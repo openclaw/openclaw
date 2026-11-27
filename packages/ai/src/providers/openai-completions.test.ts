@@ -315,6 +315,7 @@ describe("OpenAI-compatible completions params", () => {
       },
     );
 
+    // The direct entrypoint has no refusal retry, so an undeclared route gets no strict field.
     expect(capturedPayload?.tools).toEqual([
       {
         type: "function",
@@ -322,7 +323,6 @@ describe("OpenAI-compatible completions params", () => {
           name: "lookup",
           description: "Lookup",
           parameters: {},
-          strict: false,
         },
       },
     ]);

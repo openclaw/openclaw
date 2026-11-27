@@ -164,4 +164,16 @@ describe("OpenAI strict tool schema normalization", () => {
       properties: { mode: { anyOf: [mode, { type: "null" }] } },
     });
   });
+
+  it("adds null to an enum that a nullable type would still reject", () => {
+    const schema = {
+      type: "object",
+      properties: { mode: { type: ["string", "null"], enum: ["auto", "manual"] } },
+      required: [],
+    };
+    expect(normalizeStrictOpenAIJsonSchema(schema)).toMatchObject({
+      required: ["mode"],
+      properties: { mode: { type: ["string", "null"], enum: ["auto", "manual", null] } },
+    });
+  });
 });

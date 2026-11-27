@@ -111,6 +111,16 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
     });
     expect(validate({ kind: "clear", value: null })).toEqual({ kind: "clear", value: null });
   });
+  // A sibling type rejects null even when a union branch allows it, so the null means absent.
+  it("drops null for an optional key whose sibling type rejects it", () => {
+    const validate = validator(
+      objectSchema(
+        { path: string, mode: { type: "string", anyOf: [string, nil] } },
+        { required: ["path"] },
+      ),
+    );
+    expect(validate({ path: "a.md", mode: null })).toEqual({ path: "a.md" });
+  });
   it.each([
     { label: "a missing required field", value: {} },
     { label: "an invalid field type", value: { leaf: "invalid" } },

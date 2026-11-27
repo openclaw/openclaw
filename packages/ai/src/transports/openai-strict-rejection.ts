@@ -1,12 +1,11 @@
 import type { Model } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost, type OpenAIStrictToolRoute } from "../host.js";
 import { isNativeOpenAIEndpoint } from "./openai-completions-compat.js";
 
 // A route that declares compat.supportsStrictMode (config or provider catalog) is never second-guessed.
 function declaresStrictMode(model: Model): boolean {
-  return (
-    (model.compat as { supportsStrictMode?: unknown } | undefined)?.supportsStrictMode !== undefined
-  );
+  return isRecord(model.compat) && model.compat.supportsStrictMode !== undefined;
 }
 
 // The configured provider is part of the route: two providers can reach different tenants
@@ -45,14 +44,15 @@ export function isStrictToolRetryCandidate(
   tools: readonly unknown[] | undefined,
   error: unknown,
 ): boolean {
-  const status = (error as { status?: unknown } | null)?.status;
+  const status = isRecord(error) ? error.status : undefined;
   return (
     (status === 400 || status === 422) &&
     !declaresStrictMode(model) &&
-    (tools ?? []).some((tool) => {
-      const record = tool as { strict?: unknown; function?: { strict?: unknown } };
-      return record.strict === true || record.function?.strict === true;
-    })
+    (tools ?? []).some(
+      (tool) =>
+        isRecord(tool) &&
+        (tool.strict === true || (isRecord(tool.function) && tool.function.strict === true)),
+    )
   );
 }
 

@@ -741,12 +741,13 @@ describe("OpenAI completions compatibility and tools", () => {
       ] as const) {
         const model = makeCompletionsModel({ id: "kimi-k2.6", provider, baseUrl });
         const payload = requestMode(mode, model, undefined, toolContext(parameters));
-        // Managed requests are strict, so the optional key also takes the projection's null branch.
+        // Managed requests are strict. Typed Moonshot branches reject null, so the optional key
+        // gains a null branch; the untyped { minimum } branch already admits null elsewhere.
         const nullBranch = mode === "managed" ? [{ type: "null" }] : [];
         expect(payload.tools?.[0]?.function.parameters, provider).toHaveProperty("properties.v", {
           anyOf: moonshot
             ? [{ type: "string", enum: ["x", "y"] }, { type: "number", minimum: 1 }, ...nullBranch]
-            : [...parameters.properties.v.anyOf, ...nullBranch],
+            : parameters.properties.v.anyOf,
         });
       }
       expect(parameters.properties.v.anyOf).toEqual([{ enum: ["x", "y"] }, { minimum: 1 }]);

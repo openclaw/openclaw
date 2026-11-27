@@ -1,3 +1,4 @@
+import { schemaAcceptsNull } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SCHEMA_MAP_KEYS, SCHEMA_NESTED_KEYS } from "./schema-walk.js";
 import {
@@ -320,7 +321,7 @@ function normalizeToolSchemaRecursive(
 
 /** Widens an optional key's schema to accept the null a strict model sends for "absent". */
 function nullableStrictSchema(schema: unknown): unknown {
-  if (!isRecord(schema) || isNullSchemaLike(schema)) {
+  if (!isRecord(schema) || schemaAcceptsNull(schema)) {
     return schema;
   }
   if (Array.isArray(schema.anyOf)) {
@@ -335,15 +336,16 @@ function nullableStrictSchema(schema: unknown): unknown {
   const { const: constValue, ...rest } = schema;
   const next: Record<string, unknown> =
     "const" in schema ? { ...rest, enum: [constValue] } : { ...schema };
-  if (typeof next.type === "string") {
-    next.type = [next.type, "null"];
-  } else if (Array.isArray(next.type)) {
-    next.type = [...next.type, "null"];
-  } else if (!Array.isArray(next.enum)) {
-    // An untyped schema without enum or const already accepts null.
-    return schema;
+  const type = next.type;
+  if (typeof type === "string" && type !== "null") {
+    next.type = [type, "null"];
+  } else if (Array.isArray(type) && !type.includes("null")) {
+    next.type = [...type, "null"];
+  } else if (type === undefined && !Array.isArray(next.enum)) {
+    // Some other constraint (allOf, oneOf) rejects null: wrap rather than edit it.
+    return { anyOf: [schema, { type: "null" }] };
   }
-  if (Array.isArray(next.enum)) {
+  if (Array.isArray(next.enum) && !next.enum.includes(null)) {
     next.enum = [...next.enum, null];
   }
   return next;
