@@ -1,4 +1,4 @@
-import { hasRuntimeContextMarker } from "../types.js";
+import { hasRuntimeContextMarker } from "@openclaw/llm-core/types";
 
 /** Request facts shared by Copilot transports; identity headers remain plugin-owned. */
 export function projectCopilotRequestFacts(

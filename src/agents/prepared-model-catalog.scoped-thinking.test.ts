@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -180,13 +181,33 @@ it("reuses paired completed catalogs for thinking capabilities", async () => {
   expectUnused(loadFullModelCatalog, manifestCatalogMock, scopedCatalogMock, acquireSnapshotMock);
 });
 
-it("keeps ownerless native observations passive", async () => {
-  const config = {};
-  const entries = [{ ...entry, reasoning: true, nativeRuntime: "test-harness" }];
-  augmentCatalogMock.mockResolvedValue(catalog(entries));
-  expect(await readThinking(config)).toEqual(entries);
-  expectUnused(acquireSnapshotMock, releaseSnapshotMock, manifestCatalogMock, scopedCatalogMock);
-});
+it.each(["explicit", "configured", "default"] as const)(
+  "keeps ownerless native observations passive with the %s workspace",
+  async (selection) => {
+    const workspaces = {
+      explicit: path.resolve("/tmp/model-catalog-explicit-workspace"),
+      configured: path.resolve("/tmp/model-catalog-configured-workspace"),
+      default: path.resolve("/tmp/model-catalog-default-workspace"),
+    };
+    vi.stubEnv("OPENCLAW_WORKSPACE_DIR", workspaces.default);
+    const config: OpenClawConfig =
+      selection === "default"
+        ? {}
+        : { agents: { entries: { main: { workspace: workspaces.configured } } } };
+    const entries = [{ ...entry, reasoning: true, nativeRuntime: "test-harness" }];
+    augmentCatalogMock.mockResolvedValue(catalog(entries));
+    expect(
+      await readThinking(
+        config,
+        selection === "explicit" ? { workspaceDir: workspaces.explicit } : {},
+      ),
+    ).toEqual(entries);
+    expect(augmentCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: workspaces[selection] }),
+    );
+    expectUnused(acquireSnapshotMock, releaseSnapshotMock, manifestCatalogMock, scopedCatalogMock);
+  },
+);
 
 it.each([
   { name: "same-route account switch", replacementKey: "fixture-account-b", native: false },

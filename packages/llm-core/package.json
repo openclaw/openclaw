@@ -19,10 +19,20 @@
       "import": "./dist/model-contracts/anthropic.mjs",
       "default": "./dist/model-contracts/anthropic.mjs"
     },
+    "./request-headers": {
+      "types": "./dist/utils/request-headers.d.mts",
+      "import": "./dist/utils/request-headers.mjs",
+      "default": "./dist/utils/request-headers.mjs"
+    },
     "./types": {
       "types": "./dist/types.d.mts",
       "import": "./dist/types.mjs",
       "default": "./dist/types.mjs"
+    },
+    "./usage-cost": {
+      "types": "./dist/usage-cost.d.mts",
+      "import": "./dist/usage-cost.mjs",
+      "default": "./dist/usage-cost.mjs"
     },
     "./diagnostics": {
       "types": "./dist/utils/diagnostics.d.mts",

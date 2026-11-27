@@ -1,4 +1,4 @@
-import { normalizeResolvedPricing } from "@openclaw/llm-core";
+import { normalizeResolvedPricing } from "@openclaw/llm-core/usage-cost";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,

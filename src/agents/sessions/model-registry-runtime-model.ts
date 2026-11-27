@@ -1,4 +1,4 @@
-import { normalizeResolvedPricing } from "@openclaw/llm-core";
+import { normalizeResolvedPricing } from "@openclaw/llm-core/usage-cost";
 import { normalizeModelFamily } from "@openclaw/model-catalog-core/model-catalog-types";
 import { ModelInferenceCapabilitiesSchema } from "@openclaw/model-catalog-core/model-inference-capabilities";
 import type { Api, Model } from "../../llm/types.js";
