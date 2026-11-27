@@ -1,3 +1,4 @@
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { expect, it } from "vitest";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -17,59 +18,141 @@ const child = sessionRow(firstKey, "Check release notes", baseTime - 2_000, chil
 const nextChild = sessionRow(nextKey, "Check package metadata", baseTime - 3_000, childScope);
 
 suite.define(() => {
-  it("does not restore the previous chat's auto-opened branch for a different chat", () =>
-    ui.withSessionPage(
-      suite,
-      async (page) => {
-        const gateway = await support.installMockGateway(page, {
-          sessionKey: firstKey,
-          sessions: [parent, peer, child],
-          heldMethods: ["connect"],
-          authMethod: "token",
-          authMode: "token",
-          presenceUsers: [
-            { id: "profile-a", self: true, identity: { type: "profile", id: "profile-a" } },
-          ],
-          methodResponses: {
-            "sessions.list": {
-              cases: [
-                { match: childScope, response: support.sessionsListResponse([child]) },
-                { response: support.sessionsListResponse([parent, peer]) },
-              ],
+  it.each(["literal", "short collision", "home", "legacy"] as const)(
+    "does not restore the previous chat's auto-opened branch for a different chat (%s)",
+    (kind) =>
+      ui.withSessionPage(
+        suite,
+        async (page) => {
+          const uuid = "52c864fe-5ba2-4eb4-9e9e-2dfa26a21dda";
+          const savedKey =
+            kind === "short collision"
+              ? "agent:main:chat:52c864fe-1111-4eb4-9e9e-2dfa26a21dda"
+              : firstKey;
+          const savedChild = sessionRow(savedKey, "Check release notes", baseTime, childScope);
+          const savedParent = sessionRow(parentKey, "Release loop", baseTime, {
+            childSessions: [savedKey],
+          });
+          const gateway = await support.installMockGateway(page, {
+            sessionKey: savedKey,
+            sessions: [savedParent, savedChild],
+            heldMethods: ["connect"],
+            authMethod: "token",
+            authMode: "token",
+            presenceUsers: [
+              { id: "profile-a", self: true, identity: { type: "profile", id: "profile-a" } },
+            ],
+            methodResponses: {
+              "sessions.list": {
+                cases: [
+                  { match: childScope, response: support.sessionsListResponse([savedChild]) },
+                  { response: support.sessionsListResponse([savedParent]) },
+                ],
+              },
             },
-          },
-        });
-        const sidebar = page.locator("aside.sidebar");
-        const toggle = sidebar.locator(`[data-child-session-toggle="${parentKey}"]`);
-        const childRow = ui.sessionRows(sidebar)(firstKey);
-        await page.goto(
-          support.controlUiSessionUrl(suite.server.baseUrl, firstKey) + "#token=test-token",
-        );
-        await gateway.waitForRequest("connect");
-        await gateway.resolveDeferred("connect");
-        await childRow.waitFor();
-        await sidebar.and(page.locator('[data-snapshot-saved="true"]')).waitFor();
+          });
+          const sidebar = page.locator("aside.sidebar");
+          const toggle = sidebar.locator(`[data-child-session-toggle="${parentKey}"]`);
+          const childRow = ui.sessionRows(sidebar)(savedKey);
+          await page.goto(
+            support.controlUiSessionUrl(suite.server.baseUrl, savedKey) + "#token=test-token",
+          );
+          await gateway.waitForRequest("connect");
+          await gateway.resolveDeferred("connect");
+          await childRow.waitFor();
+          await sidebar.and(page.locator('[data-snapshot-saved="true"]')).waitFor();
 
-        await page.reload();
-        await gateway.waitForRequest("connect");
-        await sidebar.and(page.locator('[data-snapshot-state="cached"]')).waitFor();
-        await childRow.waitFor();
-        await gateway.resolveDeferred("connect");
-        await sidebar.and(page.locator('[data-snapshot-state="live"]')).waitFor();
+          await page.goto(
+            support
+              .controlUiSessionUrl(suite.server.baseUrl, savedKey)
+              .replace("loop-child", "LOOP-CHILD"),
+          );
+          await gateway.waitForRequest("connect");
+          await sidebar.and(page.locator('[data-snapshot-state="cached"]')).waitFor();
+          await childRow.waitFor();
+          await gateway.resolveDeferred("connect");
+          await sidebar.and(page.locator('[data-snapshot-state="live"]')).waitFor();
 
-        await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, peerKey));
-        await gateway.waitForRequest("connect");
-        await sidebar.and(page.locator('[data-snapshot-state="cached"]')).waitFor();
-        await toggle.waitFor();
-        await support.captureUiProof(suite, page, "sidebar-disclosure-reload.png");
-        expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-        expect(await childRow.count()).toBe(0);
-        await gateway.resolveDeferred("connect");
-        await sidebar.and(page.locator('[data-snapshot-state="live"]')).waitFor();
-        expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-      },
-      { colorScheme: "dark", serviceWorkers: "block" },
-    ));
+          await page.addInitScript((observedParent) => {
+            const seen = new Set<string>();
+            Reflect.set(globalThis, "cachedSidebarDisclosureStates", seen);
+            new MutationObserver(() => {
+              const cachedToggle = document.querySelector(
+                `aside[data-snapshot-state="cached"] [data-child-session-toggle="${observedParent}"]`,
+              );
+              const expanded = cachedToggle?.getAttribute("aria-expanded");
+              if (expanded) {
+                seen.add(expanded);
+              }
+            }).observe(document, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              attributeFilter: ["aria-expanded", "data-snapshot-state"],
+            });
+          }, parentKey);
+          const destination =
+            kind === "short collision"
+              ? sessionRow(`agent:main:chat:${uuid}`, "Review loop", baseTime)
+              : peer;
+          const destinationPath =
+            kind === "home"
+              ? "/chat/main"
+              : kind === "legacy"
+                ? `/chat?session=${encodeURIComponent(peerKey)}`
+                : buildControlUiSessionPath({
+                    namespace: "chat",
+                    sessionKey: destination.key,
+                    fallbackAgentId: "main",
+                    displayName: destination.displayName,
+                  });
+          expect(destinationPath).not.toBeNull();
+          await page.goto(new URL(destinationPath!, suite.server.baseUrl).href);
+          await gateway.waitForRequest("connect");
+          if (kind !== "legacy") {
+            await sidebar.and(page.locator('[data-snapshot-state="cached"]')).waitFor();
+            await toggle.waitFor();
+            expect(
+              await page.evaluate(() =>
+                Array.from(Reflect.get(globalThis, "cachedSidebarDisclosureStates")),
+              ),
+            ).toEqual(["false"]);
+            await support.captureUiProof(suite, page, "sidebar-disclosure-reload.png");
+            expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+            expect(await childRow.count()).toBe(0);
+          }
+          if (kind === "literal" || kind === "short collision") {
+            await gateway.deferNext("sessions.resolve");
+          } else if (kind === "legacy") {
+            await gateway.setMethodResponse("sessions.resolve", { ok: true, ...destination });
+          }
+          await gateway.resolveDeferred("connect");
+          if (kind === "literal" || kind === "short collision") {
+            const resolution = await gateway.waitForRequest("sessions.resolve");
+            expect(resolution.params).toMatchObject(
+              kind === "literal"
+                ? { reference: { key: peerKey } }
+                : { shortId: uuid.slice(0, 8), slugHint: "review-loop" },
+            );
+            expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+            expect(await childRow.count()).toBe(0);
+            await gateway.resolveDeferred("sessions.resolve", { ok: true, ...destination });
+          }
+          await page.waitForFunction(
+            (key) => window.openclawControlUi?.snapshot().sessionKey === key,
+            kind === "home" ? "agent:main:main" : destination.key,
+          );
+          await sidebar.and(page.locator('[data-snapshot-state="live"]')).waitFor();
+          expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+          expect(
+            await page.evaluate(() =>
+              Array.from(Reflect.get(globalThis, "cachedSidebarDisclosureStates")),
+            ),
+          ).not.toContain("true");
+        },
+        { colorScheme: "dark", serviceWorkers: "block" },
+      ),
+  );
 
   it("keeps a background parent collapsed when its child list changes", () =>
     ui.withSessionPage(

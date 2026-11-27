@@ -6,13 +6,14 @@ import {
   pluginTabRefFromSearch,
 } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { SettingsSidebarFallbackProps } from "../components/settings-sidebar-lazy.tsx";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { sectionListsItems } from "../lib/section-navigation.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { pluginPageLabel } from "../pages/plugin/route.tsx";
@@ -268,6 +269,21 @@ export function readShellView(host: ShellViewHost) {
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session" || activeRoute === "systems";
+  // A saved selection can seed the default landing or the same literal chat.
+  // Home and short links need the router to resolve their identity first.
+  const startupChatTarget =
+    activeRoute === "chat" && !host.routeState.committedSessionKey
+      ? sessionRefFromPath(
+          globalThis.location?.pathname ?? host.routeState.location?.pathname ?? "",
+          context.basePath,
+        )
+      : null;
+  const pendingDifferentChat =
+    startupChatTarget !== null &&
+    (startupChatTarget.kind !== "literal" ||
+      !areUiSessionKeysEquivalent(startupChatTarget.sessionKey, host.activeSessionKey));
+  const sidebarSessionKey =
+    host.routeState.sessionRouteNotice || pendingDifferentChat ? "" : host.activeSessionKey;
   const sidebarProperties = {
     newSessionInRail: usesBrowserDrawer(mobileNavLayout),
     connectionPending: initialGatewayConnection,
@@ -279,7 +295,7 @@ export function readShellView(host: ShellViewHost) {
       isTemplatesAvailable(context.runtimeConfig.state) === true
         ? APP_ROUTE_IDS
         : APP_ROUTE_IDS.filter((routeId) => routeId !== "templates"),
-    sessionKey: host.routeState.sessionRouteNotice ? "" : host.activeSessionKey,
+    sessionKey: sidebarSessionKey,
     connected: gatewayConnected,
     communityInviteAllowed: host.shellNavigation.communityInviteAllowed,
     connectionStatus,
