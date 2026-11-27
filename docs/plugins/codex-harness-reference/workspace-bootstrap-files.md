@@ -149,23 +149,26 @@ overlay is not cached on models that never cache `instructions`. Connections wit
 a relay use shared user preferences only, log a warning when a personal overlay is
 omitted, and report zero injected characters for it.
 
-A changed or removed section reaches a live thread, persistent or incognito, as an
-injected developer message holding the complete current section; the thread is not
-cold-resumed for it, so background work protecting the thread does not block the
-next turn, and earlier history stays unchanged. Missing sections are explicitly
-withdrawn. A cold resume (for example after a Gateway restart, or for another
-configuration change) sends the complete current developer instructions, which also
-survive native compaction. Changing other generic policy still cold-resumes an
-ordinary persistent thread; a live incognito thread rejects that change.
+A changed or removed section reaches an idle persistent thread through a cold resume,
+which sends the complete current developer instructions; they also survive native
+compaction. While background work (a running native command or child) protects a
+persistent thread, the thread is not cold-resumed for a section change: it receives an
+injected developer message holding the complete current section, so the next turn is
+not blocked, and the first later turn without protected work cold-resumes it. A live
+incognito thread has no resume source and always receives the injected message.
+Missing sections are explicitly withdrawn, and earlier history stays unchanged.
+Changing other generic policy still cold-resumes an ordinary persistent thread; a live
+incognito thread rejects that change.
 
-An injected section has two limitations: automatic compaction can restore the
-thread's creation-time section for the immediate continuation before OpenClaw
+An injected section (incognito threads, and persistent threads until their protected
+work ends) has two limitations: automatic compaction can restore the thread's
+section from its last start or resume for the immediate continuation before OpenClaw
 re-delivers the current section; restoration applies to the following request. A
-fresh native child without inherited history can also receive creation-time
-instructions rather than subsequent injected edits. A full-history child can inherit
-the later handoff. Standalone compaction invalidates recorded delivery so the next
-turn refreshes it, including after a failed restore. These refreshes do not erase
-older instructions from history.
+fresh native child without inherited history can also receive that earlier section
+rather than subsequent injected edits. A full-history child can inherit the later
+handoff. Standalone compaction invalidates recorded delivery so the next turn
+refreshes it, including after a failed restore. These refreshes do not erase older
+instructions from history.
 
 Lightweight cron turns omit skills. When such a turn shares a thread with ordinary
 turns, that omission withdraws the thread-level catalog until the next ordinary turn.
