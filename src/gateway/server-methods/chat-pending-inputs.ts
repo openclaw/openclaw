@@ -118,6 +118,7 @@ export async function readChatPendingInputs(
       physicalPaths: options.physicalPaths,
       resolveGatewayContext: options.resolveGatewayContext,
     });
+  const hiddenQueuedRunIds = new Set<string>();
   const visible = page.items.flatMap((input) => {
     const message = projectPendingInputMessage(
       input,
@@ -125,7 +126,13 @@ export async function readChatPendingInputs(
       projectProfile,
       resolveCronJobName,
     );
-    return message ? [{ input, message }] : [];
+    if (!message) {
+      if (input.state === "queued" && options.queuedRunIds?.has(input.runId)) {
+        hiddenQueuedRunIds.add(input.runId);
+      }
+      return [];
+    }
+    return [{ input, message }];
   });
   const messages = replaceOversizedChatHistoryMessages({
     messages: visible.map(({ message }) => message),
@@ -135,7 +142,9 @@ export async function readChatPendingInputs(
   }).messages;
   return {
     ...page,
-    ...(options.queuedRunIds ? { queuedCount: options.queuedRunIds.size } : {}),
+    ...(options.queuedRunIds
+      ? { queuedCount: Math.max(0, options.queuedRunIds.size - hiddenQueuedRunIds.size) }
+      : {}),
     items: visible.map(({ input: item }, index) => {
       const display: ChatPendingInputsPage["items"][number] = {
         id: item.id,

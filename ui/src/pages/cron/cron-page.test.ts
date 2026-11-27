@@ -338,25 +338,31 @@ it("opens an explicitly linked automation directly in its settings", async () =>
   });
 });
 
-it("clears a failed job link when opening another link", async () => {
-  const job = createCronViewJob("current-job", { state: {} });
-  const request = cronRpc({
-    "cron.get": (params) => {
-      if ((params as { id: string }).id === "removed-job") {
-        throw new Error("Automation no longer exists");
-      }
-      return job;
-    },
-    "cron.list": () => harness.cronListResponse([job]),
-  });
-  const { page } = mountCronPage(request);
-  page.routeSearch = "?job=removed-job";
-  await waitFor(() => expect(page.textContent).toContain("Automation no longer exists"));
-  page.routeSearch = "?job=current-job";
-  await waitFor(() => expect(page.cron.cronEditingJob?.id).toBe(job.id));
-  expect(page.cron.cronError).toBeNull();
-  expect(page.textContent).not.toContain("Automation no longer exists");
-});
+it.each([
+  ["INVALID_REQUEST", "Automation no longer exists"],
+  ["FORBIDDEN", "You cannot access this automation"],
+])(
+  "preserves and clears a job-link %s failure when opening another link",
+  async (code, message) => {
+    const job = createCronViewJob("current-job", { state: {} });
+    const request = cronRpc({
+      "cron.get": (params) => {
+        if ((params as { id: string }).id === "removed-job") {
+          throw new GatewayRequestError({ code, message });
+        }
+        return job;
+      },
+      "cron.list": () => harness.cronListResponse([job]),
+    });
+    const { page } = mountCronPage(request);
+    page.routeSearch = "?job=removed-job";
+    await waitFor(() => expect(page.textContent).toContain(message));
+    page.routeSearch = "?job=current-job";
+    await waitFor(() => expect(page.cron.cronEditingJob?.id).toBe(job.id));
+    expect(page.cron.cronError).toBeNull();
+    expect(page.textContent).not.toContain(message);
+  },
+);
 
 it("drops pending automation scratch when admin access is removed", async () => {
   const job = createCronViewJob("migrated-job", {

@@ -256,6 +256,23 @@ it("invalidates a pending catalog read when the dialog's account lifetime ends",
   await expect(view.edit({ type: "enabled", enabled: true })).resolves.toBe(false);
 });
 
+it("keeps an unfinished edit after a failed save without retrying the write", async () => {
+  const harness = gateway(sample);
+  const { query } = await open(harness.client);
+  query.getByRole("button", { name: "Edit snippet" }).click();
+  flush();
+  fill("Exact text", "Unfinished edit");
+  harness.offline();
+  submit();
+  await waitForSolid(() => expect(query.getByRole("alert").textContent).toContain("unavailable"));
+  expect(query.getByLabelText("Exact text")).toHaveProperty("value", "Unfinished edit");
+  expect(query.getByRole("button", { name: "Reload saved catalog" })).toBeDefined();
+  expect(
+    harness.request.mock.calls.filter(([method]) => method === "users.prefs.set"),
+  ).toHaveLength(1);
+  expect(harness.saved()).toBe(sample);
+});
+
 it("removes an open editor when current personal authorization is denied", async () => {
   const harness = gateway(sample);
   const { query } = await open(harness.client);

@@ -31,6 +31,7 @@ import { parseArgs } from "node:util";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -285,12 +286,7 @@ try {
     for (let sample = 0; sample < samples; sample++) {
       global.gc();
       if (values.mode === "allocation") {
-        inspector.connect();
-        await inspector.post("HeapProfiler.startSampling", {
-          samplingInterval: 4096,
-          includeObjectsCollectedByMajorGC: true,
-          includeObjectsCollectedByMinorGC: true,
-        });
+        await startCollectedHeapSampling(inspector, 4096);
       }
       const reservations: unknown[] = [];
       const observe = (event: unknown) => reservations.push(event);

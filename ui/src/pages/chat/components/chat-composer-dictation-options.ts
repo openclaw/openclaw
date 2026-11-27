@@ -1,5 +1,9 @@
 import { t } from "../../../i18n/index.ts";
-import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
+import {
+  focusComposerInput,
+  readComposerEditor,
+  selectComposerInput,
+} from "../../../lib/composer-input.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
@@ -26,6 +30,7 @@ export function createComposerDictationOptions(
         start: target?.selectionStart ?? liveValue.length,
         end: target?.selectionEnd ?? liveValue.length,
         value: liveValue,
+        maxLength: target?.maxLength,
       },
       late,
       preservePreview,
@@ -36,6 +41,22 @@ export function createComposerDictationOptions(
       (exact && target && target.maxLength >= 0 && insertion.value.length > target.maxLength)
     ) {
       return false;
+    }
+    if (exact && target && captured) {
+      const editor = readComposerEditor(target);
+      if (editor) {
+        editor.replace(
+          insertion.value.slice(captured.start, insertion.caret),
+          captured.start,
+          captured.end,
+          true,
+        );
+        return target.value === insertion.value;
+      }
+      // The rich editor mounts lazily. Do not flatten a mention while it loads.
+      if ((props.getMentions?.() ?? props.mentions)?.length) {
+        return false;
+      }
     }
     if (target) {
       target.value = insertion.value;

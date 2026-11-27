@@ -21,6 +21,7 @@ import {
 } from "../../../shared/immutable-data.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { createCompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { buildInitialContext } from "../../sessions/session-manager-codec.js";
 import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
@@ -31,6 +32,7 @@ import { createPromptCacheRequestObserver } from "../prompt-cache-request-observ
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
+import { boundForkWorkingContext } from "./fork-working-context.js";
 
 // mock-isolation: Count repeated history hashing while preserving native digests.
 vi.mock("node:crypto", { spy: true });
@@ -146,6 +148,76 @@ function createFixture() {
 beforeEach(() => {
   vi.resetAllMocks();
 });
+
+it.each(["operator", "channel", "spawn", "reset", "rewind"] as const)(
+  "budgets only a copied prefix in a %s child without rewriting its transcript",
+  async (via) => {
+    const fixture = createFixture();
+    fixture.input.attempt.sessionKey =
+      via === "channel" ? "agent:main:fork:channel" : "agent:main:dashboard:child";
+    const reply = createAssistantOutput(model);
+    reply.content = [{ type: "text", text: "Blue was chosen." }];
+    const original = [
+      { role: "user" as const, content: "Archived ledger. ".repeat(2_000), timestamp: 1 },
+      { role: "user" as const, content: "Choose blue.", timestamp: 2 },
+      reply,
+      { role: "user" as const, content: "Child-only follow-up", timestamp: 2 },
+    ];
+    const id = fixture.entry.sessionId;
+    const manager = SessionManager.fromEntries([
+      {
+        type: "session",
+        version: 3,
+        id,
+        parentSession: "parent",
+        inheritedThrough: ["r2"],
+        cwd: "/synthetic",
+      },
+      ...original.map((message, index) => ({
+        type: "message",
+        id: "r" + index,
+        parentId: index ? "r" + (index - 1) : null,
+        message,
+      })),
+    ]);
+    if (via === "reset") {
+      await manager.appendResetBoundaryAsync("reset", "r3");
+    }
+    const before = JSON.stringify(manager.getPersistedEntries());
+    fixture.agent.state.messages = (await manager[sessionManagerReadInitialContext]()).messages;
+    Object.assign(fixture.input.prepared.sessionRuntime, { sessionManager: manager });
+    mocks.readEntry.mockResolvedValue({
+      sessionId: id,
+      updatedAt: 1,
+      forkSource: {
+        sessionId: "p",
+        sessionKey: "parent",
+        ...(via === "rewind" ? { entryId: "cut" } : {}),
+      },
+      createdVia: via === "reset" || via === "rewind" ? "operator" : via,
+    });
+    const prepared = await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+    const budget = createCompactionRequestBudget({
+      contextWindow: 2_048,
+      reserveTokens: 0,
+      systemPrompt: "Instructions",
+      pendingPrompt: "Continue",
+      tools: [{ name: "read", description: "Read", parameters: {} }],
+    });
+    const history = prepared.explicitChatFork
+      ? boundForkWorkingContext(fixture.agent.state.messages, budget, 512)
+      : fixture.agent.state.messages;
+    if (via === "spawn" || via === "rewind") {
+      expect(history).toHaveLength(4);
+    } else if (via === "reset") {
+      expect(prepared.explicitChatFork).toBeUndefined();
+      expect(history).toMatchObject([original[3]]);
+    } else {
+      expect(history).toMatchObject(original.slice(1));
+    }
+    expect(JSON.stringify(manager.getPersistedEntries())).toBe(before);
+  },
+);
 
 it("publishes restored assistant history without rehashing it on later model requests", async () => {
   const fixture = createFixture();

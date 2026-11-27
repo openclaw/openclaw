@@ -26,9 +26,9 @@ import {
   SettingsSection,
   SettingsRow,
   SettingsSegmented,
-  SettingsToggle,
   SettingsLoadingSkeleton,
 } from "../../components/solid/settings-ui.tsx";
+import { Switch } from "../../components/solid/switch.tsx";
 import { GitHubIdentity } from "../../features/github-connections/github-identity-view.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
@@ -534,7 +534,7 @@ export function AgentTools(
                                     onClick={(event: Event) => event.stopPropagation()}
                                     onKeyDown={(event: KeyboardEvent) => event.stopPropagation()}
                                   >
-                                    <SettingsToggle
+                                    <Switch
                                       checked={resolved().allowed}
                                       disabled={!editable()}
                                       ariaLabel={t(

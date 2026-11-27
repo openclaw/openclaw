@@ -1,4 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -40,6 +41,21 @@ export async function writeDoctorGatewayConfig(
     ctx.cfg = previous;
     throw error;
   }
+}
+
+/**
+ * Read-only. Under Gateway maintenance only the stray launchd job removal runs here; the
+ * managed service is repaired when Doctor restores it.
+ */
+export async function checkGatewayServicesRepairPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  if (!ctx.gatewayMaintenanceActive) {
+    return "work";
+  }
+  const { checkMacForeignLaunchdJobRepairPending } =
+    await import("../commands/doctor-foreign-launchd-jobs.js");
+  return checkMacForeignLaunchdJobRepairPending(ctx.options, ctx.env ?? process.env);
 }
 
 export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -184,6 +200,11 @@ export async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Prom
   );
 }
 
+/** Under Gateway maintenance the daemon is repaired when Doctor restores the service. */
+export function repairsGatewayDaemon(ctx: DoctorHealthFlowContext): boolean {
+  return isDefaultInstallIdentity(ctx.env ?? process.env) && ctx.gatewayMaintenanceActive !== true;
+}
+
 export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
     return;
@@ -193,7 +214,7 @@ export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Prom
       await import("../commands/doctor-platform-notes.js");
     await noteMacDisabledGatewayLaunchAgent(ctx.env ?? process.env);
   }
-  if (ctx.gatewayMaintenanceActive) {
+  if (!repairsGatewayDaemon(ctx)) {
     return;
   }
   const { maybeRepairGatewayDaemon } = await import("../commands/doctor-gateway-daemon-flow.js");

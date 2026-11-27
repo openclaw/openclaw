@@ -10,16 +10,16 @@ The resumed runtime did not contain the previous scratch packet, attachment copi
 
 ## Fresh observations and changes
 
-| Item | This iteration |
-| --- | --- |
-| M07 review | Sole durable comment remains unchanged: narrow extension/client choice, existing-limit storage and admission semantics before implementation; no human acceptance. |
-| Fork #2 | Still open/draft at observed 7d8c99e9683ab86d65452d3de71ed3aa8463e6cc before this documentation commit; base b7bd237d00508e0999c7a3fc6e36bc32bf421098. Empty fresh comment/review/thread inventories; no reviewed PR SHA. |
-| Upstream source | Once-refreshed main aa8288706247f3445242abf74395b9419100e665 replaces prior packet pin 3c3a83bb62095dba9c7641acd033d4b87db6d820 for current claims. |
-| New capacity observation | Prose placement now uses maxLength/truncateUtf16Safe, as well as trim/spacing. The proposal and runbook require whole-literal preservation or visible refusal; no runtime repair is inferred. |
-| Current preference owner | Name preparePersonalPreferences where relevant, retain authenticated profile binding and existing post-read/canonical-write guards; do not copy the fork's special access helper as generic policy. |
-| Storage arithmetic | Fresh own-script calculation reproduces 26-byte envelope, 609 representative bytes, 3097/3105 maximal ordinary bytes, escaping failures and actual/projected 4096/4097 boundaries. No project code executed. |
-| Shared settings | Current absence and sync-map exclusions verified. configSync:false can still allow profile sync; type-only addition is not save/load support. |
-| Design and proof | Automatic/manual alternatives, 13 requirements and 11 original criteria retained; all product proof NOT COLLECTED, all runtime targets UNMEASURED. |
+| Item                     | This iteration                                                                                                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M07 review               | Sole durable comment remains unchanged: narrow extension/client choice, existing-limit storage and admission semantics before implementation; no human acceptance.                                                        |
+| Fork #2                  | Still open/draft at observed 7d8c99e9683ab86d65452d3de71ed3aa8463e6cc before this documentation commit; base b7bd237d00508e0999c7a3fc6e36bc32bf421098. Empty fresh comment/review/thread inventories; no reviewed PR SHA. |
+| Upstream source          | Once-refreshed main aa8288706247f3445242abf74395b9419100e665 replaces prior packet pin 3c3a83bb62095dba9c7641acd033d4b87db6d820 for current claims.                                                                       |
+| New capacity observation | Prose placement now uses maxLength/truncateUtf16Safe, as well as trim/spacing. The proposal and runbook require whole-literal preservation or visible refusal; no runtime repair is inferred.                             |
+| Current preference owner | Name preparePersonalPreferences where relevant, retain authenticated profile binding and existing post-read/canonical-write guards; do not copy the fork's special access helper as generic policy.                       |
+| Storage arithmetic       | Fresh own-script calculation reproduces 26-byte envelope, 609 representative bytes, 3097/3105 maximal ordinary bytes, escaping failures and actual/projected 4096/4097 boundaries. No project code executed.              |
+| Shared settings          | Current absence and sync-map exclusions verified. configSync:false can still allow profile sync; type-only addition is not save/load support.                                                                             |
+| Design and proof         | Automatic/manual alternatives, 13 requirements and 11 original criteria retained; all product proof NOT COLLECTED, all runtime targets UNMEASURED.                                                                        |
 
 ## ClawSweeper responses carried into the commit
 

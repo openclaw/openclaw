@@ -140,11 +140,10 @@ function renderVoiceSnippetReviewDialog(options: ReviewDialogContext) {
             disabled={!canDownload()}
             onClick={() => {
               if (canDownload()) {
-                void options.owner.exportText().then((text) => {
-                  if (text !== null && !options.signal.aborted) {
-                    downloadTextFile("openclaw-dictation.txt", text);
-                  }
-                });
+                const text = options.owner.exportText();
+                if (text !== null) {
+                  downloadTextFile("openclaw-dictation.txt", text);
+                }
               }
             }}
           >

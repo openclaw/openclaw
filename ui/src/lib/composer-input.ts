@@ -10,7 +10,7 @@ export type ComposerEditorBridge = {
   requestSync: () => void;
   focus: (options?: FocusOptions) => void;
   select: (start: number, end: number, direction?: "forward" | "backward" | "none") => void;
-  replace: (text: string, start: number, end: number) => void;
+  replace: (text: string, start: number, end: number, isolate?: true) => void;
   /** Replace the whole draft as one isolated history step. */
   replaceAll: (text: string) => void;
   /** Step the editor's own history back, restoring mention identities with the text. */

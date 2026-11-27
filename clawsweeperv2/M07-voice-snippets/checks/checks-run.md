@@ -12,15 +12,15 @@ The durable issue review is unchanged; there is no observed human acceptance or 
 
 ## Actual standalone design calculation
 
-| Field | Actual observation |
-| --- | --- |
-| Command | `node checks/catalogue-size-calculation.mjs` in the new design directory |
-| Runtime | Node v24.22.3 |
-| Completion UTC | 2026-11-26T16:11:41.275Z |
-| Exit | 0 |
-| Scope | Own synthetic JSON/UTF-8 arithmetic, no repository imports, network, credentials or user text |
-| Result | 26-byte envelope; 609 representative bytes; 3097/3105 maximal ordinary bytes; escaped counterexamples; exact actual/projected 4096/4097 boundaries |
-| Reproduction | Complete calculation source embedded in [catalogue-size-calculation.md](catalogue-size-calculation.md); actual [numeric report](catalogue-size-calculation.json) |
+| Field          | Actual observation                                                                                                                                               |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Command        | `node checks/catalogue-size-calculation.mjs` in the new design directory                                                                                         |
+| Runtime        | Node v24.22.3                                                                                                                                                    |
+| Completion UTC | 2026-11-26T16:11:41.275Z                                                                                                                                         |
+| Exit           | 0                                                                                                                                                                |
+| Scope          | Own synthetic JSON/UTF-8 arithmetic, no repository imports, network, credentials or user text                                                                    |
+| Result         | 26-byte envelope; 609 representative bytes; 3097/3105 maximal ordinary bytes; escaped counterexamples; exact actual/projected 4096/4097 boundaries               |
+| Reproduction   | Complete calculation source embedded in [catalogue-size-calculation.md](catalogue-size-calculation.md); actual [numeric report](catalogue-size-calculation.json) |
 
 The temporary script is not a maintained repository executable; its complete source is retained as Markdown. The calculation's timestamps do not measure application performance. Product validation, actual accepted writes and latency remain NOT COLLECTED / UNMEASURED.
 
@@ -28,12 +28,12 @@ The temporary script is not a maintained repository executable; its complete sou
 
 Document coverage, local links, Markdown whitespace/fences/heading/list structure, JSON parsing, source identities and exact calculation totals are checked against the new packet. The intended commit includes Markdown and JSON only. No source build/test/formatter or secret scanner is invoked.
 
-| Check | Disposition | Result |
-| --- | --- | --- |
-| Nine required documents, all 13 named IDs, all 11 acceptance IDs, exact leading question and Q01–Q16 | See actual receipt | [document-validation.json](document-validation.json) records the observed result |
-| New Markdown local links/format, JSON parsing, numeric totals and embedded calculation source | See actual receipt | Same receipt; these checks do not execute product code |
-| `git diff --cached --check` for intended documentation | See actual receipt | Same receipt; native Git in the fresh documentation-only working directory |
-| Independent bounded review of six design documents | DONE | No material issue found; parent-supplied pinned excerpt also supports the source-only capacity observation. Root corrected a Q05 cross-reference to the actual literal-capacity scenario Q04. |
+| Check                                                                                                | Disposition        | Result                                                                                                                                                                                        |
+| ---------------------------------------------------------------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Nine required documents, all 13 named IDs, all 11 acceptance IDs, exact leading question and Q01–Q16 | See actual receipt | [document-validation.json](document-validation.json) records the observed result                                                                                                              |
+| New Markdown local links/format, JSON parsing, numeric totals and embedded calculation source        | See actual receipt | Same receipt; these checks do not execute product code                                                                                                                                        |
+| `git diff --cached --check` for intended documentation                                               | See actual receipt | Same receipt; native Git in the fresh documentation-only working directory                                                                                                                    |
+| Independent bounded review of six design documents                                                   | DONE               | No material issue found; parent-supplied pinned excerpt also supports the source-only capacity observation. Root corrected a Q05 cross-reference to the actual literal-capacity scenario Q04. |
 
 The remote mutation is limited to a new tree/commit based on the exact existing branch head, followed by a non-forced expected-head ref update. The resulting tree/diff and PR state are verified after publication. No force push, source branch creation, issue/PR metadata edit, comment, review request, workflow dispatch or merge is included.
 

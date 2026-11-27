@@ -27,7 +27,7 @@ function nativeCommand(
   });
 }
 
-export type ProbeRunEvent = {
+type ProbeRunEvent = {
   phase: "listening" | "started";
   pid: number;
   ppid: number;

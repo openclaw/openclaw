@@ -704,10 +704,11 @@ export function createModelProviderLogin(options: {
         doneMessage: connectedLabel
           ? t("modelSetup.providerConnected", { provider: connectedLabel })
           : t("modelSetup.wizard.connected"),
-        doneDescription:
+        doneDescription: `${signIn.signedInEmail ?? ""}\n${
           completionModel && !modelSelection.choosing
             ? t("modelProviders.login.modelReady", { model: completionModel.name })
-            : undefined,
+            : ""
+        }`.trim(),
       });
       return {
         ...current,

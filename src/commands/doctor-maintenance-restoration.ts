@@ -21,6 +21,7 @@ import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { traceDoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { createDoctorMaintenanceState } from "./doctor-maintenance-state.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { assertDoctorServiceSelection } from "./doctor-service-repair-policy.js";
@@ -340,6 +341,7 @@ export async function restoreDoctorGatewayService(params: {
       (installation.requiresInstallRootRefresh || writeConfig)
     ) {
       const originalInstallation = installation;
+      await traceDoctorMaintenancePending("service-definition");
       if (!inspectionFailure) {
         // Reversing our stop cannot authorize an installation rewrite during another update.
         const assertInstallationCurrent = () => {

@@ -49,7 +49,7 @@ async function open(saved: VoiceSnippetCatalog, rawTranscript = "insert snippet 
   invoker.focus();
   const lifetime = new AbortController();
   const deliver = vi.fn(() => "committed" as const);
-  const loadCatalog = vi.fn(async () => saved);
+  let connected = true;
   const owner = new VoiceSnippetReview({
     request: {
       schemaVersion: 1,
@@ -61,8 +61,7 @@ async function open(saved: VoiceSnippetCatalog, rawTranscript = "insert snippet 
     },
     catalog: saved,
     signal: lifetime.signal,
-    isCurrent: () => true,
-    loadCatalog,
+    isCurrent: () => connected,
     deliver,
   });
   await owner.prepare();
@@ -73,12 +72,24 @@ async function open(saved: VoiceSnippetCatalog, rawTranscript = "insert snippet 
   if (!(preview instanceof HTMLTextAreaElement)) {
     throw new Error("Expected plain-text preview");
   }
-  return { owner, lifetime, deliver, loadCatalog, closed, modal, query, preview, invoker };
+  return {
+    owner,
+    lifetime,
+    deliver,
+    disconnect: () => {
+      connected = false;
+    },
+    closed,
+    modal,
+    query,
+    preview,
+    invoker,
+  };
 }
 
 it("shows complete literal sensitive text in a focused readonly preview before one explicit acceptance", async () => {
   const body = `00017\n{{name}} <script>alert(1)</script> $HOME\n\n${"long text ".repeat(200)}`;
-  const { query, preview, deliver, loadCatalog, closed, invoker } = await open(catalog(body));
+  const { query, preview, deliver, closed, invoker } = await open(catalog(body));
   expect(preview.value).toBe(body);
   expect(preview.readOnly).toBe(true);
   expect(document.body.querySelector("script")).toBeNull();
@@ -86,66 +97,36 @@ it("shows complete literal sensitive text in a focused readonly preview before o
   expect(deliver).not.toHaveBeenCalled();
   query.getByRole("button", { name: "Add to draft" }).click();
   await expect(closed).resolves.toBe(true);
-  expect(loadCatalog).toHaveBeenCalledTimes(2);
   expect(deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: body }));
   await waitForSolid(() => expect(document.activeElement).toBe(invoker));
 });
 
-it.each(["denied", "revised"])("refuses a new download after the catalog is %s", async (reason) => {
-  const saved = catalog("Private exact text");
-  const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
-  const { query, owner, loadCatalog, deliver } = await open(saved);
-  if (reason === "denied") {
-    loadCatalog.mockRejectedValueOnce(new Error("Access denied"));
-  } else {
-    loadCatalog.mockResolvedValueOnce({ ...saved, revision: saved.revision + 1 });
-  }
-  query.getByRole("button", { name: "Download plain text" }).click();
-  await waitForSolid(() =>
-    expect(owner.snapshot().error).toBe(reason === "denied" ? "unavailable" : "stale-catalog"),
-  );
-  expect(query.getByRole("button", { name: "Download plain text" })).toHaveProperty(
-    "disabled",
-    true,
-  );
-  expect(download).not.toHaveBeenCalled();
+it("blocks recovery and Apply after the capture loses its connection", async () => {
+  const { owner, deliver, disconnect } = await open(catalog("Private exact text"));
+  disconnect();
+  expect(owner.exportText()).toBeNull();
+  await expect(owner.accept()).resolves.toBe(false);
   expect(deliver).not.toHaveBeenCalled();
 });
 
-it("does not duplicate acceptance while a fresh authorization read is pending or after delivery", async () => {
-  const saved = catalog("Exact body");
-  const { query, owner, loadCatalog, deliver, closed } = await open(saved);
-  const authorization = Promise.withResolvers<VoiceSnippetCatalog>();
-  loadCatalog.mockReturnValueOnce(authorization.promise);
+it("does not duplicate acceptance when Apply is clicked twice", async () => {
+  const { query, owner, deliver, closed } = await open(catalog("Exact body"));
   const accept = query.getByRole("button", { name: "Add to draft" });
   accept.click();
   accept.click();
-  expect(loadCatalog).toHaveBeenCalledTimes(2);
-  expect(deliver).not.toHaveBeenCalled();
-  authorization.resolve(saved);
   await expect(closed).resolves.toBe(true);
   await expect(owner.accept()).resolves.toBe(false);
   expect(deliver).toHaveBeenCalledOnce();
 });
 
-it.each(["Add to draft", "Download plain text"])(
-  "cancels a pending %s without publishing its late authorization result",
-  async (action) => {
-    const saved = catalog("Exact body");
-    const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
-    const { query, owner, loadCatalog, deliver, closed } = await open(saved);
-    const authorization = Promise.withResolvers<VoiceSnippetCatalog>();
-    loadCatalog.mockReturnValueOnce(authorization.promise);
-    query.getByRole("button", { name: action }).click();
-    query.getByRole("button", { name: "Cancel" }).click();
-    await expect(closed).resolves.toBe(false);
-    authorization.resolve(saved);
-    await waitForSolid(() => expect(owner.snapshot().busy).toBe(false));
-    expect(owner.snapshot()).toMatchObject({ text: "", sourceText: "", canAccept: false });
-    expect(download).not.toHaveBeenCalled();
-    expect(deliver).not.toHaveBeenCalled();
-  },
-);
+it("clears the admitted result and blocks recovery on explicit cancellation", async () => {
+  const { query, owner, deliver, closed } = await open(catalog("Exact body"));
+  query.getByRole("button", { name: "Cancel" }).click();
+  await expect(closed).resolves.toBe(false);
+  expect(owner.snapshot()).toMatchObject({ text: "", sourceText: "", canAccept: false });
+  expect(owner.exportText()).toBeNull();
+  expect(deliver).not.toHaveBeenCalled();
+});
 
 it("expands two deliberate source selections without changing surrounding prose and modal cancel prevents delivery", async () => {
   const phrase = "insert snippet signature";

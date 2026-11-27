@@ -14,10 +14,10 @@ The first proposed slice is a tiny optional browser/en-US consumer: at most eigh
 
 ## Options and recommendation
 
-| Option | User flow | Tradeoff |
-| --- | --- | --- |
+| Option                                                                                             | User flow                                                                                                  | Tradeoff                                                                                                                                  |
+| -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | **Narrow generic finalized-dictation contract plus optional consumer — recommended conditionally** | Existing microphone capture → one finalized explicit command → source/expansion review → Apply → real Undo | Supports automatic voice expansion but requires accepted finality/source/draft metadata, literal placement, ordering and content storage. |
-| **Manually invoked draft plugin** | User invokes a composer action, chooses a record and reviews an existing draft proposal | Smaller automatic integration scope, but not automatic voice support; concurrent edits, client scope and storage still need acceptance. |
+| **Manually invoked draft plugin**                                                                  | User invokes a composer action, chooses a record and reviews an existing draft proposal                    | Smaller automatic integration scope, but not automatic voice support; concurrent edits, client scope and storage still need acceptance.   |
 
 Do not create another implementation PR to settle this choice. The latest instruction authorizes committing this design revision; it does not turn the bot's recommendation into owner acceptance.
 
@@ -55,18 +55,21 @@ Keep existing `assertCurrent`, deferred credential-dispatch, inbound provider-fr
 Use one existing authenticated profile preference value only if owners accept its content/access/retention policy. No key is reserved by this draft.
 
 ```json
-{"version":1,"entries":[{"id":"s1","trigger":"status","body":"Build complete.","enabled":true}]}
+{
+  "version": 1,
+  "entries": [{ "id": "s1", "trigger": "status", "body": "Build complete.", "enabled": true }]
+}
 ```
 
-| Boundary | Proposed requirement |
-| --- | --- |
-| Record count | 0–8 total, including disabled entries |
-| ID | Unique proposed `[A-Za-z0-9_-]{1,16}`; at most 16 ASCII characters |
-| Trigger | Nonempty; at most 64 UTF-8 bytes; accepted exact grammar/control policy |
-| Body | Nonempty literal string; at most 256 UTF-8 bytes; no dynamic variables |
-| Enabled | Boolean |
-| Entire compact JSON value | At most 4,096 UTF-8 bytes including version, metadata, punctuation and escaping |
-| Shared quotas | Unchanged 128 counted generic keys/profile and 32 entries/update; catalogue consumes one key/entry |
+| Boundary                  | Proposed requirement                                                                               |
+| ------------------------- | -------------------------------------------------------------------------------------------------- |
+| Record count              | 0–8 total, including disabled entries                                                              |
+| ID                        | Unique proposed `[A-Za-z0-9_-]{1,16}`; at most 16 ASCII characters                                 |
+| Trigger                   | Nonempty; at most 64 UTF-8 bytes; accepted exact grammar/control policy                            |
+| Body                      | Nonempty literal string; at most 256 UTF-8 bytes; no dynamic variables                             |
+| Enabled                   | Boolean                                                                                            |
+| Entire compact JSON value | At most 4,096 UTF-8 bytes including version, metadata, punctuation and escaping                    |
+| Shared quotas             | Unchanged 128 counted generic keys/profile and 32 entries/update; catalogue consumes one key/entry |
 
 Reject malformed/unknown versions, unknown fields, collisions under the accepted grammar and oversized whole values before a partial write. Keep the prior value and unsaved edit visible. Do not truncate, delete unrelated preferences, shard across profile keys or reinstate the fork's 9-MiB reserved exception. [Current limits](https://github.com/openclaw/openclaw/blob/aa8288706247f3445242abf74395b9419100e665/packages/gateway-protocol/src/schema/user-profile-constants.ts) · [Validation](https://github.com/openclaw/openclaw/blob/aa8288706247f3445242abf74395b9419100e665/src/state/user-preferences.validation.ts)
 
@@ -88,19 +91,19 @@ Coordinate [M11 #205845](https://github.com/openclaw/openclaw/issues/205845) and
 
 ## Original acceptance criteria: explicit disposition
 
-| ID | Original obligation | Revised disposition | Status | Product proof |
-| --- | --- | --- | --- | --- |
+| ID       | Original obligation                                                                 | Revised disposition                                                                                                                               | Status           | Product proof |
+| -------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ------------- |
 | M07-AC01 | Exact explicit triggers once in utterance order; prose/literal escapes stay literal | One explicit command per finalized capture first; preserve capture order. Mixed multi-intent capture and exact grammar remain deferred/undecided. | NEEDS MAINTAINER | NOT COLLECTED |
-| M07-AC02 | Useful handling of collision, disabled item and unknown name | Preserve source; bounded choice/error; no guessed expansion. Duplicate/content policy requires acceptance. | NEEDS MAINTAINER | NOT COLLECTED |
-| M07-AC03 | Literal placeholders/dates/numbers/leading zeroes, no lookup/interpolation | Firm invariant for small static bodies. Whole body survives or insertion visibly refuses. | PLAN ONLY | NOT COLLECTED |
-| M07-AC04 | Protected bytes survive enabled M11 transforms | Requires accepted shared literal placement/ranges and actual sibling proof; default-off transforms are insufficient. | NEEDS MAINTAINER | NOT COLLECTED |
-| M07-AC05 | Catalogue/account/permission/cancellation races | Supersede blanket catalogue-driven retirement with admitted snapshot. Retain real authority/input/target/cancellation guards. | NEEDS MAINTAINER | NOT COLLECTED |
-| M07-AC06 | Nested triggers, shell text, URLs and instructions stay inert | No evaluation, network side effect, recursion, reinterpretation or Send. | PLAN ONLY | NOT COLLECTED |
-| M07-AC07 | Unsupported-target recovery; never send/execute | Browser draft first; preserve text and visibly refuse unsupported capacity/encoding. Broader adapters/recovery features deferred. | NEEDS MAINTAINER | NOT COLLECTED |
-| M07-AC08 | Import/export round-trip and atomic invalid-input rejection | Import/export deferred; small editor writes still need atomic validation. Original round-trip criterion is not satisfied. | NEEDS MAINTAINER | NOT COLLECTED |
-| M07-AC09 | Keyboard/screen-reader chooser, review, cancel and focus | Actual first-client keyboard and assistive technology required. Mobile/native unqualified. | PLAN ONLY | NOT COLLECTED |
-| M07-AC10 | No default body/trigger logs; diagnostics separately controlled | No normal content logging. A new content-inspection mode is not part of this slice. | PLAN ONLY | NOT COLLECTED |
-| M07-AC11 | Feature-off dictation/audio unchanged | Prove ordinary prose capacity handling, audio release, errors and late-final siblings remain unchanged. | PLAN ONLY | NOT COLLECTED |
+| M07-AC02 | Useful handling of collision, disabled item and unknown name                        | Preserve source; bounded choice/error; no guessed expansion. Duplicate/content policy requires acceptance.                                        | NEEDS MAINTAINER | NOT COLLECTED |
+| M07-AC03 | Literal placeholders/dates/numbers/leading zeroes, no lookup/interpolation          | Firm invariant for small static bodies. Whole body survives or insertion visibly refuses.                                                         | PLAN ONLY        | NOT COLLECTED |
+| M07-AC04 | Protected bytes survive enabled M11 transforms                                      | Requires accepted shared literal placement/ranges and actual sibling proof; default-off transforms are insufficient.                              | NEEDS MAINTAINER | NOT COLLECTED |
+| M07-AC05 | Catalogue/account/permission/cancellation races                                     | Supersede blanket catalogue-driven retirement with admitted snapshot. Retain real authority/input/target/cancellation guards.                     | NEEDS MAINTAINER | NOT COLLECTED |
+| M07-AC06 | Nested triggers, shell text, URLs and instructions stay inert                       | No evaluation, network side effect, recursion, reinterpretation or Send.                                                                          | PLAN ONLY        | NOT COLLECTED |
+| M07-AC07 | Unsupported-target recovery; never send/execute                                     | Browser draft first; preserve text and visibly refuse unsupported capacity/encoding. Broader adapters/recovery features deferred.                 | NEEDS MAINTAINER | NOT COLLECTED |
+| M07-AC08 | Import/export round-trip and atomic invalid-input rejection                         | Import/export deferred; small editor writes still need atomic validation. Original round-trip criterion is not satisfied.                         | NEEDS MAINTAINER | NOT COLLECTED |
+| M07-AC09 | Keyboard/screen-reader chooser, review, cancel and focus                            | Actual first-client keyboard and assistive technology required. Mobile/native unqualified.                                                        | PLAN ONLY        | NOT COLLECTED |
+| M07-AC10 | No default body/trigger logs; diagnostics separately controlled                     | No normal content logging. A new content-inspection mode is not part of this slice.                                                               | PLAN ONLY        | NOT COLLECTED |
+| M07-AC11 | Feature-off dictation/audio unchanged                                               | Prove ordinary prose capacity handling, audio release, errors and late-final siblings remain unchanged.                                           | PLAN ONLY        | NOT COLLECTED |
 
 ## Required proof and rollout decision
 

@@ -2,6 +2,7 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeForegroundService
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
@@ -938,7 +939,7 @@ class ChatControllerOutboxTest {
         advanceUntilIdle()
         gateway.sendFailureAfterDispatch =
           GatewayRequestRejected(
-            GatewaySession.ErrorShape(
+            ErrorShape(
               code = "UNAVAILABLE",
               message = "Gateway is restarting",
               details =
@@ -987,7 +988,7 @@ class ChatControllerOutboxTest {
 
       gateway.online = true
       gateway.sendFailureAfterDispatch =
-        GatewayRequestRejected(GatewaySession.ErrorShape(code = "UNAVAILABLE", message = "cached run failed"))
+        GatewayRequestRejected(ErrorShape(code = "UNAVAILABLE", message = "cached run failed"))
       first.handleGatewayEvent("health", null)
       advanceUntilIdle()
 
@@ -2200,7 +2201,7 @@ class ChatControllerOutboxTest {
         "chat",
         """{"sessionKey":"custom","runId":"owner-a-row","state":"delta","message":{"role":"assistant","content":[{"type":"text","text":"private A stream"}]}}""",
       )
-      assertNull(chat.streamingAssistantText.value)
+      assertNull(chat.streamingAssistant.value?.text)
 
       chat.switchSession("agent:other:main")
       defaultAgentId = "owner-a"
@@ -2706,7 +2707,7 @@ class ChatControllerOutboxTest {
           )
         }.toString(),
       )
-      assertEquals("Original run is still working.", chat.streamingAssistantText.value)
+      assertEquals("Original run is still working.", chat.streamingAssistant.value?.text)
 
       // A follow-up send must see the accepted head as live-owned: it dispatches directly,
       // without erasing the running turn or parking its durable row.
@@ -2714,7 +2715,7 @@ class ChatControllerOutboxTest {
       advanceTimeBy(10_000)
       assertTrue(followUp)
       assertEquals(listOf("slow turn", "second"), gateway.sentMessages)
-      assertEquals("Original run is still working.", chat.streamingAssistantText.value)
+      assertEquals("Original run is still working.", chat.streamingAssistant.value?.text)
       assertTrue(outbox.rows().values.none { it.status == ChatOutboxStatus.Failed })
     }
 

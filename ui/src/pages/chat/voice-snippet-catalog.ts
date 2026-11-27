@@ -59,7 +59,10 @@ export class VoiceSnippetCatalogView {
     return this.current();
   }
 
-  private async run(operation: () => Promise<boolean>): Promise<boolean> {
+  private async run(
+    operation: () => Promise<boolean>,
+    preserveEditorOnFailure = false,
+  ): Promise<boolean> {
     if (this.busy) {
       return false;
     }
@@ -82,6 +85,10 @@ export class VoiceSnippetCatalogView {
         if (error instanceof VoiceSnippetValidationError) {
           this.error = error.code;
           this.collisionIds = error.ids;
+        } else if (preserveEditorOnFailure) {
+          // Keep the edit and its original compare-and-set value. A manual
+          // reload can reconcile an uncertain write; never replay it here.
+          this.error = "unavailable";
         } else {
           this.retire("unavailable");
         }
@@ -143,7 +150,7 @@ export class VoiceSnippetCatalogView {
       this.stored = next;
       this.catalog = next;
       return true;
-    });
+    }, true);
   }
 
   async export(): Promise<string | null> {

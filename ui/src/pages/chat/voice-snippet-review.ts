@@ -45,7 +45,6 @@ export class VoiceSnippetReview {
       catalog: VoiceSnippetCatalog;
       signal: AbortSignal;
       isCurrent: () => boolean;
-      loadCatalog: () => Promise<VoiceSnippetCatalog>;
       deliver: (
         result: DictationRefinementResult,
       ) => "committed" | "not-committed" | "outcome-unknown";
@@ -90,15 +89,12 @@ export class VoiceSnippetReview {
     this.error = null;
     this.changes.publish();
     try {
-      // Reads are freshly authorized before the first materialization and each choice.
-      const current = await this.options.loadCatalog();
-      if (!this.current() || revision !== this.revision) {
-        return;
-      }
+      // Catalog content belongs to the admitted capture. Connection and
+      // destination checks still apply when the user acts on the review.
       const resolved = this.index.resolve(
         this.options.request,
         this.intents,
-        current,
+        this.options.catalog,
         this.choices,
       );
       const escapes = resolved.literalEdits.map((edit) => ({
@@ -170,7 +166,7 @@ export class VoiceSnippetReview {
     this.busy = true;
     this.changes.publish();
     try {
-      if (!(await this.revalidate())) {
+      if (!this.current()) {
         return false;
       }
       const outcome = this.options.deliver(this.result);
@@ -192,25 +188,8 @@ export class VoiceSnippetReview {
     }
   }
 
-  private async revalidate(): Promise<boolean> {
-    const catalog = await this.options.loadCatalog();
-    if (!this.current()) {
-      return false;
-    }
-    const current = this.index.resolve(this.options.request, this.intents, catalog, this.choices);
-    if (
-      catalog.revision !== this.options.catalog.revision ||
-      !catalog.enabled ||
-      current.problems.length
-    ) {
-      this.error = "stale-catalog";
-      return false;
-    }
-    return true;
-  }
-
-  /** Manual recovery is a new materialization and uses the same authorization as acceptance. */
-  async exportText(): Promise<string | null> {
+  /** Recover the admitted result while its capture and connection are current. */
+  exportText(): string | null {
     if (
       !this.current() ||
       this.busy ||
@@ -222,18 +201,7 @@ export class VoiceSnippetReview {
     ) {
       return null;
     }
-    this.busy = true;
-    this.changes.publish();
-    try {
-      return (await this.revalidate()) ? this.result.text : null;
-    } catch {
-      this.result = null;
-      this.error = "unavailable";
-      return null;
-    } finally {
-      this.busy = false;
-      this.changes.publish();
-    }
+    return this.result.text;
   }
 
   cancel(): void {

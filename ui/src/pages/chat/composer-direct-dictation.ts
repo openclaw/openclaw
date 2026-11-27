@@ -1,7 +1,11 @@
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
-import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
+import {
+  focusComposerInput,
+  readComposerEditor,
+  selectComposerInput,
+} from "../../lib/composer-input.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
@@ -29,6 +33,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
             start: textarea.selectionStart,
             end: textarea.selectionEnd,
             value: textarea.value,
+            maxLength: textarea.maxLength,
           })?.value
         : undefined;
     },
@@ -51,6 +56,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
             start: late ? target.selectionStart : target.value.length,
             end: late ? target.selectionEnd : target.value.length,
             value: target.value,
+            maxLength: target.maxLength,
           },
           late,
           preservePreview,
@@ -99,6 +105,28 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
         isCurrent,
         commit: (text) => {
           if (!isCurrent()) {
+            return false;
+          }
+          const editor = readComposerEditor(target);
+          if (editor) {
+            const insertion = place(text, selection, selection, undefined, undefined, true);
+            if (
+              !insertion?.changed ||
+              (target.maxLength >= 0 && insertion.value.length > target.maxLength)
+            ) {
+              return false;
+            }
+            editor.replace(
+              insertion.value.slice(selection.start, insertion.caret),
+              selection.start,
+              selection.end,
+              true,
+            );
+            return target.value === insertion.value;
+          }
+          // A mention-capable surface may not have mounted the rich editor yet.
+          const mentions = target.getAttribute("data-composer-mentions");
+          if (mentions && mentions !== "[]") {
             return false;
           }
           capturedSelection = selection;

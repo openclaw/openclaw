@@ -212,7 +212,9 @@ async function scanLaunchdDir(params: {
   return results;
 }
 
-export async function findSystemGatewayServices(): Promise<ExtraGatewayService[]> {
+export async function findSystemGatewayServices(
+  includeEntry?: (entry: string) => boolean,
+): Promise<ExtraGatewayService[]> {
   if (process.platform !== "linux") {
     return [];
   }
@@ -220,14 +222,8 @@ export async function findSystemGatewayServices(): Promise<ExtraGatewayService[]
   const results: ExtraGatewayService[] = [];
   try {
     for (const dir of DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS) {
-      results.push(
-        ...(
-          await scanSystemdDir({
-            dir,
-            scope: "system",
-          })
-        ).map(projectService),
-      );
+      const services = await scanSystemdDir({ dir, scope: "system", includeEntry });
+      results.push(...services.map(projectService));
     }
   } catch {
     return [];

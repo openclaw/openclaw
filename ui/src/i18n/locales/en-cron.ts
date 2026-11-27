@@ -11,12 +11,17 @@ const enCron = {
       script: "Script: {script}",
       agent: "Agent: {message}",
     },
+    linkUnavailable: "Couldn’t open this automation. Reload this page to try again.",
     missingConfigRevision:
       "This automation is missing its configuration revision. Refresh and try again.",
     changedOnGateway:
       "This automation changed on the Gateway. The latest definition is loaded; review it before retrying.",
     changedOnGatewayLoadFailed:
       "This automation changed on the Gateway, but the latest definition could not be loaded. Refresh before retrying.",
+    saveConflictReloaded:
+      "This automation changed before your edits could be saved. Review the latest settings shown here, then reapply your edits.",
+    saveConflictReloadFailed:
+      "This automation changed before your edits could be saved. Copy your edits before reloading the page, then review the latest settings in Edit before reapplying them.",
     runQueued: "Run queued. Run ID: {runId}",
     adminRequired: "Only the owner with automation access or an admin can change this automation.",
     runNotStarted: {
@@ -45,6 +50,10 @@ const enCron = {
         "Condition triggers require an interval, cron, or stream schedule.",
       systemTextRequired: "System text is required.",
       agentMessageRequired: "Agent message is required.",
+      payloadThinkingUnsupported:
+        "This reasoning level is not available for the selected model. Choose an available level or Default.",
+      payloadThinkingUnsupportedExisting:
+        "This automation’s saved reasoning level is not available for the selected model. You can still update other settings or pause it.",
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
       deliveryModeRequired: "Choose an option before saving.",
       webhookUrlRequired: "Enter the URL where OpenClaw should send results.",
@@ -97,6 +106,13 @@ const enCron = {
       moreJob: "More actions for {name}",
     },
 
+    result: {
+      progress: "Progress",
+      done: "Completed",
+      blocked: "Blocked",
+      needs_attention: "Needs attention",
+      no_change: "No change",
+    },
     attention: {
       title: "Last run failed",
       autoDisabledTitle: "Automatically stopped",
@@ -405,6 +421,7 @@ const enCron = {
       unavailable:
         "MCP Events is unavailable. Enable and configure the plugin to manage this source.",
       discoveryFailed: "Couldn’t load events. Refresh the catalog before saving.",
+      catalogUnavailable: "Couldn’t load events. Try {action}. Details: {error}",
       catalogMismatch: "The event catalog returned a different server. Refresh and try again.",
       catalogCursor: "The event catalog repeated a page. Check the MCP server and refresh.",
       catalogLimit:

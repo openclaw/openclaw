@@ -1402,6 +1402,7 @@ const reviewedOperations = new Map([
         operations: [
           "readGatewayLastShutdownInDatabase",
           "inspectGatewayCrashLoopBreakerInDatabase",
+          "countRepairableMaintenanceStartupFailuresInDatabase",
         ],
         evidence:
           "SQL readers execute only through gatewayBootReadOperations in the shared-state read worker or gatewayBootOperations begin/recover in the shared-state writer. Host lifecycle APIs dispatch these operations; remaining host imports from this kernel are pure helpers and constants.",
@@ -2187,6 +2188,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-archive-metadata.ts",
+    [
+      {
+        tier: "T1",
+        operations: ["readTranscriptArchiveRows"],
+        evidence:
+          "Usage workers read archive identities. Transcript workers and synchronous history readers use the same query for ordered archive listings.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-archive-read.ts",
     [
       {
@@ -2197,13 +2209,7 @@ const reviewedOperations = new Map([
           "readTranscriptArchivePageInWorker",
         ],
         evidence:
-          "Only session-transcript.worker.ts:230 (presence) and session-accessor.sqlite-archive.worker.ts:483,491 (page/final) call these readers; shared archive listing remains T1.",
-      },
-      {
-        tier: "T1",
-        operations: ["listTranscriptArchivesFromDatabase"],
-        evidence:
-          "Durable archive enumeration reaches this query through transcript, Memory corpus, and usage-cost workers. session-transcript-inventory-runtime.ts returns an empty archive inventory for memory actors. Synchronous history/SDK readers retain the shared durable kernel. The shared list kernel remains mixed.",
+          "The transcript worker reads archive presence; the archive worker reads final messages and pages.",
       },
     ],
   ],
@@ -3263,28 +3269,18 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/state/agent-provenance.ts",
-    [
-      {
-        tier: "W",
-        operations: ["deleteAgentProvenanceForAgent"],
-        evidence:
-          "Only completeAgentDeletionJournalInDatabase, reached from agent-deletion.worker.ts, deletes provenance; lifecycle incarnation readers retain synchronous live-authority checks",
-      },
-    ],
-  ],
-  [
     "src/state/agent-provenance.kernel.ts",
     [
       {
         tier: "W",
         operations: [
+          "deleteAgentProvenanceForAgent",
           "listAgentProvenanceInDatabase",
           "recordAgentProvenanceInDatabase",
           "readAgentProvenanceBatchInDatabase",
         ],
         evidence:
-          "agentProvenance.list/readBatch execute through agentProvenanceReadOperations in the read-only registry; record executes through agentProvenanceOperations in agent-provenance.worker.ts; native synchronous lifecycle guards use the joined projection in agent-lifecycle-read.kernel.ts",
+          "agentProvenance.list/readBatch execute through agentProvenanceReadOperations in the read-only registry; record executes through agentProvenanceOperations in agent-provenance.worker.ts; journal completion deletes provenance on its existing worker transaction; native synchronous lifecycle guards use the joined projection in agent-lifecycle-read.kernel.ts",
       },
     ],
   ],
@@ -3779,6 +3775,7 @@ const exceptionModules = new Set([
   "src/state/openclaw-state-db-transaction.ts",
   "src/state/openclaw-state-lease-store.ts",
   "src/state/openclaw-state-lease-storage.ts",
+  "src/state/openclaw-agent-db-lease-rows.ts",
   "src/state/openclaw-agent-db-lease.ts",
   "src/infra/gateway-boot-lifecycle.ts",
   "src/infra/sqlite-staging-token.ts", // acquireSqliteStagingToken holds the private snapshot admission/retirement lock through native transactions.

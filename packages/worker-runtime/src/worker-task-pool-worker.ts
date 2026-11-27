@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
+import { workerTaskUnavailableError } from "./worker-task-error.js";
 import type { WorkerTaskHost } from "./worker-task-host.js";
 import { releaseWorkerNativeSectionsOnExit } from "./worker-task-native-sections.js";
 import type { Slot, Task, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
@@ -74,7 +75,7 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
   options: Pick<WorkerTaskPoolOptions<Output>, "workerUrl" | "workerOptions" | "prepareWorker">;
   host: WorkerTaskHost;
   runInContext: <T>(operation: () => T) => T;
-  unavailableError: (message: string, cause?: unknown) => Error;
+  preferShared: (slot: Slot<Input, Output>) => void;
   onStarted: (worker: WorkerLifecycle) => void;
   onMessage: (message: unknown) => void;
   onFailure: (error: Error, nativeFailure?: true) => void;
@@ -125,7 +126,7 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
     slot.native.on("execution-exit", (code) => {
       releaseWorkerNativeSectionsOnExit(slot.nativeSections);
       if (!slot.retiring) {
-        params.onFailure(params.unavailableError(`worker exited with code ${code}`), true);
+        params.onFailure(workerTaskUnavailableError(slot, `worker exited with code ${code}`), true);
       }
     });
   } else {
@@ -141,7 +142,10 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
       if (isRecord(message) && message.status === "ready") {
         slot.ready = true;
       } else {
-        params.onFailure(params.unavailableError("worker task server did not become ready"), true);
+        params.onFailure(
+          workerTaskUnavailableError(slot, "worker task server did not become ready"),
+          true,
+        );
       }
       return;
     }
@@ -153,10 +157,10 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
     }
   });
   worker.on("error", (error) =>
-    params.onFailure(params.unavailableError(String(error), error), true),
+    params.onFailure(workerTaskUnavailableError(slot, String(error), error), true),
   );
   worker.on("messageerror", (error) =>
-    params.onFailure(params.unavailableError(String(error), error)),
+    params.onFailure(workerTaskUnavailableError(slot, String(error), error)),
   );
   worker.once("exit", (code) => {
     releaseWorkerNativeSectionsOnExit(slot.nativeSections);
@@ -164,5 +168,8 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
     counted = false;
     params.onExit(code, wasCounted);
   });
+  if (params.host.isSharedWorker?.(worker)) {
+    params.preferShared(slot);
+  }
   return worker;
 }

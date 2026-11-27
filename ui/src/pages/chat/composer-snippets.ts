@@ -101,12 +101,6 @@ export class ComposerSnippetCapture {
       isCurrent: () => this.current(),
       // Missing stable provider receipts permit deliberate UI selection, never automatic activation.
       literalCode: !structured?.qualified || !structured.finalized,
-      loadCatalog: async () => {
-        if (!this.current() || !(await this.view.load()) || !this.current() || !this.view.catalog) {
-          throw new Error("unavailable");
-        }
-        return this.view.catalog;
-      },
       deliver: (result: DictationRefinementResult) => {
         if (!this.current() || !this.options.target?.isCurrent()) {
           return "not-committed";

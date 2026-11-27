@@ -1,6 +1,8 @@
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import type { RequesterSettleWakeBatchState } from "../announce/subagent-announce.requester-settle-state.js";
-import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import type {
+  RequesterSettleWakeState,
+  SubagentRunRecord,
+} from "../registry/subagent-registry.types.js";
 
 export type RequesterWakeMutation =
   | {
@@ -9,7 +11,7 @@ export type RequesterWakeMutation =
     }
   | {
       kind: "transition";
-      state: RequesterSettleWakeBatchState;
+      state: RequesterSettleWakeState;
       requesterDelivery?: NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"];
     }
   | { kind: "complete" };

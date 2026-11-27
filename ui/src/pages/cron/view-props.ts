@@ -5,6 +5,7 @@ import {
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
+import { validateCronModelThinkingSelection } from "../../lib/cron/model-thinking-validation.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
 import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
@@ -91,9 +92,17 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     });
   }
   const eventSource = page.eventSource.view;
+  const persistedPayload = cron.cronEditingJob?.payload;
   const fieldErrors = {
     ...page.cron().cronFieldErrors,
     ...validateCronEventSelection(page.cron().cronForm, eventSource),
+    ...validateCronModelThinkingSelection(
+      page.cron().cronForm,
+      models.catalog,
+      persistedPayload?.kind === "agentTurn"
+        ? { model: persistedPayload.model, thinking: persistedPayload.thinking }
+        : undefined,
+    ),
   };
   return {
     ...page.actions,

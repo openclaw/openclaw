@@ -32,7 +32,6 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 
 type PublicationEnvelope = {
   payload: Record<string, unknown>;
-  plan: ReturnType<ConnectionSessionRows["prepareDelivery"]>;
   variants: Array<
     | {
         payload: Record<string, unknown>;
@@ -50,6 +49,14 @@ type PublicationDelivery = {
   serializeSession: () => Buffer;
   delivered: (client: GatewayClient) => void;
 };
+
+function deliveredAncestors(plan: PublicationDelivery["plan"]) {
+  return plan.ancestor
+    ? plan.rows
+      ? plan.rows.wire.slice(1)
+      : plan.ancestor.ancestorSessions
+    : undefined;
+}
 
 /** Stable producer fields retain their order around the two history-owned ancestor fields. */
 function prepareEnvelopeSerialization(
@@ -83,13 +90,17 @@ function prepareEnvelopeSerialization(
   const suffix = prefix + flush();
   const sharedEnvelope = segments.length === 0 ? Buffer.from(suffix) : undefined;
   return (
-    recipient: Record<string, unknown>,
+    plan: PublicationDelivery["plan"],
     serializeSession: () => Buffer,
     serializeMessage?: () => Buffer,
   ): ReturnType<NonNullable<SessionEventProjection["serializePayload"]>> => {
     let encoded = "";
     for (const segment of segments) {
-      const field = JSON.stringify({ [segment.field]: recipient[segment.field] }).slice(1, -1);
+      const value =
+        segment.field === "ancestorSessions"
+          ? deliveredAncestors(plan)
+          : plan.ancestor?.ancestorSessionRefs;
+      const field = JSON.stringify({ [segment.field]: value }).slice(1, -1);
       encoded += segment.prefix + (field ? `${field},` : "");
     }
     encoded += suffix;
@@ -187,6 +198,7 @@ export function prepareSessionEventProjection(
         ? prepared.ancestors
         : projection.ancestorRows(record, read);
     const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
+    const reuseEnvelope = prepared?.reuseEnvelope && !eventScope.singleRecipient;
     const ancestorRevision = randomUUID();
     const audiences = new Map<
       string,
@@ -233,7 +245,7 @@ export function prepareSessionEventProjection(
           return undefined;
         }
         const hiddenAncestors: Array<{ key: string; histories: Map<object, object> }> = [];
-        const ancestorRowIds: number[] | undefined = prepared?.reuseEnvelope ? [] : undefined;
+        const ancestorRowIds: number[] | undefined = reuseEnvelope ? [] : undefined;
         const ancestorRows = ancestors?.every((ancestor) => projection.isCurrent(ancestor))
           ? ancestors.flatMap((ancestor) => {
               const target = presentation.target({
@@ -254,7 +266,7 @@ export function prepareSessionEventProjection(
           : undefined;
         // Different identities can receive identical immutable rows. Share delivery work
         // only after current disclosure, including every visible and hidden ancestor.
-        const contentKey = prepared?.reuseEnvelope
+        const contentKey = reuseEnvelope
           ? JSON.stringify([
               sessionRowId(row),
               ancestorRows && ancestorRowIds,
@@ -302,7 +314,6 @@ export function prepareSessionEventProjection(
         );
         const envelope: PublicationEnvelope = audience.envelope ?? {
           variants: [],
-          plan,
           payload: {
             ...base,
             // Restore only slots owned by this producer; compact message envelopes never had pin fields.
@@ -315,11 +326,7 @@ export function prepareSessionEventProjection(
             cyberAccessProgram: row.cyberAccessProgram ?? null,
             fastMode: row.fastMode,
             effectiveFastMode: row.effectiveFastMode,
-            ancestorSessions: plan.ancestor
-              ? plan.rows
-                ? plan.rows.wire.slice(1)
-                : plan.ancestor.ancestorSessions
-              : undefined,
+            ancestorSessions: deliveredAncestors(plan),
             ancestorSessionRefs: plan.ancestor?.ancestorSessionRefs,
             visibility: row.visibility,
             sharingRole: row.sharingRole,
@@ -336,7 +343,7 @@ export function prepareSessionEventProjection(
         if (Object.hasOwn(envelope.payload, "childSessions")) {
           envelope.payload.childSessions = row.childSessions;
         }
-        if (prepared?.reuseEnvelope) {
+        if (reuseEnvelope) {
           audience.envelope = envelope;
         }
         let sessionBytes: Buffer | undefined;
@@ -378,7 +385,6 @@ export function prepareSessionEventProjection(
         const { row } = audience;
         const envelope = delivery.envelope;
         let template = envelope.variants[variant];
-        const reused = template !== undefined;
         if (!template) {
           let refs = fieldRefs ? envelope.fieldRefs : undefined;
           if (fieldRefs && !refs) {
@@ -435,40 +441,22 @@ export function prepareSessionEventProjection(
           template = { payload: wirePayload };
           envelope.variants[variant] = template;
         }
-        const plan = delivery.plan;
-        // Templates never carry one connection's row versions or ancestor certificates to another.
-        const wirePayload =
-          prepared?.reuseEnvelope && envelope.plan !== plan
-            ? {
-                ...template.payload,
-                session: plan.rows ? plan.rows.wire[0] : row,
-                ancestorSessions: plan.ancestor
-                  ? plan.rows
-                    ? plan.rows.wire.slice(1)
-                    : plan.ancestor.ancestorSessions
-                  : undefined,
-                ancestorSessionRefs: plan.ancestor?.ancestorSessionRefs,
-              }
-            : template.payload;
         const message = omitMessage ? undefined : serializeMessage;
-        // A singleton uses the ordinary encoder; prepare shared fragments only on actual reuse.
-        const serialize =
-          prepared?.reuseEnvelope && reused
-            ? (template.serialize ??= prepareEnvelopeSerialization(
-                template.payload,
-                Boolean(message),
-                envelopeFields,
-                Boolean(audience.ancestors?.length),
-              ))
-            : undefined;
         const serializeSession = delivery.serializeSession;
         projected = {
-          payload: wirePayload,
+          ...(reuseEnvelope
+            ? {
+                serializePayload: () =>
+                  (template.serialize ??= prepareEnvelopeSerialization(
+                    template.payload,
+                    Boolean(message),
+                    envelopeFields,
+                    Boolean(audience.ancestors?.length),
+                  ))(delivery.plan, serializeSession, message),
+              }
+            : { payload: template.payload }),
           serializeSession,
           serializeMessage: message,
-          serializePayload: serialize
-            ? () => serialize(wirePayload, serializeSession, message)
-            : undefined,
           delivered: delivery.delivered,
         };
         delivery.variants[variant] = projected;
