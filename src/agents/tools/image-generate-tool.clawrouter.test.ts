@@ -218,9 +218,9 @@ it("uses the same request key for inferred and explicit Google edit resolution",
         );
       }
       expect(lookup).toHaveBeenCalledTimes(2);
-      const [inferred, explicit] = lookup.mock.calls;
-      expect(inferred?.[1].requestKey).toMatch(/^[a-f0-9]{64}$/);
-      expect(inferred?.[1].requestKey).toBe(explicit?.[1].requestKey);
+      const [inferred, explicit] = lookup.mock.calls.map(([, query]) => query?.requestKey);
+      expect(inferred).toMatch(/^[a-f0-9]{64}$/);
+      expect(explicit).toBe(inferred);
     } finally {
       lookup.mockRestore();
     }
