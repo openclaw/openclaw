@@ -30,8 +30,8 @@ import {
   type GatewayRunSignalAction,
   type GatewayRunSignalContext,
   type GatewayRunSignalRequest,
+  type GatewayShutdownFailure as ShutdownFailure,
 } from "./run-loop-request.js";
-import type { GatewayShutdownFailure as ShutdownFailure } from "./run-loop-request.js";
 import { resolveGatewayShutdownBudget } from "./run-loop-shutdown-budget.js";
 import * as loopCompletion from "./run-loop-shutdown-format.js";
 import { createGatewayRunSignals } from "./run-loop-signals.js";
