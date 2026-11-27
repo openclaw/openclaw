@@ -162,6 +162,9 @@ export function createOpenClawStateCurrentWarmReader<T>(
           }
           unregister();
         };
+        // SQLite changes data_version on this connection only when another connection
+        // publishes a commit; the result stays exact until it changes.
+        let observed: { dataVersion: number; value: T } | undefined;
         const reader = {
           path: pathname,
           scope,
@@ -169,12 +172,22 @@ export function createOpenClawStateCurrentWarmReader<T>(
             if (!assertCurrent(current)) {
               return { available: false };
             }
+            const dataVersion = readSqliteDataVersion(connection.database.db);
+            if (dataVersion !== undefined && observed?.dataVersion === dataVersion) {
+              retained?.observe();
+              return { available: true, value: observed.value };
+            }
+            observed = undefined;
             const result = runOpenClawStateCurrentReadConnection(
               connection,
               operation,
               openStateSchemaReadAdmission,
             );
             retained?.observe();
+            // Read before the rows: a commit published during the read forces another.
+            if (dataVersion !== undefined) {
+              observed = { dataVersion, value: result };
+            }
             return { available: true, value: result };
           },
         };
@@ -198,6 +211,14 @@ export function createOpenClawStateCurrentWarmReader<T>(
       return bound.read(scope);
     });
   };
+}
+
+function readSqliteDataVersion(db: OpenClawStateReadConnection["database"]["db"]) {
+  if (isPostgresSqlConnection(db)) {
+    return undefined;
+  }
+  const row = db.prepare("PRAGMA data_version").get(); // sqlite-allow-raw -- Connection-local commit counter.
+  return typeof row?.data_version === "number" ? row.data_version : undefined;
 }
 
 /** An independent current reader keeps composite policy rows in one bounded snapshot. */
