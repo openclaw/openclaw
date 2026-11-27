@@ -114,6 +114,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       dynamicTools: toolBridge.specs,
       askUserAvailable: toolBridge.availableTools.some((tool) => tool.name === "ask_user"),
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
+      webSearchRequested: toolState.webSearchRequested,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
       systemPromptReplaced: turnState.promptBuild.systemPromptReplaced,
