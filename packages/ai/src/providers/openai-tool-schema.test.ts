@@ -134,4 +134,12 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(resolveOpenAIToolStrictFlag(open, true)).toBe(false);
     expect(resolveOpenAIToolStrictFlag({ ...open, additionalProperties: false }, true)).toBe(true);
   });
+
+  // A union branch without a type is valid JSON Schema but outside strict mode's subset.
+  it("keeps a closed tool with a union key non-strict, but accepts a nullable type list", () => {
+    const union = objectSchema({ mode: { anyOf: [{ enum: ["auto"] }, { type: "integer" }] } });
+    expect(resolveOpenAIToolStrictFlag(union, true)).toBe(false);
+    const nullable = objectSchema({ limit: { type: ["integer", "null"] } });
+    expect(resolveOpenAIToolStrictFlag(nullable, true)).toBe(true);
+  });
 });
