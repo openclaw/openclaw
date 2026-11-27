@@ -33,24 +33,39 @@ export async function resolveStrictToolModel<M extends Model>(model: M): Promise
   return rejected ? withoutStrictTools(model) : model;
 }
 
-// OpenAI's strict refusal: 400 invalid_function_parameters, param tools[n].parameters,
-// "Invalid schema for function '<name>': ... additionalProperties must be false for a strict
-// schema". Other endpoints name strict or the tool schema the same way.
-const STRICT_REJECTION =
-  /invalid_function_parameters|invalid schema for function|\bstrict\b|json_schema|additionalProperties|\btools\[\d+\]/i;
-// Account, quota, rate and size errors are never strict refusals, whatever status a proxy uses.
-const NOT_STRICT_REJECTION =
-  /insufficient_quota|quota|billing|credit|invalid_api_key|unauthori[sz]ed|authentication|permission|rate_limit|rate limit|too many requests|context_length_exceeded|maximum context/i;
+// Account, quota, rate and size failures, whatever status a proxy reports them with.
+const NOT_STRICT_CODE =
+  /insufficient_quota|quota|billing|invalid_api_key|unauthori[sz]ed|authentication|permission|rate_limit|context_length_exceeded/i;
+// OpenAI's strict refusal: code invalid_function_parameters, param tools[n].parameters.
+const STRICT_CODE = /^invalid_function_parameters$/;
+const STRICT_PARAM = /^tools\[\d+\]/;
+// Without structured fields: "Invalid schema for function '<name>': ... additionalProperties
+// must be false for a strict schema", or another endpoint naming strict or the tool schema.
+const STRICT_MESSAGE = /invalid schema for function|\bstrict\b|json_schema|additionalProperties/i;
+const NOT_STRICT_MESSAGE =
+  /insufficient_quota|exceeded your current quota|invalid_api_key|incorrect api key|unauthori[sz]ed|rate limit|too many requests|context_length_exceeded|maximum context length/i;
 
-/** The provider's own description of a refused request: code, type, param and message. */
-function describeProviderError(error: unknown): string {
-  if (!isRecord(error)) {
-    return "";
-  }
+function readString(...values: unknown[]): string {
+  return values.find((value): value is string => typeof value === "string") ?? "";
+}
+
+/**
+ * Whether the provider's error is a strict or tool-schema rejection. Structured fields decide
+ * first (an account code vetoes, a strict code or tools[n] param confirms); the message only
+ * decides when neither is present, so a tool named like "credit_lookup" cannot veto.
+ */
+function isStrictRejection(error: Record<string, unknown>): boolean {
   const body = isRecord(error.error) ? error.error : {};
-  return [body.code, body.type, body.param, body.message, error.code, error.param, error.message]
-    .filter((part) => typeof part === "string")
-    .join(" ");
+  const code = readString(body.code, error.code);
+  const type = readString(body.type, error.type);
+  if (NOT_STRICT_CODE.test(code) || NOT_STRICT_CODE.test(type)) {
+    return false;
+  }
+  if (STRICT_CODE.test(code) || STRICT_PARAM.test(readString(body.param, error.param))) {
+    return true;
+  }
+  const message = readString(body.message, error.message);
+  return STRICT_MESSAGE.test(message) && !NOT_STRICT_MESSAGE.test(message);
 }
 
 /**
@@ -63,12 +78,10 @@ export function isStrictToolRetryCandidate(
   tools: readonly unknown[] | undefined,
   error: unknown,
 ): boolean {
-  const status = isRecord(error) ? error.status : undefined;
-  const description = describeProviderError(error);
   return (
-    (status === 400 || status === 422) &&
-    STRICT_REJECTION.test(description) &&
-    !NOT_STRICT_REJECTION.test(description) &&
+    isRecord(error) &&
+    (error.status === 400 || error.status === 422) &&
+    isStrictRejection(error) &&
     !declaresStrictMode(model) &&
     (tools ?? []).some(
       (tool) =>

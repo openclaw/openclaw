@@ -32,10 +32,11 @@ const reply = `data: ${JSON.stringify({
   choices: [{ index: 0, delta: { content: "done" }, finish_reason: "stop" }],
 })}\n\ndata: [DONE]\n\n`;
 
-// The strict refusal OpenAI returned for an open-map tool schema (captured 2026-11-27).
+// The strict refusal OpenAI returned for an open-map tool schema (captured 2026-11-27). The
+// account-sounding tool name must not veto it.
 const strictRefusal = {
   message:
-    "Invalid schema for function 'lookup': In context=(), additionalProperties must be false for a strict schema",
+    "Invalid schema for function 'credit_lookup': In context=(), additionalProperties must be false for a strict schema",
   type: "invalid_request_error",
   param: "tools[0].parameters",
   code: "invalid_function_parameters",
