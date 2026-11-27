@@ -76,6 +76,7 @@ test -z \"\${OPENCLAW_EAGER_BROWSER_CONTROL_SERVER:-}\"
 entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
 node \"\$entry\" config set browser.enabled true >/dev/null
 node \"\$entry\" config set browser.noSandbox true >/dev/null
+node \"\$entry\" config set browser.ssrfPolicy.allowedHostnames '[\"127.0.0.1\"]' --strict-json >/dev/null
 openclaw_e2e_exec_gateway \"\$entry\" $PORT loopback /tmp/browser-plugin-profiles-gateway.log" >/dev/null
 
 if ! docker_e2e_wait_container_bash "$CONTAINER_NAME" 240 0.5 \
@@ -188,6 +189,8 @@ profile evaluate --fn '() => ({ userAgent: navigator.userAgent, width: innerWidt
   >/tmp/profile-device-desktop-state.json
 assert_device_state /tmp/profile-device-desktop-state.json Windows 1280 720 1 1920 1080 0 landscape-primary
 
+node /tmp/assert-tab-isolation.mjs "$entry" "$PORT" "$PROFILE"
+
 profile stop >/tmp/profile-stopped-final.json
 for _ in $(seq 1 80); do
   if ! kill -0 "$BROWSER_PID" 2>/dev/null &&
@@ -211,6 +214,9 @@ printf 'profile=%s browserPid=%s cdpPort=%s playwrightCore=%s\n' \
 CONTAINER
 docker_e2e_docker_cmd cp \
   "$LIFECYCLE_SCRIPT" "$CONTAINER_NAME:/tmp/browser-plugin-profiles-lifecycle.sh"
+docker_e2e_docker_cmd cp \
+  "$ROOT_DIR/scripts/e2e/lib/browser-plugin-profiles/assert-tab-isolation.mjs" \
+  "$CONTAINER_NAME:/tmp/assert-tab-isolation.mjs"
 
 if ! docker_e2e_docker_cmd exec "$CONTAINER_NAME" \
   bash /tmp/browser-plugin-profiles-lifecycle.sh "$PORT" "$TOKEN" "$PROFILE"
