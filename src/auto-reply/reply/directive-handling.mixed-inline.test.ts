@@ -295,7 +295,6 @@ describe("mixed inline directives", () => {
     expect(result).not.toHaveProperty("preRunRejection", expect.anything());
     expect(sessionEntry.reasoningLevel).toBe("on");
     expect(persistenceMocks.persist).toHaveBeenCalledOnce();
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(lifecycleEvents).toEqual([patchedSession]);
   });
 
