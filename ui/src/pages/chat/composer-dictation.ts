@@ -1,9 +1,12 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import type { ComposerDictationCapture } from "./composer-dictation-capture.ts";
+import type {
+  ComposerDictationFailure,
+  ComposerDictationOwnerOptions,
+} from "./composer-dictation-owner-options.ts";
 import type { placeComposerDictation } from "./composer-dictation-session.ts";
 import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
@@ -11,31 +14,6 @@ const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
 
 type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recording" | "stopping";
-
-type ComposerDictationFailure = {
-  kind: "interrupted" | "start" | "busy";
-  preservesText: boolean;
-};
-
-export type ComposerDictationOwnerOptions = {
-  client: GatewayBrowserClient | null;
-  sessionKey?: string;
-  prepareSession?: () => Promise<string | undefined>;
-  draftKey?: string;
-  /** Connection/account identity from the existing composer scope owner. */
-  contextKey?: string;
-  corrections?: { mode: "off" | "explicit"; locale: string };
-  getDraftRevision?: () => number;
-  captureDraftGuard?: () => () => boolean;
-  connected: boolean;
-  enabled: boolean;
-  dictationAvailable?: boolean;
-  realtimeTalkActive: boolean;
-  onCommit: (text: string, late?: true, preservePreview?: true, ownedOnly?: true) => void;
-  onError: (message: string, failure: ComposerDictationFailure) => void;
-  onTap?: () => void;
-  onDictationUnavailable?: () => void;
-};
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
 export class ComposerDictationOwner extends EventTarget {

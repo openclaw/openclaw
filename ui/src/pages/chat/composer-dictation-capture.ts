@@ -1,9 +1,9 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ComposerDictationOwnerOptions } from "./composer-dictation-owner-options.ts";
 import {
   ComposerDictationCommits,
   ComposerDictationSession,
 } from "./composer-dictation-session.ts";
-import type { ComposerDictationOwnerOptions } from "./composer-dictation.ts";
 
 // A later failure loading the full review must not require another fetch to
 // render the original transcript and its recovery actions.
