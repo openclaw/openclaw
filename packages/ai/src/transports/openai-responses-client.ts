@@ -389,9 +389,9 @@ function createResponsesTransportExecutor(config: {
             initialRejectedCompaction,
             buildFullHistoryRequest: () => buildRequest("full-history"),
             buildItemConflictRequest,
-            buildRequestWithoutStrictTools: () => {
+            buildToolsWithoutStrict: async () => {
               toolModel = withoutStrictTools(toolModel);
-              return buildRequest("checkpoint");
+              return (await buildRequest("checkpoint")).tools;
             },
             onStrictToolsRejected: () => recordStrictToolRejection(model),
             onCompactionRejected: (checkpoint) =>

@@ -291,8 +291,8 @@ export async function createResponsesStreamWithRecovery(params: {
     | OpenAIResponsesRequestParams
     | Promise<OpenAIResponsesRequestParams>;
   buildItemConflictRequest?: () => Promise<OpenAIResponsesRequestParams>;
-  /** Rebuilds this request, and every later rebuild, with strict tools off. */
-  buildRequestWithoutStrictTools?: () => Promise<OpenAIResponsesRequestParams>;
+  /** Non-strict tools for this request; every later rebuild also keeps strict off. */
+  buildToolsWithoutStrict?: () => Promise<OpenAIResponsesRequestParams["tools"]>;
   /** The retry without strict tools was accepted. */
   onStrictToolsRejected?: () => Promise<void>;
 }): Promise<{
@@ -536,15 +536,16 @@ export async function createResponsesStreamWithRecovery(params: {
           !nextAttempt &&
           !responseAccepted &&
           strictToolsRetry === "none" &&
-          params.buildRequestWithoutStrictTools &&
+          params.buildToolsWithoutStrict &&
           isStrictToolRetryCandidate(params.model, attempt.request.tools, error)
         ) {
           // One retry without strict tools; only an accepted retry teaches the route.
           strictToolsRetry = "pending";
           strictToolsDropped = true;
+          // Only the tools change: the active attempt keeps its recovered input and metadata.
           nextAttempt = {
-            kind: attempt.kind,
-            request: await params.buildRequestWithoutStrictTools(),
+            ...attempt,
+            request: { ...attempt.request, tools: await params.buildToolsWithoutStrict() },
           };
         }
         if (!nextAttempt) {
