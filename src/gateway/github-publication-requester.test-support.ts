@@ -251,8 +251,9 @@ async function createRequesterPolicySources(
       externalWrites.push(argv.join(" "));
     }
     if (argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"))) {
-      publishedTitles.push(JSON.parse(input!).title);
-      publishedBodies.push(JSON.parse(input!).body);
+      const { title, body } = JSON.parse(input!);
+      publishedTitles.push(title);
+      publishedBodies.push(body);
     }
   });
   return {

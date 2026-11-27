@@ -88,10 +88,6 @@ export async function prepareGitHubPublicationContent(params: {
   existingPullRequest?: string;
 }) {
   const { row } = params;
-  const firstCommit =
-    params.history && !params.existingPullRequest && !(row.title?.trim() && row.body?.trim())
-      ? await readFirstBranchCommit(params.history)
-      : undefined;
   const config = currentGitHubPublicationConfig();
   const initialEntry = params.readCurrentEntry();
   const initialShare = resolveSessionPublicShare(initialEntry);
@@ -101,13 +97,6 @@ export async function prepareGitHubPublicationContent(params: {
     agentId: row.agent_id,
     entry: initialEntry,
   });
-  const description = (row.body?.trim() || firstCommit?.description || params.defaultDescription)
-    .replace(/(?:\s*---\s*\n\[View the OpenClaw team session\]\([^\r\n)]*\)\s*)+$/u, "")
-    .replace(
-      /(?:^|\n\n)## Worked on by\n\n(?:- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\n)*- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?=\n\n|$)/gu,
-      "",
-    )
-    .trimEnd();
   const prepared = await prepareGitCoauthorAttribution({
     agentId: row.agent_id,
     config,
@@ -123,7 +112,21 @@ export async function prepareGitHubPublicationContent(params: {
     incognito: initialEntry?.incognito,
   });
   params.assertCurrent();
-
+  const firstCommit =
+    params.history && !params.existingPullRequest && !(row.title?.trim() && row.body?.trim())
+      ? await readFirstBranchCommit(params.history)
+      : undefined;
+  const description = (row.body?.trim() || firstCommit?.description || params.defaultDescription)
+    .replace(/(?:\s*---\s*\n\[View the OpenClaw team session\]\([^\r\n)]*\)\s*)+$/u, "")
+    .replace(
+      /(?:^|\n\n)## Worked on by\n\n(?:- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\n)*- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?=\n\n|$)/gu,
+      "",
+    )
+    .trimEnd();
+  // The publication commit holds only what the branch's own commits left out, so without a
+  // requested title it names the branch. The pull request describes the branch's work.
+  const commitTitle = row.title?.trim() || `Publish ${row.branch}`;
+  const title = row.title?.trim() || firstCommit?.title || commitTitle;
   const participantName = escapeMarkdownText(
     sanitizeChatDisplayText(params.participantDisplayName?.replace(/\s+/gu, " ").trim() ?? ""),
   );
