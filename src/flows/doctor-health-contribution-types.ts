@@ -126,11 +126,21 @@ export type DoctorHealthContribution = {
   healthChecks: readonly DoctorHealthCheck[];
   healthCheckIds: readonly string[];
   /** Read-only work check traced under Gateway maintenance; without one the contribution has work. */
-  pending?: (
-    ctx: DoctorHealthFlowContext,
-  ) => DoctorMaintenancePending | Promise<DoctorMaintenancePending>;
+  pending?: DoctorContributionPending;
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
+
+/**
+ * "diagnostic-only" declares that `run` never writes under `--fix`, so it never has work;
+ * doctor-health-contributions.diagnostic-only.test.ts runs each declared contribution in
+ * repair mode and fails when one changes a store. A function is the owner's read-only check
+ * and must decide with the same predicate as `run`.
+ */
+export type DoctorContributionPending =
+  | "diagnostic-only"
+  | ((
+      ctx: DoctorHealthFlowContext,
+    ) => DoctorMaintenancePending | Promise<DoctorMaintenancePending>);
 
 export type DoctorContributionHealthCheck = Omit<DoctorHealthCheck, "id" | "kind" | "source"> & {
   readonly id?: string;

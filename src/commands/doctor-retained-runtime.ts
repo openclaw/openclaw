@@ -7,11 +7,13 @@ import { maintainRetainedUpdateRuntimes } from "../infra/temp-artifact-cleanup.j
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { holdDoctorMaintenanceExit } from "./doctor-maintenance-exit.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import { inspectDoctorTemporaryDirectories } from "./doctor/shared/temporary-directories.js";
 
 type RetainedRuntimeAuthority = {
   assertCurrent: () => void;
   assertResourcesSettled?: (directory: string) => void;
+  onRecognized?: (directory: string) => void;
 };
 
 /**
@@ -41,6 +43,20 @@ export async function prepareRetainedUpdateRuntimeMaintenance(
     })),
     ...warnings,
   ];
+}
+
+/**
+ * Read-only: whether the cleanup before the stop would try to remove an updater runtime.
+ * The report-only pass recognizes the same runtimes; the census and identity checks that
+ * can still keep one run only when removing.
+ */
+export async function checkRetainedUpdateRuntimesPending(
+  env: NodeJS.ProcessEnv,
+): Promise<DoctorMaintenancePending> {
+  const maintain = await prepareRetainedUpdateRuntimeMaintenance(env);
+  let recognized = 0;
+  await maintain(false, { assertCurrent: () => {}, onRecognized: () => (recognized += 1) });
+  return recognized > 0 ? "work" : "none";
 }
 
 /**
