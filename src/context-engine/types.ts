@@ -314,12 +314,7 @@ export type ContextEngineSessionTarget = {
  * - `budget`: context crossed the host's compaction budget.
  * - `timeout`: recovery after a model call timed out under large context.
  */
-export type ContextEngineCompactionReason =
-  | "manual"
-  | "preflight"
-  | "overflow"
-  | "budget"
-  | "timeout";
+type ContextEngineCompactionReason = "manual" | "preflight" | "overflow" | "budget" | "timeout";
 
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** Runtime task working directory; workspaceDir remains the agent bootstrap workspace. */
