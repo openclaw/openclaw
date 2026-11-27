@@ -182,14 +182,9 @@ export function prepareWorkspacePluginRegistries(
     input.readOnly || input.runtimePluginPurpose === "isolated-completion"
       ? undefined
       : (reusableGeneration?.inboundPluginRegistry ??
-        loadInboundRegistry?.(
-          input,
-          metadataSnapshot,
-          getConfiguredHarnessRuntimes,
-          (source) => {
-            primaryRegistry = source;
-          },
-        ));
+        loadInboundRegistry?.(input, metadataSnapshot, getConfiguredHarnessRuntimes, (source) => {
+          primaryRegistry = source;
+        }));
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
   for (const registry of new Set([inboundPluginRegistry, baseRegistry])) {
     if (registry) {

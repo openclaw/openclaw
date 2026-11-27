@@ -323,7 +323,7 @@ describe("agent runtime plugin registries", () => {
           ),
         ).toBe(activeRegistry);
         expect(hoisted.loadPluginRegistryHandle).not.toHaveBeenCalled();
-      expect(getConfiguredHarnessRuntimes).not.toHaveBeenCalled();
+        expect(getConfiguredHarnessRuntimes).not.toHaveBeenCalled();
       });
     } finally {
       selectCurrentPluginMetadataCache(previousCache);
