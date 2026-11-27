@@ -50,7 +50,7 @@ export function createMemoryTool(params: {
     label: params.contract.label,
     name: params.contract.name,
     description: params.contract.describe(ctx.sources),
-    parameters: params.contract.parameters,
+    parameters: params.contract.parameters(ctx.sources),
     prepareArguments: params.contract.prepareArguments,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
       const latestCtx = params.options.getConfig ? resolveMemoryToolContext(params.options) : ctx;

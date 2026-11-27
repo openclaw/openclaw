@@ -110,6 +110,49 @@ describe("memory tool schemas", () => {
     expect(description).toContain("Do not repeat memory retrieval");
     expect(description).not.toContain("Mandatory recall step");
   });
+
+  const corpusEnum = (tool: { parameters: unknown }) =>
+    (tool.parameters as { properties: { corpus: { enum: string[] } } }).properties.corpus.enum;
+
+  it.each([
+    ["session search is not configured", {}, {}, false],
+    ["recall-only indexing is on", { rememberAcrossConversations: true }, {}, false],
+    ["sessions is a configured source", { sources: ["memory", "sessions"] }, {}, true],
+    [
+      "the helper's sessions recall is forced",
+      {},
+      { conversationRecall: recall("sessions") },
+      true,
+    ],
+    [
+      "the helper's recall is configured-only",
+      {},
+      { conversationRecall: recall("configured") },
+      false,
+    ],
+  ] as const)(
+    "offers corpus=sessions only when searchable: %s",
+    (_name, search, options, offered) => {
+      const tool = corpusTool({ ...search }, { ...options });
+
+      expect(corpusEnum(tool)).toEqual(
+        offered ? ["memory", "wiki", "all", "sessions"] : ["memory", "wiki", "all"],
+      );
+      expect(tool.description).toContain("`corpus=memory` restricts hits");
+      expect(tool.description.includes("`corpus=sessions`")).toBe(offered);
+      expect(Value.Check(tool.parameters, { query: "X", corpus: "sessions" })).toBe(offered);
+    },
+  );
+
+  it("keeps the helper's forced sessions recall searching sessions without a model corpus", async () => {
+    const searchImpl = searchHits([hit("sessions/past-thread.jsonl", "sessions", "fact")]);
+    const tool = corpusTool({}, { conversationRecall: recall("sessions") }, "all");
+
+    const result = await executeSearch(tool, {});
+
+    expect(searchImpl).toHaveBeenCalledWith(expect.objectContaining({ sources: ["sessions"] }));
+    expect(result.details).toMatchObject({ results: [{ snippet: "fact" }] });
+  });
 });
 
 describe("memory_search unavailable payloads", () => {

@@ -48,10 +48,20 @@ const MemoryGetSchema = {
   additionalProperties: false,
 } as const satisfies TSchema;
 
-type MemorySourceContract = Readonly<{ files: string; search: string }>;
+// Offer `sessions` only when this tool can search it; the runtime guard in tools.ts stays.
+const MemorySearchSchemaWithoutSessions = {
+  ...MemorySearchSchema,
+  properties: {
+    ...MemorySearchSchema.properties,
+    corpus: { type: "string", enum: ["memory", "wiki", "all"] },
+  },
+} as const satisfies TSchema;
+
+type MemorySourceContract = Readonly<{ files: string; search: string; sessions: boolean }>;
 
 function resolveMemorySourceContract(
   settings: NonNullable<ReturnType<typeof resolveMemorySearchIndexConfig>>,
+  conversationRecall: MemoryToolOptions["conversationRecall"],
 ): MemorySourceContract {
   const files = [
     "MEMORY.md, USER.md, Markdown files recursively under memory/",
@@ -64,6 +74,8 @@ function resolveMemorySourceContract(
     search: settings.searchSources.includes("sessions")
       ? `${files}, indexed session transcripts`
       : files,
+    sessions:
+      settings.searchSources.includes("sessions") || conversationRecall?.corpus === "sessions",
   };
 }
 
@@ -80,7 +92,12 @@ export function resolveMemoryToolContext(options: MemoryToolOptions) {
   // Tool schemas and guidance need source policy; provider validation belongs to execution.
   const settings = resolveMemorySearchIndexConfig(cfg, agentId);
   return settings
-    ? { cfg, agentId, settings, sources: resolveMemorySourceContract(settings) }
+    ? {
+        cfg,
+        agentId,
+        settings,
+        sources: resolveMemorySourceContract(settings, options.conversationRecall),
+      }
     : null;
 }
 
@@ -92,7 +109,8 @@ const GET_READ_OUTCOME_GUIDANCE =
 export const MEMORY_SEARCH_TOOL_CONTRACT = {
   label: "Memory Search",
   name: "memory_search",
-  parameters: MemorySearchSchema,
+  parameters: ({ sessions }: MemorySourceContract) =>
+    sessions ? MemorySearchSchema : MemorySearchSchemaWithoutSessions,
   prepareArguments: (args: unknown) => {
     const params = asToolParamsRecord(args);
     const aliases = [
@@ -113,14 +131,18 @@ export const MEMORY_SEARCH_TOOL_CONTRACT = {
     }
     return normalized;
   },
-  describe: ({ search }: MemorySourceContract) =>
-    `Semantically search ${search} when an answer depends on prior work, decisions, dates, people, preferences, or todos not already present in the current turn. Do not repeat memory retrieval when supplied context fully answers the question. Omit \`corpus\` to search those configured sources. Session results are transcript search references, not readable memory-file paths. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements; use \`corpus=all\` only when compiled wiki supplements are needed. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` searches indexed session transcripts under the same visibility rules as session history tools and returns unavailable when semantic session indexing is disabled. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
+  describe: ({ search, sessions }: MemorySourceContract) =>
+    `Semantically search ${search} when an answer depends on prior work, decisions, dates, people, preferences, or todos not already present in the current turn. Do not repeat memory retrieval when supplied context fully answers the question. Omit \`corpus\` to search those configured sources. Session results are transcript search references, not readable memory-file paths. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements; use \`corpus=all\` only when compiled wiki supplements are needed. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking).${
+      sessions
+        ? " `corpus=sessions` searches indexed session transcripts under the same visibility rules as session history tools and returns unavailable when semantic session indexing is disabled."
+        : ""
+    } ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
 } as const;
 
 export const MEMORY_GET_TOOL_CONTRACT = {
   label: "Memory Get",
   name: "memory_get",
-  parameters: MemoryGetSchema,
+  parameters: () => MemoryGetSchema,
   describe: ({ files }: MemorySourceContract) =>
     `Safe exact excerpt read from ${files}. Session transcript paths are unsupported; use the available session-history workflow for session hits. Defaults to a bounded excerpt when lines are omitted and includes truncation/continuation info when more content exists. \`corpus=wiki\` reads registered compiled-wiki supplements. ${GET_READ_OUTCOME_GUIDANCE} ${SEARCH_CORPUS_OUTCOME_GUIDANCE}`,
 } as const;
