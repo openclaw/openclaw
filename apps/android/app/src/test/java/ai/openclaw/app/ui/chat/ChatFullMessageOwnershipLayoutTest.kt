@@ -41,6 +41,7 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
@@ -1613,6 +1614,15 @@ class ChatFullMessageOwnershipLayoutTest {
         .single()
         .text,
     )
+    // Background history must not steal the open reader's viewport. Move away
+    // explicitly before checking that its in-flight full read keeps its owner.
+    composeRule.onNodeWithText(gateway.backgroundText(39)).assertIsNotDisplayed()
+    composeRule
+      .onNode(hasContentDescription("Jump to latest") and hasClickAction())
+      .assertIsDisplayed()
+      .assertIsEnabled()
+      .performClick()
+    composeRule.waitForIdle()
     composeRule.onNodeWithText(gateway.backgroundText(39)).assertIsDisplayed()
   }
 

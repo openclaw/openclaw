@@ -200,7 +200,7 @@ private fun SystemAgentConversation(
       // Separate keys keep a retiring question from resizing its immutable message.
       // Reversed item order keeps each question visually below its reply.
       state.messages.asReversed().forEach { message ->
-        message.question?.takeIf { message.id !in state.dismissedQuestionIds && message.id !in state.retiredQuestionIds }?.let { question ->
+        message.question?.takeIf { message.id !in state.retiredQuestionIds }?.let { question ->
           add(SystemAgentConversationRow.Question(message.id, question))
         }
         add(SystemAgentConversationRow.Message(message))

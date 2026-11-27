@@ -81,7 +81,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   protected batchFailure: { count: number; lastError?: string; lastProvider?: string } = {
     count: 0,
   };
-  protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
+  protected abstract markEmbeddingProviderFailure(err: unknown): void;
   private readonly activeProviderUses = new Map<MemoryEmbeddingProvider, Set<Promise<void>>>();
   private syncProviderGenerationRelease: (() => void) | null = null;
   private syncProviderGenerationOwners = 0;
@@ -323,7 +323,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           error: formatErrorMessage(err),
         });
       }
-      this.markLocalEmbeddingProviderDegraded(err);
+      this.markEmbeddingProviderFailure(err);
       throw createMemoryEmbeddingOperationError({
         operation: structured ? "structured-batch" : "batch",
         providerId: provider.id,
@@ -378,7 +378,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     } catch (error) {
       // An interrupted check says nothing about the provider's health.
       if (provider === this.provider && !signal?.aborted) {
-        this.markLocalEmbeddingProviderDegraded(error);
+        this.markEmbeddingProviderFailure(error);
       }
       throw error;
     }

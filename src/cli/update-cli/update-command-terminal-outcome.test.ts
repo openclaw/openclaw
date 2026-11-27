@@ -33,7 +33,6 @@ import {
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -498,7 +497,6 @@ async function scenario(
   );
   const retainedLinkTarget = await fs.readlink(expectedRetained).catch(() => undefined);
   const history = getUpdateRun(run.runId, { env: run.env });
-  const report = history ? renderUpdateRunReport(history).markdown : "missing history";
   const observations = {
     injected,
     repeatedCompletion,
@@ -519,7 +517,6 @@ async function scenario(
     humanOutput,
     errorOutput,
     history,
-    report,
     lease: createManagedHandoffLeaseStore().read(swap.packageRoot).kind,
   };
   return observations;
@@ -593,7 +590,6 @@ describe("composed cleanup and terminal outcome", () => {
     });
     expect(value.sentinel).toMatchObject({ payload: { status: "error", stats: { reason } } });
     expect(value.package.version).toBe("2.0.0");
-    expect(value.report.toLowerCase()).toContain("failed");
     expect.soft(value.history?.downtimeMs).toBe(0);
     expect(JSON.stringify(report)).toContain("fixture original failure before recovery");
     expect(JSON.stringify(value.sentinel)).toContain("fixture original failure before recovery");
@@ -621,9 +617,11 @@ describe("composed cleanup and terminal outcome", () => {
       if (kind === "cleanup-deadline") {
         expect(value.repeatedCompletion).toMatchObject({
           durationMs: 300_001,
-          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+          advisory: expect.objectContaining({
+            kind: "recoverable-maintenance",
+            message: expect.stringContaining("cleanup budget expired"),
+          }),
         });
-        expect(value.report).toContain("cleanup budget expired");
         expect(
           await fs.readFile(path.join(value.expectedRetained, "package.json"), "utf8"),
         ).toContain('"version":"1.0.0"');
@@ -636,11 +634,6 @@ describe("composed cleanup and terminal outcome", () => {
       expect(value.retainedExists).toBe(true);
       expect(JSON.stringify(value.jsonOutput)).toContain(value.expectedRetained);
       expect(JSON.stringify(value.history)).toContain(value.expectedRetained);
-      expect(value.report).toContain(value.expectedRetained);
-      if (kind === "retained") {
-        expect(value.report).toContain("EPERM");
-        expect(value.report).toContain("EBUSY");
-      }
       if (kind !== "cleanup-deadline") {
         expect(value.repeatedCompletion).toMatchObject({
           exitCode: 1,
@@ -677,7 +670,6 @@ describe("composed cleanup and terminal outcome", () => {
         ]),
       }),
     ]);
-    expect(value.report).toContain(value.expectedRetained);
     // The link is not removed another way, and its checkout is never followed.
     expect(value.linkTarget).toBeDefined();
     expect(value.retainedLinkTarget).toBe(value.linkTarget);

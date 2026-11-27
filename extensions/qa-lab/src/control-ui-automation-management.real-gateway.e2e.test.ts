@@ -398,7 +398,7 @@ suite.define(() => {
       });
       // The definition stays visible for prompt caching; execution requires owner authority.
       const nonOwnerRefusal =
-        "automations needs the owner's authority, and this turn was not started by the owner. Do not retry automations.";
+        "I did not run automations. It needs the Gateway owner's authority, and this turn does not run with it. Ask the Gateway owner to do it. Do not retry automations.";
       expect(provider.toolAvailability.get(nonOwnerMarker)).toBe(true);
       expect(provider.results.get(nonOwnerMarker)).toBe(nonOwnerRefusal);
       expect(nonOwnerReply.text).toContain(nonOwnerRefusal);

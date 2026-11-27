@@ -1,7 +1,6 @@
 import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor-capabilities.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import type { PluginCohortRecoveryPair } from "./update-plugin-cohort-schema.js";
@@ -62,19 +61,6 @@ export function assertPluginCohortRecoveryContinuation(
     throw new UpdateRecoveryRequiredError(pair.reservation);
   }
   continuation.fence.assertCurrent();
-}
-
-/** Detection never claims or retires recovery; a live owner may continue only its exact plugin pair. */
-export function assertNoPendingUpdateRecovery(
-  options: UpdateRecoveryAdmissionOptions = {},
-): PluginCohortRecoveryPair | undefined {
-  // Candidate children can migrate the ledger after this updater admitted its original format.
-  const facts = withUpdateRunRead(
-    ({ db }) => readUpdateRecoveryAdmissionFacts(db),
-    options,
-    openDoctorStateSchemaReadAdmission,
-  );
-  return assertUpdateRecoveryAdmissionFacts(facts, options);
 }
 
 /** Workers return coherent rows, never executor authority or a pre-admitted continuation. */

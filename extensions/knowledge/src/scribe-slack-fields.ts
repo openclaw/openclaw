@@ -1,20 +1,30 @@
 /** The Slack scribe's start dialog choices: how often, the user token and DMs opt-ins, and how far back. */
 import { choice, el } from "./page-dom.js";
-import { SLACK_SCHEDULE, type ScribeMode, type SlackSince } from "./scribes-catalog.js";
+import {
+  defaultOptions,
+  SLACK_SCHEDULE,
+  type ScribeMode,
+  type SlackSince,
+} from "./scribes-catalog.js";
 import type { ScribeDetection } from "./scribes-state.js";
 
 const SLACK_SINCE: readonly SlackSince[] = ["7d", "30d", "today"];
 
 /**
  * "How often", "Which conversations" and "Starting from" for the Slack scribe. The user token
- * choice is off, and disabled when the Slack account is known to have no user token.
+ * choice starts from `initial` (off by default), and can't be turned on when the Slack account is
+ * known to have no user token.
  */
-export function slackFields(detection: ScribeDetection, changed: () => void) {
+export function slackFields(
+  detection: ScribeDetection,
+  changed: () => void,
+  initial = defaultOptions("slack"),
+) {
   const state: { mode: ScribeMode; since: SlackSince; userToken: boolean; dms: boolean } = {
     mode: "ongoing",
-    since: "7d",
-    userToken: false,
-    dms: false,
+    since: initial.since,
+    userToken: initial.userToken,
+    dms: initial.dms,
   };
   const set = (patch: Partial<typeof state>) => () => {
     Object.assign(state, patch);
@@ -68,8 +78,10 @@ export function slackFields(detection: ScribeDetection, changed: () => void) {
       tokens?.user === false
         ? "No Slack user token is configured for the Slack account."
         : "Uses the Slack user token configured for the Slack account, which can read more than the bot.",
-      tokens?.user === false,
+      // Without a user token it can't be turned on, but a saved opt-in can still be turned off.
+      tokens?.user === false && !state.userToken,
       toggle("userToken"),
+      state.userToken,
     ),
     choice(
       "checkbox",
@@ -78,6 +90,7 @@ export function slackFields(detection: ScribeDetection, changed: () => void) {
       "Private conversations the token can read. Off by default.",
       false,
       toggle("dms"),
+      state.dms,
     ),
   );
   const since = el("label", undefined, "knowledge-field");
@@ -103,13 +116,14 @@ export function slackFields(detection: ScribeDetection, changed: () => void) {
   );
   return {
     nodes: [often, which, since],
+    which,
     mode: () => state.mode,
     valid: () => !userOnly || state.userToken,
     options: () => ({
       since: state.since,
       userToken: state.userToken,
       dms: state.dms,
-      schedule: SLACK_SCHEDULE,
+      schedule: initial.schedule ?? SLACK_SCHEDULE,
     }),
   };
 }

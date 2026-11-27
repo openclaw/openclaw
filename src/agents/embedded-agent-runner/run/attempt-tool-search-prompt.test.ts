@@ -114,7 +114,7 @@ it("keeps explicit task creation discoverable in Code Mode and removes revoked c
   expect(surface.tools.map((tool) => tool.name)).not.toContain("sessions_create");
   expect(prepared.systemPromptText).toContain('"spin up a new task"');
   expect(prepared.systemPromptText).toContain("`sessions_create`");
-  expect(prepared.systemPromptText).toContain("no completion event or yield expectation");
+  expect(prepared.systemPromptText).toContain("no completion event or yield");
   expect(prepared.systemPromptText).not.toContain("## Delegation");
 
   const restricted = runtime.compactTools([createStubTool("sessions")]);

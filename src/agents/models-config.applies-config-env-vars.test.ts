@@ -163,6 +163,49 @@ describe("models-config planning", () => {
     });
   });
 
+  it("omits configured providers the registry rejects and keeps the rest loadable", async () => {
+    discover({});
+    const { api: _api, ...withoutApi } = provider({ baseUrl: "https://legacy.example/v1" });
+    const plan = await generate({
+      cfg: { models: { providers: { valid: provider(), legacy: withoutApi } } },
+      // Rows an older planner wrote for these keys are replaced, even malformed ones.
+      existingParsed: {
+        providers: {
+          legacy: withoutApi,
+          valid: { baseUrl: "https://stale.example/v1", api: "openai-completions", models: [null] },
+        },
+      },
+    });
+
+    expect(Object.keys(plan.providers)).toEqual(["valid"]);
+    expect(plan.skippedProviders).toEqual([
+      'Provider legacy, model gpt-5.5: no "api" specified. Set at provider or model level.',
+    ]);
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory(),
+      "/tmp/openclaw-skipped-provider/models.json",
+      { includePluginCatalogs: false, modelsJsonContents: plan.contents },
+    );
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("valid", "gpt-5.5")).toBeDefined();
+  });
+
+  it("keeps a provider that exists only in models.json", async () => {
+    discover({});
+    const { api: _api, ...authored } = provider({ apiKey: "FILE_ONLY_KEY" });
+    const plan = await generate({
+      cfg: { models: { providers: { valid: provider() } } },
+      existingParsed: { providers: { authored } },
+    });
+
+    expect(plan.providers.authored).toMatchObject({
+      baseUrl: authored.baseUrl,
+      apiKey: "FILE_ONLY_KEY",
+      models: [{ id: "gpt-5.5" }],
+    });
+    expect(plan.skippedProviders).toEqual([]);
+  });
+
   it("treats empty replace-mode provider sets as authoritative", async () => {
     const discovery = discover({});
     const existingParsed = { providers: { stale: {} } };
