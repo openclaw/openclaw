@@ -554,9 +554,7 @@ export default definePluginEntry({
                 !laneOne.hasStrongHit &&
                 invocationConfig.escalationDecision,
               agentId: effectiveAgentId,
-              target: { chatType, privateDestination, destination: destinationContext },
               config: liveConfig,
-              readCurrentConfig,
               decisions: api.runtime.decisions,
               logger: api.logger,
             });

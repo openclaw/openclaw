@@ -146,7 +146,6 @@ async function evaluateVersion(
     !Number.isFinite(options.timeoutMs) ||
     options.timeoutMs <= 0 ||
     !(options.signal instanceof AbortSignal) ||
-    (options.admit !== undefined && typeof options.admit !== "function") ||
     (options.assertCurrent !== undefined && typeof options.assertCurrent !== "function") ||
     (options.reasoning !== undefined && !["auto", "off", "on"].includes(options.reasoning))
   ) {

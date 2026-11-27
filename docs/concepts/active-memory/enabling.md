@@ -150,6 +150,6 @@ second); a late answer never replaces the matcher. The request uses optional
 priority, so it never takes a provider's last free evaluation slot. Without Decision assistance
 or a selected Decision model, and when the model is unavailable or busy, fails, times
 out, or returns an invalid answer, the built-in intent matcher decides as
-before. Active Memory keeps rechecking both opt-ins while a question is pending: withdrawing either cancels the request before it is sent when possible and discards any answer that still arrives. Modes `"off"` and `"always"` never ask. Hosted Decision models receive
+before. Active Memory checks both opt-ins once, when the turn starts; a change applies to the next turn. Modes `"off"` and `"always"` never ask. Hosted Decision models receive
 that bounded text and may charge for each evaluation; prefer a local model for
 per-turn use.

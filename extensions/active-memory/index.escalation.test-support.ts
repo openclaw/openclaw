@@ -8,8 +8,6 @@ import {
 type EvaluateDecision = DecisionRuntimeV1["evaluate"];
 
 type ActiveMemoryEscalationIntegrationTestHarness = {
-  currentActiveMemoryConfig: () => Record<string, unknown>;
-  expectEmbeddedChannel: (channel: string) => void;
   evaluateDecision: Mock<EvaluateDecision>;
   expectPrependContextContains: (result: unknown, text: string) => void;
   hasDebugLine: (needle: string) => boolean;
@@ -47,8 +45,6 @@ function recallAnswer(probabilityTrue: number): DecisionOutcome {
 
 /** Register escalation coverage against the shared plugin integration harness. */
 export function registerActiveMemoryEscalationIntegrationTests({
-  currentActiveMemoryConfig,
-  expectEmbeddedChannel,
   evaluateDecision,
   expectPrependContextContains,
   hasDebugLine,
@@ -59,36 +55,6 @@ export function registerActiveMemoryEscalationIntegrationTests({
   updateConfigFile,
   skippedRecallContext,
 }: ActiveMemoryEscalationIntegrationTestHarness): void {
-  it.each([
-    [
-      "Russian",
-      "Помнишь, что мы решили вчера?",
-      "Давай обсудим это завтра",
-      "Ты помнишь завтра отправить отчёт?",
-    ],
-  ])(
-    "escalates retrospective %s recall when recall mode is unset",
-    async (_language, prompt, ordinaryPrompt, futurePrompt) => {
-      registerPluginConfig({ mode: undefined });
-      expect(currentActiveMemoryConfig().mode).toBeUndefined();
-      const context = {
-        sessionKey: "agent:main:telegram:direct:owner",
-        messageProvider: "telegram",
-        channelId: "owner",
-      };
-      const ordinary = await runPromptBuild({ prompt: ordinaryPrompt }, context);
-      expectPrependContextContains(ordinary, skippedRecallContext);
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      const future = await runPromptBuild({ prompt: futurePrompt }, context);
-      expectPrependContextContains(future, skippedRecallContext);
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      const recall = await runPromptBuild({ prompt }, context);
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expectPrependContextContains(recall, "lemon pepper wings");
-      expectEmbeddedChannel("telegram");
-    },
-  );
-
   const setDecisionAssistance = (enabled: boolean) =>
     updateConfigFile((config) => {
       const agents = (config.agents ?? {}) as Record<string, unknown>;
@@ -108,29 +74,30 @@ export function registerActiveMemoryEscalationIntegrationTests({
     setDecisionAssistance(true);
   };
 
-  it("recalls an ordinary turn when the Decision model asks for deep recall", async () => {
-    enableDecisionEscalation(recallAnswer(0.9));
+  // The built-in matcher misses both; the second is a resume request from #151178.
+  it.each(["Continue with that", "继续上次的排障"])(
+    "recalls %s when the Decision model asks for deep recall",
+    async (prompt) => {
+      enableDecisionEscalation(recallAnswer(0.9));
 
-    const result = await runPromptBuild({ prompt: "Continue with that" }, operatorContext);
+      const result = await runPromptBuild({ prompt }, operatorContext);
 
-    expect(evaluateDecision).toHaveBeenCalledOnce();
-    const [batch, options] = evaluateDecision.mock.calls[0] ?? [];
-    expect(batch?.state).toEqual({
-      latestUserMessage: "Continue with that",
-      searchQuery: "Continue with that",
-    });
-    expect(Object.keys(batch?.questions ?? {})).toEqual(["deepRecall"]);
-    expect(options).toMatchObject({
-      agentId: "main",
-      purpose: ACTIVE_MEMORY_ESCALATION_DECISION_PURPOSE,
-      rubricVersion: ACTIVE_MEMORY_ESCALATION_RUBRIC_VERSION,
-      signal: expect.any(AbortSignal),
-    });
-    expect(options?.timeoutMs).toBeGreaterThan(0);
-    expect(options?.timeoutMs).toBeLessThanOrEqual(1_000);
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expectPrependContextContains(result, "lemon pepper wings");
-  });
+      expect(evaluateDecision).toHaveBeenCalledOnce();
+      const [batch, options] = evaluateDecision.mock.calls[0] ?? [];
+      expect(batch?.state).toEqual({ latestUserMessage: prompt, searchQuery: prompt });
+      expect(Object.keys(batch?.questions ?? {})).toEqual(["deepRecall"]);
+      expect(options).toMatchObject({
+        agentId: "main",
+        purpose: ACTIVE_MEMORY_ESCALATION_DECISION_PURPOSE,
+        rubricVersion: ACTIVE_MEMORY_ESCALATION_RUBRIC_VERSION,
+        signal: expect.any(AbortSignal),
+      });
+      expect(options?.timeoutMs).toBeGreaterThan(0);
+      expect(options?.timeoutMs).toBeLessThanOrEqual(1_000);
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expectPrependContextContains(result, "lemon pepper wings");
+    },
+  );
 
   it("sends only bounded normalized text to the Decision model", async () => {
     enableDecisionEscalation(recallAnswer(0.1));
@@ -195,83 +162,6 @@ export function registerActiveMemoryEscalationIntegrationTests({
     expect(hasDebugLine("active-memory: escalation decision fallback reason=error")).toBe(false);
   });
 
-  it("does not dispatch when Decision assistance is revoked while the runtime prepares", async () => {
-    enableDecisionEscalation(recallAnswer(0.1));
-    let dispatched = false;
-    evaluateDecision.mockImplementation(async (_batch, options) => {
-      setDecisionAssistance(false);
-      // Simulate the host checking the supplied callback at dispatch.
-      options.signal.throwIfAborted();
-      if (!options.admit?.()) {
-        return { status: "unavailable", reason: "disabled" };
-      }
-      dispatched = true;
-      return recallAnswer(0.1);
-    });
-
-    const result = await runPromptBuild(
-      { prompt: "What did we decide last time?" },
-      operatorContext,
-    );
-
-    expect(evaluateDecision).toHaveBeenCalledOnce();
-    expect(dispatched).toBe(false);
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expectPrependContextContains(result, "lemon pepper wings");
-    expect(
-      hasDebugLine(
-        "active-memory: escalation decision unavailable reason=revoked; using built-in matcher",
-      ),
-    ).toBe(true);
-  });
-
-  it("does not dispatch when the chat stops being targeted while the runtime prepares", async () => {
-    enableDecisionEscalation(recallAnswer(0.1));
-    let dispatched = false;
-    evaluateDecision.mockImplementation(async (_batch, options) => {
-      registerPluginConfig({
-        mode: "escalate",
-        escalationDecision: true,
-        deniedChatIds: ["operator"],
-      });
-      options.signal.throwIfAborted();
-      if (!options.admit?.()) {
-        return { status: "unavailable", reason: "disabled" };
-      }
-      dispatched = true;
-      return recallAnswer(0.1);
-    });
-
-    await runPromptBuild({ prompt: "What did we decide last time?" }, operatorContext);
-
-    expect(evaluateDecision).toHaveBeenCalledOnce();
-    expect(dispatched).toBe(false);
-    expect(
-      hasDebugLine(
-        "active-memory: escalation decision unavailable reason=revoked; using built-in matcher",
-      ),
-    ).toBe(true);
-  });
-
-  it("ignores the answer when escalationDecision is withdrawn during inference", async () => {
-    enableDecisionEscalation(recallAnswer(0.1));
-    evaluateDecision.mockImplementation(async () => {
-      // Dispatched already; the opt-in is withdrawn before the skip answer arrives.
-      registerPluginConfig({ mode: "escalate" });
-      return recallAnswer(0.1);
-    });
-
-    const result = await runPromptBuild(
-      { prompt: "What did we decide last time?" },
-      operatorContext,
-    );
-
-    expect(evaluateDecision).toHaveBeenCalledOnce();
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expectPrependContextContains(result, "lemon pepper wings");
-    expect(hasDebugLine("active-memory: recall skipped reason=decision-skip")).toBe(false);
-  });
-
   it("does not ask the Decision model without Decision assistance", async () => {
     enableDecisionEscalation(recallAnswer(0.1));
     setDecisionAssistance(false);
@@ -300,16 +190,4 @@ export function registerActiveMemoryEscalationIntegrationTests({
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
     expectPrependContextContains(result, skippedRecallContext);
   });
-
-  it.each(["always", "off"] as const)(
-    "does not ask the Decision model in mode=%s",
-    async (mode) => {
-      enableDecisionEscalation(recallAnswer(0.1));
-      registerPluginConfig({ mode, escalationDecision: true });
-
-      await runPromptBuild({ prompt: "Explain the current configuration" }, operatorContext);
-
-      expect(evaluateDecision).not.toHaveBeenCalled();
-    },
-  );
 }

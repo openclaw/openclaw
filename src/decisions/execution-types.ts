@@ -24,12 +24,6 @@ export type DecisionEvaluateOptions = {
   readonly timeoutMs: number;
   readonly signal: AbortSignal;
   /**
-   * Synchronous live consumer consent, checked before provider dispatch, at
-   * guarded-fetch request boundaries, and before returning an answer. A false
-   * result permanently disables this evaluation; throws/non-booleans reject.
-   */
-  readonly admit?: () => boolean;
-  /**
    * Caller-owned authority (for example a revocable data grant). The host calls it
    * before preparation, at every physical dispatch and retry, and before completion;
    * a throw ends the request and rejects with that error.

@@ -5,16 +5,7 @@ import type {
   DecisionRuntimeV1,
   UnavailableReason,
 } from "openclaw/plugin-sdk/decisions";
-import { resolveRememberAcrossConversations } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { normalizePluginConfig } from "./config.js";
 import type { RecallEscalationDecider } from "./escalation.js";
-import {
-  isActiveMemoryPluginEnabled,
-  isAllowedChatId,
-  isEnabledForAgent,
-} from "./session-policy.js";
-import type { ActiveMemoryChatType } from "./types.js";
 
 export const ACTIVE_MEMORY_ESCALATION_DECISION_PURPOSE = "active-memory/escalation";
 export const ACTIVE_MEMORY_ESCALATION_RUBRIC_VERSION = "active-memory-escalation/1";
@@ -41,49 +32,6 @@ export function isActiveMemoryDecisionEscalationEligible(config: OpenClawConfig)
   return config.agents?.defaults?.experimental?.decisionAssistance === true;
 }
 
-/** The turn a decision serves, as the hook resolved it. */
-export type ActiveMemoryDecisionTarget = {
-  agentId: string;
-  chatType: ActiveMemoryChatType | undefined;
-  privateDestination: boolean;
-  destination: { sessionKey?: string; messageProvider?: string; channelId?: string };
-};
-
-/**
- * Live consent for one escalation decision: Active Memory enabled in escalate
- * mode with `escalationDecision`, plus Decision assistance, and, for a turn,
- * the same targeting that admitted it (configured agent, chat type and chat
- * id, or private "Remember across conversations" recall). Derived from the
- * given configuration exactly as the hook derives its invocation settings.
- */
-export function readActiveMemoryDecisionConsent(
-  config: OpenClawConfig,
-  target?: ActiveMemoryDecisionTarget,
-): boolean {
-  const pluginConfig = isActiveMemoryPluginEnabled(config)
-    ? (resolveLivePluginConfigObject(() => config, "active-memory") ?? {})
-    : { enabled: false };
-  const current = normalizePluginConfig(pluginConfig, config);
-  const optedIn =
-    current.enabled &&
-    current.mode === "escalate" &&
-    current.escalationDecision &&
-    isActiveMemoryDecisionEscalationEligible(config);
-  if (!optedIn || !target) {
-    return optedIn;
-  }
-  if (!isAllowedChatId(current, target.destination)) {
-    return false;
-  }
-  const configuredTarget =
-    isEnabledForAgent(current, target.agentId) &&
-    target.chatType !== undefined &&
-    current.allowedChatTypes.includes(target.chatType);
-  const privateRecallTarget =
-    target.privateDestination && resolveRememberAcrossConversations(config, target.agentId);
-  return configuredTarget || privateRecallTarget;
-}
-
 export function buildActiveMemoryEscalationDecisionBatch(params: {
   message: string;
   searchQuery: string;
@@ -97,7 +45,7 @@ export function buildActiveMemoryEscalationDecisionBatch(params: {
   };
 }
 
-export type ActiveMemoryDecisionAbstainReason = UnavailableReason | "invalid-answer" | "revoked";
+export type ActiveMemoryDecisionAbstainReason = UnavailableReason | "invalid-answer";
 
 export function mapActiveMemoryEscalationDecisionOutcome(
   outcome: DecisionOutcome,
@@ -126,21 +74,11 @@ export function mapActiveMemoryEscalationDecisionOutcome(
 export function createActiveMemoryDecisionEscalationDecider(params: {
   decisions: Pick<DecisionRuntimeV1, "evaluate">;
   agentId: string;
-  /** Reads the current opt-in and turn targeting at the host's effect boundary. */
-  isStillAllowed: () => boolean;
   onAbstain?: (reason: ActiveMemoryDecisionAbstainReason) => void;
 }): RecallEscalationDecider {
-  const revoked = (): "abstain" => {
-    params.onAbstain?.("revoked");
-    return "abstain";
-  };
   return {
     async decide({ message, searchQuery, signal, timeoutMs }) {
-      if (!params.isStillAllowed()) {
-        return revoked();
-      }
-      // The host owns dispatch admission through provider/network preparation.
-      // Keep the consumer check before use as well: an answer grants no authority.
+      // The hook admitted this turn with its config; a change applies to the next turn.
       const outcome = await params.decisions.evaluate(
         buildActiveMemoryEscalationDecisionBatch({ message, searchQuery }),
         {
@@ -151,12 +89,8 @@ export function createActiveMemoryDecisionEscalationDecider(params: {
           rubricVersion: ACTIVE_MEMORY_ESCALATION_RUBRIC_VERSION,
           timeoutMs,
           signal,
-          admit: params.isStillAllowed,
         },
       );
-      if (!params.isStillAllowed()) {
-        return revoked();
-      }
       const mapped = mapActiveMemoryEscalationDecisionOutcome(outcome);
       if (mapped.result === "abstain") {
         params.onAbstain?.(mapped.reason);
@@ -173,9 +107,7 @@ export function createActiveMemoryDecisionEscalationDecider(params: {
 export function createActiveMemoryTurnEscalationDecider(params: {
   requested: boolean;
   agentId: string | undefined;
-  target: Omit<ActiveMemoryDecisionTarget, "agentId">;
   config: OpenClawConfig;
-  readCurrentConfig: () => OpenClawConfig;
   decisions: Pick<DecisionRuntimeV1, "evaluate">;
   logger: { debug?: (message: string) => void };
 }): RecallEscalationDecider | undefined {
@@ -188,11 +120,9 @@ export function createActiveMemoryTurnEscalationDecider(params: {
     );
     return undefined;
   }
-  const target = { ...params.target, agentId: params.agentId };
   return createActiveMemoryDecisionEscalationDecider({
     decisions: params.decisions,
     agentId: params.agentId,
-    isStillAllowed: () => readActiveMemoryDecisionConsent(params.readCurrentConfig(), target),
     onAbstain: (reason) => {
       params.logger.debug?.(
         `active-memory: escalation decision unavailable reason=${reason}; using built-in matcher`,

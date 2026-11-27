@@ -1282,8 +1282,6 @@ describe("active-memory plugin", () => {
   });
 
   registerActiveMemoryEscalationIntegrationTests({
-    currentActiveMemoryConfig,
-    expectEmbeddedChannel,
     expectPrependContextContains: expectRecallContains,
     hasDebugLine,
     hasInfoLine,
