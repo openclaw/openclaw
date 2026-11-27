@@ -250,11 +250,11 @@ function normalizeQwenTokenPlanResolvedModel({ model }: ProviderNormalizeResolve
     (model.compat &&
       "thinkingFormat" in model.compat &&
       model.compat.thinkingFormat !== undefined) ||
-    resolveOpenAIModelReasoningEfforts(model)?.length === 0
+    resolveOpenAIModelReasoningEfforts(model) !== undefined
   ) {
     return undefined;
   }
-  // The agent and transport clamp extended levels independently of the provider picker.
+  // The agent and transport need defaults only when the model has no effort contract.
   return {
     ...model,
     thinkingLevelMap: { xhigh: "xhigh", max: "xhigh", ...model.thinkingLevelMap },

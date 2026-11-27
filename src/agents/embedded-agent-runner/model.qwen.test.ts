@@ -120,13 +120,35 @@ describe("Qwen static fallback routing", () => {
   });
 });
 
-it("admits Qwen4-Max thinking levels and preserves them through runtime clamping", async () => {
+it.each([
+  {
+    contract: "no declared effort ladder",
+    compat: undefined,
+    levels: [
+      ["minimal", "minimal", "low"],
+      ["medium", "medium", "high"],
+      ["xhigh", "xhigh", "xhigh"],
+      ["max", "max", "xhigh"],
+    ] as const,
+  },
+  {
+    contract: "a declared low/high ladder",
+    compat: { supportedReasoningEfforts: ["low", "high"] },
+    levels: [
+      ["low", "low", "low"],
+      ["high", "high", "high"],
+      ["xhigh", "high", "high"],
+      ["max", "high", "high"],
+    ] as const,
+  },
+])("resolves Qwen4-Max thinking levels with $contract", async ({ compat, levels }) => {
   const model = makeProviderModelFixture<"openai-completions">({
     provider: "qwen-token-plan",
     id: "qwen4-max",
     api: "openai-completions",
     baseUrl: "https://example.test/v1",
     reasoning: true,
+    compat,
   });
   const { default: plugin } = await loadBundledPluginFacade<{
     default: Parameters<typeof registerProviderPlugins>[0];
@@ -135,14 +157,7 @@ it("admits Qwen4-Max thinking levels and preserves them through runtime clamping
   const runtimeModel =
     provider.normalizeResolvedModel?.({ provider: model.provider, modelId: model.id, model }) ??
     model;
-  const efforts = [
-    ["minimal", "low"],
-    ["medium", "high"],
-    ["xhigh", "xhigh"],
-    ["max", "xhigh"],
-  ] as const;
-
-  for (const [level, effort] of efforts) {
+  for (const [level, expectedLevel, effort] of levels) {
     const selected = resolveThinkingSelectionForModel({
       provider: model.provider,
       model: model.id,
@@ -152,6 +167,8 @@ it("admits Qwen4-Max thinking levels and preserves them through runtime clamping
     });
     expect(selected.supported).toBe(true);
     assert(selected.level === level);
+    const effectiveLevel = clampThinkingLevel(runtimeModel, selected.level);
+    expect(effectiveLevel).toBe(expectedLevel);
 
     const payload = { messages: [] };
     const streamFn: StreamFn = async (requestModel, _context, options) => {
@@ -168,11 +185,7 @@ it("admits Qwen4-Max thinking levels and preserves them through runtime clamping
       }),
       "Qwen Token Plan stream wrapper",
     );
-    await stream(
-      runtimeModel,
-      { messages: [] },
-      { reasoning: clampThinkingLevel(runtimeModel, selected.level) },
-    );
+    await stream(runtimeModel, { messages: [] }, { reasoning: effectiveLevel });
     expect(payload).toEqual({ messages: [], enable_thinking: true, reasoning_effort: effort });
   }
 });

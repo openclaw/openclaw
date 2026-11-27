@@ -117,6 +117,32 @@ describe("Qwen streams", () => {
   });
 
   it.each([
+    { replacementEffort: "max", expectedEffort: "high" },
+    { replacementEffort: "low", expectedEffort: "low" },
+  ])(
+    "checks Qwen4-Max replacement effort $replacementEffort against the declared ladder",
+    async ({ replacementEffort, expectedEffort }) => {
+      const model = tokenPlanModel("qwen4-max", {
+        compat: { supportedReasoningEfforts: ["low", "high"] },
+      });
+      const capture = createAsyncPayloadCapture(model, "xhigh", () => ({ messages: [] }));
+      const captured = await capture((payload) => {
+        expect(payload).toStrictEqual({
+          messages: [],
+          enable_thinking: true,
+          reasoning_effort: "high",
+        });
+        return { messages: [], enable_thinking: true, reasoning_effort: replacementEffort };
+      });
+      expect(captured).toStrictEqual({
+        messages: [],
+        enable_thinking: true,
+        reasoning_effort: expectedEffort,
+      });
+    },
+  );
+
+  it.each([
     { optOut: "a disabled support flag", compat: { supportsReasoningEffort: false } },
     { optOut: "an empty effort ladder", compat: { supportedReasoningEfforts: [] } },
   ])("preserves Qwen4-Max binary thinking with $optOut", async ({ compat }) => {

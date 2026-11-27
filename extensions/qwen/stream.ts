@@ -1,5 +1,9 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { resolveOpenAIModelReasoningEfforts, streamSimple } from "openclaw/plugin-sdk/llm";
+import {
+  resolveOpenAIModelReasoningEfforts,
+  resolveOpenAIRequestReasoning,
+  streamSimple,
+} from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeProviderId,
@@ -134,16 +138,28 @@ function patchQwenEffortPayload(
   enableThinking: boolean,
   modelGeneration: "3.8" | "4",
   model: Parameters<StreamFn>[0],
+  wireEffort?: string,
 ): void {
   delete payload.thinking;
   // An explicit token budget owns reasoning depth; Qwen rejects it together
   // with reasoning_effort. Preserve caller budgets instead of overriding them.
-  if (
-    !enableThinking ||
-    payload.thinking_budget !== undefined ||
-    (modelGeneration === "4" && resolveOpenAIModelReasoningEfforts(model)?.length === 0)
-  ) {
+  if (!enableThinking || payload.thinking_budget !== undefined) {
     delete payload.reasoning_effort;
+    return;
+  }
+  const supportedEfforts =
+    modelGeneration === "4" ? resolveOpenAIModelReasoningEfforts(model) : undefined;
+  if (supportedEfforts !== undefined) {
+    // A caller's supported wire value has already been mapped to the provider's ladder.
+    const effort =
+      wireEffort !== undefined && supportedEfforts.includes(wireEffort)
+        ? wireEffort
+        : resolveOpenAIRequestReasoning(model, wireEffort ?? thinkingLevel ?? "high").effort;
+    if (effort === undefined) {
+      delete payload.reasoning_effort;
+    } else {
+      payload.reasoning_effort = effort;
+    }
     return;
   }
   if (thinkingLevel === "minimal" || thinkingLevel === "low") {
@@ -367,12 +383,10 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
               let enableThinking =
                 forceThinking ||
                 (hasPayloadThinking ? payload.enable_thinking !== false : requestedEnableThinking);
+              const wireEffort =
+                typeof payload.reasoning_effort === "string" ? payload.reasoning_effort : undefined;
               const rawThinkingLevel =
-                typeof payload.reasoning_effort === "string"
-                  ? payload.reasoning_effort
-                  : hasPayloadThinking
-                    ? undefined
-                    : requestedThinkingLevel;
+                wireEffort ?? (hasPayloadThinking ? undefined : requestedThinkingLevel);
               if (
                 !forceThinking &&
                 (rawThinkingLevel === "off" ||
@@ -408,6 +422,7 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
                   enableThinking,
                   tokenPlanContract.modelGeneration,
                   model,
+                  wireEffort,
                 );
               } else if (tokenPlanContract?.family === "deepseek-v4") {
                 const deepSeekLevel =
