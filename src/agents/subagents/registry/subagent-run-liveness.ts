@@ -1,5 +1,6 @@
 import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
@@ -66,8 +67,7 @@ export function hasSubagentRunEnded<T extends { execution: { endedAt?: number } 
 export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
   return (
     isSubagentPausedByYield(entry) &&
-    !entry.killIntent &&
-    !entry.killReconciliation &&
+    !hasSubagentKill(entry) &&
     entry.suppressAnnounceReason !== "killed" &&
     entry.endedReason !== "subagent-killed"
   );
