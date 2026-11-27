@@ -10,7 +10,11 @@ import { readDefaultProactiveJobReceiptInDatabase } from "../cron/proactive-job-
 import { readScratchStateFromDatabase } from "../cron/scratch-read.kernel.js";
 import { writeCronJobScratchInDatabase } from "../cron/scratch-write.kernel.js";
 import { CronService } from "../cron/service.js";
-import { resolveCronJobsStorePathFromConfig, saveCronStore } from "../cron/store.js";
+import {
+  loadCronQuarantinedJobs,
+  resolveCronJobsStorePathFromConfig,
+  saveCronStore,
+} from "../cron/store.js";
 import { createReloadCronJob } from "../cron/store.test-support.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import {
@@ -58,6 +62,7 @@ import {
   resolveHeartbeatPhaseMs,
   resolveHeartbeatSchedulerSeed,
 } from "./doctor-heartbeat-schedule.js";
+import { repairLegacyCronStoreWithoutPrompt } from "./doctor/cron/legacy-repair.js";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -112,11 +117,11 @@ function readState(f: Fixture) {
   );
 }
 
-function writeJob(f: Fixture, job: CronStoredJob) {
+function writeJob(f: Fixture, job: CronStoredJob, sortOrder = 0) {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const storeKey = resolveCronStoreKeyInDatabase(db, f.storePath, f.env);
-      upsertCronJobRow(db, storeKey, job, 0);
+      upsertCronJobRow(db, storeKey, job, sortOrder);
       replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [job] });
     },
     { env: f.env },
@@ -217,6 +222,37 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
 }
 
 describe("heartbeat cadence Doctor cutover", () => {
+  it("keeps the enabled heartbeat ID when preflight also repairs a legacy reminder", async () => {
+    const f = fixture();
+    const legacy = seedLegacyMonitor(f, { name: "heartbeat-main" });
+    const reminder = createReloadCronJob({ id: "legacy-reminder", agentId: "main" });
+    writeJob(f, reminder, 1);
+    openOpenClawStateDatabase({ env: f.env })
+      .db.prepare("UPDATE cron_jobs SET job_json = ?, payload_kind = ? WHERE job_id = ?")
+      .run(
+        JSON.stringify({
+          ...reminder,
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "Check the report." },
+        }),
+        "systemEvent",
+        reminder.id,
+      );
+
+    await repairLegacyCronStoreWithoutPrompt({ cfg: f.cfg });
+    await retireHeartbeatWithDoctor(f.cfg, f.env);
+
+    expect(readState(f)!.jobs).toMatchObject([
+      { id: legacy.id, enabled: true, schedule: legacy.schedule },
+      {
+        id: reminder.id,
+        sessionTarget: "session:agent:main:main",
+        payload: { kind: "agentTurn", message: "Check the report." },
+      },
+    ]);
+    expect(await loadCronQuarantinedJobs(f.storePath, f.env)).toEqual([]);
+  });
+
   it("warns with the exact repair for old receipts without disabled provenance", async () => {
     const f = fixture();
     const monitors = await ensureHeartbeatMonitorJobs(f.cfg, f.storePath, f.env);

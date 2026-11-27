@@ -108,7 +108,8 @@ export async function loadLegacyCronRepairState(params: {
   const loaded = params.readOnly
     ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath, params.env)
     : await loadCronJobsStoreWithConfigJobs(storePath);
-  const { currentJobs, invalidConfigRows } = mergeLegacyCronJobsForRepair(loaded);
+  const { currentJobs, invalidConfigRows, retainedHeartbeatJobIds } =
+    mergeLegacyCronJobsForRepair(loaded);
   if (
     params.onlyIfLegacyDetected &&
     !legacyQuarantine &&
@@ -157,6 +158,7 @@ export async function loadLegacyCronRepairState(params: {
     legacyQuarantine,
     invalidConfigRows,
     persistedQuarantine,
+    retainedHeartbeatJobIds,
     projectedOwnersByJobId,
     rawJobs: currentJobs,
     jobsFingerprint: loaded.jobsFingerprint,
@@ -214,6 +216,7 @@ export async function applyLegacyCronStoreRepair(
           ...(quarantine ? { quarantine } : {}),
           ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
           preserveRuntimeState: true,
+          retainUnlistedJobIds: state.retainedHeartbeatJobIds,
         };
         if (state.ownerRows.length > 0 || state.persistedQuarantine.length > 0) {
           const backup = await backupCronStoreForDoctor(
@@ -226,6 +229,7 @@ export async function applyLegacyCronStoreRepair(
                 state.jobsFingerprint,
                 state.persistedQuarantine,
                 store,
+                [...state.retainedHeartbeatJobIds],
                 quarantineEntries,
                 deleteQuarantineEntries,
               ],
@@ -379,7 +383,10 @@ export async function migrateRetiredCronState(params: {
         if (!state) {
           throw new Error("Cron repair snapshot unavailable");
         }
-        const ids = new Set(state.rawJobs.map((job) => normalizeOptionalStringifiedId(job.id)));
+        const ids = new Set([
+          ...state.retainedHeartbeatJobIds,
+          ...state.rawJobs.map((job) => normalizeOptionalStringifiedId(job.id)),
+        ]);
         const imported = legacy.jobs.filter((job) => {
           const id = normalizeOptionalStringifiedId(job.id);
           if (ids.has(id)) {

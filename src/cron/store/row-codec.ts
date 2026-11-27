@@ -342,19 +342,27 @@ export function replaceCronRows(
   db: EngineConnection,
   storeKey: string,
   store: CronStoreFile,
-  opts?: CronRowReplaceOptions,
+  opts?: CronRowReplaceOptions & { retainUnlistedJobIds?: ReadonlySet<string> },
 ): CronRowReplaceResult {
   const existingRows = executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
       .selectFrom("cron_jobs")
-      .select("job_id")
+      .select(["job_id", "sort_order"])
       .$if(opts?.preserveRuntimeState === true, (query) => query.select("job_json"))
       .where("store_key", "=", storeKey),
   ).rows;
-  const normalizedJobs = store.jobs.map((job, index) =>
-    upsertCronJobRow(db, storeKey, job, index, opts),
-  );
+  // A partial replacement keeps the existing positions and appends new jobs.
+  const sortOrders = opts?.retainUnlistedJobIds?.size
+    ? new Map(existingRows.map((row) => [row.job_id, row.sort_order]))
+    : undefined;
+  let nextSortOrder = sortOrders
+    ? existingRows.reduce((max, row) => Math.max(max, row.sort_order), -1) + 1
+    : 0;
+  const normalizedJobs = store.jobs.map((job, index) => {
+    const sortOrder = sortOrders ? (sortOrders.get(job.id) ?? nextSortOrder++) : index;
+    return upsertCronJobRow(db, storeKey, job, sortOrder, opts);
+  });
   const nextJobIds = new Set(normalizedJobs.map((job) => job.id));
   const existingJobIds = new Set<string>();
   const legacyAuthorityJobIds = new Set<string>();
@@ -368,7 +376,7 @@ export function replaceCronRows(
     ) {
       legacyAuthorityJobIds.add(row.job_id);
     }
-    if (nextJobIds.has(row.job_id)) {
+    if (nextJobIds.has(row.job_id) || opts?.retainUnlistedJobIds?.has(row.job_id)) {
       continue;
     }
     // Reconcile removed jobs only; deleting the partition first rewrites every
@@ -682,6 +690,7 @@ export function loadedCronStoreFromRows(
   const configJobIndexes: number[] = [];
   const configJobRuntimeEntries: LoadedCronStore["configJobRuntimeEntries"] = [];
   const invalidConfigRows: LoadedCronStore["invalidConfigRows"] = [];
+  let unsupportedDefinitionJobIds: Map<number, string> | undefined;
 
   for (const [index, row] of rows.entries()) {
     const parsedJobJson = safeParseJsonRecord(row.job_json);
@@ -704,9 +713,13 @@ export function loadedCronStoreFromRows(
     };
 
     if (!job) {
+      const reason = getInvalidPersistedCronJobReason(configJob) ?? "invalid-payload";
+      if (reason === "unsupported-definition") {
+        (unsupportedDefinitionJobIds ??= new Map()).set(index, row.job_id);
+      }
       invalidConfigRows.push({
         sourceIndex: index,
-        reason: getInvalidPersistedCronJobReason(configJob) ?? "invalid-payload",
+        reason,
         job: configJob,
         ...(runtimeEntry.state ? { state: runtimeEntry.state } : {}),
         ...(runtimeEntry.updatedAtMs !== undefined
@@ -733,5 +746,6 @@ export function loadedCronStoreFromRows(
     configJobIndexes,
     configJobRuntimeEntries,
     invalidConfigRows,
+    ...(unsupportedDefinitionJobIds ? { unsupportedDefinitionJobIds } : {}),
   };
 }

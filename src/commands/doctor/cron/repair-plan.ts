@@ -1,4 +1,5 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { decodeStoredCronJobConfig } from "../../../cron/store/job-config-codec.js";
 import type { LoadedCronStore } from "../../../cron/store/types.js";
 import type { QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
@@ -128,6 +129,7 @@ export function mergeRuntimeEntryIntoConfigJob(params: {
 
 export function mergeLegacyCronJobsForRepair(loaded: LoadedCronStore) {
   const invalidConfigRows: QuarantinedCronConfigJob[] = [];
+  const retainedHeartbeatJobIds = new Set<string>();
   const indexedJobs = loaded.configJobs.map((job, index) => ({
     sourceIndex: loaded.configJobIndexes[index] ?? index,
     job: mergeRuntimeEntryIntoConfigJob({
@@ -136,6 +138,12 @@ export function mergeLegacyCronJobsForRepair(loaded: LoadedCronStore) {
     }),
   }));
   for (const row of loaded.invalidConfigRows) {
+    const jobId = loaded.unsupportedDefinitionJobIds?.get(row.sourceIndex);
+    // The heartbeat cutover needs the original row, including its runtime state.
+    if (jobId && asRecord(row.job?.payload).kind === "heartbeat") {
+      retainedHeartbeatJobIds.add(jobId);
+      continue;
+    }
     if (
       row.reason === "unsupported-definition" &&
       row.job &&
@@ -153,5 +161,5 @@ export function mergeLegacyCronJobsForRepair(loaded: LoadedCronStore) {
   const currentJobs = indexedJobs
     .toSorted((a, b) => a.sourceIndex - b.sourceIndex)
     .map(({ job }) => job);
-  return { currentJobs, invalidConfigRows };
+  return { currentJobs, invalidConfigRows, retainedHeartbeatJobIds };
 }
