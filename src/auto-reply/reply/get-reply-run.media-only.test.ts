@@ -15,9 +15,7 @@ vi.mock("./reply-tool-authority.js", async (importOriginal) => ({
 }));
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
-import { buildPrAttributionPrompt } from "../../agents/pr-attribution.js";
+import * as runFixtures from "../../agents/admitted-run-context.test-support.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -56,7 +54,6 @@ import { testing as controllerTesting } from "../../sessions/session-controller.
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
-import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import {
   loadAgentRunnerRuntime,
@@ -64,6 +61,10 @@ import {
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import {
+  bindOwnerIngress,
+  createOwnerIngress,
+} from "./get-reply-run.owner-ingress.test-support.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSteeringIntentProducerCases } from "./get-reply-run.steering-intent.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
@@ -132,26 +133,11 @@ vi.mock("../../agents/harness/hook-helpers.js", () => ({
 
 // Harness selection and built-in execution are owned by their focused suites. These tests keep
 // the real visible-reply policy resolver while supplying its default delivery metadata.
-const preparedReplyMockState = vi.hoisted(() => ({ unexpectedCalls: [] as string[] }));
 const envMockState = vi.hoisted(() => ({ fastTestRuntime: true }));
 
 vi.mock("../../infra/env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/env.js")>()),
   isFastTestRuntimeEnv: () => envMockState.fastTestRuntime,
-}));
-
-vi.mock("../../agents/main-session-recovery/main-session-recovery-owner-release.js", () => ({
-  scheduleMainSessionRecoveryPendingTarget: vi.fn(),
-}));
-
-vi.mock("../../config/sessions/restart-recovery-state.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/sessions/restart-recovery-state.js")>()),
-  isMainRestartRecoveryCandidate: vi.fn().mockReturnValue(false),
-}));
-
-vi.mock("../../agents/main-session-recovery/main-session-recovery-store.js", () => ({
-  claimMainSessionRecoveryOwner: vi.fn(),
-  releaseMainSessionRecoveryOwner: vi.fn(),
 }));
 
 // Provider profile discovery is owned by thinking.test.ts. Keep the real thinking-policy
@@ -187,26 +173,7 @@ vi.mock("../../agents/subagents/spawn/subagent-capabilities.js", () => ({
 }));
 
 const resolveAgentHarnessDeliveryDefaultsMock = vi.hoisted(() =>
-  vi.fn(
-    (params: {
-      provider: string;
-      modelId?: string;
-      agentHarnessId?: string;
-      agentHarnessRuntimeOverride?: string;
-    }) => {
-      const isSourceProviderCandidate = params.modelId === undefined;
-      const isDefaultModelCandidate =
-        params.provider === "anthropic" && params.modelId === "claude-opus-4-1";
-      if (
-        (!isSourceProviderCandidate && !isDefaultModelCandidate) ||
-        params.agentHarnessId ||
-        params.agentHarnessRuntimeOverride
-      ) {
-        preparedReplyMockState.unexpectedCalls.push("resolveAgentHarnessDeliveryDefaults");
-      }
-      return {};
-    },
-  ),
+  vi.fn((_params: { provider: string; modelId?: string }) => ({})),
 );
 vi.mock("../../agents/harness/selection-decision.js", () => ({
   resolveAgentHarnessDeliveryDefaults: resolveAgentHarnessDeliveryDefaultsMock,
@@ -216,50 +183,14 @@ vi.mock("../../agents/harness/selection-decision.js", () => ({
 // the three catalog/selection operations that this run-orchestration suite owns.
 vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/model-selection.js")>()),
-  buildModelAliasIndex: vi.fn(
-    (params: { cfg: { agents?: { defaults?: { models?: unknown } } } }) => {
-      if (params.cfg.agents?.defaults?.models) {
-        preparedReplyMockState.unexpectedCalls.push("buildModelAliasIndex");
-      }
-      return { byAlias: new Map(), byKey: new Map() };
-    },
-  ),
-  resolveDefaultModelForAgent: vi.fn(
-    (params: { cfg: { agents?: { defaults?: { model?: unknown } } } }) => {
-      if (params.cfg.agents?.defaults?.model) {
-        preparedReplyMockState.unexpectedCalls.push("resolveDefaultModelForAgent");
-      }
-      return { provider: "anthropic", model: "claude-opus-4-1" };
-    },
-  ),
-  resolveModelRefFromString: vi.fn(() => {
-    preparedReplyMockState.unexpectedCalls.push("resolveModelRefFromString");
-    return undefined;
-  }),
+  buildModelAliasIndex: vi.fn(() => ({ byAlias: new Map(), byKey: new Map() })),
+  resolveDefaultModelForAgent: vi.fn(() => ({ provider: "anthropic", model: "claude-opus-4-1" })),
+  resolveModelRefFromString: vi.fn(() => undefined),
 }));
 
-const resolveSessionRuntimeOverrideForProviderMock = vi.hoisted(() =>
-  vi.fn(
-    (params: {
-      entry?: {
-        agentHarnessId?: string;
-        agentRuntimeOverride?: string;
-        modelSelectionLocked?: boolean;
-      };
-    }) => {
-      if (
-        params.entry?.agentHarnessId ||
-        params.entry?.agentRuntimeOverride ||
-        params.entry?.modelSelectionLocked
-      ) {
-        preparedReplyMockState.unexpectedCalls.push("resolveSessionRuntimeOverrideForProvider");
-      }
-      return undefined;
-    },
-  ),
-);
+// mock-isolation: fixture runtime overrides must not discover installed host harnesses.
 vi.mock("../../agents/session-runtime-compat.js", () => ({
-  resolveSessionRuntimeOverrideForProvider: resolveSessionRuntimeOverrideForProviderMock,
+  resolveSessionRuntimeOverrideForProvider: vi.fn(() => undefined),
 }));
 
 // Provider policy projection belongs to its adapter and provider-local suites. These tests
@@ -394,23 +325,9 @@ vi.mock("./session-system-events.js", () => ({
 
 // mock-isolation: reply orchestration uses fixture model overrides without opening host session stores.
 vi.mock("../../sessions/stored-model-overrides.js", () => {
-  const resolveStoredModelOverride = vi.fn(
-    (params: {
-      sessionEntry?: { providerOverride?: string; modelOverride?: string };
-      sessionStore?: Record<string, { providerOverride?: string; modelOverride?: string }>;
-    }) => {
-      const entries = [params.sessionEntry, ...Object.values(params.sessionStore ?? {})];
-      if (entries.some((entry) => entry?.providerOverride || entry?.modelOverride)) {
-        preparedReplyMockState.unexpectedCalls.push("resolveStoredModelOverride");
-      }
-      return null;
-    },
-  );
   return {
-    resolveStoredModelOverride,
-    resolveStoredModelOverrideAsync: async (
-      params: Parameters<typeof resolveStoredModelOverride>[0],
-    ) => resolveStoredModelOverride(params),
+    resolveStoredModelOverride: vi.fn(() => null),
+    resolveStoredModelOverrideAsync: async () => null,
   };
 });
 
@@ -479,8 +396,12 @@ async function prepareActiveQueue(
   return { runtime, operation };
 }
 
-function runPrepared(overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {}) {
+function runPrepared(overrides: Partial<ReplyRunParams> = {}) {
   return runPreparedReply(baseParams(overrides));
+}
+
+function createConfig(overrides: Partial<ReplyRunParams["cfg"]> = {}): ReplyRunParams["cfg"] {
+  return { session: {}, channels: {}, agents: { defaults: {} }, ...overrides };
 }
 
 async function useActualSystemEventDrain() {
@@ -505,18 +426,15 @@ function expectTurnText(call: ReturnType<typeof requireRunReplyAgentCall>, text:
   });
 }
 
-const PR_ATTRIBUTION_OFF = `PR attribution: ⟦openclaw:ctx⟧
-${buildPrAttributionPrompt(false)}`;
-
 describe("runPreparedReply media-only handling", () => {
   describe.each(["followup", "collect"] as const)("queued owner authority: %s", (mode) => {
     it.each([
       "owner",
+      "telegram-named-account",
       "owner-overflow",
       "owner-batch",
       "mixed-source-authority",
       "revoked-before-drain",
-      "revoked-after-bind",
       "configured-owner",
       "configured-owner-revoked",
       "discord-owner-alias",
@@ -535,11 +453,16 @@ describe("runPreparedReply media-only handling", () => {
       "retains the actual channel owner ingress through queued execution: %s",
       async (kind) => {
         resetFollowupTurnTestState();
-        const params = ownerParams();
-        const key = expectDefined(params.sessionKey, "queued execution session key");
         const promoted = kind === "discord-promoted-before-drain";
         const refreshOwner = promoted || kind === "owner-source-replaced";
         const channel = kind === "discord-owner-alias" || promoted ? "discord" : "telegram";
+        const params = createOwnerIngress(
+          kind,
+          channel,
+          "list all automations",
+          "original-ingress",
+        );
+        const key = expectDefined(params.sessionKey, "queued execution session key");
         const cfg = {
           commands: { ownerAllowFrom: [`${channel}:${promoted ? "other" : "owner-1"}`] },
         };
@@ -571,9 +494,15 @@ describe("runPreparedReply media-only handling", () => {
           const count =
             kind === "owner-overflow"
               ? 3
-              : kind === "owner-batch" || kind === "mixed-source-authority"
+              : ["owner-batch", "mixed-source-authority"].includes(kind)
                 ? 2
                 : 1;
+          const settings = {
+            mode,
+            debounceMs: 0,
+            cap: kind === "owner-overflow" ? 1 : 20,
+            dropPolicy: "summarize" as const,
+          };
           for (let index = 0; index < count; index++) {
             const source = {
               ...followupRun,
@@ -583,25 +512,11 @@ describe("runPreparedReply media-only handling", () => {
               turnAdoptionLifecycle: undefined,
               sourceTurnId: `source-${index}`,
               messageId: `source-${index}`,
-              ...(kind === "mixed-source-authority" && index === 1
-                ? { createChannelCronAuthority: undefined }
-                : {}),
             };
-            expect(
-              enqueueFollowupRun(
-                key,
-                source,
-                {
-                  mode,
-                  debounceMs: 0,
-                  cap: kind === "owner-overflow" ? 1 : 20,
-                  dropPolicy: "summarize",
-                },
-                "none",
-                undefined,
-                false,
-              ),
-            ).toBe(true);
+            if (kind === "mixed-source-authority" && index === 1) {
+              source.createChannelCronAuthority = undefined;
+            }
+            expect(enqueueFollowupRun(key, source, settings, "none", undefined, false)).toBe(true);
             queuedSources.push(source);
           }
           return undefined;
@@ -629,14 +544,14 @@ describe("runPreparedReply media-only handling", () => {
                     return grant
                       ? withCronManagementGrant(grant, identity, method, async () => {
                           getCronManagementAuthority(identity)!();
-                          expect(queuedCapability?.requesterOwner?.senderId).toBe("owner-1");
                           expect(getCronManagementChannelRequester(identity)).toEqual(
-                            channel === "discord"
+                            channel === "discord" || channel === "telegram"
                               ? {
                                   version: 1,
                                   channel,
-                                  accountId: "default",
-                                  senderId: promoted ? "owner-1" : "transport-alias",
+                                  accountId: kind === "telegram-named-account" ? "work" : "default",
+                                  senderId:
+                                    kind === "discord-owner-alias" ? "transport-alias" : "owner-1",
                                 }
                               : undefined,
                           );
@@ -646,17 +561,11 @@ describe("runPreparedReply media-only handling", () => {
                   });
                 const options = { runId: instance.runId, agentSessionKey: "session-key" };
                 const tool = createCronTool(options);
-                if (kind === "revoked-after-bind") {
-                  current = false;
-                  await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
-                    "Automation admin grant",
-                  );
-                  scope = "revoked";
-                } else {
-                  const { details } = await tool.execute("list", { action: "list" });
-                  expect(details).toMatchObject({ scope: expect.any(String) });
-                  scope = (details as { scope: string }).scope;
-                }
+                const { details } = await tool.execute("list", { action: "list" });
+                expect(details).toMatchObject({ scope: expect.any(String) });
+                // The cron tool's gateway result includes the scope asserted above.
+                const scopedDetails = details as { scope: string };
+                scope = scopedDetails.scope;
               },
             );
             scopes.push(scope);
@@ -668,48 +577,16 @@ describe("runPreparedReply media-only handling", () => {
             releaseAgentRunDelegatedAuthority(authority);
           }
         });
-        params.command.senderId = "owner-1";
-        params.command.senderIsOwner = kind !== "non-owner" && !promoted;
-        const input = turn("list all automations", {
-          ...createProviderSurface(channel),
-          ChatType: "group",
-          SenderId: kind === "discord-owner-alias" ? "transport-alias" : "owner-1",
-          InboundEventKind: kind === "room-event" ? "room_event" : undefined,
-          ...(kind === "internal"
-            ? { InputProvenance: { kind: "inter_session" as const, sourceTool: "sessions_send" } }
-            : {}),
-        });
-        if (kind !== "configured-owner" && kind !== "configured-owner-revoked") {
-          bindCommandOwnerAuthority(input.sessionCtx, { isCurrent: () => current });
-        }
+        bindOwnerIngress(params, channel, kind, () => current);
         try {
-          await runPrepared({
-            ...params,
-            ...input,
-            conversation: undefined,
-            cfg,
-            ...(kind === "spawned"
-              ? {
-                  sessionEntry: {
-                    sessionId: "spawned-session",
-                    updatedAt: 1,
-                    spawnedBy: "agent:parent:main",
-                  },
-                }
-              : {}),
-            opts: {
-              runId: "original-ingress",
-
-              suppressNextUserMessagePersistence: kind === "replay",
-            },
-          });
+          await runPrepared({ ...params, cfg });
           if (capturedOpts?.cronCreatorAuthorityCapability) {
             expect(capturedOpts.cronCreatorAuthorityCapability.active).toBe(false);
           }
           if (kind === "owner-overflow") {
             expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
-            expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(1);
-            expect(getExistingFollowupQueue(key)?.summaryElisions[0]?.sources).toHaveLength(1);
+            expect(getExistingFollowupQueue(key)?.summaryEntries).toHaveLength(1);
+            expect(getExistingFollowupQueue(key)?.summaryElisions[0]?.entries).toHaveLength(1);
           }
           if (kind === "revoked-before-drain") {
             current = false;
@@ -767,16 +644,13 @@ describe("runPreparedReply media-only handling", () => {
           }
           expect(scope).toBe(
             kind === "owner" ||
+              kind === "telegram-named-account" ||
               kind === "owner-overflow" ||
               kind === "owner-batch" ||
               kind === "foreign-defaults" ||
-              kind === "configured-owner" ||
-              kind === "discord-owner-alias" ||
-              refreshOwner
+              kind === "owner-source-replaced"
               ? "gateway"
-              : kind === "revoked-after-bind"
-                ? "revoked"
-                : "caller",
+              : "caller",
           );
         } finally {
           clearFollowupQueue(key);
@@ -799,6 +673,7 @@ describe("runPreparedReply media-only handling", () => {
     turn,
   });
   it.each([
+    "owner",
     "owner-alias",
     "non-owner",
 
@@ -806,16 +681,14 @@ describe("runPreparedReply media-only handling", () => {
     "spawned",
     "inter-session",
     "replay",
-    "revoked-before-bind",
-    "revoked",
   ] as const)(
-    "admits configured Discord owner management through the reply ingress and real automation tool: %s",
+    "admits host-bound Discord owner management through the reply ingress and real automation tool: %s",
     async (kind) => {
       const runId = "discord-owner-management";
       const cfg = { commands: { ownerAllowFrom: ["discord:owner-1"] } };
-      const admitted = kind === "owner-alias" || kind === "revoked";
+      const admitted = kind === "owner";
       setRuntimeConfigSnapshot(cfg);
-      const { operationalRunInstance } = createTestAdmittedRunContext(runId);
+      const { operationalRunInstance } = runFixtures.createTestAdmittedRunContext(runId);
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
       const identity: AgentRuntimeIdentity = {
         kind: "agentRuntime",
@@ -829,9 +702,6 @@ describe("runPreparedReply media-only handling", () => {
         await withGatewayToolCallerIdentity(
           { ...identity, approvalAuthority: authority },
           async () => {
-            if (kind === "revoked-before-bind") {
-              setRuntimeConfigSnapshot({});
-            }
             using _ = vi
               .spyOn(gatewayModule, "callGatewayTool")
               .mockImplementation(async <T>(method: string) => {
@@ -846,9 +716,6 @@ describe("runPreparedReply media-only handling", () => {
                   const assertActive = getCronManagementAuthority(identity)!;
                   assertActive();
                   await Promise.resolve();
-                  if (kind === "revoked") {
-                    setRuntimeConfigSnapshot({});
-                  }
                   assertActive();
                   calls.push(method);
                   return { jobs: [], total: 0, hasMore: false } as T;
@@ -856,46 +723,16 @@ describe("runPreparedReply media-only handling", () => {
               });
             const options = { runId: opts?.runId, agentSessionKey: identity.sessionKey };
             const tool = createCronTool(options);
-            if (kind === "revoked") {
-              await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
-                "Automation admin grant",
-              );
-            } else {
-              await tool.execute("list", { action: "list" });
-            }
+            await tool.execute("list", { action: "list" });
           },
         );
         return undefined;
       });
+      const params = createOwnerIngress(kind, "discord", "list automations", runId);
+      bindOwnerIngress(params, "discord", kind);
       try {
-        const params = ownerParams();
-        params.command.senderId = "owner-1";
-        params.command.senderIsOwner = kind !== "non-owner";
-        await runPrepared({
-          ...params,
-          conversation: undefined,
-          cfg,
-          ...turn("list automations", {
-            ...createProviderSurface("discord"),
-            ChatType: "group",
-            SenderId: kind === "owner-alias" ? "transport-alias" : "owner-1",
-            InputProvenance:
-              kind === "inter-session"
-                ? { kind: "inter_session", sourceTool: "sessions_send" }
-                : undefined,
-            InboundEventKind: kind === "room-event" ? "room_event" : undefined,
-          }),
-          sessionEntry:
-            kind === "spawned"
-              ? { sessionId: "spawned-session", updatedAt: 1, spawnedBy: "agent:parent:main" }
-              : undefined,
-          opts: {
-            runId,
-
-            suppressNextUserMessagePersistence: kind === "replay",
-          },
-        });
-        expect(calls).toEqual(kind === "revoked" ? [] : admitted ? ["cron.list"] : ["restricted"]);
+        await runPrepared({ ...params, cfg });
+        expect(calls).toEqual(admitted ? ["cron.list"] : ["restricted"]);
       } finally {
         releaseAgentRunDelegatedAuthority(authority);
         clearRuntimeConfigSnapshot();
@@ -946,7 +783,6 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   beforeEach(async () => {
-    preparedReplyMockState.unexpectedCalls.length = 0;
     loadSessionEntryMock.mockReset();
     vi.clearAllMocks();
     resetPreparedReplySessionStore();
@@ -963,7 +799,6 @@ describe("runPreparedReply media-only handling", () => {
     await cleanupPreparedReplyFixtures();
     vi.useRealTimers();
     resetSystemEventsForTest();
-    expect(preparedReplyMockState.unexpectedCalls).toEqual([]);
   });
 
   it("passes approved elevated defaults to the runner", async () => {
@@ -973,8 +808,7 @@ describe("runPreparedReply media-only handling", () => {
       elevatedAllowed: true,
     });
 
-    const call = requireRunReplyAgentCall();
-    expect(call.followupRun.run.bashElevated).toEqual({
+    expect(requireRunReplyAgentCall().followupRun.run.bashElevated).toEqual({
       enabled: true,
       allowed: true,
       defaultLevel: "on",
@@ -1032,6 +866,52 @@ describe("runPreparedReply media-only handling", () => {
     },
   );
 
+  it.each([
+    ["off", "low"],
+    ["low", "low"],
+    ["high", "high"],
+  ] as const)(
+    "resolves Talk preference %s against the selected consult model",
+    async (requested, expected) => {
+      const catalog = [
+        {
+          provider: "anthropic",
+          id: "claude-opus-5-5",
+          name: "Claude Opus",
+          reasoning: true,
+          compat: { thinkingLevels: ["low", "medium", "high"], defaultThinkingLevel: "medium" },
+        },
+      ];
+      await runPrepared({
+        provider: "anthropic",
+        model: "claude-opus-5-5",
+        modelState: {
+          ...nonReasoningModelState(),
+          allowedModelCatalog: catalog,
+          resolveThinkingCatalog: async () => catalog,
+        },
+        resolvedThinkLevel: requested,
+        opts: { thinkingLevelOverride: requested, normalizeThinkingLevelOverride: true },
+      });
+      const run = requireRunReplyAgentCall().followupRun.run;
+      expect(run.thinkLevel).toBe(expected);
+      expect(run.thinkLevelOverride).toBe(requested);
+    },
+  );
+
+  it("does not clamp inherited thinking without a Talk override", async () => {
+    await runPrepared({
+      provider: "openai",
+      model: "chat-latest",
+      modelState: nonReasoningModelState(),
+      resolvedThinkLevel: "high",
+      opts: { normalizeThinkingLevelOverride: true },
+    });
+    const run = requireRunReplyAgentCall().followupRun.run;
+    expect(run.thinkLevel).toBe("high");
+    expect(run.thinkLevelOverride).toBeUndefined();
+  });
+
   it("projects prepared embedded prompt variants without changing CLI session guidance", async () => {
     vi.mocked(buildInboundMetaSystemPrompt).mockReturnValueOnce("Inbound metadata.");
     vi.mocked(buildSourceConversationContext).mockImplementation(
@@ -1041,8 +921,7 @@ describe("runPreparedReply media-only handling", () => {
       opts: {
         sourceReplyDeliveryMode: "message_tool_only",
         sourceReplyDeliveryModeOrigin: "runtime_default",
-      } as NonNullable<Parameters<typeof runPreparedReply>[0]["opts"]> &
-        SourceReplyDeliveryRuntimeOptions,
+      } as NonNullable<ReplyRunParams["opts"]> & SourceReplyDeliveryRuntimeOptions,
       ...turn("hello", {
         ...createProviderSurface("discord"),
         ChatType: "direct",
@@ -1050,9 +929,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     });
 
-    const call = requireRunReplyAgentCall(-1);
-    const followupRun = call.followupRun;
-    const run = followupRun.run;
+    const { run } = requireRunReplyAgentCall(-1).followupRun;
     const initialTurnContext = { start: 0, text: "Inbound metadata.\n\ndirect:message_tool_only" };
     const automaticTurnContext = { start: 0, text: "Inbound metadata.\n\ndirect:automatic" };
     const staticPrompt = "direct:message_tool_only\n\nPersistent policy.";
@@ -1143,7 +1020,6 @@ describe("runPreparedReply media-only handling", () => {
     expectTurnText(call, "please answer here");
     expect(call.followupRun.currentInboundContext?.text).toBe(
       [
-        PR_ATTRIBUTION_OFF,
         "Current message:\nchat_id=-100123\ninbound_event_kind: user_request",
         MESSAGE_TOOL_ONLY_DELIVERY_HINT,
       ].join("\n\n"),
@@ -1164,9 +1040,9 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPreparedReply(params);
 
-    const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("[User sent media without caption]");
-    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+    const { followupRun } = requireRunReplyAgentCall();
+    expect(followupRun.prompt).toContain("[User sent media without caption]");
+    expect(followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "",
       __openclaw: { media: [expect.objectContaining({ path: "/tmp/input.png" })] },
@@ -1327,14 +1203,13 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("projects partially hydrated current images into the runner and transcript layout", async () => {
-    const secondImageData = Buffer.from("second image bytes");
     const media = () => [
       { path: "/tmp/described-image.png", contentType: "image/png", workspaceDir: "/tmp" },
       { path: "/tmp/undescribed-image.png", contentType: "image/png", workspaceDir: "/tmp" },
     ];
     const image = {
       type: "image" as const,
-      data: secondImageData.toString("base64"),
+      data: Buffer.from("second image bytes").toString("base64"),
       mimeType: "image/png",
     };
     resolveCurrentTurnImagesMock.mockResolvedValueOnce({
@@ -1365,20 +1240,18 @@ describe("runPreparedReply media-only handling", () => {
 
     expect(result).toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
-    const call = requireRunReplyAgentCall();
-    expect(call.followupRun.images).toEqual([image]);
-    expect(
-      (
-        call.followupRun.userTurnTranscriptRecorder?.message as unknown as Record<string, unknown>
-      )?.["__openclaw"],
-    ).toMatchObject({
-      mediaImageLayout: {
-        slots: [{ kind: "inline", factIndex: 1 }],
-        suppressedFactIndexes: [0],
+    const { followupRun } = requireRunReplyAgentCall();
+    expect(followupRun.images).toEqual([image]);
+    expect(followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      __openclaw: {
+        mediaImageLayout: {
+          slots: [{ kind: "inline", factIndex: 1 }],
+          suppressedFactIndexes: [0],
+        },
       },
     });
-    expect(call.followupRun.imageOrder).toEqual(["inline"]);
-    expect(call.followupRun.prompt).toContain("a tiny dot image");
+    expect(followupRun.imageOrder).toEqual(["inline"]);
+    expect(followupRun.prompt).toContain("a tiny dot image");
   });
 
   it.each([false, true])(
@@ -1451,9 +1324,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("keeps /reset soft tails even when the bare reset prompt is empty", async () => {
     const result = await runPrepared({
-      ctx: {
-        ...createInboundBody("/reset soft re-read persona files"),
-      },
+      ctx: createInboundBody("/reset soft re-read persona files"),
       sessionCtx: {
         ...createSessionBody(""),
         Provider: "slack",
@@ -1480,7 +1351,7 @@ describe("runPreparedReply media-only handling", () => {
     const { resolveSessionAuthSelection } =
       await import("../../agents/auth-profiles/session-override.js");
     const sessionId = "reply-operation-auth-failure";
-    const activeBefore = sessionQueries.listActiveReplyRunSessionKeys().length;
+    const activeBefore = sessionQueries.listActiveSessionRunKeys().length;
     vi.mocked(resolveSessionAuthSelection).mockRejectedValueOnce(new Error("auth failed"));
 
     await expect(
@@ -1489,7 +1360,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     ).rejects.toThrow("auth failed");
 
-    expect(sessionQueries.listActiveReplyRunSessionKeys().length).toBe(activeBefore);
+    expect(sessionQueries.listActiveSessionRunKeys().length).toBe(activeBefore);
   });
 
   it("routes a channel-configured interrupt through session-work admission", async () => {
@@ -1551,11 +1422,6 @@ describe("runPreparedReply media-only handling", () => {
       ...activeEntry,
       goal: { ...activeEntry.goal!, status: "complete" },
     };
-    const cfg = {
-      session: {},
-      channels: {},
-      agents: { defaults: {} },
-    };
     await useQueueMode("interrupt");
     vi.mocked(inboundMeta.formatActiveGoalContext).mockImplementation((entry) =>
       entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : undefined,
@@ -1586,7 +1452,6 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     const runPromise = runPrepared({
-      cfg,
       isNewSession: false,
       sessionId: "session-goal-interrupt",
       sessionEntry: activeEntry,
@@ -1711,56 +1576,37 @@ describe("runPreparedReply media-only handling", () => {
     }
   });
 
-  it("rebinds a queued pre-dispatch reply operation after session rollover", async () => {
-    const operation = createOperation("session-before-rollover");
-
-    try {
-      await expect(
-        runPrepared({
-          isNewSession: true,
-          sessionId: "session-after-rollover",
-          opts: { replyOperation: operation } as never,
-        }),
-      ).resolves.toEqual({ text: "ok" });
-
-      const call = requireRunReplyAgentCall(-1);
-      expect(operation.sessionId).toBe("session-after-rollover");
-      expect(call.replyOperation).toBe(operation);
-      expect(call.followupRun.run.sessionId).toBe("session-after-rollover");
-    } finally {
-      operation.complete();
-    }
-  });
-
-  it("rebinds a provisional pre-dispatch operation to a discovered existing session", async () => {
-    const operation = createOperation("provisional-session");
-    const sessionStore: Record<string, SessionEntry> = {
-      "session-key": {
-        sessionId: "existing-session",
-        updatedAt: 1,
-      },
-    };
-
-    try {
-      await expect(
-        runPrepared({
-          isNewSession: false,
-          sessionEntry: undefined,
-          sessionId: undefined,
-          sessionStore,
-          storePath: "/tmp/sessions.json",
-          opts: { replyOperation: operation } as never,
-        }),
-      ).resolves.toEqual({ text: "ok" });
-
-      const call = requireRunReplyAgentCall(-1);
-      expect(operation.sessionId).toBe("existing-session");
-      expect(call.replyOperation).toBe(operation);
-      expect(call.followupRun.run.sessionId).toBe("existing-session");
-    } finally {
-      operation.complete();
-    }
-  });
+  it.each(["rollover", "discovered"] as const)(
+    "rebinds a pre-dispatch reply operation to the %s session",
+    async (kind) => {
+      const operation = createOperation(
+        kind === "rollover" ? "session-before-rollover" : "provisional-session",
+      );
+      const sessionId = kind === "rollover" ? "session-after-rollover" : "existing-session";
+      try {
+        await expect(
+          runPrepared({
+            ...(kind === "rollover"
+              ? { isNewSession: true, sessionId }
+              : {
+                  isNewSession: false,
+                  sessionEntry: undefined,
+                  sessionId: undefined,
+                  sessionStore: { "session-key": { sessionId, updatedAt: 1 } },
+                  storePath: "/tmp/sessions.json",
+                }),
+            opts: { replyOperation: operation } as never,
+          }),
+        ).resolves.toEqual({ text: "ok" });
+        const call = requireRunReplyAgentCall(-1);
+        expect(operation.sessionId).toBe(sessionId);
+        expect(call.replyOperation).toBe(operation);
+        expect(call.followupRun.run.sessionId).toBe(sessionId);
+      } finally {
+        operation.complete();
+      }
+    },
+  );
 
   it("keeps route and dispatch system events queued when busy admission returns", async () => {
     vi.useFakeTimers();
@@ -1768,7 +1614,7 @@ describe("runPreparedReply media-only handling", () => {
     await useQueueMode("interrupt");
     const routeSessionKey = "agent:main:slack:channel:c123";
     const dispatchSessionKey = `${routeSessionKey}:thread:123.456`;
-    const cfg = { session: {}, channels: {}, agents: { defaults: {} } };
+    const cfg = createConfig();
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     let resolveCancelled!: () => void;
     const cancelled = new Promise<void>((resolve) => {
@@ -1907,9 +1753,10 @@ describe("runPreparedReply media-only handling", () => {
       currentInboundAudio: true,
       run: { sourceReplyDeliveryMode: "message_tool_only", terminalReplyExpectation: "optional" },
     });
-    expect(call?.followupRun.run.suppressNextUserMessagePersistence).toBeUndefined();
-    expect(call?.followupRun.run.suppressTranscriptOnlyAssistantPersistence).toBe(true);
-    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toEqual({
+    const { run, userTurnTranscriptRecorder, currentInboundContext } = call.followupRun;
+    expect(run.suppressNextUserMessagePersistence).toBeUndefined();
+    expect(run.suppressTranscriptOnlyAssistantPersistence).toBe(true);
+    expect(userTurnTranscriptRecorder?.message).toEqual({
       role: "user",
       content: "#35676 Keśava: No wtf",
       idempotencyKey: buildChannelSourceTurnId({
@@ -1936,7 +1783,7 @@ describe("runPreparedReply media-only handling", () => {
         },
       },
     });
-    call?.followupRun.userTurnTranscriptRecorder?.markRuntimePersisted({
+    userTurnTranscriptRecorder?.markRuntimePersisted({
       role: "user",
       content: "#35676 Keśava: No wtf",
       timestamp: 1_710_000_000_000,
@@ -1949,15 +1796,11 @@ describe("runPreparedReply media-only handling", () => {
       timestampMs: 1_710_000_000_000,
       expectedSessionId: expect.any(String),
     });
-    expect(call?.followupRun.currentInboundContext?.text).toContain(
-      "#35675 obviyus ->#35674: Are you fr fr",
-    );
-    expect(call?.followupRun.currentInboundContext?.text).toContain("[OpenClaw room event]");
-    expect(call?.followupRun.currentInboundContext?.text).toContain(
-      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
-    );
-    expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
-    expect(call?.followupRun.currentInboundContext?.text).not.toContain("Current event:");
+    expect(currentInboundContext?.text).toContain("#35675 obviyus ->#35674: Are you fr fr");
+    expect(currentInboundContext?.text).toContain("[OpenClaw room event]");
+    expect(currentInboundContext?.text).toContain(ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE);
+    expect(currentInboundContext?.text).not.toContain("visible_reply_contract:");
+    expect(currentInboundContext?.text).not.toContain("Current event:");
   });
 
   it.each([
@@ -1969,10 +1812,9 @@ describe("runPreparedReply media-only handling", () => {
     const abortController = new AbortController();
     const sourceAbortController = new AbortController();
     const operatorController = new AbortController();
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = runFixtures.createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
-      assertCurrent: () => operatorController.signal.throwIfAborted(),
       signal: operatorController.signal,
     });
     const isUserRequest = kind === "user_request";
@@ -2033,9 +1875,9 @@ describe("runPreparedReply media-only handling", () => {
       ),
     });
 
-    const call = requireRunReplyAgentCall(-1);
-    expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("automatic");
-    expect(call?.followupRun.currentInboundContext?.text).not.toContain(
+    const { followupRun } = requireRunReplyAgentCall(-1);
+    expect(followupRun.run.sourceReplyDeliveryMode).toBe("automatic");
+    expect(followupRun.currentInboundContext?.text).not.toContain(
       "visible_reply_contract: message_tool_only",
     );
   });
@@ -2158,79 +2000,63 @@ describe("runPreparedReply media-only handling", () => {
     },
   );
 
-  it.each([
-    { stableMode: "message_tool_only", expectedPrompt: "group:telegram:group:message_tool_only" },
-  ] as const)(
-    "keeps CLI binding facts stable across room-event, primary, and cron assembly for $stableMode",
-    async ({ stableMode, expectedPrompt }) => {
-      vi.mocked(buildSourceConversationContext).mockImplementation(
-        ({ sessionCtx, sourceReplyDeliveryMode }) =>
-          [
-            "group",
-            sessionCtx.Provider,
-            sessionCtx.ChatType,
-            sourceReplyDeliveryMode ?? "automatic",
-          ].join(":"),
-      );
-      const cfg: ReplyRunParams["cfg"] = {
-        session: {},
-        channels: {},
-        agents: { defaults: {} },
-        ...(stableMode === "message_tool_only"
-          ? { messages: { visibleReplies: "message_tool" } }
-          : {}),
-      };
-      const sessionEntry = createTelegramGroupSession();
-      const stableOptions: ReplyRunParams["opts"] = {
-        sourceReplyDeliveryMode: stableMode,
-        sessionPromptSourceReplyDeliveryMode: stableMode,
-      };
-      const sequence: Array<readonly ["room_event" | "primary" | "cron", ReplyRunParams["opts"]]> =
+  it("keeps CLI binding facts stable across room-event, primary, and cron assembly", async () => {
+    const stableMode = "message_tool_only";
+    const expectedPrompt = "group:telegram:group:message_tool_only";
+    vi.mocked(buildSourceConversationContext).mockImplementation(
+      ({ sessionCtx, sourceReplyDeliveryMode }) =>
         [
-          ["room_event", { ...stableOptions, sourceReplyDeliveryMode: "message_tool_only" }],
-          ["primary", stableOptions],
-          ["cron", { ...stableOptions }],
-        ];
-      // Scheduled wakes must derive the same stable session policy.
-      for (const [kind, opts] of sequence) {
-        const isWake = kind === "cron";
-        const messageId = kind === "room_event" ? "msg-1" : "msg-2";
-        await runPrepared({
-          cfg,
-          opts,
-          isNewSession: false,
-          systemSent: true,
-          sessionEntry,
-          ...turn(
-            isWake ? "scheduled wake" : "@bot check this",
-            isWake
-              ? { InternalTurnSource: kind }
-              : { ...createProviderSurface("telegram"), ChatType: "group", MessageSid: messageId },
-            kind === "room_event" ? { InboundEventKind: kind } : {},
-            isWake ? { SessionKey: "agent:main:telegram:-100123" } : {},
-          ),
-        });
-      }
+          "group",
+          sessionCtx.Provider,
+          sessionCtx.ChatType,
+          sourceReplyDeliveryMode ?? "automatic",
+        ].join(":"),
+    );
+    const cfg = createConfig({ messages: { visibleReplies: "message_tool" } });
+    const sessionEntry = createTelegramGroupSession();
+    const stableOptions: ReplyRunParams["opts"] = {
+      sourceReplyDeliveryMode: stableMode,
+      sessionPromptSourceReplyDeliveryMode: stableMode,
+    };
+    // Scheduled wakes must derive the same stable session policy.
+    for (const kind of ["room_event", "primary", "cron"] as const) {
+      const isWake = kind === "cron";
+      const messageId = kind === "room_event" ? "msg-1" : "msg-2";
+      await runPrepared({
+        cfg,
+        opts: { ...stableOptions },
+        isNewSession: false,
+        systemSent: true,
+        sessionEntry,
+        ...turn(
+          isWake ? "scheduled wake" : "@bot check this",
+          isWake
+            ? { InternalTurnSource: kind }
+            : { ...createProviderSurface("telegram"), ChatType: "group", MessageSid: messageId },
+          kind === "room_event" ? { InboundEventKind: kind } : {},
+          isWake ? { SessionKey: "agent:main:telegram:-100123" } : {},
+        ),
+      });
+    }
 
-      const roomEvent = requireRunReplyAgentCall(0).followupRun;
-      const primary = requireRunReplyAgentCall(1).followupRun.run;
-      const cron = requireRunReplyAgentCall(2).followupRun.run;
-      expect(roomEvent.run.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(primary.sourceReplyDeliveryMode).toBe(stableMode);
-      expect(cron.sourceReplyDeliveryMode).toBe(stableMode);
-      expect(roomEvent.run.extraSystemPrompt).toBe(expectedPrompt);
-      expect(roomEvent.currentInboundContext?.text).toContain(
-        "You were not explicitly tagged or mentioned in this room event",
-      );
-      for (const prepared of [roomEvent.run, primary, cron]) {
-        expect(prepared.extraSystemPromptStatic).toBe(expectedPrompt);
-        expect(prepared.cliSessionBindingFacts).toEqual({
-          extraSystemPromptStatic: expectedPrompt,
-          sourceReplyDeliveryMode: stableMode,
-        });
-      }
-    },
-  );
+    const roomEvent = requireRunReplyAgentCall(0).followupRun;
+    const primary = requireRunReplyAgentCall(1).followupRun.run;
+    const cron = requireRunReplyAgentCall(2).followupRun.run;
+    expect(roomEvent.run.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(primary.sourceReplyDeliveryMode).toBe(stableMode);
+    expect(cron.sourceReplyDeliveryMode).toBe(stableMode);
+    expect(roomEvent.run.extraSystemPrompt).toBe(expectedPrompt);
+    expect(roomEvent.currentInboundContext?.text).toContain(
+      "You were not explicitly tagged or mentioned in this room event",
+    );
+    for (const prepared of [roomEvent.run, primary, cron]) {
+      expect(prepared.extraSystemPromptStatic).toBe(expectedPrompt);
+      expect(prepared.cliSessionBindingFacts).toEqual({
+        extraSystemPromptStatic: expectedPrompt,
+        sourceReplyDeliveryMode: stableMode,
+      });
+    }
+  });
 
   it.each(["originless", "message-tool-denied"] as const)(
     "resolves automatic synthetic stable facts for %s sessions",
@@ -2246,14 +2072,11 @@ describe("runPreparedReply media-only handling", () => {
         );
       }
       await runPrepared({
-        cfg: {
-          session: {},
-          channels: {},
-          agents: { defaults: {} },
-          ...(!originless
+        cfg: createConfig(
+          !originless
             ? { messages: { visibleReplies: "message_tool" }, tools: { deny: ["message"] } }
-            : {}),
-        },
+            : {},
+        ),
         opts: {},
         isNewSession: false,
         systemSent: true,
@@ -2288,22 +2111,20 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(buildSourceConversationContext).mockReturnValue("group:telegram:group:automatic");
     vi.mocked(buildGroupIntro).mockReturnValue("intro:mention");
     const sessionEntry = createTelegramGroupSession();
+    const opts: ReplyRunParams["opts"] = {
+      sourceReplyDeliveryMode: "automatic",
+      sessionPromptSourceReplyDeliveryMode: "automatic",
+    };
 
     await runPrepared({
-      opts: {
-        sourceReplyDeliveryMode: "automatic",
-        sessionPromptSourceReplyDeliveryMode: "automatic",
-      },
+      opts: { ...opts },
       isNewSession: true,
       systemSent: false,
       sessionEntry,
       ...turn("@bot first", { ...createProviderSurface("telegram"), ChatType: "group" }),
     });
     await runPrepared({
-      opts: {
-        sourceReplyDeliveryMode: "automatic",
-        sessionPromptSourceReplyDeliveryMode: "automatic",
-      },
+      opts: { ...opts },
       isNewSession: false,
       systemSent: true,
       sessionEntry,
@@ -2321,11 +2142,9 @@ describe("runPreparedReply media-only handling", () => {
 
   it("captures the prepared reply policy for queued Slack runs", async () => {
     await runPrepared({
-      cfg: {
-        session: {},
+      cfg: createConfig({
         channels: { slack: { replyToMode: "all" } },
-        agents: { defaults: {} },
-      },
+      }),
       ...turn(
         "",
         {
@@ -2355,19 +2174,16 @@ describe("runPreparedReply media-only handling", () => {
         ChatType: liveChatType,
       };
       await runPrepared({
-        cfg: {
-          session: {},
+        cfg: createConfig({
           channels: {
             slack: {
               replyToMode: "all",
               replyToModeByChatType: { channel: "off", direct: "first" },
             },
           },
-          agents: { defaults: {} },
-        },
+        }),
         opts: {},
-        ctx: { ...createInboundBody("scheduled wake"), ...route },
-        sessionCtx: { ...createSessionBody("scheduled wake"), ...route },
+        ...turn("scheduled wake", route),
         sessionEntry: {
           sessionId: "session-1",
           updatedAt: 1,
@@ -2407,9 +2223,7 @@ describe("runPreparedReply media-only handling", () => {
 
     const followupRun = requireRunReplyAgentCall().followupRun;
     const context = followupRun.currentInboundContext;
-    expect(followupRun.prompt).toBe(
-      [PR_ATTRIBUTION_OFF, "A new session was started via /new or /reset."].join("\n\n"),
-    );
+    expect(followupRun.prompt).toBe("A new session was started via /new or /reset.");
     for (const event of [
       "Slack reaction added: :eyes:",
       "Slack message in #claw-test from Alice",

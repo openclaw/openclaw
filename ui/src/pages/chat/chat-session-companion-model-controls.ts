@@ -9,7 +9,7 @@ import {
   readChatModelCatalogState,
   refreshChatModelCatalogOnDemand,
 } from "./chat-state-refresh.ts";
-import type { ChatModelControlsProps } from "./components/chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "./components/chat-model-controls.types.ts";
 
 const sideChatCatalogs = new WeakMap<ModelCatalogEntry[], ModelCatalogEntry[]>();
 

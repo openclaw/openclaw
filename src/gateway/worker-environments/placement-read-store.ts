@@ -25,12 +25,25 @@ export function createPlacementReadStore(params: {
     );
   };
   const read = async (sessionIds?: readonly string[]) => {
+    // A complete empty scan also proves there are no placements to preserve. A writer
+    // can reserve its sequence before the scan, then deliver its receipt afterward.
+    const inventorySequence =
+      sessionIds === undefined && owner.pending.size === 0 ? owner.sequence : undefined;
     const publish = capturePlacementReplicaRead(context.admission.identity);
     const records = await runOpenClawStateWorkerOperation(context, (scope) =>
       scope.execute({ type: "workerPlacements.read", input: { sessionIds } }),
     );
     publish(records, sessionIds);
-    return decorate(records, sessionIds);
+    const placements = decorate(records, sessionIds);
+    if (
+      records.length === 0 &&
+      owner.active &&
+      owner.sequence === inventorySequence &&
+      owner.pending.size === 0
+    ) {
+      owner.preservation ??= new Map();
+    }
+    return placements;
   };
   const getManyAsync = async (
     sessionIds: readonly string[],
@@ -63,6 +76,22 @@ export function createPlacementReadStore(params: {
       return { ...result, placement };
     },
     listAsync: () => read(),
+    async listSessionIdentitiesAsync() {
+      const identities = await runOpenClawStateWorkerOperation(context, (scope) =>
+        scope.execute({ type: "workerPlacements.readIdentities", input: {} }),
+      );
+      context.admission.assertCurrent();
+      const persistedIds = new Set(identities.map((identity) => identity.sessionId));
+      // Local placements can exist only in the replica, including released claims.
+      for (const id of owner.localClaimSessions) {
+        const placement = owner.placements.get(id)?.placement;
+        if (placement && !persistedIds.has(id)) {
+          const { sessionId, agentId, sessionKey } = placement;
+          identities.push({ sessionId, agentId, sessionKey });
+        }
+      }
+      return identities;
+    },
     async getPlacementMoveAsync(sessionId: string) {
       const id = required(sessionId, "move session id");
       const move = await runOpenClawStateWorkerOperation(context, (scope) =>

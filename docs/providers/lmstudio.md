@@ -116,42 +116,53 @@ failures return a JSON error with the same recovery guidance as human output and
 exit nonzero without applying the proposed provider configuration.
 
 Interactive setup can additionally prompt for a preferred load context length and applies it across
-the discovered models it saves to config.
+the discovered models it saves to config, capped by each model's advertised maximum. The synthesized
+output budget is sized from that final load context, rather than the context that happened to be
+loaded during discovery: a 16K preference gets an 8K output budget, and a 64K preference gets 32K.
+Leaving the preference blank keeps the discovered context. Setup preserves existing per-model
+output limits; otherwise, a configured provider `maxTokens` default takes precedence over the
+synthesized budget and is capped to the final context. Without either override, setup keeps the
+context-sized output default. Existing saved configurations are not automatically rewritten.
 
 ## Configuration
 
-### Streaming usage compatibility
+<a id="thinking-compatibility" />
 
-LM Studio doesn't always emit an OpenAI-shaped `usage` object on streamed responses. OpenClaw
-recovers token counts from llama.cpp-style `timings.prompt_n` / `timings.predicted_n` metadata
-instead. Any OpenAI-compatible endpoint resolved as a local endpoint (loopback host) gets this same
-fallback, which covers other local backends such as vLLM, SGLang, llama.cpp, LocalAI, Jan, TabbyAPI,
-and text-generation-webui.
+### Chat transport and thinking
 
-### Gemma 4 tool-call recovery
+OpenClaw uses LM Studio's [Anthropic-compatible Messages API](https://lmstudio.ai/docs/developer/anthropic-compat/messages)
+for chat, including models saved with `api: "openai-completions"`. The shared Messages transport
+handles streaming text, thinking, images, tool calls, conversation replay, and token usage.
+Your server must provide `/v1/messages`. Embeddings continue to use the existing embeddings endpoint.
 
-For Gemma 4 models using `openai-completions`, OpenClaw recovers complete standalone
-`<|tool_call>call:...<tool_call|>` batches if the server returns them as text,
-including when the call is the last content before `finish_reason: "stop"`.
-Recovery preserves raw string arguments and requires complete argument objects;
-incomplete calls, prose, and code examples remain text. Truncated, filtered,
-cancelled, or unterminated streams do not authorize recovered calls. If native
-tool calls also appear in the stream, they remain authoritative and raw text is
-not promoted.
+Thinking `off` sends `thinking: { type: "disabled" }`. Enabled thinking levels send
+`thinking: { type: "enabled" }`; LM Studio controls the reasoning budget, so levels such as
+`medium` and `xhigh` do not set distinct budgets. This avoids sending graded
+`reasoning_effort` values to binary-thinking models, which can produce an unsupported-setting
+warning on Chat Completions. Explicit `thinkingLevelMap` and `reasoningEffortMap` entries still
+determine enabled/disabled intent, including in existing saved model configurations.
+When no thinking level is requested, LM Studio keeps its own default.
 
-### Thinking compatibility
+Requests with `responseFormat` (or the `response_format` model parameter, including
+`extra_body.response_format`) use
+[Chat Completions structured output](https://lmstudio.ai/docs/developer/openai-compat/structured-output)
+instead: Messages does not enforce a response schema. Routing happens before the request is sent.
+This path preserves saved reasoning settings and translates binary `off`/`on` wire values to
+`none`/`high`, which Chat Completions accepts. The endpoint may still warn about enabled graded
+effort on a binary model. Explicit API choices other than
+`openai-completions` and `anthropic-messages` retain their selected transport.
 
-When LM Studio's `/api/v1/models` discovery reports model-specific reasoning options, OpenClaw
-exposes matching `reasoning_effort` values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) in
-model compat metadata. Some LM Studio builds advertise a binary UI option (`allowed_options: ["off",
-"on"]`) while rejecting those literal values on `/v1/chat/completions`; OpenClaw normalizes that
-binary shape to the six-level scale before sending requests, including for older saved config that
-still has `off`/`on` reasoning maps.
+<a id="streaming-usage-compatibility" />
 
-For graded options, fresh discovery maps `max` (and Ultra's provider effort) to the highest
-advertised standard effort level, regardless of option order. For example, `off`, `low`, `medium`
-maps `max` to `medium`. Existing saved graded `reasoningEffortMap` values remain explicit
-configuration; rerun LM Studio setup to regenerate them from current server metadata.
+Both chat paths remove unsupported `pattern` constraints from tool schemas before sending them.
+Chat Completions requests include streaming usage; OpenClaw also recovers token counts from llama.cpp-style
+`timings.prompt_n` / `timings.predicted_n` metadata when necessary.
+
+<a id="gemma-4-tool-call-recovery" />
+
+For Gemma 4 models on the Chat Completions path, OpenClaw can recover complete standalone
+`<|tool_call>call:...<tool_call|>` batches returned as text. Native tool calls remain authoritative;
+truncated, cancelled, or incomplete textual calls are never executed.
 
 ### Explicit configuration
 
@@ -201,6 +212,8 @@ With preload enabled, embedding requests also check that their model is loaded a
 instance prepared for the configured context length. This avoids truncating input through a smaller
 loaded instance and lets memory embeddings recover after model eviction even when LM Studio JIT
 loading is disabled. Embedding model and cache identity keep the configured model key.
+If a native preload fails and the subsequent embedding request also fails, the error includes
+the context length OpenClaw attempted alongside the inference error.
 
 ### Disabling preload
 
@@ -261,6 +274,38 @@ When LM Studio rejects a prompt because it exceeds the loaded context, OpenClaw 
 If a single message is too large, shorten it or load the model with a larger context; compacting
 earlier history cannot shrink that message. Server-side truncation without an overflow error
 does not trigger this recovery.
+
+### Embedding model fails to load on a small host
+
+Memory indexing fails with `Model is unloaded` when LM Studio cannot allocate the embedding model's
+context. In OpenClaw 2026.11.3, a missing `models.providers.lmstudio.models` entry requested
+64,000 tokens, capped to the model's maximum. Loading a 32,768-token embedding model this way
+could exhaust a 16 GB host. Set a small `contextTokens` in the model entry to request a fixed budget:
+
+```json5
+{
+  models: {
+    providers: {
+      lmstudio: {
+        models: [
+          {
+            id: "text-embedding-qwen3-embedding-0.6b",
+            name: "Qwen3 Embedding 0.6B",
+            input: ["text"],
+            contextWindow: 32768,
+            contextTokens: 1024,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+After a successful preload, OpenClaw uses the prepared context to split long text documents before embedding them. Rebuild an existing index with `openclaw memory index --force`, then search for a phrase near the end of a long note. Choose a context that also fits your queries and any custom input prefix. LM Studio can truncate oversized inputs and still return a vector.
+
+To skip LM Studio for embeddings, [llmman](/providers/llmman#advanced-configuration) sizes the
+embedding context per daemon with `LLMMAN_CONTEXT_LENGTH`.
 
 ### Model discovery failures
 

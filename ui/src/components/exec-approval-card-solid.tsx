@@ -5,11 +5,16 @@ import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import {
   compactApprovalCommand,
+  formatApprovalDecisionShortcut,
   summarizeApprovalScopeLabel,
 } from "../app/approval-presentation.ts";
-import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
+import {
+  canDecideApproval,
+  type ExecApprovalDecision,
+  type ExecApprovalRequest,
+} from "../app/exec-approval.ts";
 import { registerApprovalsEnglish } from "../i18n/locales/en-approvals.ts";
-import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { formatCountdown } from "../lib/format.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
@@ -17,6 +22,7 @@ import { projectAgentRowContext } from "../lib/reactive/agent-row-context.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
@@ -26,15 +32,16 @@ import {
 } from "./approval-countdown.tsx";
 import { createApprovalDecisionPresentation } from "./approval-decision-presentation.ts";
 import {
+  ApprovalTurnLabel,
   ExecApprovalBody,
   MobileExecApprovalBody,
   renderPluginBody,
 } from "./exec-approval-content.tsx";
+import { inboxDecisionLabel, inboxDecisionOrder } from "./sidebar-approval-decisions.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { KeyboardShortcut } from "./solid/kbd.tsx";
-import "./kbd.css";
 
 registerEnglishCatalog(registerApprovalsEnglish);
 
@@ -61,6 +68,7 @@ const MODAL_DECISION_ORDER = [
 export type ExecApprovalCardProps = {
   approval: ExecApprovalRequest;
   sourceSession?: GatewaySessionRow;
+  currentSessionKey?: string;
   nodeDisplayName?: string;
   busy: boolean;
   connected: boolean;
@@ -164,14 +172,6 @@ function decisionClass(decision: ExecApprovalDecision) {
   return decision === "allow-once" ? "btn primary" : decision === "deny" ? "btn danger" : "btn";
 }
 
-function decisionShortcut(decision: ExecApprovalDecision) {
-  return decision === "allow-once"
-    ? "Ctrl/Cmd+Enter"
-    : decision === "allow-always"
-      ? "Ctrl/Cmd+Shift+Enter"
-      : "Ctrl/Cmd+D";
-}
-
 export function resolveApprovalDecisions(
   active: ExecApprovalRequest,
 ): readonly ExecApprovalDecision[] {
@@ -184,16 +184,14 @@ export function resolveApprovalDecisions(
 }
 
 export function approvalTitle(active: ExecApprovalRequest): string {
-  if (active.kind === "exec" && active.request.streamProposal) {
-    return active.request.streamProposal.name;
-  }
-  return active.kind !== "exec"
-    ? (active.pluginTitle ?? t("execApproval.pluginApprovalNeeded"))
-    : t("execApproval.execApprovalNeeded");
+  return active.kind === "exec"
+    ? (active.request.streamProposal?.name ?? t("execApproval.execApprovalNeeded"))
+    : (active.pluginTitle ?? t("execApproval.pluginApprovalNeeded"));
 }
 
 export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
   const approval = createMemo(() => props.approval);
+  const canGrant = () => canDecideApproval(approval(), props.canGrant);
   const nowMs = createMemo(() => readApprovalTime(approval().expiresAtMs));
   const expired = () => approval().expiresAtMs <= nowMs();
   const command = createMemo(() => compactApprovalCommand(approval().request.command));
@@ -207,7 +205,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
   const expiryUrgent = () => expired() || approval().expiresAtMs - nowMs() < 60_000;
   const expiryLabel = () => approvalRemainingLabel(approval().expiresAtMs, nowMs());
   const reviewOnlyMessage = () => t("execApproval.reviewOnly");
-  const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();
+  const grantError = () => !canGrant() && props.error === reviewOnlyMessage();
   return (
     <openclaw-sidebar-approval-row style={{ display: "contents" }}>
       <article
@@ -257,12 +255,13 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
               </div>
             )}
           </Show>
+          <ApprovalTurnLabel actor={approval().request.turnActor} sidebar />
           <div
             class="sidebar-approval-row__actions"
             role="group"
             aria-label={t("approvalPage.actionsLabel")}
           >
-            <For each={resolveApprovalDecisions(approval())}>
+            <For each={inboxDecisionOrder(resolveApprovalDecisions(approval()))}>
               {(decision) => {
                 const label = createMemo(() => approvalDecisionLabel(decision, approval()));
                 return (
@@ -272,16 +271,16 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
                     class={[
                       "btn btn--xs sidebar-approval-row__action",
                       `sidebar-approval-row__action--${decision}`,
-                      { "btn--ghost": decision === "deny" },
+                      { primary: decision === "allow-once", "btn--ghost": decision === "deny" },
                     ]}
                     aria-label={t("execApproval.decisionRequest", {
-                      decision: label(),
+                      decision: inboxDecisionLabel(label()),
                       command: command(),
                     })}
-                    disabled={!props.connected || props.busy || !props.canGrant || expired()}
+                    disabled={!props.connected || props.busy || !canGrant() || expired()}
                     onClick={(event: Event) => props.onDecision(event, approval().id, decision)}
                   >
-                    {label()}
+                    {inboxDecisionLabel(label())}
                   </button>
                 );
               }}
@@ -299,7 +298,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
               </a>
             ) : undefined}
           </div>
-          {props.connected && !props.canGrant ? (
+          {props.connected && !canGrant() ? (
             <div class="sidebar-approval-row__message" role={grantError() ? "alert" : "note"}>
               {reviewOnlyMessage()}
             </div>
@@ -326,6 +325,7 @@ function ExecApprovalCardContent(
   },
 ) {
   const active = createMemo(() => props.approval);
+  const canGrant = () => canDecideApproval(active(), props.canGrant);
   const [card, setCard] = createSignal<HTMLDivElement>();
   const mobile = createMemo(
     () => props.presentation === "mobile" && props.variant === "inline" && active().kind === "exec",
@@ -338,7 +338,7 @@ function ExecApprovalCardContent(
     return order ? order.filter((item) => eligible.includes(item)) : eligible;
   });
   const reviewOnlyMessage = () => t("execApproval.reviewOnly");
-  const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();
+  const grantError = () => !canGrant() && props.error === reviewOnlyMessage();
   const offlineError = () =>
     !props.connected && props.error === t("sessionsView.actionRequiresConnection");
   const decisionError = () =>
@@ -354,17 +354,40 @@ function ExecApprovalCardContent(
   const agentId = () => (props.variant === "modal" ? active().request.agentId?.trim() : null);
   const commandAgent = () =>
     active().kind === "exec" ? active().request.agentId?.trim() : undefined;
-  const commandTitleParts = createMemo(() => {
-    const proposal = active().request.streamProposal;
-    // Split the translation template before inserting names so parameter text stays literal.
-    return t(
-      proposal
-        ? proposal.operation === "add"
-          ? "execApproval.agentStartWatcher"
-          : "execApproval.agentChangeWatcher"
-        : "execApproval.agentRunCommand",
-    ).split("{agent}");
+  const agentContext = projectAgentRowContext(useOptionalApplication());
+  const commandAgentName = createMemo(() => {
+    const id = commandAgent() ?? "";
+    const app = agentContext.read();
+    const agent = app?.agents.state.agentsList?.agents.find((entry) => entry.id === id);
+    return normalizeAgentLabel(agent ?? { id }, app?.agentIdentity.get(id));
   });
+  const sessionSuffix = createMemo(() => {
+    const key =
+      props.variant === "modal"
+        ? (active().sourceSessionKey ?? active().request.sessionKey)
+        : active().kind === "exec" && active().sourceSessionKey;
+    return key &&
+      !(props.currentSessionKey && areUiSessionKeysEquivalent(key, props.currentSessionKey))
+      ? " " +
+          t("execApproval.inSession", {
+            session: resolveSessionDisplayName(key, props.sourceSession),
+          })
+      : "";
+  });
+  const commandTitleKey = () =>
+    active().request.streamProposal
+      ? active().request.streamProposal?.operation === "add"
+        ? "execApproval.agentStartWatcher"
+        : "execApproval.agentChangeWatcher"
+      : "execApproval.agentRunCommand";
+  // Split the translation template before inserting names so parameter text stays literal.
+  const title = () =>
+    (commandAgent()
+      ? t(commandTitleKey(), {
+          agent: commandAgentName()!,
+          name: active().request.streamProposal?.name ?? "",
+        })
+      : approvalTitle(active())) + sessionSuffix();
   const shortcuts = () =>
     props.variant === "modal" && (active().kind !== "exec" || props.onDecisionReady !== undefined);
   const sourceSession = () => props.variant === "inline" && active().sourceSessionKey;
@@ -372,12 +395,12 @@ function ExecApprovalCardContent(
     <>
       <div class="exec-approval-header">
         <div class="exec-approval-heading">
-          <div class="exec-approval-title">
+          <div class="exec-approval-title" title={title()}>
             <Show when={active().kind === "exec"} fallback={approvalTitle(active())}>
               <Show
                 when={commandAgent()}
                 fallback={
-                  <span class="exec-approval-request">
+                  <span class={["exec-approval-request", "exec-approval-sentence"]}>
                     <span class="exec-approval-fallback-icon" aria-hidden="true">
                       <Icon name="terminal" />
                     </span>
@@ -393,13 +416,13 @@ function ExecApprovalCardContent(
               >
                 {(agent) => (
                   <span class="exec-approval-sentence">
-                    <For each={commandTitleParts()}>
+                    <For each={t(commandTitleKey()).split("{agent}")}>
                       {(part, index) => (
                         <>
                           {index() > 0 ? (
                             <span class="exec-approval-identity">
                               <ApprovalAgentAvatar agentId={agent()} />
-                              <span class="exec-approval-agent-name">{agent()}</span>
+                              <span class="exec-approval-agent-name">{commandAgentName()}</span>
                             </span>
                           ) : undefined}
                           <span class="exec-approval-request">
@@ -423,21 +446,13 @@ function ExecApprovalCardContent(
                 )}
               </Show>
             </Show>
+            <span>{sessionSuffix()}</span>
           </div>
           {active().kind !== "exec" && (pluginId() || agentId()) ? (
             <div class="exec-approval-chips">
               {renderChip("plugin", pluginId())} {renderChip("agent", agentId())}
             </div>
           ) : undefined}
-          <Show when={active().kind === "exec" && sourceSession()}>
-            {(sessionKey) => (
-              <div class="exec-approval-source">
-                {t("execApproval.requestedBySession", {
-                  session: resolveSessionDisplayName(sessionKey(), props.sourceSession),
-                })}
-              </div>
-            )}
-          </Show>
           <Show when={active().kind !== "exec"}>
             <ApprovalCountdown
               class="exec-approval-sub exec-approval-countdown"
@@ -475,6 +490,7 @@ function ExecApprovalCardContent(
           </div>
         )}
       </Show>
+      <ApprovalTurnLabel actor={active().request.turnActor} />
       <Show
         when={active().kind === "exec" && active().id}
         keyed
@@ -514,7 +530,7 @@ function ExecApprovalCardContent(
             {summarizeApprovalScopeLabel(active().request.scope!)}
           </div>
         ) : undefined}
-        {active().kind !== "exec" && props.connected && !props.canGrant ? (
+        {active().kind !== "exec" && props.connected && !canGrant() ? (
           <div
             class={grantError() ? "exec-approval-error" : "exec-approval-warning"}
             role={grantError() ? "alert" : "note"}
@@ -551,10 +567,10 @@ function ExecApprovalCardContent(
             type="button"
             aria-label={label()}
             aria-busy={pending() ? "true" : undefined}
-            disabled={!props.connected || props.deciding() || props.busy || !props.canGrant}
+            disabled={!props.connected || props.deciding() || props.busy || !canGrant()}
             title={
-              shortcuts() && props.connected && props.canGrant
-                ? `${label()} (${decisionShortcut(decision)})`
+              shortcuts() && props.connected && canGrant()
+                ? `${label()} (${formatApprovalDecisionShortcut(decision)})`
                 : label()
             }
             onClick={() => void props.decide(active().id, decision)}
@@ -584,68 +600,65 @@ function ExecApprovalCardContent(
     </Show>
   );
   return (
-    <>
-      {" "}
-      <div
-        ref={setCard}
-        class={[
-          "exec-approval-card",
-          `exec-approval-card--${props.variant}`,
-          `exec-approval-card--severity-${severity()}`,
-          {
-            "exec-approval-card--mobile": mobile(),
-            "exec-approval-card--command": active().kind === "exec",
-          },
-        ]}
-        data-approval-id={active().id}
-      >
-        <Show when={props.variant === "modal"} fallback={content()}>
-          <div class="exec-approval-modal-content">{content()}</div>
+    <div
+      ref={setCard}
+      class={[
+        "exec-approval-card",
+        `exec-approval-card--${props.variant}`,
+        `exec-approval-card--severity-${severity()}`,
+        {
+          "exec-approval-card--mobile": mobile(),
+          "exec-approval-card--command": active().kind === "exec",
+        },
+      ]}
+      data-approval-id={active().id}
+    >
+      <Show when={props.variant === "modal"} fallback={content()}>
+        <div class="exec-approval-modal-content">{content()}</div>
+      </Show>
+      <Show when={active().kind === "exec"} fallback={footer()}>
+        <Show when={decisionError()}>
+          <div class="exec-approval-error" role="alert">
+            {t("execApproval.decisionUnconfirmed")}
+          </div>
         </Show>
-        <Show when={active().kind === "exec"} fallback={footer()}>
-          <Show when={decisionError()}>
-            <div class="exec-approval-error" role="alert">
-              {t("execApproval.decisionUnconfirmed")}
+        <div class="exec-approval-footer">
+          <Show
+            when={
+              props.variant === "inline" && (props.pendingCount ?? 0) > 0 && props.onOpenPending
+            }
+          >
+            <button
+              class="exec-approval-more"
+              type="button"
+              onClick={() => props.onOpenPending?.()}
+            >
+              {t("execApproval.morePending", { count: String(props.pendingCount) })}
+            </button>
+          </Show>
+          <Show when={!props.connected}>
+            <div class="exec-approval-status muted" role="status">
+              {t("execApproval.offline")}
             </div>
           </Show>
-          <div class="exec-approval-footer">
-            <Show
-              when={
-                props.variant === "inline" && (props.pendingCount ?? 0) > 0 && props.onOpenPending
-              }
-            >
-              <button
-                class="exec-approval-more"
-                type="button"
-                onClick={() => props.onOpenPending?.()}
-              >
-                {t("execApproval.morePending", { count: String(props.pendingCount) })}
-              </button>
-            </Show>
-            <Show when={!props.connected}>
+          <Show
+            when={!props.connected || canGrant()}
+            fallback={
               <div class="exec-approval-status muted" role="status">
-                {t("execApproval.offline")}
+                <span class="exec-approval-status-label">
+                  <Icon name="lock" />
+                  {t("execApproval.viewOnly")}
+                </span>
+                <span>{reviewOnlyMessage()}</span>
               </div>
-            </Show>
-            <Show
-              when={!props.connected || props.canGrant}
-              fallback={
-                <div class="exec-approval-status muted" role="status">
-                  <span class="exec-approval-status-label">
-                    <Icon name="lock" />
-                    {t("execApproval.viewOnly")}
-                  </span>
-                  <span>{reviewOnlyMessage()}</span>
-                </div>
-              }
-            >
-              {footer()}
-            </Show>
-          </div>
-          {props.renderPendingQueue?.()}
-        </Show>
-      </div>
-    </>
+            }
+          >
+            {footer()}
+          </Show>
+        </div>
+        {props.renderPendingQueue?.()}
+      </Show>
+    </div>
   );
 }
 
@@ -664,7 +677,9 @@ export const ExecApprovalCard = defineSolidBridge<{ props?: ExecApprovalCardProp
     decisionLifetimes.set(host, {
       retire: presentation.retire,
       update(next) {
-        if (next?.approval.id !== approvalId || !next?.busy || !next.connected || !next.canGrant) {
+        const pending =
+          next?.busy && next.connected && canDecideApproval(next.approval, next.canGrant);
+        if (next?.approval.id !== approvalId || !pending) {
           presentation.retire();
         }
         approvalId = next?.approval.id;

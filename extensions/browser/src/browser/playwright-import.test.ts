@@ -1,8 +1,18 @@
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { expect, it } from "vitest";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import { expect, it, vi } from "vitest";
+
+vi.mock("playwright-core", () => {
+  throw new Error("browser route registration must not load Playwright");
+});
 
 const require = createRequire(import.meta.url);
+
+it("loads browser routes without evaluating Playwright", async () => {
+  const { createBrowserRouteDispatcher } = await import("./routes/dispatcher.js");
+  expect(createBrowserRouteDispatcher).toBeTypeOf("function");
+});
 
 it("loads Playwright without replacing process directory functions", () => {
   const output = execFileSync(

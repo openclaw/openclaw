@@ -12,6 +12,7 @@ import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createState } from "./chat-gateway.test-support.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { createState as createInFlightState } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
@@ -37,8 +38,8 @@ import {
   rememberAuthoritativeTerminal,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
-import type { ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -322,49 +323,48 @@ function runningSession(chatStream: string, overrides: Partial<ChatState> = {}):
   };
 }
 
-type HistoryToolSegment = { text: string; ts: number; toolCallId?: string };
-type LiveToolState = ChatHistoryHost &
-  Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder"> & {
-    chatStreamSegments: HistoryToolSegment[];
-    chatToolMessages: Record<string, unknown>[];
-    toolStreamSyncTimer: number | null;
-  };
-
 function createLiveToolHistoryState(
   messages: unknown[],
   chatStream: string,
   tools: Record<string, unknown>[],
-  segments: HistoryToolSegment[],
-): LiveToolState {
-  const state = createHistorySnapshot(messages, {
-    chatMessages: [messages[0]],
-    chatRunId: "run-1",
-    chatStream,
-    chatStreamStartedAt: 100,
-  }).state;
-  const liveState = state as LiveToolState;
-  liveState.chatStreamSegments = segments;
-  liveState.chatToolMessages = tools;
-  liveState.toolStreamById = new Map(
-    tools.map((tool) => {
-      const toolCallId = String(tool.toolCallId);
-      const runId = typeof tool.runId === "string" ? tool.runId : (state.chatRunId ?? "run-1");
-      return [
-        buildToolStreamIdentity(runId, toolCallId),
-        {
-          toolCallId,
-          runId,
-          message: tool,
-          name: "shell",
-          startedAt: 0,
-          receivedAt: 0,
+  preambles: Array<{ text: string; ts: number }>,
+) {
+  const state = createInFlightState({ messages, thinkingLevel: "low" });
+  state.chatMessages = [messages[0]];
+  state.chatRunId = "run-1";
+  state.chatStreamStartedAt = 100;
+  vi.stubGlobal("window", globalThis);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  for (const [index, tool] of tools.entries()) {
+    const preamble = preambles[index];
+    const envelope = { sessionKey: state.sessionKey, runId: "run-1" };
+    if (preamble) {
+      handleAgentEvent(state, {
+        ...envelope,
+        seq: index * 2 + 1,
+        ts: preamble.ts,
+        stream: "item",
+        data: {
+          kind: "preamble",
+          phase: "end",
+          itemId: `commentary-${index}`,
+          progressText: preamble.text,
         },
-      ];
-    }),
-  );
-  liveState.toolStreamOrder = [...liveState.toolStreamById.keys()];
-  liveState.toolStreamSyncTimer = null;
-  return liveState;
+      });
+    }
+    handleAgentEvent(state, {
+      ...envelope,
+      seq: index * 2 + 2,
+      ts: typeof tool.timestamp === "number" ? tool.timestamp : (preamble?.ts ?? 0) + 1,
+      stream: "tool",
+      data: { phase: "start", toolCallId: String(tool.toolCallId), name: "shell", args: {} },
+    });
+  }
+  vi.advanceTimersByTime(100);
+  receive(state, "delta", { message: replyText(chatStream) });
+  return state;
 }
 
 function textMessage(
@@ -476,12 +476,12 @@ describe("handleChatGatewayEvent", () => {
     const label = () =>
       chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
     receive(state, "status", { phase: "preparing_context", seq: 1 });
-    expect(label()).toBe("Preparing this turn…");
+    expect(label()).toBe("Preparing reply");
     receive(state, "delta", {
       runId: "run-other",
       message: { role: "assistant", content: "Other" },
     });
-    expect(label()).toBe("Preparing this turn…");
+    expect(label()).toBe("Preparing reply");
     receive(state, "status", { phase: "starting_model", seq: 2 });
     expect(label()).toBe("Waiting for a response");
     receive(state, "status", { phase: "preparing_context", seq: 3 });
@@ -714,7 +714,7 @@ describe("handleChatGatewayEvent", () => {
       { state: "error", errorKind: "timeout", errorMessage: "agent provider timeout" },
       "timeout",
       "timeout",
-      "Error: agent provider timeout",
+      "agent provider timeout",
     ],
   ] as const)(
     "projects the canonical %s status onto the selected session",
@@ -843,7 +843,7 @@ describe("handleChatGatewayEvent", () => {
       "First thought. Configure provider auth.",
     );
     expect(state.chatMessages[2]).toEqual(terminal);
-    expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected", runId: "run-1" });
+    expect(state.chatRunError).toEqual({ summary: "gateway disconnected", runId: "run-1" });
   });
 
   it.each([
@@ -898,26 +898,57 @@ describe("handleChatGatewayEvent", () => {
     },
   );
 
-  it("adds bounded OAuth facts to live errors without changing the summary", () => {
-    const summary =
-      "⚠️ Your refresh token has already been used to generate a new access token. Please try signing in again.";
-    const state = createState({ chatRunId: "run-1" });
-    receive(state, "error", {
-      errorMessage: summary,
-      errorDetail: {
-        provider: "openai",
-        failoverReason: "refresh_token_reused",
-        providerRuntimeFailureKind: "auth_refresh",
-        providerErrorType: "invalid_request_error",
-        httpStatus: 401,
-      },
-    });
-    expect(state.chatRunError).toEqual({
+  it.each([
+    ["invalid_request_error", "invalid_request_error"],
+    [
+      "invalid_request_error password=synthetic-secret",
+      "invalid_request_error password=[redacted]",
+    ],
+  ])(
+    "preserves redacted OAuth facts alongside classification: %s",
+    (providerErrorType, expectedType) => {
+      const summary =
+        "⚠️ Your refresh token has already been used to generate a new access token. Please try signing in again.";
+      const state = createState({ chatRunId: "run-1" });
+      receive(state, "error", {
+        errorMessage: summary,
+        errorDetail: {
+          provider: "openai",
+          failoverReason: "refresh_token_reused",
+          providerRuntimeFailureKind: "auth_refresh",
+          providerErrorType,
+          httpStatus: 401,
+          providerErrorMessagePreview: '{"access_token":"synthetic-oauth-response"}',
+        },
+      });
+      expect(state.chatRunError).toEqual({
+        runId: "run-1",
+        summary: `${summary}\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: ${expectedType}`,
+        kind: "auth_refresh",
+      });
+    },
+  );
+
+  it.each([
+    {
       kind: "auth_refresh",
-      runId: "run-1",
-      summary: `${summary}\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: invalid_request_error`,
-    });
-  });
+      payload: { errorDetail: { providerRuntimeFailureKind: "auth_refresh" } },
+    },
+    { kind: "stop", payload: { stopReason: "aborted-partial-persistence-failed" } },
+    { kind: "state_contention", payload: { errorKind: "state_contention" } },
+  ] as const)(
+    "adopts $kind recovery after history publishes the same failure",
+    ({ kind, payload }) => {
+      const summary = "The operation failed.";
+      const state = createState({
+        chatRunId: "run-1",
+        chatRunError: { runId: "run-1", summary },
+      });
+      seedTerminal(state, "error", { errorMessage: summary });
+      receive(state, "error", { errorMessage: summary, ...payload });
+      expect(state.chatRunError).toEqual({ runId: "run-1", summary, kind });
+    },
+  );
 
   it("does not label a newer response with a completed run's late error", () => {
     const state = createState({ chatRunId: "run-completed" });
@@ -960,7 +991,7 @@ describe("handleChatGatewayEvent", () => {
         retry: { attempt, maxAttempts: 10, reason: "rate_limit", retryAt: 10_000 + attempt },
       });
       expect(chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null)).toBe(
-        "Retrying…",
+        "Retrying",
       );
       expect(state.chatRunStartup).toMatchObject({
         phase: "retrying",
@@ -1246,7 +1277,7 @@ describe("loadChatHistory retry handling", () => {
       expect(state.chatLoading).toBe(false);
       expect(getChatHistoryLoadState(state)).toMatchObject({
         phase: "failed",
-        message: expect.stringContaining("timed out"),
+        message: expect.stringContaining("in time"),
       });
     }
     expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(true);
@@ -1269,7 +1300,7 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it.each([false, true])(
-    "recovers stream segments and prunes only persisted tool cards (partial=%s)",
+    "recovers keyed commentary and prunes only persisted tool cards (partial=%s)",
     async (partial) => {
       const tools = [
         historyTool("call_1", "first output", 2, 2),
@@ -1285,17 +1316,11 @@ describe("loadChatHistory retry handling", () => {
           : historyTool("call_2", "second output", 4, 3),
       ];
       const persistedCount = partial ? 1 : 2;
-      const segments = [
-        { text: "before first tool", ts: 1, ...(partial ? { toolCallId: "call_1" } : {}) },
-        {
-          text: "before first tool\nbefore second tool",
-          ts: 3,
-          ...(partial ? { toolCallId: "call_2" } : {}),
-        },
+      const preambles = [
+        { text: "before first tool", ts: 1 },
+        { text: "before second tool", ts: 3 },
       ];
-      const stream = partial
-        ? "before first tool\nbefore second tool\nStill answering."
-        : "Still answering.";
+      const stream = "Still answering.";
       const expectedRows: Array<number | { text: string; timestamp: number }> = [
         { text: "before first tool", timestamp: 1 },
         0,
@@ -1310,8 +1335,9 @@ describe("loadChatHistory retry handling", () => {
         [persistedUser, ...tools.slice(0, persistedCount)],
         stream,
         tools,
-        segments,
+        preambles,
       );
+      const liveTools = [...state.chatToolMessages];
 
       await loadChatHistory(state);
 
@@ -1328,7 +1354,7 @@ describe("loadChatHistory retry handling", () => {
         chatStream: stream,
         chatStreamStartedAt: 100,
       });
-      expect(state.chatToolMessages).toEqual(remainingTools.map((index) => tools[index]));
+      expect(state.chatToolMessages).toEqual(remainingTools.map((index) => liveTools[index]));
       expect(state.toolStreamOrder).toEqual(
         remainingTools.map((index) =>
           buildToolStreamIdentity("run-1", String(tools[index]?.toolCallId)),
@@ -1346,16 +1372,16 @@ describe("loadChatHistory retry handling", () => {
     },
   );
 
-  it("clears live tool cards when history catches up with content-block tool ids", async () => {
+  it("clears live tool cards for recorded content-block results", async () => {
     const persistedUser = userText("latest ask", { seq: 1 });
-    const persistedToolCall = {
+    const persistedToolResult = {
       role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "shell", arguments: {} }],
+      content: [{ type: "toolResult", id: "call_1", name: "shell", text: "done" }],
       timestamp: 2,
       __openclaw: { seq: 2 },
     };
     const state = createLiveToolHistoryState(
-      [persistedUser, persistedToolCall],
+      [persistedUser, persistedToolResult],
       "Still answering.",
       [toolCall("call_1")],
       [{ text: "before tool", ts: 1 }],
@@ -1364,7 +1390,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual([
       persistedUser,
       expect.objectContaining({ ...replyText("before tool"), timestamp: 1 }),
-      persistedToolCall,
+      persistedToolResult,
     ]);
     expect(state).toMatchObject({
       chatRunId: "run-1",
@@ -1408,18 +1434,21 @@ describe("loadChatHistory retry handling", () => {
   it("keeps live tool cards when history only replaces streamed text", async () => {
     const persistedUser = userText("latest ask", { seq: 1 });
     const historyAssistant = replyText("First visible stream text. More final text.", { seq: 2 });
-    const liveToolMessage = toolCall("call_current");
     const state = createLiveToolHistoryState(
       [persistedUser, historyAssistant],
       "First visible stream text.",
-      [liveToolMessage],
-      [{ text: "First visible stream text.", ts: 90 }],
+      [toolCall("call_current")],
+      [],
     );
+    const liveToolMessage = state.chatToolMessages[0];
     await loadChatHistory(state);
     expect(state.chatMessages).toEqual([persistedUser, historyAssistant]);
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
     expect(state.chatToolMessages).toEqual([liveToolMessage]);
+    expect(state.chatStreamSegments).toMatchObject([
+      { text: "First visible stream text.", runId: "run-1", persisted: true },
+    ]);
     expect(visibleParts(state)).toEqual([]);
     expect(state.toolStreamById.size).toBe(1);
     expect(state.toolStreamOrder).toEqual([buildToolStreamIdentity("run-1", "call_current")]);
@@ -1440,8 +1469,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatVerboseLevel).toBeNull();
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
-      message:
-        "You don't have permission to view existing chat history. Ask the person who manages OpenClaw for access.",
+      message: "Couldn’t view session history. Ask an admin to grant read access.",
       retryable: false,
     });
     expect(state.lastError).toBeNull();
@@ -1571,7 +1599,7 @@ describe("aborted chat diagnostics", () => {
   it("keeps first-terminal provider sign-out killed and interrupted", () => {
     const stopReason = "auth-revoked";
     const expectedError =
-      "Error: This reply stopped because the provider was signed out. Sign in again or choose another model.";
+      "This reply stopped because the provider was signed out. Sign in again or choose another model.";
     const state = createAbortDiagnosticState();
     receive(state, "aborted", {
       runId: "run-validation-abort",

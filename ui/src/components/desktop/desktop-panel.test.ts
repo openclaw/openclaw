@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { preserveDocumentStyle } from "../../test-helpers/preserve-document-style.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient, DesktopConnectionHandle } from "./desktop-client.ts";
@@ -126,6 +127,7 @@ async function handoffFixture(initialControl = false, delayedHandle = false) {
 
 describe("embedded desktop panel presentation", () => {
   beforeEach(() => {
+    preserveDocumentStyle();
     vi.stubGlobal("localStorage", createStorageMock());
   });
 
@@ -136,7 +138,7 @@ describe("embedded desktop panel presentation", () => {
 
   it.each([
     { reason: "control-taken:林 🦞", notice: "林 🦞 took control" },
-    { reason: "control-taken", notice: "Another operator took control" },
+    { reason: "control-taken", notice: "Someone else took control" },
   ])("identifies a takeover ($reason) and reconnects view-only", async ({ reason, notice }) => {
     const request = desktopRequest(workerInventory);
     const connect = connected();
@@ -208,7 +210,7 @@ describe("embedded desktop panel presentation", () => {
       expect(rpcCalls(request, "sessions.describe")).toHaveLength(0);
       expect(rpcCalls(request, "environments.list")).toHaveLength(0);
       expect(panel.querySelector(".desktop-picker")).toBeNull();
-      expect(panel.textContent).toContain("The requested desktop is unavailable");
+      expect(panel.textContent).toContain("This desktop is unavailable");
     });
   });
 

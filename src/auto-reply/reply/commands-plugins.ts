@@ -25,7 +25,7 @@ import { resolvePluginInstallSourcePlan } from "../../plugins/install-source-pla
 import { createInstalledPluginOwnershipResolver } from "../../plugins/installed-plugin-package-ownership.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import { installManagedPlugin } from "../../plugins/management-mutations.js";
-import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../../plugins/plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -246,9 +246,6 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
         getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
       const context = resolveContext?.();
       const assertInvokerOwned = () => {
-        if (!hasGatewayAdminScope(params)) {
-          params.command.assertOwnerCurrent?.();
-        }
         params.commandInvocationSignal?.throwIfAborted();
         params.opts?.abortSignal?.throwIfAborted();
         if (resolveContext && (!context || resolveContext() !== context)) {
@@ -256,7 +253,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
         }
       };
       assertInvokerOwned();
-      return await withPluginLifecycleLease({ signal: params.opts?.abortSignal }, async () => {
+      return await withPluginLifecycleLeaseAsync({ signal: params.opts?.abortSignal }, async () => {
         const prepared = await readConfigFileSnapshotForWrite();
         const snapshot = prepared.snapshot;
         if (!snapshot.valid) {
@@ -405,9 +402,6 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
         await setPluginEnabledFromCommand({
           pluginId: plugin.id,
           action: pluginsCommand.action,
-          assertCurrent: hasGatewayAdminScope(params)
-            ? undefined
-            : params.command.assertOwnerCurrent,
           ...resolvePluginCapabilityConsentCliOptions({
             acceptCapabilities:
               pluginsCommand.action === "enable" && pluginsCommand.acceptCapabilities,
@@ -444,7 +438,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
     };
 
     if (pluginsCommand.action === "enable" || pluginsCommand.action === "disable") {
-      return await withPluginLifecycleLease({}, handleLoadedCommand);
+      return await withPluginLifecycleLeaseAsync({}, handleLoadedCommand);
     }
     return await handleLoadedCommand();
   },

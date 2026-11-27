@@ -8,7 +8,7 @@ import type {
   ModelRuntimeChoice,
   ModelsListResult,
 } from "../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
@@ -22,7 +22,8 @@ import { prepareCliProviderClassifier } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import { normalizeChatType } from "../channels/chat-type.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { resolveBaseConversationId } from "../channels/plugins/session-conversation.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveFreshSessionTotalTokens, resolveSessionTotalTokens } from "../config/sessions.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
@@ -34,6 +35,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { classifySessionKind, type SessionKind } from "../sessions/classify-session-kind.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 import {
@@ -156,11 +158,8 @@ function stripChannelRecipientPrefix(
   if (!raw.toLowerCase().startsWith(prefix)) {
     return raw;
   }
-  const stripped = raw.slice(prefix.length);
-  const topicMarkerIndex = stripped.toLowerCase().indexOf(":topic:");
-  // Topic suffixes are routing detail, not the peer id used by runtime-policy
-  // session-key display.
-  return topicMarkerIndex >= 0 ? stripped.slice(0, topicMarkerIndex) : stripped;
+  // Topic scope is routing detail, not the peer id used by runtime-policy display.
+  return resolveBaseConversationId(normalizedChannel, raw.slice(prefix.length));
 }
 
 export async function sessionsCommand(
@@ -174,6 +173,7 @@ export async function sessionsCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  const signal = getAsyncWorkSignal();
   const aggregateAgents = opts.allAgents === true;
   const cfg = await captureRuntimeConfigAsyncReader()();
   const { resolveModelContextTokenProjection } = await import("../agents/context.js");
@@ -263,6 +263,19 @@ export async function sessionsCommand(
         const acpAgentId = parseAgentSessionKey(acpSessionKey)?.agentId ?? "acp";
         modelRef = { provider: "acpx", model: `${acpAgentId}-acp` };
       }
+      if (!modelRef) {
+        // No stored and no configured model leaves nothing model-derived to show.
+        return Object.assign(row, {
+          agentId,
+          acpRuntime,
+          agentRuntime: undefined,
+          contextTokens: undefined,
+          displayModelRef: undefined,
+          kind: classifySessionKind(row.key, entry),
+          runtimePolicySessionKey: undefined,
+          runtimeLabel: "",
+        });
+      }
       const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
         cfg,
         agentId,
@@ -293,6 +306,7 @@ export async function sessionsCommand(
           ? callGateway<ModelsListResult>({
               config: cfg,
               localPortOverride: gatewayOwner.port,
+              signal,
               method: "models.list",
               params: {
                 agentId,
@@ -312,6 +326,9 @@ export async function sessionsCommand(
                 ),
               }))
               .catch(() => {
+                if (signal?.aborted) {
+                  return undefined;
+                }
                 warnCatalogUnavailable();
                 return readSavedCatalog();
               })
@@ -432,6 +449,9 @@ export async function sessionsCommand(
       });
     }),
   );
+  if (signal?.aborted) {
+    return;
+  }
   const hasMore = rows.length < totalCount;
 
   if (opts.json) {
@@ -457,8 +477,8 @@ export async function sessionsCommand(
           totalTokens: resolveSessionTotalTokens(row) ?? null,
           totalTokensFresh: resolveFreshSessionTotalTokens(row) !== undefined,
           contextTokens: row.contextTokens ?? null,
-          modelProvider: modelRef.provider,
-          model: modelRef.model,
+          modelProvider: modelRef?.provider ?? null,
+          model: modelRef?.model ?? null,
         });
       }),
     });
@@ -468,11 +488,13 @@ export async function sessionsCommand(
   const primaryTarget = targets[0];
   if (primaryTarget && targets.length === 1 && !aggregateAgents) {
     runtime.log(
-      info(`Session store: ${sanitizeTerminalText(resolveSessionStoreDisplayPath(primaryTarget))}`),
+      info(terminalText`Session store: ${resolveSessionStoreDisplayPath(primaryTarget)}`),
     );
   } else {
     runtime.log(
-      info(`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`),
+      info(
+        terminalText`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`,
+      ),
     );
   }
   runtime.log(
@@ -508,12 +530,12 @@ export async function sessionsCommand(
         Object.assign(column, { header: colorize(rich, theme.heading, column.header) }),
       ),
       rows: rows.map((row) => ({
-        agent: colorize(rich, theme.accentBright, sanitizeTerminalText(row.agentId)),
+        agent: colorize(rich, theme.accentBright, terminalText`${row.agentId}`),
         kind: formatKindCell(row.kind, rich),
         key: formatSessionKeyCell(row.key, rich),
         age: formatSessionAgeCell(row.updatedAt, rich),
-        model: formatSessionModelCell(row.displayModelRef.model, rich),
-        runtime: colorize(rich, theme.info, sanitizeTerminalText(row.runtimeLabel)),
+        model: formatSessionModelCell(row.displayModelRef?.model, rich),
+        runtime: colorize(rich, theme.info, terminalText`${row.runtimeLabel}`),
         tokens: formatTokensCell(
           resolveSessionTotalTokens(row),
           resolveFreshSessionTotalTokens(row),

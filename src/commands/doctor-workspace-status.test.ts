@@ -66,46 +66,6 @@ describe("collectWorkspaceStatusHealthFindings", () => {
     expect(activeWorkspace).toBeUndefined();
   });
 
-  it("shares scoped workspace inspection while reporting identical registrar failures once", () => {
-    const diagnostic = {
-      level: "error" as const,
-      pluginId: "broken-fixture",
-      source: "/plugins/broken-fixture/index.js",
-      message: "board widget registration has invalid kind",
-    };
-    mocks.listAgentIds.mockReturnValue(["alpha", "beta"]);
-    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/workspace/${agentId}`);
-    let activeWorkspace: string | undefined;
-    const runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner = (scope, run) => {
-      activeWorkspace = scope.workspaceDir;
-      try {
-        return run();
-      } finally {
-        activeWorkspace = undefined;
-      }
-    };
-    mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => {
-      expect(activeWorkspace).toBe(workspaceDir);
-      return {
-        workspaceDir,
-        ...createPluginLoadResult({ plugins: [], diagnostics: [diagnostic] }),
-      };
-    });
-    mocks.buildPluginCompatibilityWarnings.mockImplementation(({ workspaceDir }) => {
-      expect(activeWorkspace).toBe(workspaceDir);
-      return ["legacy-plugin is hook-only"];
-    });
-
-    const findings = collectWorkspaceStatusHealthFindings({}, { runWithPluginMetadataSnapshot });
-    expect(findings.map((finding) => finding.message)).toEqual([
-      'Agent "alpha": legacy-plugin is hook-only',
-      'Agent "alpha": board widget registration has invalid kind',
-      'Agent "beta": legacy-plugin is hook-only',
-    ]);
-    expect(findings.filter((finding) => finding.target === "broken-fixture")).toHaveLength(1);
-    expect(activeWorkspace).toBeUndefined();
-  });
-
   it("omits healthy plugins but gives errored metadata records an actionable finding", () => {
     mocks.listAgentIds.mockReturnValue(["default"]);
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");

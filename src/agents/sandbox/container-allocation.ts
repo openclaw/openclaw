@@ -89,7 +89,15 @@ export function buildSandboxCreateArgs(params: {
     args.push("--read-only");
   }
   for (const entry of params.cfg.tmpfs) {
-    args.push("--tmpfs", entry);
+    const [target, options = ""] = entry.split(":", 2);
+    // Engine defaults scale with host RAM; cold dependency stores must not inherit that budget.
+    const size = target === "/tmp/openclaw-deps" ? "4g" : target === "/tmp" ? "1g" : "256m";
+    args.push(
+      "--tmpfs",
+      /(?:^|,)size=/u.test(options)
+        ? entry
+        : `${target}:${options ? `${options},` : ""}size=${size}`,
+    );
   }
   if (params.cfg.network) {
     args.push("--network", params.cfg.network);
@@ -199,7 +207,6 @@ export async function allocateSandboxContainer(params: {
         })
       : undefined;
   const createCfg = podmanPolicy?.cfg ?? cfg;
-  await ensureContainerImage(engine, cfg.image);
 
   const { argv: args, env } = buildSandboxCreateArgs({
     name,
@@ -212,6 +219,8 @@ export async function allocateSandboxContainer(params: {
   if (podmanPolicy) {
     args.push(...podmanPolicy.extraCreateArgs);
   }
+  // Creation resolves the local image atomically; a separate preflight only queues more work.
+  args.push("--pull=never");
   args.push("--workdir", cfg.workdir);
   for (const bind of params.mountPlan.skippedBinds) {
     log.warn(
@@ -242,7 +251,13 @@ export async function allocateSandboxContainer(params: {
   const created = await withContainerEnvFile(env, async (envFile) => {
     args.push("--env-file", envFile, cfg.image, ...command);
     params.assertCurrent?.();
-    return await execContainer(engine, args);
+    try {
+      return await execContainer(engine, args, { assertCurrent: params.assertCurrent });
+    } catch (error) {
+      // Retain image/daemon guidance while preserving unrelated creation failures.
+      await ensureContainerImage(engine, cfg.image);
+      throw error;
+    }
   });
   const containerId = created.stdout.trim();
   if (!/^[a-f0-9]{64}$/u.test(containerId)) {

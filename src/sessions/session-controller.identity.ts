@@ -7,19 +7,6 @@ import type {
 } from "./session-controller.contracts.js";
 import * as controllerStorage from "./session-controller.storage.js";
 
-/** A retained source grants no admission once its owning mailbox has retired it. */
-export function isLiveSessionControllerSource(input: SessionControllerInput): boolean {
-  const { owner } = input.mailbox;
-  return (
-    controllerStorage.sessionControllers.get(owner.id) === owner &&
-    owner.mailbox === input.mailbox &&
-    input.mailbox.entries.includes(input) &&
-    input.phase !== "consumed" &&
-    !input.retirementRequested &&
-    !input.abortSignal.aborted
-  );
-}
-
 /** Reads logical identity from an exact reserved or adopted controller source. */
 export function getSessionControllerSourceIdentity(input: SessionControllerInput): Readonly<{
   sessionId: string;

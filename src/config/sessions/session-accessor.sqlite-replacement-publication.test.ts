@@ -1,10 +1,11 @@
-import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
+import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import * as logging from "../../logging/logger.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
@@ -36,8 +37,8 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
-import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
+import { prepareChatDeliveryLease } from "./session-delivery-generation.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 import { sealSessionEntryPublicationSource } from "./session-entry-publication-source.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
@@ -118,6 +119,50 @@ function retainSharing(
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+it("publishes full replacement snapshots without returning unused historical rows", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { scope, write, read } = setup("replacement-reply-payload");
+    const skillsSnapshot = { prompt: "synthetic saved instructions ".repeat(1024), skills: [] };
+    write(makeEntry("replacement-reply-payload", { label: "before", skillsSnapshot }));
+    const replies: unknown[] = [];
+    const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
+    const stop = sessionChanges.subscribeFacts((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        publications.push(readPreparedSessionEntryChange(change, scope.sessionKey));
+      }
+    });
+    delivery.afterResult = (result) => {
+      replies.push(result);
+    };
+    try {
+      const result = await applySessionEntryExactReplacements({
+        ...scope,
+        sessionKeys: [scope.sessionKey],
+        update: ([row]) => ({
+          result: "replacement result",
+          replacements: [
+            { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "after" } },
+          ],
+        }),
+      });
+      expect(result).toBe("replacement result");
+      expect(read()).toMatchObject({ label: "after", skillsSnapshot });
+      expect(publications).toEqual([
+        expect.objectContaining({
+          entry: expect.objectContaining({ label: "after" }),
+          fullEntry: expect.objectContaining({ label: "after", skillsSnapshot }),
+        }),
+      ]);
+      expect(replies).toEqual([
+        { maintenancePlans: expect.any(Array), publication: expect.any(Object) },
+      ]);
+    } finally {
+      delivery.afterResult = undefined;
+      stop();
+    }
+  });
 });
 
 it.each(["full entry", "write token", "receipt"])(
@@ -537,11 +582,11 @@ it.each(["metadata only", "lost result", "callback failure", "release failure"] 
       writeSessionEntry(database, sessionKey, original);
       addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 1 });
       const { identity, sharing } = retainSharing(database, sessionKey, original);
-      const generation = await prepareSessionDeliveryGeneration({
-        ...scope,
-        sessionId: original.sessionId,
-        lifecycleRevision: original.lifecycleRevision,
-      });
+      const generation = await prepareChatDeliveryLease(
+        chatRef({
+          ...scope,
+        }),
+      );
       generation.assertCurrent();
       const projection = createSessionMembershipProjection();
       projection.updateTargets([

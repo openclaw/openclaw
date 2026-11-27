@@ -6,7 +6,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { resolveSessionVisibility, type SessionSharingTarget } from "../session-sharing-policy.js";
+import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import { isSameSessionSharingTarget } from "../session-sharing-target-read.js";
 import { prepareSessionSharingAccess } from "./sessions-sharing-authority.js";
@@ -19,10 +19,7 @@ function deny(error: ErrorShape): never {
 
 /** Retain the selected facts owner through reads, commit grants, and mirror settlement. */
 export async function withSessionReactionAccess(
-  params: Pick<
-    GatewayRequestHandlerOptions,
-    "client" | "context" | "respond" | "hasCurrentClientAuthority"
-  > & {
+  params: Pick<GatewayRequestHandlerOptions, "client" | "context" | "respond"> & {
     sessionKey: string;
     agentId?: string;
     write: boolean;
@@ -32,7 +29,7 @@ export async function withSessionReactionAccess(
   const { client, respond } = params;
   try {
     using access = await prepareSessionSharingAccess({ ...params, prepareMembership: true }, () =>
-      deny(errorShape(ErrorCodes.FORBIDDEN, "reaction author or session authority changed")),
+      deny(errorShape(ErrorCodes.FORBIDDEN, "The reaction request ended. Retry the request.")),
     );
     if (!access) {
       return;
@@ -44,8 +41,7 @@ export async function withSessionReactionAccess(
       }
       if (
         !target ||
-        (hasOperatorBoundary(client, policyConfig, sharing) &&
-          sharing.entryFilter?.(target.storeKey, target.entry) === false)
+        (hasOperatorBoundary(client, policyConfig, sharing) && !sharing.canReadTarget(target))
       ) {
         deny(errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`));
       }
@@ -77,9 +73,11 @@ export async function withSessionReactionAccess(
             errorShape(ErrorCodes.FORBIDDEN, "your operator role permits viewing sessions only"),
           );
         }
-        const denied = sharing.authorizeTarget(target);
-        if (denied && !(resolveSessionVisibility(target.entry) === "suggest" && cap !== "view")) {
-          deny(denied);
+        if (!sharing.accessForTarget(target).canReact) {
+          deny(
+            sharing.authorizeTarget(target) ??
+              errorShape(ErrorCodes.FORBIDDEN, "Your invitation does not permit reactions."),
+          );
         }
       }
       return target;

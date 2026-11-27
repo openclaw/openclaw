@@ -1,5 +1,4 @@
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 type SessionTitleTarget = {
   storePath: string;
@@ -11,24 +10,39 @@ const requestKey = (target: SessionTitleTarget) =>
 
 // One request per session; callers share settlement and pending requests
 // always leave the registry, including model failures and timeouts.
-const pending = new Map<string, Promise<boolean>>();
+const pending = new Map<string, { request: Promise<boolean>; started: boolean }>();
 export const sessionTitleRequests = {
   get(target: SessionTitleTarget) {
-    return pending.get(requestKey(target));
+    return pending.get(requestKey(target))?.request;
   },
-  run(target: SessionTitleTarget, create: () => Promise<boolean>, onStateChanged?: () => void) {
+  isPending(target: SessionTitleTarget) {
+    return pending.get(requestKey(target))?.started === true;
+  },
+  run(
+    target: SessionTitleTarget,
+    create: (markStarted: () => void) => Promise<boolean>,
+    onStateChanged?: () => void,
+  ) {
     const key = requestKey(target);
     const existing = pending.get(key);
     if (existing) {
-      return existing;
+      return existing.request;
     }
-    const request = getOrCreatePromise(pending, key, create, { evictOnSettled: true });
-    // Register after the cache eviction handlers so either outcome publishes the
-    // settled state, not the just-completed request still present in the registry.
-    if (onStateChanged) {
-      void request.then(onStateChanged, onStateChanged);
-      onStateChanged();
-    }
+    const request = Promise.resolve().then(() =>
+      create(() => {
+        owner.started = true;
+        onStateChanged?.();
+      }),
+    );
+    const owner = { request, started: false };
+    pending.set(key, owner);
+    const settle = () => {
+      pending.delete(key);
+      if (owner.started) {
+        onStateChanged?.();
+      }
+    };
+    void request.then(settle, settle);
     return request;
   },
 };
@@ -46,14 +60,4 @@ export function resolveExplicitSessionName(entry: SessionEntry | undefined): str
 
 export function hasExplicitSessionName(entry: SessionEntry | undefined): boolean {
   return Boolean(resolveExplicitSessionName(entry));
-}
-
-/** Manual names and other title owners never participate in automatic refinement. */
-export function matchesGeneratedSessionTitle(entry: SessionEntry, name: string): boolean {
-  return (
-    entry.titleRefinement?.sessionId === entry.sessionId &&
-    entry.titleRefinement.generatedName === name &&
-    entry.displayName === name &&
-    ![entry.label, entry.subject, entry.groupChannel, entry.space].some((value) => value?.trim())
-  );
 }

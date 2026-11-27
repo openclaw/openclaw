@@ -52,7 +52,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-75 plugins
+80 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -60,7 +60,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
-- **[advisor](/plugins/reference/advisor)** (`@openclaw/advisor`) - included in OpenClaw. Experimental: reviews ongoing agent work on the session's own model and offers one short correction.
+- **[advisor](/plugins/reference/advisor)** (`@openclaw/advisor`) - included in OpenClaw. Reviews ongoing agent work on the session's own model and offers one short correction.
 
 - **[agent-guidance](/plugins/reference/agent-guidance)** (`@openclaw/agent-guidance`) - included in OpenClaw. Shares instruction files across selected agents without editing their workspace files.
 
@@ -76,7 +76,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[azure-speech](/plugins/reference/azure-speech)** (`@openclaw/azure-speech`) - included in OpenClaw. Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).
 
-- **[beam](/plugins/reference/beam)** (`@openclaw/beam`) - included in OpenClaw. Read-only coding-session Beam receiver.
+- **[beam](/plugins/reference/beam)** (`@openclaw/beam`) - included in OpenClaw. Receive coding-session snapshots for viewing and Team handoff.
 
 - **[bifrost](/plugins/reference/bifrost)** (`@openclaw/bifrost-provider`) - included in OpenClaw. Adds Bifrost model provider support to OpenClaw.
 
@@ -97,6 +97,8 @@ Each entry lists the package, distribution route, and description.
 - **[crabbox](/plugins/reference/crabbox)** (`@openclaw/crabbox-provider`) - included in OpenClaw. Cloud worker provider and lease-backed sandbox backend for the Crabbox CLI.
 
 - **[cua-computer](/plugins/reference/cua-computer)** (`@openclaw/cua-computer`) - included in OpenClaw. Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.
+
+- **[deep-research](/plugins/reference/deep-research)** (`@openclaw/deep-research`) - included in OpenClaw. Bounded research with source-backed findings and explicit gaps.
 
 - **[deepgram](/plugins/reference/deepgram)** (`@openclaw/deepgram-provider`) - included in OpenClaw. Deepgram audio transcription with Nova and Flux models, plus realtime speech recognition.
 
@@ -129,6 +131,8 @@ Each entry lists the package, distribution route, and description.
 - **[linux-node](/plugins/reference/linux-node)** (`@openclaw/linux-node`) - included in OpenClaw. Desktop notifications, camera capture, and location for Linux node hosts.
 
 - **[litellm](/plugins/reference/litellm)** (`@openclaw/litellm-provider`) - included in OpenClaw. Adds LiteLLM model provider support to OpenClaw.
+
+- **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - included in OpenClaw, and also from npm or ClawHub: `@openclaw/llama-cpp-provider`. Managed and external llama.cpp servers for GGUF chat, embeddings and local images.
 
 - **[llm-task](/plugins/reference/llm-task)** (`@openclaw/llm-task`) - included in OpenClaw. Generic JSON-only LLM tool for structured tasks callable from workflows.
 
@@ -166,6 +170,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[openai](/plugins/reference/openai)** (`@openclaw/openai-provider`) - included in OpenClaw. Adds OpenAI model provider support to OpenClaw.
 
+- **[openclaw-id-access](/plugins/reference/openclaw-id-access)** (`@openclaw/openclaw-id-access`) - included in OpenClaw. Choose who can reach this claw remotely: invite people, approve their requests, and see and remove members.
+
 - **[opencode-go](/plugins/reference/opencode-go)** (`@openclaw/opencode-go-provider`) - included in OpenClaw. Adds OpenCode Go model provider support to OpenClaw.
 
 - **[openrouter](/plugins/reference/openrouter)** (`@openclaw/openrouter-provider`) - included in OpenClaw. Adds OpenRouter model provider support to OpenClaw.
@@ -176,6 +182,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[requesty](/plugins/reference/requesty)** (`@openclaw/requesty-provider`) - included in OpenClaw. Adds Requesty model provider support to OpenClaw.
 
+- **[rerank](/plugins/reference/rerank)** (`@openclaw/rerank-provider`) - included in OpenClaw. Use any /rerank endpoint as a Decision model.
+
 - **[runway](/plugins/reference/runway)** (`@openclaw/runway-provider`) - included in OpenClaw. Adds video generation provider support.
 
 - **[senseaudio](/plugins/reference/senseaudio)** (`@openclaw/senseaudio-provider`) - included in OpenClaw. Adds media understanding provider support.
@@ -183,6 +191,8 @@ Each entry lists the package, distribution route, and description.
 - **[session-share](/plugins/reference/session-share)** (`@openclaw/session-share`) - included in OpenClaw. Read-only OpenClaw sessions on paired gateways.
 
 - **[sglang](/plugins/reference/sglang)** (`@openclaw/sglang-provider`) - included in OpenClaw. Adds SGLang model provider support to OpenClaw.
+
+- **[skill-workshop](/plugins/reference/skill-workshop)** (`@openclaw/skill-workshop`) - included in OpenClaw. Learned skills each agent saves from its own work.
 
 - **[talk-voice](/plugins/reference/talk-voice)** (`openclaw`) - included in OpenClaw. Manage Talk voice selection (list/set).
 
@@ -206,7 +216,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-100 plugins
+105 plugins
 
 - **[abliteration](/plugins/reference/abliteration)** (`@openclaw/abliteration-provider`) - npm or ClawHub: `@openclaw/abliteration-provider`. OpenClaw Abliteration provider plugin.
 
@@ -227,6 +237,8 @@ Each entry lists the package, distribution route, and description.
 - **[buzz](/plugins/reference/buzz)** (`@openclaw/buzz`) - npm or ClawHub: `@openclaw/buzz`. Connect OpenClaw agents to Buzz rooms.
 
 - **[byteplus](/plugins/reference/byteplus)** (`@openclaw/byteplus-provider`) - npm or ClawHub: `@openclaw/byteplus-provider`. Adds BytePlus, BytePlus Plan model provider support to OpenClaw.
+
+- **[celeris](/plugins/reference/celeris)** (`@openclaw/celeris`) - npm or ClawHub: `@openclaw/celeris`. Adds Celeris model provider support to OpenClaw.
 
 - **[cerebras](/plugins/reference/cerebras)** (`@openclaw/cerebras-provider`) - npm or ClawHub: `@openclaw/cerebras-provider`. Adds Cerebras model provider support to OpenClaw.
 
@@ -264,6 +276,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[facetime](/plugins/reference/facetime)** (`@openclaw/facetime`) - npm or ClawHub: `@openclaw/facetime`. Experimental FaceTime realtime voice carrier for OpenClaw agents.
 
+- **[fastino](/plugins/reference/fastino)** (`@openclaw/fastino-provider`) - npm or ClawHub: `@openclaw/fastino-provider`. Native GLiDE Boolean, Choice and Score decisions.
+
 - **[featherless](/plugins/reference/featherless)** (`@openclaw/featherless-provider`) - npm or ClawHub: `@openclaw/featherless-provider`. OpenClaw Featherless AI provider plugin.
 
 - **[feishu](/plugins/reference/feishu)** (`@openclaw/feishu`) - npm or ClawHub: `@openclaw/feishu`. OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).
@@ -273,6 +287,8 @@ Each entry lists the package, distribution route, and description.
 - **[fireworks](/plugins/reference/fireworks)** (`@openclaw/fireworks-provider`) - npm or ClawHub: `@openclaw/fireworks-provider`. Adds Fireworks model provider support to OpenClaw.
 
 - **[fish-audio-speech](/plugins/reference/fish-audio-speech)** (`@openclaw/fish-audio-speech`) - npm or ClawHub: `@openclaw/fish-audio-speech`. Fish Audio hosted text-to-speech with streaming, voice notes, and telephony output.
+
+- **[gbrain](/plugins/reference/gbrain)** (`@openclaw/gbrain`) - npm or ClawHub: `@openclaw/gbrain`. Connects OpenClaw to a GBrain brain: sets up GBrain's own service when needed and adds it as the gbrain MCP server.
 
 - **[gmi](/plugins/reference/gmi)** (`@openclaw/gmi-provider`) - npm or ClawHub: `@openclaw/gmi-provider`. OpenClaw GMI Cloud provider plugin.
 
@@ -298,7 +314,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[line](/plugins/reference/line)** (`@openclaw/line`) - npm or ClawHub: `@openclaw/line`. OpenClaw LINE channel plugin for LINE Bot API chats.
 
-- **[llama-cpp](/plugins/reference/llama-cpp)** (`@openclaw/llama-cpp-provider`) - npm or ClawHub: `@openclaw/llama-cpp-provider`. Managed and external llama.cpp servers for GGUF chat, embeddings and local images.
+- **[liquid-ai](/plugins/reference/liquid-ai)** (`@openclaw/liquid-ai-provider`) - npm or ClawHub: `@openclaw/liquid-ai-provider`. Adds Liquid AI model provider support to OpenClaw.
 
 - **[lobster](/plugins/reference/lobster)** (`@openclaw/lobster`) - npm or ClawHub: `@openclaw/lobster`. Lobster workflow tool plugin for typed pipelines and resumable approvals.
 
@@ -322,6 +338,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[mxc](/plugins/reference/mxc)** (`@openclaw/mxc-sandbox`) - npm or ClawHub: `@openclaw/mxc-sandbox`. OS-level sandboxed tool execution via MXC: runs commands in a Windows ProcessContainer with configured MXC policy files.
 
+- **[nace](/plugins/reference/nace)** (`@openclaw/nace`) - npm or ClawHub: `@openclaw/nace`. Adds Nace model provider support to OpenClaw.
+
 - **[nextcloud-talk](/plugins/reference/nextcloud-talk)** (`@openclaw/nextcloud-talk`) - npm or ClawHub: `@openclaw/nextcloud-talk`. OpenClaw Nextcloud Talk channel plugin for conversations.
 
 - **[nostr](/plugins/reference/nostr)** (`@openclaw/nostr`) - npm or ClawHub: `@openclaw/nostr`. OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.
@@ -334,9 +352,11 @@ Each entry lists the package, distribution route, and description.
 
 - **[openshell](/plugins/reference/openshell)** (`@openclaw/openshell-sandbox`) - npm or ClawHub: `@openclaw/openshell-sandbox`. OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local workspaces and SSH command execution.
 
-- **[parallel](/tools/parallel-search)** (`@openclaw/parallel-plugin`) - npm or ClawHub: `@openclaw/parallel-plugin`. Adds web search provider support.
+- **[parallel](/tools/parallel-search)** (`@openclaw/parallel-plugin`) - npm or ClawHub: `@openclaw/parallel-plugin`. Adds Parallel model provider support to OpenClaw.
 
-- **[perplexity](/plugins/reference/perplexity)** (`@openclaw/perplexity-plugin`) - npm or ClawHub: `@openclaw/perplexity-plugin`. Adds web search provider support.
+- **[particle](/plugins/reference/particle)** (`@openclaw/particle-provider`) - npm or ClawHub: `@openclaw/particle-provider`. Adds Particle model provider support to OpenClaw.
+
+- **[perplexity](/plugins/reference/perplexity)** (`@openclaw/perplexity-plugin`) - npm or ClawHub: `@openclaw/perplexity-plugin`. Adds Perplexity Decisions model provider support to OpenClaw.
 
 - **[pixverse](/plugins/reference/pixverse)** (`@openclaw/pixverse-provider`) - npm or ClawHub: `@openclaw/pixverse-provider`. OpenClaw PixVerse video generation provider plugin.
 
@@ -370,7 +390,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[tavily](/plugins/reference/tavily)** (`@openclaw/tavily-plugin`) - npm or ClawHub: `@openclaw/tavily-plugin`. Adds agent-callable tools. Adds web search provider support.
 
-- **[team-reports](/plugins/reference/team-reports)** (`@openclaw/team-reports`) - npm or ClawHub: `@openclaw/team-reports`. Daily, weekly, and monthly team activity reports from GitHub and Discord, with model-written summaries, served in the Control UI.
+- **[team-reports](/plugins/reference/team-reports)** (`@openclaw/team-reports`) - npm or ClawHub: `@openclaw/team-reports`. Daily, weekly, and monthly team activity reports from GitHub and Discord, with model-written summaries, shown in the OpenClaw app.
 
 - **[teams-meetings](/plugins/reference/teams-meetings)** (`@openclaw/teams-meetings`) - npm or ClawHub: `@openclaw/teams-meetings`. Join Microsoft Teams meetings as a Chrome browser guest.
 

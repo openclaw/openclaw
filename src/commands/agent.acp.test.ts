@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
@@ -11,6 +10,7 @@ import { persistAcpTurnTranscript } from "../agents/command/transcript-persisten
 import { getTranscriptMessageRole } from "../agents/embedded-agent-runner/message-visibility.js";
 import * as embeddedModule from "../agents/embedded-agent.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import * as configIoModule from "../config/io.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -176,16 +176,13 @@ async function withAcpSession(
     async (home) => {
       const storePath = path.join(home, "sessions.json");
       const sessionKey = stale ? "agent:codex:acp:stale" : "agent:codex:acp:test";
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: stale ? "stale-1" : "acp-session-1",
-            updatedAt: Date.now(),
-            ...(!stale && { acp: resolveReadySession(sessionKey).meta }),
-          },
-        }),
-      );
+      writeFixtureJsonSync(storePath, {
+        [sessionKey]: {
+          sessionId: stale ? "stale-1" : "acp-session-1",
+          updatedAt: Date.now(),
+          ...(!stale && { acp: resolveReadySession(sessionKey).meta }),
+        },
+      });
       mockConfig(home, storePath, acpOverrides);
       await fn();
     },

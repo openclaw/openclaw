@@ -53,6 +53,7 @@ export type SessionCapability = Pick<
   | "createResult"
   | "patch"
   | "patchMany"
+  | "acknowledgeHiddenRuns"
   | "archiveVisibility"
   | "beginArchive"
   | "assignOwner"
@@ -70,6 +71,7 @@ export type SessionCapability = Pick<
     | "subscribeList"
     | "observeList"
     | "refreshList"
+    | "wakeList"
     | "refresh"
     | "refreshReplacement"
   > &

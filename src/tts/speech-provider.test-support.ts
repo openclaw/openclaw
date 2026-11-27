@@ -1,16 +1,16 @@
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
 
-export function createFullSpeechPolicy(): SpeechModelOverridePolicy {
+export function createSpeechPolicy(allowed: boolean): SpeechModelOverridePolicy {
   return {
-    enabled: true,
-    allowText: true,
-    allowProvider: true,
-    allowVoice: true,
-    allowModelId: true,
-    allowVoiceSettings: true,
-    allowNormalization: true,
-    allowSeed: true,
+    enabled: allowed,
+    allowText: allowed,
+    allowProvider: allowed,
+    allowVoice: allowed,
+    allowModelId: allowed,
+    allowVoiceSettings: allowed,
+    allowNormalization: allowed,
+    allowSeed: allowed,
   };
 }
 

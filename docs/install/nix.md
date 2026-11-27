@@ -78,6 +78,20 @@ defaults write ai.openclaw.mac openclaw.nixMode -bool true
 - Missing dependencies surface Nix-specific remediation messages.
 - The UI shows a read-only Nix mode banner.
 
+### Telemetry
+
+First-party `nix-openclaw` sets `OPENCLAW_NIX_MODE=1`, which suppresses daily
+update checks, feature statistics, installation counts, and update outcomes. If
+your Nix package does not enable Nix mode, set `update.checkOnStart = false` in
+your declarative OpenClaw config or `OPENCLAW_NO_AUTO_UPDATE=1` in the service
+environment to stop the same requests.
+
+ClawHub reporting is separate. For `nix-openclaw`, set
+`programs.openclaw.environment.CLAWHUB_DISABLE_TELEMETRY = "1";` in Home Manager
+and apply it with `home-manager switch`. Set `CLAWHUB_DISABLE_TELEMETRY=1` in the
+environment of any standalone CLI you use with ClawHub, too. See
+[Telemetry controls](/gateway/telemetry#telemetry-controls) for what each switch disables.
+
 ### Config and state paths
 
 OpenClaw reads JSON5 config from `OPENCLAW_CONFIG_PATH` and stores mutable data in `OPENCLAW_STATE_DIR`. Under Nix, set these explicitly to Nix-managed locations so runtime state and config stay out of the immutable store.
@@ -90,12 +104,49 @@ OpenClaw reads JSON5 config from `OPENCLAW_CONFIG_PATH` and stores mutable data 
 
 ### Service PATH discovery
 
-The launchd/systemd gateway service auto-discovers Nix-profile binaries so plugins and tools that shell out to `nix`-installed executables work without manual PATH setup:
+On Linux, the systemd Gateway service auto-discovers Nix-profile binaries so plugins and tools that shell out to `nix`-installed executables work without manual PATH setup:
 
 - When `NIX_PROFILES` is set, every entry is added to the service PATH in right-to-left precedence (matches Nix shell precedence: rightmost wins).
 - When `NIX_PROFILES` is unset, `~/.nix-profile/bin` is added as a fallback.
 
-This applies to both macOS launchd and Linux systemd service environments.
+These profile directories follow the trusted system directories in the service PATH.
+
+On macOS, the launchd Gateway service intentionally uses a system-only PATH and does not add Nix profiles or inherit your shell's PATH:
+
+```text
+/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+```
+
+If a CLI backend, stdio MCP server, or skill needs a Nix-installed executable, use one of these approaches:
+
+- **CLI-managed service:** install an executable wrapper that adds the required Nix bin directories to `PATH`, then execs OpenClaw with `"$@"`. Adjust the profile directories below to match your own profiles, and replace `/absolute/path/to/openclaw` with your OpenClaw executable's absolute path:
+
+  ```bash
+  mkdir -p ~/.local/bin
+  cat > ~/.local/bin/openclaw-nix-wrapper <<'EOF'
+  #!/bin/sh
+  set -eu
+  export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"
+  exec /absolute/path/to/openclaw "$@"
+  EOF
+  chmod +x ~/.local/bin/openclaw-nix-wrapper
+  ```
+
+  Register it with the persistent [`--wrapper` option](/cli/gateway/service#install-with-a-wrapper):
+
+  ```bash
+  openclaw gateway install --wrapper ~/.local/bin/openclaw-nix-wrapper --force
+  openclaw gateway restart
+  ```
+
+  OpenClaw persists the wrapper for later reinstalls, updates, and Doctor repairs; do not edit the generated LaunchAgent.
+
+- **Per-command configuration:** use the executable's absolute path wherever the integration accepts a command path, rather than relying on a bare command name.
+- **nix-openclaw-managed service:** add the tools to `programs.openclaw.runtimePackages` (or `programs.openclaw.instances.<name>.runtimePackages`) in your Home Manager configuration, then run `home-manager switch`. The module adds these packages to the Gateway's runtime PATH without changing your shell's PATH. For example:
+
+  ```nix
+  programs.openclaw.runtimePackages = [ pkgs.jq ];
+  ```
 
 ## Related
 

@@ -6,7 +6,7 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { unadmittedScheduledOccurrence } from "../scheduled-occurrence.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import type { CronEvent } from "../types.js";
+import type { CronEvent, CronStoredJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
@@ -14,17 +14,20 @@ import { run } from "./ops-run.js";
 
 const PARENT_KEY = "agent:main:dashboard:parent";
 
-it("pauses once when the parent is gone, and again after a re-enable while it is still gone", async () => {
+it.each([false, true])("handles a missing parent (command=%s)", async (command) => {
   await withOpenClawTestState({ label: "cron-parent-pause" }, async (fixture) => {
     const now = Date.now();
     const storePath = fixture.statePath("cron", "jobs.json");
-    const job = {
+    const job: CronStoredJob = {
       ...createDueIsolatedJob({ id: "parent-paused", nowMs: now - 2000, nextRunAtMs: now - 1000 }),
       // Recurring, so only the pause can disable it.
       schedule: { kind: "every" as const, everyMs: 60_000 },
-      sessionKey: PARENT_KEY,
+      sessionKey: command ? undefined : PARENT_KEY,
       sourceConversation: { sessionKey: PARENT_KEY, sessionId: "parent-session" },
     };
+    if (command) {
+      job.payload = { kind: "command", argv: ["echo", "synthetic"] };
+    }
     const runner = vi.fn(async () => ({ status: "ok" as const }));
     const enqueueSessionEvent = vi.fn(async () => ({ ok: true as const }));
     const events: CronEvent[] = [];
@@ -34,17 +37,23 @@ it("pauses once when the parent is gone, and again after a re-enable while it is
       defaultAgentId: "main",
       isAgentAvailable: () => true,
       runIsolatedAgentJob: runner,
-      onEvent: (event) => events.push(event),
-      enqueueSessionEvent,
+      ...(command
+        ? { runCommandJob: runner }
+        : { onEvent: (event: CronEvent) => events.push(event), enqueueSessionEvent }),
       admitScheduledOccurrence: async () => ({
         ...unadmittedScheduledOccurrence("parent gone"),
-        pause: { reason: "archived", parentSessionKey: PARENT_KEY },
+        pause: { reason: command ? "removed" : "archived", parentSessionKey: PARENT_KEY },
       }),
     });
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     await list(state);
     try {
       await run(state, job.id, "force");
+      if (command) {
+        expect(runner).toHaveBeenCalledOnce();
+        expect((await loadCronStore(storePath)).jobs[0]?.enabled).toBe(true);
+        return;
+      }
       let persisted = (await loadCronStore(storePath)).jobs[0];
       expect(runner).not.toHaveBeenCalled();
       expect(persisted?.enabled).toBe(false);
@@ -63,43 +72,6 @@ it("pauses once when the parent is gone, and again after a re-enable while it is
       expect(runner).not.toHaveBeenCalled();
       expect(persisted?.enabled).toBe(false);
       expect(events.filter((event) => event.action === "finished")).toHaveLength(2);
-    } finally {
-      stop(state);
-      await state.op;
-    }
-  });
-});
-
-it("keeps a command job running when its parent is gone", async () => {
-  await withOpenClawTestState({ label: "cron-parent-pause-command" }, async (fixture) => {
-    const now = Date.now();
-    const storePath = fixture.statePath("cron", "jobs.json");
-    const job = {
-      ...createDueIsolatedJob({ id: "command-job", nowMs: now - 2000, nextRunAtMs: now - 1000 }),
-      payload: { kind: "command" as const, argv: ["echo", "synthetic"] },
-      // Recurring, so only the pause can disable it.
-      schedule: { kind: "every" as const, everyMs: 60_000 },
-      sourceConversation: { sessionKey: PARENT_KEY, sessionId: "parent-session" },
-    };
-    const runner = vi.fn(async () => ({ status: "ok" as const }));
-    const state = createCronRegressionState({
-      storePath,
-      nowMs: () => now,
-      defaultAgentId: "main",
-      isAgentAvailable: () => true,
-      runCommandJob: runner,
-      runIsolatedAgentJob: runner,
-      admitScheduledOccurrence: async () => ({
-        ...unadmittedScheduledOccurrence("parent gone"),
-        pause: { reason: "removed", parentSessionKey: PARENT_KEY },
-      }),
-    });
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    await list(state);
-    try {
-      await run(state, job.id, "force");
-      expect(runner).toHaveBeenCalledOnce();
-      expect((await loadCronStore(storePath)).jobs[0]?.enabled).toBe(true);
     } finally {
       stop(state);
       await state.op;

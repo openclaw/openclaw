@@ -10,9 +10,16 @@ import {
 } from "./evidence-files.js";
 import { readText, parseYaml, safeRoot } from "./files.js";
 import { RECORD_MAX_BYTES, AUXILIARY_MAX_BYTES } from "./limits.js";
-import { resolveLinks } from "./markdown-links.js";
+import { carryLinkExtraction, resolveLinks } from "./markdown-links.js";
 import { linkTargets, mergeProblem } from "./merge.js";
-import { approvedRecall, Envelope, type Issue, type LoadedRecord, type Scope } from "./model.js";
+import {
+  approvedRecall,
+  Envelope,
+  type Issue,
+  type LoadedRecord,
+  type Recall,
+  type Scope,
+} from "./model.js";
 import {
   bundledOntology,
   parseOntology,
@@ -44,13 +51,21 @@ function sameScope(a: unknown, b: Scope): boolean {
 }
 
 export type { ScanResult };
-/** One record file's parse, valid while the file keeps `stamp`. */
+/** A null stamp retains link ownership but never admits a cached record read. */
 type ParsedFile = {
-  stamp: string;
+  stamp: string | null;
   descriptors: Map<string, string>;
   record?: LoadedRecord;
   issue?: string;
 };
+type ScanEntry = {
+  name: string;
+  isDirectory: boolean;
+  isFile: boolean;
+  isSymbolicLink: boolean;
+  stamp?: string;
+};
+type ScanTree = { stamp: string; directories: Map<string, ScanEntry[]> };
 /** Holds one scope's scan state. The owner (RealVault) keeps it across operations.
  * `entry` is the whole last scan, reused only while every file the scan read
  * still has its stamp. `files` and `evidence` are per-file results, so a change
@@ -99,7 +114,7 @@ export class VaultScanner {
       descriptorStamp = sourceDescriptorStamper(this.root);
     if (
       tree &&
-      hit?.tree === tree &&
+      hit?.tree === tree.stamp &&
       [...hit.evidence].every(
         ([file, stamp]) =>
           settledStamp(stamp) &&
@@ -110,9 +125,9 @@ export class VaultScanner {
     ) {
       return hit.data;
     }
-    const { data, evidence } = await this.load();
+    const { data, evidence } = await this.load(undefined, tree ?? undefined);
     if (tree) {
-      this.cache.entry = { tree, evidence: evidence.stamps, data: freeze(data) };
+      this.cache.entry = { tree: tree.stamp, evidence: evidence.stamps, data: freeze(data) };
     } else {
       this.cache.entry = undefined;
     }
@@ -120,8 +135,9 @@ export class VaultScanner {
   }
   // Stamp every entry the scan walk visits. Null when the tree exceeds scan
   // limits; the scan itself then reports the failure and nothing is cached.
-  private treeStamp(): string | null {
+  private treeStamp(): ScanTree | null {
     const entries: string[] = [];
+    const directories = new Map<string, ScanEntry[]>();
     let visited = 0;
     const walk = (dir: string, depth: number): boolean => {
       if (depth > 8) {
@@ -133,33 +149,46 @@ export class VaultScanner {
       } catch {
         return false;
       }
+      const children: ScanEntry[] = [];
+      directories.set(dir, children);
       for (const name of names) {
         if (++visited > MAX_ENTRIES) {
           return false;
         }
         const file = dir + name,
-          stamp = fileStamp(this.root, file);
-        entries.push(`${file}|${stamp}`);
+          observed = fs.lstatSync(path.join(this.root, file), { bigint: true }),
+          directory = observed.isDirectory();
+        const stamp = fileStamp(this.root, file, observed);
+        children.push({
+          name,
+          isDirectory: directory,
+          isFile: observed.isFile(),
+          isSymbolicLink: observed.isSymbolicLink(),
+          stamp,
+        });
+        // Retained originals and publication staging change on every upload
+        // and save without changing the catalog; cited files carry their own
+        // evidence stamps. Only their kind (a real directory or not) matters here.
         if (!dir && (name === "artifacts" || name === ".knowledge-history")) {
+          entries.push(`${file}|${directory ? "directory" : stamp}`);
           continue;
         }
-        if (
-          fs.lstatSync(path.join(this.root, file)).isDirectory() &&
-          !walk(file + "/", depth + 1)
-        ) {
+        entries.push(`${file}|${stamp}`);
+        if (directory && !walk(file + "/", depth + 1)) {
           return false;
         }
       }
       return true;
     };
     try {
-      return walk("", 0) ? digest(entries.join("\n")) : null;
+      return walk("", 0) ? { stamp: digest(entries.join("\n")), directories } : null;
     } catch {
       return null;
     }
   }
   private async load(
     overlay?: Overlay,
+    tree?: ScanTree,
   ): Promise<{ data: ScanResult; evidence: EvidenceInspector }> {
     const issues: Issue[] = [];
     // One read per retained file for this scan; observation reuses the same checks.
@@ -167,9 +196,12 @@ export class VaultScanner {
       this.cache.files ??= new Map();
       this.cache.evidence ??= new Map();
     }
-    const evidence = new EvidenceInspector(this.root, overlay ? undefined : this.cache?.evidence);
+    // Overlay scans share per-file parses and evidence outcomes, which are
+    // keyed by on-disk stamps. A parse that hydrated from an overlay artifact
+    // carries the disk stamp but not the disk bytes, so it is never cached.
+    const evidence = new EvidenceInspector(this.root, this.cache?.evidence);
     const descriptorStamp = sourceDescriptorStamper(this.root);
-    const parsed = overlay ? undefined : this.cache?.files,
+    const parsed = this.cache?.files,
       seen = new Set<string>();
     const directory = this.empty ? null : await safeRoot(this.root);
     const records: LoadedRecord[] = [];
@@ -183,11 +215,16 @@ export class VaultScanner {
       if (depth > 8) {
         throw new Error("Vault directory depth exceeds 8");
       }
-      for await (const entry of directory!.entries(dir || ".", {
-        maxEntries: MAX_ENTRIES + 1,
-        order: "sorted",
-        symlinks: "reject",
-      })) {
+      // The freshness walk already captured each path's type and stamp. Changed
+      // bytes still go through readText's guarded reader; unchanged parses reuse that snapshot.
+      const entries: Iterable<ScanEntry> | AsyncIterable<ScanEntry> =
+        tree?.directories.get(dir) ??
+        directory!.entries(dir || ".", {
+          maxEntries: MAX_ENTRIES + 1,
+          order: "sorted",
+          symlinks: "reject",
+        });
+      for await (const entry of entries) {
         if (++visited > MAX_ENTRIES) {
           throw new Error(`Vault exceeds ${MAX_ENTRIES.toLocaleString("en-US")} entries`);
         }
@@ -233,14 +270,12 @@ export class VaultScanner {
           // Reuse this file's parse while its stamp is unchanged. The stamp is
           // taken before reading, so a change during the read forces a reparse.
           seen.add(file);
-          const stamp = fileStamp(this.root, file),
+          const stamp = entry.stamp ?? fileStamp(this.root, file),
             known = parsed?.get(file);
-          if (
+          const knownSourcesCurrent =
             known &&
-            known.stamp === stamp &&
-            settledStamp(stamp) &&
-            [...known.descriptors].every(([p, s]) => settledStamp(s) && descriptorStamp(p) === s)
-          ) {
+            [...known.descriptors].every(([p, s]) => settledStamp(s) && descriptorStamp(p) === s);
+          if (known && known.stamp === stamp && settledStamp(stamp) && knownSourcesCurrent) {
             for (const [p, s] of known.descriptors) {
               evidence.stamps.set(p, s);
             }
@@ -254,8 +289,18 @@ export class VaultScanner {
           // Cache only deterministic outcomes of settled files; a failed read is retried.
           const descriptors = new Map<string, string>();
           const remember = (value: Omit<ParsedFile, "stamp" | "descriptors">) => {
-            if (settledStamp(stamp) && [...descriptors.values()].every((s) => settledStamp(s))) {
-              parsed?.set(file, { stamp, descriptors, ...value });
+            if (
+              overlay &&
+              [...descriptors.keys()].some((p) => Object.hasOwn(overlay.artifacts, p))
+            ) {
+              return;
+            }
+            // Unsettled files are still reread and validated; retain their parse
+            // identity only to reuse links when those freshly read bytes match.
+            const reusable =
+              settledStamp(stamp) && [...descriptors.values()].every((s) => settledStamp(s));
+            if (reusable || value.record) {
+              parsed?.set(file, { stamp: reusable ? stamp : null, descriptors, ...value });
             } else {
               parsed?.delete(file);
             }
@@ -324,6 +369,9 @@ export class VaultScanner {
               raw,
               hash: digest(raw),
             };
+            if (known?.record?.raw === raw && knownSourcesCurrent) {
+              carryLinkExtraction(known.record, record);
+            }
             // Cache a pristine copy (metadata frozen, shared by later scans):
             // validation and observation adjust only the scan's own copy.
             if (!overlay?.artifacts[file]) {
@@ -376,11 +424,17 @@ export class VaultScanner {
       }
     }
     const byId = new Map<string, LoadedRecord[]>();
+    const recall = new Map<string, Recall>();
+    const previous = this.cache?.entry?.data;
+    const validatedMetadata = new Set(
+      previous?.records.filter((record) => record.valid).map((record) => record.metadata),
+    );
     for (const r of records) {
       byId.set(r.id, [...(byId.get(r.id) ?? []), r]);
     }
     for (const r of records) {
       const m = r.metadata;
+      const metadataValidated = validatedMetadata.has(m);
       const problem = (code: string, message: string) => {
         r.valid = false;
         add(r.path, code, message);
@@ -388,13 +442,15 @@ export class VaultScanner {
       if (byId.get(r.id)!.length > 1) {
         problem("duplicate-id", "Duplicate stable ID; exact lookup is unavailable until resolved.");
       }
-      for (const key of ["recorded_at", "updated_at"] as const) {
-        if (!Number.isFinite(Date.parse(m[key]))) {
-          problem("invalid-date", `Invalid ${key}`);
+      if (!metadataValidated) {
+        for (const key of ["recorded_at", "updated_at"] as const) {
+          if (!Number.isFinite(Date.parse(m[key]))) {
+            problem("invalid-date", `Invalid ${key}`);
+          }
         }
-      }
-      if (Date.parse(m.updated_at) < Date.parse(m.recorded_at)) {
-        problem("invalid-date", "updated_at precedes recorded_at");
+        if (Date.parse(m.updated_at) < Date.parse(m.recorded_at)) {
+          problem("invalid-date", "updated_at precedes recorded_at");
+        }
       }
       const resolve = (id: string, expectedPage = false) => {
         const candidates = byId.get(id);
@@ -477,13 +533,18 @@ export class VaultScanner {
           }
         }
       }
-      for (const message of temporalProblems(m)) {
-        problem("invalid-temporal", message);
+      if (!metadataValidated) {
+        for (const message of temporalProblems(m)) {
+          problem("invalid-temporal", message);
+        }
       }
       for (const message of annotationProblems(m, (id) => byId.get(id) ?? [])) {
         problem("invalid-annotation", message);
       }
-      if (m.recall !== undefined && !approvedRecall(m.recall)) {
+      const approval = metadataValidated ? previous?.recall.get(r.id) : approvedRecall(m.recall);
+      if (approval) {
+        recall.set(r.id, approval);
+      } else if (m.recall !== undefined) {
         add(
           r.path,
           "invalid-recall",
@@ -546,7 +607,7 @@ export class VaultScanner {
       this.observe?.(records, this.scope, evidence);
     }
     const navigable = eligible(
-      { records, ontology, sources, issues, checkedAt: "" },
+      { records, recall, ontology, sources, issues, checkedAt: "" },
       undefined,
       false,
     );
@@ -567,7 +628,7 @@ export class VaultScanner {
       }
     }
     return {
-      data: { records, ontology, sources, issues, checkedAt: new Date().toISOString() },
+      data: { records, recall, ontology, sources, issues, checkedAt: new Date().toISOString() },
       evidence,
     };
   }

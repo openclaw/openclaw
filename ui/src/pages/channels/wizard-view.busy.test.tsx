@@ -118,7 +118,9 @@ describe("ChannelWizard busy controls", () => {
       message: "Pick several",
       options: choices,
     });
-    const buttons = Array.from(multiselect.container.querySelectorAll<HTMLButtonElement>("button"));
+    const buttons = Array.from(
+      multiselect.container.querySelectorAll<HTMLButtonElement>("button:not(.oc-dialog__close)"),
+    );
     expect(buttons).toHaveLength(3);
     expect(buttons.every((button) => button.disabled)).toBe(true);
     buttons.forEach((button) => button.click());

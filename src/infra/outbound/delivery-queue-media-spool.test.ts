@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { createImageProcessor } from "../../media/media-services.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import {
@@ -19,7 +20,6 @@ import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 const storeSpy = vi.hoisted(() => ({
   onMove: null as ((from: string, to: string, rootDir: string) => void) | null,
 }));
-
 vi.mock("@openclaw/fs-safe/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
   return {
@@ -207,59 +207,58 @@ it("reclaims stale partial writes but ignores foreign files and symlinks", async
   expect(await fs.readFile(source, "utf8")).toBe("opus-bytes");
 });
 
-it("expires abandoned stages and rejects a producer that resumes too late", async () => {
+it("expires abandoned stages before or after file publication without rescanning quiet inventory", async () => {
+  await pruneOrphanedDeliveryQueueMedia({ stateDir });
+  using requests = vi.spyOn(Worker.prototype, "postMessage");
+  await pruneOrphanedDeliveryQueueMedia({ stateDir });
+  expect(requests).not.toHaveBeenCalled();
+  expect(existsSync(spoolRoot)).toBe(false);
+
   const staged = await stage({ payloads: [{ mediaUrl: source, audioAsVoice: true }] });
-
-  // Expired staging custody must win against a resumed producer.
-  await pruneOrphanedDeliveryQueueMedia({ stateDir, nowMs: Date.now() + 2 * DAY_MS });
-
-  await expect(fs.stat(staged.artifacts[0] as string)).rejects.toThrow();
-  await expect(enqueue(staged.payloads, staged.mediaStageId)).rejects.toThrow(
-    "media stage expired before enqueue",
+  const artifact = path.join(spoolRoot, ARTIFACT_A);
+  const mediaStageId = await createDeliveryQueueMediaRetention(
+    [artifact],
+    "outbound-media-stage",
+    stateDir,
   );
+  requests.mockClear();
+  await pruneOrphanedDeliveryQueueMedia({ stateDir });
+  expect(requests).not.toHaveBeenCalled();
+  expect(existsSync(artifact)).toBe(false);
+  await pruneOrphanedDeliveryQueueMedia({ stateDir, nowMs: Date.now() + 2 * DAY_MS });
+  for (const entry of [staged, { payloads: [{ mediaUrl: artifact }], mediaStageId }]) {
+    assert(entry.mediaStageId);
+    expect(
+      loadDeliveryQueueEntry(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, entry.mediaStageId, stateDir),
+    ).toBeNull();
+    await expect(enqueue(entry.payloads, entry.mediaStageId)).rejects.toThrow(
+      "media stage expired before enqueue",
+    );
+  }
+  await expect(fs.stat(staged.artifacts[0] as string)).rejects.toThrow();
   expect(await loadPendingDeliveries(stateDir)).toEqual([]);
 });
 
-it("skips quiet inventories but expires a new stage even when its producer never wrote a file", async () => {
-  await pruneOrphanedDeliveryQueueMedia({ stateDir });
-  const requests = vi.spyOn(Worker.prototype, "postMessage");
-  try {
-    await pruneOrphanedDeliveryQueueMedia({ stateDir });
-    expect(requests).not.toHaveBeenCalled();
-
-    const artifact = path.join(spoolRoot, ARTIFACT_A);
-    const mediaStageId = await createDeliveryQueueMediaRetention(
-      [artifact],
-      "outbound-media-stage",
-      stateDir,
-    );
-    requests.mockClear();
-    await pruneOrphanedDeliveryQueueMedia({ stateDir });
-    expect(requests).not.toHaveBeenCalled();
-    expect(existsSync(spoolRoot)).toBe(false);
-
-    await pruneOrphanedDeliveryQueueMedia({ stateDir, nowMs: Date.now() + 2 * DAY_MS });
-    expect(
-      loadDeliveryQueueEntry(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, mediaStageId, stateDir),
-    ).toBeNull();
-    await expect(enqueue([{ mediaUrl: artifact }], mediaStageId)).rejects.toThrow(
-      "media stage expired before enqueue",
-    );
-  } finally {
-    requests.mockRestore();
-  }
-});
-
-it("releases versioned artifacts without touching paths outside the spool", async () => {
+it("reports failed releases, continues cleanup, and ignores missing or outside paths", async () => {
   const generationFinal = await seedArtifact(`g1-${ARTIFACT_A}`, 0);
   const generationPartial = await seedArtifact(`g1-${PART_ARTIFACT}`, 0);
-
-  await releaseSpoolArtifacts(
-    [generationFinal, generationPartial, source, path.join(spoolRoot, "..", "escape.ogg")],
-    stateDir,
-  );
-
-  expectArtifacts([source], [generationFinal, generationPartial]);
+  const stuck = path.join(spoolRoot, ARTIFACT_A);
+  await fs.mkdir(stuck);
+  await fs.writeFile(path.join(stuck, "retained.txt"), "keep");
+  const capture = createWarnLogCapture("spool-release");
+  try {
+    await releaseSpoolArtifacts(
+      [stuck, generationFinal, generationPartial, path.join(spoolRoot, ARTIFACT_B), source],
+      stateDir,
+    );
+    expectArtifacts([source, stuck], [generationFinal, generationPartial]);
+    expect(
+      await capture.findText(`failed to remove delivery queue media artifact ${ARTIFACT_A}:`),
+    ).toBeDefined();
+    expect(await capture.findText(ARTIFACT_B)).toBeUndefined();
+  } finally {
+    capture.cleanup();
+  }
 });
 it("stages local media while a competing writer needs the host to release its lock", async () => {
   const database = openOpenClawStateDatabase({

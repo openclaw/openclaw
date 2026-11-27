@@ -24,7 +24,6 @@ import {
   pushSuccessfulSchtasksResponses,
   readGatewayOwnerLease,
   readWindowsProcessStartTimeSync,
-  resolveScheduledTaskOwnedGatewayPids,
   resolveTaskScriptPath,
   restartScheduledTask,
   setTaskStateProbeResult,
@@ -284,7 +283,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       "utf8",
     );
 
-    await expect(resolveScheduledTaskOwnedGatewayPids(env)).resolves.toEqual([]);
+    await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([]);
 
     expect(inspectPortUsageMock).not.toHaveBeenCalled();
     expect(gatewayServiceProbeHostsMock).not.toHaveBeenCalled();
@@ -298,7 +297,6 @@ describe("Scheduled Task stop/restart cleanup", () => {
     readGatewayOwnerLease.mockReturnValue({ ...GATEWAY_OWNER, supervisor });
     mockWindowsTaskkillSuccess();
 
-    await expect(resolveScheduledTaskOwnedGatewayPids(env)).resolves.toEqual([]);
     await expect(terminateScheduledTaskGatewayListeners(env)).rejects.toThrow(
       supervisor.name ?? "external supervisor",
     );
@@ -387,7 +385,12 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
 
-      expect(readWindowsProcessStartTimeSync).toHaveBeenCalledWith(4242, 5_000, env);
+      // The installed launcher declares its port, not the inspecting CLI's profile.
+      expect(readWindowsProcessStartTimeSync).toHaveBeenCalledWith(4242, 5_000, {
+        USERPROFILE: env.USERPROFILE,
+        APPDATA: env.APPDATA,
+        OPENCLAW_GATEWAY_PORT: String(GATEWAY_PORT),
+      });
 
       expectForcedTermination();
       expect(taskkillCalls().flat()).not.toContain("9999");

@@ -22,6 +22,15 @@ function cursorOffset(value: string | undefined): number {
 
 type TranscriptCursor = { revision: string; end: number };
 
+export class BeamTranscriptCursorError extends Error {
+  readonly kind: "invalid" | "stale";
+
+  constructor(kind: "invalid" | "stale") {
+    super(`${kind} Beam chat history cursor`);
+    this.kind = kind;
+  }
+}
+
 function transcriptRevision(session: BeamStoredSession): string {
   return createHash("sha256").update(JSON.stringify(session.items)).digest("base64url");
 }
@@ -46,7 +55,57 @@ function decodeTranscriptCursor(value: string): TranscriptCursor {
   } catch {
     // Reject malformed cursors below.
   }
-  throw new Error("invalid Beam transcript cursor");
+  throw new BeamTranscriptCursorError("invalid");
+}
+
+function readBeamSession(
+  session: BeamStoredSession,
+  params: Parameters<SessionCatalogProvider["read"]>[0],
+) {
+  const cursor = params.cursor === undefined ? undefined : decodeTranscriptCursor(params.cursor);
+  const end = Math.min(session.items.length, cursor?.end ?? session.items.length);
+  const start = Math.max(0, end - boundedLimit(params.limit));
+  let nextCursor: string | undefined;
+  if (cursor || start > 0) {
+    const revision = transcriptRevision(session);
+    if (cursor && cursor.revision !== revision) {
+      throw new BeamTranscriptCursorError("stale");
+    }
+    if (start > 0) {
+      nextCursor = encodeTranscriptCursor({ revision, end: start });
+    }
+  }
+  return {
+    hostId: BEAM_HOST_ID,
+    label: session.title,
+    threadId: session.beamId,
+    // Project only the selected page; keep chronological source indices in IDs
+    // while exposing newest-first items on the catalog wire.
+    items: session.items
+      .slice(start, end)
+      .map((item, index) => ({
+        id: `${session.beamId}:${start + index}`,
+        type: item.type,
+        text: item.text,
+        timestamp: session.updatedAt,
+        sender: item.speaker
+          ? {
+              identity: {
+                type: "observation" as const,
+                pluginId: "beam",
+                accountId: null,
+                senderKind: "unknown" as const,
+                id: `${session.beamId}:${session.revision}:${item.speaker}`,
+              },
+              label: item.speaker,
+            }
+          : item.type === "userMessage" && !session.portable && session.uploaderProfileId
+            ? { identity: { type: "profile" as const, id: session.uploaderProfileId } }
+            : undefined,
+      }))
+      .toReversed(),
+    ...(nextCursor ? { nextCursor } : {}),
+  };
 }
 
 export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvider {
@@ -66,18 +125,31 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
     label: "Beam",
     audience: "gateway-operators",
     shareRoute: BEAM_SESSION_SHARE_ROUTE,
+    ownedRoute: {
+      requiredGrantPluginId: "visitor-access",
+      methods: {
+        list: "beam.owned.list",
+        read: "beam.owned.read",
+        resolve: "beam.owned.resolve",
+        continue: "beam.owned.continue",
+      },
+    },
     supportsProcessHomeIsolation: true,
     async list(params) {
-      const search = params.search?.trim().toLowerCase();
+      // Normalize comparison text only; uploaded titles and stored identities stay original.
+      const search = params.search?.trim().toLowerCase().normalize("NFC");
       const shareId =
         search && isControlUiCatalogShareId(BEAM_SESSION_SHARE_ROUTE, search) ? search : undefined;
-      const sessions = (await store.list())
+      const sessions = (await store.list(shareId))
         .filter(
           (session) =>
             !search ||
             (shareId
               ? session.beamId.startsWith(shareId)
-              : `${session.title}\n${session.source}`.toLowerCase().includes(search)),
+              : `${session.title}\n${session.source}`
+                  .toLowerCase()
+                  .normalize("NFC")
+                  .includes(search)),
         )
         .toSorted(
           (left, right) =>
@@ -94,6 +166,10 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
           connected: true,
           sessions: page.map((session) => ({
             threadId: session.beamId,
+            exportPolicy: { origin: "imported", automatic: false },
+            ...(session.presentationDigest
+              ? { previewImageDigest: session.presentationDigest }
+              : {}),
             name: session.title,
             status: session.completed ? "completed" : "live",
             createdAt: session.createdAt,
@@ -101,7 +177,17 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
             recencyAt: session.receivedAt,
             source: session.source,
             archived: false,
-            canContinue: true,
+            canContinue: Boolean(session.handoffId),
+            ...(!session.handoffId
+              ? {
+                  continuationUnavailableReasonCode: "source-handoff-required" as const,
+                  continuationUnavailableReason:
+                    "This Beam is a read-only snapshot. Its authenticated original publisher must run beam handoff before you can continue here.",
+                }
+              : {}),
+            ...(session.continuation?.ready || session.continuation?.creating
+              ? { sessionKey: session.continuation.sessionKey }
+              : {}),
             canArchive: true,
           })),
           ...(offset + page.length < sessions.length
@@ -112,40 +198,43 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
     },
     async read(params) {
       const session = await requireSession(params.hostId, params.threadId);
-      const cursor =
-        params.cursor === undefined ? undefined : decodeTranscriptCursor(params.cursor);
-      const end = Math.min(session.items.length, cursor?.end ?? session.items.length);
-      const start = Math.max(0, end - boundedLimit(params.limit));
-      let nextCursor: string | undefined;
-      if (cursor || start > 0) {
-        const revision = transcriptRevision(session);
-        if (cursor && cursor.revision !== revision) {
-          throw new Error("stale Beam transcript cursor");
-        }
-        if (start > 0) {
-          nextCursor = encodeTranscriptCursor({ revision, end: start });
-        }
+      const page = readBeamSession(session, params);
+      // Export, import and pagination only read transcript text. A viewer opts in to the preview.
+      if (!params.includePreviewImage || params.cursor || !session.presentationDigest) {
+        return page;
+      }
+      const image = await store.getScreenshot?.(session.beamId, session.presentationDigest);
+      if (!image) {
+        throw new Error("The snapshot image changed or expired. Reload the snapshot.");
       }
       return {
-        hostId: BEAM_HOST_ID,
-        label: session.title,
-        threadId: session.beamId,
-        // Project only the selected page; keep chronological source indices in IDs
-        // while exposing newest-first items on the catalog wire.
-        items: session.items
-          .slice(start, end)
-          .map((item, index) => ({
-            id: `${session.beamId}:${start + index}`,
-            type: item.type,
-            text: item.text,
-            timestamp: session.updatedAt,
-            sender:
-              item.type === "userMessage" && session.uploaderProfileId
-                ? { identity: { type: "profile" as const, id: session.uploaderProfileId } }
-                : undefined,
-          }))
-          .toReversed(),
-        ...(nextCursor ? { nextCursor } : {}),
+        ...page,
+        previewImage: {
+          name: image.name,
+          digest: image.digest,
+          mimeType: "image/png",
+          data: image.png,
+        },
+      };
+    },
+    async resolveGatewayConversation(params) {
+      const session = await requireSession(params.hostId, params.threadId);
+      if (!session.continuation?.ready && !session.continuation?.creating) {
+        return undefined;
+      }
+      if (!params.assertCurrent) {
+        throw new Error("Beam resolution requires current request authority");
+      }
+      // An existing binding acquires a keyed read guard without reserving or writing state.
+      const guarded = await store.reserveContinuation(
+        session,
+        session.continuation.agentId,
+        params.assertCurrent,
+      );
+      return {
+        ...session.continuation,
+        assertCurrent: guarded.assertCurrent,
+        release: guarded.release,
       };
     },
     async archive(params) {
@@ -159,10 +248,34 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
     },
     async copyToGatewaySession(params) {
       const session = await requireSession(params.hostId, params.threadId);
+      if (!params.agentId || !params.assertCurrent) {
+        throw new Error("Beam continuation requires a destination and current request authority");
+      }
+      const reserved = await store.reserveContinuation(
+        session,
+        params.agentId,
+        params.assertCurrent,
+      );
+      const binding = reserved.session.continuation!;
       return {
-        displayName: session.title,
-        ...(session.sourceModel
-          ? { preferredModel: `${session.sourceModel.provider}/${session.sourceModel.model}` }
+        continuation: {
+          ...binding,
+          reservedNow: reserved.reservedNow,
+          assertCurrent: reserved.assertCurrent,
+          release: reserved.release,
+          complete: reserved.complete,
+          beginCreate: reserved.beginCreate,
+          rollback: reserved.rollback,
+          read: async (readParams) => {
+            reserved.assertCurrent();
+            return readBeamSession(reserved.session, readParams);
+          },
+        },
+        displayName: reserved.session.title,
+        ...(reserved.session.sourceModel
+          ? {
+              preferredModel: `${reserved.session.sourceModel.provider}/${reserved.session.sourceModel.model}`,
+            }
           : {}),
       };
     },

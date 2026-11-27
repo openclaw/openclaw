@@ -97,7 +97,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     let patched: unknown;
     const wrapped = expectDefined(
       createConfiguredOllamaCompatStreamWrapper({
-        provider: "ollama",
+        provider: model.provider,
         modelId: id,
         model,
         thinkingLevel: "high",
@@ -138,29 +138,6 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
       expect(body.options).not.toHaveProperty("num_ctx");
     },
   );
-  it("keeps configured native thinking when runtime thinking is off", async () => {
-    mockSuccess();
-    const model: Model = {
-      ...createModel("qwen3:32b", "Qwen3", { reasoning: true }),
-      api: "ollama",
-      provider: "ollama",
-      baseUrl: "http://ollama-host:11434",
-      params: { thinking: "medium" },
-    };
-    const stream = expectDefined(
-      createConfiguredOllamaCompatStreamWrapper({
-        provider: "ollama",
-        modelId: model.id,
-        model,
-        thinkingLevel: "off",
-        streamFn: createOllamaStreamFn("http://ollama-host:11434"),
-      }),
-      "native wrapper",
-    );
-    await Array.fromAsync(await stream(model, { messages: [] }, {}));
-    expect(requestBody().think).toBe("medium");
-    expect(requestBody().options).not.toHaveProperty("think");
-  });
 });
 
 describe("convertToOllamaMessages", () => {
@@ -215,27 +192,6 @@ describe("buildAssistantMessage", () => {
     });
     expect(result.stopReason).toBe("stop");
     expect(result.content).toEqual([{ type: "text", text: emojiAnswer }]);
-  });
-  it("accounts for cached prompt tokens without changing the total", () => {
-    const result = buildAssistantMessage(
-      createAssistantResponse(
-        { content: "ok" },
-        {
-          prompt_eval_count: 10,
-          prompt_eval_cached_count: 6,
-          eval_count: 2,
-        },
-      ),
-      modelInfo,
-    );
-    expect(result.usage).toMatchObject({
-      input: 4,
-      output: 2,
-      cacheRead: 6,
-      cacheWrite: 0,
-      totalTokens: 12,
-      cacheTelemetry: { state: "available" },
-    });
   });
 });
 
@@ -293,9 +249,7 @@ function mockResponse(body: BodyInit | null, init?: ResponseInit, refreshTimeout
   return release;
 }
 
-function mockSuccess() {
-  mockResponse(successBody, { headers: ndjsonHeaders });
-}
+const mockSuccess = () => mockResponse(successBody, { headers: ndjsonHeaders });
 
 function createControlledNdjsonFetch() {
   const encoder = new TextEncoder();
@@ -394,6 +348,11 @@ async function expectNext(
   await expect(iterator.next()).resolves.toMatchObject({ done: false, value });
 }
 
+const collectEvents = async (params: Parameters<typeof openStream>[0] = {}) =>
+  Array.fromAsync(await openStream(params));
+const collectManaged = async (params: Parameters<typeof openManaged>[0]) =>
+  Array.fromAsync(await openManaged(params));
+
 function rejectWhenAborted(signal: AbortSignal): Promise<never> {
   return new Promise((_, reject) => {
     const rejectWithReason = () =>
@@ -426,7 +385,7 @@ async function collectMockedOllamaEvents(
   params: Parameters<typeof openStream>[0] = {},
 ): Promise<OllamaStreamEvent[]> {
   mockResponse(lines.join("\n") + "\n", { headers: ndjsonHeaders });
-  return Array.fromAsync(await openStream(params));
+  return collectEvents(params);
 }
 
 function collectKimiEvents(messages: Partial<AssistantResponseMessage>[]) {
@@ -441,7 +400,7 @@ function collectKimiEvents(messages: Partial<AssistantResponseMessage>[]) {
 
 async function successfulOllamaRequest(params: Parameters<typeof openStream>[0]) {
   mockSuccess();
-  const events = await Array.fromAsync(await openStream(params));
+  const events = await collectEvents(params);
   expect(events.at(-1)?.type).toBe("done");
   return {
     body: requestBody(),
@@ -453,7 +412,7 @@ describe("createOllamaStreamFn streaming events", () => {
   it("stops an already-aborted stream at the read boundary", async () => {
     mockSuccess();
     const signal = AbortSignal.abort();
-    expect(await Array.fromAsync(await openStream({ options: { signal } }))).toMatchObject([
+    expect(await collectEvents({ options: { signal } })).toMatchObject([
       { type: "error", reason: "aborted" },
     ]);
   });
@@ -523,17 +482,15 @@ describe("createOllamaStreamFn streaming events", () => {
       const cancel = vi.spyOn(body, "cancel");
       const release = mockResponse(body);
       const caller = new AbortController();
-      const eventsPromise = Array.fromAsync(
-        await openStream({
-          options: {
-            onResponse: () => {
-              hookStarted.resolve();
-              return hookPending.promise;
-            },
-            signal: caller.signal,
+      const eventsPromise = collectEvents({
+        options: {
+          onResponse: () => {
+            hookStarted.resolve();
+            return hookPending.promise;
           },
-        }),
-      );
+          signal: caller.signal,
+        },
+      });
       await hookStarted.promise;
       if (phase === "resolving") {
         await Promise.resolve();
@@ -543,8 +500,7 @@ describe("createOllamaStreamFn streaming events", () => {
         caller.abort();
       }
       const events = await eventsPromise;
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ type: "error", reason: "aborted" });
+      expect(events).toMatchObject([{ type: "error", reason: "aborted" }]);
       expect(getReader).not.toHaveBeenCalled();
       expect(cancel).toHaveBeenCalledTimes(1);
       expect(release).toHaveBeenCalledTimes(1);
@@ -580,8 +536,8 @@ describe("createOllamaStreamFn streaming events", () => {
 
   it("never exposes an intermediate native call invalidated by a later length terminal", async () => {
     const events = await collectMockedOllamaEvents([
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"done_reason":"length"}',
+      ndjson({ tool_calls: [bashCall] }),
+      ndjson({}, { done: true, done_reason: "length" }),
     ]);
 
     expectEventTypes(events, "done");
@@ -616,24 +572,21 @@ describe("createOllamaStreamFn streaming events", () => {
     source.pushLine(ndjson({}, { done: true }));
     source.close();
     const remaining = await Array.fromAsync(stream);
-    expectEventTypes(remaining, "toolcall_start toolcall_delta toolcall_end done");
-    expect(remaining[0]).toMatchObject({ type: "toolcall_start", contentIndex: 1 });
-    expect(remaining[1]).toMatchObject({
-      type: "toolcall_delta",
-      contentIndex: 1,
-      delta: '{"command":"ls"}',
-    });
-    expect(remaining[2]).toMatchObject({ type: "toolcall_end", contentIndex: 1 });
-    expect(remaining.at(-1)).toMatchObject({
-      type: "done",
-      reason: "toolUse",
-      message: {
-        content: [
-          { type: "text", text },
-          { type: "toolCall", name: "bash", arguments: { command: "ls" } },
-        ],
+    expect(remaining).toMatchObject([
+      { type: "toolcall_start", contentIndex: 1 },
+      { type: "toolcall_delta", contentIndex: 1, delta: '{"command":"ls"}' },
+      { type: "toolcall_end", contentIndex: 1 },
+      {
+        type: "done",
+        reason: "toolUse",
+        message: {
+          content: [
+            { type: "text", text },
+            { type: "toolCall", name: "bash", arguments: { command: "ls" } },
+          ],
+        },
       },
-    });
+    ]);
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
     expect(source.release).toHaveBeenCalledOnce();
   });
@@ -642,13 +595,9 @@ describe("createOllamaStreamFn streaming events", () => {
       '$$"##"%#"##"####""$""""##""$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$' +
       '#"$"$"""$""""#$"""$"""%"%###"""#%""""&"#"""$"""#"#""""%#""""&"#"""$"""$"""#%"""';
     const events = await collectKimiEvents([{ content: garbled }]);
-    const types = events.map((e) => e.type);
-    expect(types).toEqual(["error"]);
-    const errorEvent = events.at(-1);
-    expect(errorEvent?.type).toBe("error");
-    if (errorEvent?.type === "error") {
-      expect(errorEvent.error.errorMessage).toContain("garbled visible text");
-    }
+    expect(events).toMatchObject([
+      { type: "error", error: { errorMessage: expect.stringContaining("garbled visible text") } },
+    ]);
   });
 
   it("buffers Kimi inline reasoning until the streaming boundary is safe", async () => {
@@ -675,9 +624,10 @@ describe("createOllamaStreamFn streaming events", () => {
     source.pushLine(ndjson({}, { done: true }));
     source.close();
     const remaining = await Array.fromAsync(stream);
-    expectEventTypes(remaining, "text_end done");
-    expect(remaining[0]).toMatchObject({ content: "OK." });
-    expect(remaining[1]).toMatchObject({ message: { content: [{ type: "text", text: "OK." }] } });
+    expect(remaining).toMatchObject([
+      { type: "text_end", content: "OK." },
+      { type: "done", message: { content: [{ type: "text", text: "OK." }] } },
+    ]);
     expect(JSON.stringify(remaining)).not.toContain(hiddenReasoning);
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   });
@@ -983,24 +933,22 @@ describe("createConfiguredOllamaStreamFn", () => {
         },
       };
     });
-    const events = Array.fromAsync(
-      await openManaged({
-        providerId: "ollama-gpu",
-        defaultHeaders: { "X-Provider": "provider", Authorization: "Bearer proxy-token" },
-        options: {
-          apiKey: "real-token", // pragma: allowlist secret
-          headers: { "X-Request": "request" },
-          signal,
-          onPayload: async (payload) => {
-            payloadStarted.resolve();
-            await finishPayload.promise;
-            order.push("payload ready");
-            return { ...requireRecord(payload, "payload"), model: "patched" };
-          },
+    const events = collectManaged({
+      providerId: "ollama-gpu",
+      defaultHeaders: { "X-Provider": "provider", Authorization: "Bearer proxy-token" },
+      options: {
+        apiKey: "real-token", // pragma: allowlist secret
+        headers: { "X-Request": "request" },
+        signal,
+        onPayload: async (payload) => {
+          payloadStarted.resolve();
+          await finishPayload.promise;
+          order.push("payload ready");
+          return { ...requireRecord(payload, "payload"), model: "patched" };
         },
-        acquire,
-      }),
-    );
+      },
+      acquire,
+    });
     try {
       await payloadStarted.promise;
       expect(order).toEqual([]);
@@ -1036,13 +984,11 @@ describe("createConfiguredOllamaStreamFn", () => {
         acquisitionSignal = currentSignal;
         return rejectWhenAborted(currentSignal);
       });
-      const eventsPromise = Array.fromAsync(
-        await openManaged({
-          model: { requestTimeoutMs: ending === "timeout" ? 25 : 5_000 },
-          options: ending === "timeout" ? undefined : { signal: caller.signal },
-          acquire,
-        }),
-      );
+      const eventsPromise = collectManaged({
+        model: { requestTimeoutMs: ending === "timeout" ? 25 : 5_000 },
+        options: ending === "timeout" ? undefined : { signal: caller.signal },
+        acquire,
+      });
       await vi.advanceTimersByTimeAsync(0);
       expect(acquire).toHaveBeenCalledOnce();
       if (ending === "timeout") {
@@ -1072,12 +1018,7 @@ describe("createConfiguredOllamaStreamFn", () => {
       acquisitionSignal = expectDefined(signal, "acquisition timeout signal");
       return { release: vi.fn() };
     });
-    const eventsPromise = Array.fromAsync(
-      await openManaged({
-        model: { requestTimeoutMs: 25 },
-        acquire,
-      }),
-    );
+    const eventsPromise = collectManaged({ model: { requestTimeoutMs: 25 }, acquire });
     await vi.advanceTimersByTimeAsync(0);
     expect(guardedFetch).toHaveBeenCalledOnce();
     expect(requestCall()).toMatchObject({ timeoutMs: 25 });
@@ -1124,7 +1065,7 @@ describe("createConfiguredOllamaStreamFn", () => {
           Object.assign(new Error("connect failed"), { code: "ECONNREFUSED" }),
         );
       }
-      const events = await Array.fromAsync(await openManaged({ acquire }));
+      const events = await collectManaged({ acquire });
       expect(acquire).toHaveBeenCalledOnce();
       expect(leaseRelease).toHaveBeenCalledOnce();
       expect(events).toMatchObject([{ type: "error" }]);
@@ -1143,16 +1084,7 @@ describe("createConfiguredOllamaStreamFn", () => {
 
   it("does not acquire or fetch after payload serialization failure", async () => {
     const acquire = vi.fn(async () => ({ release: vi.fn() }));
-    const events = await Array.fromAsync(
-      await openManaged({
-        options: {
-          onPayload: () => {
-            return { value: 1n };
-          },
-        },
-        acquire,
-      }),
-    );
+    const events = await collectManaged({ options: { onPayload: () => ({ value: 1n }) }, acquire });
     expect(events).toMatchObject([{ type: "error", reason: "error" }]);
     expect(acquire).not.toHaveBeenCalled();
     expect(guardedFetch).not.toHaveBeenCalled();

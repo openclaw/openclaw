@@ -1,11 +1,16 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createSignal, createUniqueId, lazy, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Kbd } from "../../../components/solid/kbd.tsx";
+import { Kbd, KeyboardShortcut, ShortcutHint } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
+import {
+  formatKeyboardShortcutParts,
+  isApplePlatform,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../../../lib/keyboard-shortcut-contract.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
@@ -20,6 +25,12 @@ registerEnglishCatalog(registerSessionNavigationEnglish);
 const MicrophoneMenu = lazy(() => import("./chat-composer-microphone-menu.tsx"), {
   export: "MicrophoneMenu",
 });
+
+// The device affordance and microphone hint share one pointer-intent window.
+const MICROPHONE_HOVER_DELAY_MS = 250;
+const microphoneHoverStyle = {
+  "--chat-microphone-reveal-delay": `${MICROPHONE_HOVER_DELAY_MS}ms`,
+};
 
 type ChatRunControlsProps = ReturnType<typeof createChatComposerContext>["runControlsProps"];
 
@@ -126,6 +137,10 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
             props.onOpenTalkSettings?.();
           } else if (item.id === "capability:dictation") {
             props.onOpenDictationSettings?.();
+          } else if (item.id === "speech-api-key") {
+            props.onConfigureApiKey?.(undefined);
+          } else if (item.id.startsWith("api-key:")) {
+            props.onConfigureApiKey?.(item.id.slice("api-key:".length));
           }
         }}
       />
@@ -169,8 +184,11 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return (
-    <span class={["chat-talk-control", { "chat-talk-control--holding": holding() }]}>
-      <openclaw-tooltip prop:content={tooltip()}>
+    <span
+      class={["chat-talk-control", { "chat-talk-control--holding": holding() }]}
+      style={microphoneHoverStyle}
+    >
+      <openclaw-tooltip prop:content={tooltip()} prop:delay={MICROPHONE_HOVER_DELAY_MS}>
         <button
           class={[
             "chat-send-btn",
@@ -285,12 +303,19 @@ export function renderChatAbortActionSolid(
   return (
     <>
       {props.canAbort ? (
-        <openclaw-tooltip prop:content={t("chat.runControls.stop")}>
+        <openclaw-tooltip>
+          <span slot="content">
+            <ShortcutHint
+              label={t("chat.runControls.stop")}
+              combo={KEYBOARD_SHORTCUT_COMBOS.escape}
+            />
+          </span>
           <button
             class="chat-send-btn chat-send-btn--stop"
             ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
             onClick={() => props.onAbort?.()}
-            aria-label={t("chat.runControls.stopGenerating")}
+            disabled={!props.onAbort}
+            aria-label={t("chat.runControls.stop")}
           >
             <Icon name="stop" />
             <span class="agent-chat__control-label">{t("chat.runControls.stop")}</span>
@@ -337,15 +362,12 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
   const hasSendableContent = () =>
     hasComposedContent() && props.canSend && !props.sending && !sendDisabledReason();
   const showShortcutTooltip = () =>
-    !isMobileBrowserPlatform() &&
-    !props.preparingAttachments &&
-    sendStatus() == null &&
-    alternateAvailable();
+    !isMobileBrowserPlatform() && !props.preparingAttachments && sendStatus() == null;
   const SendAction = () => (
     <openclaw-tooltip
       prop:content={
         props.preparingAttachments
-          ? t("chat.composer.preparingAttachments")
+          ? (props.videoPreparationStatus?.message ?? t("chat.composer.preparingAttachments"))
           : showShortcutTooltip()
             ? ""
             : (sendStatus() ?? label())
@@ -353,9 +375,27 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     >
       <Show when={showShortcutTooltip()}>
         <span slot="content">
-          {label()} <Kbd keys="⏎" inline />
-          {" · "}
-          {alternateLabel()} <Kbd keys={t("chat.sendShortcutModifierEnter")} inline />
+          {label()}{" "}
+          <KeyboardShortcut
+            combo={
+              props.sendShortcut === "modifier-enter"
+                ? KEYBOARD_SHORTCUT_COMBOS.modifiedEnter
+                : KEYBOARD_SHORTCUT_COMBOS.sendMessage
+            }
+            inline
+          />
+          <Show when={alternateAvailable()}>
+            {" · "}
+            {alternateLabel()}{" "}
+            <Kbd
+              keys={
+                isApplePlatform()
+                  ? t("chat.sendShortcutModifierEnter")
+                  : formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, false)
+              }
+              inline
+            />
+          </Show>
         </span>
       </Show>
       <button
@@ -364,7 +404,11 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
         onClick={(event) => props.onSend(event)}
         disabled={!hasSendableContent()}
         aria-label={sendStatus() ?? description()}
-        aria-busy={sendBusy() || props.preparingAttachments ? "true" : "false"}
+        aria-busy={
+          sendBusy() || (props.videoPreparationStatus?.busy ?? props.preparingAttachments)
+            ? "true"
+            : "false"
+        }
       >
         {sendBusy() ? <span class="btn__spinner" aria-hidden="true" /> : <Icon name="arrowUp" />}
         <span class="agent-chat__control-label">{label()}</span>
@@ -445,8 +489,11 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     <>
       {props.voiceActive && props.onToggleVoice ? (
         <>
-          <span class="chat-talk-control chat-talk-control--active">
-            <openclaw-tooltip prop:content={t("chat.composer.stopVoiceInput")}>
+          <span class="chat-talk-control chat-talk-control--active" style={microphoneHoverStyle}>
+            <openclaw-tooltip
+              prop:content={t("chat.composer.stopVoiceInput")}
+              prop:delay={MICROPHONE_HOVER_DELAY_MS}
+            >
               <button
                 class={[
                   "chat-send-btn chat-send-btn--voice-live",

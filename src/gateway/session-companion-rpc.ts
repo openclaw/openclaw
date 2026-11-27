@@ -13,7 +13,12 @@ import {
   type SessionSourceAssertion,
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import {
+  resolveOperatorRolePolicy,
+  resolveGatewayOperatorRoleActor,
+} from "./operator-role-policy.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
@@ -58,11 +63,26 @@ function resolveCompanionTarget(
   };
 }
 
+/**
+ * Side chat history is private to the authenticated person asking. Connections
+ * without a personal identity (for example, a shared Gateway token) are one
+ * principal, so they keep sharing a single thread per session.
+ */
+function resolveSessionCompanionOwnerId(
+  client: Parameters<GatewayRequestHandlers[string]>[0]["client"],
+): string {
+  const actor = resolveGatewayOperatorRoleActor(client);
+  const profileId =
+    client?.authenticatedUserProfile?.profileId ??
+    (actor?.kind === "operator" ? actor.profileId : undefined);
+  return profileId ? `profile:${profileId}` : "shared";
+}
+
 function companionTargetIsVisible(
   client: Parameters<GatewayRequestHandlers[string]>[0]["client"],
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
   prepared: {
-    target: Pick<SessionSharingTarget, "storeKey" | "entry"> | null;
+    target: SessionSharingTarget | null;
     membership: ReadonlySet<string>;
     profiles?: PreparedSessionSharingProfiles;
   },
@@ -73,7 +93,10 @@ function companionTargetIsVisible(
   const cfg = context.getRuntimeConfig();
   const sharingTarget = prepared.target;
   if (!sharingTarget) {
-    return cfg.gateway?.roles === undefined;
+    return !(
+      isNamedOperatorRoleEnforcementEnabled(cfg) ||
+      resolveOperatorRolePolicy(client, cfg) !== undefined
+    );
   }
   const sharing = prepareProjectedSessionSharing({
     client,
@@ -81,7 +104,7 @@ function companionTargetIsVisible(
     profiles: prepared.profiles,
     isMember: (_target, id) => prepared.membership.has(id),
   });
-  return sharing.entryFilter?.(sharingTarget.storeKey, sharingTarget.entry) !== false;
+  return sharing.canReadTarget(sharingTarget);
 }
 
 export const sessionCompanionHandlers: GatewayRequestHandlers = {
@@ -156,12 +179,13 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       );
       let releaseSharing: (() => void) | undefined;
       let capturedOperator:
-        | Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
+        | Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>
         | undefined;
       let retainedSource: PreparedSessionSourceAuthority | undefined;
       try {
         const profiles = await prepareSessionSharingProfiles(client);
         let readSharingFacts: () => PreparedSessionMutationFacts;
+        let followRegistration: Parameters<typeof companion.ask>[0]["followRegistration"];
         if (actorFacts) {
           readSharingFacts = actorFacts.readCurrent;
         } else {
@@ -171,6 +195,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
             allowMissing: true,
           });
           releaseSharing = preparedFacts.release;
+          followRegistration = preparedFacts.followRegistration;
           readSharingFacts = () => preparedFacts.readCurrent(context.getRuntimeConfig());
         }
         const initialSharingFacts = readSharingFacts();
@@ -258,7 +283,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           retainedSource = await assertSourceCurrent.prepareSessionSource?.();
           retainedSource?.assertCurrent();
         }
-        capturedOperator = await captureGatewayOperatorRunAuthority({
+        capturedOperator = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority,
@@ -289,18 +314,20 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           sessionKey: target.sessionKey,
           agentId: target.agentId,
           question,
+          askId: params.askId,
           ...(selectionContext ? { selectionContext } : {}),
           ...(originalAttachments ? { attachments: originalAttachments } : {}),
           ...(selection ? { selection } : {}),
           connId,
+          ownerId: resolveSessionCompanionOwnerId(client),
           assertSourceCurrent,
+          followRegistration,
           ...(assertInputCurrent ? { assertInputCurrent } : {}),
           ...(capturedOperator ? { operatorAuthority: capturedOperator.authority } : {}),
           ...(signal ? { signal } : {}),
         });
         retainedSource?.assertCurrent();
         assertSourceCurrent();
-        capturedOperator?.authority.assertCurrent();
         respond(true, result);
       } catch (error) {
         if (error instanceof SessionMutationAuthorizationChangedError) {
@@ -331,7 +358,8 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
                   retryable:
                     error.reason === "rate-limited" ||
                     error.reason === "context-unavailable" ||
-                    error.reason === "timeout",
+                    error.reason === "timeout" ||
+                    error.reason === "stopped",
                   ...(error.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}),
                 },
           ),
@@ -375,7 +403,11 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         }
         respond(
           true,
-          target.companion.state({ agentId: target.agentId, sessionKey: target.sessionKey }),
+          target.companion.state({
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+            ownerId: resolveSessionCompanionOwnerId(client),
+          }),
         );
       } finally {
         facts.release();
@@ -385,17 +417,28 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
   "sessions.companion.reset": defineValidatedGatewayHandler(
     "sessions.companion.reset",
     validateSessionsCompanionResetParams,
-    ({ params, respond, context }) => {
+    ({ params, respond, client, context }) => {
       const { sessionKey, agentId } = params;
       const target = resolveCompanionTarget({ sessionKey, agentId }, context);
       if (!target.ok) {
         respond(false, undefined, target.error);
         return;
       }
-      target.companion.reset({
+      // Clearing affects only the caller's own thread.
+      const reset = target.companion.reset({
         agentId: target.agentId,
         sessionKey: target.sessionKey,
+        ownerId: resolveSessionCompanionOwnerId(client),
+        ...(params.cancelAskId ? { cancelAskId: params.cancelAskId } : {}),
       });
+      if (params.cancelAskId && !reset) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "This side chat question is not running."),
+        );
+        return;
+      }
       respond(true, { ok: true });
     },
   ),

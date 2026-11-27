@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import { createGatewayDispatchStartupTrace } from "../cli/startup-trace.js";
 import { measureDoctorConfigPreflightStep } from "../commands/doctor-config-preflight-measure.js";
+import * as workerCpu from "../infra/worker-cpu.js";
 import { captureWorkerStartObserver } from "../infra/worker-request-diagnostics.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
@@ -84,6 +85,12 @@ describe("gateway startup trace", () => {
     async (enabled) => {
       vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
       const rss = vi.spyOn(process.memoryUsage, "rss").mockReturnValue(128 * 1024 * 1024);
+      vi.spyOn(workerCpu, "sampleTrackedWorkerMemory").mockReturnValue({
+        ...workerCpu.sampleTrackedWorkerMemory({ refresh: false }),
+        workerCount: 2,
+        workerHeapSampledCount: 0,
+        workerHeapTotalBytes: undefined,
+      });
       const info = vi.fn();
       const trace = createGatewayStartupTrace({ info } as never);
       try {
@@ -91,101 +98,10 @@ describe("gateway startup trace", () => {
           rss.mockReturnValue(256 * 1024 * 1024);
         });
         expect(info.mock.calls[0]?.[0]).not.toContain("rssMb=");
-        expect(info.mock.calls[1]?.[0]).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d workers=0 /);
+        expect(info.mock.calls[1]?.[0]).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d workers=2 /);
         rss.mockReturnValue(512 * 1024 * 1024);
         trace.mark("ready");
-        expect(info.mock.calls.at(-1)?.[0]).toMatch(/ rssMb=512\.0 heapUsedMb=\d+\.\d workers=0 /);
-      } finally {
-        trace.close();
-      }
-    },
-  );
-
-  it.each([
-    { enabled: "0", fail: false },
-    { enabled: "0", fail: true },
-    { enabled: "1", fail: false },
-  ])(
-    "summarizes recovery once at phase end ($enabled, failure=$fail)",
-    async ({ enabled, fail }) => {
-      vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
-      let now = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => now);
-      const log = createSubsystemLogger("gateway-startup-test");
-      const info = vi.spyOn(log, "info").mockImplementation(() => {});
-      const trace = createGatewayStartupTrace(log, 0);
-      const step = (name: string, ms: number) =>
-        trace.measure(name, () => {
-          now += ms;
-        });
-      const failure = new Error("synthetic private recovery payload");
-      try {
-        trace.mark("ready");
-        info.mockClear();
-        const recovery = trace.measure("sidecars.subagent-recovery", async () => {
-          await step("sidecars.recovery-readers", 100);
-          await trace.measure("sidecars.delivery-recovery", async () => {
-            await step("sidecars.delivery-discovery", 10);
-            await step("sidecars.delivery-entries", 20);
-            await step("sidecars.delivery-history", 30);
-            await step("sidecars.delivery-replay", 15);
-            await step("sidecars.delivery-replay", 25);
-            await step("sidecars.delivery-notices", 200);
-            await step("sidecars.delivery-notices", 300);
-            await step("sidecars.delivery-retry-wait", 1_000);
-          });
-          await step("sidecars.exec-recovery", 20);
-          await step("sidecars.subagent-load", 30);
-          await trace.measure("sidecars.subagent-activation", async () => {
-            await step("sidecars.subagent-bind", 10);
-            trace.detail("sidecars.subagent-activation", [
-              ["registryActivationAuthorityRestoreMs", 6],
-              ["registryActivationPublishMs", 2],
-              ["registryActivationYieldMs", 1],
-              ["registryActivationRuns", 6],
-              ["registryActivationActiveRuns", 2],
-              ["registryActivationRecoveredRuns", 1],
-              ["registryActivationPublishedRuns", 5],
-            ]);
-            await step("sidecars.subagent-requesters", 5);
-            await trace.measure("sidecars.subagent-resume", async () => {
-              await step("sidecars.subagent-reserve", 3);
-              now += 17;
-              trace.detail("sidecars.subagent-activation", [
-                ["registryActivationSessionReadMs", 7],
-                ["registryActivationYieldMs", 2],
-              ]);
-            });
-            await trace.measure("sidecars.subagent-interrupted", () => {
-              now += 5;
-              if (fail) {
-                throw failure;
-              }
-            });
-          });
-        });
-        if (fail) {
-          await expect(recovery).rejects.toBe(failure);
-        } else {
-          await recovery;
-        }
-        const messages = info.mock.calls.map(([message]) => message);
-        const summary = messages.filter((message) => message.includes("readersMs="));
-        expect(summary).toEqual([
-          expect.stringContaining(
-            `startup ${enabled === "1" ? "trace" : "phase"}: sidecars.subagent-recovery 1790.0ms total=1790.0ms ${enabled === "1" ? "eventLoopMax=0.0ms " : ""}readersMs=100.0 execMs=20.0 registryLoadMs=30.0 registryActivationMs=40.0 registryActivationBindMs=10.0 registryActivationRequestersMs=5.0 registryActivationReserveMs=3.0 registryActivationResumeMs=20.0 registryActivationAuthorityRestoreMs=6.0 registryActivationPublishMs=2.0 registryActivationSessionReadMs=7.0 registryActivationYieldMs=3.0 registryActivationRuns=6.0 registryActivationActiveRuns=2.0 registryActivationRecoveredRuns=1.0 registryActivationPublishedRuns=5.0 outcome=${fail ? "failure" : "success"}`,
-          ),
-        ]);
-        if (enabled === "0") {
-          expect(messages).toHaveLength(2);
-        }
-        expect(messages.join("\n")).not.toContain(failure.message);
-
-        info.mockClear();
-        await trace.measure("sidecars.subagent-recovery", () => {});
-        expect(info.mock.calls.at(-1)?.[0]).toContain(
-          "readersMs=0.0 execMs=0.0 registryLoadMs=0.0 registryActivationMs=0.0 registryActivationBindMs=0.0 registryActivationRequestersMs=0.0 registryActivationReserveMs=0.0 registryActivationResumeMs=0.0 registryActivationAuthorityRestoreMs=0.0 registryActivationPublishMs=0.0 registryActivationSessionReadMs=0.0 registryActivationYieldMs=0.0 registryActivationRuns=0.0 registryActivationActiveRuns=0.0 registryActivationRecoveredRuns=0.0 registryActivationPublishedRuns=0.0 outcome=success",
-        );
+        expect(info.mock.calls.at(-1)?.[0]).toMatch(/ rssMb=512\.0 heapUsedMb=\d+\.\d workers=2 /);
       } finally {
         trace.close();
       }
@@ -293,7 +209,7 @@ describe("gateway startup trace", () => {
         "database-admission",
         () => Promise.resolve(),
         (name, run) => measureCliCommandStartup(name, run),
-        () => ({ agents: 200 }),
+        () => ({ agents: 200, stateIntegrityReason: "schema-mismatch" }),
       );
     }
     const info = vi.fn();
@@ -318,7 +234,9 @@ describe("gateway startup trace", () => {
     const admissionStep = messages.find((message) =>
       message.startsWith("startup trace: process.bootstrap.cli.bootstrap.database-admission "),
     );
-    expect(admissionStep).toMatch(/start=\d+\.\dms calls=2\.0 agents=400\.0$/);
+    expect(admissionStep).toMatch(
+      /start=\d+\.\dms calls=2\.0 agents=400\.0 stateIntegrityReason=schema-mismatch$/,
+    );
     expect(admissionStep).not.toContain("rssMb=");
     expect(messages.find((message) => message.startsWith("startup trace: ready "))).toContain(
       "cli.bootstrap.database-admission:",

@@ -22,14 +22,15 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
-import * as embeddedStateLock from "../infra/embedded-state-lock.js";
-import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
 import {
   sanitizeHostExecEnv,
   withHostExecInheritedEnvOmitted,
 } from "../infra/host-env-security.js";
+import * as processSignalBridge from "../infra/process-signal-bridge.js";
+import { captureNativeSignalBridge } from "../infra/process-signal-bridge.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -74,9 +75,9 @@ describe("agent exec stored auth", () => {
         started.resolve();
         return pendingRows.promise;
       });
-      const createSignalBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
+      const createSignalBridge = processSignalBridge.createProcessSignalBridge;
       const signals = captureNativeSignalBridge(createSignalBridge);
-      vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
+      vi.spyOn(processSignalBridge, "createProcessSignalBridge").mockImplementationOnce(
         signals.create,
       );
       const runAgent = vi.fn(async () => success());
@@ -111,13 +112,10 @@ describe("agent exec stored auth", () => {
     const codexHome = tempDirs.make("openclaw-agent-exec-codex-home-");
     const normalStateDir = tempDirs.make("openclaw-agent-exec-hidden-auth-");
     const agentDir = path.join(normalStateDir, "agents", "main", "agent");
-    await fs.writeFile(
-      path.join(codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: { access_token: "test-access", refresh_token: "test-refresh" },
-      }),
-    );
+    await writeFixtureJson(path.join(codexHome, "auth.json"), {
+      auth_mode: "chatgpt",
+      tokens: { access_token: "test-access", refresh_token: "test-refresh" },
+    });
     await withEnvAsync(
       {
         CODEX_HOME: codexHome,
@@ -193,16 +191,13 @@ describe("agent exec stored auth", () => {
     const customAgentDir = path.join(stateDir, "custom-home");
     await fs.mkdir(customAgentDir);
     const config = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(
-      config,
-      JSON.stringify({
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "beta" } },
-          entries: { alpha: { agentDir: customAgentDir }, beta: {} },
-        },
-      }),
-    );
+    await writeFixtureJson(config, {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: { alpha: { agentDir: customAgentDir }, beta: {} },
+      },
+    });
     saveAuthProfileStore(stored, customAgentDir);
     const result = await run(
       async (options) => {

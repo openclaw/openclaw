@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { prepareCliRunModelAuthority } from "../agents/cli-runner/run-admission.js";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
@@ -16,6 +16,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { createSessionCompanion } from "./session-companion.js";
+import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 const runEmbeddedAgent = vi.hoisted(() =>
   vi.fn<(params: RunEmbeddedAgentInternalParams) => Promise<ReturnType<typeof completion>>>(),
@@ -76,7 +77,8 @@ vi.mock("../agents/sessions/index.js", () => ({
     }),
   },
 }));
-vi.mock("../agents/simple-completion-runtime.js", () => ({
+// mock-isolation: Keep synthetic companion selection independent of installed providers and auth state.
+vi.mock("../agents/simple-completion-selection.js", () => ({
   resolveSimpleCompletionSelectionForAgent: resolveSelection,
 }));
 vi.mock("../agents/cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext }));
@@ -142,6 +144,7 @@ const question = {
   sessionKey: "agent:main:main",
   question: "What is it doing?",
   connId: "conn-1",
+  ownerId: "shared",
 };
 
 function expectAnswer(respond: ReturnType<typeof vi.fn>, answer: unknown = expect.any(String)) {
@@ -177,10 +180,9 @@ function queueSeed() {
 }
 
 function operatorFor(cfg: OpenClawConfig, allow: string[], deny?: string[]) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId: "companion-reader",
     scopes: ["operator.read"],
-    assertCurrent() {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
       policy: { sourceAgent: "main", allow, ...(deny ? { deny } : {}) },
@@ -214,7 +216,7 @@ async function invokeAsk(
   const respond = vi.fn();
   await sessionCompanionHandlers["sessions.companion.ask"]!({
     params: { sessionKey: question.sessionKey, ...params },
-    client: { connId },
+    client: { ...sharingPolicyClient({ scopes: [] }), connId },
     context: {
       sessionCompanion: companion,
       getRuntimeConfig: () => cfg,

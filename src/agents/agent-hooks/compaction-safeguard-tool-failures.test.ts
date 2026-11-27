@@ -3,6 +3,8 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { jsonResult } from "../tools/common.js";
 import {
+  collectToolFailureFact,
+  collectToolFailuresFromFacts,
   collectToolFailures,
   formatToolFailuresSection,
 } from "./compaction-safeguard-tool-failures.js";
@@ -27,6 +29,19 @@ describe("compaction-safeguard tool failures", () => {
     timestamp: 1,
     isError: true,
     details,
+  });
+  it("deduplicates after range selection and excludes accepted spawns before claiming ids", () => {
+    const facts = [
+      failure("same", "older"),
+      failure("same", "accepted", acceptedDetails, "sessions_spawn"),
+      failure("same", "selected"),
+      failure("same", "duplicate"),
+    ].map(collectToolFailureFact);
+    expect(collectToolFailuresFromFacts(facts).map((fact) => fact.summary)).toEqual(["older"]);
+    expect(collectToolFailuresFromFacts(facts.slice(1)).map((fact) => fact.summary)).toEqual([
+      "selected",
+    ]);
+    expect(facts[1]).toBeUndefined();
   });
   it.each([
     {

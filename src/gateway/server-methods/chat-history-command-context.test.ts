@@ -95,7 +95,7 @@ it.each([
     const completed = { toolCallId: "command", phase: "end", status: "completed" };
     const outcome = paired
       ? completed
-      : { toolCallId: "command", phase: "end", summary: "Outcome unknown" };
+      : { toolCallId: "command", phase: "end", unpairedCall: true };
     for (const activity of [page.activity, delta.activity]) {
       expect(activity).toMatchObject([
         { messageId: "command-call", items: [outcome] },
@@ -103,6 +103,7 @@ it.each([
       ]);
       if (!paired) {
         expect(activity?.[0]?.items[0]).not.toHaveProperty("status");
+        expect(activity?.[0]?.items[0]).not.toHaveProperty("summary");
       }
     }
     for (const messages of [page.messages, delta.messages.map((envelope) => envelope.message)]) {

@@ -1,5 +1,11 @@
 # iOS app
 
+## Build, test and prove
+
+- Run, drive, test and prove changes on the simulator with the [iOS E2E skill](../../.agents/skills/ios-e2e/SKILL.md).
+- Swift checks: `scripts/lint-swift.sh ios`; `scripts/format-swift.sh ios`. Changed non-Swift files: `node scripts/run-format.mts --check --no-error-on-unmatched-pattern -- <files>` (#197424 failed CI on a TypeScript format change).
+- Strings changed, including a `String(localized:)` reused from a new file: `pnpm native:i18n:baseline`, then `pnpm native:i18n:verify` prints `changed=false` (#197846 failed `native-i18n` on a reused string). Commit only `apps/.i18n/native-source.json`; the locale refresh regenerates `Localizable.xcstrings` and locale JSON after merge (#197424).
+
 ## UI / Typography
 
 - iOS SwiftUI text should use branded typography helpers, not bare system fonts. Use `OpenClawType` in `apps/ios/Sources/**`, `OpenClawChatTypography` in shared chat UI, `WatchClawType` in watch UI, and `OpenClawActivityType` in Live Activity UI.
@@ -7,7 +13,16 @@
 - Avoid shorthand controls like `Button("Title")`, `Link("Title", ...)`, `TextField("Placeholder", ...)`, and `SecureField("Placeholder", ...)` when they make typography or placeholder styling implicit. Prefer explicit label builders with branded `Text`/`Label`.
 - Secure-field placeholders need both branded visual styling and accessibility semantics. If using an overlay placeholder, keep the actual field semantically named with `.accessibilityLabel(...)` and hide the decorative placeholder from accessibility.
 - System font modifiers are acceptable for SF Symbol `Image(systemName:)` sizing, not for user-visible text unless a platform control makes branded typography impossible. If an exception is intentional, keep it narrow and explain why.
-- When touching iOS text surfaces, update/keep `apps/ios/Tests/OpenClawTypographyTests.swift` so bare text/control regressions are caught, then run the focused typography test.
+- The typography scanner in `apps/ios/Tests/OpenClawTypographyTests.swift` enforces this rule across iOS sources (no per-surface pins to update); when touching iOS text surfaces, run the focused typography test.
+
+## Concurrency
+
+- Callbacks handed to Apple or third-party APIs must be `@Sendable` unless the API guarantees main-queue delivery. In `@MainActor` code, a closure literal passed to a callback parameter that is not `@Sendable` inherits main-actor isolation, and Swift 6 traps when the API calls it on another queue (the speech-permission crash fixed in #196822). Write `{ @Sendable ... in }` or build the closure in a `nonisolated` function, and hop back with `Task { @MainActor in ... }`. The SDK header states whether a callback is `NS_SWIFT_SENDABLE` and which queue calls it.
+- Permission prompts go through `PermissionRequestBridge`: it checks the request is still current right before the OS prompt starts, resumes exactly once, and resumes on cancel. Apple's async permission APIs hop off the main actor before starting the prompt, which breaks that check.
+
+## Secrets
+
+- Tokens, passwords, setup/bootstrap codes and keys go through `GenericPasswordKeychainStore` (or the file-protected device credential store in OpenClawKit), never `UserDefaults`, `@AppStorage`, `@SceneStorage` or plain files. Hold a secret typed into a field in `@State` until it is saved to the Keychain (the setup-code leak fixed in #197049).
 
 ## Licenses Screen
 

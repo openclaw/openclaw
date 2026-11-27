@@ -80,7 +80,7 @@ describe("Buzz live directory", () => {
     relayMocks.connect.mockResolvedValue();
     relayMocks.send.mockResolvedValue();
     relayMocks.auth.mockResolvedValue("ok");
-    relayMocks.roomMetadataEvents = [room("Engineering")];
+    relayMocks.roomMetadataEvents = [room("Cafe\u0301")];
     relayMocks.profileEvents = [profile(ALICE_PROFILE)];
     relayMocks.membershipEvents = [
       event({
@@ -122,8 +122,8 @@ describe("Buzz live directory", () => {
       limit: 1,
     });
     expect(peers.map((entry) => entry.id)).toEqual([MEMBER_PUBLIC_KEY]);
-    await expect(listBuzzDirectoryGroupsLive(params)).resolves.toEqual([
-      expect.objectContaining({ kind: "group", id: `buzz:${ROOM_ID}`, name: "Engineering" }),
+    await expect(listBuzzDirectoryGroupsLive({ ...params, query: "CAFÉ" })).resolves.toEqual([
+      expect.objectContaining({ kind: "group", id: `buzz:${ROOM_ID}`, name: "Cafe\u0301" }),
     ]);
     const members = await listBuzzDirectoryGroupMembers({
       ...params,

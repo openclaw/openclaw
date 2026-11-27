@@ -94,7 +94,7 @@ export function deferSessionControllerClaimBeforeExecution(
     claim.released ||
     claim.releaseRequested ||
     claim.mailbox.claim !== claim ||
-    !claim.sources.length ||
+    (!claim.sources.length && claim.operation !== undefined) ||
     claim.custody.completed ||
     claim.inputs.some((input) => input.injection)
   ) {
@@ -128,19 +128,8 @@ export function releaseSessionControllerClaim(claim: SessionControllerMailboxCla
     mailbox.clearing = true;
     try {
       for (const input of claim.inputs) {
-        let authorityCurrent = true;
-        if (claim.retryBeforeExecution) {
-          try {
-            input.source?.operatorAuthority?.assertCurrent();
-            input.sourceAdapter?.authority?.assertCurrent();
-          } catch {
-            authorityCurrent = false;
-          }
-        }
         const retry =
-          authorityCurrent &&
-          input.source &&
-          !isFollowupRunAborted(input.source) &&
+          (!input.source || !isFollowupRunAborted(input.source)) &&
           input.claim === claim &&
           input.phase === "claimed" &&
           claim.retryBeforeExecution &&

@@ -118,6 +118,7 @@ it.each([
       }
       if (replacement === "route") {
         await router.navigate("advanced", context);
+        await vi.dynamicImportSettled();
         const advanced = await waitForSolid(() => {
           expect(view.querySelector(".content-header--settings .page-title")?.textContent).toBe(
             "Advanced",

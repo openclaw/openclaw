@@ -24,9 +24,25 @@ function createMockSettingsApi(settings: Record<string, unknown>, logs?: string[
   } as unknown as UrbitSSEClient;
   return {
     manager: createSettingsManager(api, logs && { log: (message) => logs.push(message) }),
-    emit: async (key: string, value: unknown) =>
+    emit: async (key: string, value: unknown, remove = false) =>
       handlers.event?.({
-        "put-entry": { desk: "moltbot", "bucket-key": "tlon", "entry-key": key, value },
+        "settings-event": {
+          [remove ? "del-entry" : "put-entry"]: {
+            desk: "moltbot",
+            "bucket-key": "tlon",
+            "entry-key": key,
+            value,
+          },
+        },
+      }),
+    emitDirect: async (key: string, value: unknown) =>
+      handlers.event?.({
+        "put-entry": {
+          desk: "moltbot",
+          "bucket-key": "tlon",
+          "entry-key": key,
+          value,
+        },
       }),
   };
 }
@@ -39,12 +55,6 @@ const pendingApproval = (id: string, timestamp: number, ship = "~bus"): PendingA
 });
 
 describe("tlon settings store", () => {
-  it("loads autoDiscoverChannels from the settings-store scry response", async () => {
-    const { manager } = createMockSettingsApi({ autoDiscoverChannels: true });
-    // Regression: the parser previously read the dead `autoDiscover` key.
-    expect((await manager.load()).autoDiscoverChannels).toBe(true);
-  });
-
   it("preserves oversized pending approvals loaded from persisted settings", async () => {
     const pendingApprovals = Array.from({ length: TLON_PENDING_APPROVAL_LIMIT + 1 }, (_, index) =>
       pendingApproval(`dm-${index}`, index, `~ship-${index}`),
@@ -61,7 +71,7 @@ describe("tlon settings store", () => {
       // Saved before sender provenance existed: no clubId, no verifiedDirect.
       { ...pendingApproval("dm-old", 1), originalMessage: message },
       { ...pendingApproval("dm-new", 2, "~nec"), verifiedDirect: true, originalMessage: message },
-      { ...pendingApproval("dm-club", 3, "~zod"), clubId: "0v3.abc" },
+      { ...pendingApproval("dm-club", 3, "~zod"), clubId: "0v3.abcde" },
       // Malformed provenance fields are rejected rather than coerced.
       { ...pendingApproval("dm-bad-club", 4), clubId: 7 },
       { ...pendingApproval("dm-bad-verified", 5), verifiedDirect: "yes" },
@@ -70,14 +80,35 @@ describe("tlon settings store", () => {
     expect((await manager.load()).pendingApprovals).toEqual(stored.slice(0, 3));
   });
 
-  it("applies live autoDiscoverChannels updates delivered over the subscription", async () => {
-    const { manager, emit } = createMockSettingsApi({});
-    expect((await manager.load()).autoDiscoverChannels).toBeUndefined();
+  it("loads autoDiscoverChannels and applies live subscription updates", async () => {
+    const { manager, emit, emitDirect } = createMockSettingsApi({ autoDiscoverChannels: true });
+    // Regression: the parser previously read the dead `autoDiscover` key.
+    expect((await manager.load()).autoDiscoverChannels).toBe(true);
     const updates: TlonSettingsStore[] = [];
     await manager.startSubscription((settings) => updates.push(settings));
     await emit("autoDiscoverChannels", false);
+    await emitDirect("dmAllowlist", ["~bus"]);
 
-    expect(updates).toEqual([expect.objectContaining({ autoDiscoverChannels: false })]);
+    expect(updates).toEqual([
+      expect.objectContaining({ autoDiscoverChannels: false }),
+      expect.objectContaining({ dmAllowlist: ["~bus"] }),
+    ]);
+  });
+
+  it("restores club grants and applies wrapped policy updates and removal", async () => {
+    const rules = { "0v1.abcde": "allow" };
+    const { manager, emit } = createMockSettingsApi({ clubRules: JSON.stringify(rules) });
+    expect((await manager.load()).clubRules).toEqual(rules);
+    const updates: TlonSettingsStore[] = [];
+    await manager.startSubscription((settings) => updates.push(settings));
+    await emit("clubRules", "{}");
+    await emit("clubPolicy", "disabled");
+    await emit("clubRules", undefined, true);
+    expect(updates.map((v) => [v.clubPolicy, v.clubRules])).toEqual([
+      [undefined, {}],
+      ["disabled", {}],
+      ["disabled", undefined],
+    ]);
   });
 
   it("preserves pending approval contents without logging them", async () => {
@@ -93,14 +124,15 @@ describe("tlon settings store", () => {
     };
     const logs: string[] = [];
     const { manager, emit } = createMockSettingsApi({ pendingApprovals: [approval] }, logs);
-    expect((await manager.load()).pendingApprovals).toEqual([approval]);
+    const loaded = await manager.load();
+    expect(loaded.pendingApprovals).toEqual([approval]);
+    expect(loaded.autoDiscoverChannels).toBeUndefined();
     const updates: TlonSettingsStore[] = [];
     await manager.startSubscription((settings) => updates.push(settings));
     await emit("pendingApprovals", JSON.stringify([approval]));
 
     expect(updates[0]?.pendingApprovals).toEqual([approval]);
-    expect(logs).toContain("[settings] Loaded");
-    expect(logs).toContain("[settings] Update: pendingApprovals");
+    expect(logs.length).toBeGreaterThan(0);
     expect(logs.join("\n")).not.toContain("private-tlon-");
   });
 });

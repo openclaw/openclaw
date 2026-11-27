@@ -15,21 +15,29 @@ vi.mock("../../lib/sessions/session-message-subscriptions.runtime.ts", async (im
   return importOriginal();
 });
 
-it("loads subscription code during route loading without waiting or opening an observer", async () => {
+it("preloads subscriptions without waiting or opening observers", async () => {
   const { context, request } = createSessionRouteContext();
-  const loads = pages.map(async (page) => {
+  const load = async (page: (typeof pages)[number]) => {
     const location = { pathname: `/${page.id}/roboclaw/main`, search: "", hash: "" };
     return page.loader!(
       context,
       createRouteLoaderOptions(location, page.loaderDeps!(context, location)),
     );
-  });
+  };
+  const loads = [load(pages[0])];
   try {
     await runtime.started.promise;
-    expect(await Promise.all(loads)).toEqual([
-      expect.objectContaining({ kind: "session", sessionKey: "agent:roboclaw:main" }),
-      expect.objectContaining({ kind: "session", sessionKey: "agent:roboclaw:main" }),
-    ]);
+    await expect(loads[0]).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:roboclaw:main",
+    });
+    const dashboard = load(pages[1]);
+    loads.push(dashboard);
+    await expect(dashboard).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:roboclaw:main",
+    });
+    await expect(load(pages[1])).resolves.toMatchObject({ kind: "session" });
     expect(request).not.toHaveBeenCalled();
 
     request.mockImplementation(async (_method, params) => params);

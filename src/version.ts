@@ -56,11 +56,11 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
   return undefined;
 }
 
-export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
+function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
   return readStringFromJsonCandidates(moduleUrl, PACKAGE_JSON_CANDIDATES, "version", true);
 }
 
-export function readVersionFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
+function readVersionFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
   return readStringFromJsonCandidates(moduleUrl, BUILD_INFO_CANDIDATES, "version");
 }
 
@@ -192,6 +192,12 @@ export function resolveRuntimeServiceBuildProvenance(): BuildProvenance | null {
 
 export function resolveRuntimeServiceCommit(): string | null {
   return RUNTIME_SERVICE_COMMIT;
+}
+
+/** Build time recorded beside the loaded build, normalized to ISO; unparseable values are omitted. */
+export function resolveRuntimeServiceBuiltAt(): string | null {
+  const builtAt = Date.parse(RUNTIME_SERVICE_BUILD?.builtAt ?? "");
+  return Number.isFinite(builtAt) ? new Date(builtAt).toISOString() : null;
 }
 
 export function resolveCompatibilityHostVersion(

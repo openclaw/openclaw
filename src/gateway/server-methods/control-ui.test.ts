@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as githubReadIdentity from "../../agents/github-read-identity.js";
 import * as githubIdentity from "../../agents/github-tool-identity.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -8,10 +9,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import {
-  SecretSurfaceUnavailableError,
-  setActiveDegradedSecretOwners,
-} from "../../secrets/runtime-degraded-state.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as checkDetails from "../control-ui-session-pr-check-details.js";
@@ -20,7 +18,7 @@ import {
   createTestControlUiSessionPrSubscriptions,
   createTestSessionPrReadSource,
 } from "../control-ui-session-pr-subscriptions.test-support.js";
-import { gitHubPublicApi } from "../github-public-api.js";
+import { gitHubPublicApi, githubApiToken } from "../github-public-api.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
 import { controlUiHandlers } from "./control-ui.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
@@ -61,7 +59,7 @@ function configuredGitHub(token: string): OpenClawConfig {
 
 const json = (value: unknown) => new Response(JSON.stringify(value));
 const previewUnavailable =
-  "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.";
+  "The configured web app GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.";
 const degradedPreview = {
   ownerKind: "capability" as const,
   ownerId: "control-ui-github",
@@ -268,13 +266,10 @@ describe("controlUi.githubPreview", () => {
     const title =
       mode === "managed" ? "Use the selected GitHub identity" : "Public metadata without a login";
     const anonymousResponse = json(issueFields(title));
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       if (mode === "anonymous") {
         return anonymousResponse;
       }
-      expect(new Headers(init?.headers).get("Authorization")).toBe(
-        `Bearer ${mode === "managed" ? identity.token : "configured-reader-token"}`,
-      );
       const url = input instanceof Request ? input.url : input.toString();
       const issue = mode === "managed" ? url.endsWith("/issues/88120") : url.includes("/issues/");
       return json(
@@ -324,6 +319,87 @@ describe("controlUi.githubPreview", () => {
       } else {
         expect(prepare).not.toHaveBeenCalled();
       }
+    }
+  });
+
+  it.each([
+    { mode: "cli", method: "controlUi.githubPreview" },
+    { mode: "cli", method: "controlUi.githubDetail" },
+    { mode: "cli-rejected", method: "controlUi.githubDetail" },
+    { mode: "signed-out", method: "controlUi.githubPreview" },
+    { mode: "environment", method: "controlUi.githubPreview" },
+  ])("reads $method with the shared GitHub CLI account ($mode)", async ({ mode, method }) => {
+    vi.stubEnv("GH_TOKEN", mode === "environment" ? "ambient-reader-token" : "");
+    vi.stubEnv("GITHUB_TOKEN", "");
+    vi.spyOn(githubReadIdentity, "readNativeGitHubConfiguration").mockReturnValue(
+      mode === "signed-out" ? "unconfigured" : "configured",
+    );
+    const assertSelected = vi.fn();
+    const prepare = vi.spyOn(githubIdentity, "prepareGitHubReadIdentity").mockResolvedValue({
+      token: "detected-cli-token",
+      selection: { source: "system-detected", accountId: 102 },
+      cacheScope: `detected-cli-${mode}-${method}`,
+      assertSelected,
+      revalidate: vi.fn().mockResolvedValue(undefined),
+      start: async <T>(start: () => T): Promise<Awaited<T>> => {
+        assertSelected();
+        return await start();
+      },
+    });
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const title = "Public item";
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const authorization = new Headers(init?.headers).get("Authorization");
+      if (mode === "cli-rejected" && authorization) {
+        return new Response("{}", {
+          status: 403,
+          headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "9999999999" },
+        });
+      }
+      const url = input instanceof Request ? input.url : input.toString();
+      return json(
+        url.includes("/issues/")
+          ? issueFields(title, {
+              repository_url: "https://api.github.com/repos/openclaw/openclaw",
+              body: "Reader body",
+              comments: 0,
+            })
+          : { id: 125, private: false, visibility: "public" },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { respond, send } = fixture(method.replace("controlUi.", ""));
+    const number = { cli: 88130, "cli-rejected": 88131, "signed-out": 88132, environment: 88133 };
+    await send(
+      {
+        kind: "issue",
+        number: number[mode as keyof typeof number],
+        owner: "openclaw",
+        repo: "openclaw",
+        agentId: "main",
+      },
+      runtime(() => cfg),
+    );
+    expectReply(respond, expect.objectContaining({ title }));
+    const authorizations = fetchMock.mock.calls.map(([, init]) =>
+      new Headers(init?.headers).get("Authorization"),
+    );
+    if (mode === "cli") {
+      expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
+      expect(authorizations.every((value) => value === "Bearer detected-cli-token")).toBe(true);
+    } else if (mode === "cli-rejected") {
+      // A rate-limited CLI login retries public reads anonymously, like environment tokens.
+      expect(authorizations).toContain("Bearer detected-cli-token");
+      expect(authorizations.at(-1)).toBeNull();
+    } else {
+      // Signed-out hosts never probe gh per read; environment tokens keep their own path.
+      expect(prepare).not.toHaveBeenCalled();
+      expect(
+        authorizations.every((value) =>
+          mode === "environment" ? value === "Bearer ambient-reader-token" : value === null,
+        ),
+      ).toBe(true);
     }
   });
 
@@ -385,6 +461,7 @@ describe("controlUi.githubPreview", () => {
         refKeys: ["store:default:PREVIEW_TOKEN"],
       },
     ]);
+    expect(githubApiToken({ GH_TOKEN: "ambient" }, {})).toBe("ambient");
     respond.mockClear();
     await send(
       target,
@@ -438,18 +515,10 @@ describe("controlUi.githubPreview", () => {
     { name: "malformed owner", owner: "openclaw/evil", refresh: undefined, valid: false },
   ])("validates $name", async ({ owner, refresh, valid }) => {
     const target = githubTarget(99817, "openclaw", owner);
-    const preview = {
-      ...target,
-      login: "octocat",
-      state: "open",
-      title: "Refreshed preview",
-      createdAt: "2026-09-01T08:00:00Z",
-      updatedAt: "2026-09-01T09:00:00Z",
-    };
-    const loadPreview = vi.spyOn(gitHubPublicApi, "loadControlUiGitHubPreview");
-    if (owner === "openclaw") {
-      loadPreview.mockResolvedValue(preview);
-    }
+    const preview = { title: "Refreshed preview" };
+    const loadPreview = vi
+      .spyOn(gitHubPublicApi, "loadControlUiGitHubPreview")
+      .mockResolvedValue(preview);
     const { respond, send } = fixture("githubPreview");
     await send({ ...target, ...(refresh !== undefined ? { refresh } : {}) });
     if (valid) {
@@ -488,13 +557,6 @@ describe("controlUi.githubPreview", () => {
       message: "GitHub API rate limit exceeded (HTTP 429). Wait and retry.",
       retryable: true,
     },
-    {
-      failure: "configured-unavailable preview credential",
-      managed: false,
-      error: new SecretSurfaceUnavailableError(degradedPreview),
-      message: previewUnavailable,
-      retryable: false,
-    },
   ])("preserves the $failure diagnostic", async ({ managed, error, message, retryable }) => {
     const loadPreview = vi.spyOn(gitHubPublicApi, "loadControlUiGitHubPreview");
     if (managed) {
@@ -505,10 +567,8 @@ describe("controlUi.githubPreview", () => {
     const { respond, send } = fixture("githubPreview");
     await send(
       {
+        ...githubTarget(managed ? 88125 : 99816),
         kind: managed ? "issue" : "pull",
-        number: managed ? 88125 : 99816,
-        owner: "openclaw",
-        repo: "openclaw",
         ...(managed ? { agentId: "main" } : {}),
       },
       managed
@@ -800,7 +860,15 @@ describe("controlUi.sessionPullRequests.checks", () => {
     await withOpenClawTestState({ label: "ci-details-missing-client-roles" }, async () => {
       let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       const enableRoles = () => {
-        cfg = { ...cfg, gateway: { roles: { definitions: {} } } };
+        cfg = {
+          ...cfg,
+          gateway: {
+            roles: {
+              default: "denied",
+              definitions: { denied: { agents: [], scopes: [], sessions: { others: "none" } } },
+            },
+          },
+        };
         setRuntimeConfigSnapshot(cfg);
       };
       setRuntimeConfigSnapshot(cfg);

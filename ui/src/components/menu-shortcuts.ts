@@ -57,5 +57,5 @@ export function findMenuSearch(surface: HTMLElement): HTMLInputElement | undefin
 }
 
 export function menuOwnsShortcut(surface: HTMLElement, key: string): boolean {
-  return /^[a-z0-9]$/iu.test(key) && Boolean(findMenuShortcut(surface, key.toLowerCase()));
+  return /^[a-z0-9/]$/iu.test(key) && Boolean(findMenuShortcut(surface, key.toLowerCase()));
 }

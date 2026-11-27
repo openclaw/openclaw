@@ -60,7 +60,8 @@ export function expectedIndexWriteOptions(config: unknown, env: NodeJS.ProcessEn
     lease: expect.objectContaining({
       databasePath,
       assertOwned: expect.any(Function),
-      assertOwnedInTransaction: expect.any(Function),
+      assertCurrent: expect.any(Function),
+      stateLease: expect.objectContaining({ assertCurrent: expect.any(Function) }),
     }),
   };
 }

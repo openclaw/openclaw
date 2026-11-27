@@ -13,13 +13,13 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
 import { testing } from "../../../sessions/session-controller.test-support.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
-import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   bindWorkerToolPreparation,
@@ -33,6 +33,7 @@ const nativeKey = "agent:main:native-lineage";
 afterEach(() => {
   testing.resetSessionControllerForTest();
   vi.restoreAllMocks();
+  assertNoRetainedSessionSharingReads();
 });
 
 it.each([
@@ -93,16 +94,14 @@ it.each([
   });
   const { sessionKey, sessionId } = attempt;
   const operation = createTestReplyOperation({ sessionKey, sessionId });
+  using cleanup = new DisposableStack();
+  cleanup.defer(() => operation.complete());
   await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
   const admitted = await operation.bindToolAuthorityRouteAsync(attempt);
   const compatAssertCurrent = vi.fn(() => {
     if (change === "legacy-allowed") {
-      expect(
-        loadSessionEntryReadOnly({
-          ...nativeRead,
-          readConsistency: "latest",
-        })?.sessionId,
-      ).toBe("native");
+      const entry = loadSessionEntryReadOnly({ ...nativeRead, readConsistency: "latest" });
+      expect(entry?.sessionId).toBe("native");
       return;
     }
     if (change === "compat-refusal" && operation.sessionId === attempt.sessionId) {
@@ -150,10 +149,7 @@ it.each([
       return read(inputs, consume, options);
     });
   const consumed = vi.fn(() => "admitted");
-  const calls = observeMainThreadSql();
-  using cleanup = new DisposableStack();
   cleanup.defer(() => delayed.mockRestore());
-  cleanup.defer(() => calls.restore());
   await using gate = bindingGate();
   const preparations = [preparation];
   if (refusal) {
@@ -174,12 +170,10 @@ it.each([
   }
   const outcome = gate.observe(authority.withPreparedCurrent!(consumed, preparations));
   await gate.wait(outcome, "Final admission was not reached");
-  calls.expectIdle();
   if (change === "policy" || change === "metadata") {
     await updateSessionEntry({ agentId: "policy", sessionKey: policyKey }, () =>
       change === "policy" ? { sandboxMode: undefined } : { label: "renamed" },
     );
-    calls.clear();
   } else if (change === "malformed") {
     await runOpenClawAgentWriteAdmission({ agentId: "policy", env }, ({ canonicalPath }) => {
       {
@@ -198,7 +192,6 @@ it.each([
         factsInvalidated: true,
       });
     });
-    calls.clear();
   } else if (change === "route") {
     await operation.bindToolAuthorityRouteAsync({
       provider: attempt.provider,
@@ -211,9 +204,6 @@ it.each([
   }
   gate.resume();
   const result = await outcome;
-  if (change !== "legacy-allowed") {
-    calls.expectIdle();
-  }
   if (change === "metadata" || change === "legacy-allowed") {
     expect(result).toBe("admitted");
     expect(consumed).toHaveBeenCalledOnce();

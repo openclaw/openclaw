@@ -1,118 +1,36 @@
+import path from "node:path";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE } from "../../shared/sandbox-workspace-paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { execContainer, type SandboxContainerEngine } from "./container-engine.js";
 import {
   parseInspectedSandboxMounts,
   resolveDockerSourceNamespace,
   translateSandboxMountSources,
+  type InspectedSandboxMount,
 } from "./docker-mount-source.js";
 import { getSandboxHostPathPolicyKey } from "./host-paths.js";
+import type { SandboxMountPlan, SandboxMountPlanInput } from "./mount-plan.prepare.js";
 import { isPathInsideContainerRoot } from "./path-utils.js";
-import type { SandboxWorkspaceAccess } from "./types.js";
-import {
-  normalizeMountContainerPath,
-  resolveMaterializedSandboxSkillsWorkspaceDir,
-  resolveSandboxMountSelection,
-  resolveSandboxTmpfsMounts,
-} from "./workspace-mounts.js";
+import { normalizeMountContainerPath } from "./workspace-mounts.js";
 
-export type SandboxMountPlan = {
-  binds: string[];
-  protectedTargets: string[];
-  skippedBinds: string[];
-  readOnlyWorkspaceSkillMounts: ReturnType<
-    typeof resolveSandboxMountSelection
-  >["readOnlyWorkspaceSkillMounts"];
-  tmpfs: ReturnType<typeof resolveSandboxTmpfsMounts>;
-};
+export type { SandboxMountPlan } from "./mount-plan.prepare.js";
 
-export async function prepareSandboxMountPlan(params: {
-  engine: SandboxContainerEngine;
-  workspaceDir: string;
-  workspaceSource?: "managed-worktree";
-  assertCurrent?: () => void;
-  agentWorkspaceDir: string;
-  skillsWorkspaceDir?: string;
-  workdir: string;
-  workspaceAccess: SandboxWorkspaceAccess;
-  binds?: readonly string[];
-  tmpfs?: readonly string[];
-  readOnlyResourceMounts?: readonly { hostPath: string; containerPath: string }[];
-}): Promise<SandboxMountPlan> {
-  const selection = resolveSandboxMountSelection(params);
-  const namespace = await resolveDockerSourceNamespace(params.engine);
-  const relativeSkillMount = `${MATERIALIZED_SANDBOX_SKILLS_WORKSPACE}/skills`;
-  const skillTarget = normalizeMountContainerPath(`${params.workdir}/${relativeSkillMount}`);
-  if (
-    params.workspaceSource === "managed-worktree" &&
-    selection.readOnlyWorkspaceSkillMounts.some((mount) => mount.containerPath === skillTarget)
-  ) {
-    // Engine-created nested mountpoints can be owned by a different user namespace.
-    // Allocate the empty scaffold as its workspace owner before mounting read-only
-    // instructions, so normal workspace retention can later remove it without chmod.
-    const workspace = await openFsSafeRoot(params.workspaceDir, {
-      mode: 0o755,
-      mutationSymlinks: "reject",
-      assertBeforeMutation: params.assertCurrent,
-    });
-    await workspace.mkdir(relativeSkillMount);
-  }
-  const allowedRoots = [
-    params.workspaceDir,
-    params.agentWorkspaceDir,
-    params.skillsWorkspaceDir ??
-      resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir),
-    ...(params.readOnlyResourceMounts ?? []).map((mount) => mount.hostPath),
-  ];
-  const targets = selection.mounts.map((mount) => mount.containerPath);
-  const binds = new Map<string, string>();
-  const protectedTargets = new Set<string>();
-  for (const mount of selection.mounts) {
-    const target = normalizeMountContainerPath(mount.containerPath);
-    if (mount.source === "bind") {
-      continue;
-    }
-    const translated = namespace
-      ? translateSandboxMountSources({
-          source: mount.hostPath,
-          containerPath: target,
-          allowedRoots,
-          mounts: namespace,
-          readOnly: mount.readOnly,
-          shadowedTargets: targets.filter(
-            (other) => other !== target && isPathInside(target, other),
-          ),
-        })
-      : [{ ...mount, containerPath: target }];
-    for (const projected of translated) {
-      if (mount.source === "protectedSkill") {
-        protectedTargets.add(projected.containerPath);
-      }
-      binds.set(
-        projected.containerPath,
-        `${projected.hostPath}:${projected.containerPath}:${projected.readOnly ? "ro,z" : "z"}`,
-      );
-    }
-  }
-  // Custom mounts retain their daemon-host contract. Protected instruction mounts
-  // win exact collisions; other explicit overrides match filesystem bridge policy.
-  for (const bind of selection.custom) {
-    const parsed = splitSandboxBindSpec(bind);
-    const target = parsed ? normalizeMountContainerPath(parsed.container) : bind;
-    binds.set(target, bind);
-    protectedTargets.delete(target);
-  }
-  return {
-    binds: [...binds.values()],
-    protectedTargets: [...protectedTargets],
-    skippedBinds: selection.skippedBinds,
-    readOnlyWorkspaceSkillMounts: selection.readOnlyWorkspaceSkillMounts,
-    tmpfs: resolveSandboxTmpfsMounts(params.tmpfs),
-  };
+export async function prepareSandboxMountPlan(
+  params: Omit<SandboxMountPlanInput, "namespace"> & {
+    engine: SandboxContainerEngine;
+    assertCurrent?: () => void;
+  },
+): Promise<SandboxMountPlan> {
+  const { engine, assertCurrent, ...input } = params;
+  const namespace = await resolveDockerSourceNamespace(engine);
+  const { prepareSandboxMounts } = await import("../../skills/runtime/refresh.js");
+  return await prepareSandboxMounts(
+    { ...input, namespace },
+    assertCurrent,
+    engine.stateGuard?.stateOwnerPath,
+  );
 }
 
 async function inspectSandboxMounts(params: {
@@ -148,9 +66,10 @@ export async function resolveSandboxContainerOnlyMounts(params: {
   engine: SandboxContainerEngine;
   containerName: string;
   assertCurrent?: () => void;
+  mounts?: readonly InspectedSandboxMount[];
 }): Promise<string[]> {
   params.assertCurrent?.();
-  const inspected = await inspectSandboxMounts(params);
+  const inspected = params.mounts ?? (await inspectSandboxMounts(params));
   params.assertCurrent?.();
   const { stdout } = await execContainer(
     params.engine,
@@ -250,8 +169,9 @@ export async function compareSandboxMountPlan(params: {
   engine: SandboxContainerEngine;
   containerName: string;
   plan: SandboxMountPlan;
+  mounts?: readonly InspectedSandboxMount[];
 }): Promise<"match" | "protected-mounts-added" | "changed"> {
-  const actual = await inspectSandboxMounts(params);
+  const actual = params.mounts ?? (await inspectSandboxMounts(params));
   const expected = new Map(
     params.plan.binds.flatMap((bind) => {
       const parsed = splitSandboxBindSpec(bind);
@@ -296,7 +216,9 @@ export async function compareSandboxMountPlan(params: {
     return "match";
   }
   const actualTargets = new Set(actual.map((mount) => mount.destination));
-  const added = params.plan.protectedTargets.filter((target) => !actualTargets.has(target));
+  const added = [...params.plan.protectedTargets, ...(params.plan.pinnedAncestors ?? [])].filter(
+    (target) => !actualTargets.has(target),
+  );
   // Only new Gateway-selected read-only overlays can be installed automatically.
   // Existing mounts must match: a previous user bind at a protected target is not
   // evidence that the Gateway owned it, even when it was read-only.
@@ -362,7 +284,21 @@ export async function sandboxContainerShowsWorkspacePaths(params: {
     const covering = actual
       .filter((mount) => isPathInsideContainerRoot(mount.destination, target))
       .toSorted((a, b) => b.destination.length - a.destination.length)[0];
-    const expected = planned.find((mount) => mount.containerPath === covering?.destination);
+    // Ancestor self-binds pinning protected skill mounts expose the same workspace
+    // bytes: accept a covering bind only when its source is the workspace source at
+    // that exact relative path.
+    const expected =
+      covering === undefined
+        ? undefined
+        : planned
+            .filter((mount) => isPathInsideContainerRoot(mount.containerPath, covering.destination))
+            .toSorted((a, b) => b.containerPath.length - a.containerPath.length)
+            .map((mount) => ({
+              hostPath: path.posix.join(
+                mount.hostPath,
+                path.posix.relative(mount.containerPath, covering.destination),
+              ),
+            }))[0];
     return (
       covering?.type === "bind" &&
       expected !== undefined &&

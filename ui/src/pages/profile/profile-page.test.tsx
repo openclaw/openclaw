@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -64,11 +64,14 @@ function stubProfileAvatarProcessing(decode = vi.fn<() => Promise<void>>(async (
   });
 }
 
-function selectProfileAvatar(page: ParentNode) {
+function selectProfileAvatar(
+  page: ParentNode,
+  file = new File(["avatar"], "avatar.png", { type: "image/png" }),
+) {
   const avatarInput = page.querySelector<HTMLInputElement>('input[type="file"]')!;
   Object.defineProperty(avatarInput, "files", {
     configurable: true,
-    value: [new File(["avatar"], "avatar.png", { type: "image/png" })],
+    value: [file],
   });
   avatarInput.dispatchEvent(new Event("change", { bubbles: true }));
 }
@@ -108,19 +111,25 @@ afterEach(async () => {
 
 it("refreshes translated copy when the locale changes while mounted", async () => {
   const { context } = createConnectedContext(vi.fn() as GatewayBrowserClient["request"]);
-  context.gateway.snapshot.phase = "stopped";
-  context.gateway.snapshot.client = null;
   const page = mountProfilePage(context);
-  flush();
+  await waitForFast(() =>
+    expect(page.querySelector("#settings-profile-identity h2")).not.toBeNull(),
+  );
 
-  const note = page.querySelector(".settings-empty");
-  const englishNote = note?.textContent?.trim();
+  // Use unchanged copy: newly edited English intentionally falls back until translated.
+  const title = page.querySelector("#settings-profile-identity h2");
+  const englishTitle = title?.textContent?.trim();
 
   await i18n.setLocale("de");
   flush();
 
-  expect(note?.textContent?.trim()).toBe(t("profilePage.offline"));
-  expect(note?.textContent?.trim()).not.toBe(englishNote);
+  await waitForFast(() => {
+    const translatedTitle = page
+      .querySelector("#settings-profile-identity h2")
+      ?.textContent?.trim();
+    expect(translatedTitle).toBe(t("profilePage.identity.title"));
+    expect(translatedTitle).not.toBe(englishTitle);
+  });
 });
 
 it("renders identity before Usage statistics and opens the usage page", async () => {
@@ -143,11 +152,19 @@ it("renders identity before Usage statistics and opens the usage page", async ()
 
   await waitForFast(() =>
     expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-      ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
+      [
+        "users.self",
+        "users.listModelAccounts",
+        "users.prefs.get",
+        "users.channelIdentity",
+        "users.channelIdentity",
+      ].toSorted(),
     ),
   );
   const identity = page.querySelector("#settings-profile-identity");
-  expect(identity?.textContent).toContain("No single verified GitHub sign-in account");
+  // The GitHub row shows its status only; the explanation is under the section's "?".
+  expect(identity?.textContent).toContain("Unavailable");
+  expect(identity?.textContent).not.toContain("No single verified GitHub sign-in account");
   expect(
     [...(identity?.querySelectorAll(".settings-row__title") ?? [])].filter(
       (node) => node.textContent?.trim() === "Linked emails",
@@ -158,7 +175,7 @@ it("renders identity before Usage statistics and opens the usage page", async ()
   expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
   expect(page.querySelector(".profile-stats")).toBeNull();
   expect(page.querySelector(".profile-heatmap")).toBeNull();
-  const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
+  const usageRow = page.querySelector<HTMLButtonElement>("button.settings-row--nav");
   expect(usageRow?.textContent).toContain("Usage statistics");
   expect(page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!)).toBe(
     Node.DOCUMENT_POSITION_FOLLOWING,
@@ -205,6 +222,31 @@ it("offers identity connection setup without profile RPCs or secret inputs for u
   expect(harness.context.navigate).toHaveBeenCalledWith("connection");
 });
 
+it("falls back to initials when no profile avatar route can be built", async () => {
+  setAvatarGatewayOrigin(null);
+  const profile = {
+    ...modelAccountProfile,
+    displayName: "Ada Lovelace",
+    emails: ["profile-preview@example.test"],
+    hasAvatar: false,
+  };
+  const request = mockRpc({
+    "users.prefs.get": () => ({ status: "ok", entries: {} }),
+    "users.self": () => ({ profile }),
+    "users.listModelAccounts": () => ({ profileId: profile.id, accounts: [], links: [] }),
+  });
+  const { context } = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: profile.displayName,
+  });
+  context.gateway.connection.gatewayUrl = "file:///profile-preview";
+  const page = mountProfilePage(context);
+  await waitForFast(() =>
+    expect(page.querySelector("openclaw-viewer-avatar")?.textContent?.trim()).toBe("AL"),
+  );
+  expect(page.querySelector("openclaw-viewer-avatar img")).toBeNull();
+});
+
 it("falls back to the text avatar when the hero image fails to load", async () => {
   const request = vi.fn();
   const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
@@ -232,7 +274,9 @@ it("falls back to the text avatar when the hero image fails to load", async () =
   };
   const page = mountProfilePage(harness.context);
 
-  flush();
+  await waitForFast(() =>
+    expect(page.querySelector(".profile-hero__avatar .identity-avatar--agent")).not.toBeNull(),
+  );
   const avatar = page.querySelector(".profile-hero__avatar .identity-avatar--agent")!;
   const image = avatar.querySelector("img");
   expect(image?.getAttribute("src")).toBe("data:image/png;base64,unloadable");
@@ -316,7 +360,8 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
   flush();
   const refresh = refreshButton(page)!;
   expect(refresh.disabled).toBe(true);
-  expect(refresh.textContent?.trim()).toBe(t("common.refreshing"));
+  expect(refresh.getAttribute("aria-busy")).toBe("true");
+  expect(refresh.getAttribute("aria-label")).toBe(t("common.refreshing"));
 
   refresh.click();
   refresh.click();
@@ -325,7 +370,8 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
 
   firstIdentity.reject(new Error("identity unavailable: OPENAI_API_KEY=sk-1234567890abcdef"));
   await waitForFast(() => expect(refresh.disabled).toBe(false));
-  expect(refresh.textContent?.trim()).toBe(t("common.refresh"));
+  expect(refresh.getAttribute("aria-busy")).toBeNull();
+  expect(refresh.getAttribute("aria-label")).toBe(t("common.refresh"));
   expect(page.textContent).toContain("identity unavailable: OPENAI_API_KEY=sk-123...cdef");
   expect(page.textContent).not.toContain("sk-1234567890abcdef");
 
@@ -461,6 +507,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     ...modelAccountProfile,
     emails: ["ada@example.test", "ada@work.test"],
   };
+  const nameSave = createDeferred<{ profile: UserProfile }>();
+  onTestFinished(() => nameSave.resolve({ profile }));
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "users.prefs.get") {
       return { status: "ok", entries: {} };
@@ -474,7 +522,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     if (method === "users.setDisplayName") {
       expect(params).toEqual({ profileId: "profile-1", displayName: "Augusta Ada" });
       profile = { ...profile, displayName: "Augusta Ada", updatedAt: 3 };
-      return { profile };
+      return nameSave.promise;
     }
     if (method === "users.setAvatar") {
       profile = {
@@ -510,7 +558,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     "openclaw-viewer-avatar",
   );
   expect(viewer?.user?.id).toBe(profile.id);
-  expect(page.textContent).toContain("ada@example.test, ada@work.test");
+  expect(page.textContent).toContain("ada@example.test");
+  expect(page.textContent).toContain("ada@work.test");
   expect(request.mock.calls.some(([method]) => method === "users.list")).toBe(false);
 
   const input = page.querySelector<HTMLInputElement>('.identity-name-control input[type="text"]');
@@ -523,6 +572,13 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   await waitForFast(() =>
     expect(request.mock.calls.some(([method]) => method === "users.setDisplayName")).toBe(true),
   );
+  await waitForFast(() => {
+    expect(page.querySelector<HTMLInputElement>('input[type="file"]')?.disabled).toBe(true);
+    expect(page.querySelector<HTMLButtonElement>(".identity-avatar-control .btn")?.disabled).toBe(
+      true,
+    );
+  });
+  nameSave.resolve({ profile });
   await waitForFast(() =>
     expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2),
   );
@@ -538,10 +594,19 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   displayNameInput.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   const accountContext = page.querySelector("openclaw-model-accounts");
-  expect(accountContext?.textContent).toContain("Augusta Ada");
   expect(accountContext?.textContent).not.toContain("Unsaved draft");
   stubProfileAvatarProcessing();
-  selectProfileAvatar(page);
+  const processAvatar = vi.spyOn(avatarProcessing, "processProfileAvatar");
+  const picker = page.querySelector<HTMLInputElement>('input[type="file"]')!;
+  const chooser = page.querySelector<HTMLButtonElement>(".identity-avatar-control .btn")!;
+  const clickInput = vi.spyOn(picker, "click");
+  chooser.click();
+  expect(chooser.type).toBe("button");
+  expect(clickInput).toHaveBeenCalledOnce();
+  const avatarFile = new File(["avatar"], "avatar.webp", { type: "image/webp" });
+  selectProfileAvatar(page, avatarFile);
+  expect(processAvatar).toHaveBeenCalledWith(avatarFile);
+  expect(picker).toMatchObject({ accept: "image/png,image/jpeg,image/webp", value: "" });
   await waitForFast(() =>
     expect(request.mock.calls.some(([method]) => method === "users.setAvatar")).toBe(true),
   );
@@ -688,14 +753,21 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
   await waitForFast(() => expect(page.textContent).toContain("Ada · Personal workspace"));
   expect(page.querySelector("#profile-account-auth-answer")).toBeNull();
   expect(page.querySelector<HTMLButtonElement>(".profile-auth-add-account")?.disabled).toBe(false);
-  expect(page.querySelector<HTMLButtonElement>(".profile-auth-link-unlink")?.disabled).toBe(false);
+  expect(
+    page.querySelector<HTMLButtonElement>(".profile-auth-account-picker .picker-select__trigger")
+      ?.disabled,
+  ).toBe(false);
 });
 
 it("rechecks avatar upload policy after processing and rerenders on config updates", async () => {
-  const profile = { ...modelAccountProfile };
+  let profile = { ...modelAccountProfile };
   const request = mockRpc({
     "users.prefs.get": () => ({ status: "ok", entries: {} }),
     "users.self": () => ({ profile }),
+    "users.setDisplayName": () => {
+      profile = { ...profile, displayName: "Edited with uploads disabled" };
+      return { profile };
+    },
     "users.listModelAccounts": () => ({ profileId: profile.id, accounts: [], links: [] }),
   });
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
@@ -726,6 +798,20 @@ it("rechecks avatar upload policy after processing and rerenders on config updat
   );
   expect(rpcCalls(request, "users.setAvatar")).toHaveLength(0);
   expect(profileName(page)?.disabled).toBe(false);
+  expect(page.querySelector("openclaw-viewer-avatar")).not.toBeNull();
+  expect(page.querySelector(".identity-avatar-control .btn")).toBeNull();
+  profileName(page)!.value = "Edited with uploads disabled";
+  profileName(page)!.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  page
+    .querySelector<HTMLFormElement>(".identity-name-control")!
+    .dispatchEvent(new SubmitEvent("submit", { cancelable: true }));
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith("users.setDisplayName", {
+      profileId: profile.id,
+      displayName: "Edited with uploads disabled",
+    }),
+  );
 });
 
 it("replaces a retired profile read when the same ID gains profile qualification", async () => {
@@ -751,16 +837,16 @@ it("replaces a retired profile read when the same ID gains profile qualification
 });
 
 it.each([
-  { scopes: ["operator.read"], summary: "You have permission to view server information." },
+  { scopes: ["operator.read"], summary: "You can view settings and activity." },
   { scopes: ["operator.write"], summary: "You have permission to send messages and make changes." },
   {
     scopes: ["operator.sessions.read"],
     summary: "You have permission to view your own sessions.",
   },
-  { scopes: ["operator.admin"], summary: "You have permission to manage this server." },
+  { scopes: ["operator.admin"], summary: "You have admin access." },
   {
     scopes: ["operator.approvals"],
-    summary: "This connection has a limited set of permissions.",
+    summary: "Your access is limited.",
   },
   {
     scopes: ["operator.read", "operator.sessions.write"],
@@ -777,12 +863,12 @@ it.each([
   expect(access?.querySelector(".settings-row__title")?.textContent).toBe(summary);
   const details = access?.querySelector("details");
   expect(details?.open).toBe(false);
-  expect(details?.querySelector("summary")?.textContent).toBe("Technical details");
+  expect(details?.querySelector("summary")?.textContent).toBe("Show details");
   expect(details?.querySelector(".settings-row__value")?.textContent).toBe(scopes.join(", "));
   expect(access?.textContent).toContain(
     "Sessions, browsers, and tools may have additional restrictions.",
   );
-  expect(access?.textContent).toContain("Ask your server administrator to review your access.");
+  expect(access?.textContent).toContain("Ask your admin to review your access.");
   expect(request).not.toHaveBeenCalled();
 });
 
@@ -793,7 +879,7 @@ it("distinguishes unreported permissions from an explicit empty grant", async ()
   const page = mountProfilePage(harness.context);
   flush();
   expect(page.querySelector("#settings-profile-access")?.textContent).toContain(
-    "Your permissions could not be confirmed.",
+    "Couldn’t confirm your access. Reconnect to try again.",
   );
 
   harness.emitHello(gatewayHelloForMethods([], []));
@@ -827,7 +913,7 @@ it("reconnects through the connection owner while retaining the last access summ
   expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
     scope,
   );
-  expect(page.textContent).toContain("You have permission to manage this server.");
+  expect(page.textContent).toContain("You have admin access.");
   expect(page.querySelector("openclaw-personal-instructions")).toBe(personalEditor);
 
   harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));

@@ -73,9 +73,7 @@ describe("openclaw path CLI", () => {
     it("CLI-V02 rejects a malformed path with code 1", async () => {
       const rt = createTestRuntime();
       await pathValidateCommand("oc://X/a\x00b", { json: true }, rt);
-      expect(rt.exitCode).toBe(1);
-      const out = JSON.parse(stdoutText(rt));
-      expect(out.valid).toBe(false);
+      expect([rt.exitCode, JSON.parse(stdoutText(rt)).valid]).toEqual([1, false]);
     });
   });
 
@@ -202,9 +200,7 @@ describe("openclaw path CLI", () => {
       );
       expect(rt.exitCode).toBe(0);
       const out = JSON.parse(stdoutText(rt));
-      expect(out.resolved).toBe(true);
-      expect(out.match.kind).toBe("leaf");
-      expect(out.match.valueText).toBe("fetch");
+      expect(out).toMatchObject({ resolved: true, match: { kind: "leaf", valueText: "fetch" } });
     });
 
     it("CLI-R02 returns 1 for not-found path", async () => {
@@ -527,6 +523,20 @@ describe("openclaw path CLI", () => {
         value: "oops",
         expected: { ok: false, reason: "parse-error", detail: 'cannot coerce "oops" to number' },
       },
+      ...["jsonc", "jsonl"].flatMap((kind) =>
+        ["", " \t\r\n "].map((value) => ({
+          label: `blank ${kind} number ${JSON.stringify(value)}`,
+          file: `config.${kind}`,
+          before: '{"count":1}\n',
+          path: `oc://config.${kind}/${kind === "jsonl" ? "L1/" : ""}count`,
+          value,
+          expected: {
+            ok: false,
+            reason: "parse-error",
+            detail: `cannot coerce "${value}" to number`,
+          },
+        })),
+      ),
       {
         label: "keyed insertion into an array",
         file: "config.jsonc",
@@ -594,7 +604,7 @@ describe("openclaw path CLI", () => {
 
     describe.each(["\n", "\r\n"])("Markdown source preservation with %j", (ending) => {
       const frontmatter =
-        '\uFEFF---\n# Keep the authored metadata.\nname: &shared "example"\ncopy: *shared\nempty: &empty\nempty_copy: *empty\n\ndescription: |\n  First line.\n  Second line.\nmetadata:\n  openclaw:\n    requires:\n      bins: [gh]\n---\n';
+        '\uFEFF---\n# Keep the authored metadata.\nname: &shared "example"\ncopy: *shared\nempty: &empty # Keep empty anchor.\nempty_copy: *empty\nvacant: # Keep empty value.\n\ndescription: |\n  First line.\n  Second line.\n# Keep the next-line comment.\nmetadata:\n  openclaw:\n    requires:\n      bins: [gh]\n---\n';
       const body = '\n# Title\n\n## Tools ##\n- command: old\n\n## Other\n* untouched: "quoted"';
       const before = frontmatter + body;
       it.each([
@@ -627,7 +637,13 @@ describe("openclaw path CLI", () => {
           "empty anchored value",
           "[frontmatter]/empty",
           "filled",
-          before.replace("empty: &empty\n", "empty: &empty filled\n"),
+          before.replace("empty: &empty #", "empty: &empty filled #"),
+        ],
+        [
+          "empty value with inline comment",
+          "[frontmatter]/vacant",
+          "has: colon",
+          before.replace("vacant: #", 'vacant: "has: colon" #'),
         ],
         [
           "block scalar replacement",
@@ -662,6 +678,11 @@ describe("openclaw path CLI", () => {
           expect(readFileSync(filePath, "utf8")).toBe(
             expected.replace(/\n/g, ending) + finalNewline,
           );
+          if (target === "[frontmatter]/empty" || target === "[frontmatter]/vacant") {
+            const fields = parseYaml(readFileSync(filePath, "utf8").split("---")[1] ?? "");
+            const key = target === "[frontmatter]/empty" ? "empty" : "vacant";
+            expect(fields[key]).toBe(value);
+          }
           if (target === "[frontmatter]/metadata") {
             const readback = createTestRuntime();
             await pathResolveCommand(
@@ -920,44 +941,35 @@ describe("openclaw path CLI", () => {
       );
     });
 
-    it.each([true])(
-      "refuses sentinel-bearing Markdown insertion in the CLI (dry-run=%s)",
-      async (dryRun) => {
-        const { workspaceDir, filePath } = fileFixture("AGENTS.md");
-        const before = "---\nname: x\n---\n";
-        writeFileSync(filePath, before, "utf-8");
-        const rt = createTestRuntime();
-
-        await pathSetCommand(
-          "oc://AGENTS.md/[frontmatter]/+note",
-          "before__OPENCLAW_REDACTED__after",
-          { cwd: workspaceDir, json: true, dryRun },
-          rt,
-        );
-
-        expect(rt.exitCode).toBe(1);
-        expect(stdoutText(rt)).toContain("OC_EMIT_SENTINEL");
-        expect(stdoutText(rt)).toContain("oc://AGENTS.md/[frontmatter]/+note");
-        expect(readFileSync(filePath, "utf-8")).toBe(before);
-      },
-    );
-
-    it("CLI-S03 sentinel-bearing value is refused at emit", async () => {
-      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
-      writeFileSync(filePath, '{ "token": "x" }', "utf-8");
+    it.each([
+      [
+        "AGENTS.md",
+        "---\nname: x\n---\n",
+        "[frontmatter]/+note",
+        "before__OPENCLAW_REDACTED__after",
+      ],
+      ["gateway.jsonc", '{ "token": "x" }', "token", "__OPENCLAW_REDACTED__"],
+      ["data.jsonc", '{"items":[]}', "items/+", '{"__OPENCLAW_REDACTED__":1}'],
+      ["data.jsonc", '{"items":{}}', "items/+__OPENCLAW_REDACTED__", "1"],
+      ["data.jsonc", '{"items":{}}', "items/+pre__OPENCLAW_REDACTED__post", "1"],
+      ["data.jsonl", '{"old":1}\n', "+", '{"__OPENCLAW_REDACTED__":1}'],
+      ["data.yaml", "items: []\n", "items/+", '{"__OPENCLAW_REDACTED__":1}'],
+    ])("CLI-S03 refuses sentinel content for %s at %s", async (file, before, suffix, value) => {
+      const { workspaceDir, filePath } = fileFixture(file);
+      writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
-      // Sentinel values can enter the AST, but emit must reject them through
-      // the structured CLI error boundary instead of escaping Commander.
       await pathSetCommand(
-        "oc://gateway.jsonc/token",
-        "__OPENCLAW_REDACTED__",
-        { cwd: workspaceDir, json: true },
+        `oc://${file}/${suffix}`,
+        value,
+        { cwd: workspaceDir, json: true, dryRun: file === "AGENTS.md" },
         rt,
       );
       expect(rt.exitCode).toBe(1);
       expect(stdoutText(rt)).toContain("OC_EMIT_SENTINEL");
-      // Include the actual file in the sentinel error so operators can locate it.
-      expect(stdoutText(rt)).toContain("gateway.jsonc");
+      expect(stdoutText(rt)).toContain(
+        file === "data.jsonl" ? "oc:///L2" : file === "AGENTS.md" ? `oc://${file}/${suffix}` : file,
+      );
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
     it("CLI-S05 malformed yaml returns structured parse-error", async () => {
@@ -979,39 +991,38 @@ describe("openclaw path CLI", () => {
   });
 
   describe("find", () => {
-    it.each(["jsonc", "yaml", "jsonl"])("CLI-F01 finds array indexes in %s", async (kind) => {
+    const findFiles = ["config.jsonc", "config.yaml", "config.jsonl"];
+    if (process.platform !== "win32") {
+      findFiles.push("report?.jsonc");
+    }
+    it.each(findFiles)("CLI-F01 finds and round-trips indexes in %s", async (filename) => {
       const options = { cwd: tempDirs.make("oc-path-cli-"), json: true };
       const before = '{ "items": [ { "id": "a" }, { "id": "b" } ] }\n';
-      writeFileSync(join(options.cwd, `config.${kind}`), before, "utf-8");
-      const prefix = `oc://config.${kind}/${kind === "jsonl" ? "L1/" : ""}items`;
+      writeFileSync(join(options.cwd, filename), before, "utf-8");
+      const file = filename.includes("?") ? JSON.stringify(filename) : filename;
+      const prefix = `oc://${file}/${filename.endsWith(".jsonl") ? "L1/" : ""}`;
       for (const [suffix, expected] of [
-        [".*/id", ["a", "b"]],
-        ['."1"/*', ["b"]],
-        ['.""/*', []],
-        ['."$first"/*', []],
-        ['."2"/*', []],
+        ["items.*/id", ["a", "b"]],
+        ['items."1"/*', ["b"]],
+        ['items.""/*', []],
+        ['items."$first"/*', []],
+        ['items."2"/*', []],
+        ["nope/*", []],
       ] as const) {
         const rt = createTestRuntime();
-        await pathFindCommand(prefix + suffix, options, rt);
-        expect(rt.exitCode).toBe(expected.length ? 0 : 1);
+        await pathFindCommand(prefix + suffix + "?session=proof", options, rt);
         const out = JSON.parse(stdoutText(rt));
-        expect(out.count).toBe(expected.length);
+        expect([rt.exitCode, out.count]).toEqual([expected.length ? 0 : 1, expected.length]);
         expect(out.matches).toMatchObject(expected.map((valueText) => ({ match: { valueText } })));
         for (const { path, match } of out.matches) {
+          expect(path).toMatch(/\?session=proof$/);
           const resolved = createTestRuntime();
           await pathResolveCommand(path, options, resolved);
+          expect(resolved.exitCode).toBe(0);
           expect(JSON.parse(stdoutText(resolved))).toMatchObject({ resolved: true, match });
         }
       }
-      expect(readFileSync(join(options.cwd, `config.${kind}`), "utf-8")).toBe(before);
-    });
-
-    it("CLI-F02 returns 1 when zero matches", async () => {
-      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
-      writeFileSync(filePath, "{}", "utf-8");
-      const rt = createTestRuntime();
-      await pathFindCommand("oc://gateway.jsonc/nope/*", { cwd: workspaceDir, json: true }, rt);
-      expect(rt.exitCode).toBe(1);
+      expect(readFileSync(join(options.cwd, filename), "utf-8")).toBe(before);
     });
 
     it("CLI-F03 file-slot wildcard rejected with clear error (no ENOENT)", async () => {

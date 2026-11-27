@@ -122,14 +122,5 @@ export type DiffArtifactBlobMetadata =
   | DiffViewerArtifactMetadata
   | DiffRenderedFileArtifactMetadata;
 
-export type DiffArtifactMeta = {
-  id: string;
-  expiresAt: string;
-  title: string;
-  inputKind: DiffInput["kind"];
-  fileCount: number;
-  viewerPath: string;
-};
-
 export const DIFF_ARTIFACT_ID_PATTERN = /^[0-9a-f]{20}$/;
 export const DIFF_ARTIFACT_TOKEN_PATTERN = /^[0-9a-f]{48}$/;

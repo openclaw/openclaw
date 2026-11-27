@@ -6,6 +6,41 @@ import { SessionSchema } from "./zod-schema.session.js";
 
 const accepts = (raw: unknown) => OpenClawSchema.safeParse(raw).success;
 
+test("accepts opt-in proxy credit headers without changing the user principal header", () => {
+  expect(
+    accepts({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-occ-identity",
+            gitCoauthor: { nameHeader: "x-credit-name", emailHeader: "x-credit-email" },
+          },
+        },
+      },
+    }),
+  ).toBe(true);
+});
+
+test.each([
+  { nameHeader: "", emailHeader: "x-email" },
+  { nameHeader: "x-name\r\ninjected", emailHeader: "x-email" },
+  { nameHeader: "x-name" },
+])("rejects invalid or incomplete proxy credit mapping %j", (gitCoauthor) => {
+  expect(
+    accepts({
+      gateway: {
+        auth: {
+          trustedProxy: {
+            userHeader: "x-user",
+            gitCoauthor,
+          },
+        },
+      },
+    }),
+  ).toBe(false);
+});
+
 function expectSchemaIssue(raw: unknown, path: string[], message?: string) {
   const result = OpenClawSchema.safeParse(raw);
   expect(result.error?.issues).toContainEqual(
@@ -57,6 +92,28 @@ const modelConfig = (modelPolicy: unknown, extraRoles = {}) => ({
   ...rolesConfig({ definitions: { guest: { ...validRole, modelPolicy }, ...extraRoles } }),
 });
 
+test.each(["none", "view", "invited"])("preserves explicit session access mode %s", (others) => {
+  const config = validated(
+    rolesConfig({
+      definitions: { guest: { ...validRole, sessions: { others } } },
+    }),
+  );
+  expect(config.gateway?.roles?.definitions.guest?.sessions.others).toBe(others);
+});
+
+test("does not enable invitation-only access in an unconfigured Gateway", () => {
+  expect(validated({}).gateway?.roles).toBeUndefined();
+  expect(validated(rolesConfig({})).gateway?.roles?.definitions.guest?.sessions.others).toBe(
+    "view",
+  );
+});
+
+test("accepts a conversation-scoped automation role without operator.write", () => {
+  const scopes = ["operator.sessions.write", "operator.cron"];
+  const config = validated(rolesConfig({ definitions: { guest: { ...validRole, scopes } } }));
+  expect(config.gateway?.roles?.definitions.guest?.scopes).toEqual(scopes);
+});
+
 test.each([
   [{ octocat: "missing" }, "octocat", "must name a configured role definition"],
   [{ octo_cat: "guest" }, "octo_cat", "Invalid GitHub login"],
@@ -84,6 +141,34 @@ test("validates model source, scoped aliases, empty membership and future-family
   });
 });
 
+test("accepts only explicit nonstandard Access grants independently of model policy", () => {
+  const config = validated(
+    rolesConfig({
+      definitions: {
+        guest: {
+          ...validRole,
+          accessPrograms: { cyber: ["daybreak_red", "daybreak_blue", "daybreak_red"] },
+        },
+      },
+    }),
+  );
+  expect(config.gateway?.roles?.definitions.guest?.accessPrograms).toEqual({
+    cyber: ["daybreak_red", "daybreak_blue"],
+  });
+});
+
+test("accepts project grants as every project or trimmed unique project IDs", () => {
+  const project = (projects: unknown) =>
+    validated(rolesConfig({ definitions: { guest: { ...validRole, projects } } })).gateway?.roles
+      ?.definitions.guest?.projects;
+  expect(project("*")).toBe("*");
+  expect(project([" handbook ", "handbook", "site"])).toEqual(["handbook", "site"]);
+  expect(project([])).toEqual([]);
+  expect(
+    validated(rolesConfig({ definitions: { guest: validRole } })).gateway?.roles?.definitions.guest,
+  ).not.toHaveProperty("projects");
+});
+
 test.each([
   { sourceAgent: "missing", deny: ["fixture/restricted-*"] },
   { sourceAgent: "shared", deny: ["fixture/restricted-**"] },
@@ -102,9 +187,17 @@ test.each([
 test.each([
   ["unknown session permission", { sessions: { others: "edit" } }],
   ["unknown sandbox policy", { sandbox: "optional" }],
+  ["wildcard Access grant", { accessPrograms: { cyber: ["*"] } }],
+  ["implicit standard Access grant", { accessPrograms: { cyber: ["standard"] } }],
+  ["unknown Access grant", { accessPrograms: { cyber: ["blue"] } }],
   ["unknown operator scope", { scopes: ["operator.superuser"] }],
+  ["leading whitespace in an operator scope", { scopes: [" operator.read"] }],
+  ["trailing whitespace in an operator scope", { scopes: ["operator.write "] }],
+  ["blank operator scope", { scopes: [" \t"] }],
   ["wildcard in an agent allowlist", { agents: ["*"] }],
   ["blank access-policy plugin", { accessPolicyPlugin: " " }],
+  ["blank project grant", { projects: [" "] }],
+  ["non-wildcard project grant string", { projects: "handbook" }],
   ["missing session policy", { sessions: undefined, agents: "*", scopes: ["operator.read"] }],
   ["freeform capability", { capability: "sessions.delete" }],
 ] as const)("rejects %s", (_name, overrides) => {
@@ -114,7 +207,6 @@ test.each([
 
 test.each([
   [{ default: "missing", definitions: { guest: validRole } }, "default"],
-  [{ definitions: { guest: validRole } }, "default"],
   [{ definitions: {} }, "definitions"],
 ] as const)("requires a role %s", (roles, field) => {
   expectSchemaIssue({ gateway: { roles } }, ["gateway", "roles", field]);
@@ -232,4 +324,105 @@ test("validates the realtime input transcription model as an optional string", (
     { talk: { realtime: { providers: { openai: { inputTranscriptionModel: 123 } } } } },
     ["talk", "realtime", "providers", "openai", "inputTranscriptionModel"],
   );
+});
+
+test("accepts role definitions without enabling named-role enforcement", () => {
+  expect(accepts({ gateway: { roles: { definitions: { guest: validRole } } } })).toBe(true);
+});
+
+test("requires a default for GitHub role assignments, including an empty mapping", () => {
+  for (const byGithubLogin of [{ octocat: "guest" }, {}]) {
+    expectSchemaIssue(
+      { gateway: { roles: { definitions: { guest: validRole }, assignments: { byGithubLogin } } } },
+      ["gateway", "roles", "assignments", "byGithubLogin"],
+      "gateway.roles.default",
+    );
+  }
+});
+
+test.each(["read", "suggest", "send"] as const)(
+  "accepts the opt-in invited ceiling %s only on invited roles",
+  (maxInvitedAccess) => {
+    const definition = { ...validRole, sessions: { others: "invited", maxInvitedAccess } };
+    expect(
+      validated(rolesConfig({ definitions: { guest: definition } })).gateway?.roles?.definitions
+        .guest?.sessions,
+    ).toEqual(definition.sessions);
+    for (const others of ["none", "view", "suggest", "write"]) {
+      expect(
+        OpenClawSchema.safeParse(
+          rolesConfig({
+            definitions: { guest: { ...definition, sessions: { others, maxInvitedAccess } } },
+          }),
+        ).success,
+      ).toBe(false);
+    }
+  },
+);
+
+test.each(["invitedTools", "invitedAlsoAllow"] as const)(
+  "validates %s invited tool policy syntax only with an invitation ceiling",
+  (field) => {
+    const sessions = { others: "invited", maxInvitedAccess: "send" };
+    const config = (value: object) =>
+      rolesConfig({ definitions: { guest: { ...validRole, sessions: value } } });
+    for (const invitedTools of [
+      [],
+      ["read"],
+      [" read ", "read"],
+      ["*"],
+      ["group:fs"],
+      ["browser", "knowledge_*", "mcp:server:read", "plugins", "openclaw"],
+      ["github_publish", "sessions_yield", "view_image", "progress_card"],
+      ["tool_search", "tool_describe", "dispatch_action"],
+    ]) {
+      expect(
+        validated(config({ ...sessions, [field]: invitedTools })).gateway?.roles?.definitions.guest
+          ?.sessions,
+      ).toEqual({ ...sessions, [field]: [...new Set(invitedTools.map((name) => name.trim()))] });
+    }
+    for (const invitedTools of [null, "read", [123], [""], ["  "]]) {
+      expect(OpenClawSchema.safeParse(config({ ...sessions, [field]: invitedTools })).success).toBe(
+        false,
+      );
+    }
+    expect(OpenClawSchema.safeParse(config({ others: "invited", [field]: ["read"] })).success).toBe(
+      false,
+    );
+  },
+);
+
+test.each([
+  [[], []],
+  [["read"], []],
+  [[], ["web_fetch"]],
+  [["read"], ["web_fetch"]],
+])("rejects both invited tool policy fields %j / %j", (invitedTools, invitedAlsoAllow) => {
+  expectSchemaIssue(
+    rolesConfig({
+      definitions: {
+        guest: {
+          ...validRole,
+          sessions: { others: "invited", maxInvitedAccess: "send", invitedTools, invitedAlsoAllow },
+        },
+      },
+    }),
+    ["gateway", "roles", "definitions", "guest", "sessions"],
+    "cannot set both invitedTools and invitedAlsoAllow",
+  );
+});
+
+test("validates invited permission only on invited-session roles", () => {
+  for (const invitedPermission of ["read-only", "guarded", "workspace", "full"]) {
+    for (const others of ["none", "invited", "view", "suggest", "write"]) {
+      const cfg = {
+        gateway: {
+          roles: {
+            definitions: { guest: { ...validRole, sessions: { others, invitedPermission } } },
+          },
+        },
+      };
+      expect(OpenClawSchema.safeParse(cfg).success).toBe(others === "invited");
+    }
+  }
 });

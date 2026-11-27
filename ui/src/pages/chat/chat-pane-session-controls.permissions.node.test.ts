@@ -1,23 +1,33 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { createMediaQueryList } from "../../test-helpers/media-query.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { renderControls } from "./chat-pane-session-controls.test-support.ts";
 import { readChatPaneMutationAccess } from "./chat-pane-session-controls.ts";
-import { createRenderTestChatPane } from "./chat-pane.test-support.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
+import { createPageState } from "./chat-state-page.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { setChatRunOwner } from "./history-merge.ts";
 import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
+
+beforeEach(() => {
+  // jsdom has no Web Animations API; the browser suite owns motion proof.
+  vi.stubGlobal("matchMedia", (query: string) =>
+    createMediaQueryList(query, query === "(prefers-reduced-motion: reduce)"),
+  );
+});
 
 async function createControlsFixture(
   scope: string,
@@ -68,12 +78,15 @@ async function createControlsFixture(
     requestHandlers: {
       "sessions.patch": { ok: true, key: selectedSession.key, entry: selectedSession },
       "sessions.list": sessionsResult,
+      "users.listModelAccounts": { accounts: [], links: [], profileId: "viewer" },
     },
   });
-  const pane = createRenderTestChatPane();
-  const state = Object.assign(pane.initialize(createInitializationContext()), fixtureHost, {
-    chatModelCatalogInitialized: true,
-  });
+  const context = createInitializationContext();
+  const state = Object.assign(
+    createPageState(context, { afterCommit: () => () => {} }, { dispatchEvent: () => true }),
+    fixtureHost,
+    { chatModelCatalogInitialized: true },
+  );
   const catalogScope = {
     agentId: resolveChatAgentId(state) ?? undefined,
     sessionKey: state.sessionKey,
@@ -86,7 +99,7 @@ async function createControlsFixture(
   const visibleSession = selectedChatSessionRow(state);
   const access = readChatPaneMutationAccess(
     {
-      ...pane.context.gateway.snapshot,
+      ...context.gateway.snapshot,
       client: state.client,
       phase: "connected",
       hello: state.hello,
@@ -105,12 +118,15 @@ async function createControlsFixture(
   const container = document.createElement("div");
   document.body.append(container);
   renderPaneModelControl(controls.composerControls, container, true);
+  // Await lazy module work before starting the DOM readiness deadline.
+  await import("./components/chat-model-picker-panel.tsx");
   await waitForSolid(() =>
     expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
   );
   const effort = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
   effort.open = true;
   effort.dispatchEvent(new Event("toggle"));
+  await import("./components/chat-effort-picker-panel.tsx");
   await waitForSolid(() =>
     expect(container.querySelector("[data-chat-thinking-slider]")).not.toBeNull(),
   );
@@ -118,6 +134,19 @@ async function createControlsFixture(
 }
 
 describe("chat pane model-setting permissions", () => {
+  it("explains why a read-only connection cannot change thinking level or session permissions", async () => {
+    const { controls, container } = await createControlsFixture("operator.read");
+    expect(
+      container.querySelector("[data-chat-thinking-select]")?.getAttribute("aria-description"),
+    ).toBe("You don’t have permission to change the thinking level.");
+    const picker = mountSolid(ChatPermissionPicker, controls.permissionPicker!);
+    expect(
+      picker.container
+        .querySelector("[data-chat-permission-select]")
+        ?.getAttribute("aria-description"),
+    ).toBe("You don’t have permission to change this session’s permissions.");
+  });
+
   it("uses live permission facts while the model catalog is still unavailable", async () => {
     const { state, selectedSession, access } =
       await createControlsFixture("operator.sessions.write");
@@ -140,6 +169,12 @@ describe("chat pane model-setting permissions", () => {
     expect(controls.composerControls.model.snapshot).toBeDefined();
     expect(controls.permissionPicker).toMatchObject({ mode: "workspace", disabled: false });
   });
+  it("lists model accounts on picker open only when the connection can read them", async () => {
+    const sessionOnly = await createControlsFixture("operator.sessions.write");
+    expect(sessionOnly.state.request).not.toHaveBeenCalledWith("users.listModelAccounts", {});
+    const reader = await createControlsFixture("operator.write");
+    expect(reader.state.request).toHaveBeenCalledExactlyOnceWith("users.listModelAccounts", {});
+  });
   it("persists an explicit Standard choice over inherited speed", async () => {
     const { state, selectedSession, container } =
       await createControlsFixture("operator.sessions.write");
@@ -149,7 +184,6 @@ describe("chat pane model-setting permissions", () => {
     const standard = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!;
     expect(standard.getAttribute("aria-checked")).toBe("true");
     expect(standard.disabled).toBe(false);
-    expect(state.request).not.toHaveBeenCalled();
     state.request.mockImplementation(async (method, params) => {
       if (method === "sessions.patch") {
         if (
@@ -284,12 +318,15 @@ describe("chat pane model-setting permissions", () => {
       const thinking = container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
       const fast = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!;
       const context = container.querySelector<HTMLButtonElement>(
-        "[data-chat-context-window-toggle]",
+        ".chat-controls__context-trigger",
       )!;
       expect(thinking.disabled).toBe(readOnly);
       expect(fast.disabled).toBe(readOnly);
       expect(context.disabled).toBe(scope !== "operator.admin");
+      expect(context).not.toBeNull();
       context.click();
+      await controls.composerControls.model.onContextWindowSelect!("extended", state.sessionKey);
+      await getPendingChatPickerPatch(state, state.sessionKey);
       if (!readOnly) {
         thinking.value = "1";
         thinking.dispatchEvent(new Event("change", { bubbles: true }));
@@ -401,7 +438,9 @@ describe("chat pane model-setting permissions", () => {
       container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!.click();
       await controls.permissionPicker.onSelect("guarded");
       await getPendingChatPickerPatch(state, state.sessionKey);
-      expect(state.request).not.toHaveBeenCalled();
+      expect(state.request.mock.calls.filter(([method]) => method === "sessions.patch")).toEqual(
+        [],
+      );
     },
   );
 });

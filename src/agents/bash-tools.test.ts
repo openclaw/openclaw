@@ -22,10 +22,16 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { getFinishedSession, waitForExecScope } from "./bash-process-registry.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
+import {
+  getFinishedSession,
+  processSessionInstanceId,
+  waitForExecScope,
+} from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
+import { fullGatewayExec, runningSession } from "./bash-tools.lifecycle.test-support.js";
 import { getBashShellConfig } from "./shell-utils.js";
 
 // mock-isolation: Hold normal follow-up admission so factory tests can inspect exact queued routing.
@@ -142,9 +148,7 @@ const shellEcho = (text: string) => (isWin ? `Write-Output ${text}` : `echo ${te
 const echoSequence = (...values: string[]) => values.map(shellEcho).join("; ");
 const createTool = (defaults?: Parameters<typeof createExecTool>[0]) =>
   createExecTool({
-    host: "gateway",
-    security: "full",
-    ask: "off",
+    ...fullGatewayExec,
     bypassHostApprovalFloors: true,
     scopeKey,
     ...defaults,
@@ -161,15 +165,8 @@ const execute = (
 ) => tool.execute(`call-${++callId}`, { command, ...options });
 const processAction = (args: Parameters<typeof processTool.execute>[1]) =>
   processTool.execute(`call-${++callId}`, args);
-function runningId(result: Awaited<ReturnType<ReturnType<typeof createExecTool>["execute"]>>) {
-  expect(result.details.status).toBe("running");
-  if (result.details.status !== "running") {
-    throw new Error("expected running session");
-  }
-  return result.details.sessionId;
-}
 const startBackground = async (tool: ReturnType<typeof createExecTool>, command: string) =>
-  runningId(await execute(tool, command, { background: true }));
+  runningSession((await execute(tool, command, { background: true })).details).sessionId;
 const notifyTool = (defaults?: Parameters<typeof createExecTool>[0]) =>
   createTool({
     backgroundMs: 0,
@@ -201,6 +198,39 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it("lets read-only process observe but never control an owner's existing command", async () => {
+  const observer = createProcessTool({ scopeKey, readOnly: true });
+  const completedId = await heldExit(async () => {
+    const id = await startBackground(
+      createTool({ notifyOnExit: false }),
+      shellEcho("owner output"),
+    );
+    expect((await observer.execute("list", { action: "list" })).details).toMatchObject({
+      sessions: [{ sessionId: id }],
+    });
+    for (const action of [
+      "write",
+      "send-keys",
+      "paste",
+      "submit",
+      "kill",
+      "clear",
+      "remove",
+    ] as const) {
+      expect(
+        text(await observer.execute(action, { action, sessionId: id, data: "echo injected\n" })),
+      ).toContain("can only list, poll, or log");
+    }
+    expect(text(await observer.execute("log", { action: "log", sessionId: id }))).toContain(
+      "owner output",
+    );
+    return id;
+  });
+  expect(
+    (await observer.execute("poll", { action: "poll", sessionId: completedId })).details,
+  ).toMatchObject({ status: "completed" });
+});
+
 it("yields a pollable process and releases foreground callbacks", async () => {
   const onUpdate = vi.fn();
   const abort = new AbortController();
@@ -219,7 +249,7 @@ it("yields a pollable process and releases foreground callbacks", async () => {
     );
     await Promise.race([exit.waitStarted, execution]);
     await vi.advanceTimersByTimeAsync(10);
-    const runningSessionId = runningId(await execution);
+    const runningSessionId = runningSession((await execution).details).sessionId;
     expect(onUpdate).toHaveBeenCalledTimes(1);
     const listener = addListener.mock.calls.find(([type]) => type === "abort")?.[1];
     expect(listener).toBeDefined();
@@ -249,7 +279,7 @@ it("awaits terminal shell results past the yield window without enabling notific
     expect(settled).toBe(false);
   });
   await expect(execution).resolves.toMatchObject({
-    details: { status: "completed", exitCode: 0, aggregated: "before\nafter" },
+    details: { status: "completed", exitCode: 0, aggregated: "before\nafter\n" },
   });
   expect(peekSystemEvents(sessionKey)).toEqual([]);
   await expect(
@@ -277,37 +307,16 @@ it("does not default to elevated when not allowed", async () => {
   expect(text(await execute(tool, shellEcho("hi")))).toContain("hi");
 });
 
-it("reads the unbounded offset log window", async () => {
+it("reads the unbounded offset and clamped tail log windows", async () => {
   const sessionId = await startAndFinish(
     createTool(),
     Array.from({ length: 201 }, (_, i) => shellEcho(`line-${i + 1}`)).join("; "),
   );
   const log = await processAction({ action: "log", sessionId, offset: 30 });
-  expect(log.details).toMatchObject({ totalLines: 201 });
+  expect(text(await processAction({ action: "log", sessionId, limit: -5 }))).toMatch(/^line-201\n/);
   expect(text(log).split("\n")[0]).toBe("line-31");
-  expect(text(log).split("\n").at(-1)).toBe("line-201");
+  expect(text(log)).toMatch(/line-201\n\nProcess exited with code 0\.$/);
   expect(text(log)).not.toContain("showing last 200");
-});
-
-it("isolates process lists and polling by scopeKey", async () => {
-  const alpha = await startBackground(createTool({ scopeKey: "agent:alpha" }), shellEcho("alpha"));
-  const beta = await startBackground(createTool({ scopeKey: "agent:beta" }), shellEcho("beta"));
-  try {
-    const list = await createProcessTool({ scopeKey: "agent:alpha" }).execute("list", {
-      action: "list",
-    });
-    expect(list.details).toMatchObject({
-      sessions: [expect.objectContaining({ sessionId: alpha })],
-    });
-    expect(text(list)).not.toContain(beta);
-    const poll = await createProcessTool({ scopeKey: "agent:beta" }).execute("poll", {
-      action: "poll",
-      sessionId: alpha,
-    });
-    expect(poll.details).toMatchObject({ status: "failed" });
-  } finally {
-    await Promise.all([waitForExecScope("agent:alpha"), waitForExecScope("agent:beta")]);
-  }
 });
 
 describe("background completion notifications", () => {
@@ -346,24 +355,59 @@ describe("background completion notifications", () => {
     await state.cleanup();
   });
 
+  it("delivers an assembled exec completion to the conversation's auto-thread", async () => {
+    const exec = expectDefined(
+      createOpenClawCodingTools({
+        sessionKey,
+        messageProvider: "discord",
+        currentChannelId: "channel:111",
+        currentMessagingTarget: "channel:222",
+        exec: { ...fullGatewayExec, bypassHostApprovalFloors: true, scopeKey },
+      }).find((tool) => tool.name === "exec"),
+      "assembled exec tool",
+    );
+    const result = await exec.execute("auto-thread", {
+      command: shellEcho("thread-result"),
+      background: true,
+    });
+    expect(result.details).toMatchObject({ status: "running" });
+    await waitForExecScope(scopeKey);
+    const receipt = expectDefined(receipts[0], "completion receipt");
+    await expect(receipt.accepted).resolves.toEqual({ ok: true });
+    expect(peekSystemEventEntries(sessionKey)).toContainEqual(
+      expect.objectContaining({
+        id: receipt.id,
+        deliveryContext: expect.objectContaining({ channel: "discord", to: "channel:222" }),
+      }),
+    );
+  });
+
   it.each([
+    { name: "defaults to notifying a chat provider", chat: true, emits: true },
+    // Dashboard and API sessions have no chat provider; silent success still wakes them.
+    { name: "defaults to notifying a non-chat session", chat: false, emits: true },
     {
-      name: "defaults to notifying chat providers",
-      notifyOnExitEmptySuccess: undefined,
-      emits: true,
+      name: "honors an explicit silent override",
+      chat: true,
+      notifyOnExitEmptySuccess: false,
+      emits: false,
     },
-    { name: "honors an explicit silent override", notifyOnExitEmptySuccess: false, emits: false },
-  ])("$name on empty success", async ({ notifyOnExitEmptySuccess, emits }) => {
+  ])("$name on empty success", async ({ chat, notifyOnExitEmptySuccess, emits }) => {
     const id = await startAndFinish(
       notifyTool({
-        messageProvider: " Telegram ",
-        currentChannelId: "telegram:-100123:topic:47",
-        currentThreadTs: "47",
+        ...(chat
+          ? {
+              messageProvider: " Telegram ",
+              currentChannelId: "telegram:-100123:topic:47",
+              currentThreadTs: "47",
+            }
+          : {}),
         notifyOnExitEmptySuccess,
       }),
       isWin ? "$null" : ":",
     );
-    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
+    const finished = expectDefined(getFinishedSession(id), "finished process");
+    expect(finished).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
     expect(receipts).toHaveLength(emits ? 1 : 0);
     if (emits) {
       const receipt = expectDefined(receipts[0], "completion receipt");
@@ -371,13 +415,15 @@ describe("background completion notifications", () => {
       expect(peekSystemEventEntries(sessionKey)).toContainEqual(
         expect.objectContaining({
           id: receipt.id,
-          contextKey: `exec:${id}`,
-          deliveryContext: {
-            channel: "telegram",
-            to: "telegram:-100123:topic:47",
-            threadId: "47",
-            accountId: undefined,
-          },
+          contextKey: `exec:${processSessionInstanceId(finished)}`,
+          deliveryContext: chat
+            ? {
+                channel: "telegram",
+                to: "telegram:-100123:topic:47",
+                threadId: "47",
+                accountId: undefined,
+              }
+            : undefined,
         }),
       );
       expect(
@@ -390,9 +436,13 @@ describe("background completion notifications", () => {
         }),
       ).toBeUndefined();
     }
-    expect(peekSystemEvents(sessionKey)).toEqual(
-      emits ? [`Exec completed (${id.slice(0, 8)}, code 0)`] : [],
-    );
+    const events = peekSystemEvents(sessionKey);
+    expect(events).toHaveLength(emits ? 1 : 0);
+    if (emits) {
+      expect(events[0]).toMatch(
+        new RegExp(`^Exec completed \\(${id.slice(0, 8)}, code 0, [^)]+\\) with no output\\.$`),
+      );
+    }
   });
 });
 

@@ -7,7 +7,7 @@ import { isResponsesOutputLimitToolCallError } from "../providers/openai-respons
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sseState = vi.hoisted(() => ({
-  outcomes: [] as SdkResponse[],
+  outcomes: [] as Array<Error | SdkResponse>,
   signal: undefined as AbortSignal | undefined,
 }));
 
@@ -141,7 +141,11 @@ it("aborts whitespace argument churn and recovers through the same-model retry o
     reason: { code: "degenerate_output" },
   });
   expect(events).not.toContain("toolcall_end");
-  expectWarning("abortReason=degenerate_output");
+  expect(logWarn).toHaveBeenCalledWith(
+    "provider-error",
+    "Model request failed",
+    expect.objectContaining({ abortReason: "degenerate_output" }),
+  );
   expect(JSON.stringify(logWarn.mock.calls)).not.toContain("return 1;");
 
   vi.useFakeTimers();
@@ -304,6 +308,46 @@ it.each(["filtered", "failed", "eof", "aborted"])(
   },
 );
 
+it("skips payload summaries when explicit transport debugging is promoted to disabled info", async () => {
+  vi.stubEnv("OPENCLAW_DEBUG_MODEL_TRANSPORT", "1");
+  configureAiTransportHost({ logWarn, logDebug, logInfo, isLogEnabled: () => false });
+  sseState.outcomes.push(
+    Object.assign(new Error("private response"), { code: "rate_limit_exceeded" }),
+  );
+  expect((await (await run()).result()).stopReason).toBe("error");
+  expect(logInfo).not.toHaveBeenCalled();
+  expect(logWarn).not.toHaveBeenCalled();
+});
+
+it("logs exactly one bounded warning per rate-limited provider attempt", async () => {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    sseState.outcomes.push(
+      Object.assign(new Error("private provider response body"), {
+        status: 429,
+        code: "rate_limit_exceeded",
+        type: "tokens",
+        request_id: `req_${attempt}`,
+      }),
+    );
+    expect((await (await run()).result()).stopReason).toBe("error");
+  }
+  expect(logWarn.mock.calls).toEqual(
+    [1, 2, 3].map((attempt) => [
+      "provider-error",
+      "Model request failed",
+      {
+        provider: model.provider,
+        model: model.id,
+        name: "Error",
+        status: 429,
+        code: "rate_limit_exceeded",
+        type: "tokens",
+        requestId: `req_${attempt}`,
+      },
+    ]),
+  );
+});
+
 it("logs the idle-timeout reason at warning level when the stream throws a generic abort", async () => {
   vi.useFakeTimers();
   queueStream(async function* () {
@@ -344,13 +388,14 @@ it("omits provider error messages, headers, and bodies from transport logs", asy
     });
   });
   expect((await (await run()).result()).stopReason).toBe("error");
-  const line = logWarn.mock.calls.find(([, message]) =>
-    message.startsWith("[responses] error "),
-  )?.[1];
-  expect(line).toContain("name=SyntaxError status=503 code=service_unavailable");
-  expect(line).not.toContain("abortReason=");
-  expect(line).not.toContain("message=");
-  expect(line).not.toContain("\n");
+  expect(logWarn).toHaveBeenCalledExactlyOnceWith("provider-error", "Model request failed", {
+    provider: model.provider,
+    model: model.id,
+    name: "SyntaxError",
+    status: 503,
+    code: "service_unavailable",
+    responseId: "resp_error",
+  });
   const logs = JSON.stringify(logWarn.mock.calls);
   expect(logs).not.toContain(privateText);
   expect(logs).not.toMatch(/private-(?:key|request|response|cookie)/u);
@@ -432,7 +477,11 @@ it.each([
     );
     expect(JSON.stringify(result.diagnostics)).not.toContain("provider-private-reason");
     if (result.stopReason === "error") {
-      expectWarning(`incompleteReason=${incompleteReason}`);
+      expect(logWarn).toHaveBeenCalledWith(
+        "provider-error",
+        "Model request failed",
+        expect.objectContaining({ incompleteReason }),
+      );
       expect(JSON.stringify(logWarn.mock.calls)).not.toContain("provider-private-reason");
     }
   },

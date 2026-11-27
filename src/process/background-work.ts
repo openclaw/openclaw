@@ -7,14 +7,12 @@ import { CommandLane } from "./lanes.js";
 const BACKGROUND_WORK_GROUP = "background-work";
 const BACKGROUND_WORK_MAX_CONCURRENT = 3;
 
-/** Lazily register Workshop's serial lane, including after queue-state resets. */
-export function getSkillWorkshopReviewLane(): string {
-  const lane = `${CommandLane.Background}:core:skill-workshop`;
+/** Lazily register one background owner's serial lane, including after queue-state resets. */
+export function getBackgroundOwnerLane(owner: string): string {
+  const lane = `${CommandLane.Background}:${owner}`;
   if (getLaneGroup(lane)) {
     if ((getQueueState().lanes.get(lane)?.maxConcurrent ?? 1) !== 1) {
-      throw new Error(
-        "Background owner core:skill-workshop is already registered with different concurrency",
-      );
+      throw new Error(`Background owner ${owner} is already registered with different concurrency`);
     }
   } else {
     const group = getQueueState().laneGroups.get(BACKGROUND_WORK_GROUP);

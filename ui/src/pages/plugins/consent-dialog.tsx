@@ -1,12 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, onSettled, Show, For, Errored, Loading } from "solid-js";
+import { createMemo, For, Errored, Loading } from "solid-js";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
-import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   RetryAction,
   SettingsRow,
@@ -24,14 +25,14 @@ import type {
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { pluginFallbackGradient, pluginMonogram } from "./presentation.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
 
 registerEnglishCatalog(registerPluginConsentEnglish);
 
-export type PluginConsentIntent = { kind: "enable"; pluginId: string; rowKey: string };
+type PluginConsentIntent = { kind: "enable"; pluginId: string; rowKey: string };
 
 type PluginConsentFallback = {
   name: string;
@@ -64,102 +65,6 @@ type PluginConsentDialogProps = {
   onConfirm: () => void;
   onRetry: () => void;
 };
-
-type ArtTileProps = {
-  registerIcon?: (readId: () => string) => () => void;
-  slug: string;
-  name: string;
-  iconUrl?: string;
-  onIconError?: () => void;
-  authorIconUrl?: string;
-  loading?: boolean;
-  class?: string;
-  whiteBackground?: boolean;
-};
-
-export function PluginArtTile(props: ArtTileProps): JSX.Element {
-  const slug = () => props.slug;
-  let disposed = false;
-  onSettled(() => {
-    const unregister = props.registerIcon?.(slug);
-    return () => {
-      disposed = true;
-      unregister?.();
-    };
-  });
-  type ImageState = { source: string | undefined; status: "loading" | "ready" | "failed" };
-  const [packageImage, setPackageImage] = createSignal<ImageState>((previous) => {
-    const source = props.iconUrl;
-    return previous && previous.source === source ? previous : { source, status: "loading" };
-  });
-  const [authorImage, setAuthorImage] = createSignal<ImageState>((previous) => {
-    const source = props.authorIconUrl;
-    return previous && previous.source === source ? previous : { source, status: "loading" };
-  });
-  const currentImage = () =>
-    packageImage().source && packageImage().status !== "failed"
-      ? { state: packageImage(), update: setPackageImage, package: true }
-      : { state: authorImage(), update: setAuthorImage, package: false };
-  const gradient = () => pluginFallbackGradient(slug());
-  const monogram = createMemo(() => pluginMonogram(props.name));
-  const source = () =>
-    currentImage().state.status === "failed" ? undefined : currentImage().state.source;
-  const pending = () =>
-    source() ? currentImage().state.status === "loading" : Boolean(props.loading);
-  const className = () => props.class ?? "plugins-tile";
-  const settle = (url: string, status: "ready" | "failed") => {
-    const image = currentImage();
-    if (disposed || image.state.source !== url) {
-      return;
-    }
-    image.update({ ...image.state, status });
-    if (status === "failed" && image.package) {
-      props.onIconError?.();
-    }
-  };
-  // Only the displayed image is admitted; failed sources stay failed until their URL changes.
-  return (
-    <>
-      {source() || pending() ? (
-        <span
-          class={[
-            className(),
-            { "plugins-tile--white": props.whiteBackground, skeleton: pending() },
-          ]}
-          data-plugin-icon-id={slug()}
-          aria-hidden="true"
-        >
-          <Show when={source()} keyed>
-            {(url) => (
-              <img
-                class="plugins-icon"
-                src={url}
-                alt=""
-                loading="eager"
-                decoding="async"
-                hidden={pending()}
-                onLoad={() => settle(url, "ready")}
-                onError={() => settle(url, "failed")}
-              />
-            )}
-          </Show>
-        </span>
-      ) : (
-        <span
-          class={[className(), `${className()}--fallback`]}
-          data-plugin-icon-id={slug()}
-          style={{
-            "--plugins-art-a": gradient()[0],
-            "--plugins-art-b": gradient()[1],
-          }}
-          aria-hidden="true"
-        >
-          {monogram() ? <span>{monogram()}</span> : <Icon name="plug" />}
-        </span>
-      )}
-    </>
-  );
-}
 
 function renderPluginMetaRow(label: string, value: JSX.Element | string, warning = false) {
   return (
@@ -239,7 +144,7 @@ function renderWidenedCapabilities(details: CapabilityConsentErrorDetails) {
     <section class="plugins-consent__section oc-section">
       <h3>{t("pluginConsent.widenedTitle")}</h3>
       <p class="plugins-consent__description">
-        {t("pluginConsent.widenedDescription")}
+        {t("pluginConsent.widenedDescription")}{" "}
         {details.acceptedAt
           ? t("pluginConsent.previouslyAccepted", { date: details.acceptedAt })
           : undefined}
@@ -292,14 +197,21 @@ function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): JSX.
       description={t("pluginConsent.grantsDescription")}
       carapace
     >
-      {renderPluginMetaRow(
-        t("pluginConsent.promptInjection"),
-        grantValue(
-          grants.hooks.allowPromptInjection,
-          "pluginConsent.allowed",
-          "pluginConsent.blocked",
-        ),
-      )}
+      <SettingsRow
+        title={t("pluginConsent.promptInjection")}
+        description={t("pluginConsent.promptInjectionDescription")}
+        control={
+          <span>
+            {grantValue(
+              grants.hooks.allowPromptInjection,
+              "pluginConsent.allowed",
+              "pluginConsent.blocked",
+            )}
+          </span>
+        }
+        stackedOnNarrow
+        carapace
+      />
       {renderPluginMetaRow(
         t("pluginConsent.conversationAccess"),
         <>
@@ -360,8 +272,10 @@ function pluginOriginLabel(origin: string | undefined, official?: boolean): stri
   return label ? t(label) : (origin ?? (official === false ? t("pluginConsent.community") : null));
 }
 
+/** The header names the source kind and package; this adds only a distinct spec and the pin. */
 function renderProvenance(source: PluginInspectSource | undefined) {
-  if (!source) {
+  const spec = source?.spec && source.spec !== source.packageName ? source.spec : undefined;
+  if (!source || (!spec && !source.integrity)) {
     return undefined;
   }
   const integrityLabel =
@@ -373,11 +287,7 @@ function renderProvenance(source: PluginInspectSource | undefined) {
   return (
     <>
       <div class="plugins-consent__provenance">
-        <span>
-          {[t(SOURCE_KIND_LABELS[source.kind]), source.spec ?? source.packageName]
-            .filter(Boolean)
-            .join(" · ")}
-        </span>
+        {spec ? <span>{spec}</span> : undefined}
         {source.integrity ? (
           <span title={source.integrity}>
             {integrityLabel}: <code>{source.integrity.slice(0, 20)}…</code>
@@ -430,12 +340,20 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
   const details = () => consent().details;
   const plugin = () => inspection()?.plugin;
   const fallback = () => consent().fallback;
-  const packageName = () => inspection()?.source?.packageName;
   const slug = () => consent().pluginId;
   const name = () => plugin()?.name ?? fallback().name;
   const version = () => plugin()?.version ?? fallback().version;
   const origin = () => pluginOriginLabel(plugin()?.origin, fallback().official);
-  const meta = () => [origin(), packageName()].filter(Boolean).join(" · ");
+  // Origin, source and package once, under the name: "Global · ClawHub · calendar-plus".
+  const meta = () => {
+    const source = inspection()?.source;
+    const parts = [
+      origin(),
+      source ? t(SOURCE_KIND_LABELS[source.kind]) : undefined,
+      source?.packageName,
+    ];
+    return [...new Set(parts.filter(Boolean))].join(" · ");
+  };
   const action = () =>
     props.busy ? t("pluginsPage.working") : t("pluginConsent.enableNamed", { name: name() });
   const confirmUnavailable = () =>
@@ -443,7 +361,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
   const confirm = (
     <button
       type="button"
-      class="btn primary oc-action oc-action-primary"
+      class="btn primary"
       disabled={confirmUnavailable() && !props.mutationBlockedReason}
       aria-disabled={!props.canMutate ? "true" : undefined}
       onClick={() => {
@@ -487,8 +405,8 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
       style={{ "--openclaw-modal-width": "min(560px, calc(100vw - 32px))" }}
       onModal-cancel={() => props.onCancel()}
     >
-      <section class="plugins-consent oc-card" data-plugin-consent={consent().intent.kind}>
-        <header class="plugins-consent__header">
+      <section class="oc-dialog plugins-consent" data-plugin-consent={consent().intent.kind}>
+        <header class="oc-dialog__header plugins-consent__header">
           <PluginArtTile
             registerIcon={props.registerIcon}
             slug={slug()}
@@ -496,42 +414,52 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
             iconUrl={props.iconUrl}
             loading={props.iconLoading}
           />
-          <div>
+          <div class="plugins-consent__identity">
             <div class="plugins-detail__title">
               <h2>{name()}</h2>
               {version() ? <span class="plugins-version">{`v${version()}`}</span> : undefined}
             </div>
             {meta() ? <p class="plugins-consent__description">{meta()}</p> : undefined}
           </div>
+          <IconButton
+            size={28}
+            class="oc-dialog__close"
+            icon="x"
+            label={t("common.close")}
+            tooltip={false}
+            onClick={() => props.onCancel()}
+          />
         </header>
-        <Loading
-          on={receipt()}
-          fallback={
-            <p class="plugins-consent__hint" role="status">
-              {t("pluginConsent.loading")}
-            </p>
-          }
-        >
-          <Errored
-            fallback={(error, reset) => (
-              <div class="plugins-consent__error" role="alert">
-                <span>{formatUiError(error())}</span>
-                <RetryAction
-                  type="button"
-                  class="btn btn--sm oc-action oc-action-secondary"
-                  label={t("pluginsPage.tryAgain")}
-                  onRetry={() => {
-                    props.onRetry();
-                    reset();
-                  }}
-                />
-              </div>
-            )}
+        <div class="oc-dialog__body">
+          <Loading
+            on={receipt()}
+            fallback={
+              <p class="plugins-consent__hint" role="status">
+                {t("pluginConsent.loading")}
+              </p>
+            }
           >
-            <InspectionBody />
-          </Errored>
-        </Loading>
-        <openclaw-modal-actions class="plugins-consent__actions">
+            <Errored
+              fallback={(error, reset) => (
+                <InlineAlert tone="danger" class="plugins-consent__error" role="alert">
+                  <span>{formatUiError(error())}</span>
+                  <RetryAction
+                    type="button"
+                    class="btn btn--sm oc-action oc-action-secondary"
+                    label={t("pluginsPage.tryAgain")}
+                    onRetry={() => {
+                      props.onRetry();
+                      reset();
+                    }}
+                  />
+                </InlineAlert>
+              )}
+            >
+              <InspectionBody />
+            </Errored>
+          </Loading>
+        </div>
+        <openclaw-modal-actions class="oc-dialog__footer plugins-consent__actions">
           <button
             type="button"
             class="btn oc-action oc-action-secondary"

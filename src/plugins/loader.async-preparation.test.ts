@@ -1,8 +1,13 @@
+import fs from "node:fs";
 import { availableParallelism } from "node:os";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createGatewayStartupTrace } from "../gateway/server-startup-trace.js";
+import { NativeWorker } from "../infra/worker-native-handle.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as jitiFactory from "./jiti-factory.js";
+import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -13,13 +18,140 @@ import {
 } from "./loader.test-fixtures.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import * as preparation from "./plugin-generation-worker.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import * as sourceReferences from "./plugin-source-references.js";
+import { capturePluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
+import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginLoaderTestStateForTest();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
+
+it.each([
+  ["async", "relative"],
+  ["synchronous CLI", "relative"],
+  ["async", "package import"],
+  ["synchronous CLI", "package import"],
+])(
+  "captures bundled operation bytes with %s preparation and %s dependencies",
+  async (mode, dependencyKind) => {
+    const bundled = makePluginLoaderTempDir();
+    const plugin = writePlugin({
+      id: "bundled-operations",
+      dir: path.join(bundled, "bundled-operations"),
+      filename: "index.cjs",
+      registration: "",
+    });
+    const reference = dependencyKind === "relative" ? "./operation.cjs" : "#dep";
+    fs.writeFileSync(
+      path.join(plugin.dir, "state-operation-api.cjs"),
+      `module.exports = require(${JSON.stringify(reference)});`,
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "other-operation-api.cjs"),
+      `module.exports = require(${JSON.stringify(reference)});`,
+    );
+    const dependencyRoot = path.join(plugin.dir, "node_modules", "operation-dependency");
+    if (dependencyKind === "package import") {
+      const manifestPath = path.join(plugin.dir, "package.json");
+      const manifest = { name: "bundled-operations", imports: { "#dep": "operation-dependency" } };
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      fs.mkdirSync(dependencyRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependencyRoot, "package.json"),
+        JSON.stringify({ name: "operation-dependency", main: "operation.cjs" }),
+      );
+    }
+    const dependency = path.join(
+      dependencyKind === "relative" ? plugin.dir : dependencyRoot,
+      "operation.cjs",
+    );
+    fs.writeFileSync(dependency, "exports.value = 'captured';");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundled;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    await using cache = createPluginCache();
+    await withPluginSourceCaptureStorage(
+      { stateDir: makePluginLoaderTempDir(), placement: "state" },
+      () =>
+        withPluginCache(cache, async () => {
+          const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
+          const visit = vi.spyOn(sourceReferences, "visitPluginSourceReferences");
+          const createResolver = vi.spyOn(jitiFactory, "createJiti");
+          const options = {
+            activate: false,
+            config: {
+              plugins: {
+                allow: [plugin.id],
+                entries: { [plugin.id]: { enabled: true } },
+                slots: { memory: "none" },
+              },
+            },
+          };
+          const registry =
+            mode === "async"
+              ? await loadOpenClawPluginsAsync(options)
+              : loadOpenClawPlugins(options);
+          const record = registry.plugins.find(({ id }) => id === plugin.id)!;
+          expect(record).toMatchObject({ origin: "bundled", status: "loaded" });
+          if (mode === "async") {
+            expect(visit).not.toHaveBeenCalled();
+            expect(createResolver).not.toHaveBeenCalled();
+            const workers = new Set(
+              posts.mock.contexts.filter(
+                (worker): worker is NativeWorker =>
+                  worker instanceof NativeWorker &&
+                  worker.sourcePath?.includes("plugin-generation-preparation") === true,
+              ),
+            );
+            expect(workers.size).toBe(1);
+            expect([...workers][0]?.executionStopped).toBe(true);
+          } else {
+            expect(visit).toHaveBeenCalled();
+          }
+          const source = capturePluginStateOperationModuleSource(
+            getPluginInstance(record),
+            () => {},
+          )!;
+          fs.unlinkSync(dependency);
+          const readOperation = (owner: typeof source, name: string) =>
+            loadValidatedPublicSurfaceModule({
+              ...owner.resolve(name),
+              capturedSource: true,
+              surfaceLabel: "bundled operation fixture",
+            });
+          expect(readOperation(source, "state-operation-api.cjs")).toMatchObject({
+            value: "captured",
+          });
+          if (mode === "async") {
+            fs.writeFileSync(dependency, "exports.value = 'replacement';");
+            // A new installation root has its own bundled module identity. Reusing the same
+            // loaded export after an in-place edit intentionally requires a Gateway restart.
+            const nextRoot = makePluginLoaderTempDir();
+            fs.cpSync(bundled, nextRoot, { recursive: true });
+            process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = nextRoot;
+            await using replacement = createPluginCache();
+            await withPluginCache(replacement, async () => {
+              const next = await loadOpenClawPluginsAsync({ ...options, cache: false });
+              const nextRecord = next.plugins.find(({ id }) => id === plugin.id)!;
+              const nextSource = capturePluginStateOperationModuleSource(
+                getPluginInstance(nextRecord),
+                () => {},
+              )!;
+              expect(readOperation(nextSource, "other-operation-api.cjs")).toMatchObject({
+                value: "replacement",
+              });
+            });
+          }
+          expect(readOperation(source, "other-operation-api.cjs")).toMatchObject({
+            value: "captured",
+          });
+        }),
+    );
+  },
+);
 
 function fixture() {
   useNoBundledPlugins();
@@ -54,22 +186,100 @@ async function isolated<T>(run: (input: ReturnType<typeof fixture>) => Promise<T
   );
 }
 
-it("reports each external plugin's preparation worker in ordinary startup logs", () =>
+it.each([
+  { label: "below threshold", registerMs: 4_999, warning: false },
+  { label: "at threshold", registerMs: 5_000, warning: false },
+  { label: "above threshold", registerMs: 5_001, warning: true },
+  { label: "slow acquisition and import only", registerMs: 0, loadMs: 6_001, warning: false },
+  { label: "failed registration", registerMs: 6_001, fail: true, warning: false },
+  { label: "no tool registrations", registerMs: 6_001, noTools: true, warning: true },
+])("emits only advisory slow-registration warnings: $label", (scenario) =>
+  isolated(async ({ first, options }) => {
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const event = `registration-timing:${first.file}`;
+    const phases: string[] = [];
+    const advance = (phase: string) => {
+      phases.push(phase);
+      clock += phase === "load" ? (scenario.loadMs ?? 0) : scenario.registerMs;
+    };
+    const prepare = preparation.preparePluginGenerationArtifact;
+    vi.spyOn(preparation, "preparePluginGenerationArtifact").mockImplementation(async (params) => {
+      const artifact = await prepare(params);
+      clock += scenario.loadMs ?? 0;
+      return artifact;
+    });
+    const tools = scenario.noTools
+      ? ""
+      : `api.registerTool(() => { throw new Error("factory must stay lazy"); }, {
+          names: ["timing_first", "timing_second", "timing_first"],
+        });
+        api.registerTool(() => { throw new Error("unnamed factory must stay lazy"); });`;
+    fs.writeFileSync(
+      first.file,
+      `const process = require("node:process");
+      process.emit(${JSON.stringify(event)}, "load");
+      module.exports = { id: ${JSON.stringify(first.id)}, register(api) {
+        ${tools}
+        process.emit(${JSON.stringify(event)}, "register");
+        ${scenario.fail ? 'throw new Error("register failed");' : ""}
+      } };`,
+    );
+    writeFixtureJson(first.dir, "openclaw.plugin.json", {
+      id: first.id,
+      configSchema: { type: "object", additionalProperties: false },
+      contracts: { tools: ["timing_first", "timing_second"] },
+    });
+    const warn = vi.fn();
+    process.on(event, advance);
+    try {
+      const registry = await loadOpenClawPluginsAsync({
+        ...options,
+        logger: { info() {}, warn, error() {} },
+      });
+      expect(phases).toEqual(["load", "register"]);
+      expect(registry.plugins.find(({ id }) => id === first.id)?.status).toBe(
+        scenario.fail ? "error" : "loaded",
+      );
+      expect(registry.tools.filter(({ pluginId }) => pluginId === first.id)).toHaveLength(
+        scenario.fail || scenario.noTools ? 0 : 2,
+      );
+      const warnings = warn.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.includes("plugin registration took"));
+      expect(warnings).toEqual(
+        scenario.warning
+          ? [
+              `[plugins] first-external plugin registration took ${scenario.registerMs.toFixed(1)}ms (>5000ms); ` +
+                (scenario.noTools
+                  ? "0 tool registrations; 0 registered tool names. "
+                  : "2 tool registrations; 2 registered tool names. ") +
+                "Registration completed (advisory only).",
+            ]
+          : [],
+      );
+    } finally {
+      process.off(event, advance);
+    }
+  }),
+);
+
+it("reports the shared external preparation worker once in ordinary startup logs", () =>
   isolated(async ({ options }) => {
     const info = vi.fn();
     const trace = createGatewayStartupTrace({ info } as never);
     try {
       const registry = await loadOpenClawPluginsAsync({ ...options, startupTrace: trace });
       expect(registry.plugins.filter((plugin) => plugin.status === "loaded")).toHaveLength(2);
-      for (const id of ["first-external", "second-external"]) {
-        const messages = info.mock.calls
-          .map(([message]) => String(message))
-          .filter((message) =>
-            message.startsWith(`startup trace: plugins.gateway-load.plugin.${id} `),
-          );
-        expect(messages).toHaveLength(1);
-        expect(messages[0]).toContain("plugin-generation-preparation.worker.js:1");
-      }
+      const preparationMessages = info.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.startsWith("startup trace: plugins.gateway-load.plugin."));
+      expect(
+        preparationMessages.filter((message) =>
+          message.includes("plugin-generation-preparation.worker.js:1"),
+        ),
+        preparationMessages.join("\n"),
+      ).toHaveLength(1);
     } finally {
       trace.close();
     }
@@ -181,4 +391,52 @@ it.each(["synchronous CLI", "cached async"])("loads %s without worker acquisitio
     }
     expect(registry.providers.map(({ provider }) => provider.label)).toEqual(["First", "Second"]);
   }),
+);
+
+it.each([
+  { first: "lenient", second: "strict" },
+  { first: "strict", second: "lenient" },
+] as const)(
+  "applies each concurrent caller's load-error policy when a $second load joins a $first one",
+  async ({ first, second }) => {
+    useNoBundledPlugins();
+    const counterKey = "__openclawJoinedLoadRegistrations";
+    const plugin = writePlugin({
+      id: "joined-load-failure",
+      body: `module.exports = { id: "joined-load-failure", register() {
+  globalThis[${JSON.stringify(counterKey)}] = (globalThis[${JSON.stringify(counterKey)}] ?? 0) + 1;
+  throw new Error("joined registration failed");
+} };`,
+    });
+    const config = pluginFixtureConfig(plugin);
+    const load = (policy: "lenient" | "strict") =>
+      loadOpenClawPluginsAsync({
+        config,
+        activate: false,
+        ...(policy === "strict" ? { throwOnLoadError: true } : {}),
+      });
+    try {
+      const firstLoad = load(first);
+      const secondLoad = load(second);
+      const [strictResult, lenientResult] = await Promise.allSettled(
+        first === "strict" ? [firstLoad, secondLoad] : [secondLoad, firstLoad],
+      );
+      expect(strictResult).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({ name: "PluginLoadFailureError" }),
+      });
+      expect(lenientResult).toMatchObject({
+        status: "fulfilled",
+        value: {
+          plugins: expect.arrayContaining([
+            expect.objectContaining({ id: plugin.id, status: "error" }),
+          ]),
+        },
+      });
+      // A strict caller reuses lenient registration work; a strict failure discards its registry.
+      expect(Reflect.get(globalThis, counterKey)).toBe(first === "lenient" ? 1 : 2);
+    } finally {
+      Reflect.deleteProperty(globalThis, counterKey);
+    }
+  },
 );

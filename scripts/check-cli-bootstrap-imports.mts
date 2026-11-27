@@ -8,7 +8,9 @@ import type { Node as AcornNode } from "acorn";
 import {
   WORKER_BUNDLE_ARTIFACT_PATHS,
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_ENTRY_PATH,
 } from "../src/shared/worker-bundle-hash.js";
+import { checkWorkerModuleBudget } from "./check-worker-module-budget.mjs";
 import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
@@ -159,6 +161,14 @@ function listRuntimeImportSpecifiers(source: string): string[] {
         continue;
       }
       const node = value as AcornNode & Record<string, unknown>;
+      // These leaves cannot contain imports; avoid allocating property lists for them.
+      if (
+        node.type === "Identifier" ||
+        node.type === "Literal" ||
+        node.type === "TemplateElement"
+      ) {
+        continue;
+      }
       if (
         node.type === "ImportDeclaration" ||
         node.type === "ExportNamedDeclaration" ||
@@ -556,7 +566,13 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
     ...collectCliBootstrapExternalImportErrors(params),
     ...collectGatewayRunChunkBudgetErrors(params),
     ...collectNativeHookRelayBundleErrors(params),
-    ...collectWorkerDeployArtifactErrors(params),
+    // A runtime-only build may skip the sealed bundle; an emitted one is always checked.
+    ...(process.env.OPENCLAW_BUILD_WORKER_DEPLOY_BUNDLE === "0" &&
+    !fs.existsSync(
+      path.resolve(params.rootDir ?? process.cwd(), "dist/worker", WORKER_BUNDLE_ENTRY_PATH),
+    )
+      ? []
+      : collectWorkerDeployArtifactErrors(params)),
   ];
   const errors = findings.filter((finding) => typeof finding === "string");
   const limitsFailed = reportLimitViolations(
@@ -576,8 +592,10 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     checkCliBootstrapExternalImports({ requireNativeHookRelay: true });
+    await checkWorkerModuleBudget(process.cwd());
     console.log("CLI bootstrap import guard passed.");
-  } catch {
+  } catch (error) {
+    console.error(error);
     process.exit(1);
   }
 }

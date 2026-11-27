@@ -99,7 +99,12 @@ Views are retained in least-recently-used order, with limits of 512 cache slots
 retention per projection. The estimate counts history identities, current row
 references and cached row/fact encodings, serialized array buffers, selection and
 partition entries, query keys, and view overhead. Shared current row encodings are
-counted once per projection, while packed replies are charged per view. This is a
+counted once per projection, while packed replies are charged per view. Selection
+vectors charge eight bytes per reference to an upstream-owned entry pair;
+facet and map records retain a larger per-record estimate. Selection
+refreshes remove superseded filtered partitions and their byte charges together;
+unchanged partitions remain reusable. This accounting does not depend on garbage
+collection. This is a
 retention estimate rather than whole-heap
 attribution. A response exceeding the budget is
 served without retaining its baseline. Eviction does not change authorization
@@ -154,6 +159,21 @@ and legacy ACP keys are repaired only by `openclaw doctor --fix`. Missing usage
 remains absent until the normal usage writer records it.
 
 Both methods accept `activeOnly: true` to select currently running or queued sessions before pagination. Activity comes from the live runtime owners, not a stored status flag. Ordinary listing behavior is unchanged when the option is omitted or false. Active-only results include each visible agent-owned `global` and `unknown` session with its raw key and captured `agentId`; callers identify rows by agent, key, and `sessionId` together. Literal `agent:<id>:global` and `agent:<id>:unknown` sessions remain different rows. Active-only raw sentinel rows omit the optional `childSessions` and `hasActiveSubagentRun` fields; use `hasActiveRun` for direct activity. Normal permissions, archive/inclusion filters, and page limits still apply. Sessionless/internal runs are outside the session index.
+
+Subagent child rows carry an optional `subagentRunState` from the subagent
+registry's current run for that child: `active` (running or queued), `paused`
+(the run called `sessions_yield` and waits for a continuation, either a message
+or its own children's results), `interrupted`, or `historical` (ended). A paused
+row keeps the `status` and `endedAt` its yielded turn recorded, usually
+`done`, so clients that do not know `paused` keep their current presentation.
+Clients that show a paused child should check `subagentRunState` before
+`status`, and should still let `hasActiveRun` win: a separate follow-up turn can
+run in a child whose delegated task stays paused. A continuation, completion,
+kill, or settlement replaces or clears the pause and publishes the row through
+`sessions.changed`; the pause survives a Gateway restart because the task can
+still be continued. The row exposes no acknowledgment text or other child
+content. `sessions.changed` events carry the same field. Rows without a
+subagent run omit it, and the `dashboard` row mode does not include it.
 
 Both methods accept `ownerFirst: true` to prepend up to 60 matching viewer-owned
 rows (or `limit`, when smaller) to the normal first page, deduplicated by session key. This applies only
@@ -479,6 +499,26 @@ or protocol-version change.
   Job definitions, run summaries, diagnostics, and delivery traces are omitted;
   use `cron.get`, `cron.list`, or `cron.runs` when displaying those details.
   Internal `cron_changed` plugin hooks still receive the full job snapshot.
+  A `finished` event already carries the next-run time; clients should not expect
+  a duplicate `scheduled` event for that same schedule. Quiet trigger evaluations
+  still publish `scheduled` when they advance the schedule without a completion.
+- `cron.inventory.changed`: payload-free notice after a committed cron definition
+  change, including add, update, retarget, remove, and enable/disable changes.
+  It reaches every operator connection admitted to read cron, including readers
+  who can no longer see a retargeted job. It contains no job ID, session, or job
+  content; clients refresh only their own authorized inventory. Normal runtime
+  `started`, `finished`, and `scheduled` events do not invalidate inventory.
+  State-only `updated` publications and unchanged declarative saves also stay
+  quiet. A run that actually disables a job publishes a definition invalidation;
+  completing an already-disabled job does not. The same committed-definition
+  comparison gates `sessions.changed` with reason `cron-binding`, including
+  both old and new bound sessions on retarget. Known jobs consume runtime facts
+  locally; unrelated unknown job IDs do not require a list read.
+  Support is advertised in `hello-ok.features.events`. Clients using this
+  contract debounce invalidations, share inventory reads by connection and query,
+  and defer hidden views until they become visible. When the event is absent
+  from the catalog, retain the older `cron`-event refresh behavior. The notice
+  uses the ordinary per-connection sequence and slow-client gap recovery.
 - `shutdown`: gateway shutdown notification.
 - `node.pair.requested` / `node.pair.resolved`: node pairing lifecycle.
 - `node.invoke.request`: node invoke request broadcast.
@@ -620,6 +660,9 @@ deduplicated by resolved session and run ID. While the `system.run` invocation
 that started the run still waits for its result, the Gateway holds the finished
 notification: the caller receives the output inline, and the notification is queued
 only if that invocation then fails (timeout, cancellation or disconnect). A
+started, finished, or denied event that arrives after the caller already received
+a successful result inline produces no notification; a terminal event consumes
+the retained authorization. A
 heartbeat wake is requested only after a system event is queued.
 
 Node event delivery is best-effort, not a durable completion ledger.

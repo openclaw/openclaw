@@ -5,12 +5,16 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/serv
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildBrowserGatewayConnectPlan } from "../api/gateway-connect-plan.ts";
 import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
+import { t } from "../i18n/index.ts";
+import { readCronInventory } from "../lib/cron/inventory.ts";
 import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";
 import { loadModelCatalog } from "../lib/model-catalog-store.ts";
 import { requestSessionList } from "../lib/sessions/session-requests.ts";
+import { cronJobsListResponse } from "../test-helpers/cron.ts";
+import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -18,7 +22,7 @@ import {
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
 import { loadSettings } from "./settings.ts";
-import type { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import { reloadAfterRenderErrorOnce, type scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
   scheduleStaleChunkReloadMock: vi.fn<typeof scheduleStaleChunkReload>(async () => true),
@@ -43,6 +47,23 @@ vi.mock("../build-info.ts", () => ({
         : Boolean(identity.version && identity.version !== "2026.7.19"),
 }));
 
+function stubReloadDocument() {
+  const replace = vi.fn();
+  const location = Object.assign(new URL("http://127.0.0.1:18789/chat/main"), { replace });
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location }));
+  vi.stubGlobal(
+    "document",
+    Object.assign(new EventTarget(), {
+      documentElement: { getAttribute: () => null },
+      querySelector: () => null,
+    }),
+  );
+  const probe = createDeferred<Response>();
+  const fetchMock = vi.fn<typeof fetch>(() => probe.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  return { replace, probe, fetchMock };
+}
+
 describe("createApplicationGateway connection ownership", () => {
   let gateway: ReturnType<typeof createStore>["gateway"];
   let current: ReturnType<typeof createStore>["current"];
@@ -66,6 +87,29 @@ describe("createApplicationGateway connection ownership", () => {
     gateway.start();
     current().testOptions.onHello?.(HELLO);
   }
+
+  it("keeps shared cron inventory capabilities when the current identity hydrates", async () => {
+    const profile = createDeferred<unknown>();
+    gateway.start();
+    const client = current();
+    client.request.mockImplementation((method) =>
+      method === "users.self" ? profile.promise : Promise.resolve(cronJobsListResponse()),
+    );
+    client.testOptions.onHello?.({
+      ...HELLO,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { events: ["cron.inventory.changed"] },
+    });
+    await readCronInventory(client, { compact: true });
+    await readCronInventory(client, { compact: true });
+    expect(client.request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
+    profile.resolve({ profile: { id: "hydrated-reader", emails: [] } });
+    await profile.promise;
+    expect(gateway.snapshot.selfUser?.id).toBe("hydrated-reader");
+    await readCronInventory(client, { compact: true });
+    await readCronInventory(client, { compact: true });
+    expect(client.request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
+  });
 
   it.each([false, true])(
     "waits for a connect catalog only when the peer advertises it: %s",
@@ -304,18 +348,8 @@ describe("createApplicationGateway connection ownership", () => {
     const actual =
       await vi.importActual<typeof import("./stale-chunk-reload.ts")>("./stale-chunk-reload.ts");
     scheduleStaleChunkReloadMock.mockImplementationOnce(actual.scheduleStaleChunkReload);
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const replace = vi.fn();
-    const location = Object.assign(new URL("http://127.0.0.1:18789/chat/main"), { replace });
-    vi.stubGlobal("window", Object.assign(new EventTarget(), { location }));
-    vi.stubGlobal(
-      "document",
-      Object.assign(new EventTarget(), {
-        documentElement: { getAttribute: () => null },
-        querySelector: () => null,
-      }),
-    );
+    const { replace, fetchMock } = stubReloadDocument();
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
     ({ gateway, current } = createStore({
       clientOptions: { clientName: "openclaw-ios", mode: "ui" },
     }));
@@ -339,6 +373,50 @@ describe("createApplicationGateway connection ownership", () => {
     expect(current().testOptions.bootstrapProfile).toBeUndefined();
     expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
   });
+
+  it.each([
+    "first hello",
+    "reconnect",
+    "reauthentication",
+    "bootstrap token",
+    "bootstrap profile",
+    "stale build",
+  ])(
+    "settles pending render recovery under the current hello authority: %s",
+    async (transition) => {
+      const { replace, probe, fetchMock } = stubReloadDocument();
+      gateway.connect({
+        bootstrapToken: transition === "bootstrap token" ? "synthetic-bootstrap" : "",
+        bootstrapProfile: transition === "bootstrap profile" ? "owner" : undefined,
+      });
+      if (transition === "reconnect" || transition === "reauthentication") {
+        current().testOptions.onHello?.(HELLO);
+        current().testOptions.onClose?.({
+          code: transition === "reauthentication" ? 1008 : 1006,
+          reason: "connection lost",
+          willRetry: transition !== "reauthentication",
+          ...(transition === "reauthentication"
+            ? { error: { code: "PAIRING_REQUIRED", message: "Pair again" } }
+            : {}),
+        });
+        if (transition === "reauthentication") {
+          gateway.connect();
+        }
+      }
+      const recovery = reloadAfterRenderErrorOnce(createGatewayControlUiReloadOptions(gateway));
+      expect(fetchMock).toHaveBeenCalledOnce();
+      current().testOptions.onHello?.({
+        ...HELLO,
+        ...(transition === "stale build"
+          ? { server: { version: "2026.7.19", buildId: "replacement-build", connId: "test" } }
+          : {}),
+      });
+      probe.resolve(new Response(null, { status: 200 }));
+      const shouldReload = transition === "first hello";
+      expect(await recovery).toBe(shouldReload);
+      expect(replace).toHaveBeenCalledTimes(shouldReload ? 1 : 0);
+    },
+  );
 
   it("keeps legacy version fallback on reconnect instead of first admission", () => {
     gateway.start();
@@ -460,8 +538,8 @@ describe("createApplicationGateway connection ownership", () => {
       expect(gateway.snapshot.phase).toBe(willRetry ? "reconnecting" : "offline");
       expect(gateway.snapshot.lastError).toBe(
         willRetry
-          ? "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket 1006)"
-          : "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket 1006)",
+          ? "Disconnected. Reconnecting automatically. (WebSocket 1006)"
+          : "Disconnected. Check your connection and reconnect. (WebSocket 1006)",
       );
     }
   });
@@ -494,7 +572,9 @@ describe("createApplicationGateway connection ownership", () => {
     expect(current().testOptions.bootstrapToken).toBeUndefined();
     current().testOptions.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
     expect(gateway.snapshot.phase).toBe("connecting");
-    expect(gateway.snapshot.lastError).toBe("disconnected (1006): remote refused");
+    expect(gateway.snapshot.lastError).toBe(
+      `${t("connection.interrupted", { code: "1006" })} remote refused`,
+    );
   });
 
   it("advances the connection revision only when credentials change", () => {
@@ -688,7 +768,13 @@ describe("createApplicationGateway connection ownership", () => {
     connect();
     const client = gateway.snapshot.client!;
     current().request.mockImplementation(async (method) =>
-      method === "cron.list" ? { jobs: [{ id: "job", name: "Automation" }] } : { models: [] },
+      method === "cron.list"
+        ? {
+            ...cronJobsListResponse(),
+            jobs: [{ id: "job", name: "Automation", enabled: true }],
+            total: 1,
+          }
+        : { models: [] },
     );
     const load = () =>
       loadCommandPaletteCatalogItems({
@@ -703,7 +789,7 @@ describe("createApplicationGateway connection ownership", () => {
     expect(first).toEqual(shared);
     expect(first).toContainEqual(expect.objectContaining({ label: "Automation" }));
     expect(count()).toBe(1);
-    for (const event of ["cron", "config.changed"]) {
+    for (const event of ["cron.inventory.changed", "config.changed"]) {
       let pending: ReturnType<typeof load> | undefined;
       const unsubscribe = gateway.subscribeEvents(() => {
         pending = load();

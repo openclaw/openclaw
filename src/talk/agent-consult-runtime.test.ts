@@ -15,7 +15,10 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import {
+  consultRealtimeVoiceAgent,
+  consultRealtimeVoiceAgentInSessionRuntime,
+} from "./agent-consult-runtime.js";
 import {
   createOrResumeClientVoiceSession,
   registerClientVoiceConsultRun,
@@ -44,9 +47,6 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
     payloads,
     meta: {},
   }));
-  const getSessionEntry = vi.fn(
-    ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey],
-  );
   const prepareSessionEntryPatch = vi.fn<
     ConsultParams["agentRuntime"]["session"]["prepareSessionEntryPatch"]
   >(async (params) => {
@@ -77,10 +77,9 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       session: {
         resolveStorePath: vi.fn(() => state.statePath("sessions.json")),
-        getSessionEntry,
-        getSessionEntryAsync: vi.fn(
-          async (params: { sessionKey: string }) => sessionStore[params.sessionKey],
-        ),
+        getSessionEntry: ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey],
+        getSessionEntryAsync: async ({ sessionKey }: { sessionKey: string }) =>
+          sessionStore[sessionKey],
         prepareSessionEntryPatch,
       },
       runEmbeddedAgent,
@@ -93,8 +92,12 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
 type ConsultParams = Parameters<typeof consultRealtimeVoiceAgent>[0];
 type TestRuntime = ReturnType<typeof createAgentRuntime>["runtime"];
 
-function runConsult(runtime: TestRuntime, params: Partial<ConsultParams> = {}) {
-  return consultRealtimeVoiceAgent({
+function runConsult(
+  runtime: TestRuntime,
+  params: Partial<ConsultParams> = {},
+  sessionRuntime = false,
+) {
+  return (sessionRuntime ? consultRealtimeVoiceAgentInSessionRuntime : consultRealtimeVoiceAgent)({
     agentRuntime: runtime as never,
     cfg: {},
     logger: { warn: vi.fn() },
@@ -134,15 +137,7 @@ const forkConsult = (runtime: TestRuntime, params: Partial<ConsultParams> = {}) 
 function requireEmbeddedAgentCall(
   runEmbeddedAgent: ReturnType<typeof createAgentRuntime>["runEmbeddedAgent"],
 ): RunEmbeddedAgentParams {
-  const params = runEmbeddedAgent.mock.calls[0]?.[0];
-  if (!params) {
-    throw new Error("Expected embedded OpenClaw agent call");
-  }
-  return params;
-}
-
-function expectNonEmptyString(value: unknown) {
-  expect(value).toEqual(expect.stringMatching(/\S/u));
+  return expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "embedded OpenClaw agent call");
 }
 
 function expectForkTarget(call: RunEmbeddedAgentParams, sessionId = call.sessionId) {
@@ -277,7 +272,19 @@ describe("realtime voice agent consult runtime", () => {
       { text: "Then this." },
     ]);
 
+    const runOptions = {
+      senderId: "+15550001234",
+      senderIsOwner: true,
+      toolsAllow: ["read"],
+      toolBindings: { voice_call: { kind: "active-call", callId: "call-1" } },
+      provider: "openai",
+      model: "gpt-5.4",
+      thinkLevel: "high",
+      fastMode: true,
+      timeoutMs: 10_000,
+    } satisfies Partial<ConsultParams>;
     const result = await runConsult(runtime, {
+      ...runOptions,
       cfg: { agents: { entries: { operator: {} } } },
       sessionKey: "voice:15550001234",
       runIdPrefix: "voice-realtime-consult:call-1",
@@ -288,15 +295,6 @@ describe("realtime voice agent consult runtime", () => {
       ],
       assistantLabel: "Agent",
       questionSourceLabel: "caller",
-      senderId: "+15550001234",
-      senderIsOwner: true,
-      toolsAllow: ["read"],
-      toolBindings: { voice_call: { kind: "active-call", callId: "call-1" } },
-      provider: "openai",
-      model: "gpt-5.4",
-      thinkLevel: "high",
-      fastMode: true,
-      timeoutMs: 10_000,
     });
 
     expect(result).toEqual({ text: "Speak this.\n\nThen this." });
@@ -308,28 +306,20 @@ describe("realtime voice agent consult runtime", () => {
       updatedAt: expect.any(Number),
     });
     expect(voiceSession.createdAt).toBeGreaterThan(0);
-    expectNonEmptyString(voiceSession.sessionId);
+    expect(voiceSession.sessionId).toMatch(/\S/u);
     expect(voiceSession.updatedAt).toBeGreaterThan(0);
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expect(call).toMatchObject({
+      ...runOptions,
       sessionId: voiceSession.sessionId,
       sessionKey: "voice:15550001234",
       sandboxSessionKey: "agent:operator:voice:15550001234",
       agentId: "operator",
-      senderId: "+15550001234",
-      senderIsOwner: true,
       messageProvider: "voice",
       lane: "voice",
-      provider: "openai",
-      model: "gpt-5.4",
-      thinkLevel: "high",
-      fastMode: true,
-      timeoutMs: 10_000,
     });
-    expect(call.toolsAllow).toStrictEqual(["read"]);
-    expect(call.toolBindings).toStrictEqual({
-      voice_call: { kind: "active-call", callId: "call-1" },
-    });
+    expect(call.toolsAllow).toStrictEqual(runOptions.toolsAllow);
+    expect(call.toolBindings).toStrictEqual(runOptions.toolBindings);
     expect(call.prompt).toBe(
       [
         "Live voice request from the caller during a live phone call.",
@@ -345,25 +335,6 @@ describe("realtime voice agent consult runtime", () => {
     expect(call.extraSystemPrompt).toBe(
       "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
     );
-  });
-
-  it("carries current voice session permissions without enabling owner trace", async () => {
-    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
-    sessionStore["agent:main:voice"] = {
-      sessionId: "voice-session",
-      updatedAt: 1,
-      permissionMode: "workspace",
-      toolOverrides: { webSearch: false },
-    };
-    await runConsult(runtime, {
-      sessionKey: "agent:main:voice",
-      senderIsOwner: true,
-    });
-    expect(requireEmbeddedAgentCall(runEmbeddedAgent)).toMatchObject({
-      permissionMode: "workspace",
-      toolOverrides: { webSearch: false },
-      traceAuthorized: false,
-    });
   });
 
   it.each(["consult", "requester"])(
@@ -516,22 +487,10 @@ describe("realtime voice agent consult runtime", () => {
 
     await forkConsult(runtime);
 
-    expect(forkSessionEntryFromParent.mock.calls[0]?.[0]).toMatchObject({
-      parentSessionKey: "agent:main:main",
-      agentId: "main",
-      config: {},
-      sessionKey: "agent:main:subagent:google-meet:meet-1",
-    });
-    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
-    const forkedEntry = expectDefined(
-      sessionStore["agent:main:subagent:google-meet:meet-1"],
-      "forked voice session",
-    );
-    expect(forkedEntry).toBeDefined();
+    const forkedEntry = expectDefined(sessionStore[forkSessionKey], "forked voice session");
     expect(forkedEntry).toStrictEqual({
       sessionId: "forked-session",
       spawnedBy: "agent:main:main",
-      // The consult child's lineage receipt; the fixture parent has no lifecycle revision.
       spawnedBySessionId: "parent-session",
       parentSessionLifecycleRevision: undefined,
       spawnedBySenderIsOwner: false,
@@ -555,11 +514,7 @@ describe("realtime voice agent consult runtime", () => {
     forkSessionEntryFromParent.mockImplementation(async (params) => ({
       status: "skipped",
       reason: "decision-skip",
-      sessionEntry: {
-        ...(params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() }),
-        sessionId: "",
-        updatedAt: Date.now(),
-      },
+      sessionEntry: { ...params.fallbackEntry, sessionId: "", updatedAt: Date.now() },
       decision: {
         status: "skip",
         reason: "parent-too-large",
@@ -575,16 +530,17 @@ describe("realtime voice agent consult runtime", () => {
     expect(warn).toHaveBeenCalledWith(
       "[talk] Parent context is too large to fork (150000/100000 tokens); starting with isolated context instead.",
     );
-    expect(runtime.session.prepareSessionEntryPatch).toHaveBeenCalled();
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
-    expectNonEmptyString(call.sessionId);
+    expect(call.sessionId).toMatch(/\S/u);
     expectForkTarget(call);
   });
 
-  it("reuses the call session delivery context when requester metadata is absent", async () => {
+  it("reuses current call permissions and delivery without enabling owner trace", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
     sessionStore["voice:google-meet:meet-1"] = {
       sessionId: "call-session",
+      permissionMode: "workspace",
+      toolOverrides: { webSearch: false },
       delivery: normalizeSessionDeliveryState({
         context: {
           channel: "discord",
@@ -596,7 +552,7 @@ describe("realtime voice agent consult runtime", () => {
       updatedAt: 1,
     };
 
-    await runConsult(runtime, { sessionKey: "voice:google-meet:meet-1" });
+    await runConsult(runtime, { sessionKey: "voice:google-meet:meet-1", senderIsOwner: true });
 
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expect(call).toMatchObject({
@@ -608,6 +564,81 @@ describe("realtime voice agent consult runtime", () => {
       messageThreadId: "thread-456",
       currentChannelId: "channel:123",
       currentThreadTs: "thread-456",
+      permissionMode: "workspace",
+      toolOverrides: { webSearch: false },
+      traceAuthorized: false,
+    });
+  });
+
+  it("keeps the high voice default for plugin bridges even when the parent chat sets thinking", async () => {
+    // Bridges run the embedded owner, which does not read session thinking.
+    const bridge = createAgentRuntime();
+    const sessionKey = "agent:main:bridge-thinking";
+    bridge.sessionStore[sessionKey] = {
+      sessionId: "bridge-thinking",
+      updatedAt: 1,
+      thinkingLevel: "low",
+    };
+    await runConsult(bridge.runtime, { agentId: "main", sessionKey });
+    expect(requireEmbeddedAgentCall(bridge.runEmbeddedAgent).thinkLevel).toBe("high");
+  });
+
+  it("leaves the lock to the session runtime while preserving the high voice default", async () => {
+    const sessionKey = "agent:main:session-runtime";
+    const bridge = createAgentRuntime();
+    bridge.sessionStore[sessionKey] = { ...lockedEntry, sessionId: "locked-bridge" };
+    // Bridges without the session runtime still refuse to cross a locked native transcript.
+    // An old untyped caller cannot opt the public helper out of its model lock.
+    const legacyOptions = { dispatchesInSessionRuntime: true, agentId: "main", sessionKey };
+    await expect(runConsult(bridge.runtime, legacyOptions)).rejects.toThrow(/locked/i);
+    expect(bridge.runEmbeddedAgent).not.toHaveBeenCalled();
+
+    const session = createAgentRuntime();
+    session.sessionStore[sessionKey] = { ...lockedEntry, sessionId: "locked-session" };
+    await expect(
+      runConsult(
+        session.runtime,
+        {
+          agentId: "main",
+          sessionKey,
+        },
+        true,
+      ),
+    ).resolves.toEqual({ text: "Speak this." });
+    // Voice retains its high default; the command owner normalizes runtime support.
+    expect(requireEmbeddedAgentCall(session.runEmbeddedAgent).thinkLevel).toBe("high");
+
+    const plain = createAgentRuntime();
+    await runConsult(plain.runtime, { agentId: "main", sessionKey: "agent:main:bridge" });
+    expect(requireEmbeddedAgentCall(plain.runEmbeddedAgent).thinkLevel).toBe("high");
+
+    await expect(
+      runConsult(
+        createAgentRuntime().runtime,
+        {
+          agentId: "main",
+          sessionKey: "agent:main:override",
+          provider: "openai",
+        },
+        true,
+      ),
+    ).rejects.toThrow("Session-runtime consults use the session's own model selection");
+  });
+
+  it.each([
+    ["a caller listed in commands.ownerAllowFrom", "facetime:owner@example.com", true],
+    ["an allowed caller not listed there", "facetime:guest@example.com", false],
+  ])("decides owner from the sender for %s", async (_name, senderId, owner) => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+
+    await runConsult(runtime, {
+      cfg: { commands: { ownerAllowFrom: ["facetime:owner@example.com", "+15550001111"] } },
+      senderId,
+    });
+
+    expect(requireEmbeddedAgentCall(runEmbeddedAgent)).toMatchObject({
+      senderId,
+      senderIsOwner: owner,
     });
   });
 });

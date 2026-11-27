@@ -1,24 +1,16 @@
-import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { CONTROL_UI_ENVIRONMENT_COLORS } from "../gateway/control-ui-bootstrap-contract.js";
-import {
-  ADMIN_SCOPE,
-  APPROVALS_SCOPE,
-  PAIRING_SCOPE,
-  QUESTIONS_SCOPE,
-  READ_SCOPE,
-  SESSION_READ_SCOPE,
-  SESSION_WRITE_SCOPE,
-  TALK_SCOPE,
-  TALK_SECRETS_SCOPE,
-  WRITE_SCOPE,
-} from "../gateway/operator-scopes.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import {
   isValidPortalIngressDomain,
   portalIngressConflictsWithOrigin,
 } from "./gateway-portal-ingress.js";
+import { GatewayOpenClawIdConfigSchema } from "./zod-schema.gateway-openclaw-id.js";
+import {
+  GatewayOperatorRoleDefinitionSchema,
+  OperatorScopeSchema,
+} from "./zod-schema.gateway-roles.js";
 import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
@@ -27,18 +19,6 @@ import {
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const OperatorScopeSchema = z.enum([
-  ADMIN_SCOPE,
-  READ_SCOPE,
-  WRITE_SCOPE,
-  SESSION_READ_SCOPE,
-  SESSION_WRITE_SCOPE,
-  APPROVALS_SCOPE,
-  QUESTIONS_SCOPE,
-  PAIRING_SCOPE,
-  TALK_SCOPE,
-  TALK_SECRETS_SCOPE,
-]);
 const GatewayGitHubEndpointSchema = z
   .strictObject({
     host: z.string().trim().min(1).optional(),
@@ -79,40 +59,13 @@ const GatewayGitHubEndpointSchema = z
       });
     }
   });
-export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
-  sessions: z.strictObject({
-    /** Maximum access to another person's sessions without explicit membership. */
-    others: z.enum(["none", "view", "suggest", "write"]),
-  }),
-  /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */
-  sandbox: z.enum(["inherit", "required"]).optional(),
-  /** Agent IDs available for session creation and runs, or all agents when set to "*". */
-  agents: z.union([
-    z.literal("*"),
-    z
-      .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
-      .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
-  ]),
-  /** Optional model ceiling for this role; defaults to the source agent's primary and fallbacks. */
-  modelPolicy: z
-    .strictObject({
-      sourceAgent: z
-        .string()
-        .trim()
-        .min(1)
-        .refine(isValidAgentId, "Invalid agent id")
-        .transform(normalizeAgentId)
-        .optional(),
-      allow: z.array(z.string().trim().min(1)).optional(),
-      deny: z.array(z.string().trim().min(1)).optional(),
-    })
-    .optional(),
-  /** Ceiling applied to the authenticated profile's granted operator scopes. */
-  scopes: z.array(OperatorScopeSchema).transform((scopes) => uniqueValues(scopes)),
-  /** Required access-policy plugin; availability is checked at admission, not config parsing. */
-  accessPolicyPlugin: z.string().trim().min(1).max(128).optional(),
-});
 const GatewayOperatorRoleNameSchema = z.string().trim().min(1).max(128);
+const CloudflareAccessIssuerSchema = z
+  .string()
+  .regex(
+    /^https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.cloudflareaccess\.com$/u,
+    "Expected a Cloudflare Access HTTPS issuer origin without a trailing slash",
+  );
 const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const GatewayHttpImagesSchema = z.strictObject(ResponsesEndpointUrlFetchShape).optional();
 
@@ -126,6 +79,19 @@ function validateGatewayPublicOrigin(value: string): boolean {
 
 export const GatewayConfigSchema = z
   .strictObject({
+    resources: z
+      .strictObject({
+        profile: z.enum(["auto", "standard", "lean"]).optional(),
+        memoryBudgetMiB: z.number().int().positive().optional(),
+      })
+      .optional(),
+    sessionControl: z
+      .strictObject({
+        publicationReadEnabled: z.boolean().optional(),
+        steeringEnabled: z.boolean().optional(),
+        publicationWriteEnabled: z.boolean().optional(),
+      })
+      .optional(),
     /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
     port: z.number().int().min(1).max(65_535).optional(),
     /**
@@ -179,7 +145,10 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
+    /** Experimental OpenClaw ID remote access (Labs); inert unless enabled. */
+    openclawId: GatewayOpenClawIdConfigSchema.optional(),
     github: GatewayGitHubEndpointSchema.optional(),
+    repositoryIntegration: z.string().trim().min(1).optional(),
     projects: z
       .strictObject({
         defaultRepository: z
@@ -205,10 +174,10 @@ export const GatewayConfigSchema = z
         basePath: z.string().optional(),
         experimental: z
           .strictObject({
-            /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
+            /** Advanced native UI opt-out (default true; existing false stays off, bundled UI unaffected). */
             customPlugins: z.boolean().optional(),
-            /** Show the official Claw catalog and Add flow in Control UI (default false). */
-            claws: z.boolean().optional(),
+            /** Advanced Templates opt-out (default true; existing false stays off). */
+            templates: z.boolean().optional(),
             /** Enable experimental speech bubbles in the Control UI (default false). */
             chatBubbles: z.boolean().optional(),
             /** Optional, tool-free next-message suggestions (disabled by default). */
@@ -364,16 +333,42 @@ export const GatewayConfigSchema = z
              * trust boundary and direct Gateway access is otherwise locked down.
              */
             allowLoopback: z.boolean().optional(),
+            /** Revision-scoped delegation from OpenClaw Enterprise's private browser proxy. */
+            delegation: z
+              .strictObject({
+                credentialFile: z
+                  .string()
+                  .refine(isAbsolute, "Expected an absolute credential file path"),
+              })
+              .optional(),
+            /** Optional organization commit credit, supplied only by the authenticated proxy. */
+            gitCoauthor: z
+              .strictObject({
+                nameHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailVerifiedHeader: z
+                  .string()
+                  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)
+                  .optional(),
+              })
+              .optional(),
+            /**
+             * Verify cf-access-jwt-assertion against the team's signing keys before
+             * trusting the user header. Off by default; header presence alone is trusted then.
+             */
+            cloudflareAccessJwt: z
+              .strictObject({
+                /** Access team origin, such as https://example.cloudflareaccess.com. */
+                issuer: CloudflareAccessIssuerSchema,
+                /** Application Audience (AUD) tag the assertion must carry. */
+                audience: z.string().trim().min(1),
+              })
+              .optional(),
             /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */
             cloudflareAccessOidc: z
               .strictObject({
                 /** Exact Cloudflare Access issuer origin, including https://. */
-                issuer: z
-                  .string()
-                  .regex(
-                    /^https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.cloudflareaccess\.com$/u,
-                    "Expected a Cloudflare Access HTTPS issuer origin without a trailing slash",
-                  ),
+                issuer: CloudflareAccessIssuerSchema,
                 /** Access identity-provider ID, not its display name or the OIDC subject. */
                 providerId: z.string().trim().min(1),
                 /** Forwarded claim containing a verified numeric GitHub account ID as a decimal string. */
@@ -398,15 +393,21 @@ export const GatewayConfigSchema = z
                 scopes: z.array(z.string().min(1)).optional(),
               })
               .optional(),
+            /**
+             * Let approved CLI and TUI devices that request more than their paired
+             * scopes connect within them instead of filing a scope-upgrade request,
+             * and issue the TUI a device token. @default false
+             */
+            narrowToDeviceGrant: z.boolean().optional(),
           })
           .optional(),
       })
       .optional(),
-    /** Optional profile-bound operator roles; omitted preserves legacy authorization. */
+    /** Role definitions; a default enables profile-bound named-role enforcement. */
     roles: z
       .strictObject({
-        /** Required default for profiles without a valid explicit or GitHub login assignment. */
-        default: GatewayOperatorRoleNameSchema,
+        /** Enables named-role enforcement and supplies the fallback for unassigned profiles. */
+        default: GatewayOperatorRoleNameSchema.optional(),
         assignments: z
           .strictObject({
             /** Case-insensitive GitHub login assignments; explicit profile assignments win. */
@@ -422,11 +423,19 @@ export const GatewayConfigSchema = z
           ),
       })
       .superRefine((roles, ctx) => {
-        if (!Object.hasOwn(roles.definitions, roles.default)) {
+        if (roles.default !== undefined && !Object.hasOwn(roles.definitions, roles.default)) {
           ctx.addIssue({
             code: "custom",
             message: "gateway.roles.default must name a configured role definition",
             path: ["default"],
+          });
+        }
+        if (roles.default === undefined && roles.assignments?.byGithubLogin !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            message:
+              "gateway.roles.assignments.byGithubLogin requires gateway.roles.default to enable named-role enforcement",
+            path: ["assignments", "byGithubLogin"],
           });
         }
         const githubLogins = new Set<string>();
@@ -645,7 +654,7 @@ export const GatewayConfigSchema = z
       ctx.addIssue({
         code: "custom",
         path: ["portals", "ingress", "domain"],
-        message: "Portal ingress must use a separate domain from Gateway and Control UI origins",
+        message: "Portal ingress must use a separate domain from Gateway and web app origins",
       });
     }
     if (ingress.port === (gateway.port ?? 18789)) {

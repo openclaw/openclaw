@@ -1,9 +1,14 @@
+import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import {
   IncognitoSessionEndedError,
   IncognitoSessionSyncAccessError,
 } from "../../../state/incognito-session-error.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import {
+  makeAgentAssistantMessage,
+  makeAgentUserMessage,
+} from "../../test-helpers/agent-message-fixtures.js";
 import { createEventBus } from "../event-bus.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { SessionMetadataCommittedError } from "../session-manager-metadata-error.js";
@@ -74,11 +79,10 @@ async function expectFatal(runner: ExtensionRunner, invoke: Invoke, failure: Err
   expect(report).not.toHaveBeenCalled();
 }
 
-const buildMessages = (): [AgentMessage, AgentMessage] =>
-  [
-    { role: "user", content: [{ type: "text", text: "hello" }] },
-    { role: "assistant", content: [{ type: "text", text: "hi" }] },
-  ] as [AgentMessage, AgentMessage];
+const buildMessages = (): [UserMessage, AssistantMessage] => [
+  makeAgentUserMessage({ content: [{ type: "text", text: "hello" }] }),
+  makeAgentAssistantMessage({ content: [{ type: "text", text: "hi" }] }),
+];
 
 it("ExtensionRunner warns once for legacy binding; async binding stays silent", () => {
   const runner = buildRunner();
@@ -116,6 +120,34 @@ it("isolates caller messages while chaining replacements through a shared handle
   const runner = buildHandlerRunner("context", [record], [record, record]);
   expect(await runner.emitContext(messages)).toBe(final);
   expect(contexts[0]).toBe(contexts[1]);
+});
+
+it("detaches frozen context containers without serializing their transcript text", async () => {
+  const block = Object.freeze({ type: "text" as const, text: "history".repeat(8192) });
+  const message = { role: "user" as const, content: [block], timestamp: 1 };
+  const messages: AgentMessage[] = [message];
+  Object.freeze(message.content);
+  Object.freeze(message);
+  Object.freeze(messages);
+  const runner = buildHandlerRunner("context", [async () => undefined]);
+  using nativeClone = vi.spyOn(globalThis, "structuredClone");
+  const projected = await runner.emitContext(messages);
+  expect(projected).toEqual(messages);
+  expect(nativeClone).not.toHaveBeenCalled();
+  const projectedMessage = projected[0];
+  if (projectedMessage?.role !== "user" || !Array.isArray(projectedMessage.content)) {
+    throw new Error("Expected the projected user message");
+  }
+  const content = projectedMessage.content;
+  if (content[0]?.type !== "text") {
+    throw new Error("Expected the projected text block");
+  }
+  content[0].text = "hook edit";
+  content.push({ type: "text", text: "hook addition" });
+  projected.push({ role: "user", content: "next", timestamp: 2 });
+  expect(messages).toHaveLength(1);
+  expect(message.content).toEqual([block]);
+  expect(block.text).toBe("history".repeat(8192));
 });
 
 // Other adapters share dispatchHandlers; retain each distinct stop/continue path here.

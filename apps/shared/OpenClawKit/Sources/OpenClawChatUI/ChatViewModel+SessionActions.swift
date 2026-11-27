@@ -80,6 +80,7 @@ extension OpenClawChatViewModel {
     }
 
     func beginSessionBranchSwitchActivity(for session: SessionSnapshot) -> SessionBranchSwitchActivity {
+        self.invalidateHistoryCursor(replacingCanonicalHistory: true)
         self.nextSessionBranchSwitchGeneration &+= 1
         let activity = SessionBranchSwitchActivity(
             session: session,
@@ -132,6 +133,7 @@ extension OpenClawChatViewModel {
     @discardableResult
     func performStartNewSession(
         agentID: String? = nil,
+        inheritCurrentSession: Bool = false,
         worktree: Bool,
         worktreeBaseRef: String? = nil,
         routeLease: OpenClawChatNewSessionRouteLease? = nil) async -> Bool
@@ -150,7 +152,8 @@ extension OpenClawChatViewModel {
                 self.activeAgentId ??
                 OpenClawChatSessionKey.agentID(from: self.resolvedMainSessionKey))?
             .lowercased()
-        let parentSessionKey = requestedAgentID == nil || requestedAgentID == currentAgentID
+        // Global/sidebar creation uses Gateway defaults; only in-chat /new inherits.
+        let parentSessionKey = inheritCurrentSession && (requestedAgentID == nil || requestedAgentID == currentAgentID)
             ? self.sessionKey
             : nil
         let next: String
@@ -438,7 +441,8 @@ extension OpenClawChatViewModel {
     public func fetchSessionList(
         search: String?,
         archived: Bool,
-        agentID: String? = nil) async -> [OpenClawChatSessionEntry]
+        agentID: String? = nil,
+        preservingPersonalPinOrder: Bool = false) async -> [OpenClawChatSessionEntry]
     {
         let session = self.currentSessionSnapshot()
         let query = ChatPayloadDecoding.trimmedNonEmptyString(search)
@@ -449,7 +453,9 @@ extension OpenClawChatViewModel {
                 archived: archived,
                 agentID: agentID ?? session.deliveryAgentID)
             guard self.isCurrentSession(session) else { return [] }
-            return OpenClawChatSessionListOrganizer.organize(res.sessions)
+            return OpenClawChatSessionListOrganizer.organize(
+                res.sessions,
+                preservingPersonalPinOrder: preservingPersonalPinOrder)
         } catch {
             // A superseded (cancelled) fetch must not produce fallback rows;
             // the newer task owns the scoped list. Callers also guard on
@@ -575,6 +581,7 @@ extension OpenClawChatViewModel {
             return
         }
         do {
+            self.invalidateHistoryCursor(replacingCanonicalHistory: true)
             let result = try await self.transport.rewindSession(
                 sessionKey: initiatingSession.key,
                 entryId: entryID)
@@ -590,6 +597,7 @@ extension OpenClawChatViewModel {
             self.input = result.editorText ?? ""
             self.narration = ChatNarration()
             self.restoreEditorAttachments(result.editorAttachments)
+            self.invalidateHistoryCursor(replacingCanonicalHistory: true)
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
             _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
             guard self.isCurrentSession(initiatingSession) else {
@@ -789,6 +797,7 @@ extension OpenClawChatViewModel {
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             self.narration = ChatNarration()
+            self.invalidateHistoryCursor(replacingCanonicalHistory: true)
             await self.reconcileSessionBranchChange(
                 switchActivity,
                 confirmedLeafEntryID: normalizedLeafEntryID)
@@ -937,16 +946,22 @@ extension OpenClawChatViewModel {
     public func setSessionPinned(key: String, pinned: Bool, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
         let row = self.sidebarData?.row(key: key, agentID: target.agentID ?? self.activeAgentId)
+        #if os(macOS)
+        if pinned, let observed = self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId),
+           observed.isSnoozed(at: self.sidebarRosterClock.gatewayDate()) { return }
+        #endif
         let pinnedAt = pinned ? Date().timeIntervalSince1970 * 1000 : nil
         self.mutateSessionOptimistically(
             target: target,
             field: .pinned,
             update: { $0.pinned = pinned
                 $0.pinnedAt = pinnedAt
+                #if !os(macOS)
                 if pinned {
                     $0.snoozedUntil = nil
                     $0.snoozedAt = nil
                 }
+                #endif
             },
             mutation: { routeLease in
                 try await routeLease.patchSession(

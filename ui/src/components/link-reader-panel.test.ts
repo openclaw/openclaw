@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderDescriptor,
@@ -6,7 +6,6 @@ import type {
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
 import {
   item,
@@ -80,7 +79,8 @@ describe("Plugin link reader panel", () => {
     const loadedFiles = panel.querySelector(".lr-files");
     expect(scrollPorts.has(panel.querySelector(".lr-content")!)).toBe(true);
     expect(scrollPorts.has(panel.querySelector(".lr-diff")!)).toBe(true);
-    expect(deferredFiles?.isConnected).toBe(false);
+    // The section keeps its place and heading; only its body was waiting.
+    expect(loadedFiles).toBe(deferredFiles);
     filesButton.click();
     expect(document.activeElement).toBe(loadedFiles);
     checks.resolve({
@@ -143,9 +143,9 @@ describe("Plugin link reader panel", () => {
       open(panel);
       await expectTitle(panel, "Item 1");
       button(panel, "Refresh item").click();
-      await waitForFast(() => expect(panel.textContent).toContain("Could not refresh"));
+      await waitForFast(() => expect(panel.textContent).toContain("Couldn’t refresh"));
       expect(panel.textContent).toContain(
-        section === "checks" ? "Build passed" : section === "files" ? "kept.ts" : "Comment text",
+        section === "checks" ? "Checks passed" : section === "files" ? "kept.ts" : "Comment text",
       );
       request.mockResolvedValueOnce(previous);
       const name =
@@ -153,7 +153,7 @@ describe("Plugin link reader panel", () => {
       [...panel.querySelectorAll<HTMLButtonElement>(".lr-section-nav button")]
         .find((node) => node.textContent?.startsWith(name))!
         .click();
-      await waitForFast(() => expect(panel.textContent).not.toContain("Could not refresh"));
+      await waitForFast(() => expect(panel.textContent).not.toContain("Couldn’t refresh"));
       expect(request).toHaveBeenCalledTimes(4);
       expect(request).toHaveBeenLastCalledWith(
         "forge.item",
@@ -184,7 +184,12 @@ describe("Plugin link reader panel", () => {
         retryable: true,
       }),
     );
-    await waitForFast(() => expect(panel.textContent).toContain("Temporary failure"));
+    await waitForFast(() =>
+      expect(panel.querySelector(".lr-document-header .lr-notice")?.textContent).toContain(
+        "Temporary failure",
+      ),
+    );
+    expect(panel.querySelector(".lr-document-header time")).toBeNull();
     expect(panel.querySelector(".lr-document")).toBe(document);
     // A changed identity or denied repository must never keep admitted pixels.
     request.mockRejectedValueOnce(
@@ -213,7 +218,7 @@ describe("Plugin link reader panel", () => {
     const time = panel.querySelector(".lr-content:not([hidden]) time");
     const expected = timestamp ?? document.createdAt;
     expect(time?.getAttribute("datetime")).toBe(expected);
-    expect(time?.textContent?.trim()).toBe(new Date(expected).toLocaleString());
+    expect(time?.getAttribute("title")).toBe(new Date(expected).toLocaleString());
     expect(panel.querySelector(".lr-state")?.textContent?.trim()).toBe(label);
   });
 
@@ -245,15 +250,11 @@ describe("Plugin link reader panel", () => {
       await panel.updateComplete;
       await panel.updateComplete;
       await waitForFast(() =>
-        expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe("Could not load item"),
+        expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe(
+          "Couldn’t load this item",
+        ),
       );
       expect(document.activeElement).toBe(composer);
-      const address = panel.querySelector<HTMLInputElement>(".lr-url")!;
-      address.focus();
-      address.value = itemUrl(3);
-      address.dispatchEvent(new Event("input", { bubbles: true }));
-      await panel.updateComplete;
-      expect(document.activeElement).toBe(address);
     },
   );
 
@@ -313,7 +314,7 @@ describe("Plugin link reader panel", () => {
     );
   });
 
-  it("retains embedded tab history while hidden, and fences work from a previous session", async () => {
+  it("retains embedded tabs while hidden, and fences work from a previous session", async () => {
     const stale = createDeferred<ControlUiLinkReaderDocument>();
     const request = vi.fn(async (_method: string, params?: unknown) => requestedItem(params));
     const panel = await mount(request, {
@@ -333,12 +334,13 @@ describe("Plugin link reader panel", () => {
     await panel.updateComplete;
     expect(panel.querySelector(".lr-content")).toBe(content);
     expect(request).toHaveBeenCalledTimes(2);
-    button(panel, "Back").click();
+    panel.selectHostedTab(panel.hostedTabs[0]!.id);
     await expectTitle(panel, "Item 1");
+    expect(request).toHaveBeenCalledTimes(2);
 
     request.mockReturnValueOnce(stale.promise);
     open(panel, itemUrl(4));
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
     panel.sessionKey = "session-b";
     await panel.updateComplete;
     stale.resolve(item(4));
@@ -346,7 +348,6 @@ describe("Plugin link reader panel", () => {
     await panel.updateComplete;
     expect(panel.querySelector("h1")).toBeNull();
     expect(panel.querySelector(".lr-initial-form")).not.toBeNull();
-    expect(panel.querySelector(".lr-toolbar")).toBeNull();
     expect(panel.querySelector<HTMLInputElement>(".lr-url")?.value).toBe("");
     expect(localStorage.getItem(storageKey)).toBeNull();
   });
@@ -369,18 +370,9 @@ describe("Plugin link reader panel", () => {
     expect(panel.hostedTabs).toMatchObject([{ label: "Item 1", url: itemUrl(1) }]);
     expect(panel.hostedActions).toBeUndefined();
     const originalTabId = panel.activeHostedTabId;
-    const newTab = button(panel, "New reader tab");
-    expect(newTab.closest(".lr-toolbar")).not.toBeNull();
-    newTab.focus();
-    panel.available = false;
-    await panel.updateComplete;
-    expect(newTab.disabled).toBe(true);
-    panel.available = true;
-    await panel.updateComplete;
-    expect(panel.hostedActions).toBeUndefined();
-    expect(button(panel, "New reader tab")).toBe(newTab);
-    expect(newTab.disabled).toBe(false);
-    newTab.click();
+    // The region's header owns "+" here; the panel adds no second one.
+    expect(panel.querySelector('button[aria-label="New reader tab"]')).toBeNull();
+    open(panel, null);
     await panel.updateComplete;
     expect(panel.hostedTabs).toHaveLength(2);
     expect(panel.activeHostedTabId).not.toBe(originalTabId);
@@ -392,6 +384,14 @@ describe("Plugin link reader panel", () => {
     panel.tabsInHeader = false;
     await panel.updateComplete;
     expect(panel.querySelector(".lr-tab-header")).not.toBeNull();
+    const newTab = button(panel, "New reader tab");
+    expect(newTab.closest(".lr-tab-header")).not.toBeNull();
+    panel.available = false;
+    await panel.updateComplete;
+    expect(newTab.disabled).toBe(true);
+    panel.available = true;
+    await panel.updateComplete;
+    expect(newTab.disabled).toBe(false);
     await panel.closeHostedTab(panel.activeHostedTabId!);
     expect(onClose).toHaveBeenCalledOnce();
     expect(panel.hostedTabs).toEqual([]);
@@ -452,27 +452,23 @@ describe("Plugin link reader panel", () => {
     });
   });
 
-  it("navigates backward and forward, drops the forward branch, and refreshes without adding history", async () => {
+  it("opens another item in its own tab and refreshes the selected one in place", async () => {
     const request = vi.fn(async (_method: string, params: unknown) => requestedItem(params));
     const panel = await mount(request);
     open(panel);
     await expectTitle(panel, "Item 1");
     open(panel, itemUrl(2));
     await expectTitle(panel, "Item 2");
-    button(panel, "Back").click();
-    await expectTitle(panel, "Item 1");
-    button(panel, "Forward").click();
-    await expectTitle(panel, "Item 2");
-    button(panel, "Back").click();
-    await expectTitle(panel, "Item 1");
-    open(panel, itemUrl(3));
-    await expectTitle(panel, "Item 3");
-    expect(button(panel, "Forward").disabled).toBe(true);
+    expect(panel.hostedTabs.map((tab) => tab.url)).toEqual([itemUrl(1), itemUrl(2)]);
+    expect(panel.querySelector(".lr-url")).toBeNull();
     button(panel, "Refresh item").click();
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(7));
-    await expectTitle(panel, "Item 3");
-    button(panel, "Back").click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    await expectTitle(panel, "Item 2");
+    expect(panel.hostedTabs).toHaveLength(2);
+    // The same item with another fragment stays in its tab.
+    open(panel, itemUrl(1) + "#comment-1");
     await expectTitle(panel, "Item 1");
+    expect(panel.hostedTabs.map((tab) => tab.url)).toEqual([itemUrl(1) + "#comment-1", itemUrl(2)]);
   });
 
   it("opens, selects, deduplicates, and closes icon-bearing tabs without reloading cached documents", async () => {
@@ -481,19 +477,19 @@ describe("Plugin link reader panel", () => {
       files: [{ path: "src/example.ts", additions: 1, deletions: 1, patch: "-old\n+new" }],
     }));
     const panel = await mount(request);
-    open(panel, itemUrl(1), undefined, true);
+    open(panel, itemUrl(1));
     await expectTitle(panel, "Item 1");
     const firstContent = panel.querySelector(".lr-content");
     const firstFile = firstContent!.querySelector<HTMLDetailsElement>(".lr-file")!;
     firstFile.open = true;
-    open(panel, itemUrl(2), undefined, true);
+    open(panel, itemUrl(2));
     await expectTitle(panel, "Item 2");
     expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
     expect(panel.querySelectorAll(".tabstrip-tab__icon svg")).toHaveLength(2);
     const hostedTabs = panel.hostedTabs;
     expect(hostedTabs.every((tab) => tab.icon instanceof SVGSVGElement)).toBe(true);
     expect(hostedTabs[0]!.icon).not.toBe(panel.hostedTabs[0]!.icon);
-    open(panel, itemUrl(1), undefined, true);
+    open(panel, itemUrl(1));
     await expectTitle(panel, "Item 1");
     expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
     expect(panel.querySelector(".lr-content:not([hidden])")).toBe(firstContent);
@@ -513,26 +509,15 @@ describe("Plugin link reader panel", () => {
     );
   });
 
-  it("keeps history inside each tab and leaves the selected tab intact at the tab limit", async () => {
+  it("leaves the selected tab intact at the tab limit", async () => {
     const request = vi.fn(async (_method: string, params: unknown) => requestedItem(params));
     const panel = await mount(request);
-    open(panel, itemUrl(1), undefined, true);
-    await expectTitle(panel, "Item 1");
-    open(panel, itemUrl(99));
-    await expectTitle(panel, "Item 99");
-    open(panel, itemUrl(2), undefined, true);
-    await expectTitle(panel, "Item 2");
-    expect(button(panel, "Back").disabled).toBe(true);
-    open(panel, itemUrl(99), undefined, true);
-    await expectTitle(panel, "Item 99");
-    button(panel, "Back").click();
-    await expectTitle(panel, "Item 1");
-    for (let number = 3; number <= 10; number++) {
-      open(panel, itemUrl(number), undefined, true);
+    for (let number = 1; number <= 10; number++) {
+      open(panel, itemUrl(number));
       await expectTitle(panel, "Item " + number);
     }
     const calls = request.mock.calls.length;
-    open(panel, itemUrl(11), undefined, true);
+    open(panel, itemUrl(11));
     await panel.updateComplete;
     expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(10);
     await expectTitle(panel, "Item 10");
@@ -577,13 +562,7 @@ describe("Plugin link reader panel", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the current original directly accessible while copying from the mobile menu", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    const previous = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-    onTestFinished(() => {
-      restorePropertyDescriptor(navigator, "clipboard", previous);
-    });
+  it("keeps the original one click away in the document header", async () => {
     const panel = await mount(
       vi.fn(async (_method, params) => requestedItem(params)),
       {
@@ -594,44 +573,14 @@ describe("Plugin link reader panel", () => {
     );
     open(panel);
     await expectTitle(panel, "Item 1");
-    const content = panel.querySelector(".lr-content:not([hidden])");
-    const address = panel.querySelector<HTMLInputElement>(".lr-url")!;
-    address.focus();
-    address.value = itemUrl(2);
-    address.dispatchEvent(new Event("input", { bubbles: true }));
-    await panel.updateComplete;
-    const original = panel.querySelector<HTMLAnchorElement>(".lr-actions > a.lr-external")!;
-    expect(original).not.toBeNull();
+    const original = panel.querySelector<HTMLAnchorElement>(
+      ".lr-document-header .lr-actions a.lr-external",
+    )!;
     expect(original.href).toBe(itemUrl(1));
     expect(original.getAttribute("aria-label")).toBe("Open on Forge");
     expect(original.target).toBe("_blank");
     expect(original.rel).toBe("noopener noreferrer");
     expect(original.hasAttribute("data-link-reader-external")).toBe(true);
-    const trigger = button(panel, "Link reader actions");
-    trigger.click();
-    await panel.updateComplete;
-    const menu = document.getElementById(trigger.getAttribute("aria-controls")!)!;
-    menu.querySelector<HTMLElement>('[aria-label="Copy link"]')!.click();
-    await waitForFast(() => expect(writeText).toHaveBeenCalledExactlyOnceWith(itemUrl(1)));
-    expect(panel.querySelector(".lr-content:not([hidden])")).toBe(content);
-    expect(panel.querySelector(".lr-url")).toBe(address);
-    expect(address.value).toBe(itemUrl(2));
-  });
-
-  it("keeps at most 30 history entries in this mounted panel", async () => {
-    const panel = await mount(
-      vi.fn(async (_method: string, params?: unknown) => requestedItem(params)),
-    );
-    for (let number = 1; number <= 31; number++) {
-      open(panel, itemUrl(number));
-      await expectTitle(panel, "Item " + number);
-    }
-    for (let number = 30; number >= 2; number--) {
-      button(panel, "Back").click();
-      await expectTitle(panel, "Item " + number);
-    }
-    expect(button(panel, "Back").disabled).toBe(true);
-    expect(button(panel, "Forward").disabled).toBe(false);
   });
 
   it("clears reservations and cancels work on close, restores focus, and stays idle while hidden", async () => {
@@ -725,7 +674,7 @@ describe("Plugin link reader panel", () => {
     await waitForFast(() =>
       expect(panel.querySelector('[role="alert"]')?.textContent).toContain(message),
     );
-    expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe("Could not load item");
+    expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe("Couldn’t load this item");
     expect(panel.querySelector('[role="alert"]')?.textContent).not.toContain(
       "This item may be private or deleted",
     );
@@ -745,30 +694,25 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
     expect(request).toHaveBeenCalledTimes(3);
   });
-  it("retains the loaded document, selected tab, and address draft through a transport blip", async () => {
+  it("retains the loaded document and selected tab through a transport blip", async () => {
     const refreshed = createDeferred<ControlUiLinkReaderDocument>();
     const request = vi.fn().mockResolvedValueOnce(item()).mockReturnValueOnce(refreshed.promise);
     const panel = await mount(request);
     open(panel);
     await expectTitle(panel, "Item 1");
-    const address = panel.querySelector<HTMLInputElement>(".lr-url")!;
-    address.value = "https://forge.example/items/42";
-    address.dispatchEvent(new Event("input", { bubbles: true }));
     const selected = panel.activeHostedTabId;
     const document = panel.querySelector("h1");
 
     panel.available = false;
     await panel.updateComplete;
     expect(panel.querySelector("h1")).toBe(document);
-    expect(address.value).toBe("https://forge.example/items/42");
     expect(panel.activeHostedTabId).toBe(selected);
-    expect(panel.querySelector<HTMLButtonElement>(".lr-go")?.disabled).toBe(true);
+    expect(button(panel, "Refresh item").disabled).toBe(true);
     expect(request).toHaveBeenCalledTimes(1);
 
     panel.available = true;
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(panel.querySelector("h1")).toBe(document);
-    expect(address.value).toBe("https://forge.example/items/42");
     refreshed.resolve({ ...item(), title: "Refreshed item" });
     await expectTitle(panel, "Refreshed item");
 
@@ -814,7 +758,7 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
     const firstTab = panel.activeHostedTabId!;
     await waitForFast(() => expect(panel.querySelector("img")?.src).toBe(oldImage));
-    open(panel, itemUrl(2), undefined, true);
+    open(panel, itemUrl(2));
     await expectTitle(panel, "Item 2");
     const secondTab = panel.activeHostedTabId!;
 
@@ -950,11 +894,13 @@ describe("Plugin link reader panel", () => {
     const panel = await mount(request);
     panel.readers = [reader, second];
     await panel.updateComplete;
-    open(panel, itemUrl(1), undefined, true);
+    open(panel, itemUrl(1));
     await expectTitle(panel, "forge.item");
-    open(panel, "https://notes.example/notes/2", undefined, true);
+    open(panel, "https://notes.example/notes/2");
     await expectTitle(panel, "notes.read");
-    expect(panel.querySelector(".lr-external")?.textContent).toContain("Open on Notes");
+    expect(
+      panel.querySelector(".lr-content:not([hidden]) .lr-external")?.getAttribute("aria-label"),
+    ).toBe("Open on Notes");
     expect(request.mock.calls[1]?.[0]).toBe("notes.read");
     panel.readers = [
       reader,

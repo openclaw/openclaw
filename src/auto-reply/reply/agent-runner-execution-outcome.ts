@@ -9,6 +9,7 @@ import { prepareReplyTurnRunSource } from "./agent-runner-admission.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import { bindGoalContinuationExecution } from "./goal-continuation-return.js";
+import { handoffCompletedSourceReply } from "./queue/drain.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 import { withVisibleWorkSessionReporter } from "./visible-work-sessions.js";
@@ -65,6 +66,9 @@ async function recordAgentTurnExecutionOutcome(
     executionStatus === "ok" ? "completed" : executionStatus === "failed" ? "errored" : "aborted";
   const toolDelivered =
     outcome?.kind === "settled" && hasCompletedSourceReplyDeliveryEvidence(outcome.result);
+  if (toolDelivered && executionStatus === "ok" && params.replyOperation) {
+    handoffCompletedSourceReply(params.replyOperation, params.followupRun);
+  }
   const values = {
     runId: result?.runId ?? params.opts?.runId ?? "unknown",
     sessionKey,
@@ -92,7 +96,10 @@ async function recordSessionEventTerminalOutcome(
   event: SessionEventExecution | undefined,
   runId: string,
   result: AgentTurnExecutionResult | undefined,
+  replyOperation: AgentTurnParams["replyOperation"],
 ): Promise<void> {
+  const replyResult = replyOperation?.result;
+  const failureCause = replyResult?.kind === "failed" ? replyResult.cause : undefined;
   await event?.onTerminal(
     runId,
     result?.outcome.kind === "aborted"
@@ -101,10 +108,12 @@ async function recordSessionEventTerminalOutcome(
         ? "completed"
         : "failed",
     result?.outcome.kind === "settled"
-      ? { ...result.outcome.result, resolved: result.outcome.resolved }
+      ? { ...result.outcome.result, resolved: result.outcome.resolved, failureCause }
       : result?.outcome.kind === "rejected"
-        ? { payloads: [result.outcome.payload], resolved: result.outcome.resolved }
-        : undefined,
+        ? { payloads: [result.outcome.payload], resolved: result.outcome.resolved, failureCause }
+        : failureCause !== undefined
+          ? { failureCause }
+          : undefined,
   );
 }
 
@@ -126,6 +135,7 @@ export async function runAgentTurnWithOutcome(
       eventExecution.assertCurrent?.();
     }
     source.claim();
+    const adapter = params.followupRun.controllerInput?.sourceAdapter;
     const result = await withExecRequestTurn(
       {
         identity: {
@@ -133,8 +143,23 @@ export async function runAgentTurnWithOutcome(
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
           sessionId: params.followupRun.run.sessionId,
           agentId: params.followupRun.run.agentId,
+          // Unbound event wakes inherit custody; absent fields must not erase its original actor.
+          ...(adapter?.requester?.connectionId !== undefined
+            ? { ownerConnId: adapter.requester.connectionId }
+            : {}),
+          ...(adapter?.requester?.deviceId !== undefined
+            ? { ownerDeviceId: adapter.requester.deviceId }
+            : {}),
+          ...(adapter?.initiatingPersonalOperator
+            ? { initiatingPersonalOperator: adapter.initiatingPersonalOperator }
+            : {}),
+          ...(adapter?.controlUiVisible !== undefined
+            ? { controlUiVisible: adapter.controlUiVisible }
+            : {}),
+          ...(adapter?.turnKind ? { turnKind: adapter.turnKind } : {}),
         },
         owners: eventExecution?.execRequestOwners,
+        continues: Boolean(eventExecution?.execRequestOwners?.length),
         abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
       },
       () =>
@@ -163,13 +188,18 @@ export async function runAgentTurnWithOutcome(
     }
     await recordAgentTurnExecutionOutcome(params, result);
     terminalRecorded = true;
-    await recordSessionEventTerminalOutcome(eventExecution, runId, result);
+    await recordSessionEventTerminalOutcome(eventExecution, runId, result, params.replyOperation);
     return result;
   } catch (error) {
     eventExecution?.onFailed?.(error);
     if (!terminalRecorded) {
       await recordAgentTurnExecutionOutcome(params, undefined);
-      await recordSessionEventTerminalOutcome(eventExecution, runId, undefined);
+      await recordSessionEventTerminalOutcome(
+        eventExecution,
+        runId,
+        undefined,
+        params.replyOperation,
+      );
     }
     throw error;
   } finally {

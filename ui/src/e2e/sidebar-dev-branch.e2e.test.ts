@@ -1,11 +1,16 @@
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar dev branch badge E2E",
@@ -13,10 +18,10 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const DEV_BRANCH = "feat/dev-branch-badge";
+const DEV_BRANCH = "fix/control-ui-model-picker-capability-badge-and-sidebar-state-styling";
 
 suite.define(() => {
-  it("renders the dev checkout branch in the footer in the danger color", async () => {
+  it("truncates a long dev branch on one line and keeps its full name in the tooltip", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, { devGitBranch: DEV_BRANCH });
 
@@ -36,18 +41,14 @@ suite.define(() => {
           }),
         )
         .toEqual({ name: DEV_BRANCH, description: DEV_BRANCH });
-
-      const colors = await badge.evaluate((element) => {
-        // Resolve the token before comparing against the computed RGB color.
-        const probe = document.createElement("span");
-        probe.style.color = "var(--danger)";
-        element.append(probe);
-        const danger = getComputedStyle(probe).color;
-        probe.remove();
-        return { badge: getComputedStyle(element).color, danger };
-      });
-      expect(colors.danger).not.toBe("");
-      expect(colors.badge).toBe(colors.danger);
+      const name = badge.locator(".sidebar-footer-branch__name");
+      const layout = await name.evaluate((element) => ({
+        height: element.getBoundingClientRect().height,
+        lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+        clipped: element.scrollWidth > element.clientWidth,
+      }));
+      expect(layout.height).toBeLessThanOrEqual(layout.lineHeight + 1);
+      expect(layout.clipped).toBe(true);
     });
   });
 
@@ -64,7 +65,7 @@ suite.define(() => {
           label: index === 19 ? "CI timer" : `Release review ${index + 1}`,
           updatedAt: 1_780_000_000_000 - index * 60_000,
         }));
-        await installMockGateway(page, { sessionKey: sessions[0]!.key, sessions });
+        const gateway = await installMockGateway(page, { sessionKey: sessions[0]!.key, sessions });
         await page.emulateMedia({ colorScheme: "dark" });
         const response = await page.goto(suite.server.baseUrl);
         expect(response?.status()).toBe(200);
@@ -75,7 +76,7 @@ suite.define(() => {
         const body = sidebar.locator(".sidebar-shell__body");
         await body.waitFor();
         await sidebar.locator(".sidebar-identity-card").waitFor();
-        await sidebar.getByRole("button", { name: "Show more", exact: true }).click();
+        await expandSidebarSessions(body, 20);
         const last = sidebar.getByText("CI timer", { exact: true });
         await expect
           .poll(async () => {
@@ -90,17 +91,35 @@ suite.define(() => {
           scrollTo: sidebar.getByText("CI timer", { exact: true }),
           elements: [sidebar],
         });
-        const gap = await body.evaluate((element) => {
+        expect(await sidebar.locator(".sidebar-shell__footer").count()).toBe(0);
+        const unusedSpace = await body.evaluate((element) => {
           const shell = element.closest(".sidebar-shell")!;
-          const style = getComputedStyle(shell);
           return (
             shell.getBoundingClientRect().bottom -
             element.getBoundingClientRect().bottom -
-            Number.parseFloat(style.paddingBottom)
+            Number.parseFloat(getComputedStyle(shell).paddingBottom)
           );
         });
-        expect(gap).toBeLessThanOrEqual(1);
+        expect(Math.abs(unusedSpace)).toBeLessThanOrEqual(1);
         expect(await sidebar.locator(".sidebar-footer-branch").count()).toBe(0);
+        const connectedBounds = await body.boundingBox();
+        await page.clock.install();
+        await pauseVirtualClock(page);
+        await gateway.setOnline(false);
+        await page.clock.runFor(2_001);
+        const flag = sidebar.locator(".sidebar-shell__connection");
+        await flag.waitFor({ state: "visible" });
+        await page.clock.runFor(4_001);
+        expect(await flag.isVisible()).toBe(true);
+        expect(await body.boundingBox()).toEqual(connectedBounds);
+        await gateway.setOnline(true);
+        await page.clock.resume();
+        await flag.waitFor({ state: "detached" });
+        expect(await body.boundingBox()).toEqual(connectedBounds);
+        await last.click();
+        await expect
+          .poll(() => page.url())
+          .toBe(controlUiSessionUrl(suite.server.baseUrl, sessions[19]!.key));
       },
     );
   });

@@ -1,6 +1,6 @@
 import { createSignal, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { userEvent } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { nextFrame } from "../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -8,9 +8,54 @@ import { saveIndicatorProps } from "./settings-save-indicator.test-support.ts";
 import { SettingsSaveIndicator } from "./settings-save-indicator.tsx";
 import { SettingsSegmented, SettingsToggleRow } from "./solid/settings-ui.tsx";
 import startupStyles from "../styles.css?inline";
+import settingsStyles from "../styles/settings.css?inline";
 
 const optionsFor = (...values: string[]) =>
   values.map((value) => ({ value, label: value[0]!.toUpperCase() + value.slice(1) }));
+
+it("keeps the native switch geometry and blocks activation while its initial read is pending", async () => {
+  const host = document.body.appendChild(document.createElement("div"));
+  onTestFinished(() => host.remove());
+  const target = host.attachShadow({ mode: "open" }).appendChild(document.createElement("div"));
+  const [pending, setPending] = createSignal(true);
+  const onChange = vi.fn();
+  mountSolid(
+    () => (
+      <>
+        <style>
+          {startupStyles}
+          {settingsStyles}
+        </style>
+        <SettingsToggleRow
+          title="Session source"
+          checked={true}
+          pending={pending()}
+          onChange={onChange}
+        />
+      </>
+    ),
+    { container: target },
+  );
+  await nextFrame();
+  const input = target.querySelector<HTMLInputElement>("input")!;
+  const control = target.querySelector<HTMLElement>(".settings-toggle__control")!;
+  const before = control.getBoundingClientRect().toJSON();
+  expect(input.disabled).toBe(true);
+  expect(input.getAttribute("aria-hidden")).toBe("true");
+  expect(getComputedStyle(control).visibility).toBe("hidden");
+  input.click();
+  expect(onChange).not.toHaveBeenCalled();
+  setPending(false);
+  flush();
+  await nextFrame();
+  expect(target.querySelector("input")).toBe(input);
+  expect(control.getBoundingClientRect().toJSON()).toEqual(before);
+  expect(input.disabled).toBe(false);
+  expect(input.hasAttribute("aria-hidden")).toBe(false);
+  expect(getComputedStyle(control).visibility).toBe("visible");
+  input.click();
+  expect(onChange).toHaveBeenCalledExactlyOnceWith(false);
+});
 
 it("animates Applying before lazy settings styles load", async () => {
   const container = document.createElement("div");
@@ -29,9 +74,9 @@ it("animates Applying before lazy settings styles load", async () => {
     { container: target },
   );
   await waitForSolid(() =>
-    expect(target.querySelector(".settings-save-indicator__spinner svg")).not.toBeNull(),
+    expect(target.querySelector(".settings-save-indicator__spinner")).not.toBeNull(),
   );
-  const spinner = target.querySelector<SVGElement>(".settings-save-indicator__spinner svg")!;
+  const spinner = target.querySelector<HTMLElement>(".settings-save-indicator__spinner")!;
   const animation = spinner.getAnimations()[0]!;
   expect(animation).toBeDefined();
   const duration = Number(animation.effect!.getComputedTiming().duration);
@@ -214,4 +259,46 @@ it("keeps non-saving restrictions native when they arrive during a save", async 
   view.setDisabled(false);
   flush();
   expect(controls.every((control) => !control.disabled)).toBe(true);
+});
+
+it.each([
+  [["Form", "Raw"], 60],
+  [["Aktuelle Instanz", "Historische Abstammungslinie"], 180],
+])("keeps segmented labels %j whole in a %ipx phone column", async (labels, width) => {
+  await page.viewport(390, 844);
+  const host = document.createElement("div");
+  const root = host.attachShadow({ mode: "open" });
+  document.body.append(host);
+  onTestFinished(() => host.remove());
+  const target = root.appendChild(document.createElement("div"));
+  mountSolid(
+    () => (
+      <>
+        <style>{startupStyles}</style>
+        <style>{settingsStyles}</style>
+        <div class="shell--settings" style={{ width: `${width}px` }}>
+          <SettingsSegmented
+            mode="buttons"
+            value={labels[0]!}
+            options={labels.map((label) => ({ value: label, label }))}
+            onChange={() => undefined}
+          />
+        </div>
+      </>
+    ),
+    { container: target },
+  );
+  await nextFrame();
+  const buttons = [...target.querySelectorAll("button")];
+  expect(buttons).toHaveLength(labels.length);
+  for (const button of buttons) {
+    const text = button.firstChild!;
+    for (const match of text.textContent!.matchAll(/\S+/g)) {
+      const range = document.createRange();
+      range.setStart(text, match.index);
+      range.setEnd(text, match.index + match[0].length);
+      const lines = new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)));
+      expect(lines.size, match[0]).toBe(1);
+    }
+  }
 });

@@ -1,13 +1,16 @@
 import { spinner } from "@clack/prompts";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { clearActiveProgressLine } from "../../../packages/terminal-core/src/progress-line.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-owner-record.js";
+import { AUTOMATIC_RECOVERY_CLEANUP_STEP } from "../../infra/update-automatic-cleanup-result.js";
 import { formatUpdateDoctorLintFinding } from "../../infra/update-doctor-lint.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
-import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
+import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
 import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import {
   toPublicUpdateRun,
@@ -15,13 +18,16 @@ import {
   type UpdateRunPhase,
   type UpdateRunRecord,
 } from "../../infra/update-run-record.js";
+import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
-import { isFailedUpdateStep, projectUpdateRunResultSteps } from "../../infra/update-run-step.js";
+  isFailedUpdateStep,
+  projectUpdateRunResultSteps,
+  updateRunWarningMessages,
+} from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { formatJsonConsoleLine, getConsoleSettings } from "../../logging/console.js";
+import { isLogLevelEnabled } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
@@ -32,10 +38,34 @@ const activeUpdateProgress = new Map<
   {
     finish: (record: UpdateRunRecord | undefined) => void;
     pause: () => void;
+    suspendForDoctor: () => Promise<() => void>;
   }
 >();
+
+/**
+ * Update Doctor children take exclusive SQLite custody of shared state. Any open
+ * parent reader blocks that lock, so observation stops, and its in-flight read
+ * settles, before the caller closes parent handles and spawns the child.
+ */
+export async function suspendUpdateProgressForDoctor(runId: string): Promise<() => void> {
+  return (await activeUpdateProgress.get(runId)?.suspendForDoctor()) ?? (() => {});
+}
 const UPDATE_PROGRESS_POLL_MS = 250;
 const UPDATE_STEP_NOTICE_MS = 30_000;
+
+/** Child phase facts stay visible while schema changes defer ledger observation. */
+export function createUpdateDoctorProgress(): ((line: string) => void) | undefined {
+  const settings = getConsoleSettings();
+  if (!isLogLevelEnabled("info", settings.level)) {
+    return undefined;
+  }
+  return (message) => {
+    const line =
+      settings.style === "json" ? formatJsonConsoleLine({ level: "info", message }) : message;
+    clearActiveProgressLine();
+    process.stderr.write(`${line}\n`);
+  };
+}
 
 // These CLI-only callbacks can render the row just committed by their ledger owner.
 export type UpdateDisplayProgress = {
@@ -70,6 +100,7 @@ export function createUpdateProgress(
   let stepNotice: ReturnType<typeof setInterval> | undefined;
   let currentRecord: UpdateRunRecord | undefined;
   let pendingRead: AbortController | undefined;
+  let pendingPoll: Promise<void> | undefined;
   let polling = true;
   let observation: "active" | "suspended" | "disposed" = "active";
   const seenPhases = new Set<UpdateRunPhase>();
@@ -156,18 +187,45 @@ export function createUpdateProgress(
     } finally {
       pendingRead = undefined;
       if (polling && observation === "active") {
-        timer = setTimeout(() => void poll(), UPDATE_PROGRESS_POLL_MS);
+        timer = setTimeout(startPoll, UPDATE_PROGRESS_POLL_MS);
         timer.unref?.();
       }
     }
   };
+  const startPoll = () => {
+    pendingPoll = poll();
+  };
+  const suspend = () => {
+    if (observation === "active") {
+      observation = "suspended";
+      currentRecord = undefined;
+      pausePolling();
+      stop();
+    }
+  };
+  const resume = () => {
+    if (observation === "suspended") {
+      observation = "active";
+      polling = true;
+      startPoll();
+    }
+  };
   if (run) {
-    void poll();
+    startPoll();
     activeUpdateProgress.set(run.runId, {
       finish: finalize,
       pause: () => {
         pausePolling();
         stop();
+      },
+      suspendForDoctor: async () => {
+        // Another owner's suspension stays theirs to resume.
+        if (observation !== "active") {
+          return () => {};
+        }
+        suspend();
+        await pendingPoll;
+        return resume;
       },
     });
   }
@@ -198,21 +256,8 @@ export function createUpdateProgress(
   return {
     progress,
     stop,
-    suspend: () => {
-      if (observation === "active") {
-        observation = "suspended";
-        currentRecord = undefined;
-        pausePolling();
-        stop();
-      }
-    },
-    resume: () => {
-      if (observation === "suspended") {
-        observation = "active";
-        polling = true;
-        void poll();
-      }
-    },
+    suspend,
+    resume,
     dispose: () => finalize(currentRecord, true),
   };
 }
@@ -265,12 +310,11 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
   }
 }
 
-/** Prepare history and report artifacts while the caller still owns terminal effects. */
+/** Capture the completion history while the caller still owns terminal effects. */
 export async function prepareResult(
   result: UpdateRunResult,
   opts: UpdateCommandOptions,
   reportHints: {
-    doctorHint?: string | null;
     nextAction?: string;
     record?: UpdateRunRecord;
     readHistory?: boolean;
@@ -279,10 +323,7 @@ export async function prepareResult(
 ): Promise<(additionalSteps?: readonly UpdateStepResult[]) => void> {
   assertCurrent?.();
   const finalizeProgress = result.runId ? activeUpdateProgress.get(result.runId) : undefined;
-  // Retire polling before waiting for report IO, including detached recovery.
   finalizeProgress?.pause();
-  let run: UpdateRunRecord | undefined;
-  let report: ReturnType<typeof renderUpdateRunReport> | undefined;
   const readRun =
     result.runId && !reportHints.record && reportHints.readHistory !== false
       ? () => {
@@ -295,65 +336,38 @@ export async function prepareResult(
           }
         }
       : undefined;
-  // The artifact owner reads under its lock and reconciles after publication.
-  // Captured and detached reports never reopen retained history.
-  const renderReport = (current?: UpdateRunRecord) => {
-    assertCurrent?.();
-    run = reportHints.record ?? current;
-    report = renderUpdateRunReport(updateRunReportInputFromResult(result, run), {
-      ...reportHints,
-      mode: result.mode === "unknown" ? run?.target.kind : result.mode,
-      markdownLimit: Infinity,
-    });
-    return report;
-  };
-  const reportPath = await writeUpdateRunReportArtifact({
-    result,
-    report: renderReport,
-    record: reportHints.record,
-    readRun,
-    env: opts.run?.env,
-    detached: reportHints.readHistory === false,
-    assertCurrent,
-  }).catch((error: unknown) => {
-    assertCurrent?.();
-    defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
-    return undefined;
-  });
-  assertCurrent?.();
-  report ??= renderReport(readRun?.());
-  const preparedReport = report;
+  const run = reportHints.record ?? readRun?.();
   return (additionalSteps = []) => {
-    // Optional post-success maintenance runs after executor settlement. Its
-    // diagnostics enrich captured output without reopening history or changing
-    // the update's already prepared outcome/report artifact.
+    // Supplemental diagnostics enrich output without reopening history.
     const reportedResult = additionalSteps.length
       ? { ...result, steps: [...result.steps, ...additionalSteps] }
       : result;
     const reportedRun = run ? projectUpdateRunResultSteps(run, additionalSteps) : undefined;
-    const outputReport = additionalSteps.length
-      ? renderUpdateRunReport(updateRunReportInputFromResult(reportedResult, reportedRun), {
-          ...reportHints,
-          mode: result.mode === "unknown" ? run?.target.kind : result.mode,
-          markdownLimit: Infinity,
-        })
-      : preparedReport;
+    const summary = updateRunReportInputFromResult(reportedResult, reportedRun);
+    if (reportHints.nextAction) {
+      summary.origin = { ...summary.origin, nextAction: reportHints.nextAction };
+    }
     finalizeProgress?.finish(reportedRun);
     if (opts.json) {
       defaultRuntime.writeJson({
         ...reportedResult,
         ...(reportedRun ? { run: toPublicUpdateRun(reportedRun) } : {}),
-        reportPath,
       });
       return;
     }
     defaultRuntime.log("");
-    defaultRuntime.log(theme.heading(outputReport.headline));
-    if (reportPath) {
-      defaultRuntime.log(`Report: ${reportPath}`);
+    defaultRuntime.log(theme.heading(renderUpdateRunSummary(summary)));
+    for (const warning of updateRunWarningMessages(summary.steps)) {
+      defaultRuntime.log(`Warning: ${warning}`);
     }
-    for (const line of outputReport.lines) {
-      defaultRuntime.log(line);
+    for (const owed of reportedRun ? listUpdateOwedSteps(reportedRun) : []) {
+      defaultRuntime.log(`Warning: ${formatUpdateOwedStep(owed)}`);
+    }
+    // Cleanup states what it removed and kept even when nothing needs attention.
+    for (const step of additionalSteps) {
+      if (step.name === AUTOMATIC_RECOVERY_CLEANUP_STEP && step.diagnostics?.[0]) {
+        defaultRuntime.log(step.diagnostics[0]);
+      }
     }
   };
 }

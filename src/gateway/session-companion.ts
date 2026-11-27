@@ -1,6 +1,6 @@
 import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -8,16 +8,20 @@ import {
   createSessionCompanionAskRuntime,
   type SessionCompanionAskDeps,
 } from "./session-companion-ask.js";
-import type { SessionCompanionThread } from "./session-companion-state.js";
-import { sessionObserverScopeKey } from "./session-observer-model.js";
+import {
+  sessionCompanionScopePrefix,
+  sessionCompanionThreadKey,
+  type SessionCompanionThread,
+} from "./session-companion-state.js";
 import { onGatewaySessionReset } from "./session-reset-notifications.js";
 
-type SessionCompanionTarget = { sessionKey: string; agentId: string };
+/** `ownerId` names the requester whose private thread is addressed. */
+type SessionCompanionTarget = { sessionKey: string; agentId: string; ownerId: string };
 
 export type SessionCompanionService = {
   ask: ReturnType<typeof createSessionCompanionAskRuntime>["ask"];
   state: (target: SessionCompanionTarget) => SessionsCompanionStateResult;
-  reset: (target: SessionCompanionTarget) => void;
+  reset: (target: SessionCompanionTarget & { cancelAskId?: string }) => boolean;
   dispose: () => void;
 };
 
@@ -39,18 +43,23 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
     isDisposed: () => disposed,
   });
 
-  const reset = (
-    target: SessionCompanionTarget,
-    cancellation: "backing-session-revoked" | "explicit-reset",
-  ) => {
-    const sessionKey = target.sessionKey.trim();
-    const agentId = target.agentId.trim();
-    if (!sessionKey || !agentId) {
-      return;
-    }
-    const key = sessionObserverScopeKey(sessionKey, agentId);
-    askRuntime.cancel(sessionKey, agentId, cancellation);
+  const resetThread = (key: string, cancellation: "backing-session-revoked" | "explicit-reset") => {
+    askRuntime.cancel(key, cancellation);
     threads.delete(key);
+  };
+  // Session lifecycle changes retire every requester's thread for that session.
+  const revokeSession = (
+    sessionKey: string,
+    agentId: string,
+    matches: (thread: SessionCompanionThread | undefined) => boolean = () => true,
+  ) => {
+    const prefix = sessionCompanionScopePrefix(sessionKey, agentId);
+    const keys = new Set([...threads.keys(), ...askRuntime.activeKeys()]);
+    for (const key of keys) {
+      if (key.startsWith(prefix) && matches(threads.get(key))) {
+        resetThread(key, "backing-session-revoked");
+      }
+    }
   };
 
   const sweep = () => {
@@ -75,18 +84,20 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
     } catch {
       return;
     }
-    reset({ sessionKey, agentId }, "backing-session-revoked");
+    revokeSession(sessionKey, agentId);
   });
   const unsubscribeIdentity = onSessionIdentityMutation((mutation) => {
-    if (mutation.kind !== "delete" || !mutation.previous.sessionId) {
+    const previousSessionId = mutation.kind === "delete" ? mutation.previous.sessionId : undefined;
+    if (!previousSessionId) {
       return;
     }
     for (const sessionKey of mutation.previous.sessionKeys) {
-      const key = sessionObserverScopeKey(sessionKey, mutation.agentId);
       // Replayed deletions must not retire a newer generation under the same scoped key.
-      if (threads.get(key)?.context.sessionId === mutation.previous.sessionId) {
-        reset({ sessionKey, agentId: mutation.agentId }, "backing-session-revoked");
-      }
+      revokeSession(
+        sessionKey,
+        mutation.agentId,
+        (thread) => thread?.context.sessionId === previousSessionId,
+      );
     }
   });
 
@@ -104,7 +115,7 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
     ask: askRuntime.ask,
     state(target) {
       const agentId = target.agentId.trim();
-      const key = sessionObserverScopeKey(target.sessionKey.trim(), agentId);
+      const key = sessionCompanionThreadKey(target.sessionKey.trim(), agentId, target.ownerId);
       const thread = threads.get(key);
       const defaults = resolveDefaultModel(agentId);
       if (!thread) {
@@ -117,7 +128,16 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
       };
     },
     reset(target) {
-      reset(target, "explicit-reset");
+      const sessionKey = target.sessionKey.trim();
+      const agentId = target.agentId.trim();
+      if (sessionKey && agentId) {
+        const key = sessionCompanionThreadKey(sessionKey, agentId, target.ownerId);
+        if (target.cancelAskId) {
+          return askRuntime.cancel(key, "stopped", target.cancelAskId);
+        }
+        resetThread(key, "explicit-reset");
+      }
+      return true;
     },
     dispose() {
       disposed = true;

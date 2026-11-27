@@ -46,8 +46,11 @@ export function resolveGatewayStatus(
   if (snapshot.suspensionPhase === "prepared") {
     return "suspended";
   }
-  if (snapshot.phase === "connecting" || snapshot.phase === "starting") {
-    return snapshot.phase;
+  if (snapshot.phase === "connecting") {
+    return snapshot.offlineStable ? "connecting" : null;
+  }
+  if (snapshot.phase === "starting") {
+    return "starting";
   }
   if (snapshot.phase === "connected") {
     return snapshot.client?.recoveryScopeReady === false || historyRecovering ? "restoring" : null;

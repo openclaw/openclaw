@@ -97,6 +97,21 @@ struct SystemCredential {
     service: String,
 }
 
+impl SystemCredential {
+    fn for_profile(namespace: &str, isolated_profile: bool) -> Self {
+        let base = if isolated_profile {
+            "ai.openclaw.tauri.aot.gateway-profiles"
+        } else {
+            "ai.openclaw.tauri.gateway-profiles"
+        };
+        // Debug signatures must never create the release app's Keychain ACL.
+        let debug = if cfg!(debug_assertions) { ".debug" } else { "" };
+        Self {
+            service: format!("{base}{debug}.{}", digest(namespace)),
+        }
+    }
+}
+
 fn credential_error(error: keyring::Error) -> String {
     #[cfg(target_os = "macos")]
     if let keyring::Error::PlatformFailure(cause) | keyring::Error::NoStorageAccess(cause) = &error
@@ -152,16 +167,10 @@ pub(crate) struct GatewayProfiles {
 
 impl GatewayProfiles {
     pub fn new(namespace: &str) -> Self {
-        // Debug signatures must never create the release app's Keychain ACL.
-        let base = if cfg!(debug_assertions) {
-            "ai.openclaw.tauri.gateway-profiles.debug"
-        } else {
-            "ai.openclaw.tauri.gateway-profiles"
-        };
-        let service = format!("{base}.{}", digest(namespace));
+        let credential = SystemCredential::for_profile(namespace, crate::test_profile::enabled());
         Self {
-            browser_scope: digest(&service),
-            credential: Box::new(SystemCredential { service }),
+            browser_scope: digest(&credential.service),
+            credential: Box::new(credential),
             registry: Mutex::new(None),
         }
     }
@@ -463,6 +472,24 @@ fn canonical_request(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn isolated_app_credential_service_never_reuses_the_shipped_service() {
+        let namespace = "/fixture/home/.openclaw/openclaw.json";
+        let suffix = digest(namespace);
+        let debug = if cfg!(debug_assertions) { ".debug" } else { "" };
+        let normal = SystemCredential::for_profile(namespace, false);
+        assert_eq!(
+            normal.service,
+            format!("ai.openclaw.tauri.gateway-profiles{debug}.{suffix}")
+        );
+        let isolated = SystemCredential::for_profile(namespace, true);
+        assert_eq!(
+            isolated.service,
+            format!("ai.openclaw.tauri.aot.gateway-profiles{debug}.{suffix}")
+        );
+        assert_ne!(normal.service, isolated.service);
+    }
 
     #[derive(Default)]
     struct MemoryState {

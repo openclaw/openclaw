@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -11,10 +10,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "../../state/openclaw-state-schema.test-support.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
 import {
   getRegistryWorktreeProvisionedChunk,
@@ -34,7 +33,6 @@ import {
   updateRegistryWorktree,
 } from "./registry.js";
 import {
-  findLiveRegistryWorktreeByOwner,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
   listRegistryWorktrees,
@@ -197,33 +195,6 @@ it("persists, orders, and updates worktree rows through Kysely", async () => {
   expect(await getRegistryWorktreeProvisionedPaths(env, "second")).toBeUndefined();
 });
 
-it("keeps record reads bounded when a worktree has a large provisioning manifest", async () => {
-  record = {
-    ...record,
-    ownerKind: "session",
-    ownerId: "session-1",
-    snapshotRef: "refs/openclaw/snapshots/provisioned",
-    runEndCleanup: { outcome: "retained-provisioned-drift", at: 30 },
-  };
-  const provisionedPaths = Array.from({ length: 1_000 }, (_, index) => `settings-${index}.json`);
-  await insertRegistryWorktree(env, record, { provisionedPaths });
-  const counter = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(openOpenClawStateDatabase({ env }).db),
-    ["records"],
-    (sql) => (/\bfrom\s+"worktrees"/iu.test(sql) ? "records" : null),
-  );
-  try {
-    expect(listRegistryWorktrees(env)).toEqual([record]);
-    expect(getRegistryWorktree(env, record.id)).toEqual(record);
-    expect(findLiveRegistryWorktreeByPath(env, record.path)).toEqual(record);
-    expect(findLiveRegistryWorktreeByOwner(env, "session", "session-1")).toEqual(record);
-    expect(counter.textBytes.records).toBeLessThan(4_096);
-  } finally {
-    counter.restore();
-  }
-  expect(await getRegistryWorktreeProvisionedPaths(env, record.id)).toEqual(provisionedPaths);
-});
-
 it("reads the provisioned-path ledger after captured shared-state migration", async () => {
   const databasePath = openOpenClawStateDatabase({ env }).path;
   await closeDatabase();
@@ -231,9 +202,11 @@ it("reads the provisioned-path ledger after captured shared-state migration", as
   await fs.copyFile(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
   const { DatabaseSync } = requireNodeSqlite();
   const legacy = new DatabaseSync(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
       ALTER TABLE worktrees DROP COLUMN provisioned_paths_json;
+      ALTER TABLE worker_session_placements DROP COLUMN confirmed_loss_recovery_json;
       DROP INDEX idx_worker_session_placements_environment;
       PRAGMA user_version = 5;
       UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';

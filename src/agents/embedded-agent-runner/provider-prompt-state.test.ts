@@ -9,13 +9,16 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareModelRequestBody } from "../../../packages/ai/src/transports/model-request-body.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 import {
   clearProviderPromptState,
   getProviderPromptState,
   markLastProviderPromptContextRejected,
+  type PromptPreparationResult,
+  type PromptPreparationTask,
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "./provider-prompt-state.js";
@@ -36,12 +39,13 @@ function observe(
   promptState: ProviderPromptState,
   streamFn: StreamFn,
   recordEvent?: Parameters<typeof wrapStreamFnWithProviderPromptState>[0]["recordEvent"],
+  effectiveContextTokenBudget = 128_000,
 ) {
   return wrapStreamFnWithProviderPromptState({
     state: promptState,
     streamFn,
     recordEvent,
-    effectiveContextTokenBudget: 128_000,
+    effectiveContextTokenBudget,
   });
 }
 
@@ -70,28 +74,14 @@ function createResultStream(stopReason: "error" | "stop", errorMessage?: string)
 }
 
 describe("provider prompt state", () => {
-  it("keeps state within one run id and drops it at the run boundary", () => {
-    const first = getProviderPromptState("run-1");
-    expect(getProviderPromptState("run-1")).toBe(first);
-
-    clearProviderPromptState("run-1");
-    expect(getProviderPromptState("run-1")).not.toBe(first);
-    clearProviderPromptState("run-1");
-  });
-
   it("retains active run state until its owned cleanup", () => {
-    const firstRunId = "active-run-0";
-    const otherRunIds = Array.from({ length: 79 }, (_, index) => `active-run-${index + 1}`);
-    const first = getProviderPromptState(firstRunId);
+    const runIds = Array.from({ length: 80 }, (_, index) => `active-run-${index}`);
+    const first = getProviderPromptState(runIds[0]!);
     try {
-      for (const runId of otherRunIds) {
-        getProviderPromptState(runId);
-      }
-      expect(getProviderPromptState(firstRunId)).toBe(first);
+      runIds.forEach((runId) => getProviderPromptState(runId));
+      expect(getProviderPromptState(runIds[0]!)).toBe(first);
     } finally {
-      for (const runId of [firstRunId, ...otherRunIds]) {
-        clearProviderPromptState(runId);
-      }
+      runIds.forEach((runId) => clearProviderPromptState(runId));
     }
   });
 
@@ -289,8 +279,14 @@ describe("provider prompt state", () => {
     };
     const prepared = prepareProviderPrompt({ payload, encode: false });
     const entries = vi.spyOn(Array.prototype, "entries");
-    // Replace only the worker transport; admission and payload observation stay real.
-    const worker = vi.spyOn(WorkerTaskPool.prototype, "run").mockResolvedValueOnce({
+    // A prior file can own the pool through an earlier module evaluation;
+    // replace only its transport so admission and payload observation stay real.
+    const pool = resolveGlobalSingleton<
+      WorkerTaskPool<PromptPreparationTask, PromptPreparationResult>
+    >(Symbol.for("openclaw.providerPromptHashPool"), () => {
+      throw new Error("Expected provider prompt state to initialize its worker pool");
+    });
+    const worker = vi.spyOn(pool, "run").mockResolvedValueOnce({
       kind: "provider",
       prompt: prepared,
     });
@@ -313,33 +309,17 @@ describe("provider prompt state", () => {
   });
 
   it("does not compare rejected payloads across effective context scopes", async () => {
-    const runId = "changed-context-scope";
-    const scopedState = getProviderPromptState(runId);
-    const scopedContext = { systemPrompt: "system", messages: [], tools: [] } as Context;
     const payload = { input: "same", model: model.id };
     const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
       await options?.onPayload?.(payload, model);
       return createResultStream("error");
     });
-    const firstWrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state: scopedState,
-      effectiveContextTokenBudget: 64_000,
-    });
-    const first = await firstWrapped(model, scopedContext);
-    await first.result();
-    markLastProviderPromptContextRejected(scopedState);
+    await (await observe(state, transport, undefined, 64_000)(model, context)).result();
+    markLastProviderPromptContextRejected(state);
 
-    const secondWrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state: scopedState,
-      effectiveContextTokenBudget: 128_000,
-    });
-    const second = await secondWrapped(model, scopedContext);
-    await second.result();
+    await (await observe(state, transport)(model, context)).result();
 
     expect(transport).toHaveBeenCalledTimes(2);
-    clearProviderPromptState(runId);
   });
 
   it("keeps a rejected primary identity across successful auxiliary attempts", async () => {
@@ -403,5 +383,67 @@ describe("provider prompt state", () => {
 
     endResultStream(stream, "stop");
     await result.result();
+  });
+});
+
+describe("final model request gate", () => {
+  it.each([false, true])(
+    "awaits one gate after provider transforms (encoded=%s)",
+    async (encoded) => {
+      const order: string[] = [];
+      let sent: unknown;
+      const transformPayload = vi.fn(async (payload, _model, receivedContext) => {
+        expect(receivedContext).toBe(context);
+        order.push("gate");
+        expect(payload.input).toEqual(["provider addition"]);
+        return { ...payload, input: ["withheld"] };
+      });
+      const wrapped = wrapStreamFnWithProviderPromptState({
+        state,
+        effectiveContextTokenBudget: 128000,
+        transformPayload,
+        streamFn: async (_model, _context, options) => {
+          const encode = encoded ? prepareModelRequestBody(options) : undefined;
+          const prepared = await options?.onPayload?.({ input: ["raw"] }, model);
+          sent = encode
+            ? JSON.parse(new TextDecoder().decode((await encode(prepared)).body))
+            : prepared;
+          order.push("send");
+          return createResultStream("stop");
+        },
+      });
+      await wrapped(model, context, {
+        onPayload: async () => {
+          order.push("provider");
+          return { input: ["provider addition"] };
+        },
+      });
+      expect(order).toEqual(["provider", "gate", "send"]);
+      expect(transformPayload).toHaveBeenCalledTimes(1);
+      expect(sent).toEqual({ input: ["withheld"] });
+      expect(state.lastAttempt?.digest).toBe(
+        prepareProviderPrompt({ payload: sent, encode: encoded }).digest,
+      );
+    },
+  );
+
+  it("gates encode-only retries and stops an aborted request after the gate", async () => {
+    const controller = new AbortController();
+    const gate = vi.fn(async (payload) => payload);
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      state,
+      effectiveContextTokenBudget: 128000,
+      transformPayload: gate,
+      streamFn: async (_model, _context, options) => {
+        const encode = prepareModelRequestBody(options);
+        await encode({ input: ["first"] });
+        await encode({ input: ["retry"] });
+        controller.abort();
+        await encode({ input: ["aborted"] });
+        throw new Error("must not send");
+      },
+    });
+    await expect(wrapped(model, context, { signal: controller.signal })).rejects.toThrow();
+    expect(gate).toHaveBeenCalledTimes(3);
   });
 });

@@ -1,13 +1,21 @@
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import {
+  createCpuTrackedWorker,
   createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
+import { getResourceProfile } from "openclaw/plugin-sdk/resource-profile";
 import { pluginFilesLocation } from "./plugin-files.js";
 import type { RegistryOperations, RegistryRequest, RegistryResponse } from "./registry-host.js";
+import { KnowledgeRestartError } from "./restart-error.js";
 import { sdkUrls } from "./storage-client.js";
 import type { RegistrySnapshot } from "./store-registry.js";
 
+const stopped = () =>
+  new KnowledgeRestartError(
+    "registry-stopped",
+    "Knowledge store registry stopped; retry the original request.",
+  );
 type Pending = { resolve(value: unknown): void; reject(error: unknown): void };
 const registryEntrypoint = createPluginRuntimeProcessEntrypoint(
   "knowledgeRegistry",
@@ -20,8 +28,11 @@ export class RegistryUnavailable extends Error {}
  * snapshot so store resolution can read registry facts synchronously. */
 export class RegistryClient {
   private worker?: Worker;
+  private idleTimer?: NodeJS.Timeout;
+  private closing?: Promise<void>;
   private readonly pending = new Map<number, Pending>();
   private nextId = 0;
+  private disposed = false;
   /** Latest published registry facts; undefined until the first load. */
   current?: RegistrySnapshot;
   /** Set when the registry cannot be opened; every store is then unavailable. */
@@ -35,6 +46,10 @@ export class RegistryClient {
     op: Op,
     ...args: Parameters<RegistryOperations[Op]>
   ): Promise<ReturnType<RegistryOperations[Op]>> {
+    clearTimeout(this.idleTimer);
+    if (this.closing) {
+      await this.closing;
+    }
     const worker = this.start(),
       id = ++this.nextId;
     const value = await new Promise<unknown>((resolve, reject) => {
@@ -61,17 +76,33 @@ export class RegistryClient {
       throw e;
     }
   }
-  close() {
+  /** Stop the worker and resolve once it has exited. Outstanding calls fail;
+   * the next call starts a new worker unless the client was disposed. */
+  close(): Promise<void> {
+    clearTimeout(this.idleTimer);
     const worker = this.worker;
     this.worker = undefined;
-    this.fail(new Error("Knowledge store registry stopped; retry the original request."));
-    void worker?.terminate();
+    this.fail(stopped());
+    if (worker) {
+      this.closing = worker.terminate().then(() => {
+        this.closing = undefined;
+      });
+    }
+    return this.closing ?? Promise.resolve();
+  }
+  /** Close for good: no later call starts a worker. */
+  dispose() {
+    this.disposed = true;
+    return this.close();
   }
   private start(): Worker {
     if (this.worker) {
       return this.worker;
     }
-    const worker = new Worker(resolveRuntimeWorkerUrl(registryEntrypoint), {
+    if (this.disposed) {
+      throw stopped();
+    }
+    const worker = createCpuTrackedWorker(resolveRuntimeWorkerUrl(registryEntrypoint), {
       workerData: { sdk: sdkUrls(), files: pluginFilesLocation(), stateRoot: this.stateRoot() },
     });
     worker.unref();
@@ -83,6 +114,14 @@ export class RegistryClient {
       this.pending.delete(message.id);
       if (!this.pending.size) {
         worker.unref();
+        if (getResourceProfile() === "lean") {
+          this.idleTimer = setTimeout(() => {
+            if (this.worker === worker && !this.pending.size) {
+              // Keep a failed termination as the next call's visible failure.
+              void this.close().catch(() => {});
+            }
+          }, 60_000).unref();
+        }
       }
       if (message.ok) {
         call.resolve(message.value);

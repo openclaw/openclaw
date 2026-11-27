@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import * as toast from "../../lib/toast.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
@@ -23,6 +23,11 @@ import {
   submitPendingWorktree,
 } from "./draft-worktree-submission.test-support.ts";
 import { decodeIdentityPreferences } from "./preferences.ts";
+
+// These cases own preference ordering, not cold picker code loading.
+beforeAll(async () => {
+  await import("../chat/components/chat-model-picker-panel.tsx");
+});
 
 afterEach(resetWorktreeMocks);
 
@@ -56,13 +61,24 @@ it.each([
     });
     controls.onThinkingSelect?.("high", controls.sessionKey);
     controls.onFastModeSelect?.(fastMode === true ? "on" : fastMode, controls.sessionKey);
-    const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high", fastMode };
+    controls.onAccessProgramSelect?.("daybreak_red", controls.sessionKey);
+    const selected = {
+      model: "openai/gpt-5.6-sol",
+      thinkingLevel: "high",
+      fastMode,
+      ...(identified ? { cyberAccessProgram: "daybreak_red" } : {}),
+    };
     await expectSaved(prefs, selected);
     admitted.resolve(acceptedWorktreeSession);
     await submitting;
     expectWorktreeName(next.place);
     expect(prefs.stored()).toMatchObject({ ...selected, worktree: true, baseRef: "main" });
-    expect(control).toMatchObject({ selected: selected.model, thinkingLevel: "high", fastMode });
+    expect(control).toMatchObject({
+      selected: selected.model,
+      thinkingLevel: "high",
+      fastMode,
+      cyberAccessProgram: "daybreak_red",
+    });
   },
 );
 
@@ -494,6 +510,7 @@ it.each(["accepted clear", "ordinary edit"] as const)(
       await Promise.all(writes.mock.results.map((result) => result.value));
       expect(first.context.sessions.createResult).not.toHaveBeenCalled();
       expect(warning).toHaveBeenCalledExactlyOnceWith({
+        severity: "error",
         message:
           "Saving your new-session choices could not be confirmed. Check them before starting a session.",
       });
@@ -582,7 +599,6 @@ it("keeps accepted names retired when older model saves commit last", async () =
       await modelSave.wait();
     }
   });
-  const writes = vi.spyOn(next.gateway, "persistPreference");
   await chooseModel(next);
   try {
     await modelSave.started.promise;
@@ -591,10 +607,9 @@ it("keeps accepted names retired when older model saves commit last", async () =
     expect(prefs.stored()).toMatchObject({ worktreeName: "" });
   } finally {
     modelSave.release.resolve();
-    await Promise.all(writes.mock.results.map((result) => result.value));
+    await expectSaved(prefs, { model: "openai/gpt-5.6-sol" });
   }
   expect(next.context.sessions.createResult).not.toHaveBeenCalled();
-  expect(prefs.stored()).toMatchObject({ model: "openai/gpt-5.6-sol" });
   expect(decodePreference(prefs.stored()).main?.worktreeName).toBeUndefined();
 });
 

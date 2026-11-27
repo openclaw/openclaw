@@ -54,15 +54,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
   };
 });
-vi.mock("openclaw/plugin-sdk/text-chunking", () => ({
-  chunkItems: <T>(items: T[]) => [items],
-  markdownToIR: (text: string) => text,
-  renderMarkdownIRChunksWithinLimit: (text: string) => [text],
-  renderMarkdownWithMarkers: (text: string) => text,
-  sanitizeAssistantVisibleText: (text: string) => text,
-  stripReasoningTagsFromText: (text: string) => text,
-}));
-
 let registerSlackMessageEvents: typeof import("./messages.js").registerSlackMessageEvents;
 
 function inboundLogLines(): string[] {

@@ -1,5 +1,5 @@
 import type { EngineConnection } from "../infra/sql-connection.js";
-import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import type { SqliteWalHealth, SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type {
   DatabaseFileIdentity,
   DatabasePathIdentity,
@@ -7,6 +7,8 @@ import type {
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
 export { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
+export const AGENT_COLD_NAVIGATION_SCHEMA_VERSION = 39;
+export const AGENT_TEXT_SEARCH_SCHEMA_VERSION = 38;
 export const AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION = 37;
 export const AGENT_VECTOR_SEARCH_SCHEMA_VERSION = 33;
 export const AGENT_VECTOR_DECODER_SCHEMA_VERSION = 32;
@@ -32,6 +34,20 @@ export type OpenClawAgentDatabase = {
   db: EngineConnection;
   path: string;
   walMaintenance: SqliteWalMaintenance;
+  closeTiming?: {
+    startedAt: number;
+    walStopMs?: number;
+    checkpointMs?: number;
+    nativeCloseMs?: number;
+    checkpoint?: {
+      alreadyClosed: boolean;
+      pathCurrent: boolean;
+      state?: SqliteWalHealth["state"];
+      logFrames?: number | null;
+      checkpointedFrames?: number | null;
+      walBytes?: number;
+    };
+  };
 };
 
 export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
@@ -48,6 +64,14 @@ export type OpenClawAgentDatabaseRepairAdmission = {
   expectedIdentity?: DatabaseFileIdentity;
   /** Live caller authority for native open and schema/registry admission mutations. */
   assertCurrent?: () => void;
+};
+
+export type AgentLeaseRowIdentity = {
+  leaseId: string;
+  agentId: string;
+  path: string;
+  ownerPid: number;
+  ownerStartTime: number | null;
 };
 
 /** Shared-state registry row describing an agent database seen by this process. */

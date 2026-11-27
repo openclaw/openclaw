@@ -5,17 +5,19 @@ import {
   createSignal,
   merge,
   onSettled,
+  Show,
   untrack,
 } from "solid-js";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { navigateToModelProvider } from "../../model-providers/navigation.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
-import {
-  createChatComposerContext,
-  createComposerDictationOptions,
-} from "./chat-composer-frame.ts";
+import { navigateToSpeechSettings } from "../voice-api-key-navigation.ts";
+import { createComposerDictationOptions } from "./chat-composer-dictation-options.ts";
+import { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
@@ -27,6 +29,16 @@ import { renderChatComposerView } from "./chat-composer-view.tsx";
 export { resetChatComposerState } from "./chat-composer-state.ts";
 
 export function ChatComposer(props: ChatComposerProps & { questions: ComposerQuestions }) {
+  // Native pane inputs can acquire their final presentation identity after mount.
+  // A new identity needs its own retained state and native textarea binding.
+  return (
+    <Show when={props.paneId} keyed>
+      {(paneId) => <PaneComposer {...props} paneId={paneId} />}
+    </Show>
+  );
+}
+
+function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions }) {
   // A pane owns this component's lifetime; a different pane mounts a different composer.
   const initialPaneId = untrack(() => props.paneId);
   const state = getChatComposerState(initialPaneId);
@@ -65,7 +77,24 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
     );
     state.dictation = new ComposerDictationOwner(initialDictationOptions);
   }
-  const voice = { dictation: state.dictation, picker: microphonePicker };
+  const application = useOptionalApplication();
+  const voice = {
+    dictation: state.dictation,
+    picker: microphonePicker,
+    configureApiKey: application
+      ? (modelProvider: string | undefined) => {
+          if (modelProvider) {
+            navigateToModelProvider(
+              application,
+              currentProps.currentAgentId || null,
+              modelProvider,
+            );
+          } else {
+            navigateToSpeechSettings(application);
+          }
+        }
+      : undefined,
+  };
   // Dictation admission invalidates edits and dismisses errors before the next input event.
   onSettled(() =>
     voice.dictation.subscribe(() => {
@@ -111,7 +140,6 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
   const prediction = createComposerPrediction(readPredictionSource);
   const questionPanel = createComposerQuestionPanel(
     () => props.questions,
-    composition,
     () => props.getTranscriptElement,
   );
   const streaming = createMemo(() => currentProps.stream !== null);
@@ -142,10 +170,19 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
       if (!current.emojiEnabled || current.draftKey !== previous?.context.draftKey) {
         state.emojiMenu.close();
       }
+      // A proposal belongs to the draft it was offered for; another chat never shows it.
+      if (previous && current.draftKey !== previous.context.draftKey) {
+        state.tasks()?.dismiss();
+      }
+      state.tasks()?.syncDraft(current.visibleDraft);
       const options = current.dictationOptions;
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);
       prediction.sync(predictions);
+      if (current.queuedSubmitDue) {
+        // Submission reads live composer state; run it after this commit.
+        queueMicrotask(current.flushQueuedSubmit);
+      }
     },
   );
   onSettled(() => {
@@ -163,7 +200,6 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
         directory: current.mentionDirectory,
         host:
           current.mentionDirectory &&
-          current.showComposer &&
           !state.composerComposing &&
           !state.dictation?.locksComposer &&
           state.composerTextarea?.isConnected
@@ -180,6 +216,39 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
   onSettled(() =>
     listen(document, "visibilitychange", () => prediction.sync(readPredictionSource())),
   );
+  onSettled(() => {
+    const stop = () => context().stopRunFromEscape();
+    const send = () => context().runControlsProps.onSend();
+    state.stopRunFromEscape = stop;
+    state.sendDraft = send;
+    return () => {
+      if (state.stopRunFromEscape === stop) {
+        state.stopRunFromEscape = null;
+      }
+      if (state.sendDraft === send) {
+        state.sendDraft = null;
+      }
+    };
+  });
 
-  return renderChatComposerView(context, currentProps, state);
+  // Owners and handlers retain live reads; only scalar presentation values filter updates.
+  const scalarContext = createProjection(() => {
+    const current = context();
+    return {
+      attachmentReadRevision: current.attachmentReadRevision,
+      canCompose: current.canCompose,
+      showAbortableUi: current.showAbortableUi,
+      visibleDraft: current.visibleDraft,
+      submitQueued: current.submitQueued,
+      predictionText: current.predictionText,
+      runStatusAnnouncement: current.runStatusAnnouncement,
+      cancellationCaveat: current.cancellationCaveat,
+      sendShortcut: current.sendShortcut,
+      showComposerProgress: current.showComposerProgress,
+      draftKey: current.draftKey,
+      mentionError: current.mentionError,
+    };
+  });
+  const viewContext = merge(context, scalarContext);
+  return renderChatComposerView(() => viewContext, currentProps, state);
 }

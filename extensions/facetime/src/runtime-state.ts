@@ -1,11 +1,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { FaceTimeCallStatusEvent, AuthenticatedFaceTimeOwner } from "./call-events.js";
+import type { FaceTimeCallStatusEvent, AuthenticatedFaceTimeCaller } from "./call-events.js";
 import type { HelperActionResult } from "./helper-results.js";
 import type { FaceTimeHelperPeer } from "./helper-rpc.js";
 import type { FaceTimeHelperSupervisorStatus } from "./helper-supervisor.js";
 import type { FaceTimeDialMode, PendingFaceTimeDial } from "./outbound-call.js";
-import type { FaceTimeTalkDriver } from "./talk-driver.js";
-import type { FaceTimeTalkEventSummary } from "./talk-events-summary.js";
+import type { startFaceTimeTalkDriver } from "./talk-driver.js";
 
 type FaceTimeCarrierMode = "ringing" | "muted" | "active" | "closing" | "closed";
 
@@ -59,7 +58,7 @@ export class ActiveFaceTimeCall {
   lastHelperAction?: HelperActionResult;
   lastRoutingError?: string;
   audioRouting?: Promise<void>;
-  talk?: FaceTimeTalkDriver;
+  talk?: Awaited<ReturnType<typeof startFaceTimeTalkDriver>>;
   talkStarting?: Promise<void>;
   talkActivation?: Promise<void>;
   carrierHangupPending?: boolean;
@@ -70,7 +69,7 @@ export class ActiveFaceTimeCall {
   constructor(params: {
     callUUID: string;
     phase: "ringing" | "active";
-    owner: AuthenticatedFaceTimeOwner;
+    owner: AuthenticatedFaceTimeCaller;
     handle?: string;
     peer?: FaceTimeHelperPeer;
   }) {
@@ -293,7 +292,16 @@ export type FaceTimeRuntimeStatus = {
     lastHelperAction?: HelperActionResult;
     lastRoutingError?: string;
     carrierHangupPending?: boolean;
-    recentTalkEvents?: FaceTimeTalkEventSummary[];
+    recentTalkEvents?: Array<{
+      type: string;
+      turnId?: string;
+      callId?: string;
+      final?: boolean;
+      byteLength?: number;
+      name?: string;
+      text?: string;
+      message?: string;
+    }>;
   }>;
 };
 

@@ -40,7 +40,6 @@ import * as nativeControl from "./subagent-control.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunTerminated } from "./subagent-registry.js";
-import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
@@ -92,10 +91,9 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
       "Cancellation never reached its runtime handoff.",
     );
     expect(
-      await finalizeInterruptedSubagentRun({
+      await markSubagentRunTerminated({
         runId: original.runId,
-        expectedEntry: original,
-        error: "Original execution interrupted",
+        reason: "Original execution stopped",
       }),
     ).toBe(1);
     expect(
@@ -119,7 +117,7 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
 });
 
 it.each(["before interruption", "after interruption", "after abort"] as const)(
-  "revalidates caller control for new stops and settles accepted stops when revoked %s",
+  "refuses a Stop revoked before admission and finishes one revoked %s",
   async (revocation) => {
     const { storePath, sessionKey, sessionId, runId } = await seed("caller-control", {
       runId: "caller-control-run",
@@ -171,10 +169,17 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
         callerControlsAncestor = false;
         admission.release();
       }
-      await expect(pending).rejects.toThrow("Caller no longer controls ancestor.");
-      const accepted = revocation === "after abort";
-      expect(controller.signal.aborted).toBe(accepted);
-      expect(onInterrupt).toHaveBeenCalledTimes(Number(revocation !== "before interruption"));
+      if (revocation === "before interruption") {
+        // Revoked while the Stop still selected its tree: refused before any effect.
+        await expect(pending).rejects.toThrow("Caller no longer controls ancestor.");
+        expect(controller.signal.aborted).toBe(false);
+        expect(onInterrupt).not.toHaveBeenCalled();
+      } else {
+        // Revocation applies to the caller's next request; this admitted Stop finishes.
+        await expect(pending).resolves.toMatchObject({ found: true, killed: true });
+        expect(controller.signal.aborted).toBe(true);
+        expect(onInterrupt).toHaveBeenCalledTimes(1);
+      }
       expect(subagentRuns.get(runId)?.killIntent).toBeUndefined();
     } finally {
       blocker.release();
@@ -187,13 +192,12 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
 );
 
 it.each([
-  ...(["queued", "accepted"] as const).flatMap((phase) =>
-    (["ready", "failure"] as const).map((outcome) => ({ phase, outcome, terminal: false })),
-  ),
-  { phase: "accepted", outcome: "failure", terminal: true },
+  { phase: "queued", terminal: false },
+  { phase: "accepted", terminal: false },
+  { phase: "accepted", terminal: true },
 ] as const)(
-  "prepares cancellation facts while $phase and settles $outcome (terminal=$terminal)",
-  async ({ phase, outcome, terminal }) => {
+  "an admitted Stop never waits on caller facts requested while $phase (terminal=$terminal)",
+  async ({ phase, terminal }) => {
     const { storePath, sessionKey, sessionId, runId } = await seed("readiness", {
       runId: "readiness-run",
     });
@@ -227,17 +231,8 @@ it.each([
         return mutation;
       });
     }
-    const readEntered = createDeferred();
-    const releaseRead = createDeferred();
-    const failure = new AggregateError([new Error("read cleanup failed")], "cancel read failed");
     let needsRead = false;
-    const read = releaseRead.promise.then(() => {
-      needsRead = false;
-      if (outcome === "failure") {
-        throw failure;
-      }
-    });
-    void read.catch(() => {});
+    let readRequested = false;
     const pending = killSubagentRunAdmin(
       {
         cfg: getRuntimeConfig(),
@@ -254,54 +249,33 @@ it.each([
           if (!needsRead) {
             return undefined;
           }
-          readEntered.resolve();
-          return read;
+          readRequested = true;
+          return new Promise<void>(() => {});
         },
       },
     );
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
     try {
       await awaitGateBeforeSettlement(
         phase === "accepted" ? interrupted.promise : mutationQueued.promise,
         pending,
         "Cancellation never reached its selected lifecycle phase.",
       );
+      // Caller facts serve only the admission check; the admitted Stop never reads them again.
       needsRead = true;
       blocker.release();
       admission.release();
-      await awaitGateBeforeSettlement(
-        readEntered.promise,
-        pending,
-        "Cancellation skipped pending caller preparation.",
-      );
-      expect(settled).toBe(false);
-      expect(controller.signal.aborted).toBe(phase === "accepted");
       if (terminal) {
         expect(await markSubagentRunTerminated({ runId, reason: "killed" })).toBe(1);
-        expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
       }
-      releaseRead.resolve();
       const result = await pending;
-      if (outcome === "failure") {
-        const error = "error" in result ? result.error : undefined;
-        expect(result.killed).toBe(phase === "accepted");
-        expect(error).toContain("cancel read failed");
-        expect(error).not.toContain("Caller facts were not prepared");
-      } else {
-        expect(result.killed).toBe(true);
-      }
-      const stopped = phase === "accepted" || outcome === "ready";
-      expect(controller.signal.aborted).toBe(stopped);
+      expect(readRequested).toBe(false);
+      expect(result).toMatchObject({ found: true });
+      expect(result).not.toHaveProperty("error");
+      expect(controller.signal.aborted).toBe(true);
       expect(subagentRuns.get(runId)?.killIntent).toBeUndefined();
-      expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe(
-        stopped ? "killed" : "running",
-      );
+      expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
     } finally {
       blocker.release();
-      releaseRead.resolve();
       admission.release();
       await Promise.allSettled([blocker.pending, pending]);
       await detachActiveEmbeddedRun(sessionId, handle, sessionKey);

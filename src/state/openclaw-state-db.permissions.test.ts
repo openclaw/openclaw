@@ -9,6 +9,7 @@ const fault = vi.hoisted(() => {
     error: undefined as Error | undefined,
     failProbe: true,
     removeSuffix: undefined as string | undefined,
+    opened: undefined as string[] | undefined,
   };
 });
 
@@ -25,19 +26,26 @@ vi.mock("node:fs", async (importOriginal) => {
     }
     return actual.chmodSync(target, mode);
   };
-  return { ...actual, chmodSync, default: { ...actual, chmodSync } };
+  const openSync: typeof actual.openSync = (...args) => {
+    fault.opened?.push(String(args[0]));
+    return actual.openSync(...args);
+  };
+  return { ...actual, chmodSync, openSync, default: { ...actual, chmodSync, openSync } };
 });
 
 const fs = await import("node:fs");
 const { closeOpenClawStateDatabaseForTest, openOpenClawStateDatabase } =
   await import("./openclaw-state-db.js");
 const { ensureOpenClawStatePermissions } = await import("./openclaw-state-db-permissions.js");
+const { writeConfigMachineState } = await import("./config-machine-state-write.js");
+const { readConfigMachineState } = await import("./config-machine-state.js");
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
     fault.error = undefined;
     fault.failProbe = true;
     fault.removeSuffix = undefined;
+    fault.opened = undefined;
     closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
@@ -61,6 +69,33 @@ it.skipIf(process.platform === "win32")("leaves already-private metadata unchang
 
   expect(fs.statSync(pathname, { bigint: true }).ctimeNs).toBe(before.ctimeNs);
 });
+
+it.skipIf(process.platform === "win32")(
+  "keeps shared-state commits out of sibling private stores",
+  () => {
+    const { options, env } = fixture();
+    const siblings = [
+      join(env.OPENCLAW_STATE_DIR, "client"),
+      join(env.OPENCLAW_STATE_DIR, "control"),
+    ];
+    for (const directory of siblings) {
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    }
+    fs.writeFileSync(join(siblings[0]!, "credentials.sqlite"), "credential fixture", {
+      mode: 0o600,
+    });
+    fs.writeFileSync(join(siblings[1]!, "services.sqlite"), "service fixture", { mode: 0o600 });
+    writeConfigMachineState("permission-probe", 0, options);
+    fault.opened = [];
+    for (let value = 1; value <= 3; value++) {
+      writeConfigMachineState("permission-probe", value, options);
+    }
+    expect(readConfigMachineState("permission-probe", options)).toBe(3);
+    expect(
+      fault.opened.filter((file) => siblings.some((directory) => file.startsWith(directory))),
+    ).toEqual([]);
+  },
+);
 
 it.each([true, false])("handles EPERM with restrictive existing permissions=%s", (restrictive) => {
   const { options, env } = fixture(restrictive);

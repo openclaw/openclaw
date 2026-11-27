@@ -116,7 +116,7 @@ it("admits a restarted current schema before repeated version and migration prob
   const restarted = openState({ env });
   for (const pattern of [
     /^PRAGMA user_version\b/iu,
-    /select "value_json" from "config_machine_state"/iu,
+    /select \* from "config_machine_state"/iu,
     /^PRAGMA integrity_check\b/iu,
   ]) {
     expect(observation.queries.filter((sql) => pattern.test(sql))).toHaveLength(1);
@@ -240,9 +240,10 @@ it("readmits startup checkpoint storage after a tracked header change", () => {
 });
 
 it("validates a replacement file before reusing a shared-state pathname", () => {
-  const { env } = replacedState(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+  const { env } = replacedState(`PRAGMA user_version = ${SCHEMA_VERSION + 1};
+    UPDATE schema_meta SET app_version = '2026.10.8' WHERE meta_key = 'primary'`);
   const observation = observeSqliteReadSql(StatementSync.prototype);
-  expect(() => openState({ env })).toThrow(/newer schema version/iu);
+  expect(() => openState({ env })).toThrow(/OpenClaw 2026\.10\.8;.*doctor --fix/isu);
   expect(validationStatements(observation.queries).length).toBeGreaterThan(0);
 });
 

@@ -20,6 +20,7 @@ import {
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { replaceConfigFile, resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import {
   findPluginConfigEntry,
   hasPluginConfigId,
@@ -309,18 +310,20 @@ async function projectPlanState(params: {
           continue;
         }
         if (profile.kind === "api_key" || profile.kind === "token") {
+          // Provider migration does not select a replacement for every agent/account.
+          if (coerceSecretRef(profile.refValue, nextConfig.secrets?.defaults) === null) {
+            if (isNonEmptyString(profile.value)) {
+              warnings.push(
+                `Auth profile "${profile.profileId}" for provider "${provider}" in ${authStorePath} retains its plaintext credential because it has no valid ${profile.refField}. Add an explicit auth-profile target to migrate this account.`,
+              );
+            }
+            continue;
+          }
           if (isNonEmptyString(profile.value)) {
             scrubbedValues.add(profile.value.trim());
           }
           if (profile.valueField in profile.profile) {
             delete profile.profile[profile.valueField];
-            mutated = true;
-          }
-          if (
-            profile.refField in profile.profile &&
-            coerceSecretRef(profile.refValue, nextConfig.secrets?.defaults) === null
-          ) {
-            delete profile.profile[profile.refField];
             mutated = true;
           }
           continue;
@@ -345,9 +348,12 @@ async function projectPlanState(params: {
       if (!fs.existsSync(envPath)) {
         continue;
       }
-      const current = fs.readFileSync(envPath, "utf8");
+      const bytes = fs.readFileSync(envPath);
+      const current = bytes.toString("utf8");
       const scrubbed = scrubEnvRaw(current, scrubbedValues, knownSecretEnvVars);
       if (scrubbed !== current) {
+        // No-op inspections may tolerate legacy bytes; rewrites must not replace them.
+        decodeUtf8Input(bytes, `File ${envPath}`);
         envRawByPath.set(envPath, scrubbed);
         changedFiles.add(envPath);
       }
@@ -548,7 +554,7 @@ function captureFileSnapshot(pathname: string): FileSnapshot {
   const stat = fs.statSync(pathname);
   return {
     existed: true,
-    content: fs.readFileSync(pathname, "utf8"),
+    content: decodeUtf8Input(fs.readFileSync(pathname), `File ${pathname}`),
     mode: stat.mode & 0o777,
   };
 }

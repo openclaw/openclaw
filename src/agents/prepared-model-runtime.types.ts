@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type { ActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import type { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import type { PluginGenerationMetrics } from "../plugins/plugin-generation-metrics.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
@@ -17,6 +18,10 @@ import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.ty
 import type { PublishedModelCatalogOwnerCandidate } from "./prepared-model-catalog.types.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
+
+export const PREPARED_MODEL_RUNTIME_LIFETIMES_KEY = Symbol.for(
+  "openclaw.preparedModelRuntimeLifetimes",
+);
 
 export type PreparedConfiguredRuntimeModel = Readonly<{
   provider: string;
@@ -94,6 +99,11 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     allowGatewaySubagentBinding: boolean;
     /** Reads accepted inventory without scheduling discovery or expiry renewal. */
     readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
+    /** Admission facts travel with run projections; never reread live inventory for a started turn. */
+    capturedModelCatalog?: Readonly<{
+      admitted: ModelCatalogSnapshot;
+      published: ModelCatalogSnapshot;
+    }>;
     /** Inventory demand may renew expired providers without waiting or replacing saved rows. */
     refreshExpiredModelCatalog?: () => void;
     /** Rechecks native CLI login availability without refreshing provider inventory. */
@@ -110,6 +120,8 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     ) => Promise<ModelCatalogSnapshot>;
     /** Full static models for configured refs, resolved once at the lifecycle boundary. */
     configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
+    /** Configured fallback health routes, normalized once in the owning plugin generation. */
+    fallbackRateLimitModels?: ReadonlyMap<string, Model | undefined>;
     /** Exact logical IDs precede static equivalence within this policy generation. */
     findConfiguredRuntimeModel: (
       provider: string,
@@ -125,6 +137,7 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     inlineProviderModels: readonly InlineModelEntry[];
     createStores: (
       publishedModels?: ReadonlyMap<string, readonly Model[]>,
+      selectedModel?: { provider: string; modelId: string },
     ) => PreparedModelRuntimeStores;
     /** Bounded metadata shared by runs; replacing the model/auth generation drops the memo. */
     routeModelResolutionMemo?: Map<string, Promise<Model>>;
@@ -136,6 +149,7 @@ export type PreparedReplyDispatchRuntime = Readonly<{
   agentDir: string;
   workspaceDir: string;
   config: OpenClawConfig;
+  readPolicyConfig?: () => OpenClawConfig;
   modelCatalog: ModelCatalogSnapshot;
   readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   inboundPluginRegistry: PluginRegistry;
@@ -162,12 +176,15 @@ export type PreparedModelRuntimeInput = {
   env?: NodeJS.ProcessEnv;
   allowGatewaySubagentBinding?: boolean;
   runtimePluginSelections?: readonly AgentHarnessPluginSelection[];
+  /** Admission binding independent of the shared model/discovery cache identity. */
+  readPolicyConfig?: () => OpenClawConfig;
   config: OpenClawConfig;
 };
 
 export type PreparedModelRuntimeLease = Readonly<{
   snapshot: PreparedModelRuntimeSnapshot;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
+  run<T>(run: () => T): T;
   [Symbol.asyncDispose](): Promise<void>;
 }>;
 
@@ -177,6 +194,12 @@ export type PreparedModelRuntimeLeaseOptions = {
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   abortSignal?: AbortSignal;
+  /**
+   * A plugin-runtime refresh continuation already ran tools on
+   * the previous generation, so it waits for every pending reload to settle
+   * instead of failing after the usual three publication gates.
+   */
+  waitForReplacementPublication?: boolean;
   /** Pure planning against admitted facts; requested selections remain explicit and additive. */
   deriveRuntimePluginSelections?: (context: {
     config: OpenClawConfig;
@@ -206,6 +229,8 @@ export type PreparedModelRuntimeRefreshOptions = {
   joinSupersedingPublication?: boolean;
   /** Restricts replacement to configured owners whose normalized agent id is present. */
   agentIds?: ReadonlySet<string>;
+  /** Auth-only config publications rebuild credentials without replacing plugin capabilities. */
+  preservePluginGenerations?: boolean;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{
@@ -221,6 +246,7 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   generatedCatalogReadCount: number;
   workspaceFactsMs: number;
   runtimePluginMs: number;
+  pluginPreparation?: Readonly<PluginGenerationMetrics>;
   pluginMetadataMs: number;
   staticProviderCatalogMs: number;
   ambientCredentialsMs: number;
@@ -245,6 +271,10 @@ export type PreparedModelCatalogProviderFacts = {
 
 export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
+  /** Acquired scopes stay live-owned even when replacement auth discards their rows. */
+  acquiredProviderIds?: ReadonlySet<string>;
+  /** An unscoped provider acquisition completed; retained across provider-local refreshes. */
+  fullProviderDiscovery?: true;
   runtimeModels: ReadonlyMap<string, readonly Model[]>;
   key: string;
   pluginFingerprint: string;

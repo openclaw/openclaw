@@ -36,6 +36,7 @@ export type ResolvedCliBackend = Pick<
   | "toolAvailabilityEnforcement"
   | "projectNativeToolAuthority"
   | "resolveManagedNativeTools"
+  | "nativeToolSearch"
   | "nativeToolMode"
   | "hostOwnedTools"
   | "sideQuestionToolMode"
@@ -155,11 +156,15 @@ export function listCliRuntimeProviderIds(
     includeSetupRegistry?: boolean;
   } = {},
 ): string[] {
-  // Only CLI backends with a canonical modelProvider are runtime aliases that
-  // should be hidden from model-provider pickers. Standalone CLI backends own
-  // direct refs such as acme-cli/model and must remain selectable.
+  // A runtime is hidden when it aliases a different canonical provider.
+  // A backend bound to its own id owns direct refs such as
+  // antigravity-cli/model and stays selectable.
   return [
-    ...new Set(listCliRuntimeModelBackendBindings(params).map((binding) => binding.runtime)),
+    ...new Set(
+      listCliRuntimeModelBackendBindings(params)
+        .filter((binding) => binding.runtime !== binding.provider)
+        .map((binding) => binding.runtime),
+    ),
   ].toSorted();
 }
 
@@ -307,6 +312,7 @@ export function resolveCliBackendConfig(
     toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
     projectNativeToolAuthority: backend.projectNativeToolAuthority,
     resolveManagedNativeTools: backend.resolveManagedNativeTools,
+    nativeToolSearch: backend.nativeToolSearch,
     nativeToolMode: backend.nativeToolMode,
     hostOwnedTools: backend.hostOwnedTools,
     sideQuestionToolMode: backend.sideQuestionToolMode,

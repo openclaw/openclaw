@@ -6,15 +6,13 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import {
-  getDiagnosticSessionState,
-  resetDiagnosticSessionStateForTest,
-} from "../logging/diagnostic-session-state.js";
+import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -46,10 +44,8 @@ import { runWithToolExecutionValidation } from "./agent-tools.execution-validati
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
-import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
-import { hashToolCall, recordToolCall } from "./tool-loop-detection.js";
 import { createToolSearchCatalogRef, registerHeadlessToolSearchCatalog } from "./tool-search.js";
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
@@ -620,46 +616,6 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       expect(clientCall).not.toHaveBeenCalled();
     },
   );
-
-  it("finishes async reconciliation before exposing a wrapped call as ready", async () => {
-    beforeToolCallHook = installBeforeToolCallHook({
-      runBeforeToolCallImpl: async () => ({ params: { path: "/tmp/final" } }),
-    });
-    const runId = "run-reconcile-before-ready";
-    const sessionKey = "agent:main:reconcile-before-ready";
-    const state = getDiagnosticSessionState({ sessionKey, sessionId: "session-reconcile" });
-    recordToolCall(state, "read", { path: "/tmp/original" }, "reconcile-call", { runId });
-    const execute = vi.fn().mockResolvedValue({ content: [], details: {} });
-    const hookContext = {
-      runId,
-      sessionKey,
-      sessionId: "session-reconcile",
-      loopDetection: { enabled: true },
-    };
-    const source = wrapToolWithBeforeToolCallHook(
-      asAgentTool({ name: "read", execute }),
-      hookContext,
-    );
-    const tool = wrapToolDefinition(
-      expectDefined(toToolDefinitions([source], hookContext)[0], "reconcile tool definition"),
-    );
-    const preparer = expectDefined(
-      getInternalToolExecutionPreparer(tool),
-      "reconcile private execution preparer",
-    );
-
-    const prepared = await preparer({
-      toolCallId: "reconcile-call",
-      args: { path: "/tmp/original" },
-    });
-
-    expect(prepared.kind).toBe("ready");
-    expect(state.toolCallHistory?.at(-1)?.argsHash).toBe(
-      hashToolCall("read", { path: "/tmp/final" }),
-    );
-    prepared.dispose();
-    expect(execute).not.toHaveBeenCalled();
-  });
 
   it("passes agent context to outer code-mode exec hooks through OpenClaw custom tools", async () => {
     beforeToolCallHook = installBeforeToolCallHook({

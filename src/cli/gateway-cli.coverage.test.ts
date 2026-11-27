@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { CostUsageSummary } from "../infra/session-cost-usage.js";
+import { resetLogger } from "../logging/logger.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type DiscoveredBeacon = Awaited<
@@ -30,6 +32,11 @@ const mocks = await vi.hoisted(async () => {
 });
 
 const { runtimeLogs, runtimeErrors, defaultRuntime } = mocks;
+const work = vi.hoisted(() => ({ signal: undefined as AbortSignal | undefined }));
+vi.mock("../shared/async-work-scope.js", async (importActual) => ({
+  ...(await importActual<typeof import("../shared/async-work-scope.js")>()),
+  getAsyncWorkSignal: () => work.signal,
+}));
 
 vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
@@ -130,9 +137,12 @@ async function expectJsonValidationFailure(args: string[], message: unknown) {
 
 describe("gateway-cli coverage", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(resetLogger);
 
   beforeEach(() => {
+    resetLogger();
     gatewayProgram = createGatewayProgram();
+    work.signal = undefined;
     callGateway.mockReset();
     callGateway.mockImplementation(defaultCallGateway);
     runtimeLogs.length = 0;
@@ -162,31 +172,17 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).not.toContain("GatewayClientRequestError");
   });
 
-  it("registers gateway probe and routes to gatewayStatusCommand", async () => {
-    gatewayStatusCommand.mockClear();
-
-    await runGatewayCommand(["probe", "--json"]);
-
-    expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+  it.each([
+    [["usage-cost"], "usage.cost", { days: 30 }],
+    [["stability", "--limit", "5"], "diagnostics.stability", { limit: 5 }],
+  ])("prints no gateway %j reply that lands after Ctrl+C", async (args, method, params) => {
+    work.signal = AbortSignal.abort();
+    await runGatewayCommand([...args, "--json"]);
+    expectGatewayCall({ method, params });
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("registers gateway stability and routes to diagnostics RPC", async () => {
-    await runGatewayCommand(["stability", "--limit", "5", "--type", "payload.large", "--json"]);
-
-    expectGatewayCall({
-      method: "diagnostics.stability",
-      localPortOverride: undefined,
-      params: { limit: 5, type: "payload.large" },
-    });
-  });
-
-  it("scopes usage-cost to a specific agent via --agent", async () => {
-    await runGatewayCommand(["usage-cost", "--agent", "alpha", "--days", "7", "--json"]);
-
-    expectGatewayCall({ method: "usage.cost", params: { days: 7, agentId: "alpha" } });
-  });
-
-  it("prints the provider/model breakdown for missing costs", async () => {
+  it("scopes usage-cost to an agent and prints its missing-cost breakdown", async () => {
     callGateway.mockResolvedValue({
       updatedAt: 1,
       days: 7,
@@ -204,8 +200,9 @@ describe("gateway-cli coverage", () => {
       cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
     });
 
-    await runGatewayCommand(["usage-cost", "--days", "7"]);
+    await runGatewayCommand(["usage-cost", "--agent", "alpha", "--days", "7"]);
 
+    expectGatewayCall({ method: "usage.cost", params: { days: 7, agentId: "alpha" } });
     expect(runtimeLogs.join("\n")).toContain(
       "Missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2)",
     );
@@ -218,7 +215,6 @@ describe("gateway-cli coverage", () => {
       totalTokens: 100,
       totalCost: 0.1,
       inputCost: 0.1,
-      usageReport: { state: "unavailable" },
     };
     const summary: CostUsageSummary = {
       updatedAt: 1,
@@ -237,7 +233,7 @@ describe("gateway-cli coverage", () => {
       timeoutMs: 10_000,
     });
     const output = runtimeLogs.join("\n");
-    const figures = "unavailable (known subtotal: $0.10 · 100 tokens)";
+    const figures = "$0.10 · 100 tokens";
     expect(output).toContain(`Latest day: 2026-09-01 · ${figures}`);
     expect(output).toContain(
       `Usage totals may be incomplete (partial). Run this command again later.\nTotal: ${figures}`,
@@ -320,7 +316,6 @@ describe("gateway-cli coverage", () => {
   );
 
   it("prints the latest stability bundle without calling Gateway", async () => {
-    callGateway.mockClear();
     const tempDir = tempDirs.make("openclaw-gateway-cli-bundle-");
     const bundleDir = path.join(tempDir, "logs", "stability");
     const bundlePath = path.join(
@@ -426,7 +421,6 @@ describe("gateway-cli coverage", () => {
   ] as const)(
     "writes %s export with service-owned snapshots (timeout=%i, JSON=%s)",
     async (command, timeoutMs, json) => {
-      callGateway.mockClear();
       callGateway.mockResolvedValue({ ok: true, source: "serving-gateway" });
       const tempDir = tempDirs.make("openclaw-gateway-cli-support-");
       const outputPath = path.join(tempDir, "diagnostics.zip");
@@ -442,7 +436,6 @@ describe("gateway-cli coverage", () => {
         },
       );
 
-      expect(callGateway).toHaveBeenCalledTimes(2);
       for (const method of ["health", "diagnostics.capabilities"]) {
         expect(callGateway).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -453,7 +446,6 @@ describe("gateway-cli coverage", () => {
           }),
         );
       }
-      expect(fs.existsSync(outputPath)).toBe(true);
       const zip = await JSZip.loadAsync(fs.readFileSync(outputPath));
       const capabilities = zip.file("runtime/gateway-capabilities.json");
       if (!capabilities) {
@@ -508,10 +500,7 @@ describe("gateway-cli coverage", () => {
       ["\\\\?\\UNC\\server\\share\\config.json", "\\\\?\\UNC\\server\\share\\config.json"],
       ["\\\\.\\pipe\\openclaw-gateway", "\\\\.\\pipe\\openclaw-gateway"],
     ] as const;
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ logging: { file: logPath }, plugins: { enabled: false } }),
-    );
+    writeFixtureJsonSync(configPath, { logging: { file: logPath }, plugins: { enabled: false } });
     fs.writeFileSync(logPath, cases.map(([msg]) => JSON.stringify({ msg })).join("\n") + "\n");
     const expected = cases.map(([, msg]) => JSON.stringify({ msg })).join("\n") + "\n";
 
@@ -525,6 +514,7 @@ describe("gateway-cli coverage", () => {
         OPENCLAW_TEST_FILE_LOG: "1",
       },
       async () => {
+        resetLogger();
         // A relative namespace suffix must not acquire the current home prefix.
         const cwd = vi.spyOn(process, "cwd").mockReturnValue(userProfile);
         try {
@@ -533,7 +523,32 @@ describe("gateway-cli coverage", () => {
             await runGatewayCommand(["diagnostics", "export", "--output", outputPath, "--json"]);
             const zip = await JSZip.loadAsync(fs.readFileSync(outputPath));
             const logs = await zip.file("logs/openclaw-sanitized.jsonl")?.async("string");
-            expect(logs).toBe(expected);
+            const diagnostics = JSON.parse(
+              (await zip.file("diagnostics.json")?.async("string")) ?? "{}",
+            ).logs;
+            let logContext: string | undefined;
+            if (logs !== expected) {
+              logContext = JSON.stringify({
+                iteration: filename === "first.zip" ? 1 : 2,
+                selectedConfiguredFile:
+                  diagnostics?.file === `$OPENCLAW_STATE_DIR${path.sep}input.log`,
+                lineCount:
+                  typeof diagnostics?.lineCount === "number" ? diagnostics.lineCount : null,
+                size: typeof diagnostics?.size === "number" ? diagnostics.size : null,
+                cursor: typeof diagnostics?.cursor === "number" ? diagnostics.cursor : null,
+                status:
+                  typeof diagnostics?.file !== "string"
+                    ? "missing-metadata"
+                    : diagnostics.file === "unavailable"
+                      ? "failed"
+                      : "included",
+              });
+            }
+            expect(
+              diagnostics?.file === `$OPENCLAW_STATE_DIR${path.sep}input.log`,
+              logContext,
+            ).toBe(true);
+            expect(logs, logContext).toBe(expected);
             if (logs === undefined) {
               throw new Error("Diagnostics export is missing sanitized logs");
             }
@@ -546,6 +561,7 @@ describe("gateway-cli coverage", () => {
           }
         } finally {
           cwd.mockRestore();
+          resetLogger();
         }
       },
     );

@@ -198,7 +198,7 @@ export async function captureRemoteWorkspaceManifest(params: {
         : createRemoteWorkspaceManifestScript(params.maxHashMemoBytes),
       params.remoteWorkspaceDir,
       params.baseCommit ?? "",
-      params.baseCommit ? "eligible" : "all",
+      "all",
       ...params.priorManifestDigests,
       "memo-v1",
     ],

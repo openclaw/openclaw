@@ -50,9 +50,11 @@ async function recoverIncognito(page: Page) {
   const expired = pane.getByText("Incognito session expired", { exact: true });
   const proof = (name: string) => path.join(suite.artifactDir, name + ".png");
   const loader = pane.locator(".chat-thread openclaw-panel-loading-skeleton");
-  await loader.waitFor({ state: "attached" });
+  await pane.locator(".chat-thread-inner").waitFor({ state: "attached" });
+  // Expired Incognito history has no saved messages to promise with placeholders.
+  expect(await loader.count()).toBe(0);
   await gateway.resolveDeferred("chat.startup");
-  await loader.waitFor({ state: "detached" });
+  await expired.waitFor({ state: "visible" });
 
   if (captureUiProof) {
     await page.screenshot({ path: proof("expired-route") });
@@ -114,7 +116,7 @@ async function recoverIncognito(page: Page) {
   }
   await pendingRow.locator(".chat-bubble").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as markdown", exact: true }).click();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(pendingText);
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(pendingText);
   await discard.click();
   await pendingRow.waitFor({ state: "detached" });
   expect(await gateway.getRequests("chat.send")).toHaveLength(1);

@@ -1,25 +1,20 @@
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import type { RequesterSettleWakeBatchState } from "../announce/subagent-announce.requester-settle-state.js";
-import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-
-export type BlockSubagentCompletionRequest = {
-  subagent: SubagentRunRecord;
-  reason: string;
-  operatorAuthorityUnavailable?: true;
-  enqueuedAt?: number;
-  suspendedReason?: "expiry" | "permanent_failure";
-  storeReplaced?: true;
-  lastDropReason?: NonNullable<SubagentRunRecord["delivery"]>["lastDropReason"];
-  disposition?: NonNullable<SubagentRunRecord["delivery"]>["disposition"];
-};
+import type {
+  RequesterSettleWakeState,
+  SubagentRunRecord,
+} from "../registry/subagent-registry.types.js";
 
 export type RequesterWakeMutation =
-  | { kind: "transition"; state: RequesterSettleWakeBatchState }
+  | {
+      kind: "requesterDelivery";
+      fact: NonNullable<NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"]>;
+    }
+  | {
+      kind: "transition";
+      state: RequesterSettleWakeState;
+      requesterDelivery?: NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"];
+    }
   | { kind: "complete" };
-
-export type SubagentCompletionQueueReceipt =
-  | { id: string; status: "pending"; enqueuedAt: number; payloadJson: string }
-  | { id: string; status: "completed" | "failed" };
 
 export type RequesterWakeCommittedWrite = {
   entries: readonly { subagent: SubagentRunRecord }[];
@@ -28,7 +23,7 @@ export type RequesterWakeCommittedWrite = {
 
 export type SubagentCompletionMutation =
   | { kind: "settle"; queueId: string; expected: SubagentRunRecord; subagent: SubagentRunRecord }
-  | { kind: "block"; params: BlockSubagentCompletionRequest; now: number }
+  | { kind: "settleInHistory"; subagent: SubagentRunRecord; now: number }
   | { kind: "reconcileCancelled"; expected: SubagentRunRecord; now: number }
   | {
       kind: "requesterWake";
@@ -53,6 +48,4 @@ export type SubagentCompletionMutationResult = {
   applied: boolean | null;
   records: SubagentCompletionRecord[];
   retiredRunIds: string[];
-  queueIds: string[];
-  queueReceipts?: SubagentCompletionQueueReceipt[];
 };

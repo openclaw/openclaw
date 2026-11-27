@@ -2,7 +2,8 @@
 
 import type { ConversationListItem } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
-import { cronListResponse, operatorHello, waitForCronPage } from "./cron-page.test-support.tsx";
+import { createChannelCapability } from "../../lib/channels/index.ts";
+import { cronListResponse, waitForCronPage } from "./cron-page.test-support.tsx";
 import { cronRpc, mountCronPage } from "./cron-rpc.test-support.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 
@@ -59,7 +60,7 @@ async function mountSuggestions(conversations: ConversationListItem[]) {
     }),
     { render: true, scopeId: "writer" },
   );
-  mounted.context.channels.state.channelsSnapshot = {
+  mounted.context.acquireChannels(createChannelCapability).state.channelsSnapshot = {
     ts: 0,
     channelOrder: ["telegram", "discord"],
     channelLabels: { telegram: "Telegram", discord: "Discord" },
@@ -75,7 +76,6 @@ async function mountSuggestions(conversations: ConversationListItem[]) {
     },
     channelDefaultAccountId: { telegram: "default", discord: "discord-account" },
   };
-  mounted.gateway.emitSnapshot({ hello: operatorHello(["operator.admin"]) });
   await waitForCronPage(() => expect(mounted.page.cron.cronJobs).toHaveLength(2));
   expect(mounted.page.querySelector("datalist")).toBeNull();
   mounted.page.querySelector<HTMLButtonElement>('[data-test-id="cron-new-task"]')!.click();

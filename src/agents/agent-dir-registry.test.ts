@@ -1,19 +1,39 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as directoryWatch from "../infra/directory-watch-host.js";
+import * as pathExistence from "../infra/path-existence.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   isPathOwnedByAnotherRegisteredAgent as ownedByOther,
   normalizeAgentDirRegistryPath as normalizePath,
   registerResolvedAgentDir as registerDir,
   resolveRegisteredAgentIdForDir as ownerOf,
+  resolveRegisteredAgentIdForDirAsync as ownerOfAsync,
   unregisterResolvedAgentDir as unregisterDir,
 } from "./agent-dir-registry.js";
 
 vi.mock("node:worker_threads", () => ({ isMainThread: true }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => {
+  const access = fs.accessSync;
+  vi.spyOn(fs.promises, "access").mockImplementation(async (...args) => access(...args));
+  // Inject owner notifications; directory-watch-host.test.ts proves native transport.
+  vi.spyOn(directoryWatch, "watchDirectory").mockImplementation((directory) => {
+    const watch = Object.assign(new EventEmitter(), { close() {} });
+    try {
+      fs.accessSync(directory, fs.constants.R_OK);
+    } catch (error) {
+      queueMicrotask(() => watch.emit("error", error, true));
+    }
+    return watch;
+  });
+});
+
+afterEach(() => vi.restoreAllMocks());
 
 function registered(owner: Parameters<typeof registerDir>[0]) {
   registerDir(owner);
@@ -21,7 +41,7 @@ function registered(owner: Parameters<typeof registerDir>[0]) {
 }
 
 function observeOwners(owners: Array<{ agentId: string; agentDir: string }>) {
-  const watch = vi.spyOn(fs, "watch");
+  const watch = vi.spyOn(directoryWatch, "watchDirectory");
   owners.forEach((owner) => registerDir(owner));
   const closes = watch.mock.results.map((result) => {
     if (result.type !== "return") {
@@ -58,27 +78,33 @@ describe("agent directory registry", () => {
     unregisterDir({ agentId: "current", agentDir });
   });
 
-  it("keeps ownership stable through a symlinked parent after the agent dir is removed", () => {
-    const root = tempDirs.make("openclaw-agent-dir-registry-");
-    const realRoot = path.join(root, "real");
-    const linkedRoot = path.join(root, "linked");
-    const realAgentDir = path.join(realRoot, "agent");
-    const linkedAgentDir = path.join(linkedRoot, "agent");
-    fs.mkdirSync(realAgentDir, { recursive: true });
-    fs.symlinkSync(realRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+  it.each([
+    ["sync", ownerOf],
+    ["async", ownerOfAsync],
+  ] as const)(
+    "keeps %s ownership stable through a removed symlinked parent",
+    async (_mode, lookup) => {
+      const root = tempDirs.make("openclaw-agent-dir-registry-");
+      const realRoot = path.join(root, "real");
+      const linkedRoot = path.join(root, "linked");
+      const realAgentDir = path.join(realRoot, "agent");
+      const linkedAgentDir = path.join(linkedRoot, "agent");
+      fs.mkdirSync(realAgentDir, { recursive: true });
+      fs.symlinkSync(realRoot, linkedRoot, process.platform === "win32" ? "junction" : "dir");
 
-    using _ = registered({ agentId: "current", agentDir: realAgentDir });
-    expect(ownerOf(linkedAgentDir)).toBe("current");
-    registerDir({ agentId: "deleted", agentDir: linkedAgentDir });
-    expect(ownerOf(realAgentDir)).toBeUndefined();
-    expect(ownedByOther({ agentId: "deleted", pathname: linkedAgentDir })).toBe(true);
-    expect(unregisterDir({ agentId: "deleted", agentDir: linkedAgentDir })).toBe(true);
-    expect(ownerOf(realAgentDir)).toBe("current");
+      using _ = registered({ agentId: "current", agentDir: realAgentDir });
+      expect(await lookup(linkedAgentDir)).toBe("current");
+      registerDir({ agentId: "deleted", agentDir: linkedAgentDir });
+      expect(await lookup(realAgentDir)).toBeUndefined();
+      expect(ownedByOther({ agentId: "deleted", pathname: linkedAgentDir })).toBe(true);
+      expect(unregisterDir({ agentId: "deleted", agentDir: linkedAgentDir })).toBe(true);
+      expect(await lookup(realAgentDir)).toBe("current");
 
-    fs.rmSync(realAgentDir, { recursive: true });
-    expect(unregisterDir({ agentId: "current", agentDir: linkedAgentDir })).toBe(true);
-    expect(ownerOf(realAgentDir)).toBeUndefined();
-  });
+      fs.rmSync(realAgentDir, { recursive: true });
+      expect(unregisterDir({ agentId: "current", agentDir: linkedAgentDir })).toBe(true);
+      expect(await lookup(realAgentDir)).toBeUndefined();
+    },
+  );
 
   it("matches tilde paths against the effective custom home", () => {
     const root = tempDirs.make("openclaw-agent-dir-home-");
@@ -103,6 +129,7 @@ describe("agent directory registry", () => {
     using observed = observeOwners(fleet);
     const { watch, closes } = observed;
     const initialWatches = watch.mock.calls.length;
+    const expectedPath = fs.realpathSync.native(fleet[0]!.agentDir);
     using realpath = vi.spyOn(fs.realpathSync, "native");
     for (const owner of fleet) {
       expect(registerDir(owner)).toBe(false);
@@ -113,7 +140,7 @@ describe("agent directory registry", () => {
     expect(realpath).not.toHaveBeenCalled();
     // Destructive admission bypasses the prepared identity even when lookups reuse it.
     const { agentDir } = fleet[0]!;
-    expect(normalizePath(agentDir)).toBe(fs.realpathSync.native(agentDir));
+    expect(normalizePath(agentDir)).toBe(expectedPath);
     expect(realpath).toHaveBeenCalled();
   });
 
@@ -129,10 +156,36 @@ describe("agent directory registry", () => {
     if (parent?.type !== "return") {
       throw new Error("Missing agent directory ancestor watch");
     }
-    parent.value.emit("change", "change", path.basename(agentDir));
+    watch.mock.calls[parentIndex]![1]("change", path.basename(agentDir));
     expect(closes[parentIndex]).not.toHaveBeenCalled();
     expect(ownerOf(agentDir)).toBe("main");
     expect(watch).toHaveBeenCalledTimes(count);
+  });
+
+  it("resolves prepared identities once per recovery sweep without synchronous filesystem calls", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const root = tempDirs.make("openclaw-agent-dir-recovery-");
+    const agentDir = path.join(root, "agents", "main", "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    try {
+      using _ = observeOwners([{ agentId: "main", agentDir }]);
+      using realpath = vi.spyOn(pathExistence, "resolveIdentityPathViaExistingAncestor");
+      using synchronous = vi.spyOn(fs.realpathSync, "native");
+      await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.all(realpath.mock.results.map((result) => result.value));
+      expect(synchronous).not.toHaveBeenCalled();
+      expect(realpath).toHaveBeenCalledExactlyOnceWith(agentDir);
+      expect(ownerOf(agentDir)).toBe("main");
+      await Promise.resolve();
+      realpath.mockClear();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.all(realpath.mock.results.map((result) => result.value));
+      expect(synchronous).not.toHaveBeenCalled();
+      expect(realpath).toHaveBeenCalledExactlyOnceWith(agentDir);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retires ancestor watches on shutdown without losing registered ownership", async () => {
@@ -167,7 +220,9 @@ describe("agent directory registry", () => {
       fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
       expect(unregisterDir({ agentId: "main", agentDir })).toBe(false);
       expect(ownedByOther({ agentId: "other", pathname: original })).toBe(true);
+      using realpath = vi.spyOn(pathExistence, "resolveIdentityPathViaExistingAncestor");
       await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.all(realpath.mock.results.map((result) => result.value));
       expect(ownerOf(agentDir)).toBeUndefined();
       expect(ownerOf(path.join(original, "agent"))).toBe("main");
       registerDir({ agentId: "replacement", agentDir });

@@ -49,7 +49,11 @@ export function createExecution(
         effectiveAllowModelOverride: false,
         lifecycleStorePath: "",
         operationalRunInstance: {},
-        preparedModelRuntimeLease: { [Symbol.asyncDispose]: runtimeRelease, snapshot: {} },
+        preparedModelRuntimeLease: {
+          run: <T>(run: () => T): T => run(),
+          [Symbol.asyncDispose]: runtimeRelease,
+          snapshot: {},
+        },
         replyDispatchRuntime: { config: { runtime: "A" }, pluginGeneration: "generation-A" },
         unpersistedOffloadedRefs: [],
         userTurn: {
@@ -70,7 +74,6 @@ export function createExecution(
       isNewSession: false,
       isRawModelRun: true,
       isOneShotModelRun: true,
-      isRestartRecoveryResumeRun: false,
       suppressVisibleSessionEffects: true,
       images: [],
       imageOrder: [],
@@ -90,7 +93,6 @@ export function createExecution(
         logGateway: { error: vi.fn(), warn: vi.fn() },
       },
       io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
-      releaseCronContinuationClaimWithRecovery: async () => true,
     } as unknown as Parameters<typeof startAgentRunExecution>[0],
   };
 }
@@ -223,6 +225,7 @@ export function bindFollowupCompletion(execution: ReturnType<typeof createExecut
       signal: custody.signal,
       assertCurrent: () => custody.signal.throwIfAborted(),
       run: (work) => work(),
+      runWithRequester: (work) => work(),
       release: () => custody.abort(),
     },
   });

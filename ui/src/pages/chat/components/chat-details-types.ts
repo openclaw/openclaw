@@ -5,7 +5,10 @@ import type {
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
+import type { SessionDisplayPullRequest } from "../../../lib/session-pull-request-presentation.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
+import type { DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
+import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
 import type { ChatSessionProgressProps } from "./chat-composer-types.ts";
 import type { ChatOutputsDesktopProps } from "./chat-outputs-data.ts";
 import type { ChatPanePlacementProps } from "./chat-pane-placement.tsx";
@@ -57,7 +60,7 @@ type ChatDetailsDesktopPresentation = {
   /** Localized section labels supplied by the host's copy owner. */
   peopleLabel: string;
   outputsLabel: string;
-  /** Localized Working, without the ellipsis in common.working. */
+  /** Localized Working label. */
   subagentsWorkingLabel: string;
 };
 
@@ -83,12 +86,17 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "subagentSessions"
     | "subagentParentKey"
     | "subagentSessionsHydrated"
-    | "subagentSessionsRead"
+    | "subagentSessionsUnavailable"
     | "onOpenSubagent"
     | "onOpenSubagents"
     | "personActivity"
     | "onScrollPortRef"
   > & {
+    sharing?: import("../../../api/types.ts").SessionMembersListEvidenceResult;
+    cachedDetails?: ChatDetailsSnapshot;
+    /** The session observation has accepted current facts; cached rows are display only. */
+    sessionFactsReady?: boolean;
+    onDetailsSnapshot?: (patch: DetailsSnapshotPatch) => void;
     desktopPresentation?: ChatDetailsDesktopPresentation;
     desktopDisclosures?: ChatDetailsDesktopDisclosures;
     environment?: ChatDetailsEnvironmentData;
@@ -97,6 +105,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     retainOutputs?: () => (() => void) | undefined;
     /** Details consumes the unfiltered progress projection, independently of Show in chat. */
     progressCardError?: "access-denied" | "unavailable";
+    progressCardRefreshReserved?: boolean;
     showTaskProgress?: boolean;
     onShowTaskProgressChange?: (shown: boolean) => void;
     onSessionSelect?: (sessionKey: string) => void;
@@ -105,6 +114,8 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     onCollapseTaskProgressChange?: (collapsed: boolean) => void;
     onOpenTaskProgressSettings?: () => void;
     pullRequests?: ControlUiSessionPullRequest[];
+    /** Includes recorded task PRs without treating them as current-checkout facts. */
+    displayPullRequests?: SessionDisplayPullRequest[];
     pullRequestsGateway?: ApplicationGateway;
     pullRequestsSessionId?: string;
     pullRequestsBranch?: ControlUiSessionBranch;
@@ -115,7 +126,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     /** Opens this pane's Processes panel; absent where the pane has none. */
     onOpenProcesses?: (instanceId?: string) => void;
     onCompact?: () => void | Promise<unknown>;
-    onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
+    onDismissPullRequest?: ChatPullRequestsProps["onDismiss"];
     onDismissPullRequestsBranch?: (branch: ControlUiSessionBranch) => void;
     githubPublication?: GitHubPublicationView;
   };

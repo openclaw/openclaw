@@ -8,17 +8,12 @@ import {
   type ChannelSetupWizardAdapter,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
+import { listBuzzAccountIds, resolveBuzzAccountConfig } from "./account-config.js";
 import { waitForBuzzRoomAccess } from "./room-access-wait.js";
 import { discoverBuzzRooms, type BuzzDiscoveredRoom } from "./room-discovery.js";
 import { patchBuzzAccountConfig } from "./setup-core.js";
 import { verifyBuzzAfterSetup } from "./setup-verify.js";
-import {
-  decodeBuzzPrivateKey,
-  listBuzzAccountIds,
-  resolveBuzzAccount,
-  resolveBuzzAccountConfig,
-  resolveBuzzPublicKey,
-} from "./types.js";
+import { decodeBuzzPrivateKey, resolveBuzzAccount, resolveBuzzPublicKey } from "./types.js";
 
 const channel = "buzz" as const;
 type BuzzSetupPrompter = Parameters<ChannelSetupWizardAdapter["configure"]>[0]["prompter"];

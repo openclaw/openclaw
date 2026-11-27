@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveCommandOwnerAuthority } from "../auto-reply/command-auth.js";
+import { captureCommandOwnerIdentity } from "../auto-reply/command-owner-facts.js";
 import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelOperatorAdminAuthority } from "../gateway/channel-operator-authority.js";
 import { createAdminMemberRoleConfig } from "../gateway/operator-role.test-support.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -20,17 +22,51 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { updateRepairParentMessageSchema } from "./update-repair-protocol.js";
 import {
+  createDelegatedUpdateRequesterAuthority,
   createManagedUpdateRequesterAuthority,
   createManagedUpdateRequesterContinuationAuthority,
-  prepareManagedUpdateRequesterIdentity,
+  prepareUpdateRequesterIdentity,
   type UpdateRequester,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import { getUpdateRunForProgressAsync } from "./update-run-reader.js";
 
 vi.mock("../cli/plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: vi.fn(),
 }));
+
+// Doctor sources of installed plugins are unavailable while their state migration is pending.
+const doctorSource = vi.hoisted(() => ({ unprepared: undefined as string | undefined }));
+vi.mock("../commands/doctor/legacy-config-repair.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../commands/doctor/legacy-config-repair.js")>();
+  const [
+    { isPluginDoctorMigrationDeferred },
+    { PluginSetupPreparationRequiredError },
+    { createPluginManifestRecordFixture },
+  ] = await Promise.all([
+    import("../plugins/doctor-contract-registry.js"),
+    import("../plugins/plugin-setup-module.js"),
+    import("../plugins/plugin-metadata.test-support.js"),
+  ]);
+  return {
+    ...actual,
+    planLegacyConfigForUpdateChannel: (
+      ...args: Parameters<typeof actual.planLegacyConfigForUpdateChannel>
+    ) => {
+      const id = doctorSource.unprepared;
+      if (id && !isPluginDoctorMigrationDeferred(id)) {
+        throw new PluginSetupPreparationRequiredError(
+          createPluginManifestRecordFixture({ id, origin: "global" }),
+          "/plugins/doctor.js",
+          "/plugins",
+        );
+      }
+      return actual.planLegacyConfigForUpdateChannel(...args);
+    },
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -67,6 +103,7 @@ beforeEach(async () => {
   env = { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
   await writeConfig(allowed);
   vi.mocked(ensureCliPluginRegistryLoaded).mockReset().mockResolvedValue(undefined);
+  doctorSource.unprepared = undefined;
 });
 
 async function linkedAdmins() {
@@ -88,10 +125,11 @@ async function linkedAdmins() {
     accountId: identity.accountId,
     senderId: identity.senderId,
   };
-  const authorizationSource = resolveCommandOwnerAuthority(
+  const authorizationSource = captureCommandOwnerIdentity(
     config,
     channelRequester,
     options,
+    resolveChannelOperatorAdminAuthority,
   ).source;
   expect(authorizationSource).toBe(`profile:${ada.id}`);
   return {
@@ -136,8 +174,12 @@ it.each(["reassignment", "role change in original state"])(
       unlinkUserChannelIdentity(fixture.ada.id, fixture.identity, fixture.options);
       linkUserChannelIdentity(fixture.grace.id, fixture.identity, fixture.options);
       expect(
-        resolveCommandOwnerAuthority(fixture.config, fixture.channelRequester, fixture.options)
-          .source,
+        captureCommandOwnerIdentity(
+          fixture.config,
+          fixture.channelRequester,
+          fixture.options,
+          resolveChannelOperatorAdminAuthority,
+        ).source,
       ).toBe(`profile:${fixture.grace.id}`);
     } else {
       setUserProfileRole(fixture.ada.id, "member", fixture.options);
@@ -187,7 +229,7 @@ it.each(["profile", "configured-owner"])(
     if (source === "configured-owner") {
       await writeConfig(allowed);
     }
-    const identity = await prepareManagedUpdateRequesterIdentity(
+    const identity = await prepareUpdateRequesterIdentity(
       source === "profile" ? fixture.requester : requester,
       env,
     );
@@ -252,6 +294,86 @@ it.each(["callback", "local-executor"] as const)(
   },
 );
 
+it.each([true, false])(
+  "keeps a prefixed configured owner current when plugins await Doctor migrations: %s",
+  async (pendingOnly) => {
+    await writeConfig({ commands: { ownerAllowFrom: ["telegram:owner"] } });
+    const registry = createTestPluginRegistry().registry;
+    registry.plugins.push(createPluginRecord({ id: "telegram", status: "error" }));
+    registry.diagnostics.push({
+      level: "error",
+      pluginId: "telegram",
+      message: "pending",
+      ...(pendingOnly ? { code: "plugin-state-migration" as const } : {}),
+    });
+    const { PluginLoadFailureError } = await import("../plugins/loader-shared.js");
+    const error = new PluginLoadFailureError(registry, registry.plugins);
+    vi.mocked(ensureCliPluginRegistryLoaded).mockRejectedValueOnce(error);
+    const authority = await authorityFor({ channel: "telegram", senderId: "owner" });
+    if (!pendingOnly) {
+      expect(() => authority.isCurrent()).toThrow(error);
+      return;
+    }
+    expect(authority.isCurrent()).toBe(true);
+    await writeConfig({ commands: { ownerAllowFrom: ["telegram:other"] } });
+    expect(authority.isCurrent()).toBe(false);
+  },
+);
+
+it.each(["discord", "mattermost"])(
+  "keeps a typed %s owner current only while the owner entry remains configured",
+  async (channel) => {
+    const registry = createTestPluginRegistry().registry;
+    registry.plugins.push(
+      createPluginRecord({ id: channel, status: "error", channelIds: [channel] }),
+    );
+    registry.diagnostics.push({
+      level: "error",
+      pluginId: channel,
+      message: "pending",
+      code: "plugin-state-migration",
+    });
+    const { PluginLoadFailureError } = await import("../plugins/loader-shared.js");
+    vi.mocked(ensureCliPluginRegistryLoaded).mockRejectedValueOnce(
+      new PluginLoadFailureError(registry, registry.plugins),
+    );
+    setActivePluginRegistry(registry);
+    try {
+      await writeConfig({ commands: { ownerAllowFrom: [`${channel}:user:100000000000000001`] } });
+      const authority = await authorityFor({ channel, senderId: "100000000000000001" });
+      expect(authority.isCurrent()).toBe(true);
+      await writeConfig({ commands: { ownerAllowFrom: [`${channel}:user:100000000000000002`] } });
+      expect(authority.isCurrent()).toBe(false);
+    } finally {
+      await clearActivePluginRegistry(registry);
+    }
+  },
+);
+
+it.each([undefined, "discord"])(
+  "checks an owner against the Doctor migration without publishing it (unprepared: %s)",
+  async (unprepared) => {
+    doctorSource.unprepared = unprepared;
+    const legacy = (owner: string) =>
+      JSON.stringify({
+        commands: { ownerAllowFrom: [`telegram:${owner}`] },
+        skills: { workshop: { autonomous: { mode: "auto", channelNotices: true } } },
+      });
+    const original = legacy("1001");
+    await writeConfig(original);
+    const authority = await createDelegatedUpdateRequesterAuthority(
+      { channel: "telegram", senderId: "1001", authorizationSource: "configured-owner" },
+      "run",
+      { assertCurrent() {} },
+      env,
+    );
+    expect(authority.isCurrent()).toBe(true);
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    await writeConfig(legacy("1002"));
+    expect(authority.isCurrent()).toBe(false);
+  },
+);
+
 it.each(["registry", "config preparation", "config recheck"])(
   "reports %s failure, not revocation",
   async (failure) => {
@@ -272,6 +394,39 @@ it.each(["registry", "config preparation", "config recheck"])(
       expect(authority.isCurrent()).toBe(true);
       await writeConfig({ commands: { ownerAllowFrom: ["other"] } });
       expect(authority.isCurrent()).toBe(false);
+    }
+  },
+);
+
+it.each(["owner check", "identity preparation"] as const)(
+  "the update helper's %s releases worker-held state readers before Doctor",
+  async (entry) => {
+    // The managed handoff helper outlives this check while Doctor and rollback take
+    // native exclusion; an idle retained WAL reader would hold their shared lock.
+    const run = create();
+    // Only the requester check may hold a connection when exclusion is attempted.
+    await closeOpenClawStateDatabaseAsync();
+    for (const [name, value] of Object.entries(env)) {
+      vi.stubEnv(name, value);
+    }
+    vi.mocked(ensureCliPluginRegistryLoaded).mockImplementationOnce(async () => {
+      await getUpdateRunForProgressAsync(run.runId, { env });
+    });
+    const helper = await import("../cli/daemon-cli.js");
+    if (entry === "owner check") {
+      expect(await helper.isManagedUpdateRequesterOwner(requester)).toBe(true);
+    } else {
+      expect((await helper.prepareManagedUpdateRequesterIdentity(requester)).requester).toEqual(
+        requester,
+      );
+    }
+    const exclusive = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
+    try {
+      exclusive.exec(
+        "PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;",
+      );
+    } finally {
+      exclusive.close();
     }
   },
 );

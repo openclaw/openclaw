@@ -28,6 +28,7 @@ import {
 type RuntimeEntryParams = Omit<Parameters<CreateSessionMcpRuntime>[0], "configFingerprint"> & {
   configReloadAtAdmission?: SessionMcpConfigPublication;
   runtimeKey: string;
+  recordOwnedResource: () => void;
 };
 
 type RequesterRuntimeParams = RuntimeEntryParams & {
@@ -81,6 +82,7 @@ export function createSessionMcpRuntimeManagerInstall(
     }
     lifecycle.ensureIdleSweepTimer();
     if (slot && store.liveRuntimeSlots.has(slot)) {
+      params.recordOwnedResource();
       lifecycle.catalogs.observeCatalog(runtime, params.runtimeKey, {
         sessionId,
         sessionKey: params.sessionKey,
@@ -104,16 +106,23 @@ export function createSessionMcpRuntimeManagerInstall(
   /** Install under the runtime-key queue shared by acquisition and disposal. */
   const getOrCreateRuntimeEntry = async (
     params: RuntimeEntryParams,
-    loaded?: Parameters<typeof loadSessionMcpConfig>[0]["loaded"],
+    config: ReturnType<typeof loadSessionMcpConfig>,
   ): Promise<SessionMcpRuntime> => {
-    // Static admission shares its synchronous preparation, never runtime reload inputs.
-    const config = loadSessionMcpConfig({ ...params, loaded, logDiagnostics: false });
     const nextFingerprint = requesterRuntimeFingerprint(
       config.fingerprint,
       params.requesterConnect,
     );
     const hasServers = Object.keys(config.loaded.mcpServers).length > 0;
-    const { runtimeKey, configReloadAtAdmission, ...runtimeParams } = params;
+    const {
+      runtimeKey,
+      configReloadAtAdmission,
+      recordOwnedResource: _recordOwnedResource,
+      ...input
+    } = params;
+    const runtimeParams = {
+      ...input,
+      lastListedCatalogByServerIdentity: store.lastListedCatalogByServerIdentity,
+    };
     const catalogBinding = {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -198,7 +207,10 @@ export function createSessionMcpRuntimeManagerInstall(
     },
   ): Promise<SessionMcpRuntime> => {
     const connectionHash = hashMcpResolvedConnections(params.connectionOverrides);
-    const runtime = await getOrCreateRuntimeEntry(params);
+    const runtime = await getOrCreateRuntimeEntry(
+      params,
+      loadSessionMcpConfig({ ...params, logDiagnostics: false }),
+    );
     if (store.runtimesBySessionId.get(params.runtimeKey) === runtime) {
       store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
         connectionHash,
@@ -271,6 +283,7 @@ export function createSessionMcpRuntimeManagerInstall(
     try {
       return await installRequesterRuntime({
         runtimeKey: params.runtimeKey,
+        recordOwnedResource: params.recordOwnedResource,
         configReloadAtAdmission: params.configReloadAtAdmission,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,

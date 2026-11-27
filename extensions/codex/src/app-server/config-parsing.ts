@@ -1,3 +1,4 @@
+import { createPluginConfigParser } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
@@ -141,10 +142,12 @@ const codexPluginConfigSchema = z.strictObject({
       mode: z.enum(["yolo", "guardian"]).optional(),
       transport: z.enum(["stdio", "websocket", "unix"]).optional(),
       homeScope: z.enum(["agent", "user"]).optional(),
+      workerHostedCloud: z.boolean().optional(),
       command: z.string().optional(),
       args: z.union([z.array(z.string()), z.string()]).optional(),
       url: z.string().optional(),
       authToken: SecretInputSchema.optional(),
+      tlsPeerCertificate: z.string().min(1).max(16384).optional(),
       headers: z.record(z.string(), SecretInputSchema).optional(),
       clearEnv: z.array(z.string()).optional(),
       remoteWorkspaceRoot: z.string().trim().min(1).optional(),
@@ -173,7 +176,6 @@ const codexPluginConfigSchema = z.strictObject({
         })
         .optional(),
       codeModeOnly: z.boolean().optional(),
-      loopDetectionPreToolUseRelay: z.boolean().optional(),
       requestTimeoutMs: z.number().positive().optional(),
       approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
       sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional(),
@@ -196,7 +198,12 @@ export type ParsedCodexPluginConfig = Omit<
   codexPlugins?: z.infer<typeof codexPluginsConfigSchema>;
 };
 
-export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
+export const readCodexPluginConfig = createPluginConfigParser<ParsedCodexPluginConfig>(
+  "codex",
+  parseCodexPluginConfig,
+);
+
+function parseCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
   const appServer = asNullableRecord(asNullableRecord(value)?.appServer);
   if (appServer?.approvalPolicy === "untrusted") {
     throw new Error(

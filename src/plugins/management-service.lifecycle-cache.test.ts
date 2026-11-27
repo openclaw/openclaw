@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -130,6 +131,34 @@ it("retries a failed official catalog prewarm and keeps the recovered catalog pr
   await expect(list()).resolves.toMatchObject({ plugins: [] });
   await expect(list()).resolves.toMatchObject({ plugins: [] });
   expect(officialCatalog).toHaveBeenCalledTimes(2);
+});
+
+it("serves installed rows while catalog enrichment is pending, then reuses the prepared facts", async () => {
+  const hosted = createDeferred<typeof emptyCatalog>();
+  metadata.mockReturnValue(pluginMetadata({ id: "phase-plugin" }));
+  officialCatalog.mockReturnValue(hosted.promise);
+  const config = { plugins: { entries: { "phase-plugin": { enabled: true } } } };
+  const params = { config, env: {}, cachedCatalogOnly: true };
+  const pending = listManagedPlugins(params);
+  try {
+    const first = await Promise.race([pending, nextTurn().then(() => undefined)]);
+    expect(first?.plugins).toContainEqual(
+      expect.objectContaining({ id: "phase-plugin", installed: true, enabled: true }),
+    );
+    expect(first?.diagnostics).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("pending") }),
+    );
+  } finally {
+    hosted.resolve(emptyCatalog);
+    await pending;
+  }
+  const prepared = await list(config);
+  expect(await listManagedPlugins(params)).toEqual(prepared);
+  config.plugins.entries["phase-plugin"].enabled = false;
+  expect((await listManagedPlugins(params)).plugins).toContainEqual(
+    expect.objectContaining({ id: "phase-plugin", enabled: false, state: "disabled" }),
+  );
+  expect(officialCatalog).toHaveBeenCalledOnce();
 });
 
 it("uses current config after awaiting the hosted catalog", async () => {

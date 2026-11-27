@@ -1,14 +1,18 @@
-import { createMemo } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
+import { liveValue } from "../../lib/reactive/live-value.ts";
+import {
+  ModelProviderIcon,
+  useProviderDisplayLabel,
+} from "../../lib/reactive/provider-presentation.tsx";
 import { modelPickerOptions, type ModelPickerParams } from "../model-picker-options.ts";
-import { providerDisplayLabel } from "../provider-icon-data.ts";
 import { Picker, type PickerParams } from "../select-picker.ts";
-import { ProviderBrandIcon } from "./provider-icon.tsx";
 
 export type { ModelPickerOption, ModelPickerParams } from "../model-picker-options.ts";
 
 type ModelSelectOption = ReturnType<typeof modelPickerOptions>["options"][number];
 
-export function ModelPicker(props: ModelPickerParams) {
+export function ModelPicker(props: ModelPickerParams & { windowed?: boolean }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const options = createMemo(() => props.options);
   const selectedValue = createMemo(() => props.value);
   const customLabel = createMemo(() => props.custom?.label);
@@ -28,8 +32,60 @@ export function ModelPicker(props: ModelPickerParams) {
     }
   };
   const providerIcon = (provider: string) => (
-    <ProviderBrandIcon provider={provider} class="model-picker__provider-icon" />
+    <ModelProviderIcon provider={provider} class="model-picker__provider-icon" />
   );
+  const renderWindowSizer = (visible: readonly ModelSelectOption[]) => {
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        provider?: string;
+        description?: string;
+        labels: string[];
+      }
+    >();
+    for (const option of visible) {
+      // Every provider icon has the same 20px track. Equal detail text therefore
+      // lets one multiline label reproduce a group's widest intrinsic row.
+      const key = `${Boolean(option.provider)}:${option.description ?? ""}`;
+      let group = groups.get(key);
+      if (!group) {
+        // Unusual catalogs with many distinct details keep their original sizing
+        // and rendering instead of growing a second large set of row owners.
+        if (groups.size === 32) {
+          return undefined;
+        }
+        group = { key, provider: option.provider, description: option.description, labels: [] };
+        groups.set(key, group);
+      }
+      // Labels normally collapse CSS whitespace; only our separators start lines.
+      group.labels.push(option.label.replace(/[ \t\n\r\f]+/g, " ").replace(/^ | $/g, ""));
+    }
+    return (
+      <div class="picker-select__sizer" aria-hidden="true" inert>
+        <For each={[...groups.values()]} keyed={(group) => group.key}>
+          {(group) => (
+            <div class="picker-select__option">
+              <Show when={group().provider}>
+                {(provider) => (
+                  <span class="picker-select__leading">{providerIcon(provider())}</span>
+                )}
+              </Show>
+              <span class="picker-select__copy">
+                <span class="picker-select__label" style={{ "white-space": "pre" }}>
+                  {group().labels.join("\n")}
+                </span>
+                {group().description && (
+                  <span class="picker-select__description">{group().description}</span>
+                )}
+              </span>
+              <span class="picker-select__check" />
+            </div>
+          )}
+        </For>
+      </div>
+    );
+  };
   const pickerParams = createMemo<PickerParams<ModelSelectOption>>(() => ({
     id: props.id,
     label: props.label,
@@ -39,6 +95,9 @@ export function ModelPicker(props: ModelPickerParams) {
     title: props.title,
     placement: props.placement,
     searchable: true,
+    // The model picker's phone form belongs to its own overhaul.
+    phoneSheet: false,
+    windowed: props.windowed ? renderWindowSizer : undefined,
     searchPlaceholder: props.searchPlaceholder,
     groupBy: props.groupByProvider
       ? (option) =>
@@ -75,14 +134,13 @@ export function ModelPicker(props: ModelPickerParams) {
       <Picker params={pickerParams()} />
       {props.custom ? (
         <input
-          ref={(input) => (customInput = input)}
+          ref={[(input) => (customInput = input), liveValue(selectedValue)]}
           id={props.custom.id}
           class="settings-input model-picker__custom"
           aria-label={props.custom.label}
           aria-invalid={props.custom.invalid ? "true" : "false"}
           aria-describedby={props.custom.describedBy}
           placeholder={props.custom.placeholder ?? ""}
-          value={props.value}
           hidden={choices().selectedIndex >= 0}
           disabled={props.disabled}
           onInput={commitCustom}

@@ -2,7 +2,11 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Context } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   installRuntimeContextMessageForPrompt,
   normalizeMessagesForLlmBoundary,
@@ -20,20 +24,32 @@ import {
   streamMocks,
 } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { buildCommandContext } from "../../auto-reply/reply/commands.js";
 import { prepareReplyRunContext } from "../../auto-reply/reply/get-reply-run-context.js";
 import { baseParams } from "../../auto-reply/reply/get-reply-run.test-support.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { readReplySourceInput } from "../../auto-reply/reply/reply-source-binding.js";
-import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import {
+  prepareReplyRunToolAuthority,
+  prepareReplyToolAuthority,
+} from "../../auto-reply/reply/reply-tool-authority.js";
 import {
   listSessionPendingInputs,
+  loadSessionEntry,
   loadTranscriptEventsSync,
+  patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  onTrustedInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
 import {
   claimSessionControllerTask,
@@ -43,7 +59,7 @@ import {
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { gatewayRequest } from "../request-frame.test-support.js";
 import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import {
@@ -61,29 +77,91 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("steering input custody", () => {
+  it.each([true, false])(
+    "attributes pre-ACK persistence waits with an active run=%s",
+    async (active) => {
+      await using fixture = await createBrowserFollowupFixture({ active });
+      const previous = areDiagnosticsEnabledForProcess();
+      const phases: DiagnosticEventPayload[] = [];
+      setDiagnosticsEnabledForProcess(true);
+      const stop = onTrustedInternalDiagnosticEvent((event) => phases.push(event), {
+        include: ["diagnostic.phase.completed"],
+      });
+      try {
+        expect(await fixture.send()).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "started" }),
+          undefined,
+          expect.anything(),
+        );
+        await waitForDiagnosticEventsDrained();
+        const names = phases.flatMap((event) =>
+          event.type === "diagnostic.phase.completed" && event.details?.stage === "request"
+            ? [event.name]
+            : [],
+        );
+        expect(names).toEqual(
+          expect.arrayContaining(
+            (active
+              ? ["persist.stage.read", "persist.stage.authority", "persist.stage.commit"]
+              : [
+                  "persist.transcript.target",
+                  "persist.transcript.commit",
+                  "persist.transcript.publication",
+                ]
+            ).map((phase) => `chat.send.detail.${phase}`),
+          ),
+        );
+        if (active) {
+          expect(names).toContain("chat.send.detail.session.actor.command.queue");
+          expect(names).toContain("chat.send.detail.session.actor.command.execute");
+        }
+      } finally {
+        stop();
+        setDiagnosticsEnabledForProcess(previous);
+      }
+    },
+  );
+
   it.for([
     ...(
       [
         "shared-secret owner",
         "same grant",
         "changed grant",
-        "revoked grant",
         "same permissions across profiles",
         "no native admission across profiles",
       ] as const
     ).map((scenario) => ({
       scenario,
-      allowCollaborativeSteering:
-        scenario === "revoked grant"
-          ? undefined
-          : scenario === "no native admission across profiles",
+      allowCollaborativeSteering: scenario === "no native admission across profiles",
     })),
+    { scenario: "same requester protocol metadata drift", allowCollaborativeSteering: false },
+    { scenario: "same requester protocol metadata drift", allowCollaborativeSteering: true },
+    { scenario: "same requester binding drift", allowCollaborativeSteering: true },
+    { scenario: "same requester sandboxed session writer", allowCollaborativeSteering: false },
+    {
+      scenario: "same requester sandboxed revoked after acceptance",
+      allowCollaborativeSteering: false,
+    },
+    { scenario: "sandboxed same permissions across profiles", allowCollaborativeSteering: false },
     { scenario: "different scopes across profiles", allowCollaborativeSteering: undefined },
     { scenario: "different role session caps across profiles", allowCollaborativeSteering: true },
+    { scenario: "owner into loop", allowCollaborativeSteering: false },
+    { scenario: "owner into cron", allowCollaborativeSteering: false },
+    { scenario: "owner into subagent", allowCollaborativeSteering: false },
+    { scenario: "owner into loop revoked after acceptance", allowCollaborativeSteering: false },
+    { scenario: "nonowner into loop", allowCollaborativeSteering: false },
   ])(
     "preserves authenticated chat.send steering authority across callers ($scenario, collaboration: $allowCollaborativeSteering)",
     async ({ scenario, allowCollaborativeSteering }, { signal }) => {
       const startOwnerTurn = scenario === "same permissions across profiles";
+      const background = scenario.includes(" into ");
+      const subagent = scenario === "owner into subagent";
+      const nonowner = scenario === "nonowner into loop";
+      const continuation = scenario.startsWith("same requester ") || background;
+      const sandboxedSessionWriter = scenario.includes("sandboxed");
+      const revokeAfterAcceptance = scenario.endsWith("revoked after acceptance");
       const sharedSecretOwner = scenario === "shared-secret owner";
       const profile = sharedSecretOwner
         ? ensureGatewayOwnerProfile("Gateway Owner")
@@ -94,8 +172,10 @@ describe("steering input custody", () => {
         ? ensureProfileForEmail("other-steering@example.test")
         : profile;
       const fixture = await createBrowserFollowupFixture({
-        // This matrix compares task collaborators; main requester changes have separate coverage.
-        sessionKey: "agent:main:dashboard:steering-collaboration",
+        sessionKey:
+          scenario === "owner into cron"
+            ? "agent:main:cron:steering-automation"
+            : `agent:main:${subagent ? "subagent" : "dashboard"}:steering-collaboration`,
         preserveContent: true,
         active: !startOwnerTurn,
         // Both callers may write here; their caps still differ for other sessions.
@@ -103,6 +183,7 @@ describe("steering input custody", () => {
           ? { createdActor: { type: "human", source: "profile", id: incomingProfile.id } as const }
           : {}),
       });
+      await patchSessionEntryCore(fixture.scope, () => ({ displayName: "Steering custody" }));
       const initialConfig = fixture.context.getRuntimeConfig();
       const initialQueue = { ...initialConfig.messages?.queue };
       delete initialQueue.allowCollaborativeSteering;
@@ -119,6 +200,7 @@ describe("steering input custody", () => {
           ...initialConfig.messages,
           queue: {
             ...initialQueue,
+            collaborativeSteeringFallback: "reject",
             ...(allowCollaborativeSteering !== undefined ? { allowCollaborativeSteering } : {}),
           },
         },
@@ -131,31 +213,31 @@ describe("steering input custody", () => {
           agents: ["main", "other"],
           modelPolicy: { allow: ["openai/gpt-test"] },
         };
-        const cfg = fixture.context.getRuntimeConfig();
-        const roleConfig: typeof cfg = {
-          ...cfg,
-          gateway: {
-            ...cfg.gateway,
-            roles: {
-              definitions: {
-                writer: role,
-                participant: { ...role, sessions: { others: "view" } },
-              },
+        steeringConfig.gateway = {
+          ...steeringConfig.gateway,
+          roles: {
+            default: "participant",
+            definitions: {
+              writer: role,
+              participant: { ...role, sessions: { others: "view" } },
             },
           },
         };
-        fixture.context.getRuntimeConfig = () => roleConfig;
         fixture.client.connect.scopes = role.scopes;
         setUserProfileRole(profile.id, "writer");
         setUserProfileRole(incomingProfile.id, "participant");
+      }
+      if (sandboxedSessionWriter) {
+        steeringConfig.agents!.defaults!.sandbox = { mode: "all" };
+        fixture.client.connect.scopes = ["operator.read", "operator.write"];
       }
       const collaborative = allowCollaborativeSteering === true && acrossProfiles;
       const accepted =
         sharedSecretOwner ||
         scenario === "same grant" ||
+        (continuation && !nonowner) ||
         (collaborative && scenario !== "no native admission across profiles");
       const refused = acrossProfiles && allowCollaborativeSteering !== true;
-      const forwarded = !accepted && scenario !== "revoked grant";
       const originalGrant = new AbortController();
       const incomingGrant = new AbortController();
       const client = (connId: string, controller: AbortController, grantId: string) => ({
@@ -183,11 +265,8 @@ describe("steering input custody", () => {
         incomingGrant,
         scenario === "changed grant" ? "replacement-grant" : "original-grant",
       );
-      if (sharedSecretOwner) {
-        prepareGatewayConnectOperatorAccess(originalClient);
-        prepareGatewayConnectOperatorAccess(reconnectedClient);
-        expect(originalClient.internal.operatorAccessAuthority).toBeUndefined();
-        expect(reconnectedClient.internal.operatorAccessAuthority).toBeUndefined();
+      if (nonowner) {
+        reconnectedClient.connect.scopes = ["operator.read", "operator.write"];
       }
       if (acrossProfiles) {
         reconnectedClient.authenticatedUserId = "other-steering@example.test";
@@ -199,12 +278,16 @@ describe("steering input custody", () => {
         if (scenario === "different scopes across profiles") {
           reconnectedClient.connect.scopes = ["operator.read", "operator.write"];
         }
-        prepareGatewayConnectOperatorAccess(originalClient);
-        prepareGatewayConnectOperatorAccess(reconnectedClient);
-        expect(originalClient.internal.operatorAccessAuthority).toBeNull();
-        expect(reconnectedClient.internal.operatorAccessAuthority).toBeNull();
       }
-      let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      if (sharedSecretOwner || acrossProfiles) {
+        for (const connection of [originalClient, reconnectedClient]) {
+          prepareGatewayConnectOperatorAccess(connection);
+          expect(connection.internal.operatorAccessAuthority).toBe(
+            sharedSecretOwner ? undefined : null,
+          );
+        }
+      }
+      let captured: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
       let operation = fixture.activeRun;
       let ownerClaim: SessionControllerMailboxClaim | undefined;
       let ownerContext: CurrentInboundPromptContext | undefined;
@@ -232,37 +315,17 @@ describe("steering input custody", () => {
           >[0];
           const ownerCtx = ownerDispatchParams.ctx;
           expect(ownerCtx).not.toHaveProperty("SenderId");
-          const ownerConfig = fixture.context.getRuntimeConfig();
           const prepared = await prepareReplyRunContext(
             baseParams({
+              ...fixture.scope,
               ctx: ownerCtx,
               sessionCtx: ownerCtx,
-              cfg: ownerConfig,
-              agentId: fixture.scope.agentId,
-              sessionKey: fixture.scope.sessionKey,
-              sessionId: fixture.scope.sessionId,
-              storePath: fixture.scope.storePath,
+              cfg: fixture.context.getRuntimeConfig(),
               isNewSession: false,
-              systemSent: true,
               provider: "openai",
               model: "gpt-test",
               opts: ownerDispatchParams.replyOptions,
               commandAuthorized: ownerCtx.CommandAuthorized === true,
-              command: buildCommandContext(
-                {
-                  ctx: ownerCtx,
-                  cfg: ownerConfig,
-                  agentId: fixture.scope.agentId,
-                  sessionKey: fixture.scope.sessionKey,
-                  isGroup: false,
-                  triggerBodyNormalized: ownerCtx.commandText ?? ownerCtx.Body ?? "",
-                },
-                resolveCommandAuthorization({
-                  cfg: ownerConfig,
-                  ctx: ownerCtx,
-                  commandAuthorized: ownerCtx.CommandAuthorized === true,
-                }),
-              ),
             }),
           );
           if (prepared.kind !== "ready") {
@@ -283,7 +346,7 @@ describe("steering input custody", () => {
             });
           });
         }
-        captured = await captureGatewayOperatorRunAuthority({
+        captured = await prepareGatewayOperatorRunAuthority({
           client: originalClient,
           context: fixture.context,
         });
@@ -309,7 +372,13 @@ describe("steering input custody", () => {
           gitContributorProfileId: profile.id,
           messageProvider: "webchat",
           chatType: "direct",
-          clientCaps: ["ui-commands"],
+          clientCaps:
+            scenario === "same requester protocol metadata drift"
+              ? ["ui-commands", "usage-refreshing"]
+              : ["ui-commands"],
+          ...(scenario === "same requester binding drift"
+            ? { toolBindings: { synthetic: "original-binding" } }
+            : {}),
           gatewayUiCommandTarget: { connId: originalClient.connId, profileId: profile.id },
           traceAuthorized: !withRoles,
           senderIsOwner: resolveCommandAuthorization({
@@ -318,13 +387,43 @@ describe("steering input custody", () => {
             commandAuthorized: true,
           }).senderIsOwner,
         };
-        const toolAuthority = prepareReplyToolAuthority(run);
-        await toolAuthority.fingerprintAsync(run.run);
-        operation.bindToolAuthoritySnapshot(toolAuthority);
-        const fingerprint = operation.bindToolAuthorityRoute(run.run);
+        if (background) {
+          run.operatorAuthority = undefined;
+          run.originatingChannel = undefined;
+          run.run.messageProvider = "internal";
+          // Child launches carry their session lineage, not inter-session report provenance.
+          run.run.spawnedBy = subagent ? "agent:main:dashboard:steering-parent" : undefined;
+          run.run.inputProvenance = subagent
+            ? undefined
+            : {
+                kind: "internal_system",
+                sourceTool: scenario === "owner into cron" ? "cron" : "cron_execution",
+              };
+          if (scenario === "owner into cron") {
+            run.run.scheduledToolPolicy = { version: 1, mode: "trusted" };
+          }
+        }
+        const toolAuthority = continuation
+          ? prepareReplyRunToolAuthority(run, loadSessionEntry(fixture.scope))
+          : prepareReplyToolAuthority(run);
+        // The active run prepares its tools inside its admitted caller context.
+        // A later chat.send arrives outside that context, even for the same person.
+        const activeOperation = operation;
+        const fingerprint = await withGatewayToolCallerIdentity(
+          {
+            agentId: fixture.scope.agentId,
+            sessionKey: fixture.scope.sessionKey,
+            operatorAuthority: captured.authority,
+          },
+          async () => {
+            await toolAuthority.fingerprintAsync(run.run);
+            activeOperation.bindToolAuthoritySnapshot(toolAuthority);
+            return activeOperation.bindToolAuthorityRoute(run.run);
+          },
+        );
         const requesterPrincipalKey = operation.requesterPrincipalKey;
         if (sharedSecretOwner) {
-          const incoming = await captureGatewayOperatorRunAuthority({
+          const incoming = await prepareGatewayOperatorRunAuthority({
             client: reconnectedClient,
             context: fixture.context,
           });
@@ -359,16 +458,19 @@ describe("steering input custody", () => {
           );
         const providerStarted = createDeferred();
         const provider = holdAssistantResponse("Original work");
+        const providerInputs: string[] = [];
         streamMocks.streamSimple
-          .mockImplementationOnce(() => {
+          .mockImplementationOnce((_model, context) => {
+            providerInputs.push(JSON.stringify(context.messages));
             providerStarted.resolve();
             return provider.response;
           })
-          .mockImplementation((model) =>
-            createAssistantResultStream(
+          .mockImplementation((model, context) => {
+            providerInputs.push(JSON.stringify(context.messages));
+            return createAssistantResultStream(
               createAssistant(model, [{ type: "text", text: "Steering consumed" }]),
-            ),
-          );
+            );
+          });
         releaseProvider = provider.release;
         cleanupOwnerContext = installRuntimeContextMessageForPrompt({
           session,
@@ -442,11 +544,6 @@ describe("steering input custody", () => {
           buildRequestContext: () => fixture.context,
           extraHandlers: { "chat.send": handleChatSend },
         });
-        if (scenario === "revoked grant") {
-          fixture.beforeApprove.mockImplementation(() =>
-            incomingGrant.abort(new Error("Access grant ended")),
-          );
-        }
         const followupDispatched = createDeferred();
         const dispatchInput = dispatchInboundMessageMock.getMockImplementation();
         if (!dispatchInput) {
@@ -464,11 +561,16 @@ describe("steering input custody", () => {
           }),
           reconnectedClient,
         );
-        if (accepted || forwarded) {
-          expect(dispatch.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
-        }
+        expect(dispatch.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
         if (accepted) {
-          await withinTest(steeringAccepted.promise, signal);
+          await withinTest(
+            awaitGateBeforeSettlement(
+              steeringAccepted.promise,
+              followupDispatched.promise,
+              "Compatible requester input was dispatched as a separate turn",
+            ),
+            signal,
+          );
           expect(
             session.getSteeringMessages(),
             JSON.stringify(vi.mocked(fixture.context.logGateway.warn).mock.calls),
@@ -478,50 +580,50 @@ describe("steering input custody", () => {
         } else {
           expect(session.getSteeringMessages()).toEqual([]);
           expect(queueMessage).not.toHaveBeenCalled();
-          if (forwarded) {
-            await withinTest(followupDispatched.promise, signal);
-            expect(operation.personalToolParticipants?.resolve()?.profileId).toBe(profile.id);
-            expect(operation.result).toBeNull();
-            expect(provider.isReleased()).toBe(false);
-            expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-            expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
-              replyOptions: {
-                messageInjectionDisposition: refused
-                  ? "collaborative-steering-disabled"
-                  : "rejected",
-                operatorAuthority: { profileId: incomingProfile.id },
-              },
-            });
-            // The execution stub holds staged custody; the real dispatch refusal test
-            // separately verifies durable cancellation and duplicate/recovery refusal.
-            expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
-              total: 1,
-              items: [
-                {
-                  runId: fixture.params.idempotencyKey,
-                  state: "queued",
-                  message: {
-                    __openclaw: { requesterOrigin: { operatorProfileId: incomingProfile.id } },
-                  },
+          await withinTest(followupDispatched.promise, signal);
+          expect(operation.personalToolParticipants?.resolve()?.profileId).toBe(
+            background ? undefined : profile.id,
+          );
+          expect(operation.result).toBeNull();
+          expect(provider.isReleased()).toBe(false);
+          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+          expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
+            replyOptions: {
+              messageInjectionDisposition: refused ? "collaborative-steering-disabled" : "rejected",
+              operatorAuthority: { profileId: incomingProfile.id },
+            },
+          });
+          // The execution stub holds staged custody; the real dispatch refusal test
+          // separately verifies durable cancellation and duplicate/recovery refusal.
+          expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
+            total: 1,
+            items: [
+              {
+                runId: fixture.params.idempotencyKey,
+                state: "queued",
+                message: {
+                  __openclaw: { requesterOrigin: { operatorProfileId: incomingProfile.id } },
                 },
-              ],
-            });
-          } else {
-            expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-            expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-          }
+              },
+            ],
+          });
         }
         expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
         expect(operation.requesterPrincipalKey).toBe(requesterPrincipalKey);
         expect(
           operation.personalToolParticipants?.resolve(undefined, { allowTurnOwner: () => true })
             ?.operatorAuthority,
-        ).toBe(captured.authority);
+        ).toBe(background ? undefined : captured.authority);
         if (accepted && acrossProfiles) {
           const participants = operation.personalToolParticipants;
           expect(participants?.resolve(incomingProfile.id)?.profileId).toBe(incomingProfile.id);
           expect(() => participants?.resolve()).toThrow("Several people have steered this turn");
           expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBe(false);
+        }
+        if (revokeAfterAcceptance) {
+          // Native custody is already accepted, but the held provider has not
+          // completed and the next user input has not reached model I/O.
+          incomingGrant.abort(new Error("Access grant ended after steering acceptance"));
         }
         releaseProvider();
         await backingRun;
@@ -536,6 +638,9 @@ describe("steering input custody", () => {
             isRecord(event.message) &&
             event.message.idempotencyKey === `${fixture.params.idempotencyKey}:user`,
         );
+        expect(providerInputs.some((messages) => messages.includes(fixture.params.message))).toBe(
+          accepted,
+        );
         if (accepted) {
           expect(input).toMatchObject({
             message: {
@@ -543,19 +648,16 @@ describe("steering input custody", () => {
               __openclaw: { steerTargetRunId: "original-backing-run" },
             },
           });
-          if (acrossProfiles) {
+          if (acrossProfiles || background) {
             expect(input).toHaveProperty(
               "message.__openclaw.requesterOrigin.operatorProfileId",
               incomingProfile.id,
             );
           }
           expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
-        } else if (forwarded) {
+        } else {
           expect(input).toMatchObject({ message: { content: fixture.params.message } });
           expect(input).not.toHaveProperty("message.__openclaw.steerTargetRunId");
-          expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-        } else {
-          expect(input).toBeUndefined();
           expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
         }
       } finally {

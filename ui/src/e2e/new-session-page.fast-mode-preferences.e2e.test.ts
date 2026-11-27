@@ -8,6 +8,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  captureUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollAttribute,
@@ -20,7 +21,7 @@ const preferenceKey = "new-session.v1:main";
 
 suite.define(() => {
   it.each(["browser", "identity"] as const)(
-    "remembers enabled and disabled Fast mode with reasoning across new sessions (%s)",
+    "remembers authenticated Access and enabled or disabled Fast mode with reasoning across new sessions (%s)",
     async (source) => {
       const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(controlUiBundledGatewayUrl(suite.server.baseUrl))}`;
@@ -28,6 +29,7 @@ suite.define(() => {
       let page!: Page;
       let gateway!: MockGatewayControls;
       let preferenceWrites = 0;
+      let expectedAccess = "daybreak_blue";
 
       const openPage = async () => {
         preferenceWrites = 0;
@@ -43,6 +45,8 @@ suite.define(() => {
               reasoning: true,
               thinkingLevels,
               thinkingDefault: "medium",
+              cyberAccessProgramDefault: "standard",
+              availableAccessPrograms: { cyber: ["standard", "daybreak_blue"] },
             },
           ],
           ...(source === "identity"
@@ -52,13 +56,22 @@ suite.define(() => {
             "chat.metadata",
             "chat.startup",
             "sessions.create",
+            "sessions.patch",
             ...(source === "identity" ? ["users.prefs.get", "users.prefs.set"] : []),
           ],
           sessions: [],
           methodResponses: {
             "users.prefs.get": { status: "ok", entries },
             "users.prefs.set": { status: "ok" },
-            "sessions.create": { key: "agent:main:fast-mode-proof", runStarted: true },
+            "sessions.create": {
+              key: "agent:main:fast-mode-proof",
+              runStarted: true,
+              entry: {
+                model: "gpt-4.1",
+                modelProvider: "openai",
+                cyberAccessProgram: source === "identity" ? expectedAccess : "standard",
+              },
+            },
           },
         });
         await page.goto(`${suite.server.baseUrl}new`);
@@ -69,6 +82,9 @@ suite.define(() => {
         await page.locator('[data-chat-speed-option="on"]').waitFor({ state: "visible" });
         return effort;
       };
+      const daybreak = () => page.getByRole("switch", { name: "Daybreak", exact: true });
+      const expectDaybreak = () =>
+        expect.poll(() => daybreak().isChecked()).toBe(expectedAccess === "daybreak_blue");
       const speed = (value: "on" | "off") => page.locator(`[data-chat-speed-option="${value}"]`);
       const expectSpeed = (value: "on" | "off", checked = "true") =>
         pollAttribute(speed(value), "aria-checked").toBe(checked);
@@ -81,6 +97,9 @@ suite.define(() => {
         await openPage();
         await pollAttribute(await openEffort(), "data-chat-thinking-value").toBe("high");
         await expectSpeed("on", String(enabled));
+        if (source === "identity") {
+          await expectDaybreak();
+        }
       };
       const submit = async (message: string, fastMode: boolean) => {
         await page.keyboard.press("Escape");
@@ -89,6 +108,7 @@ suite.define(() => {
         expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
           fastMode,
           thinkingLevel: "high",
+          cyberAccessProgram: source === "identity" ? expectedAccess : "standard",
           message,
         });
       };
@@ -121,8 +141,35 @@ suite.define(() => {
         await speed("on").click();
         await expectSpeed("on");
         await confirmPreferenceWrite({ fastMode: true });
+        if (source === "identity") {
+          await daybreak().check();
+          await expectDaybreak();
+          await confirmPreferenceWrite({ cyberAccessProgram: "daybreak_blue" });
+        }
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await captureUiProof(suite, page, `access-${source}-new.png`);
         await submit("First session", true);
         await waitForCommittedChatRoute(page);
+        await openEffort();
+        if (source === "identity") {
+          await expectDaybreak();
+        }
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await captureUiProof(suite, page, `access-${source}-chat.png`);
+        if (source === "identity") {
+          await daybreak().uncheck();
+          await gateway.waitForRequest("sessions.patch", {
+            match: { cyberAccessProgram: "standard" },
+          });
+          await confirmPreferenceWrite({ cyberAccessProgram: "standard" });
+          expectedAccess = "standard";
+          const savedSession = await gateway.getSessionRow("agent:main:fast-mode-proof");
+          expect(savedSession.cyberAccessProgram).toBe("standard");
+          await gateway.setSessionsListResponse({ sessions: [savedSession] });
+          await page.reload();
+          await openEffort();
+          await expectDaybreak();
+        }
 
         await reopen(true);
 

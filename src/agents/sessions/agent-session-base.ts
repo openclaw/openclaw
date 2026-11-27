@@ -1,8 +1,9 @@
-import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { setInternalBeforeRequest } from "../../../packages/agent-core/src/internal-hooks.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
-import type { AssistantMessage, Model, ModelRequestHeaders } from "../../llm/types.js";
+import type { AssistantHistoryMessage, Model, ModelRequestHeaders } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { notifyListeners } from "../../shared/listeners.js";
+import { gateAgentToolExecution } from "../agent-tool-availability.js";
 import {
   getSteeringRuntimeContext,
   shouldRetainSteeringRuntimeContext,
@@ -25,7 +26,7 @@ import type {
 } from "./agent-session-types.js";
 import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
-import type { CompactionRequestBudget } from "./compaction/request-budget.js";
+import type { CompactionRequestBudget } from "./compaction/preparation.types.js";
 import {
   type ExtensionCommandContextActions,
   type ExtensionErrorListener,
@@ -98,7 +99,7 @@ export abstract class AgentSessionBase {
   protected extensionShutdownHandler?: ShutdownHandler;
   protected extensionErrorListener?: ExtensionErrorListener;
   protected extensionErrorUnsubscriber?: () => void;
-  private readonly cleanupProviderSessionResourcesOnDispose: boolean;
+  protected abstract readonly disposeBackgroundResultPlacement: () => void;
 
   protected sessionModelRegistry: ModelRegistry;
 
@@ -124,8 +125,6 @@ export abstract class AgentSessionBase {
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
     this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
-    this.cleanupProviderSessionResourcesOnDispose =
-      config.cleanupProviderSessionResourcesOnDispose ?? true;
   }
 
   get modelRegistry(): ModelRegistry {
@@ -177,10 +176,6 @@ export abstract class AgentSessionBase {
     return this.withExternalSessionWriteSettlement
       ? await this.withExternalSessionWriteSettlement(run)
       : await run();
-  }
-
-  private eventMayWriteSession(event: AgentEvent): boolean {
-    return event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type);
   }
 
   /**
@@ -295,12 +290,12 @@ export abstract class AgentSessionBase {
   }
 
   // Track last assistant message for auto-compaction check
-  protected lastAssistantMessage: AssistantMessage | undefined = undefined;
+  protected lastAssistantMessage: AssistantHistoryMessage | undefined = undefined;
   private lastAssistantEntryId: string | undefined;
   protected lastRunEndedForTurnHandoff = false;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
-  protected handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
+  protected handleAgentEvent = (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
     const prepareToolResult = createSessionToolResultPreparer(this.sessionManager, event);
     if (event.type === "agent_end") {
       const reason: unknown = signal?.reason;
@@ -310,20 +305,25 @@ export abstract class AgentSessionBase {
         reason !== null &&
         (reason as { turnHandoff?: unknown }).turnHandoff === true;
     }
-    if (this.eventMayWriteSession(event)) {
-      await this.runWithSessionWriteSettlement(
-        async () => await this.handleAgentEventUnlocked(event, prepareToolResult),
-      );
-      // Supported callbacks can replace the current result.
-      prepareToolResult();
-      return;
+    if (event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type)) {
+      return this.runWithSessionWriteSettlement(() =>
+        this.handleAgentEventUnlocked(event, prepareToolResult),
+      ).then(() => {
+        // Supported callbacks can replace the current result.
+        prepareToolResult();
+      });
     }
-    await this.handleAgentEventUnlocked(event, prepareToolResult);
+    return this.handleAgentEventUnlocked(
+      event,
+      prepareToolResult,
+      event.type === "message_update" ? false : undefined,
+    );
   };
 
   private async handleAgentEventUnlocked(
     event: AgentEvent,
     prepareToolResult: () => boolean,
+    hasExtensionHandlers?: boolean,
   ): Promise<void> {
     if (event.type === "agent_start") {
       this.lastAssistantEntryId = undefined;
@@ -337,7 +337,8 @@ export abstract class AgentSessionBase {
     }
 
     let messageChanged = false;
-    if (this.currentExtensionRunner.hasHandlers(event.type)) {
+    // Delta dispatch reaches here synchronously; user-message retirement can run callbacks.
+    if (hasExtensionHandlers ?? this.currentExtensionRunner.hasHandlers(event.type)) {
       messageChanged = await this.emitExtensionEvent(event);
     }
     // Turn numbering belongs to the session, including turns with no extension listeners.
@@ -447,7 +448,7 @@ export abstract class AgentSessionBase {
   }
 
   /** Find the last assistant message in agent state (including aborted ones) */
-  protected findLastAssistantMessage(): AssistantMessage | undefined {
+  protected findLastAssistantMessage(): AssistantHistoryMessage | undefined {
     return this.agent.state.messages.findLast((message) => message.role === "assistant");
   }
 
@@ -547,6 +548,8 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
+    this.disposeBackgroundResultPlacement();
+    setInternalBeforeRequest(this.agent, undefined);
     notifyListeners(
       [() => this.abortRetry(), () => this.abortCompaction(), () => this.agent.abort()],
       undefined,
@@ -555,9 +558,6 @@ export abstract class AgentSessionBase {
     this.currentExtensionRunner.invalidate();
     this.disconnectFromAgent();
     this.eventListeners = [];
-    if (this.cleanupProviderSessionResourcesOnDispose) {
-      cleanupSessionResources(this.sessionId);
-    }
   }
 
   get state(): AgentState {
@@ -602,16 +602,25 @@ export abstract class AgentSessionBase {
   /**
    * Set active tools by name.
    * Only tools in the registry can be enabled. Unknown tool names are ignored.
+   * An execution cap preserves these definitions and refuses denied calls.
    * Refreshes extension prompt metadata while preserving the runtime-owned prompt.
    * Changes take effect on the next agent turn.
    */
-  setActiveToolsByName(toolNames: string[]): void {
+  setActiveToolsByName(toolNames: string[], callableToolNames?: readonly string[]): void {
     const tools: AgentTool[] = [];
     const validToolNames: string[] = [];
+    const callable = callableToolNames ? new Set(callableToolNames) : undefined;
     for (const name of toolNames) {
       const tool = this.toolRegistry.get(name);
       if (tool) {
-        tools.push(tool);
+        tools.push(
+          !callable || callable.has(name)
+            ? tool
+            : gateAgentToolExecution(
+                tool,
+                `${name} is not available in this turn. Do not retry ${name}.`,
+              ),
+        );
         validToolNames.push(name);
       }
     }
@@ -703,10 +712,10 @@ export abstract class AgentSessionBase {
     };
   }
 
-  protected abstract isRetryableError(message: AssistantMessage): boolean;
-  protected abstract prepareRetry(message: AssistantMessage): Promise<boolean>;
+  protected abstract isRetryableError(message: AssistantHistoryMessage): boolean;
+  protected abstract prepareRetry(message: AssistantHistoryMessage): Promise<boolean>;
   protected abstract checkCompaction(
-    assistantMessage: AssistantMessage,
+    assistantMessage: AssistantHistoryMessage,
     skipAbortedCheck?: boolean,
     requestBudget?: CompactionRequestBudget,
   ): Promise<boolean>;

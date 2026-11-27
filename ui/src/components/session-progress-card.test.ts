@@ -2,6 +2,7 @@
 
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { publishTranscriptScroll } from "../pages/chat/components/chat-transcript-scroll-events.ts";
 import {
   observeTranscript,
   cardPart,
@@ -89,18 +90,70 @@ describe("renderSessionProgressCard", () => {
     expect(query(container, "time")?.textContent).toBe("Updated 2m ago");
   });
 
-  it("uses endedAt for terminal wording and falls back to Updated without it", () => {
+  it("does not call an unfinished saved plan completed when its parent turn ends", () => {
     const container = mountCard({
       sessionStatus: "done",
       ...runWindow,
     });
-    expect(query(container, "time")?.textContent).toBe("Completed just now");
-    expect(query(container, "time")?.getAttribute("datetime")).toBe(
-      new Date(RUN_ENDED_MS).toISOString(),
+    expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
+    expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
+      new Date(progressCard.updatedAt).toISOString(),
     );
     render({ sessionStatus: "done" }, container);
-    expect(query(container, "time")?.textContent).toBe("Updated 2m ago");
+    expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
   });
+
+  it.each(["composer", "details", "board"] as const)(
+    "updates %s runtime without rewriting the saved plan",
+    (placement) => {
+      const input = {
+        placement,
+        sessionStatus: "done" as const,
+        ...runWindow,
+        hasActiveRun: false,
+      };
+      const container = mountCard({
+        ...input,
+        runtime: { known: true, connected: true, hasActiveSubagentRun: true },
+      });
+      const details = container.querySelector("details");
+      expect(container.querySelector('[role="status"]')?.textContent).toContain(
+        "Waiting for delegated work",
+      );
+      expect(container.querySelector(".session-run-spinner")).not.toBeNull();
+      expect(container.querySelector("time")?.textContent ?? "Updated 2m ago").toBe(
+        "Updated 2m ago",
+      );
+      render(
+        {
+          ...input,
+          runtime: {
+            known: true,
+            connected: true,
+            children: { running: 1, queued: 1, waiting: 0, failed: 1 },
+            childError: "Review: Access denied".padEnd(237, "x") + "🦞🦞",
+          },
+        },
+        container,
+      );
+      expect(container.querySelector('[role="status"]')?.textContent).toContain(
+        "1 running · 1 queued · 1 failed",
+      );
+      expect(query(container, ".session-progress-card__runtime-detail")?.textContent).toBe(
+        "Review: Access denied".padEnd(237, "x") + "🦞",
+      );
+      expect(container.querySelector('[data-error="true"]')).not.toBeNull();
+      expect(container.querySelector("details")).toBe(details);
+      expect(container.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
+      render({ ...input, runtime: { connected: false, hasActiveSubagentRun: true } }, container);
+      expect(container.querySelector('[role="status"]')?.textContent).toContain(
+        "Disconnected · Activity may be outdated",
+      );
+      expect(container.querySelector(".session-run-spinner")).toBeNull();
+      render({ ...input, runtime: { known: false } }, container);
+      expect(container.querySelector('[role="status"]')?.textContent).toBe("Activity unavailable");
+    },
+  );
 
   it("refreshes relative time while connected and stops after disconnect", () => {
     const container = createContainer();
@@ -399,6 +452,21 @@ describe("renderSessionProgressCard", () => {
     drag(0, 25);
     expectOpen(card, false, 300);
     replaceCard();
+    touch("touchstart", 0);
+    // Geometry settling under a held finger must preserve its upcoming native movement.
+    publishTranscriptScroll(transcript.thread, {
+      type: "offset",
+      delta: 0,
+      scrolling: false,
+      touching: true,
+      programmatic: true,
+    });
+    touch("touchmove", 160);
+    touch("touchend", 160);
+    expectOpen(card, true, 300);
+    drag(0, 160);
+    expectOpen(card, false, 300);
+    replaceCard();
     drag(0, 200);
     drag(0, 200);
     renderCard(false);
@@ -414,7 +482,7 @@ describe("renderSessionProgressCard", () => {
 
   it.each([
     ["running", "2/3"],
-    ["done", "Completed"],
+    ["done", "2/3"],
     ["failed", "Failed"],
     ["timeout", "Failed"],
     ["killed", "Stopped"],
@@ -427,9 +495,10 @@ describe("renderSessionProgressCard", () => {
         sessionStatus: status,
         ...runWindow,
       });
-      expect(disclosure(container).open).toBe(false);
-      expect(query(container, "summary")?.getAttribute("aria-label")).toBe(
-        `Wire the checklist. ${status === "running" ? "1 of 3 completed" : expected}`,
+
+      expect(container.querySelector("details")?.open).toBe(false);
+      expect(container.querySelector("summary")?.getAttribute("aria-label")).toBe(
+        `Wire the checklist. ${status === "running" || status === "done" ? "1 of 3 completed" : expected}`,
       );
       if (placement === "composer") {
         expect(

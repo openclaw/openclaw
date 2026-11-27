@@ -12,6 +12,7 @@ import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingBindInput } from "../../infra/outbound/session-binding.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
@@ -631,6 +632,20 @@ describe("/acp command", () => {
     }
   });
 
+  it("sends every line of a multiline ACP steer instruction", async () => {
+    mockGatewaySessionResolution(defaultAcpSessionKey);
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+
+    await runCommand(
+      `/acp steer --session ${defaultAcpSessionKey} first line\n  second line\n\nfourth line`,
+    );
+
+    expectMockCallFields(hoisted.runTurnMock, {
+      mode: "steer",
+      text: "first line\n  second line\n\nfourth line",
+    });
+  });
+
   it("keeps bounded ACP steer output UTF-16 safe", async () => {
     const prefix = "a".repeat(799);
     mockGatewaySessionResolution(defaultAcpSessionKey);
@@ -950,11 +965,13 @@ describe("/acp command", () => {
       'Install and enable the plugin that provides ACP backend "custom-backend".',
     ],
   ] as const)("shows install guidance through /acp install (%j)", async (acp, hint) => {
+    using filesystem = observeMainThreadFs();
     const result = await runCommand("/acp install", {
       ...baseCfg,
       acp: { ...baseCfg.acp, ...acp },
     });
     expectReplyText(result, "ACP install:", `run: ${hint}\nthen:`);
+    expect(filesystem.calls().existsSync ?? 0).toBe(0);
   });
 
   it("offers the package install when no workspace extension exists", async () => {

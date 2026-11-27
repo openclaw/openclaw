@@ -21,7 +21,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import type { resolvePluginTools } from "../plugins/tools.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
@@ -31,10 +30,8 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
-import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
-import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { jsonResult } from "./tools/common.js";
 
 const hoisted = vi.hoisted(() => ({ resolvePluginTools: vi.fn<typeof resolvePluginTools>() }));
@@ -407,39 +404,6 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(firstResolvePluginToolsParams().context.delivery).toBeUndefined();
   });
 
-  it("forwards lifecycle-prepared plugin facts to plugin resolution", () => {
-    const config: OpenClawConfig = { plugins: { enabled: true } };
-    const pluginRegistry = createEmptyPluginRegistry();
-    const metadataSnapshot = createPluginMetadataSnapshotFixture();
-    prepareOwnedPluginLoadContext(
-      { config, workspaceDir: "/tmp" },
-      process.env,
-      pluginRegistry,
-      metadataSnapshot,
-    );
-    const loadContext = getPluginRuntimeLoadContext(pluginRegistry);
-    expectDefined(loadContext, "expected prepared plugin load context");
-    const params = resolveTools({
-      config,
-      workspaceDir: "/tmp",
-      preparedModelRuntime: {
-        ...createEmptyPreparedModelRuntimeFixture({
-          agentDir: "/tmp/agent",
-          config,
-          metadataSnapshot,
-          createStores: vi.fn(),
-        }),
-        workspaceDir: "/tmp",
-        pluginRegistry,
-      },
-    });
-    expect(params.preparedRuntime).toEqual({
-      loadContext,
-      metadataSnapshot,
-      registry: pluginRegistry,
-    });
-  });
-
   it.each(["environment", "profile", "plugin"] as const)(
     "resolves %s auth without borrowing excluded credentials",
     async (source) => {
@@ -487,6 +451,42 @@ describe("createOpenClawTools browser plugin integration", () => {
       await withPluginMetadataSnapshotScope(metadata, check, { config, trustConfigIdentity: true });
     },
   );
+
+  it("narrows tool auth queries to one stored credential type without other fallbacks", async () => {
+    vi.stubEnv("ACME_API_KEY", "env-key");
+    const config = authConfig("ACME_API_KEY");
+    config.auth = { order: { acme: ["acme:paid", "acme:subscription"] } };
+    const paid = { type: "api_key", provider: "acme", key: "paid-key" } as const; // pragma: allowlist secret
+    const subscription = {
+      type: "oauth",
+      provider: "acme",
+      access: "subscription-access",
+      refresh: "subscription-refresh",
+      expires: Date.now() + 3_600_000,
+    } as const;
+    const resolveWith = (profiles: Record<string, typeof paid | typeof subscription>) => {
+      hoisted.resolvePluginTools.mockClear();
+      return resolveTools({
+        config,
+        agentDir: TEST_AGENT_DIR,
+        authProfileStore: { version: 1, profiles },
+      }).context;
+    };
+
+    const both = resolveWith({ "acme:paid": paid, "acme:subscription": subscription });
+    expect(both.hasAuthForProvider?.("acme", { credentialType: "oauth" })).toBe(true);
+    await expect(both.resolveApiKeyForProvider?.("acme")).resolves.toBe("paid-key");
+    await expect(
+      both.resolveApiKeyForProvider?.("acme", { credentialType: "oauth" }),
+    ).resolves.toBe("subscription-access");
+
+    const paidOnly = resolveWith({ "acme:paid": paid });
+    expect(paidOnly.hasAuthForProvider?.("acme")).toBe(true);
+    expect(paidOnly.hasAuthForProvider?.("acme", { credentialType: "oauth" })).toBe(false);
+    await expect(
+      paidOnly.resolveApiKeyForProvider?.("acme", { credentialType: "oauth" }),
+    ).resolves.toBeUndefined();
+  });
 
   it("keeps the plugin tool getter live across authored source reloads", () => {
     const sourceConfig = { gateway: { publicOrigin: "https://first.example" } };
@@ -553,5 +553,84 @@ describe("createOpenClawTools Gateway caller identity", () => {
         ...expected,
       },
     ]);
+  });
+});
+
+it("retains plugin-delivered images in source history after reopen", async () => {
+  const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+  const { replaceSessionEntry, loadTranscriptEvents } =
+    await import("../config/sessions/session-accessor.js");
+  const { readTranscriptEventMessage } =
+    await import("../config/sessions/session-accessor.sqlite-read.js");
+  const { closeOpenClawAgentDatabasesAsync } = await import("../state/openclaw-agent-db.js");
+  const { projectChatDisplayMessages } = await import("../gateway/chat-display-projection.js");
+  const { resolveManagedOutgoingMediaArtifactDownload } =
+    await import("../gateway/managed-image-attachments.js");
+  const { createSolidPngBuffer } = await import("../../test/helpers/image-fixtures.js");
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionKey = SESSION_KEY;
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const mediaUrl = path.join(state.workspaceDir, "investigation.png");
+    await fs.writeFile(mediaUrl, createSolidPngBuffer(320, 180, { r: 24, g: 128, b: 192 }));
+    const config: OpenClawConfig = {
+      agents: { defaults: { workspace: state.workspaceDir } },
+      session: { store: storePath },
+      channels: { telegram: { enabled: true } },
+      plugins: { allow: ["telegram"] },
+      tools: { fs: { workspaceOnly: true } },
+    };
+    setRuntimeConfigSnapshot(config);
+    const scope = { sessionKey, sessionId: identity.sessionId, storePath };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const sendMedia = vi.fn(async (params: ChannelOutboundContext) => {
+      await params.onPlatformSendDispatch?.();
+      return {
+        channel: "telegram" as const,
+        messageId: "synthetic-confirmed-image",
+        chatId: "123",
+      };
+    });
+    const plugin = telegramPlugin({ sendMedia });
+    plugin.messaging = {
+      normalizeTarget: (raw) => raw,
+      targetResolver: { looksLikeId: () => true, hint: "<chat-id>" },
+    };
+    installChannel(plugin, ["work"]);
+    buildDeliveryTools({
+      config,
+      workspaceDir: state.workspaceDir,
+      messageActionTurnCapability: mintTurn({
+        sourceReplySessionKey: sessionKey,
+        requesterAccountId: "work",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "123",
+          currentMessagingTarget: "123",
+          currentChatType: "group",
+        },
+      }),
+    });
+    await expectDefined(
+      firstResolvePluginToolsParams().context.delivery,
+      "plugin delivery bound",
+    ).send({ text: "Plugin image", mediaUrl });
+    await closeOpenClawAgentDatabasesAsync();
+    const messages = (await loadTranscriptEvents(scope))
+      .map(readTranscriptEventMessage)
+      .filter(Boolean);
+    const displayImages = projectChatDisplayMessages(messages)
+      .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+      .filter(
+        (block: Record<string, unknown>) => block.type === "image" || block.type === "attachment",
+      );
+    expect(displayImages).toHaveLength(1);
+    const artifactId = displayImages[0]?.artifactId;
+    if (typeof artifactId !== "string") {
+      throw new Error("Missing managed artifact identity");
+    }
+    expect(
+      await resolveManagedOutgoingMediaArtifactDownload({ sessionKey, artifactId }),
+    ).toMatchObject({ type: "image", mimeType: "image/png" });
+    expect(sendMedia).toHaveBeenCalledOnce();
   });
 });

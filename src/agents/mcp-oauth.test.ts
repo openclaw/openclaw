@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { OAuthClientProvider } from "@modelcontextprotocol/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readRequestText as readOAuthBody } from "../../test/helpers/gateway-integration-fixtures.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { handleMcpOAuthCallback } from "../gateway/mcp-oauth-callback.js";
@@ -15,6 +16,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { startOperatorMcpOAuthLink } from "./mcp-oauth-link.js";
 import {
   readMcpOAuthPendingAuthorization as readPending,
   readMcpOAuthStore as readStoreFor,
@@ -45,7 +47,7 @@ const metadataUrl = () => new URL("https://mcp.example.com/.well-known/oauth-pro
 const readStore = () => readStoreFor(REMOTE_IDENTITY.storeKey);
 const storedTokens = () => withProvider(async (provider) => provider.tokens());
 const loginInstruction =
-  "Sign in again from Settings: select Connect on the plugin's page, or Sign in on the MCP page.";
+  "Sign in from Settings → MCP, or from the Gateway's terminal: run openclaw mcp login 'Remote Docs' (works while the Gateway runs), or ask the agent to connect in a direct chat.";
 
 const resolveRemoteToken = (options: Omit<Parameters<typeof resolveToken>[0], "identity"> = {}) =>
   resolveToken({ identity: REMOTE_IDENTITY, ...options });
@@ -87,14 +89,6 @@ async function persistRedirect(provider: OAuthClientProvider) {
 function sendOAuthJson(response: ServerResponse, body: unknown, status = 200): void {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
-}
-
-async function readOAuthBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function startAuthorizationServer() {
@@ -197,6 +191,69 @@ describe("MCP OAuth provider", () => {
     authMock.mockReset();
   });
 
+  it.each([
+    [{ port: 18790 }, "http://127.0.0.1:18790/oauth/mcp/callback", false],
+    [
+      { publicOrigin: "https://gateway.example.com", port: 18790 },
+      "https://gateway.example.com/oauth/mcp/callback",
+      true,
+    ],
+  ] satisfies [OpenClawConfig["gateway"], string, boolean][])(
+    "uses the Gateway's redirect origin for a shared sign-in: %j",
+    (gateway, redirectUrl, usesPublicOrigin) =>
+      withTempHome(async () => {
+        authMock.mockImplementationOnce(persistRedirect);
+        const cfg: OpenClawConfig = {
+          gateway,
+          mcp: { servers: { docs: { url: "https://mcp.example.com/mcp", auth: "oauth" } } },
+        };
+        const result = await startOperatorMcpOAuthLink({ cfg, serverName: "docs" });
+        expect(result).toMatchObject({
+          status: "redirect",
+          serverName: "docs",
+          redirectUrl,
+          usesPublicOrigin,
+        });
+        assert(result.status === "redirect");
+        expect(new URL(result.authorizationUrl).searchParams.get("redirect_uri")).toBe(redirectUrl);
+      }, "openclaw-mcp-oauth-"),
+  );
+
+  itWithHome(
+    "keeps credentials when a sign-in link cannot renew a client pinned to another callback",
+    async () => {
+      const url = "https://mcp.example.com/mcp";
+      const { storeKey } = operatorMcpOAuthIdentity("docs", url);
+      // Signed in earlier by the offline CLI loopback; the provider now asks for more scope.
+      const saved = {
+        tokens: { access_token: "synthetic-access", token_type: "Bearer" },
+        clientInformation: {
+          client_id: "cli-client",
+          redirect_uris: ["http://localhost:8989/oauth/callback"],
+        },
+        pendingAuthorizationChallenge: {
+          requiresAuthorization: true as const,
+          scope: "docs.write",
+        },
+      };
+      seedMcpOAuthStoreForTest(storeKey, saved);
+      const cfg: OpenClawConfig = {
+        gateway: { port: 18790 },
+        mcp: { servers: { docs: { url, auth: "oauth" } } },
+      };
+      await expect(startOperatorMcpOAuthLink({ cfg, serverName: "docs" })).rejects.toThrow(
+        /signed in through a different callback.*openclaw mcp logout docs/,
+      );
+      const after = await readStoreFor(storeKey);
+      expect(after).toMatchObject({
+        tokens: saved.tokens,
+        clientInformation: saved.clientInformation,
+      });
+      expect(after.lastAuthorizationUrl).toBeUndefined();
+      expect(authMock).not.toHaveBeenCalled();
+    },
+  );
+
   itWithHome("reuses a valid session without persisting a redirect", async () => {
     await saveTokens(makeTokens("stored-access", "stored-refresh"));
     const before = await readStore();
@@ -208,18 +265,21 @@ describe("MCP OAuth provider", () => {
     expect(await readStore()).toEqual(before);
   });
 
-  itWithHome("names terminal sign-in only for servers defined under mcp.servers", async () => {
-    const url = "https://mcp.example.com/mcp";
-    const missingToken = (cfg: OpenClawConfig) =>
-      resolveToken({ identity: operatorMcpOAuthIdentity("Remote Docs", url, cfg) });
-    await expect(missingToken({ mcp: { servers: { "Remote Docs": { url } } } })).rejects.toThrow(
-      `MCP server "Remote Docs" requires OAuth authorization. Sign in from Settings → MCP, or from the Gateway's terminal: stop the Gateway with openclaw gateway stop, run openclaw mcp login 'Remote Docs', then start the Gateway again.`,
-    );
-    // A plugin-declared server is absent from mcp.servers; the CLI cannot resolve it.
-    await expect(missingToken({})).rejects.toThrow(
-      `MCP server "Remote Docs" requires OAuth authorization. Select Connect on the plugin's page in Settings to sign in again.`,
-    );
-  });
+  itWithHome(
+    "offers online terminal sign-in for configured and plugin-declared servers",
+    async () => {
+      const url = "https://mcp.example.com/mcp";
+      const missingToken = (cfg: OpenClawConfig) =>
+        resolveToken({ identity: operatorMcpOAuthIdentity("Remote Docs", url, cfg) });
+      await expect(missingToken({ mcp: { servers: { "Remote Docs": { url } } } })).rejects.toThrow(
+        `MCP server "Remote Docs" requires OAuth authorization. ${loginInstruction}`,
+      );
+      // Plugin-declared servers are not listed in Settings → MCP; they sign in from their plugin page.
+      await expect(missingToken({})).rejects.toThrow(
+        `MCP server "Remote Docs" requires OAuth authorization. Select Connect on the plugin's page in Settings, or from the Gateway's terminal: run openclaw mcp login 'Remote Docs' (works while the Gateway runs), or ask the agent to connect in a direct chat.`,
+      );
+    },
+  );
 
   itWithHome("preserves insufficient scope through reauthorization", async () => {
     await saveTokens(makeTokens("decoy-token", "test-auth-token"));
@@ -232,7 +292,7 @@ describe("MCP OAuth provider", () => {
         scope: "docs.write",
       }),
     ).rejects.toThrow(
-      `MCP server "Remote Docs" requires additional OAuth authorization. Sign in again from Settings: select Connect on the plugin's page, or Sign in on the MCP page.`,
+      `MCP server "Remote Docs" requires additional OAuth authorization. ${loginInstruction}`,
     );
     expect(authMock).not.toHaveBeenCalled();
     expect(await storedTokens()).toMatchObject({

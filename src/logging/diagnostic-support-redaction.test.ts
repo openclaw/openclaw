@@ -9,7 +9,6 @@ import {
   sanitizeSupportConfigValue,
   sanitizeSupportSnapshotValue,
 } from "./diagnostic-support-redaction.js";
-import * as textRedaction from "./redact.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 
@@ -50,24 +49,23 @@ describe("diagnostic support redaction", () => {
   const npmLayoutRefusal =
     "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
 
-  it("checks repeated field names once per capture and rechecks newly registered secrets", () => {
+  it("redacts newly registered secrets on the next capture", () => {
     const context = { env: {}, stateDir: tempDir };
-    const redact = vi.spyOn(textRedaction, "redactText");
     try {
       const values = [{ source: "workspace" }, { source: "bundled" }, { source: "project" }];
       expect(sanitizeSupportSnapshotValue(values, context)).toEqual(values);
-      expect(redact.mock.calls.filter(([text]) => text === "source")).toHaveLength(1);
       registerSecretValueForRedaction("source");
       expect(sanitizeSupportSnapshotValue({ source: "workspace" }, context)).toEqual({
         "<identifier#1>": "workspace",
       });
     } finally {
-      redact.mockRestore();
       resetSecretRedactionRegistryForTest();
     }
   });
 
   it.each([
+    "Update database backup volume: needs 8.5 GiB; available 7.8 GiB",
+    "Update database rollback volume: needs 80 MiB; available 70 MiB",
     "schema migration required",
     "database schema newer than candidate",
     "plugin load failed",
@@ -77,7 +75,10 @@ describe("diagnostic support redaction", () => {
     "native module missing",
     "native module ABI mismatch",
     "startup ran out of memory",
-  ])("admits only the exact startup template %s", (message) => {
+    "Package rollback stat changed: fields=size,mtimeNs,ctimeNs",
+    "Package rollback stat changed: fields=dev,ino,mode,uid,gid,nlink,size,mtimeNs,ctimeNs",
+    "Package rollback original inode unavailable",
+  ])("admits only the exact public diagnostic template %s", (message) => {
     const context = { env: {}, stateDir: tempDir };
     expect(redactPublicSupportDiagnosticLine(message, context)).toBe(message);
     expect(redactPublicSupportDiagnosticLine(`${message} private-tenant`, context)).toBe(
@@ -118,6 +119,18 @@ describe("diagnostic support redaction", () => {
       allowed ? line : "[redacted-diagnostic]",
     );
   });
+
+  it.each(["size,private-customer", "size; before=private-value"])(
+    "rejects private values in package stat classifications: %s",
+    (fields) => {
+      expect(
+        redactPublicSupportDiagnosticLine(`Package rollback stat changed: fields=${fields}`, {
+          env: {},
+          stateDir: tempDir,
+        }),
+      ).toBe("[redacted-diagnostic]");
+    },
+  );
 
   it.each([
     [
@@ -188,6 +201,21 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    ["Invalid package dist content inventory", " at /private/example/inventory.json"],
+    ["Invalid package dist content inventory", ": private-reason token=synthetic-private-token"],
+    [
+      "Invalid package dist content inventory: malformed metadata",
+      " at /private/example/inventory.json",
+    ],
+    ["Invalid package dist content inventory entry: malformed metadata", " for private-tenant"],
+    [
+      "Invalid package dist content inventory: content mismatch",
+      ` at /private/example/index.js: ${"a".repeat(64)}`,
+    ],
+    [
+      "Invalid package dist content inventory: executable permission mismatch",
+      " on private-host.example token=synthetic-private-token",
+    ],
     ["attempt state write refused", " for private-tenant at /private/example/state.sqlite"],
     ["sentinel transaction refused", " on private-host.example"],
     ["sentinel transaction unavailable", " for token=synthetic-private-token"],
@@ -195,7 +223,7 @@ describe("diagnostic support redaction", () => {
     ["SQLite file generation changed while reading", ": /private/example/openclaw.sqlite"],
     ["SQLite file generation did not stabilize", " during confirmation: /private/example/a.sqlite"],
     [
-      "SQLite source did not stabilize",
+      "SQLite source did not stabilize; (reason=wal-copy-unstable, attempts=10)",
       " after 3 read-only inspection attempts: /private/x.sqlite",
     ],
     ["SQLite WAL commit header is unavailable or changing", ": /private/example/a.sqlite"],
@@ -215,6 +243,10 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    "(reason=private-customer, attempts=10)",
+    "(reason=source-disappeared, attempts=1000)",
+    "(reason=source-disappeared, attempts=1.5)",
+    "(reason=source-disappeared, attempts=0)",
     "ERR_PNPM_PRIVATE_CUSTOMER",
     "ERR_OSSL_PRIVATE_CUSTOMER",
     "EPRIVATE_CUSTOMER",

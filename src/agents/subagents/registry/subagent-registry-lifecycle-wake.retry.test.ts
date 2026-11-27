@@ -1,6 +1,11 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
+import { composePreparedOnlySessionSource } from "../../../config/sessions/session-source-authority.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
@@ -11,7 +16,7 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
 import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import {
-  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import {
@@ -89,157 +94,162 @@ describe("requester settle retry lifetime", () => {
     },
   );
 
-  it.each([false, true])(
-    "finishes a wake after its originating tool caller expires (restored=%s)",
-    async (restored) => {
-      await withSubagentCompletionWorkerState(async (database) => {
-        const input = armRequesterWake(records());
-        const driver = seedDriver(database, input);
-        if (restored) {
-          driver.controller.markRequesterSettleWakeRestored(input.subagent);
-        }
-        const origin = new AbortController();
-        const caller = {
-          agentId: "main",
-          sessionKey: input.subagent.requesterSessionKey,
-          operationalRunInstance: createOperationalRunInstanceRef("originating-wake-turn"),
-          receiptAuthority: () => !origin.signal.aborted,
-          approvalSignals: [origin.signal],
-        };
-        const entered = createDeferred();
-        const release = createDeferred();
-        driver.wake.mockImplementation(async (params) => {
-          const assertCaller = captureGatewayToolCallerAssertion();
-          entered.resolve();
-          await release.promise;
-          assertCaller?.("agent");
-          expect(params.isSourceCurrent()).toBe(true);
-          await params.completeBatch(
-            [params.settledEntry],
-            params.settledEntry.requesterSettleWake?.rearmGeneration,
-          );
-          return true;
-        });
-        const running = withGatewayToolCallerIdentity(caller, () => driver.run());
-        try {
-          await awaitGateBeforeSettlement(entered.promise, running, "Wake did not start");
-          origin.abort();
-          await withGatewayToolCallerIdentity(caller, () => {
-            expect(() => captureGatewayToolCallerAssertion()?.("agent")).toThrow(
-              "agent tool caller authority is no longer active",
-            );
-          });
-          release.resolve();
-          await running;
-          expect(driver.warn).not.toHaveBeenCalled();
-          expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
-          expect(storedWake(input)).toBeUndefined();
-        } finally {
-          release.resolve();
-          await running;
-          driver.controller.clearRuntimeState();
-        }
+  it("finishes a wake after its originating tool caller expires", async () => {
+    await withSubagentCompletionWorkerState(async (database) => {
+      const input = armRequesterWake(records());
+      const driver = seedDriver(database, input);
+      const origin = new AbortController();
+      const caller = {
+        agentId: "main",
+        sessionKey: input.subagent.requesterSessionKey,
+        operationalRunInstance: createOperationalRunInstanceRef("originating-wake-turn"),
+        receiptAuthority: () => origin.signal.throwIfAborted(),
+        approvalSignals: [origin.signal],
+      };
+      const entered = createDeferred();
+      const release = createDeferred();
+      driver.wake.mockImplementation(async (params) => {
+        const assertCaller = composePreparedOnlySessionSource(getGatewayToolCallerIdentity());
+        entered.resolve();
+        await release.promise;
+        assertCaller?.();
+        expect(params.isSourceCurrent()).toBe(true);
+        await params.completeBatch(
+          [params.settledEntry],
+          params.settledEntry.requesterSettleWake?.rearmGeneration,
+        );
+        return true;
       });
-    },
-  );
-
-  it.each(["before scheduling", "while waiting for recovery capacity"] as const)(
-    "defers a stopped pause notice until obligation retirement: %s",
-    async (stopAt) => {
-      await withSubagentCompletionWorkerState(async (database) => {
-        const input = armRequesterWake(records());
-        input.subagent.pauseReason = "sessions_yield";
-        input.subagent.execution.outcome = undefined;
-        input.subagent.endedReason = undefined;
-        input.subagent.delivery = { status: "pending" };
-        input.subagent.requesterSettleWake = {
-          ...input.subagent.requesterSettleWake!,
-          requesterYieldBatch: true,
-          pauseNotice: { acknowledgment: "Waiting for direction" },
-        };
-        const driver = seedDriver(database, input);
-        const releaseCapacity = createDeferred();
-        const capacityOccupied = createDeferred();
-        let occupied = 0;
-        const capacity: Promise<unknown>[] = [];
-        const observedNotices: unknown[] = [];
-        driver.wake.mockImplementation(async (params) => {
-          observedNotices.push(params.settledEntry.requesterSettleWake?.pauseNotice);
-          await params.completeBatch(
-            [params.settledEntry],
-            params.settledEntry.requesterSettleWake?.rearmGeneration,
-          );
-          return true;
+      const running = withGatewayToolCallerIdentity(caller, () => driver.run());
+      try {
+        await awaitGateBeforeSettlement(entered.promise, running, "Wake did not start");
+        origin.abort();
+        await withGatewayToolCallerIdentity(caller, () => {
+          expect(() =>
+            composePreparedOnlySessionSource(getGatewayToolCallerIdentity())?.(),
+          ).toThrow("operation was aborted");
         });
-        const stop = () =>
-          mutateSubagentRuns([input.subagent.runId], (rows) => {
-            const next = structuredClone(rows.get(input.subagent.runId)!);
-            next.pauseReason = undefined;
-            next.endedReason = "subagent-killed";
-            next.execution.outcome = { status: "error", error: "subagent run terminated" };
-            return { value: undefined, postimages: new Map([[next.runId, next]]) };
-          });
-        const drainScheduled = observeRootWork();
-        try {
-          if (stopAt === "before scheduling") {
-            await stop();
-          } else {
-            driver.controller.markRequesterSettleWakeRestored(input.subagent);
-            for (let slot = 0; slot < 2; slot++) {
-              capacity.push(
-                driver.controller.runBackgroundWork(input.subagent, async () => {
-                  occupied += 1;
-                  if (occupied === 2) {
-                    capacityOccupied.resolve();
-                  }
-                  await releaseCapacity.promise;
-                }),
-              );
-            }
-            await awaitGateBeforeSettlement(
-              capacityOccupied.promise,
-              Promise.all(capacity),
-              "Recovery capacity was not occupied",
-            );
-          }
-          driver.controller.resumeRequesterSettleWake(
-            input.subagent.runId,
-            currentCompletionRun(input),
-          );
-          if (stopAt === "while waiting for recovery capacity") {
-            expect(driver.wake).not.toHaveBeenCalled();
-            await stop();
-          }
-          releaseCapacity.resolve();
-          await Promise.all(capacity);
-          await drainScheduled();
-          expect(driver.wake).not.toHaveBeenCalled();
-          expect(storedWake(input)?.pauseNotice).toEqual({
-            acknowledgment: "Waiting for direction",
-          });
+        release.resolve();
+        await running;
+        expect(driver.warn).not.toHaveBeenCalled();
+        expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
+        expect(storedWake(input)).toBeUndefined();
+      } finally {
+        release.resolve();
+        await running;
+        driver.controller.clearRuntimeState();
+      }
+    });
+  });
 
-          const drainRetirement = observeRootWork();
-          try {
-            await driver.controller.retireSubagentObligations(
-              currentCompletionRun(input),
-              () => {},
-            );
-          } finally {
-            await drainRetirement();
-          }
-          expect(driver.wake).toHaveBeenCalledOnce();
-          expect(observedNotices).toEqual([undefined]);
-          expect(driver.warn).not.toHaveBeenCalled();
-          expect(storedWake(input)).toBeUndefined();
-        } finally {
-          releaseCapacity.resolve();
-          await Promise.all(capacity);
-          await drainScheduled();
-          driver.controller.clearRuntimeState();
-        }
+  it("records lost-run child status in the requester's current transcript", async () => {
+    await withSubagentCompletionWorkerState(async (database) => {
+      const input = armRequesterWake(records());
+      const requester = {
+        agentId: "main",
+        sessionKey: input.subagent.requesterSessionKey,
+        storePath: path.join(
+          path.dirname(database.path),
+          "agents",
+          "main",
+          "sessions",
+          "sessions.json",
+        ),
+      };
+      // A compaction successor replaced the transcript that admitted the yield.
+      await upsertSessionEntryCore(requester, {
+        sessionId: "successor",
+        lifecycleRevision: "rev-2",
+        updatedAt: Date.now(),
       });
-    },
-  );
+      Object.assign(input.subagent, {
+        requesterStorePath: requester.storePath,
+        completionRequesterSessionId: "predecessor",
+        completionRequesterLifecycleRevision: "rev-1",
+      });
+      input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+      const driver = seedDriver(database, input);
+      driver.wake.mockImplementation(async (params) => {
+        await params.completeBatch([params.settledEntry], 1, {
+          delivered: false,
+          path: "direct",
+          error: "requester turn failed",
+        });
+        return true;
+      });
+      try {
+        await driver.run();
+        const events = await loadTranscriptEvents({ ...requester, sessionId: "successor" });
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "custom_message",
+            customType: "subagent-completion",
+            display: false,
+            content: expect.stringContaining(`run ${input.subagent.runId}): completed`),
+            details: expect.objectContaining({ childRunIds: [input.subagent.runId] }),
+          }),
+        );
+        expect(storedRun(input)?.delivery).toMatchObject({
+          status: "delivered",
+          disposition: "delivered",
+        });
+        expect(storedWake(input)).toBeUndefined();
+      } finally {
+        driver.controller.clearRuntimeState();
+      }
+    });
+  });
+
+  it("defers a stopped pause notice until obligation retirement", async () => {
+    await withSubagentCompletionWorkerState(async (database) => {
+      const input = armRequesterWake(records());
+      input.subagent.pauseReason = "sessions_yield";
+      input.subagent.execution.outcome = undefined;
+      input.subagent.endedReason = undefined;
+      input.subagent.delivery = { status: "pending" };
+      input.subagent.requesterSettleWake = {
+        ...input.subagent.requesterSettleWake!,
+        requesterYieldBatch: true,
+        pauseNotice: { acknowledgment: "Waiting for direction" },
+      };
+      const driver = seedDriver(database, input);
+      const observedNotices: unknown[] = [];
+      driver.wake.mockImplementation(async (params) => {
+        observedNotices.push(params.settledEntry.requesterSettleWake?.pauseNotice);
+        await params.completeBatch(
+          [params.settledEntry],
+          params.settledEntry.requesterSettleWake?.rearmGeneration,
+        );
+        return true;
+      });
+      await mutateSubagentRuns([input.subagent.runId], (rows) => {
+        const next = structuredClone(rows.get(input.subagent.runId)!);
+        next.pauseReason = undefined;
+        next.endedReason = "subagent-killed";
+        next.execution.outcome = { status: "error", error: "subagent run terminated" };
+        return { value: undefined, postimages: new Map([[next.runId, next]]) };
+      });
+      const drain = observeRootWork();
+      try {
+        driver.controller.resumeRequesterSettleWake(
+          input.subagent.runId,
+          currentCompletionRun(input),
+        );
+        await drain(true);
+        expect(driver.wake).not.toHaveBeenCalled();
+        expect(storedWake(input)?.pauseNotice).toEqual({ acknowledgment: "Waiting for direction" });
+        await driver.controller.retireSubagentObligations(currentCompletionRun(input), () => {});
+        await drain();
+        expect(driver.wake).toHaveBeenCalledOnce();
+        expect(observedNotices).toEqual([undefined]);
+        expect(driver.warn).not.toHaveBeenCalled();
+        expect(storedWake(input)).toBeUndefined();
+      } finally {
+        await drain();
+        driver.controller.clearRuntimeState();
+      }
+    });
+  });
 
   it.each([
     { trigger: "descendant event", nextAttemptAt: undefined },
@@ -537,54 +547,6 @@ describe("requester settle retry lifetime", () => {
         database.db.exec("DROP TRIGGER IF EXISTS reject_delivered_batch");
         driver.controller.clearRuntimeState();
         worker.mockRestore();
-      }
-    });
-  });
-
-  it("recovers a failed replay publication through the existing sweep", async () => {
-    await withSubagentCompletionWorkerState(async (database) => {
-      const input = armRequesterWake(records());
-      const driver = seedDriver(database, input);
-      const attempts = vi.fn();
-      const batchRunIds = [input.subagent.runId];
-      const pending = {
-        ...structuredClone(input.subagent.requesterSettleWake!),
-        nextAttemptAt: Date.now() + 30_000,
-      };
-      database.db.exec(
-        "CREATE TRIGGER reject_wake_publication BEFORE UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.requesterSettleWake.status') = 'pending' BEGIN SELECT RAISE(ABORT, 'wake publication unavailable'); END",
-      );
-      driver.wake.mockImplementation(async (params) => {
-        await params.transitionBatch(
-          [currentCompletionRun(input)],
-          { ...pending, status: "dispatching", attemptCount: 1, batchRunIds },
-          () => {},
-        );
-        attempts();
-        if (attempts.mock.calls.length === 1) {
-          await params.transitionBatch([currentCompletionRun(input)], pending, () => {});
-          return false;
-        }
-        await params.completeBatch([currentCompletionRun(input)], pending.rearmGeneration, {
-          delivered: true,
-          path: "direct",
-          deliveredAt: 5_000,
-        });
-        return true;
-      });
-      try {
-        await driver.run();
-        expect(attempts).toHaveBeenCalledOnce();
-        expect(storedWake(input)).toBeDefined();
-        database.db.exec("DROP TRIGGER reject_wake_publication");
-        await driver.sweep();
-        expect(attempts).toHaveBeenCalledTimes(2);
-        expect(driver.wake).toHaveBeenCalledTimes(2);
-        expect(storedWake(input)).toBeUndefined();
-        expect(storedRun(input)?.delivery?.status).toBe("delivered");
-      } finally {
-        database.db.exec("DROP TRIGGER IF EXISTS reject_wake_publication");
-        driver.controller.clearRuntimeState();
       }
     });
   });

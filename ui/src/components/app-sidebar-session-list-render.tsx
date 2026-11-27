@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import {
   presenceViewerActivity,
@@ -7,11 +7,14 @@ import {
   projectPresenceViewers,
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
+import { createIntersectionObserver } from "../lib/reactive/observers.ts";
+import { createTimeout } from "../lib/reactive/timers.ts";
+import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
+import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import {
   renderPersonalSessionEmpty,
-  renderSessionMutationError,
+  renderSessionListError,
 } from "./app-sidebar-session-filter-summary.tsx";
 import type {
   RenderableSessionSection,
@@ -19,11 +22,9 @@ import type {
   PersonHeaders,
   SessionCatalogRenderSnapshot,
 } from "./app-sidebar-session-render-types.ts";
-import {
-  renderChildSessionLoadError,
-  renderPendingSessionCreateRow,
-} from "./app-sidebar-session-row-render.tsx";
+import { renderChildSessionLoadError } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
+import { sidebarPinnedSessionRows } from "./app-sidebar-session-types.ts";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
 function RosterLoadMore(props: {
@@ -31,10 +32,35 @@ function RosterLoadMore(props: {
   hasMore: boolean;
   loading: boolean;
 }) {
+  const [button, setButton] = createSignal<HTMLButtonElement>();
+  // One page per entry into view: the button has to leave and come back before
+  // the next load, so a page whose rows land off-screen or a failed load never
+  // turns into a request loop. The button stays as the manual fallback.
+  // Grouped and people-sorted views place older rows inside earlier sections,
+  // so they keep the explicit button. The flat list mostly appends; when
+  // Created order or catalog sections put a page above the fold, this still
+  // loads at most one page per entry into view.
+  createIntersectionObserver(
+    () => {
+      const target = button();
+      return target ? [target] : [];
+    },
+    (entries) => {
+      const host = props.host;
+      if (
+        host.effectiveSessionsGrouping() === "none" &&
+        host.effectiveSessionSortMode() !== "people" &&
+        entries.some((entry) => entry.isIntersecting)
+      ) {
+        void host.loadMoreSidebarSessions();
+      }
+    },
+  );
   return (
     <Show when={props.hasMore}>
       <div class="sidebar-session-pagination sidebar-session-pagination--roster">
         <button
+          ref={setButton}
           type="button"
           class="sidebar-session-pagination__button"
           aria-label={
@@ -52,13 +78,7 @@ function RosterLoadMore(props: {
   );
 }
 
-function renderSessionListBody(params: {
-  host: SidebarSessionListHost;
-  sections: RenderableSessionSection[];
-  nativeSessionsHaveMore: boolean;
-  catalogs: SessionCatalogRenderSnapshot;
-  catalogRenderer: SessionCatalogGroupsRenderer;
-}) {
+function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) {
   const host = createMemo(() => params.host);
   const personHeaders = createMemo<PersonHeaders | undefined>(() => {
     if (host().sessionsGrouping !== "person") {
@@ -93,22 +113,8 @@ function renderSessionListBody(params: {
         <Show
           when={section().id.startsWith("catalog:")}
           fallback={
-            // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
-            <Show
-              when={
-                !(section().id === "work" && section().totalRowCount === 0) &&
-                !(
-                  section().id === "ungrouped" &&
-                  section().totalRowCount === 0 &&
-                  !params.nativeSessionsHaveMore &&
-                  !host().sessionOwnershipVisibility.filters &&
-                  host().sessionsStatusFilter === "active" &&
-                  host().sessionOrganizer.draggingSessionKey === null
-                )
-              }
-            >
-              <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
-            </Show>
+            // The projection decides which empty sections render.
+            <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
           }
         >
           <Show when={catalogsBySectionId().get(section().id)}>
@@ -135,18 +141,9 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer;
 }) {
   const host = createMemo(() => params.host);
-  // A create for a rendered custom group is placed by that section instead.
-  const unplacedCreate = createMemo(() => {
-    const pending = host().pendingSessionCreate();
-    const category = pending?.category;
-    return category && params.sections.some((section) => section.category === category)
-      ? undefined
-      : pending;
-  });
   return renderSessionListFrame(
     host,
     <div class="sidebar-recent-sessions">
-      {renderPendingSessionCreateRow(unplacedCreate)}
       {renderSessionListBody(params)}
       <RosterLoadMore
         host={host()}
@@ -159,7 +156,7 @@ export function renderSessionList(params: {
         host().connected &&
           host().sessionData.sessionsResult !== null &&
           !host().sessionData.sessionsLoading &&
-          !host().sessionData.sessionMutationError &&
+          !host().sessionData.sessionListError &&
           !params.nativeSessionsHaveMore &&
           params.catalogs.catalogs.length === 0 &&
           areSessionCatalogsSettled(host().sessionData),
@@ -172,11 +169,51 @@ export function renderSessionList(params: {
 }
 /** Personal pins keep their saved order in one section above every list section. */
 function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
+  const pinWindow = createMemo(() => params.host.gatewayPinWindow);
+  const sampled = createMemo(() => ({ result: pinWindow(), at: performance.now() }));
+  // A filtered window (e.g. Archived) can omit a saved active row obtained by describe.
+  // Wake the same list for fresh Gateway time; never unhide it on the device clock.
+  // A failed wake read retries like the list's own snooze cutoff.
+  createTimeout(
+    () => params.host.sessionData.wakeSidebarSessions(),
+    () => {
+      const { result, at } = sampled();
+      if (!result) {
+        return undefined;
+      }
+      const zone = params.host.reconciledSidebarZone();
+      const listed = new Set(result.sessions.map((row) => row.key));
+      const outside = zone.entries.flatMap((entry) => {
+        const row =
+          entry.type === "session" &&
+          !entry.rail &&
+          !listed.has(entry.key) &&
+          zone.sessionRows.get(entry.key);
+        return row && !row.archived ? [row] : [];
+      });
+      const wake = nextSessionSnoozeWakeAt(outside, result.ts);
+      if (
+        wake === null ||
+        (result.activityExpiresAt !== undefined && result.activityExpiresAt + 1 <= wake)
+      ) {
+        return undefined;
+      }
+      return Math.min(2_147_483_647, Math.max(0, wake - result.ts - (performance.now() - at)));
+    },
+  );
   const section = createMemo((): RenderableSessionSection | undefined => {
     const host = params.host;
     const zone = host.reconciledSidebarZone();
     const sessions = host.sessionDataContext?.sessions;
-    const rows = sidebarPinnedSessionRows(zone, (key) => sessions?.archiveVisibility(key));
+    const gatewayTime = host.gatewayPinTime;
+    const now = gatewayTime ?? Date.now();
+    const hasSnoozedPins =
+      gatewayTime === undefined && nextSessionSnoozeWakeAt(zone.sessionRows.values(), now) !== null;
+    const rows = sidebarPinnedSessionRows(
+      zone,
+      (key) => sessions?.archiveVisibility(key),
+      hasSnoozedPins ? readVisibleTime(1_000) : now,
+    );
     if (rows.length === 0) {
       return undefined;
     }
@@ -203,7 +240,12 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
   );
 }
 
-export function renderSessionListFrame(host: () => SidebarSessionListHost, body: JSX.Element) {
+/** The roster leads with its agents; the session list keeps its own sections first. */
+export function renderSessionListFrame(
+  host: () => SidebarSessionListHost,
+  body: JSX.Element,
+  bodyFirst = false,
+) {
   const home = createMemo(() =>
     host().sidebarAgentsMode === "roster" ? null : host().mainSessionRow(),
   );
@@ -243,8 +285,10 @@ export function renderSessionListFrame(host: () => SidebarSessionListHost, body:
           {t("sessionsView.moveToTopLevel")}
         </div>
       ) : undefined}
-      {renderSessionMutationError(host())} <PinnedSessionSection host={host()} />
-      {body}
+      {renderSessionListError(host())}
+      {bodyFirst ? body : undefined}
+      <PinnedSessionSection host={host()} />
+      {bodyFirst ? undefined : body}
     </section>
   );
 }

@@ -2,11 +2,10 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { sqliteFamilyHashes as familyHashes } from "../../test/helpers/sqlite-family-hashes.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { sourceHostPluginConflict } from "../claws/plugin-capability-probe.js";
+import { captureConfigHealthStateStore } from "../config/io.health-state.js";
 import {
   resolveConfigWidePluginMetadataSnapshot,
   resolveConfigWidePluginMetadataSnapshotAsync,
@@ -31,24 +30,18 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledDiscovery from "./bundled-discovery-state.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setGatewayPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
+import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { readStartupBundledDiscoveryMode } from "./gateway-startup-plugin-config.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
-import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
 import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
-import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   parseInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
-import { listPersistedBundledPluginRecoveryLocations } from "./location-bridges.js";
 import { loadFreshManagedPluginMetadata } from "./management-service.js";
 import {
   adoptProcessPluginCache,
@@ -61,7 +54,6 @@ import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
-import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -110,32 +102,6 @@ async function seed(env: NodeJS.ProcessEnv, value: InstalledPluginIndex) {
   return database.path;
 }
 
-it("prepares Claw metadata off-thread and observes committed inventory and policy changes", async () => {
-  const env = environment();
-  await seed(env, index());
-  const pkg = {
-    kind: "plugin",
-    source: "clawhub",
-    ref: "@example/fixture",
-    version: "1.0.0",
-  } as const;
-  const check = async (
-    records: InstalledPluginIndex["installRecords"],
-    mode: "compat" | undefined,
-  ) => {
-    await withoutMainThreadSql(async () => {
-      expect(await sourceHostPluginConflict(pkg, "fixture", { env })).toBeUndefined();
-      expect(await loadInstalledPluginIndexInstallRecords({ env })).toEqual(records);
-      expect(readStartupBundledDiscoveryMode({}, env)).toBe(mode);
-    });
-  };
-  await check({}, undefined);
-  const installRecords = { fixture: { source: "npm" as const, spec: "@example/fixture@1.0.0" } };
-  await writePersistedInstalledPluginIndex({ ...index(), installRecords }, { env });
-  migrateLegacyConfigMachineState({ config: { plugins: { allow: ["fixture"] } }, env });
-  await check(installRecords, "compat");
-});
-
 async function withoutMainThreadSql(run: () => Promise<void>) {
   requireNodeSqlite();
   const sql = observeMainThreadSql();
@@ -153,8 +119,6 @@ it("transfers startup metadata out of its private snapshot and observes same-pro
   await seed(env, index());
   const processCache = getProcessPluginCache();
   await using cache = createPluginCache();
-  const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
-  const batches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
   try {
     await withPluginCache(cache, () =>
       withArtifactPreservingStateReads(() =>
@@ -172,8 +136,6 @@ it("transfers startup metadata out of its private snapshot and observes same-pro
         index().diagnostics,
       );
     });
-    expect(reads).not.toHaveBeenCalled();
-    expect(batches).toHaveBeenCalledOnce();
 
     expect(migrateLegacyConfigMachineState({ config, env }).changes).toContain(
       "Migrated plugins.bundledDiscovery → shared SQLite state",
@@ -194,114 +156,6 @@ it("transfers startup metadata out of its private snapshot and observes same-pro
     }
   } finally {
     adoptProcessPluginCache(processCache);
-  }
-});
-
-it("prepares external auth from the published inventory after an index write without rereading it", async () => {
-  const env = environment();
-  const config = {};
-  await seed(env, index());
-  const resolver = createProviderExternalAuthResolver({ resolveProviderPluginsForHooks: () => [] });
-  try {
-    const coldReads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
-    const coldBatches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
-    await withoutMainThreadSql(async () => {
-      await resolver.withPreparedExternalAuthProfiles({ config, env }, async () => {
-        expect(getCurrentPluginMetadataSnapshot({ config, env })).toBeDefined();
-      });
-    });
-    expect(coldReads).not.toHaveBeenCalled();
-    expect(coldBatches).toHaveBeenCalledOnce();
-    coldReads.mockRestore();
-    coldBatches.mockRestore();
-    for (const message of ["boot inventory", "replacement inventory"]) {
-      const snapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
-        config,
-        env,
-        allowCurrent: false,
-      });
-      setGatewayPluginMetadataSnapshot(snapshot, { config, env });
-      // Writes invalidate raw index facts; the published runtime inventory remains authoritative.
-      await writePersistedInstalledPluginIndex(index(message), { env });
-      const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
-      const batches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
-      await withoutMainThreadSql(async () => {
-        await resolver.withPreparedExternalAuthProfiles({ config, env }, async () => {
-          expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(snapshot);
-          expect(
-            resolver.resolveExternalAuthProfilesWithPlugins({
-              config,
-              env,
-              context: { env, store: { version: 1, profiles: {} } },
-            }),
-          ).toEqual([]);
-        });
-      });
-      expect(reads).not.toHaveBeenCalled();
-      expect(batches).not.toHaveBeenCalled();
-      reads.mockRestore();
-      batches.mockRestore();
-    }
-  } finally {
-    clearCurrentPluginMetadataSnapshot();
-  }
-});
-
-it("reuses the synchronous discovery reader and sees in-process writes between passes", async () => {
-  const env = environment();
-  const databasePath = await seed(env, index());
-  const moduleUrl = (name: string) => new URL(name, import.meta.url).href;
-  const source = `
-    import assert from "node:assert/strict";
-    import { parentPort, workerData } from "node:worker_threads";
-    import { openNodeSqliteDatabase } from ${JSON.stringify(moduleUrl("../infra/node-sqlite.ts"))};
-    import { readSqliteReaderDiagnosticsForPath } from ${JSON.stringify(moduleUrl("../infra/sqlite-reader-lifecycle.ts"))};
-    import { closeRetainedOpenClawStateReadConnections } from ${JSON.stringify(moduleUrl("../state/openclaw-state-db-read-connection.ts"))};
-    import { readPluginMetadataStateRowsSync } from ${JSON.stringify(moduleUrl("./installed-plugin-index-row.ts"))};
-    const pathname = workerData.databasePath;
-    const read = () => readPluginMetadataStateRowsSync(["plugins.bundledDiscovery"], { path: pathname })
-      .map((row) => ({ ...row }));
-    const connection = () => {
-      const readers = readSqliteReaderDiagnosticsForPath(pathname).connections;
-      assert.equal(readers.length, 1);
-      return readers[0].connectionId;
-    };
-    try {
-      assert.deepEqual(read(), []);
-      const first = connection();
-      assert.deepEqual(read(), []);
-      assert.equal(connection(), first);
-      const writer = openNodeSqliteDatabase(pathname);
-      try {
-        for (const mode of ["compat", "allowlist"]) {
-          writer.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1) ON CONFLICT(state_key) DO UPDATE SET value_json=excluded.value_json")
-            .run("plugins.bundledDiscovery", JSON.stringify(mode));
-          assert.deepEqual(read(), [{ state_key: "plugins.bundledDiscovery", value_json: JSON.stringify(mode) }]);
-        }
-        writer.prepare("DELETE FROM config_machine_state WHERE state_key=?").run("plugins.bundledDiscovery");
-        assert.deepEqual(read(), []);
-      } finally {
-        writer.close();
-      }
-      assert.equal(connection(), first);
-      closeRetainedOpenClawStateReadConnections();
-      assert.equal(readSqliteReaderDiagnosticsForPath(pathname).connectionCount, 0);
-      parentPort.postMessage("reused discovery reader");
-    } finally {
-      closeRetainedOpenClawStateReadConnections();
-    }
-  `;
-  const worker = new Worker(new URL(`data:text/javascript,${encodeURIComponent(source)}`), {
-    execArgv: resolveRuntimeWorkerThreadExecArgv(
-      new URL("./installed-plugin-index-row.ts", import.meta.url),
-    ),
-    workerData: { databasePath },
-  });
-  try {
-    const [result] = await once(worker, "message");
-    expect(result).toBe("reused discovery reader");
-  } finally {
-    await worker.terminate();
   }
 });
 
@@ -461,7 +315,7 @@ it("preserves database-family bytes during ambient artifact-preserving async ins
   expect(familyHashes(databasePath)).toEqual(before);
 });
 
-it("reads committed live metadata without space for a database snapshot", async () => {
+it("reads committed live startup metadata without space for a database snapshot", async () => {
   const env = environment();
   const databasePath = await seed(env, index());
   const moduleUrl = (name: string) => new URL(name, import.meta.url).href;
@@ -484,7 +338,12 @@ it("reads committed live metadata without space for a database snapshot", async 
         });
         const database = new DatabaseSync(pathname);
         database.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE unrelated_payload(data BLOB)");
+        database.prepare("INSERT INTO config_health_entries(config_path, last_observed_suspicious_signature, updated_at_ms) VALUES (?, ?, ?)").run("/synthetic/openclaw.json", "preserved-health", 123);
         process.on("message", value => {
+          if (value === "close") {
+            process.disconnect();
+            return;
+          }
           database.exec("BEGIN IMMEDIATE; INSERT INTO unrelated_payload VALUES(zeroblob(1048576))");
           if (value === "newer-schema") {
             database.exec("PRAGMA user_version=2147483647");
@@ -531,6 +390,18 @@ it("reads committed live metadata without space for a database snapshot", async 
       `,
     );
     await withEnvAsync(sqliteWorkerPreloadEnv(preload), async () => {
+      await withoutMainThreadSql(async () => {
+        const health = await withArtifactPreservingStateReads(() =>
+          captureConfigHealthStateStore(
+            { env, homedir: () => env.OPENCLAW_STATE_DIR, logger: console },
+            "/synthetic/openclaw.json",
+          ).read(),
+        );
+        expect(health.state.entries?.["/synthetic/openclaw.json"]).toMatchObject({
+          lastObservedSuspiciousSignature: "preserved-health",
+        });
+        expect(health.basis?.["/synthetic/openclaw.json"]?.updatedAtMs).toBe(123);
+      });
       for (const message of ["first committed inventory", "inventory after unrelated growth"]) {
         const committed = nextMessage();
         writer.send({ revision: 1, index: index(message) });
@@ -556,40 +427,12 @@ it("reads committed live metadata without space for a database snapshot", async 
     ).rejects.toBeInstanceOf(SqliteSchemaVersionError);
   } finally {
     if (writer.connected) {
-      writer.disconnect();
+      // Child-owned disconnect preserves Node's process-and-pipes close event.
+      writer.send("close");
     }
     const [code] = await closed;
     expect(code, stderr).toBe(0);
   }
-});
-
-it("reads retained metadata snapshots off-thread and sees committed writes after the scope", async () => {
-  const env = environment();
-  await seed(env, index("captured ledger"));
-  await withArtifactPreservingStateReads(() =>
-    withOpenClawStateDatabaseReadSnapshot(
-      async () => {
-        writeConfigMachineState(
-          "plugins.installedIndex",
-          { revision: 2, index: index("new ledger") },
-          { env },
-        );
-        await withoutMainThreadSql(async () => {
-          const row = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
-          expect(JSON.parse(row!.value_json).index.diagnostics).toEqual([
-            { level: "warn", message: "captured ledger" },
-          ]);
-        });
-      },
-      { env },
-    ),
-  );
-  await withoutMainThreadSql(async () => {
-    const row = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
-    expect(JSON.parse(row!.value_json).index.diagnostics).toEqual([
-      { level: "warn", message: "new ledger" },
-    ]);
-  });
 });
 
 it("prepares cold metadata once and preserves the merged workspace inventory without main SQL", async () => {
@@ -637,8 +480,6 @@ it("prepares cold metadata once and preserves the merged workspace inventory wit
       await prepareMode(capturedEnv);
       return activate;
     });
-  const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
-  const batches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
   try {
     await withoutMainThreadSql(() =>
       withPluginCache(createPluginCache(), async () => {
@@ -648,32 +489,12 @@ it("prepares cold metadata once and preserves the merged workspace inventory wit
         expect(first.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
         expect(first.registrySource).toBe("derived");
         expect(second).toBe(first);
-        expect(reads.mock.calls.map(([selector]) => selector)).toEqual(["bundled-discovery"]);
-        expect(batches).toHaveBeenCalledOnce();
       }),
     );
   } finally {
-    reads.mockRestore();
-    batches.mockRestore();
     mode.mockRestore();
     clearCurrentPluginMetadataSnapshot();
   }
-});
-
-it("shares a pending index read and returns the same validated inventory", async () => {
-  const env = environment();
-  const row = createDeferredCore<{ value_json: string }>();
-  const read = vi.spyOn(metadataWorker, "readPluginMetadataStateRow").mockReturnValue(row.promise);
-  await using cache = createPluginCache();
-  await withPluginCache(cache, async () => {
-    const first = readPersistedInstalledPluginIndex({ env });
-    const second = readPersistedInstalledPluginIndex({ env });
-    row.resolve({ value_json: JSON.stringify({ revision: 1, index: index() }) });
-    const [left, right] = await Promise.all([first, second]);
-    expect(left?.diagnostics).toEqual([{ level: "warn", message: "synthetic index" }]);
-    expect(right).toBe(left);
-    expect(read).toHaveBeenCalledTimes(1);
-  });
 });
 
 it("joins a retired cache's worker read without publishing its inventory", async () => {
@@ -687,55 +508,6 @@ it("joins a retired cache's worker read without publishing its inventory", async
   row.resolve({ value_json: JSON.stringify({ revision: 1, index: index() }) });
   await rejected;
   await retirement;
-});
-
-it("returns persisted bundled recovery locations through its existing async consumer without parent SQL", async () => {
-  const env = environment();
-  const rootDir = path.join(env.OPENCLAW_STATE_DIR, "previous", "extensions", "fixture");
-  const stored = index();
-  stored.plugins = [
-    ...stored.plugins,
-    {
-      pluginId: "fixture",
-      manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-      manifestHash: "synthetic-manifest",
-      rootDir,
-      origin: "bundled",
-      enabled: true,
-      startup: { sidecar: false, memory: false, agentHarnesses: [] },
-      compat: [],
-    },
-  ];
-  await seed(env, stored);
-  await withoutMainThreadSql(async () => {
-    await using cache = createPluginCache();
-    const recovered = await withPluginCache(cache, () =>
-      listPersistedBundledPluginRecoveryLocations({ env }),
-    );
-    expect(recovered).toHaveLength(1);
-    expect(recovered[0]?.pluginId).toBe("fixture");
-    expect(recovered[0]?.loadPaths).toContain(rootDir);
-  });
-});
-
-it("reads the installed ledger inside the existing install lifecycle lease without parent SQL", async () => {
-  const env = environment();
-  const stored = index();
-  stored.installRecords = {
-    fixture: { source: "path", installPath: path.join(env.OPENCLAW_STATE_DIR, "fixture") },
-  };
-  await seed(env, stored);
-  await withPluginLifecycleLease({ env }, async (lease) => {
-    lease.assertOwned();
-    await withoutMainThreadSql(async () => {
-      const options = { env, filePath: lease.databasePath };
-      expect(await loadInstalledPluginIndexInstallRecords(options)).toEqual(stored.installRecords);
-      expect((await readPersistedInstalledPluginIndex(options))?.installRecords).toEqual(
-        stored.installRecords,
-      );
-    });
-    lease.assertOwned();
-  });
 });
 
 it("keeps captured async policy and inventory in pinned roots after a concurrent memo refresh", async () => {

@@ -7,6 +7,8 @@ import {
   CLAUDE_CLI_SETUP_GUIDANCE,
   resolveModelRuntimeRoute,
 } from "../shared/model-runtime-route.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
+import { resolveNativeOwnedRuntimeModel, DEFAULT_PROVIDER } from "./defaults.js";
 import { FailoverError } from "./failover/error.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { AgentHarness } from "./harness/types.js";
@@ -14,6 +16,7 @@ import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelKey, type ModelRef } from "./model-ref-shared.js";
+import { resolveConfiguredModelPolicyAllow } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
@@ -92,7 +95,7 @@ export async function prepareModelChoice(params: {
         const selection = {
           cfg: owner.config,
           agentId: params.agentId,
-          defaultProvider: defaults.provider,
+          defaultProvider: defaults?.provider ?? DEFAULT_PROVIDER,
           defaultModel: defaults,
           catalog: owner.modelCatalog.entries,
           manifestPlugins: owner.metadataSnapshot.plugins,
@@ -111,7 +114,13 @@ export async function prepareModelChoice(params: {
           return { kind: "unavailable", error: `invalid model: ${params.raw}` };
         }
         if ("error" in selected) {
-          return { kind: "unavailable", error: selected.error };
+          const policy = resolveConfiguredModelPolicyAllow(selection);
+          return {
+            kind: "unavailable",
+            error: selected.error.startsWith("model not allowed:")
+              ? `${selected.error}. Rejected by ${policy.configPath ?? policy.repairConfigPath}. Add the model or its provider wildcard to ${policy.repairConfigPath}, or choose an allowed model.`
+              : selected.error,
+          };
         }
         const requested = selected.ref;
         const authOwner = (provider: string) =>
@@ -221,7 +230,23 @@ export async function prepareModelChoice(params: {
             entry,
             evaluation: auth,
             pluginRegistry: owner.pluginRegistry,
+            resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
           })?.id;
+          // Same ownership rule as the turn path: a harness-listed model has no host transport.
+          const nativeModel = resolveNativeOwnedRuntimeModel({
+            catalog: decisions.snapshot,
+            provider: ref.provider,
+            modelId: ref.model,
+            runtimeId: selectedRuntime,
+          });
+          if (nativeModel) {
+            return decisions.isCurrent()
+              ? { kind: "resolved", ref, model: nativeModel }
+              : {
+                  kind: "unavailable",
+                  error: "Model configuration changed during selection. Retry the request.",
+                };
+          }
           const config = auth.selectedRoute
             ? projectProviderModelRouteConfig({
                 provider: ref.provider,
@@ -325,6 +350,8 @@ export async function preparePublishedModelRuntimeChoice(params: {
   model: string;
   runtimeId?: string;
   preferredRuntimeId?: string;
+  /** Preflight the turn's own runtime, not an available alternative offered by the picker. */
+  useConfiguredRuntime?: true;
   /** Session creation supplies its bounded wait; config mutations remain passive. */
   prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   sessionEntry?: Pick<
@@ -360,6 +387,8 @@ export async function preparePublishedModelRuntimeChoice(params: {
   if (!published) {
     return { kind: "unavailable", message: unavailable };
   }
+  // A sign-in after Gateway start must reach selection without a model-list read first.
+  await published.recheckNativeLogin?.();
   let nativeCatalog: ModelCatalogSnapshot | undefined;
   if (params.prepareNativeCatalog) {
     const configuredEntry = findModelInCatalog(
@@ -367,7 +396,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
       params.provider,
       params.model,
     );
-    const selectedRuntimeId =
+    let selectedRuntimeId =
       params.runtimeId ??
       params.preferredRuntimeId ??
       resolveAgentHarnessPolicy({
@@ -378,6 +407,14 @@ export async function preparePublishedModelRuntimeChoice(params: {
         modelApi: configuredEntry?.api,
         modelBaseUrl: configuredEntry?.baseUrl,
       }).runtime;
+    if (params.useConfiguredRuntime && selectedRuntimeId === "auto" && configuredEntry) {
+      const { createModelCatalogSnapshotView } = await import("./model-catalog-view.js");
+      selectedRuntimeId =
+        createModelCatalogSnapshotView(
+          published.config,
+          published.modelCatalog,
+        ).implicitNativeRuntime(configuredEntry) ?? selectedRuntimeId;
+    }
     const nativeRuntime = published.pluginRegistry?.agentHarnesses.some(
       (registration) =>
         registration.harness.id === selectedRuntimeId &&
@@ -419,7 +456,17 @@ export async function preparePublishedModelRuntimeChoice(params: {
         : undefined,
     profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
   });
-  // A known account failure needs sign-in guidance; a catalog refresh cannot repair it.
+  const { resolveCatalogDecisionRuntime } = await loadCatalogDecisionRuntime();
+  const configuredRuntime = (entry: ModelCatalogEntry, variants?: readonly ModelCatalogEntry[]) =>
+    resolveCatalogDecisionRuntime({
+      cfg: owner.config,
+      agentId: owner.agentId ?? params.agentId,
+      entry,
+      evaluation: decisions.evaluateNative(entry, decisions.evaluateEntry(entry, variants)),
+      pluginRegistry: owner.pluginRegistry,
+      resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
+    })?.id ?? "openclaw";
+  // Recovery belongs to the failed account, which may differ from the runtime's native login.
   const describeUnavailable = async (
     row: ModelCatalogEntry,
     evaluation: ModelAuthAvailabilityEvaluation,
@@ -429,7 +476,17 @@ export async function preparePublishedModelRuntimeChoice(params: {
     if (!reason) {
       return unavailable;
     }
-    const { resolveCatalogDecisionRuntime } = await loadCatalogDecisionRuntime();
+    if (
+      (reason === "missing-auth" || reason === "auth-failed") &&
+      evaluation.selectedProfileId &&
+      !evaluation.runtimeAuth
+    ) {
+      // Shared replies must not expose the owner/account locator of a personal credential.
+      const account = isUserModelAuthProfileId(evaluation.selectedProfileId)
+        ? "personal account"
+        : `account "${evaluation.selectedProfileId}"`;
+      return `${unavailableSubject}: selected ${account} is unavailable. Restore that account, or change the explicit or default account selection.`;
+    }
     const routeRuntimeId =
       runtimeId ??
       resolveCatalogDecisionRuntime({
@@ -438,6 +495,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
         entry: row,
         evaluation,
         pluginRegistry: owner.pluginRegistry,
+        resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
       })?.id;
     const claudeCli = resolveModelRuntimeRoute(params.provider, routeRuntimeId) === "claudeCli";
     switch (reason) {
@@ -464,6 +522,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
     const requestedEntry = { provider: params.provider, id: params.model, name: params.model };
     const materializationRuntime =
       params.runtimeId ??
+      (params.useConfiguredRuntime ? configuredRuntime(requestedEntry) : undefined) ??
       (params.preferredRuntimeId &&
       decisions
         .runtimeChoices(requestedEntry, [requestedEntry])
@@ -513,6 +572,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
   const choices = decisions.runtimeChoices(entry, entryVariants);
   const runtimeId =
     params.runtimeId ??
+    (params.useConfiguredRuntime ? configuredRuntime(entry, entryVariants) : undefined) ??
     (params.preferredRuntimeId && choices?.includes(params.preferredRuntimeId)
       ? params.preferredRuntimeId
       : choices?.[0]);

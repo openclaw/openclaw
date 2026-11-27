@@ -5,6 +5,7 @@ import "../../../styles/chat.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
+import { createWorkspace } from "./chat-session-workspace-rail.test-support.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
 it.each([false, true])(
@@ -238,6 +239,7 @@ it("keeps native file navigation and selection while windowing a large leaf fold
   const filename = (index: number) => "docs/file-" + String(index).padStart(4, "0") + ".ts";
   const [revision, setRevision] = createSignal(0);
   const [fileCount, setFileCount] = createSignal(500);
+  const [fileOffset, setFileOffset] = createSignal(0);
   const [filter, setFilter] = createSignal<SessionWorkspaceProps["filter"]>("all");
   const [nestedFolder, setNestedFolder] = createSignal(false);
   const [expandedPaths, setExpandedPaths] = createSignal(["", "docs"]);
@@ -290,8 +292,10 @@ it("keeps native file navigation and selection while windowing a large leaf fold
             path: "docs",
             entries: [
               ...Array.from({ length: fileCount() }, (_, index) => ({
-                path: filename(index),
-                name: filename(index).split("/").at(-1)!,
+                path: filename(index + fileOffset()),
+                name: filename(index + fileOffset())
+                  .split("/")
+                  .at(-1)!,
                 kind: "file" as const,
                 sessionKind: index % 2 === 0 ? ("modified" as const) : ("read" as const),
               })),
@@ -467,4 +471,175 @@ it("keeps native file navigation and selection while windowing a large leaf fold
     expect(first.height).toBeGreaterThan(40);
     expect(second.top).toBeGreaterThanOrEqual(first.bottom);
   });
+
+  // A same-size replacement must invalidate the old key-to-position mapping.
+  style.remove();
+  setFileOffset(500);
+  await waitForSolid(() => expect(button(filename(0))).toBeNull());
+  scroll().scrollTop = 50 * 28;
+  await waitForSolid(() => {
+    expect(button(filename(550))).not.toBeNull();
+  });
 });
+
+it.each([400, 820, 1280])(
+  "keeps default Files actions reachable in a bounded %spx catalog",
+  async (width) => {
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(width, 800);
+    const container = document.createElement("div");
+    container.style.cssText = `position:fixed;left:0;top:0;width:${Math.min(width, 440)}px;height:420px`;
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const [query, setQuery] = createSignal("");
+    const opened: unknown[][] = [];
+    const filename = (index: number) => `folder/file-${String(index).padStart(3, "0")}.md`;
+    const workspace = (): SessionWorkspaceProps => ({
+      sessionKey: "catalog:imported",
+      loading: false,
+      error: null,
+      activeId: null,
+      filter: "all",
+      browserPath: "",
+      browserSearch: query(),
+      navigation: {
+        browserPath: "",
+        browserSearch: query(),
+        filter: "all",
+        expandedPaths: [""],
+        searchOpen: Boolean(query()),
+        sessionExpanded: true,
+        treeVisible: true,
+        treeScroll: 0,
+        sessionScroll: 0,
+      },
+      list: {
+        sessionKey: "catalog:imported",
+        root: "/workspace/" + "long-project-name/".repeat(20),
+        files: [],
+        browser: {
+          path: "",
+          ...(query() ? { search: query() } : {}),
+          entries: Array.from({ length: 500 }, (_, index) => ({
+            path: filename(index),
+            name: filename(index).split("/").at(-1)!,
+            kind: "file" as const,
+            size: 2048,
+          })).filter((entry) => entry.path.includes(query())),
+        },
+      },
+      onBrowsePath: () => {},
+      onRetry: () => {},
+      onOpenFile: (...args) => opened.push(args),
+      onSearch: setQuery,
+      onSetFilter: () => {},
+      onOpenArtifact: () => {},
+    });
+    const mounted = mountSolid(() => <SessionWorkspaceRail workspace={workspace()} />, {
+      container,
+    });
+    onTestFinished(mounted.unmount);
+    const rows = () => [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".workspace-desktop__project-scroll .workspace-desktop__row",
+      ),
+    ];
+    await waitForSolid(() => {
+      expect(rows().length).toBeGreaterThan(2);
+      expect(rows().length).toBeLessThan(80);
+      expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
+    });
+    const heading = container.querySelector<HTMLElement>(".workspace-desktop__heading")!;
+    container.style.setProperty("--control-ui-text-xs", "18px");
+    await waitForSolid(() => expect(getComputedStyle(heading).fontSize).toBe("18px"));
+    container.style.removeProperty("--control-ui-text-xs");
+    const boundary = rows().findLast(
+      (row) => Number(row.getAttribute("aria-label")!.match(/file-(\d+)/)![1]) < 100,
+    )!;
+    const next = filename(Number(boundary.getAttribute("aria-label")!.match(/file-(\d+)/)![1]) + 1);
+    boundary.focus();
+    await waitForSolid(() =>
+      expect(container.querySelector(`button[aria-label="${next}"]`)).not.toBeNull(),
+    );
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Preview");
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Copy path");
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(next);
+    await userEvent.keyboard("{Enter}");
+    expect(opened.at(-1)).toEqual([next, "workspace", undefined]);
+    await userEvent.fill(mounted.getByRole("searchbox"), "file-490");
+    await waitForSolid(() => {
+      expect(container.querySelector(".workspace-desktop__catalog")).not.toBeNull();
+      expect(container.querySelectorAll(".workspace-desktop__row")).toHaveLength(1);
+    });
+    await userEvent.fill(mounted.getByRole("searchbox"), "");
+    await waitForSolid(() => expect(rows().length).toBeGreaterThan(2));
+  },
+);
+
+it.each(["mobile", "desktop"] as const)(
+  "keeps the filename stem visible and truncates a long extension on one line in a narrow %s Files rail",
+  async (presentation) => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(390, 844);
+    const name = "review-export." + "0123456789abcdef".repeat(4);
+    const ordinary = "AccessibilityReview".repeat(8) + ".ts";
+    const container = document.createElement("div");
+    container.style.cssText = "width:310px;height:450px;position:fixed;inset:0 auto auto 0";
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const workspace = createWorkspace({
+      presentation,
+      connected: true,
+      list: {
+        root: "/workspace",
+        files: [],
+        browser: {
+          path: "",
+          entries: [name, ordinary].map((entry) => ({
+            name: entry,
+            path: entry,
+            kind: "file" as const,
+          })),
+        },
+      },
+    });
+    const view = mountSolid(() => <SessionWorkspaceRail workspace={workspace} />, { container });
+    onTestFinished(() => view.unmount());
+    const label = (n: string) =>
+      Array.from(
+        container.querySelectorAll(".chat-workspace-mobile__name,.workspace-desktop__filename"),
+      ).find((el) => el.textContent === n)!;
+    await waitForSolid(() => expect(label(name)).toBeDefined());
+    await document.fonts.ready;
+    const long = label(name);
+    const stem = long.firstElementChild!;
+    const suffix = long.lastElementChild!;
+    expect(stem.clientWidth).toBeGreaterThan(0);
+    expect(stem.scrollWidth).toBeLessThanOrEqual(stem.clientWidth + 1);
+    expect(suffix.scrollWidth).toBeGreaterThan(suffix.clientWidth);
+    expect(getComputedStyle(suffix).textOverflow).toBe("ellipsis");
+    expect(getComputedStyle(suffix).overflowX).toBe("hidden");
+    expect(getComputedStyle(suffix).whiteSpace).toBe("nowrap");
+    expect(suffix.getBoundingClientRect().right).toBeLessThanOrEqual(
+      long.getBoundingClientRect().right + 1,
+    );
+    expect(long.getBoundingClientRect().height).toBeCloseTo(
+      label(ordinary).getBoundingClientRect().height,
+      0,
+    );
+    const short = label(ordinary);
+    expect(short.lastElementChild!.textContent).toBe(".ts");
+    expect(short.firstElementChild!.scrollWidth).toBeGreaterThan(
+      short.firstElementChild!.clientWidth,
+    );
+    expect(
+      Math.abs(
+        short.firstElementChild!.getBoundingClientRect().top -
+          short.lastElementChild!.getBoundingClientRect().top,
+      ),
+    ).toBeLessThan(2);
+  },
+);

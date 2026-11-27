@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -21,6 +22,7 @@ import {
   pressAndExpectFocus,
 } from "./sidebar-assertions.test-support.ts";
 import {
+  captureSidebarUiProof,
   createSidebarCustomizationSuite,
   openSidebarCustomizationPage,
   openSidebarPinMenu,
@@ -51,7 +53,40 @@ function agentResponses(agents: Array<{ id: string; name?: string }>) {
 }
 
 suite.define(() => {
-  it("opens every new-session plus as a native link without creating sessions", async () => {
+  it("loads the agent switcher on a direct unknown URL without leaving the 404 page", async () => {
+    await suite.withPage(desktop, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        awaitInitialRoster: false,
+        methodResponses: agentResponses([
+          { id: "main", name: "Main" },
+          { id: "research", name: "Research" },
+        ]),
+      });
+      const requested = new URL("c?missing=1#anchor", suite.server.baseUrl).href;
+      await page.goto(requested);
+      await waitForControlUiGatewayReady(page);
+      const notice = page.getByText("Page not found", { exact: true });
+      await notice.waitFor({ state: "visible" });
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: /Agent menu|Switch agent/ }).click();
+      const menu = sidebar.locator(".sidebar-agent-menu");
+      await expect
+        .poll(() =>
+          menu
+            .locator(".sidebar-agent-menu__agent-list .agent-select__option-label")
+            .allTextContents(),
+        )
+        .toEqual(expect.arrayContaining(["Main", "Research"]));
+      expect(await gateway.getRequests("agents.list")).toHaveLength(1);
+      expect(page.url()).toBe(requested);
+      expect(await notice.isVisible()).toBe(true);
+
+      await menu.getByRole("menuitem", { name: "Research", exact: true }).click();
+      await waitForControlUiRoute(page, { routeId: "chat", pathnamePrefix: "/chat/research" });
+    });
+  });
+
+  it("keeps every new-session plus native and opens group and catalog targets without creating sessions", async () => {
     await suite.withPage(desktop, async ({ context, page }) => {
       const agentId = "research";
       const group = "Client & ops / α";
@@ -97,8 +132,8 @@ suite.define(() => {
       const draft = "Keep this unsent conversation draft";
       await composer.fill(draft);
       const originalUrl = page.url();
-      const railAction = {
-        selector: ".sidebar-rail .sidebar-new-session",
+      const headerAction = {
+        selector: ".sidebar-session-toolbar .sidebar-new-session",
         params: { agent: agentId },
       };
       const sectionAction = (section: string, params: Record<string, string> = {}) => ({
@@ -106,22 +141,24 @@ suite.define(() => {
         section,
         params: { agent: agentId, ...params },
       });
-      const actions: Array<{ selector: string; section?: string; params: Record<string, string> }> =
-        [
-          railAction,
-          sectionAction(`category:${group}`, { group }),
-          sectionAction("ungrouped"),
-          {
-            selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
-            section: `catalog:${catalogId}`,
-            params: { agent: agentId, catalog: catalogId },
-          },
-          railAction,
-        ];
+      const actions: Array<{
+        selector: string;
+        section?: string;
+        params: Record<string, string>;
+        newTab?: "middle" | "modified";
+      }> = [
+        headerAction,
+        { ...sectionAction(`category:${group}`, { group }), newTab: "middle" },
+        sectionAction("ungrouped"),
+        {
+          selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
+          section: `catalog:${catalogId}`,
+          params: { agent: agentId, catalog: catalogId },
+          newTab: "modified",
+        },
+      ];
+      // The header action closes with its panel, so every action runs with Sessions open.
       for (const [index, action] of actions.entries()) {
-        if (index === actions.length - 1) {
-          await page.locator('[data-navigation-view][aria-pressed="true"]').click();
-        }
         if (action.section) {
           await page
             .locator(`[data-session-section="${action.section}"] .sidebar-recent-sessions__head`)
@@ -129,6 +166,16 @@ suite.define(() => {
         }
         const link = page.locator(action.selector);
         await link.hover();
+        if (index === 0) {
+          // Exercise the neighboring header with the shortcut hint already open.
+          await expect
+            .poll(() =>
+              link.evaluate(
+                (element) => element.closest("openclaw-tooltip")?.hasAttribute("open") ?? false,
+              ),
+            )
+            .toBe(true);
+        }
         const expectedUrl = new URL(`${basePath}/new`, suite.server.baseUrl);
         expectedUrl.search = new URLSearchParams(action.params).toString();
         expect(await link.getAttribute("href")).toBe(
@@ -142,10 +189,14 @@ suite.define(() => {
           }),
         ).toBe(false);
 
+        if (!action.newTab) {
+          continue;
+        }
+
         // Native tab gestures do not retain an opener, so observe the browser context.
         const [popup] = await Promise.all([
           context.waitForEvent("page"),
-          index % 2 === 0
+          action.newTab === "modified"
             ? link.click({ modifiers: ["ControlOrMeta"] })
             : link.click({ button: "middle" }),
         ]);
@@ -166,7 +217,7 @@ suite.define(() => {
         }
       }
 
-      await page.locator(".sidebar-rail .sidebar-new-session").click();
+      await page.locator(".sidebar-session-toolbar .sidebar-new-session").click();
       await waitForControlUiRoute(page, {
         routeId: "new-session",
         pathname: `${basePath}/new`,
@@ -212,7 +263,7 @@ suite.define(() => {
           ? page
               .locator('[data-sidebar-entry="route:dashboards"]')
               .getByRole("link", { name: "Dashboards", exact: true })
-          : page.locator('[data-sidebar-entry="route:systems"] .nav-item');
+          : page.locator('.sidebar-rail [data-sidebar-entry="route:systems"] .nav-item');
       await expectFocused(target);
     } finally {
       await suite.closeBrowserContext(context);
@@ -221,7 +272,7 @@ suite.define(() => {
 
   it("shows one row per agent plus Show all and reaches them with menu keys", async () => {
     await suite.withPage(desktop, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         methodResponses: {
           "agent.identity.get": {
             cases: [
@@ -241,6 +292,9 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const draft = "Keep this draft while opening agent settings";
+      await composer.fill(draft);
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator(".sidebar-agent-menu");
@@ -248,11 +302,11 @@ suite.define(() => {
       const researchSwitch = menu.getByRole("menuitem", { name: "Research", exact: true });
       await expect
         .poll(() =>
-          researchSwitch.evaluate(
-            (element) => element.parentElement?.matches(".sidebar-agent-menu__agent-list") ?? false,
-          ),
+          menu
+            .locator(".sidebar-agent-menu__agent-list .agent-select__option-label")
+            .allTextContents(),
         )
-        .toBe(true);
+        .toEqual(["Show all", "Scheduled Automations", "Research", "Forge", "Support"]);
       await expect
         .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
         .toContain("data:image/png;base64,");
@@ -285,6 +339,21 @@ suite.define(() => {
       await pressAndExpectFocus(page, "r", researchSwitch);
       const researchSettings = researchSwitch.getByRole("button", { name: "Research settings" });
       await pressAndExpectFocus(page, "Tab", researchSettings);
+      const refreshAfter = (await gateway.getRequests("agent.identity.get", { agentId: "forge" }))
+        .length;
+      await gateway.deferNext("agent.identity.get", { agentId: "forge" });
+      await gateway.emitGatewayEvent("agent.identity.changed", { agentId: "forge" });
+      await gateway.waitForRequest("agent.identity.get", {
+        after: refreshAfter,
+        match: { agentId: "forge" },
+      });
+      await gateway.resolveDeferred(
+        "agent.identity.get",
+        { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge refreshed" },
+        { match: { agentId: "forge" } },
+      );
+      await menu.getByRole("menuitem", { name: "Forge refreshed", exact: true }).waitFor();
+      await expectFocused(researchSettings);
       await page.keyboard.press("Enter");
       await waitForControlUiRoute(page, {
         routeId: "agents",
@@ -295,6 +364,7 @@ suite.define(() => {
       );
       await page.locator(".settings-sidebar__back").click();
       await waitForControlUiRoute(page, { routeId: "chat" });
+      expect(await composer.inputValue()).toBe(draft);
       await sidebar.locator(".sidebar-agent-card__main").click();
       await expectAttribute(mainSwitch, "aria-current", "true");
       await researchSwitch.focus();
@@ -309,7 +379,80 @@ suite.define(() => {
         .toBe(1);
       await sidebar.locator(".sidebar-agent-card__main").click();
       await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
+      await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
       await sidebar.locator(".sidebar-workspace-header__main").click();
+      await expectAttribute(
+        menu.getByRole("menuitem", { name: "Show all", exact: true }),
+        "aria-current",
+        "true",
+      );
+    });
+  });
+
+  it("shares an agent from its menu row by asking in its main session", async () => {
+    await suite.withPage(desktop, async ({ page }) => {
+      const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "templates.drafts.create"],
+        methodResponses: {
+          "config.get": {
+            config,
+            sourceConfig: config,
+            hash: "agent-share",
+            valid: true,
+            issues: [],
+          },
+          // The default chat fixture keeps the sent message in the opened transcript.
+          "agents.list": {
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "research", name: "Research" },
+            ],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+      const menu = sidebar.locator(".sidebar-agent-menu");
+      const research = menu.getByRole("menuitem", { name: "Research", exact: true });
+      const share = research.getByRole("button", { name: "Share Research" });
+      const settings = research.getByRole("button", { name: "Research settings" });
+      await research.hover();
+      const resting = await share.evaluate((button) => getComputedStyle(button).color);
+      for (const action of [share, settings]) {
+        await action.hover();
+        // Hover brightens the icon without drawing a box behind it.
+        await expect
+          .poll(() =>
+            action.evaluate((button, restingColor) => {
+              const style = getComputedStyle(button);
+              return [style.backgroundColor, style.color !== restingColor];
+            }, resting),
+          )
+          .toEqual(["rgba(0, 0, 0, 0)", true]);
+      }
+      await share.hover();
+      await captureSidebarUiProof(suite, page, "agent-row-actions.png", menu, [share, settings]);
+      await pressAndExpectFocus(page, "r", research);
+      await pressAndExpectFocus(page, "Tab", share);
+      await pressAndExpectFocus(page, "Tab", settings);
+
+      await share.click();
+      const sent = await gateway.waitForRequest("chat.send");
+      expect(sent.params).toMatchObject({
+        sessionKey: "agent:research:main",
+        message: "Create a shareable template of yourself",
+      });
+      await expectPath(page, controlUiSessionPath("agent:research:main"));
+      await page.getByText("Create a shareable template of yourself", { exact: true }).waitFor();
+      await expectCount(menu, 0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      expect(await gateway.getRequests("templates.drafts.create")).toHaveLength(0);
     });
   });
 

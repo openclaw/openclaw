@@ -1,5 +1,5 @@
 import { zstdDecompressSync } from "node:zlib";
-import { getAiTransportHost } from "@openclaw/ai";
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
@@ -15,7 +15,7 @@ import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-loc
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import "../llm/ai-transport-host.js";
+import "../agents/ai-transport-runtime-host.js"; // Initialize before spies; lazy setup copies the host.
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -189,6 +189,8 @@ function completedResponse(model: string): Response {
   });
 }
 
+const originalTransportHost = getAiTransportHost();
+
 beforeEach(bindSessionMcpRuntimeTestScheduler);
 
 afterEach(async () => {
@@ -196,6 +198,8 @@ afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
   clearRuntimeAuthProfileStoreSnapshots();
   vi.restoreAllMocks();
+  // Native module loading can copy the spied host; restore the process-wide fixture too.
+  configureAiTransportHost(originalTransportHost);
 });
 
 it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
@@ -296,7 +300,7 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
       expect(binding).toMatchObject({ profileId, source: scheduledModel ? "user" : "auto" });
       const job: CronStoredJob = {
         ...storedJob("real-auth-continuity"),
-        inferenceBinding: binding,
+        inferenceBinding: binding ?? undefined,
       };
       const storePath = state.statePath("cron", "jobs.json");
       await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
@@ -349,9 +353,12 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
 
 it.each([
   ["configured key", undefined],
-  ["unadopted stored account", "Automation has no recorded inference account"],
-  ["replacement", "inference account was replaced"],
-  ["revocation", "was removed or signed out"],
+  [
+    "unadopted stored account",
+    "Automation has no recorded inference account. Runtime openclaw would run openai/gpt-4.1 with stored account openai:platform. Record the account with openclaw automations edit <jobId> --model openai/gpt-4.1@openai:platform. For eligible host-managed accounts, openclaw doctor --fix can record it without pinning the model.",
+  ],
+  ["replacement", undefined],
+  ["revocation", undefined],
 ] as const)("enforces %s before provider HTTP through the real runner", async (kind, error) => {
   await withAuthState("cron-legacy-account", async (state) => {
     const openaiUrl = "https://api.openai.com/v1";
@@ -387,11 +394,12 @@ it.each([
     await writeConfig(state, cfg);
     const job = storedJob("legacy-account");
     if (kind === "replacement" || kind === "revocation") {
-      job.inferenceBinding = await captureCronInferenceBinding({
-        cfg,
-        agentId: "main",
-        model: `openai/gpt-4.1@${platformId}`,
-      });
+      job.inferenceBinding =
+        (await captureCronInferenceBinding({
+          cfg,
+          agentId: "main",
+          model: `openai/gpt-4.1@${platformId}`,
+        })) ?? undefined;
       expect(job.inferenceBinding).toMatchObject({ profileId: platformId, source: "user" });
     }
     const storePath = state.statePath("cron", "jobs.json");
@@ -408,7 +416,13 @@ it.each([
     expect(reloaded.inferenceBinding).toEqual(job.inferenceBinding);
     try {
       const result = await runStoredTurn(cfg, reloaded);
-      if (error) {
+      if (kind === "replacement" || kind === "revocation") {
+        // The changed account is never adopted: no openai request is sent with any key.
+        // Only its provider is refused; the configured local fallback still serves the run.
+        expect(result.status, result.error).toBe("ok");
+        expect(requests.some(({ url }) => url.startsWith(openaiUrl))).toBe(false);
+        expect(requests.length).toBeGreaterThan(0);
+      } else if (error) {
         expect(result.status).toBe("error");
         expect(result.error).toContain(error);
         expect(requests).toEqual([]);
@@ -461,6 +475,7 @@ it.each([
       await writeConfig(state, cfg);
       const { CronService } = await import("./service.js");
       const { createNoopLogger } = await import("./service.test-harness.js");
+      const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
       const { createTestGatewayScheduler } =
         await import("../test-utils/gateway-scheduler-clock.js");
       const { createDirectChatContext } =
@@ -479,6 +494,8 @@ it.each([
           defaultAgentId: "main",
           log: createNoopLogger(),
           enqueueSystemEvent() {},
+          admitScheduledOccurrence: ({ job }) =>
+            admitScheduledOccurrence({ cfg, job, agentId: "main", trigger: "cron" }),
           onEvent(event) {
             if (event.action === "finished") {
               finished.push(event);

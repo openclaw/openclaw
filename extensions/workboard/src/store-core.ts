@@ -8,7 +8,7 @@ import type {
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { definedFields } from "../record-fields.js";
 import type { PersistedWorkboardCard } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
@@ -20,8 +20,6 @@ import {
   cardSessionKey,
   isActiveDependencyTarget,
   isDependencyPromotableStatus,
-  lifecycleStatusSourceUpdatedAtFromPatch,
-  shouldSkipPersistedLifecycleStatusUpdate,
   syncExecutionAttemptMetadata,
   updateEvent,
   appendEvent,
@@ -58,7 +56,9 @@ import {
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 import { readCards } from "./store-read.js";
+import { resolveLifecycleStatusWrite, settleManualStatusTransition } from "./store-status-write.js";
 import { normalizeCappedStringList } from "./store-string-lists.js";
+import { normalizeWithoutVerifications, withStoredVerifications } from "./store-verification.js";
 
 export class WorkboardCoreStore extends WorkboardBoardStore {
   private lastNotificationSequence = 0;
@@ -198,6 +198,26 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   async get(id: string): Promise<WorkboardCard | undefined> {
     const entry = await this.store.lookup(id.trim());
     return entry?.card;
+  }
+
+  async requireCardByIdOrPrefix(id: string): Promise<WorkboardCard> {
+    const exact = await this.get(id);
+    if (exact) {
+      return exact;
+    }
+    const prefix = id.trim();
+    if (!prefix) {
+      throw new Error(`card not found: ${id}`);
+    }
+    const [match, other] = await this.store.findCardIdsByPrefix(prefix);
+    if (other !== undefined) {
+      throw new Error(`Ambiguous card id prefix: ${prefix} (at least 2 matches)`);
+    }
+    const card = match === undefined ? undefined : (await this.store.lookup(match))?.card;
+    if (!card) {
+      throw new Error(`card not found: ${id}`);
+    }
+    return card;
   }
 
   protected async requireCard(id: string): Promise<WorkboardCard> {
@@ -458,31 +478,11 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     ) {
       throw new WorkboardCardConflictError(existing);
     }
-    const lifecycleStatusSourceUpdatedAt = lifecycleStatusSourceUpdatedAtFromPatch(patch.metadata);
-    const existingLifecycleStatusSourceUpdatedAt =
-      existing.metadata?.lifecycleStatusSourceUpdatedAt;
-    const hasFreshLifecycleStatusSource =
-      lifecycleStatusSourceUpdatedAt !== undefined &&
-      lifecycleStatusSourceUpdatedAt !== existingLifecycleStatusSourceUpdatedAt;
-    let effectivePatch = patch;
-    if (
-      patch.status !== undefined &&
-      lifecycleStatusSourceUpdatedAt !== undefined &&
-      shouldSkipPersistedLifecycleStatusUpdate(existing, lifecycleStatusSourceUpdatedAt)
-    ) {
-      // Ignore stale lifecycle status writes, but still accept any non-status updates in the patch.
-      effectivePatch = { ...patch, status: undefined };
-      if (isRecord(patch.metadata)) {
-        const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = patch.metadata;
-        effectivePatch.metadata = Object.keys(rest).length > 0 ? rest : undefined;
-      }
-      const hasSemanticPatch = Object.entries(effectivePatch).some(
-        ([key, value]) => key !== "status" && key !== "metadata" && value !== undefined,
-      );
-      if (!hasSemanticPatch && effectivePatch.metadata === undefined) {
-        return existing;
-      }
+    const statusWrite = resolveLifecycleStatusWrite(existing, patch);
+    if (!statusWrite) {
+      return existing;
     }
+    const { effectivePatch, hasFreshLifecycleStatusSource } = statusWrite;
     const status = normalizeStatus(effectivePatch.status, existing.status);
     const now = Math.max(Date.now(), existing.updatedAt + 1);
     const startedAt =
@@ -501,22 +501,23 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       effectivePatch.sessionKey === undefined
         ? existing.sessionKey
         : normalizeOptionalString(effectivePatch.sessionKey);
-    const execution =
+    let execution =
       effectivePatch.execution === undefined
         ? effectivePatch.sessionKey === undefined
           ? existing.execution
           : syncExecutionSessionKey(existing.execution, sessionKey)
         : normalizeExecution(effectivePatch.execution);
-    let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
-      automationLaunch: options.automationLaunch,
-      allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
-      preserveProofId: options.preserveProofId,
-      preserveNotificationId: options.preserveNotificationId,
-    });
+    let metadata = normalizeWithoutVerifications(effectivePatch.metadata, existing, options);
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
-      // Status patches often spread existing metadata. Only a newly supplied
-      // lifecycle source is provenance; copied markers must not survive a manual transition.
-      metadata = { ...metadata, lifecycleStatusSourceUpdatedAt: undefined };
+      ({ execution, metadata } = settleManualStatusTransition({
+        existing,
+        status,
+        execution,
+        metadata,
+        now,
+        nextNotificationSequence: () => this.nextNotificationSequence(now),
+        preserveProofId: options.preserveProofId,
+      }));
     }
     const automationPatch: Record<string, unknown> = {};
     for (const key of [
@@ -580,8 +581,9 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       ...(startedAt ? { startedAt } : {}),
       ...(completedAt ? { completedAt } : {}),
     });
-    next.metadata = trimMetadataToBudget(
+    next.metadata = withStoredVerifications(
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
+      existing,
       options,
     );
     next.events = appendEvent(
@@ -612,8 +614,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         next.id,
         nextEntry,
         expectedUpdatedAt,
-        options.ownerSlot.ownerId,
-        options.ownerSlot.now,
+        options.ownerSlot,
       );
       if (result === "owner_busy") {
         throw new Error(`Owner ${options.ownerSlot.ownerId} already has active Workboard work.`);

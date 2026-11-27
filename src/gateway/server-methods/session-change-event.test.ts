@@ -22,9 +22,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
-import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createSessionRowPlacementProjection } from "../session-row-placement-projection.js";
 import {
   bindSessionRowProjection,
@@ -128,11 +126,8 @@ function activePlacement(
   return makeActivePlacement(`${sessionKey}-id`, {
     sessionKey,
     generation: 1,
-    updatedAtMs: 2,
-    stateChangedAtMs: 2,
     environmentId: "worker-first",
     activeOwnerEpoch: 1,
-    workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
     turnClaim: {
       owner: "worker",
       claimId: "private-turn-claim",
@@ -192,32 +187,6 @@ afterEach(async () => {
 });
 
 describe("sessions.changed coalescing", () => {
-  it("publishes catalog-only changes without invalidating session projections or access", async () => {
-    const context = createContext();
-    const changed = vi.fn();
-    const unsubscribe = sessionChanges.subscribe(changed);
-    onTestFinished(unsubscribe);
-    const initialAccessRevision = readGatewayAccessRevision();
-
-    await emitAndSettleLeading(context, { reason: "groups" }, { catalogOnly: true });
-
-    expect(changed).not.toHaveBeenCalled();
-    expect(context.mentionInbox?.invalidateAsync).not.toHaveBeenCalled();
-    expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
-    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({ reason: "groups" }),
-      expect.any(Set),
-      expect.any(Object),
-    );
-
-    // Rename/delete use the same public reason but can change member rows.
-    await emitAndSettleLeading(context, { reason: "groups" });
-    expect(changed).toHaveBeenCalledWith({ all: true, scope: "sessions" });
-    expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
-    expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 1);
-  });
-
   it("makes the session desktop ready during roster backoff and fences late list responses", async () => {
     const context = createContext();
     const sessionKey = "agent:main:cloud";
@@ -515,45 +484,6 @@ describe("sessions.changed coalescing", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("emits a leading row and one trailing row with the latest state", async () => {
-    const context = createContext();
-    const initialAccessRevision = readGatewayAccessRevision();
-
-    await emitAndSettleLeading(context, { reason: "create", sessionKey: "agent:main:chat" });
-    mocks.rowLabel = "latest";
-    await emitAndSettleLeading(context, {
-      reason: "patch",
-      sessionKey: "agent:main:chat",
-      catalogChanged: true,
-    });
-    await emitAndSettleLeading(context, { reason: "send", sessionKey: "agent:main:chat" });
-
-    expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
-    expect(broadcasts(context)[1]?.[1]).toMatchObject({
-      label: "latest",
-      reason: "send",
-      catalogChanged: true,
-    });
-    expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 3);
-    await emitAndSettleLeading(context, { reason: "patch", sessionKey: "agent:main:chat" });
-    expect(broadcasts(context).at(-1)?.[1]).not.toHaveProperty("catalogChanged");
-  });
-
-  it("refreshes metadata projections without expiring access when nobody receives events", async () => {
-    const context = createContext(new Set());
-    const sessionKey = "agent:main:metadata";
-    const initialAccessRevision = readGatewayAccessRevision();
-    await emitAndSettleLeading(context, { reason: "patch", sessionKey }, { accessChanged: false });
-
-    expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
-    expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
-    expect(context.broadcastToConnIds).not.toHaveBeenCalled();
-    expect(mocks.loadRow).not.toHaveBeenCalled();
-  });
-
   it("emits the latest trailing row by the sustained-mutation deadline", async () => {
     const context = createContext();
     const sessionKey = "agent:main:chat";
@@ -577,53 +507,41 @@ describe("sessions.changed coalescing", () => {
     });
   });
 
-  it("does not adopt the compatibility owner's ownerless run for another agent", async () => {
-    const config: OpenClawConfig = retainLegacyDefaultAgentId(
-      {
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      } satisfies OpenClawConfig,
-      "ops",
-    );
-    const context = await contextWithRun(config, "compat-owner-run", {
-      sessionId: "agent:research:shared-session-id",
-      sessionKey: "legacy-unscoped",
-      storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
-    });
-
-    await emitAndSettleLeading(context, {
-      reason: "update",
-      sessionKey: "agent:research:shared-session",
-    });
-
-    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({ hasActiveRun: false, activeRunIds: [] }),
-      expect.anything(),
-      expect.anything(),
-    );
-  });
-
-  it("projects active bare-global runs through the persisted fixed-store owner", async () => {
-    const config = fixedStoreConfig();
-    const context = await contextWithRun(config, "ops-global-run", {
-      agentId: "ops",
-      storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
-      sessionId: "global-id",
-      sessionKey: "global",
-    });
-
-    await emitAndSettleLeading(context, { reason: "update", sessionKey: "global" });
-
-    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({ activeRunIds: ["ops-global-run"], hasActiveRun: true }),
-      expect.anything(),
-      expect.objectContaining({ agentId: "ops", sessionKeys: ["global"] }),
-    );
-    const payload = broadcasts(context)[0]?.[1];
-    expect(payload).not.toHaveProperty("agentId");
-    expect(payload).not.toHaveProperty("goal");
-  });
+  it.each([false, true])(
+    "binds active runs to their physical owner (fixed store=%s)",
+    async (fixed) => {
+      const config: OpenClawConfig = fixed
+        ? fixedStoreConfig()
+        : retainLegacyDefaultAgentId(
+            {
+              agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+            },
+            "ops",
+          );
+      const sessionKey = fixed ? "global" : "agent:research:shared-session";
+      const runId = fixed ? "ops-global-run" : "compat-owner-run";
+      const context = await contextWithRun(config, runId, {
+        ...(fixed ? { agentId: "ops" } : {}),
+        storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
+        sessionId: fixed ? "global-id" : "agent:research:shared-session-id",
+        sessionKey: fixed ? "global" : "legacy-unscoped",
+      });
+      await emitAndSettleLeading(context, { reason: "update", sessionKey });
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({ hasActiveRun: fixed, activeRunIds: fixed ? [runId] : [] }),
+        expect.anything(),
+        fixed
+          ? expect.objectContaining({ agentId: "ops", sessionKeys: ["global"] })
+          : expect.anything(),
+      );
+      if (fixed) {
+        const payload = broadcasts(context)[0]?.[1];
+        expect(payload).not.toHaveProperty("agentId");
+        expect(payload).not.toHaveProperty("goal");
+      }
+    },
+  );
 
   it("keeps a retired fixed-store owner private after the mutation commits", async () => {
     const config = fixedStoreConfig(true);

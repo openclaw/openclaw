@@ -2,25 +2,29 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
+import type { GatewayAgentRow } from "../../api/types.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
-import { resolveConfiguredCronModelSuggestions } from "../../lib/cron/model-suggestions.ts";
+import { validateCronModelThinkingSelection } from "../../lib/cron/model-thinking-validation.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
+import { profileDirectory } from "../../lib/profile-directory.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
 import type { createCronPage } from "./cron-page-state.ts";
 import { validateCronEventSelection } from "./event-source.ts";
-
-const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
+type CronModelSource = {
+  catalog: ModelCatalogPresentation | undefined;
+  agent: GatewayAgentRow | undefined;
+};
 
 export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   const channels = page.inventories.channels.read();
-  const runtimeConfig = page.inventories.runtimeConfig.read();
+  // Event sources list MCP servers from the runtime config; track its arrival.
+  page.inventories.runtimeConfig.read();
   const cron = page.cron();
   const agentsList = page.inventories.agents.read().agentsList;
-  const catalogModels = page.cronModelSuggestions();
-  let agentSuggestions: string[] = [];
-  let modelSuggestions: string[] = [];
+  let models: CronModelSource = { catalog: undefined, agent: undefined };
   let timezoneSuggestions: string[] = [];
   let accountSuggestions: string[] = [];
   let failureAlertToSuggestions: string[] = [];
@@ -38,31 +42,12 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
             .map((conversation) => conversation.target),
         )
       : [];
-    const configValue = currentConfigObject(runtimeConfig);
     const channel = cron.cronForm.deliveryChannel.trim() || "last";
-    const systemAgentIds = new Set(
-      (agentsList?.agents ?? [])
-        .filter((entry) => entry.kind === "system")
-        .map((entry) => entry.id.trim()),
-    );
-    agentSuggestions = normalizeSortedUniqueTrimmedStringList([
-      ...listSelectableAgents(agentsList?.agents ?? []).map((entry) => entry.id.trim()),
-      ...cron.cronJobs.map((job) =>
-        typeof job.agentId === "string" && !systemAgentIds.has(job.agentId.trim())
-          ? job.agentId.trim()
-          : "",
-      ),
-    ]);
-    modelSuggestions = normalizeSortedUniqueTrimmedStringList([
-      ...catalogModels,
-      ...resolveConfiguredCronModelSuggestions(configValue),
-      ...cron.cronJobs.map((job) => {
-        const payload = job.payload;
-        return payload.kind === "agentTurn" && typeof payload.model === "string"
-          ? payload.model.trim()
-          : "";
-      }),
-    ]);
+    const modelAgentId = page.resolveModelAgentId(cron);
+    models = {
+      catalog: page.cronModelCatalog(),
+      agent: agentsList?.agents.find((entry) => entry.id === modelAgentId),
+    };
     const savedDeliveryTargets = normalizeSortedUniqueTrimmedStringList(
       cron.cronJobs.map((job) => job.delivery?.to),
     );
@@ -87,42 +72,58 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     failureAlertToSuggestions = forDeliveryMode(savedDeliveryTargets);
     deliveryToSuggestions = forDeliveryMode(deliveryTargets);
   }
-  const canManage = page.canManageCron();
+  const canManage =
+    cron.cronEditingJob || cron.cronCreateOpen
+      ? page.canManageCron()
+      : page.canCreateCron() || cron.cronJobs.some(page.canManageJob);
+  const directory = profileDirectory(page.context().gateway);
+  const selectedOwner = cron.cronForm.ownerProfileId;
+  const profiles = directory.result?.profiles.filter((profile) => !profile.mergedInto) ?? [];
+  const ownerOptions = profiles.map((profile) => ({
+    value: profile.id,
+    label:
+      userProfileDisplayName(profile.id, profile.displayName, profile.githubIdentity?.login) ||
+      profile.id,
+  }));
+  if (!selectedOwner || !profiles.some((profile) => profile.id === selectedOwner)) {
+    ownerOptions.unshift({
+      value: selectedOwner,
+      label: selectedOwner || t("cron.form.ownerUnassigned"),
+    });
+  }
   const eventSource = page.eventSource.view;
+  const persistedPayload = cron.cronEditingJob?.payload;
   const fieldErrors = {
     ...page.cron().cronFieldErrors,
     ...validateCronEventSelection(page.cron().cronForm, eventSource),
+    ...validateCronModelThinkingSelection(
+      page.cron().cronForm,
+      models.catalog,
+      persistedPayload?.kind === "agentTurn"
+        ? { model: persistedPayload.model, thinking: persistedPayload.thinking }
+        : undefined,
+    ),
   };
   return {
     ...page.actions,
     gateway: page.context().gateway,
     getActionRetired: page.getActionRetired,
     onRunMount: page.registerRun,
-    loading: page.cron().cronLoading,
-    /** True once a cron.list response has completed (initial load finished). */
-    hasLoaded: page.cron().cronJobsSnapshotRevision !== null,
     listError: page.cron().cronJobsError,
     /** Canonical gateway capability for every mutation-capable cron control. */
     canManage,
+    ownerOptions,
     connected: page.cron().connected,
     status: page.cron().cronStatus,
     jobs: page.cron().cronJobs,
     reads: page.reads,
-    jobsLoadingMore: page.cron().cronJobsLoadingMore,
-    jobsTotal: page.cron().cronJobsTotal,
-    jobsHasMore: page.cron().cronJobsHasMore,
-    jobsQuery: page.cron().cronJobsQuery,
-    jobsEnabledFilter: page.cron().cronJobsEnabledFilter,
-    jobsScheduleKindFilter: page.cron().cronJobsScheduleKindFilter,
-    jobsLastStatusFilter: page.cron().cronJobsLastStatusFilter,
-    jobsTriggerFilter: page.cron().cronJobsTriggerFilter,
-    jobsSortBy: page.cron().cronJobsSortBy,
-    jobsSortDir: page.cron().cronJobsSortDir,
     editingJob: page.cron().cronEditingJob,
+    /** A copy starts from its source's name, so its create form shows the name field. */
+    cloning: page.cron().cronCloningJob !== null,
     createOpen: page.cron().cronCreateOpen,
-    listTab: page.listTab(),
+    activityOpen: page.activityOpen(),
     detailTab: page.detailTab(),
-    error: page.cron().cronError ?? page.cron().cronRunsError ?? page.deliveryDirectory.error,
+    error: page.cron().cronError ?? page.deliveryDirectory.error,
     notice: page.cron().cronNotice,
     busy: page.cron().cronBusy,
     form: page.cron().cronForm,
@@ -133,6 +134,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
     runs: page.cron().cronRuns,
     runsState: getCronRunsViewState(page.cron()),
+    runsError: page.cron().cronRunsError,
     highlightedRunId: page.cron().cronRunsRunId,
     runsHasMore: page.cron().cronRunsHasMore,
     runsLoadingMore: page.cron().cronRunsLoadingMore,
@@ -143,9 +145,8 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     eventSource,
     fieldErrors,
     canSubmit: page.cron().connected && !hasCronFormErrors(fieldErrors),
-    agentSuggestions,
-    modelSuggestions,
-    thinkingSuggestions: THINKING_SUGGESTIONS,
+    agentsList,
+    models,
     timezoneSuggestions,
     deliveryToSuggestions,
     failureAlertToSuggestions,

@@ -2,28 +2,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
+import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
   visitClaudeCliSessionMessages,
   type ClaudeCliHistoryParams,
 } from "./cli-session-history.claude-snapshot.js";
-
-// Preserve saved transcript bytes independently of the retired exec prompt builder.
-export const LEGACY_EXEC_COMPLETION_PROMPT =
-  "An async command you ran earlier has completed. The command completion details are:\n\n" +
-  "Exec completed (example, code 0) :: done\n\n" +
-  "Treat this completion as an internal continuation, not a new user request. " +
-  "Reconcile it with the conversation and continue any outstanding authorized work. " +
-  "Notify the user only if this provides a requested result not yet delivered, a meaningful change to the outcome, " +
-  "or a new unresolved failure, blocker, or decision they need to know about. " +
-  "Stay silent for routine output, duplicate or superseded results, and failures already recovered from; " +
-  "do not recap them or announce that nothing changed. " +
-  "If no user-facing update is needed, reply with exactly NO_REPLY as the entire final answer. " +
-  "NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.";
 
 export async function readClaudeCliSessionMessagesAsync(
   params: ClaudeCliHistoryParams,
@@ -37,11 +25,13 @@ export async function readClaudeCliSessionMessagesAsync(
   return messages;
 }
 
-export function mergeImportedChatHistoryMessages(params: {
-  localMessages: unknown[];
-  importedMessages: unknown[];
-}): unknown[] {
-  const index = new CliSessionHistoryIndex();
+export function mergeImportedChatHistoryMessages(
+  params: {
+    localMessages: unknown[];
+    importedMessages: unknown[];
+  },
+  index: CliHistoryIndex = new CliSessionHistoryIndex(),
+): unknown[] {
   try {
     index.appendLocal(
       params.localMessages.map((message, position) => ({ message, seq: position + 1 })),
@@ -74,14 +64,6 @@ export function answer(
 ) {
   const meta = externalId === undefined ? undefined : cliMeta(externalId, cliSessionId);
   return { ...user("Repeated answer", timestamp, meta), role: "assistant" };
-}
-
-export function boundEntry(sessionId: string): SessionEntry {
-  return {
-    sessionId: "openclaw-session",
-    updatedAt: 1,
-    cliSessionBindings: { "claude-cli": { sessionId } },
-  };
 }
 
 export function receipt(prompt: string, sessionId = "openclaw-session"): CliSessionReseedReceipt {
@@ -121,11 +103,12 @@ export function createClaudeTextHistoryLines(
     .join("\n");
 }
 
-type ClaudeHistoryReadOptions = Omit<ClaudeCliHistoryParams, "cliSessionId" | "homeDir">;
+type ClaudeHistoryReadOptions = Omit<ClaudeCliHistoryParams, "cliSessionId" | "projectsDir">;
 
 export function withClaudeProjectsDir<T>(
   run: (params: {
     homeDir: string;
+    projectsDir: string;
     sessionId: string;
     filePath: string;
     readMessages: (options?: ClaudeHistoryReadOptions) => Promise<Record<string, unknown>[]>;
@@ -134,17 +117,18 @@ export function withClaudeProjectsDir<T>(
   return withTempDir("openclaw-claude-history-", async (root) => {
     const homeDir = path.join(root, "home");
     const sessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
-    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
-    const filePath = path.join(projectsDir, `${sessionId}.jsonl`);
-    await fs.mkdir(projectsDir, { recursive: true });
+    const projectsDir = path.join(homeDir, ".claude", "projects");
+    const filePath = path.join(projectsDir, "demo-workspace", `${sessionId}.jsonl`);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, createClaudeHistoryLines(), "utf-8");
     return withEnvAsync({ HOME: homeDir }, () =>
       run({
         homeDir,
+        projectsDir,
         sessionId,
         filePath,
         readMessages: (options) =>
-          readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir, ...options }),
+          readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, projectsDir, ...options }),
       }),
     );
   });

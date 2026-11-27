@@ -65,8 +65,7 @@ export function requireVisibleSuggestionRole(params: {
   sharing: ReturnType<typeof prepareProjectedSessionSharing>;
 }) {
   const { target, client, cfg, sharing } = params;
-  const entryFilter = hasOperatorBoundary(client, cfg) ? sharing.entryFilter : undefined;
-  if (!target || entryFilter?.(target.storeKey, target.entry) === false) {
+  if (!target || (hasOperatorBoundary(client, cfg) && !sharing.canReadTarget(target))) {
     params.respond(
       false,
       undefined,
@@ -100,7 +99,13 @@ export function sessionSuggestionAddPermissionError(
   role: NonNullable<ReturnType<typeof requireVisibleSuggestionRole>>,
   sessionCap: ReturnType<typeof operatorSessionCap>,
   visibility: ReturnType<typeof resolveSessionVisibility>,
+  access?: ReturnType<ReturnType<typeof prepareProjectedSessionSharing>["accessForTarget"]>,
 ): ErrorShape | null {
+  if (access?.invitedAccessCeiling && role !== "owner" && role !== "admin") {
+    return access.canSuggest
+      ? null
+      : errorShape(ErrorCodes.FORBIDDEN, "Your invitation does not permit suggestions.");
+  }
   if (role === "viewer" && sessionCap === "view") {
     return errorShape(ErrorCodes.FORBIDDEN, "your operator role permits viewing sessions only");
   }
@@ -123,6 +128,7 @@ export function authorizeSessionSuggestionMutation(
       role,
       operatorSessionCap(client, cfg),
       resolveSessionVisibility(target.entry),
+      params.sharing.accessForTarget(target),
     );
     if (error) {
       respond(false, undefined, error);
@@ -212,6 +218,7 @@ export async function createSessionSuggestionMutation(params: {
       cfg: policyConfig,
       client: params.client,
       isMember: (_target, identityId) => current.membership.has(identityId),
+      memberAccess: (_target, identityId) => current.memberAccess?.[identityId],
     });
     return { target, physicalStorePath: current.sourcePath, cfg: policyConfig, sharing };
   };
@@ -238,7 +245,9 @@ export async function createSessionSuggestionMutation(params: {
           throw new SessionMutationAuthorizationChangedError(
             errorShape(
               ErrorCodes.UNAVAILABLE,
-              error instanceof Error ? error.message : "suggestion requester authority changed",
+              error instanceof Error
+                ? error.message
+                : "suggestion request ended; retry the request",
             ),
           );
         }

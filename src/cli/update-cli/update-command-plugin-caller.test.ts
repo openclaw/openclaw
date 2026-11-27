@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
@@ -57,7 +56,10 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 // Doctor transports are inert; plugin/config persistence and executor custody are real.
 vi.mock("./update-command-doctor-child.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-doctor-child.js")>()),
-  inspectUpdateDoctorChildSupport: async () => true,
+  inspectUpdateDoctorChildSupport: async () => ({
+    doctorConfigWrites: true,
+    doctorRetirementOnly: true,
+  }),
   withUpdateDoctorChild: async (
     params: Parameters<typeof import("./update-command-doctor-child.js").withUpdateDoctorChild>[0],
     operation: Parameters<
@@ -228,11 +230,11 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
           preUpdatePluginInstallRecords,
           updateStepTimeoutMs: 1_000,
         });
-        const unlink = fsSync.unlinkSync.bind(fsSync);
+        const unlink = fs.unlink.bind(fs);
         const unlinkSpy =
           scenario === "host-link-recovery" && !recovering
-            ? vi.spyOn(fsSync, "unlinkSync").mockImplementation((file) => {
-                unlink(file);
+            ? vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+                await unlink(file);
                 if (file === peerLink) {
                   captureBoundary();
                   releaseUpdateCommandPreflightForHandoff(fence);
@@ -383,7 +385,7 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
     const reported = json.mock.calls[0]?.[0];
     assert(terminalFailure instanceof UpdateCommandPendingRecoveryFailure);
     expect(terminalFailure.cause).toBe(refused);
-    expect(reported).toEqual({ ...terminalFailure.result, reportPath: expect.any(String) });
+    expect(reported).toEqual(terminalFailure.result);
     expect(reported).toMatchObject({
       status: "error",
       reason: "update-recovery-pending",

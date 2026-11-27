@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayFrame } from "../../../packages/gateway-protocol/src/schema/frames.ts";
 import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts";
@@ -23,6 +23,7 @@ import {
 } from "./chat-collaborator-scroll.real-gateway.test-support.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const sessionKey = "agent:main:collaborator-scroll";
 const people = [
@@ -97,27 +98,8 @@ const suite = createControlUiE2eSuite({
         const profile = ensureProfileForEmail(person.email, { env: instance.env });
         setDisplayName(profile.id, person.name, { env: instance.env });
         profileIds.push(profile.id);
-        const proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: instance.state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/": {
-                target: "http://127.0.0.1:" + instance.port,
-                ws: true,
-                headers: {
-                  "x-forwarded-for": "192.0.2." + (10 + index),
-                  "x-forwarded-proto": "http",
-                  "x-forwarded-user": person.email,
-                },
-              },
-            },
-          },
+        const proxy = await createGatewayProxy(instance.state.workspaceDir, {
+          "/": gatewayProxyRoute(instance.port, person.email, "192.0.2." + (10 + index)),
         });
         proxies.push(proxy);
         await proxy.listen();
@@ -272,13 +254,13 @@ async function waitForDelta(observed: Observation, text: string, expectedSession
     .toBe(true);
 }
 async function waitForSettlement(page: Page) {
-  await page
-    .getByRole("button", { name: "Stop generating", exact: true })
-    .waitFor({ state: "detached" });
+  await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ state: "detached" });
 }
 async function wheel(page: Page, delta: number) {
   await page.locator(".chat-pane-cache__pane--active .chat-thread").hover();
   await page.mouse.wheel(0, delta);
+  // Wheel dispatch can finish before native scrolling begins.
+  await expect.poll(() => chatThreadDistanceFromBottom(page)).toBeGreaterThan(8);
   await waitForChatScrollIdle(page);
 }
 
@@ -398,7 +380,10 @@ suite.define(() => {
                 await wheel(reader, delta);
               }
               const before = await startScrollProbe(reader);
-              expect(reading ? before.distance > 8 : before.distance <= 8).toBe(true);
+              expect(
+                reading ? before.distance > 8 : before.distance <= 8,
+                `${mode}: ${JSON.stringify(before)}`,
+              ).toBe(true);
               if (mode === "older-history") {
                 expect(before.anchorText).not.toContain(mode + " paragraph");
               }
@@ -415,11 +400,30 @@ suite.define(() => {
                       // the presence packet against its queued-custody replacement.
                       await expect
                         .poll(() =>
-                          reader
-                            .locator('.chat-virtual-row[data-virtual-row-key="presence:typing"]')
-                            .textContent(),
+                          a.received.some((frame) => {
+                            if (frame.type !== "event" || frame.event !== "session.typing") {
+                              return false;
+                            }
+                            const payload = record(frame.payload);
+                            return (
+                              payload?.sessionKey === sessionKey &&
+                              payload?.typing === true &&
+                              payload?.preview === remotePrompt &&
+                              record(payload?.actor)?.id === profileIds[1]
+                            );
+                          }),
                         )
-                        .toContain(remotePrompt);
+                        .toBe(true);
+                      // The transcript tail renders only while the reader is there.
+                      if (!reading) {
+                        await expect
+                          .poll(() =>
+                            reader
+                              .locator('.chat-virtual-row[data-virtual-row-key="presence:typing"]')
+                              .textContent(),
+                          )
+                          .toContain(remotePrompt);
+                      }
                     }
                   : undefined,
               );
@@ -488,12 +492,12 @@ suite.define(() => {
             await expect.poll(() => chatThreadDistanceFromBottom(reader)).toBeLessThanOrEqual(8);
             await expect.poll(provider.requests).toBe(local.index);
             await local.append(paragraphs("local-resume", 3));
+            await waitForDelta(a, "local-resume paragraph 3.", sessionKey);
             await waitForChatScrollIdle(reader);
-            expect
-              .soft(
-                await chatThreadDistanceFromBottom(reader),
-                "local submit follows its assistant stream",
-              )
+            await expect
+              .poll(() => chatThreadDistanceFromBottom(reader), {
+                message: "local submit follows its assistant stream",
+              })
               .toBeLessThanOrEqual(8);
             await local.finish();
             for (const page of pages) {

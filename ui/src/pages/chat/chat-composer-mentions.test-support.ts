@@ -9,12 +9,12 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
+import type { NewSessionComposerOptions } from "../new-session/composer-options.ts";
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
 } from "../new-session/composer-textarea.ts";
 import { composerContext, mountNewSessionComposer } from "../new-session/composer.test-support.ts";
-import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
 import {
   createComposerContainer,
@@ -50,6 +50,7 @@ export function composerFixture(
   initial = "",
   initialMentions: readonly HumanMention[] = [],
   submitDisabledReason?: string,
+  inviteAccessAvailable = false,
 ) {
   vi.useFakeTimers();
   onTestFinished(installChatComposerPickerDismissal(document));
@@ -68,7 +69,11 @@ export function composerFixture(
     client,
     phase: "connected",
     hello: gatewayHelloForMethods(
-      ["sessions.create", "users.mentionable"],
+      [
+        "sessions.create",
+        "users.mentionable",
+        ...(inviteAccessAvailable ? ["session.members.setAccess"] : []),
+      ],
       ["operator.sessions.write"],
     ),
     selfUser: { id: "sender-one", identity: { type: "profile", id: "sender-one" } },
@@ -89,6 +94,7 @@ export function composerFixture(
   let mentions = initialMentions;
   let ownerKey = "sender-one";
   let unsupported = false;
+  let members: readonly { identityId: string }[] | undefined;
   const send = vi.fn();
   const abort = vi.fn();
   const slashCommand = vi.fn();
@@ -121,7 +127,13 @@ export function composerFixture(
         getMentions: () => mentions,
         mentionDirectory: unsupported
           ? undefined
-          : { client, ownerKey, params: { sessionKey: "agent:main:chat" } },
+          : {
+              client,
+              ownerKey,
+              inviteAccessAvailable,
+              members,
+              params: { sessionKey: "agent:main:chat" },
+            },
         mentionsUnsupported: unsupported,
         onDraftChange: onInput,
         onSlashCommand: slashCommand,
@@ -158,8 +170,8 @@ export function composerFixture(
     }
   }
   renderCurrent();
-  const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
   const edit = (next: string, options: EditOptions = {}) => {
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
     const start = options.start ?? textarea.value.length;
     const caret = options.caret ?? next.length;
     const eventInit = {
@@ -175,6 +187,7 @@ export function composerFixture(
     renderCurrent();
   };
   const pressKey = (key: string, extra: KeyboardEventInit = {}) => {
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
     const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, ...extra });
     textarea.dispatchEvent(event);
     renderCurrent();
@@ -197,6 +210,7 @@ export function composerFixture(
     options: () => container.querySelectorAll('[role="option"]'),
     search: async (text: string, options?: Parameters<typeof edit>[1]) => {
       edit(text, options);
+      await vi.dynamicImportSettled();
       await vi.advanceTimersByTimeAsync(150);
       await vi.dynamicImportSettled();
     },
@@ -209,8 +223,17 @@ export function composerFixture(
       expect({ draft, mentions }).toEqual({ draft: expectedDraft, mentions: expectedMentions }),
     mentionAccess: () => mentionAccess,
     refresh: renderCurrent,
+    restoreDraft: (next: string, selected: readonly HumanMention[] = []) => {
+      draft = next;
+      mentions = selected;
+      renderCurrent();
+    },
     replaceOwner: () => {
       ownerKey = "sender-two";
+      renderCurrent();
+    },
+    setMembers: (next: typeof members) => {
+      members = next;
       renderCurrent();
     },
     setUnsupported: () => {

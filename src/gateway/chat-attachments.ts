@@ -1,10 +1,17 @@
+import { MIMEType } from "node:util";
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
-import { extensionForMime, kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import {
+  extensionForMime,
+  HEADERLESS_CSV_MIME_TYPE,
+  kindFromMime,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
 import type { Static } from "typebox";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { ChatAttachmentSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import type { ImageContent } from "../llm/types.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { prepareMediaAttachment } from "../media/attachment-processor.js";
 import {
@@ -24,15 +31,17 @@ export type ChatAttachment = SchemaContract<Omit<Static<typeof ChatAttachmentSch
   origin?: MediaFact["origin"];
 };
 
-export type ChatImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
+export type ChatImageContent = ImageContent;
+
+type InlineImageMetadata = {
   fileName?: string;
   sourceIndex: number;
   width?: number;
   height?: number;
 };
+
+// Upload metadata belongs to persistence, never the serialized model-facing image part.
+const inlineImageMetadata = new WeakMap<ChatImageContent, InlineImageMetadata>();
 
 export type OffloadedRef = {
   mediaRef: string;
@@ -171,7 +180,8 @@ export async function persistInboundImagesForTranscript(params: {
   const entries: PersistInboundImagesResult["entries"] = [];
   let omission: PersistInboundImagesResult["omission"] = "none";
   try {
-    for (const image of params.images) {
+    for (const [imageIndex, image] of params.images.entries()) {
+      const metadata = inlineImageMetadata.get(image);
       try {
         params.assertCurrent?.();
         const saved = await saveMediaBuffer(
@@ -179,23 +189,23 @@ export async function persistInboundImagesForTranscript(params: {
           image.mimeType,
           "inbound",
           undefined,
-          image.fileName,
+          metadata?.fileName,
           undefined,
           { assertCommitAllowed: params.assertCurrent },
         );
         entries.push({
           id: saved.id,
           path: saved.path,
-          sourceIndex: image.sourceIndex,
+          sourceIndex: metadata?.sourceIndex ?? imageIndex,
           imageKind: "inline",
           fact: {
             url: `media://inbound/${saved.id}`,
             contentType: saved.contentType ?? image.mimeType,
             kind: "image",
-            ...(image.fileName ? { fileName: image.fileName } : {}),
+            ...(metadata?.fileName ? { fileName: metadata.fileName } : {}),
             sizeBytes: saved.size,
-            width: image.width,
-            height: image.height,
+            width: metadata?.width,
+            height: metadata?.height,
           },
         });
       } catch (err) {
@@ -237,7 +247,7 @@ type UnsupportedAttachmentReason =
   | "unsupported-non-image"
   | "non-image-too-large-for-sandbox";
 
-export class UnsupportedAttachmentError extends Error {
+class UnsupportedAttachmentError extends Error {
   readonly reason: UnsupportedAttachmentReason;
   constructor(reason: UnsupportedAttachmentReason, message: string) {
     super(message);
@@ -261,6 +271,17 @@ function ensureExtension(label: string, mime: string): string {
   }
   const ext = extensionForMime(mime) ?? "";
   return ext ? `${label}${ext}` : label;
+}
+
+function hasHeaderlessCsvDeclaration(mime: string): boolean {
+  try {
+    const declared = new MIMEType(mime);
+    return (
+      declared.essence === "text/csv" && declared.params.get("header")?.toLowerCase() === "absent"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function normalizeAttachment(att: ChatAttachment, idx: number): NormalizedAttachment {
@@ -402,15 +423,18 @@ export async function parseMessageWithAttachments(
         (opts?.imageStorage !== "inline" && sizeBytes > ATTACHMENT_OFFLOAD_THRESHOLD_BYTES);
 
       if (!shouldOffload) {
-        images.push({
+        const image: ChatImageContent = {
           type: "image",
           data: b64,
           mimeType: finalMime,
+        };
+        inlineImageMetadata.set(image, {
           ...(att.fileName ? { fileName: att.fileName } : {}),
           sourceIndex: idx,
           width: prepared.width,
           height: prepared.height,
         });
+        images.push(image);
         imageOrder.push("inline");
         continue;
       }
@@ -459,7 +483,10 @@ export async function parseMessageWithAttachments(
         id: savedMedia.id,
         path: savedMedia.path,
         kind: kindFromMime(finalMime) ?? "unknown",
-        mimeType: finalMime,
+        mimeType:
+          finalMime === "text/csv" && hasHeaderlessCsvDeclaration(mime)
+            ? HEADERLESS_CSV_MIME_TYPE
+            : finalMime,
         label,
         sizeBytes,
         sourceIndex: idx,

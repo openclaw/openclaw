@@ -2,6 +2,7 @@ import {
   clearGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
   getRpcSourceForGateway,
@@ -10,13 +11,25 @@ import {
   type RpcSourceRef,
 } from "../../../sessions/session-controller.rpc-sources.js";
 import { sessionTargetOwnersMatch } from "../../../sessions/session-controller.target.js";
+import {
+  captureExecRequestCancellation,
+  stopSessionExecProcesses,
+} from "../../bash-process-control.js";
 import { resolveActiveEmbeddedRunOwnerByRunId } from "../../embedded-agent-runner/runs.js";
 import { retireRequesterFollowupAuthority } from "../requester-cron-authority.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { SubagentKillSession } from "./subagent-control-session.js";
-import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import { subagentRegistryLog as log } from "./subagent-registry-lifecycle-log.js";
+import {
+  getCurrentSubagentRunOwner,
+  getSubagentRunsForChildSession,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
+import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
+import { hasSubagentRunEnded, isYieldedSubagentRun } from "./subagent-run-liveness.js";
 
 // A retired row retains only its exact source reference; the controller owns cleanup.
 // Empty weak slots prevent that runtime incarnation from adopting a replacement.
@@ -91,6 +104,28 @@ export function captureSubagentExecution(params: {
   return { entry, runId: entry.runId, execution };
 }
 
+/** Validate the captured controller owner after its asynchronous cancellation cleanup. */
+export function assertCapturedSubagentExecutionCurrent(
+  captured: CapturedSubagentExecution,
+  selectedEntry: SubagentRunRecord,
+): void {
+  const input = captured.execution.input;
+  // Async cleanup keeps a consumed input resident until its settlement receipt completes.
+  const cleanupSettled = input.phase === "consumed" && !input.mailbox.entries.includes(input);
+  if (!cleanupSettled) {
+    const entry = getCurrentSubagentRunOwner(subagentRuns, selectedEntry) ?? captured.entry;
+    const target = input.target;
+    const rpcSource =
+      target && getRpcSourceForGateway(captured.runId, getGatewayContextResolver(input), target);
+    if (
+      entry.runId !== captured.runId ||
+      (rpcSource !== undefined && rpcSource !== captured.execution)
+    ) {
+      throw new Error("Subagent execution owner changed during cancellation");
+    }
+  }
+}
+
 /** Retires the registry projection; controller source settlement retains physical cleanup. */
 export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void {
   const entry = getCurrentSubagentRunOwner(subagentRuns, observed) ?? observed;
@@ -107,4 +142,113 @@ export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void 
     }
   }
   clearGatewayContextResolver(entry);
+}
+
+function hasRetainedControllerExecution(entry: SubagentRunRecord): boolean {
+  const current = getCurrentSubagentRunOwner(subagentRuns, entry) ?? entry;
+  const runtimeKey = getSubagentRunRuntimeKey(current);
+  if (retiredExecutions.has(runtimeKey)) {
+    return retiredExecutions.get(runtimeKey) !== undefined;
+  }
+  const resolver = getGatewayContextResolver(current);
+  return resolver ? getRpcSourceForGateway(current.runId, resolver) !== undefined : false;
+}
+
+/** A hidden subagent chat whose task ended: its scope keys and when it ended; undefined while it can still take a turn. */
+function endedSubagentTask(childSessionKey: string, childAgentId?: string) {
+  const runs = [...getSubagentRunsForChildSession(childSessionKey, childAgentId)];
+  if (
+    runs.length === 0 ||
+    runs.some(
+      (run) =>
+        !hasSubagentRunEnded(run) ||
+        isYieldedSubagentRun(run) ||
+        run.suppressAnnounceReason === "steer-restart" ||
+        // A visible spawned session is a chat: reset, delete and archive end it.
+        run.spawnMode === "session",
+    )
+  ) {
+    return undefined;
+  }
+  return {
+    // The row counts processes under the same keys, so whatever it counts is stopped.
+    scopes: new Set(
+      runs.flatMap((run) => [
+        run.childSessionKey,
+        ...(run.childSessionIdentity?.sessionId ? [run.childSessionIdentity.sessionId] : []),
+      ]),
+    ),
+    // A retained row can outlive a reset of its child key; later processes are not its own.
+    endedAt: Math.max(...runs.map((run) => run.execution.endedAt ?? 0)),
+  };
+}
+
+/**
+ * A hidden subagent whose task ended (done, failed, killed, timed out) holds no process:
+ * nothing would manage it. Derived from the stored rows on every registry publication, so
+ * no end path can skip it. A yielded subagent keeps the command it waits on. Accepted edge:
+ * a command that starts after the recorded end (a kill racing a spawn) is left running.
+ */
+export function stopEndedSubagentProcesses(event: { runIds: readonly string[] | undefined }) {
+  const children = new Map<string, string | undefined>();
+  for (const runId of event.runIds ?? []) {
+    const run = subagentRuns.get(runId);
+    if (run) {
+      children.set(run.childSessionKey, run.childAgentId);
+    }
+  }
+  for (const [childSessionKey, childAgentId] of children) {
+    const ended = endedSubagentTask(childSessionKey, childAgentId);
+    if (!ended) {
+      continue;
+    }
+    void runWithGatewayDetachedWorkContinuation(
+      () =>
+        stopSessionExecProcesses(
+          ended.scopes,
+          () => {
+            if (!endedSubagentTask(childSessionKey, childAgentId)) {
+              throw new Error("Subagent task resumed before its processes were stopped");
+            }
+          },
+          ended.endedAt,
+        ),
+      "subagents:task-end-processes",
+    ).catch((error: unknown) => {
+      log.warn("failed to stop an ended subagent's processes", { childSessionKey, error });
+    });
+  }
+}
+
+/** Capture controller topology once for a synchronous cancellation selection. */
+export function captureSubagentRetainedWork() {
+  const children = new Map<string, SubagentRunRecord[]>();
+  for (const entry of subagentRuns.values()) {
+    const key = resolveControllerSessionKey(entry);
+    const group = children.get(key) ?? [];
+    group.push(entry);
+    children.set(key, group);
+  }
+  const hasRetainedWork = (entry: SubagentRunRecord, visited = new Set<string>()): boolean => {
+    if (visited.has(entry.runId)) {
+      return false;
+    }
+    visited.add(entry.runId);
+    return (
+      entry.execution.status !== "terminal" ||
+      !entry.execution.endedAt ||
+      isSubagentPausedByYield(entry) ||
+      Boolean(entry.requesterSettleWake) ||
+      captureSubagentEmbeddedExecution(entry) !== undefined ||
+      hasRetainedControllerExecution(entry) ||
+      captureExecRequestCancellation({
+        runId: entry.runId,
+        sessionKey: entry.childSessionKey,
+        sessionId: entry.childSessionIdentity?.sessionId,
+        agentId: entry.childAgentId,
+      }).owners.length > 0 ||
+      (children.get(entry.childSessionKey) ?? []).some((child) => hasRetainedWork(child, visited))
+    );
+  };
+  return (entry: SubagentRunRecord) => hasRetainedWork(entry);
 }

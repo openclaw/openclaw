@@ -1,5 +1,6 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiSettingsTakeover } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openPicker } from "../test-helpers/select-picker-e2e.ts";
@@ -67,8 +68,9 @@ suite.define(() => {
           });
           await menuSurface.waitFor({ state: "visible" });
           const menuTokens = await surfaceTokens(menuSurface);
-          await page.goto(`${suite.server.baseUrl}settings/appearance`);
+          await evaluateControlUiContext(page, (context) => context.navigate("appearance"));
           await waitForControlUiSettingsTakeover(page);
+          await expect.poll(() => root.getAttribute("data-theme")).toBe(resolvedTheme);
           const languageSelect = page.locator("#settings-language openclaw-select-picker");
           await openPicker(languageSelect);
           const listbox = languageSelect.locator(".picker-select__menu");

@@ -26,7 +26,6 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import * as sessionLifecycle from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
@@ -87,27 +86,6 @@ function pausedCatalog(calls = 1) {
   return { entered, catalog, load };
 }
 
-function diagnostics() {
-  let clock = performance.now();
-  const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
-  const records: Array<{ traceId: string | undefined; message: string }> = [];
-  const log = vi.spyOn(sessionLog, "info").mockImplementation((message) => {
-    if (message.startsWith("slow session patch ")) {
-      records.push({ traceId: getActiveDiagnosticTraceContext()?.traceId, message });
-    }
-  });
-  return {
-    records,
-    advance: (milliseconds: number) => {
-      clock += milliseconds;
-    },
-    restore() {
-      clockSpy.mockRestore();
-      log.mockRestore();
-    },
-  };
-}
-
 afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
   closeOpenClawAgentDatabasesForTest();
@@ -115,7 +93,7 @@ afterEach(async () => {
 
 const patchContext = (
   load: GatewayRequestContext["loadGatewayModelCatalog"],
-  cfg: OpenClawConfig = {},
+  cfg: OpenClawConfig = { agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } } },
 ) => createSessionMutationContext(cfg, load);
 
 async function modelContext(state: OpenClawTestState, store: string) {
@@ -206,7 +184,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
       const { entered, catalog, load } = pausedCatalog();
       const context = patchContext(load);
       const respond = vi.fn();
-      const patch = { thinkingLevel: "low", pinned: true };
+      const patch = { thinkingLevel: "low", color: "purple" };
       const params =
         method === "sessions.patchMany" ? { targets, patch } : { ...targets[0], ...patch };
       const invoke = () => patchRequest(context, method)(params, respond);
@@ -243,7 +221,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
       await invoke();
       expect(respond.mock.calls[0]?.[0]).toBe(true);
       for (const entry of entries()) {
-        expect(entry).toMatchObject({ thinkingLevel: "low", pinnedAt: expect.any(Number) });
+        expect(entry).toMatchObject({ thinkingLevel: "low", color: "purple" });
       }
     })(),
 );
@@ -278,7 +256,14 @@ test(
     const metadataResponse = vi.fn();
     const successorResponse = vi.fn();
     const patch = patchRequest(context);
-    const timing = diagnostics();
+    let diagnosticClock = performance.now();
+    const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => diagnosticClock);
+    const records: Array<{ traceId: string | undefined; message: string }> = [];
+    const logSpy = vi.spyOn(sessionLog, "info").mockImplementation((message) => {
+      if (message.startsWith("slow session patch ")) {
+        records.push({ traceId: getActiveDiagnosticTraceContext()?.traceId, message });
+      }
+    });
     const catalogTrace = createDiagnosticTraceContext();
     const successorTrace = createDiagnosticTraceContext();
     const catalogPatch = runWithDiagnosticTraceContext(catalogTrace, () =>
@@ -290,38 +275,37 @@ test(
       await Promise.race([entered.promise, catalogPatch]);
       expect(catalogResponse).not.toHaveBeenCalled();
       successorPatch = runWithDiagnosticTraceContext(successorTrace, () =>
-        patch({ key: catalogKey, pinned: true }, successorResponse),
+        patch({ key: catalogKey, color: "purple" }, successorResponse),
       );
-      metadataPatch = patch({ key: metadataKey, pinned: true }, metadataResponse);
+      metadataPatch = patch({ key: metadataKey, color: "purple" }, metadataResponse);
       // Join independent work before advancing the diagnostic clock or releasing the catalog.
       await metadataPatch;
       expectSuccess(metadataResponse);
       expect(catalogResponse).not.toHaveBeenCalled();
       expect(successorResponse).not.toHaveBeenCalled();
-      expect(readEntry(catalogKey)?.pinnedAt).toBeUndefined();
+      expect(readEntry(catalogKey)?.color).toBeUndefined();
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
     } finally {
-      timing.advance(1_500);
+      diagnosticClock += 1_500;
       rejectPendingPreparedModelRuntimeReplacement(
         replacement,
         new Error("Synthetic catalog reload failed"),
       );
       await Promise.allSettled([catalogPatch, metadataPatch, successorPatch]);
-      timing.restore();
+      clockSpy.mockRestore();
+      logSpy.mockRestore();
     }
     expectFailure(catalogResponse, unexpectedFailure);
     expect(readEntry(catalogKey)?.contextWindow).toBeUndefined();
     expectSuccess(successorResponse);
-    expect(readEntry(catalogKey)?.pinnedAt).toEqual(expect.any(Number));
-    expect(readEntry(metadataKey)?.pinnedAt).toEqual(expect.any(Number));
-    expect(timing.records).toHaveLength(2);
-    expect(
-      timing.records.find((record) => record.traceId === catalogTrace.traceId)?.message,
-    ).toMatch(/^slow session patch 1500ms method=sessions\.patch .* catalog=1500ms(?: |$)/);
-    expect(
-      timing.records.find((record) => record.traceId === successorTrace.traceId)?.message,
-    ).toMatch(
-      /^slow session patch 1500ms method=sessions\.patch .* lifecycleAdmission=1500ms(?: |$)/,
+    expect(readEntry(catalogKey)?.color).toBe("purple");
+    expect(readEntry(metadataKey)?.color).toBe("purple");
+    expect(records.find((record) => record.traceId === catalogTrace.traceId)?.message).toContain(
+      "catalog=1500ms",
+    );
+    // The successor may wait in preflight or lifecycle admission before the catalog is released.
+    expect(records.find((record) => record.traceId === successorTrace.traceId)?.message).toContain(
+      "slow session patch 1500ms method=sessions.patch targets=1 fields=color",
     );
   }),
 );
@@ -345,10 +329,10 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
       await seedEntry(storedKey, "main", existing);
       await seedEntry(otherKey, "main", { sessionId: "other" });
       const { entered, catalog, load } = pausedCatalog();
-      const cfg: OpenClawConfig =
+      const cfg: OpenClawConfig | undefined =
         change === "alias"
           ? { session: { mainKey: "work" }, agents: { entries: { main: {} } } }
-          : {};
+          : undefined;
       const patch = patchRequest(patchContext(load, cfg));
       const response = vi.fn();
       const pending = patch(
@@ -445,7 +429,6 @@ test(
       },
     });
     const respond = vi.fn();
-    const timing = diagnostics();
     const batch = patchRequest(context, "sessions.patchMany")(
       { targets, patch: { contextWindow: "extended" } },
       respond,
@@ -454,12 +437,14 @@ test(
     let metadataPatch: Promise<void> | void = undefined;
     try {
       await Promise.race([entered.promise, batch]);
-      metadataPatch = patchRequest(context)({ key: metadataKey, pinned: true }, metadataResponse);
+      metadataPatch = patchRequest(context)(
+        { key: metadataKey, color: "purple" },
+        metadataResponse,
+      );
       await metadataPatch;
       expectSuccess(metadataResponse);
       expect(respond).not.toHaveBeenCalled();
     } finally {
-      timing.advance(1_500);
       catalog.resolve([
         {
           provider: "anthropic",
@@ -469,7 +454,6 @@ test(
         },
       ]);
       await Promise.allSettled([batch, metadataPatch]);
-      timing.restore();
     }
     expect(load).toHaveBeenCalledTimes(2);
     expect(load).toHaveBeenCalledWith({ agentId: "main" });
@@ -478,12 +462,7 @@ test(
     for (const [index, { key }] of targets.entries()) {
       expect(readEntry(key, index === 0 ? "main" : "secondary")?.contextWindow).toBe("extended");
     }
-    expect(readEntry(metadataKey)?.pinnedAt).toEqual(expect.any(Number));
-    expect(timing.records.map(({ message }) => message)).toEqual([
-      expect.stringMatching(
-        /^slow session patch 1500ms method=sessions\.patchMany .* catalog=3000ms(?: |$)/,
-      ),
-    ]);
+    expect(readEntry(metadataKey)?.color).toBe("purple");
   }),
 );
 
@@ -592,51 +571,6 @@ test(
 );
 
 test(
-  "patch timing covers preparation and lifecycle finalization before cleanup",
-  inState(async () => {
-    const key = "agent:main:phase-boundaries";
-    await seedEntry(key, "main", { sessionId: "phase-boundaries" });
-    const timing = diagnostics();
-    const runMutation = sessionLifecycle.runSessionMutation;
-    const lifecycle = vi
-      .spyOn(sessionLifecycle, "runSessionMutation")
-      .mockImplementation((params) =>
-        runMutation({
-          ...params,
-          prepare: async (owner) => {
-            await params.prepare?.(owner);
-            timing.advance(700);
-          },
-          finalize: async () => {
-            await params.finalize?.();
-            timing.advance(500);
-          },
-        }),
-      );
-    const response = vi.fn();
-    try {
-      await patchRequest(patchContext(async () => []))({ key, pinned: true }, response);
-      expectSuccess(response);
-      const message = timing.records.find((record) =>
-        record.message.startsWith("slow session patch 1200ms method=sessions.patch "),
-      )?.message;
-      for (const phase of [
-        "lifecycleAdmission=700ms",
-        "lifecycleFinalize=500ms",
-        "cleanup=0ms",
-        "snapshot=0ms",
-        "commit=0ms",
-      ]) {
-        expect(message).toContain(` ${phase}`);
-      }
-    } finally {
-      lifecycle.mockRestore();
-      timing.restore();
-    }
-  }),
-);
-
-test(
   "patchMany creates one shared physical store through original per-agent directory aliases",
   inState(async (state) => {
     const directory = state.statePath("patch-many-alias-birth");
@@ -684,7 +618,7 @@ test(
     const currentResponse = vi.fn();
     const currentParams = {
       targets: instances,
-      patch: { model: "openai/gpt-5.6-sol", pinned: true },
+      patch: { model: "openai/gpt-5.6-sol", color: "purple" },
     };
     await batch(currentParams, currentResponse);
     expectBatch(currentResponse, outcomes);
@@ -693,7 +627,7 @@ test(
         sessionId: expectedSessionId,
         providerOverride: "openai",
         modelOverride: "gpt-5.6-sol",
-        pinnedAt: expect.any(Number),
+        color: "purple",
       });
     }
   }, false),

@@ -1,14 +1,20 @@
 import { execFileSync } from "node:child_process";
+import * as childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-database-worker-ratchet.mts";
-import { inventory } from "../../scripts/database-worker-inventory.mjs";
-import * as databaseWorkerCompat from "../../scripts/lib/database-worker-compat.mts";
+import { inventory, loadInventorySources } from "../../scripts/database-worker-inventory.mjs";
+import * as inventoryProcess from "../../scripts/lib/database-worker-inventory-process.mts";
+import * as managedCommand from "../../scripts/lib/managed-child-process.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 
 it.each([
   ["session-cold-storage-chunks.ts", "readSessionColdChunks", "executeSqliteQuerySync"],
@@ -31,10 +37,16 @@ it.each([
   "proves the cold-storage kernel %s:%s only through reviewed entries",
   (file, operation, primitive) => {
     const relative = `src/config/sessions/${file}`;
+    const worker =
+      operation === "readSessionColdChunks"
+        ? "session-cold-storage-read.worker.ts"
+        : operation === "iterateSessionColdRecords"
+          ? "session-transcript-hydration.worker.ts"
+          : "session-accessor.sqlite-archive.worker.ts";
     const sources = new Map([
       [relative, `export function ${operation}() { return ${primitive}(query); }`],
       [
-        "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
+        `src/config/sessions/${worker}`,
         `export async function dispatchColdPreparation() {
           const { ${operation} } = await import('./${file.replace(/\.ts$/, ".js")}');
           return scope.run(options, () => ${operation}());
@@ -43,6 +55,17 @@ it.each([
     ]);
     const tiers = () => inventory(process.cwd(), "", false, sources).map(({ tier }) => tier);
     expect(tiers()).toEqual(["W"]);
+    sources.set(
+      "scripts/perf/session-cold-selection.ts",
+      `(await import('../../src/config/sessions/${file.replace(/\.ts$/, ".js")}')).${operation}();`,
+    );
+    expect(tiers()).toEqual(["T3"]);
+    sources.delete("scripts/perf/session-cold-selection.ts");
+    sources.set(
+      "scripts/perf/session-cold-writer.mjs",
+      `(await import('../../src/config/sessions/${file.replace(/\.ts$/, ".js")}')).${operation}();`,
+    );
+    expect(tiers()).toEqual(["T3"]);
     sources.set(
       "src/plugin-sdk/runtime.ts",
       `import { ${operation} } from '../config/sessions/${file.replace(/\.ts$/, ".js")}';
@@ -134,19 +157,48 @@ function fixture(sources: Record<string, string>) {
 const expectError = (errors: ReturnType<typeof fixture>["errors"], text: string) =>
   expect(errors).toHaveBeenCalledWith(expect.stringContaining(text));
 
-it("reuses identical source snapshots while keeping head analysis fresh and invalidating changed bases", () => {
+it("normalizes Windows discovery before SQLite exclusions and source loading", () => {
+  const files = [
+    "src/runtime.ts",
+    "src/test/fixture.ts",
+    "src/gateway/server.auth.default-token.suite.ts",
+  ];
+  const { root } = sourceFixture(Object.fromEntries(files.map((file) => [file, "export {};\n"])));
+  vi.mocked(childProcess.spawnSync).mockReturnValue({
+    pid: 0,
+    output: [],
+    status: 0,
+    signal: null,
+    stderr: "",
+    stdout: files.map((file) => path.win32.normalize(file)).join("\0") + "\0",
+  });
+  const read = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation((file, options) =>
+    read(String(file).replaceAll("\\", "/"), options),
+  );
+  const platform = process.platform;
+  Object.defineProperty(process, "platform", { value: "win32" });
+  try {
+    expect([...loadInventorySources(root)]).toEqual([["src/runtime.ts", "export {};\n"]]);
+  } finally {
+    Object.defineProperty(process, "platform", { value: platform });
+    vi.mocked(childProcess.spawnSync).mockReset();
+  }
+});
+
+it("reuses identical source snapshots while keeping head analysis fresh and invalidating changed bases", async () => {
   const source = "executeSqliteQuerySync(query);\n";
   const { root, git, write } = fixture({ "src/runtime.ts": source });
-  const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
+  const inspect = vi.spyOn(inventoryProcess, "inventoryInSubprocess");
 
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
   write("src/runtime.ts", source.repeat(2));
-  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(await main(root, ["--base", "HEAD"])).toBe(1);
   expect(inspect).toHaveBeenCalledTimes(2);
 
   git("add", "src");
   git("commit", "-m", "changed base");
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
   expect(inspect).toHaveBeenCalledTimes(3);
 
   // Simulate an edit after module load without changing the running test's source files.
@@ -160,14 +212,14 @@ it("reuses identical source snapshots while keeping head analysis fresh and inva
         ? `${bytes}\n`
         : Buffer.concat([bytes, Buffer.from("\n")]);
   });
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
   expect(inspect).toHaveBeenCalledTimes(7);
 });
 
 it.each(["contents", "added path", "renamed path"])(
   "analyzes both complete snapshots after a source change: %s",
-  (change) => {
+  async (change) => {
     const { root } = fixture({ "src/runtime.ts": "export const value = 1;\n" });
     vi.restoreAllMocks();
     const file = path.join(root, "src/runtime.ts");
@@ -178,11 +230,57 @@ it.each(["contents", "added path", "renamed path"])(
     } else {
       fs.renameSync(file, path.join(root, "src/renamed.ts"));
     }
-    const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    const inspect = vi.spyOn(inventoryProcess, "inventoryInSubprocess");
+    expect(await main(root, ["--base", "HEAD"])).toBe(0);
     expect(inspect).toHaveBeenCalledTimes(2);
   },
 );
+
+it("isolates captured bytes and reports phases before the snapshot child exits", async () => {
+  const { root, write } = sourceFixture({
+    "src/runtime.ts": "executeSqliteQuerySync(query);",
+  });
+  const sources = loadInventorySources(root);
+  write("src/runtime.ts", "executeSqliteQuerySync(query); executeSqliteQuerySync(query);");
+  let running = false;
+  const run = managedCommand.runManagedCommand;
+  vi.spyOn(managedCommand, "runManagedCommand").mockImplementation((options) =>
+    run({
+      ...options,
+      onReady(child) {
+        running = true;
+        child.once("exit", () => {
+          running = false;
+        });
+        options.onReady?.(child);
+      },
+    }),
+  );
+  const phases: string[] = [];
+  const livePhases: string[] = [];
+  const rows = await inventoryProcess.inventoryInSubprocess(root, "", false, sources, (phase) => {
+    phases.push(phase);
+    if (running) {
+      livePhases.push(phase);
+    }
+  });
+  // The transport must preserve every classifier field, not just the ratcheted count.
+  expect(rows).toEqual(inventory(root, "", false, sources));
+  expect(rows.map(({ file, tier, calls }) => ({ file, tier, calls: calls.length }))).toEqual([
+    { file: "src/runtime.ts", tier: "T1", calls: 1 },
+  ]);
+  expect(phases).toContain("semantic.graph-classification");
+  expect(livePhases).toContain("semantic.inputs");
+  expect(livePhases).toContain("semantic.graph-classification");
+  expect(running).toBe(false);
+});
+
+it("preserves the managed snapshot termination status at the ratchet entry point", async () => {
+  const { root, errors } = fixture({ "src/runtime.ts": "export {};" });
+  vi.spyOn(managedCommand, "runManagedCommand").mockResolvedValue(143);
+  expect(await main(root, ["--base", "HEAD"])).toBe(143);
+  expectError(errors, "SQLite snapshot inventory failed (143)");
+});
 
 it("excludes the reviewed Vitest suite without exempting arbitrary suite-named runtime files", () => {
   const { root } = sourceFixture({
@@ -215,7 +313,7 @@ it("classifies only the synchronous Doctor enrollment branch as one-shot", () =>
   ]);
 });
 
-it("limits unadmitted mutation classification to its synchronous guarded branch", () => {
+it("limits unadmitted mutation classification to its synchronous guarded branch", async () => {
   const relative = "src/config/sessions/session-accessor.sqlite-transcript-state.ts";
   const { root, write } = fixture({
     [relative]:
@@ -235,7 +333,7 @@ function advanceTranscriptMutationAtInTransaction(database) {
     ["T1", 1],
     ["T2", 1],
   ]);
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
   write(
     relative,
     guarded.replace(
@@ -247,38 +345,38 @@ function advanceTranscriptMutationAtInTransaction(database) {
     ["T1", 3],
     ["T2", 1],
   ]);
-  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(await main(root, ["--base", "HEAD"])).toBe(1);
 });
 
-it("rejects total T1 growth with call sites and allows splits, shrinkage, and worker calls", () => {
+it("rejects total T1 growth with call sites and allows splits, shrinkage, and worker calls", async () => {
   const source = "executeSqliteQuerySync(query);\n";
   const { root, git, write, errors } = fixture({ "src/runtime.ts": source.repeat(2) });
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
-  expect(main(root, ["--base", "HEAD", "--staged"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD", "--staged"])).toBe(0);
   write("src/runtime.ts", source.repeat(3));
-  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(await main(root, ["--base", "HEAD"])).toBe(1);
   expectError(errors, "src/runtime.ts: 2 -> 3");
   expectError(errors, "src/runtime.ts:3:1 executeSqliteQuerySync");
   git("add", ".");
   write("src/runtime.ts", source);
   errors.mockClear();
-  expect(main(root, ["--base", "HEAD", "--staged"])).toBe(1);
+  expect(await main(root, ["--base", "HEAD", "--staged"])).toBe(1);
   expectError(errors, "src/runtime.ts: 2 -> 3");
   write("src/runtime.worker.ts", source.repeat(3));
   errors.mockClear();
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
   write("src/runtime.ts", "export {};\n");
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
   expect(errors).not.toHaveBeenCalled();
   write("src/runtime.ts", source);
   write("src/split.ts", source);
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
   write("src/split.ts", source.repeat(2));
-  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(await main(root, ["--base", "HEAD"])).toBe(1);
   expectError(errors, "src/split.ts:2:1 executeSqliteQuerySync");
 });
 
-it("keeps operation exceptions scoped across line shifts without masking runtime growth", () => {
+it("keeps operation exceptions scoped across line shifts without masking runtime growth", async () => {
   const relative = "src/gateway/worker-environments/placement-turn-claims.ts";
   const source = `
 import { executeSqliteQuerySync as query } from "./queries.js";
@@ -317,13 +415,13 @@ function anotherRecorder() {
   ]);
   write(relative, "\n\n" + source);
   write(eventRelative, "\n\n" + eventSource);
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
   write("src/another-runtime.ts", "executeSqliteQuerySync(sql);\n");
-  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(await main(root, ["--base", "HEAD"])).toBe(1);
   expectError(errors, "src/another-runtime.ts:1:1 executeSqliteQuerySync");
 });
 
-it("separates deprecated-only calls and rejects bundled callers even without T1 growth", () => {
+it("separates deprecated-only calls and rejects bundled callers even without T1 growth", async () => {
   const { root, write, errors } = fixture({ "src/runtime.ts": "executeSqliteQuerySync(query);\n" });
   const relative = "extensions/matrix/auth-presence.ts";
   const wrappers = `
@@ -338,7 +436,7 @@ export function hasAnyMatrixAuth(database, query) {
     tier: "T1-compat",
     calls: [expect.any(Object)],
   });
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
   write(
     "src/plugin-sdk/sqlite-runtime.ts",
     'export { hasAnyMatrixAuth as legacyQuery } from "../../extensions/matrix/auth-presence.js";\n',
@@ -347,20 +445,20 @@ export function hasAnyMatrixAuth(database, query) {
     "src/runtime.ts",
     'import { legacyQuery as query } from "./plugin-sdk/sqlite-runtime.js"; query(db, sql);\n',
   );
-  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(await main(root, ["--base", "HEAD"])).toBe(1);
   expectError(errors, "src/runtime.ts");
 });
 
-it("validates credential writers in current and staged sources while comparing historical counts", () => {
+it("validates credential writers in current and staged sources while comparing historical counts", async () => {
   const unreviewed = "export function write() { scope.execute({ type: 'machineState.write' }); }";
   const { root, write, errors } = fixture({ "src/writer.ts": unreviewed });
   write("src/writer.ts", "export function read() {} ");
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
-  expect(main(root, ["--base", "HEAD", "--staged"])).toBe(1);
+  expect(await main(root, ["--base", "HEAD"])).toBe(0);
+  expect(await main(root, ["--base", "HEAD", "--staged"])).toBe(1);
   const diagnostic = "machineState.write credential writes require the host publication adapter";
   expectError(errors, diagnostic);
   errors.mockClear();
   write("src/writer.ts", unreviewed);
-  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(await main(root, ["--base", "HEAD"])).toBe(1);
   expectError(errors, diagnostic);
 });

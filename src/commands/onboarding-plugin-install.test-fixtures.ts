@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   OnboardingPluginInstallEntry,
@@ -54,4 +56,18 @@ export function clawHubRecord() {
     clawpackManifestSha256: "b".repeat(64),
     clawpackSize: 4096,
   };
+}
+
+export async function localWorkspace(root: string) {
+  const workspaceDir = path.join(root, "workspace");
+  const pluginDir = path.join(workspaceDir, "plugins", "demo");
+  await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+  await fs.mkdir(pluginDir, { recursive: true });
+  return { workspaceDir, realPluginDir: await fs.realpath(pluginDir) };
+}
+
+export async function bundledDirectory(root: string, pluginId: string) {
+  const dir = path.join(root, "dist", "extensions", pluginId);
+  await fs.mkdir(dir, { recursive: true });
+  return fs.realpath(dir);
 }

@@ -10,6 +10,8 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({
   name: "Tool output fidelity",
+  // Native clipboard contents are shared across contexts in the same browser.
+  browserLaunchOptions: { headless: true },
   startServerBeforeBrowser: true,
 });
 const timestamp = Date.UTC(2026, 8, 19, 12);
@@ -50,8 +52,13 @@ const history = prepareChatHistoryFixture([
   },
   { role: "assistant", content: "Output is ready for inspection.", timestamp: timestamp + 3 },
 ]);
-const capture = (page: Page, dir: string, name: string) =>
-  page.screenshot({ path: path.join(dir, name + ".png"), animations: "disabled" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const capture = (page: Page, dir: string | undefined, name: string) => {
+  if (dir && captureUiProof) {
+    return page.screenshot({ path: path.join(dir, name + ".png"), animations: "disabled" });
+  }
+  return undefined;
+};
 async function expandGroups(page: Page, reply: string) {
   await page.getByText(reply, { exact: true }).waitFor();
   for (const group of await page
@@ -62,8 +69,162 @@ async function expandGroups(page: Page, reply: string) {
 }
 
 suite.define(() => {
+  it("keeps resumed tool activity below the opening request before history catches up", async () => {
+    await suite.withPage(
+      { viewport: { width: 1200, height: 820 }, locale: "en-US" },
+      async ({ page }) => {
+        const sessionKey = "agent:main:main";
+        const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
+        await page.goto(suite.server.baseUrl + "chat");
+        const prompt = "Inspect the project layout.";
+        await page.locator(".agent-chat__input textarea").fill(prompt);
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        const request = await gateway.waitForRequest("chat.send");
+        const runId = String(asOptionalRecord(request.params)?.idempotencyKey);
+        const message = {
+          role: "user",
+          content: prompt,
+          timestamp: Date.now(),
+          __openclaw: { id: "opening", seq: 1, idempotencyKey: runId + ":user" },
+        };
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey,
+          messageId: "opening",
+          messageSeq: 1,
+          message,
+        });
+        const user = page.locator(".chat-group.user", { hasText: prompt });
+        await user.waitFor();
+        // The same conversation continues under a new run ID before its history arrives.
+        await gateway.emitGatewayEvent("session.tool", {
+          sessionKey,
+          runId: "resumed",
+          seq: 2,
+          ts: message.timestamp + 100,
+          stream: "tool",
+          data: { phase: "result", toolCallId: "layout", name: "exec", result: "" },
+        });
+        const row = page.locator(".chat-tool-msg-summary", { hasText: "Ran a script" });
+        await row.waitFor();
+        // History can replace a row between two Playwright reads. Compare the first frame
+        // with both rows painted; a reversed order must fail rather than be retried.
+        const order = await page.waitForFunction((openingText) => {
+          const rect = (selector: string, text: string) =>
+            Array.from(document.querySelectorAll(selector))
+              .find((element) => element.textContent?.includes(text))
+              ?.getClientRects()[0];
+          const opening = rect(".chat-group.user", openingText);
+          const tool = rect(".chat-tool-msg-summary", "Ran a script");
+          if (opening?.height && tool?.height) {
+            return opening.top < tool.top ? "opening-first" : "tool-first";
+          }
+          return false;
+        }, prompt);
+        if (captureUiProof) {
+          await capture(page, createControlUiE2eArtifactDir("resumed-tool-order"), "transcript");
+        }
+        expect(await order.jsonValue()).toBe("opening-first");
+      },
+    );
+  });
+  it("does not call a complete image-only result unavailable", async () => {
+    const imageResult = {
+      ...result,
+      toolName: "visual_snapshot",
+      content: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/RuoAAAAASUVORK5CYII=",
+        },
+      ],
+    };
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "chat.history": prepareChatHistoryFixture([
+              { role: "user", content: "Inspect the image result.", timestamp },
+              {
+                role: "assistant",
+                timestamp: timestamp + 1,
+                content: [{ ...toolCall({ viewport: "desktop" }), name: "visual_snapshot" }],
+              },
+              imageResult,
+              { role: "assistant", content: "The image is ready.", timestamp: timestamp + 3 },
+            ]),
+            "chat.message.get": { ok: true, message: imageResult },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        await expandGroups(page, "The image is ready.");
+        await page.locator('.chat-tool-msg-summary[aria-expanded="false"]').first().click();
+        await page.locator('openclaw-chat-tool-card .chat-tool-row[aria-expanded="false"]').click();
+        await page
+          .getByRole("button", { name: "Open tool details in side panel", exact: true })
+          .click();
+        await gateway.waitForRequest("chat.message.get");
+        const panel = page.locator("openclaw-chat-tool-output");
+        await panel.locator('.chat-tool-output[aria-busy="false"]').waitFor();
+        if (captureUiProof) {
+          await capture(page, suite.artifactDir, "tool-output-header");
+        }
+        const pane = await page.locator(".side-panel__header:visible").boundingBox();
+        expect(await panel.locator(".sidebar-header").boundingBox()).toMatchObject({
+          x: expect.closeTo(pane!.x, 0),
+          width: expect.closeTo(pane!.width, 0),
+        });
+        expect(
+          await panel
+            .getByText("Full output unavailable. Only the captured output is shown.", {
+              exact: true,
+            })
+            .count(),
+        ).toBe(0);
+        expect(await panel.locator(".chat-tool-output__actions").count()).toBe(0);
+        await panel.getByText("Tool input", { exact: true }).click();
+        expect(await panel.textContent()).toContain("desktop");
+      },
+    );
+  });
+  it("keeps captured text and its warning when the full result is genuinely unavailable", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "chat.history": history,
+            "chat.message.get": { ok: false, unavailableReason: "oversized" },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        await expandGroups(page, "Output is ready for inspection.");
+        await page.locator('.chat-tool-msg-summary[aria-expanded="false"]').first().click();
+        await page.getByRole("button", { name: "Show full output", exact: true }).click();
+        await gateway.waitForRequest("chat.message.get");
+        const panel = page.locator("openclaw-chat-tool-output");
+        const warning = panel.getByText(
+          "Full output unavailable. Only the captured output is shown.",
+          { exact: true },
+        );
+        await warning.waitFor();
+        expect(await panel.locator(".chat-tool-output__text").textContent()).toBe(
+          fullOutput.slice(0, 2_000),
+        );
+        expect(
+          await panel
+            .getByRole("button", { name: "Download available output", exact: true })
+            .isVisible(),
+        ).toBe(true);
+      },
+    );
+  });
+
   it("renders native Code Mode results without transport envelopes", async () => {
-    const artifacts = createControlUiE2eArtifactDir("code-mode-output");
+    const artifacts = captureUiProof
+      ? createControlUiE2eArtifactDir("code-mode-output")
+      : undefined;
     const source =
       'text(await tools.exec_command({cmd: "check-service", max_output_tokens: 1000}));';
     const payload =
@@ -113,7 +274,7 @@ suite.define(() => {
         await row.click();
         await capture(page, artifacts, "01-expanded");
         expect(await page.locator(".chat-tool-msg-summary").textContent()).toContain(
-          "run JavaScript",
+          "Ran a script",
         );
         const body = page.locator(".chat-tool-msg-body");
         expect(await body.locator(".chat-tool-card__outcome").textContent()).toBe("Completed");
@@ -155,7 +316,9 @@ suite.define(() => {
         });
         const expandOutput = async () => {
           await expandGroups(page, "Output is ready for inspection.");
-          const row = page.locator(".chat-tool-msg-summary", { hasText: "Capture command output" });
+          const row = page.locator(".chat-tool-msg-summary", {
+            hasText: "printf 'capture output'",
+          });
           await row.waitFor();
           if ((await row.getAttribute("aria-expanded")) !== "true") {
             await row.click();

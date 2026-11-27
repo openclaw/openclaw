@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import { root as fsRoot } from "../infra/fs-safe.js";
+import { canAccess } from "../infra/path-existence.js";
 import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import {
@@ -30,17 +30,20 @@ import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
+import type { HostFileMutationPreparer } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import { relativePathInsideSandboxRoot, resolvePathFromInput } from "./path-policy.js";
 import { buildSandboxFsMounts } from "./sandbox/fs-paths.js";
+import { resolveSandboxHostPathViaExistingAncestor } from "./sandbox/host-paths.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import { createLsTool, type LsOperations } from "./sessions/tools/ls.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
+import { SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT } from "./subagents/subagent-attachment-paths.js";
 import { bindAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import { getAgentWorkspaceAccess, WorkspaceAccessUnavailableError } from "./workspace-access.js";
@@ -114,7 +117,7 @@ function wrapWorkspaceSkillRead(
       const physicalMatch =
         physicalMatches.length === 1 &&
         physicalPath &&
-        !fs.existsSync(physicalPath) &&
+        !(await canAccess(physicalPath)) &&
         !localSkills.some(
           (candidate) => relativePathInsideSandboxRoot(candidate.baseDir, physicalPath) !== null,
         )
@@ -182,6 +185,8 @@ type CoreCodingToolsOptions = {
   includeBaseCodingTools: boolean;
   shellTools: "disabled" | "patch-only" | "full";
   workspaceOnly: boolean;
+  /** Keep participant access within this root, except exact-session attachment reads. */
+  strictWorkspaceRoot?: boolean;
   readOnly: boolean;
   sandbox?: SandboxContext;
   skillsSnapshot?: SkillSnapshot;
@@ -192,6 +197,7 @@ type CoreCodingToolsOptions = {
   imageSanitization?: ImageSanitizationLimits;
   modelHasVision?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+  prepareHostFileMutation?: HostFileMutationPreparer;
   applyPatchEnabled: boolean;
   applyPatchWorkspaceOnly: boolean;
   applyPatchContainmentSource?: ApplyPatchContainmentSource;
@@ -214,24 +220,27 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
 
-  const skillReadResources = options.skillReadResources ?? options.skillsSnapshot?.resolvedSkills;
+  const skillReadResources = options.strictWorkspaceRoot
+    ? undefined
+    : (options.skillReadResources ?? options.skillsSnapshot?.resolvedSkills);
   const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(skillReadResources);
   const attachmentReadRoot = !sandboxRoot ? options.attachmentReadRoot : undefined;
   const hostReadRoots = [
     ...(skillReadRoots ?? []),
-    ...(attachmentReadRoot && fs.existsSync(attachmentReadRoot) ? [attachmentReadRoot] : []),
+    ...(attachmentReadRoot ? [attachmentReadRoot] : []),
   ];
   const needsReadOnlyWorkspaceSkillMounts =
     options.shellTools !== "disabled" || (options.includeBaseCodingTools && options.workspaceOnly);
   const readOnlyWorkspaceSkillMounts =
     sandbox && needsReadOnlyWorkspaceSkillMounts
-      ? resolveReadOnlyWorkspaceSkillMounts({
+      ? (sandbox.fsPreparation?.readOnlyWorkspaceSkillMounts ??
+        resolveReadOnlyWorkspaceSkillMounts({
           workspaceDir: sandbox.workspaceDir,
           agentWorkspaceDir: sandbox.agentWorkspaceDir,
           skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
           workdir: sandbox.containerWorkdir,
           workspaceAccess: sandbox.workspaceAccess,
-        })
+        }))
       : [];
 
   // Older external SDK bridges predate pathMappings. Only absence selects
@@ -252,7 +261,16 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     : [];
   // Declared mount read exceptions do not grant writes or enumeration outside
   // the container workspace. Both sets reuse the same effective selection.
-  const sandboxReadMounts = sandboxFileMounts;
+  const sandboxReadMounts = options.strictWorkspaceRoot
+    ? sandboxFileMounts.filter(
+        (mount) =>
+          sandboxWorkspaceMounts.includes(mount) ||
+          (mount.containerRoot === SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT &&
+            options.attachmentReadRoot !== undefined &&
+            resolveSandboxHostPathViaExistingAncestor(mount.hostRoot) ===
+              resolveSandboxHostPathViaExistingAncestor(options.attachmentReadRoot)),
+      )
+    : sandboxFileMounts;
 
   const guardWorkspaceTool = (tool: AnyAgentTool) =>
     options.workspaceOnly
@@ -268,8 +286,9 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : {
                 resolutionCwd: options.codingRoot,
+                containmentSource: options.applyPatchContainmentSource,
                 normalizeGuardedPathParams: true,
-                allowLinkedWorktrees: tool.name !== "ls",
+                allowLinkedWorktrees: !options.strictWorkspaceRoot && tool.name !== "ls",
               },
         )
       : tool;
@@ -341,7 +360,8 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : {
                 additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
-                allowLinkedWorktrees: true,
+                containmentSource: options.applyPatchContainmentSource,
+                allowLinkedWorktrees: !options.strictWorkspaceRoot,
                 resolutionCwd: options.codingRoot,
                 normalizeGuardedPathParams: true,
               },
@@ -417,8 +437,10 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : undefined,
         workspaceOnly: options.applyPatchWorkspaceOnly,
+        strictWorkspaceRoot: options.strictWorkspaceRoot,
         containmentSource: options.applyPatchContainmentSource,
         memoryWriteProvenance: options.memoryWriteProvenance,
+        prepareHostFileMutation: options.prepareHostFileMutation,
         abortSignal: options.abortSignal,
       }),
     );
@@ -427,6 +449,8 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     shell.push(
       createLazyExecTool({
         ...options.execDefaults,
+        scratchRoot: options.containmentRoot,
+        participationRoot: options.execDefaults.participation ? options.containmentRoot : undefined,
         ...(sandbox?.required ? { sandboxRequired: true } : {}),
         cwd: options.codingRoot,
         sandbox: sandbox

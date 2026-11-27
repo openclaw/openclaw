@@ -221,7 +221,7 @@ services, and timers cannot obtain the capability. Before exposing it, the host
 adopts and commits the actual command text as a user turn and admits its current
 requester under `auto-reply.plugin-command`. Children inherit that requester’s
 lineage and effective tool ceiling. No new hook is registered, so Goal
-start/resume and restart-safe chat admission keep their existing rules.
+start/resume and ordinary chat admission keep their existing rules.
 
 Gateway chat and channel text commands are both eligible. Messages without explicit
 provenance use the ingress's ordinary sender authorization. On Gateway chat, an
@@ -579,6 +579,18 @@ to the exact native assignment and its current parent. Requester identity and
 admission are rechecked after awaited routing and before new effects.
 Native runtime history, cancellation, and submission receipts remain owned by
 the harness; there is no generic task registry or managed-flow API.
+
+Use `registerAgentHarnessCompletion` once per native assignment to report its
+completion and consumed receipt. Keep native protocol parsing in the harness.
+The returned handle's `complete`, `consume`, and `release` operations
+delegate deduplication, retries, consumption, and retirement to the shared
+completion obligation owner. `waitForDelivery` waits for an accepted attempt; `isConsumed`
+and `isRetiring` expose that owner's recorded facts. Readiness and persistence
+callbacks adapt native execution and storage; they do not choose retry policy.
+Registration grants no authority: its delivery callback must still use
+`deliverAgentHarnessCompletion` with the admitting scope and custody.
+Native assignments keep their existing six retry delays. Persisted registry
+completions retain their separate expiry policy under the same policy owner.
 
 For detached native work, await `captureAgentHarnessCompletionCustody(scope)`
 during the admitting parent registration, before publishing the registration or

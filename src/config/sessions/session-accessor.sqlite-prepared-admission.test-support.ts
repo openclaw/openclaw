@@ -39,13 +39,17 @@ export function holdReclamationAdmission(databasePath: string) {
             }
             return execute({
               ...params,
-              withWriteAdmission: async (performWrite, diagnostics) => {
-                return params.withWriteAdmission(async (...admissionArgs) => {
-                  if (!admissionArgs[0]) {
-                    await pause();
-                  }
-                  return performWrite(...admissionArgs);
-                }, diagnostics);
+              withWriteAdmission: async (performWrite, diagnostics, operation) => {
+                return params.withWriteAdmission(
+                  async (...admissionArgs) => {
+                    if (!admissionArgs[0]) {
+                      await pause();
+                    }
+                    return performWrite(...admissionArgs);
+                  },
+                  diagnostics,
+                  operation,
+                );
               },
             });
           });

@@ -7,6 +7,7 @@ import {
 } from "../../sessions/model-overrides.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { forkCliHistoryBoundary } from "./cli-history-boundary.js";
 import { forkCliSessionBindings } from "./cli-session-binding.js";
 import type {
   ForkSessionEntryFromParentTargetResult,
@@ -27,8 +28,12 @@ import {
   resolveParentForkSourceTranscript,
   type ParentForkSourceTranscript,
 } from "./session-accessor.sqlite-parent-fork.js";
+import {
+  hydrateSqliteParentForkEvent,
+  planSqliteParentForkSource,
+} from "./session-accessor.sqlite-parent-plan.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import {
   formatLegacySqliteSessionMarkerForScope,
   type ResolvedSqliteScope,
@@ -179,6 +184,7 @@ function commitEntry(
     { parentEntry, base },
     forkCliSessionBindings(parentEntry, (provider) => providers.has(normalizeProviderId(provider))),
     forkedPatch,
+    patch?.preserveVisibility,
   );
   if (!("skip" in committed)) {
     return committed.result;
@@ -199,6 +205,7 @@ function forkSessionEntryInTransaction(
   prepared: { parentEntry: SessionEntry; base: SessionEntry },
   cliSessionBindings: SessionEntry["cliSessionBindings"],
   patch?: Partial<SessionEntry>,
+  preserveVisibility?: boolean,
 ):
   | { result: ForkSessionEntryFromParentTargetResult }
   | {
@@ -213,10 +220,13 @@ function forkSessionEntryInTransaction(
   const freshParent = prepared.parentEntry;
   const freshBase = prepared.base;
   assertModelSelectionUnlocked(freshParent, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
-  const source = resolveParentForkSourceTranscript(
-    loadTranscriptEventsFromDatabase(writeDatabase, freshParent.sessionId),
+  const source = planSqliteParentForkSource(writeDatabase, freshParent.sessionId);
+  const decision = planParentForkDecision(
+    freshParent,
+    estimateParentForkPromptTokens(source, (event) =>
+      hydrateSqliteParentForkEvent(writeDatabase, freshParent.sessionId, event),
+    ),
   );
-  const decision = planParentForkDecision(freshParent, estimateParentForkPromptTokens(source));
   if (decision.status === "skip") {
     return { skip: { decision, base: freshBase, parentEntry: freshParent } };
   }
@@ -246,6 +256,7 @@ function forkSessionEntryInTransaction(
     totalTokensFresh: false,
     totalTokensVersion: undefined,
     cliSessionBindings,
+    cliHistoryBoundary: forkCliHistoryBoundary(freshParent, fork.transcript.sessionId),
     cliSessionIds: undefined,
     claudeCliSessionId: undefined,
   };
@@ -253,7 +264,11 @@ function forkSessionEntryInTransaction(
     writeDatabase,
     sessionTarget.canonicalKey,
     mergeSessionEntry(freshBase, forkIdentityPatch),
-    { previousEntry: freshBase },
+    {
+      previousEntry: freshBase,
+      // The child may have received an explicit sharing choice while preparation awaited.
+      preserveVisibility,
+    },
   );
   return {
     result: {
@@ -286,15 +301,14 @@ function forkSqliteParentTranscriptInTransaction(
   }
   const source =
     params.source === undefined
-      ? resolveParentForkSourceTranscript(
-          loadTranscriptEventsFromDatabase(database, params.parentEntry.sessionId),
-          params.forkFrom,
-        )
+      ? planSqliteParentForkSource(database, params.parentEntry.sessionId, params.forkFrom)
       : params.source;
   if (!source) {
     return { status: "failed" };
   }
-  const limitDecision = resolveParentForkLimitDecision(params, source);
+  const readEvent = (event: Parameters<typeof hydrateSqliteParentForkEvent>[2]) =>
+    hydrateSqliteParentForkEvent(database, params.parentEntry.sessionId, event);
+  const limitDecision = resolveParentForkLimitDecision(params, source, readEvent);
   if (limitDecision) {
     return { status: "too-large", decision: limitDecision };
   }
@@ -314,7 +328,15 @@ function forkSqliteParentTranscriptInTransaction(
   appendTranscriptEventsInTransaction(
     database,
     targetScope,
-    buildForkedChildTranscriptEvents({ parentSessionFile, source, targetSessionId: sessionId }),
+    (function* () {
+      for (const event of buildForkedChildTranscriptEvents({
+        parentSessionFile,
+        source,
+        targetSessionId: sessionId,
+      })) {
+        yield readEvent(event);
+      }
+    })(),
   );
   return {
     status: "created",

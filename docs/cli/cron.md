@@ -28,6 +28,14 @@ authentication, calls to the configured local loopback Gateway do not open the
 shared state database for device authentication. Remote and explicit URL targets
 retain their device authentication and pairing requirements.
 
+Ctrl-C or SIGTERM cancels a pending `list`, `show`, `status`, `get`, `runs`, or
+read-only `scratch` read without printing a late result or failure document. The CLI
+exits with status 130 or 143, respectively.
+An `add` or `edit` mutation already sent to the Gateway still waits for its
+receipt during cleanup and reports any failure; interrupting does not undo it.
+
+File inputs for `--script`, `--trigger-script`, and `scratch --file` must be regular files; symbolic links to regular files are supported. FIFOs and other special files are rejected without waiting for input. To pipe content, use `-` to read from stdin instead.
+
 ## Create jobs quickly
 
 `openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:
@@ -67,7 +75,7 @@ openclaw automations create "*/15 * * * *" \
   --to "-1001234567890"
 ```
 
-`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal run history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
+`--command <shell>` stores the Gateway host's shell: `argv: ["sh", "-lc", <shell>]` on macOS and Linux, or `argv: ["cmd.exe", "/d", "/s", "/c", <shell>]` on Windows, where the command uses `cmd.exe` syntax such as `%VAR%`. The CLI asks the Gateway for its platform; when the Gateway cannot report it, the command fails and asks for `--command-argv` instead. Jobs created before this rule on a Windows Gateway keep their stored `sh -lc` argv and fail with `spawn sh ENOENT`; rerun `openclaw cron edit <job-id> --command <shell>` to store the Windows shell. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal run history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
 
 Use `--display-name <name>` when the list and detail views should show a
 human-readable label distinct from the automation's stable name. Set or update
@@ -208,7 +216,7 @@ Isolated automation chat delivery is shared between the agent and the runner:
 - `webhook` posts the finished payload to a URL.
 - `none` disables automatic conversation results and external notifications.
 
-Agent, command, and script results belong to the chat or topic that receives them. An explicit different destination gets the result instead of the creating conversation, including for CLI and older jobs without a creating session. With no external route, the creating conversation receives it; WebChat shows the same message live and after reload. Retries do not duplicate results. Resetting an explicitly configured external destination does not stop delivery: the result enters its current session. Implicit agent-turn announcements and routeless WebChat results fail if the creating conversation was deleted or reset; recreate the job or set explicit external delivery coordinates. Command and script announcements retain an already resolved route without a source-generation check, as before. A confirmed external send remains delivered, with a warning if the conversation write fails. See [Automation delivery](/automation/cron-jobs/delivery).
+Agent, command, and script results belong to the chat or topic that receives them. An explicit different destination gets the result instead of the creating conversation, including for CLI and older jobs without a creating session. With no external route, the creating conversation receives it; WebChat shows the same message live and after reload. Retries do not duplicate results. Resetting an explicitly configured external destination does not stop delivery: the result enters its current session. Implicit agent-turn announcements and routeless WebChat results follow the creating conversation through message edits, branch switches, and resets; they fail visibly if it was deleted. Recreate the job or set explicit external delivery coordinates. Command and script announcements retain an already resolved route without a source-generation check, as before. A confirmed external send remains delivered, with a warning if the conversation write fails. See [Automation delivery](/automation/cron-jobs/delivery).
 
 Use `automations add|create --webhook <url>` or `automations edit <job-id> --webhook <url>` to set webhook delivery. Do not combine `--webhook` with chat delivery flags such as `--announce`, `--no-deliver`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
@@ -240,7 +248,7 @@ Failure notifications resolve in this order:
 2. `delivery.failureDestination` on the job, layered over the global destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The `cron.failureDestination` block, retired in 2026.8.1, is merged into them by `openclaw doctor --fix`.
 3. The job's primary announce target (when neither of the above resolves to a concrete destination).
 
-Jobs with one of those routes default to an execution-failure alert after 2 consecutive failures and a 1-hour cooldown. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job, but not the auto-disable safety notification. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy. Terminal one-shot failures bypass `after`: eligible owned jobs receive a repair turn in their owner conversation, other jobs use an enabled failure-alert route, and jobs without one receive the auto-disable safety notice. Operator cancellations and runs retired by a Gateway restart stay quiet.
+Jobs with one of those routes default to an execution-failure notice from the first failure, with a 1-hour cooldown; the same unresolved failure repeats at most daily. Owned jobs send that notice to their owner conversation's agent, which fixes the problem or tells you. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy. Terminal one-shot failures bypass `after`: eligible owned jobs receive a repair turn in their owner conversation, and other jobs use an enabled failure-alert route. Operator cancellations and runs retired by a Gateway restart stay quiet. A failed run never disables a job.
 
 Repeated failures with the same cause stay grouped into one incident across Gateway restarts. A changed cause or destination can notify after the cooldown. Successful completion clears the incident silently; the recovery stays in automation history. Skipped runs and unknown delivery outcomes do not count as recovery. If script setup cannot refresh tools after a plugin reload, the alert explains that automatic recovery failed before the script ran.
 
@@ -278,7 +286,7 @@ daylight-saving transition are reported separately as `--at` errors.
 One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence and successful executions with explicit `delivery.bestEffort: true` complete and delete normally. Use `--keep-after-run` to preserve successful jobs too.
 </Note>
 
-An `at` job records a terminal execution failure after a permanent error or exhausted retries. An `on-exit` job fired by its watcher is terminal on any execution error, including a transient one, because retrying would rerun the watched command. These failures record `state.autoDisabled`, which `openclaw doctor` reports. Manually force-running a paused `on-exit` job preserves its pause without recording an auto-disable.
+An `at` job ends after a permanent error or exhausted retries. An `on-exit` job fired by its watcher ends on any execution error, including a transient one, because retrying would rerun the watched command. Its owner is notified of that final failure; the job records no auto-disable reason.
 
 ### Recurring jobs
 
@@ -314,6 +322,8 @@ openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 ```
 
 With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs` row for the returned `runId`. It does not reread mutable job delivery settings. JSON reports payload execution as `status` and whole-run completion as `completionStatus`. The command exits `0` only for `completionStatus: "succeeded"`. `failed`, `unknown`, execution errors or skips, a missing `runId`, and timeout expiry exit non-zero (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero. Completed JSON output, including the run summary, is flushed before the command exits, so it can be piped to a JSON reader.
+
+Interrupting the CLI stops waiting for the result. The queued run continues in the Gateway.
 
 <Note>
 Use `--due` to test the condition gate when the job is currently due, or wait for its scheduled evaluation. Unlike a forced run, `--due` honors `trigger.script`; it does not make a job due early. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling. An enqueued run skipped by the gate exits non-zero with `--wait`.
@@ -364,7 +374,7 @@ Isolated automation turns require a final deliverable rather than an interim sta
 
 ### Silent token suppression
 
-For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. The terminal producer records this decision; delivery does not reparse the reply.
+For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. Reasoning the model closes with a tag such as `</think>` before that exact token counts as the same silent final. The terminal producer records this decision; delivery does not reparse the reply.
 
 For example, this final reply sends no chat message:
 
@@ -500,16 +510,19 @@ openclaw automations runs <job-id> --sort asc --offset 200 --limit 50
 Run-history filters are applied by the Gateway before paging. Use `--status`
 with `all`, `ok`, `error`, or `skipped`; use `--delivery-status` with
 `delivered`, `not-delivered`, `unknown`, or `not-requested`. `--query <text>`
-searches run summaries and errors. `--sort asc|desc` selects oldest-first or
-newest-first order, and `--offset <n>` advances through the result set using the
-page metadata returned by the previous command.
+searches run summaries and errors. Matching is case-insensitive and compares
+canonically equivalent Unicode forms as the same text without rewriting stored
+run history. `--sort asc|desc` selects oldest-first or newest-first order, and
+`--offset <n>` advances through the result set using the page metadata returned
+by the previous command.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
 
 Use `--query <text>` to search job IDs, names, descriptions, declared agent IDs,
-and display names. Matching is case-insensitive and uses the Gateway's existing
-inventory filter before paging; the CLI reads every bounded matching page with
-the same query. It combines with `--all`, `--agent`, and either text or `--json`
+and display names. Matching is case-insensitive and compares canonically equivalent
+Unicode forms as the same text without rewriting stored metadata. The Gateway filters
+before paging; the CLI reads every bounded matching page with the same query. It
+combines with `--all`, `--agent`, and either text or `--json`
 output. Omitting the flag or passing only whitespace keeps the existing listing.
 This searches job metadata, not message or script payloads; use `automations runs
 <job-id> --query <text>` to search run summaries and errors instead.
@@ -567,7 +580,7 @@ openclaw automations edit <job-id> --session current
 openclaw automations edit <job-id> --session "session:daily-brief"
 ```
 
-`openclaw automations add` warns when `--agent` is omitted on agent-turn jobs and falls back to the default agent (`main`). Pass `--agent <id>` at create time to pin a specific agent.
+`openclaw automations add` warns when `--agent` is omitted on agent-turn or script jobs. Ownership resolves from an explicit `--agent`, then an agent-qualified `--session-key`, then the configured default agent. The default follows `agents.defaults.systemAgent.agentId` or the applicable legacy/sole-agent fallback; omitting `--agent` does not pin the job to `main`. Pass `--agent <id>` at create time to pin a specific agent. If no owner can be resolved, creation fails with an error asking you to select an agent or configure the system agent.
 
 Delivery tweaks:
 

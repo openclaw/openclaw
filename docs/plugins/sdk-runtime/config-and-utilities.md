@@ -37,6 +37,14 @@ Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
 
 For direct SDK imports, use `config-contracts` for types, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. The broad `openclaw/plugin-sdk/config-runtime` compatibility barrel has been removed. Read entry-scoped values from `api.pluginConfig`; use a supplied tool context only for its runtime-wide config snapshot, and keep plugin-specific merging at that boundary. Bundled plugin tests should mock these focused subpaths directly.
 
+Use `createPluginConfigParser(pluginId, parse)` from `openclaw/plugin-sdk/plugin-config-runtime`
+when a pure plugin-config parser runs repeatedly. It shares a frozen parsed result
+for the current published config revision or a deeply frozen input snapshot.
+Publish config changes through the host; mutating a published object alone does not invalidate it.
+Republishing config invalidates live results, including same-object updates;
+standalone mutable inputs are parsed on every call. The parser must return an owned
+JSON value without mutating its input. Errors propagate unchanged and are not cached.
+
 When using the direct `config-mutation` import to replace a source snapshot, pass
 the edited config as `sourceConfig` to `replaceConfigFile`, retaining its `snapshot`,
 `baseHash`, `writeOptions`, and explicit `afterWrite` policy. Runtime-derived
@@ -102,6 +110,11 @@ Metadata discovery still does not execute plugin code. See
 
 ### Process and network utilities
 
+`getAsyncWorkSignal()` from `openclaw/plugin-sdk/concurrency-runtime` returns the
+active host work scope's cancellation signal, or `undefined` outside a managed
+scope. Pass it to cancellable reads and check it before publishing their results.
+Already-accepted mutations retain their owner's settlement policy.
+
 `runInDetachedAsyncContext` from `openclaw/plugin-sdk/concurrency-runtime` starts
 work in the host's context-free async root. Use it at an independently admitted
 service request boundary when a long-lived listener can retain its startup
@@ -165,10 +178,14 @@ endpoints outside that path. Unknown identities are rejected on supported hosts;
 hosts without native birth-identity support and other platforms leave existing
 processes untouched. PID 1 can itself be a live owner on Linux.
 
-For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
-the same subpath. It reuses the current Node executable and resolves a real Node
-binary when the host runs under Bun, skipping Bun's `node` shim. An unavailable
-Node runtime returns `undefined`; the caller reports the missing requirement.
+For a subprocess that requires Node.js, await `resolveNodeRuntimeExecutableAsync` from
+the same subpath. It reuses the current Node executable when supported by OpenClaw,
+or finds a supported Node binary, skipping older Node versions and Bun's `node`
+shim. An unavailable supported Node runtime returns `undefined`; the caller
+reports the missing requirement.
+Cold discovery creates and removes its probe script and waits for the child asynchronously.
+The synchronous `resolveNodeRuntimeExecutable` remains available for CLI tooling;
+Gateway request paths should use the async form.
 
 Interactive process adapters can use `spawnTerminalPty` from the same subpath.
 It owns platform-specific terminal creation. On macOS and Linux, Bun uses its
@@ -319,6 +336,12 @@ whole-card text fallbacks that must retain labels clipped by native limits. This
 shares core outbound rendering's fallback-text policy and removes the portable
 presentation fields after rendering. The callback may be synchronous or async.
 
+Before retaining a failure in a cache, owner field, or terminal abort signal, call
+`materializeErrorStack(error)` from `openclaw/plugin-sdk/error-runtime`. It formats
+lazy stacks throughout the nested error graph so captured frames can release
+request data, while preserving error identity, messages, codes, and causes.
+Formatting is best effort for immutable errors and custom stack accessors.
+
 Use `attachErrorDiagnostic(error, text)` from `openclaw/plugin-sdk/error-runtime`
 to attach supplemental operator diagnostics to a thrown error without changing
 its identity, message, or failure classification. Mask opaque credentials first;
@@ -330,11 +353,16 @@ CLI logs render these diagnostics automatically; successful runs remain quiet.
 Native RPC error messages retain their original text; `agent.wait` renders the
 supplemental diagnostic at its terminal result boundary.
 
-Channel plugins must admit authenticated agent turns through their injected
-`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
-accepts owner authority only from the exact active, trusted plugin registered for
-`options.messageChannel`; guest turns retain their non-owner identity. The public
-`agentCommandFromIngress` SDK helper never accepts a caller-supplied owner claim.
+Channel plugins run agent turns for their senders through the injected
+`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. Only the
+active plugin registered for `options.messageChannel` can call it. Pass the
+sender as `runContext.senderId` and the channel account as `accountId`: the host
+makes the turn an owner turn exactly when `commands.ownerAllowFrom` lists that
+sender, the same rule as a text message from that channel. Any other sender runs
+as a non-owner.
+`options.senderIsOwner` is deprecated and ignored; passing `true` logs one
+deprecation warning per plugin. The public `agentCommandFromIngress` SDK helper
+never makes a turn an owner turn.
 
 Model-picker integrations use two focused runtime subpaths. Import the typed
 `ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from
@@ -418,6 +446,13 @@ two-party event loops that do not go through the shared inbound reply runner.
 
 ### Bounded waits
 
+Use `performance.now()` for process-local elapsed measurements and budgets.
+Remaining time may be fractional; retain the operation's expiration, timeout
+normalization, and integer rounding policy. Never persist monotonic readings or
+send them as epoch timestamps. Persisted times, user-facing dates, and
+cross-process deadlines stay wall-clock values; translate an incoming epoch
+deadline into a local budget once when admitting the work.
+
 `openclaw/plugin-sdk/time-runtime` exports
 `raceWithTimeout(operation, timeoutMs, onTimeout, { ref?, signal?, onAbort? })`. Pass an existing
 promise, or a function returning a promise when the timer must start before the
@@ -484,6 +519,10 @@ function diagnosticsEnabled() {
 Recheck the gates when emitting a delayed summary. Keep fields bounded and
 content-free, and preserve the operation's result if the diagnostic sink fails.
 This predicate does not enable or authorize [audit identity collection](/gateway/audit).
+
+`normalizeDiagnosticTraceContext(value)` validates unknown trace fields and returns only the
+recognized context fields, or `undefined` when any supplied field is invalid. It does not
+generate IDs, change casing, or establish that an event is trusted.
 
 `onInternalDiagnosticEvent(listener, interest?)` filters events before copying
 their payload for the listener. `include` and `exclude` apply to every event;

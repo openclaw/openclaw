@@ -44,6 +44,7 @@ import type {
 } from "./session-agent-purge.types.js";
 import { publishSessionStateArchivesInWorker } from "./session-archive-publication.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { runSessionNativeBindingWorkerOperation } from "./session-native-binding.js";
 import { assertMaintenancePreservationCompatible } from "./store-maintenance-preserve-snapshot.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
@@ -108,115 +109,133 @@ export async function purgeDeletedAgentSessionEntries(
       resolved,
       entries,
       async (assertSourceCurrent) => {
-        const native = !execution;
-        const preservation = await prepareSessionMaintenancePreservation(params.storePath, {
-          native,
-        });
-        const assertCurrent = () => {
-          execution?.assertCurrent();
-          assertSourceCurrent();
+        const attemptPurge = async () => {
+          const native = !execution;
+          const preservation = await prepareSessionMaintenancePreservation(params.storePath, {
+            native,
+            env: resolved.env,
+          });
+          const assertCurrent = () => {
+            execution?.assertCurrent();
+            assertSourceCurrent();
+          };
+          try {
+            assertCurrent();
+            if (native) {
+              return await runExclusiveSqliteSessionWrite(
+                resolved,
+                async () => {
+                  const committedPurge = runSqliteSessionDeletionTransaction(
+                    (current) => {
+                      assertCurrent();
+                      const result = commitSessionAgentPurgeInDatabase(
+                        current,
+                        { ...selection, ...prepared, materializedPlans },
+                        (target) =>
+                          applySessionEntryMaintenance(target, {
+                            activeSessionKey: "",
+                            archiveDirectory: selection.archiveDirectory,
+                            storePath: params.storePath,
+                            preservation: preservation.capture,
+                            refreshCandidates: preservation.refreshCandidates,
+                          }),
+                      );
+                      const publish = prepareCommittedSessionEntryRemovals(
+                        resolved.agentId,
+                        readOpenClawAgentDatabaseIdentity(current).identity,
+                        prepared.entryRemovals,
+                      );
+                      assertCurrent();
+                      return { ...result, publish };
+                    },
+                    database,
+                    { operationLabel: "session.entry.purge-deleted-agent" },
+                  );
+                  committedPurge.publish();
+                  return committedPurge;
+                },
+                "session.agent-purge.commit",
+              );
+            }
+            const sentPreservation = preservation.capture();
+            const input: SessionAgentPurgeCommit = {
+              ...selection,
+              entryRemovals: prepared.entryRemovals,
+              materializedPlans,
+              maintenance: {
+                activeSessionKey: "",
+                archiveDirectory: selection.archiveDirectory,
+                maintenance: normalizeResolvedMaintenanceConfigInput(resolveMaintenanceConfig()),
+                preservation: sentPreservation,
+                storePath: params.storePath,
+              },
+            };
+            const operation: Omit<
+              Parameters<
+                typeof runSessionEntryWorkerOperation<
+                  SessionAgentPurgeCommitted,
+                  SessionAgentPurgeResult
+                >
+              >[0],
+              "run"
+            > = {
+              database,
+              agentId: resolved.agentId,
+              retainedExecution: execution,
+              assertCurrent,
+              assertPrepared: () => {
+                preservation.capture();
+              },
+              assertCandidate: (candidate, retained) =>
+                assertMaintenancePreservationCompatible(
+                  sentPreservation,
+                  preservation.capture(retained),
+                  candidate.result.maintenancePlans,
+                ),
+              candidateKind: "session-agent-purge",
+              onCommitted: createSessionIdentityResultPublisher(resolved),
+            };
+            const captured = captureNativeSessionWorkerDeletion(entries);
+            return captured
+              ? await runSessionNativeBindingWorkerOperation<
+                  SessionAgentPurgeCommitted,
+                  SessionAgentPurgeResult
+                >({
+                  ...operation,
+                  captured,
+                  entries,
+                  execute: (worker, nativeBindings) =>
+                    worker.execute({
+                      type: "session.agentPurge.commit",
+                      input: { ...input, nativeBindings },
+                    }),
+                })
+              : await runSessionEntryWorkerOperation<
+                  SessionAgentPurgeCommitted,
+                  SessionAgentPurgeResult
+                >({
+                  ...operation,
+                  run: (worker, commit) =>
+                    commit(() => worker.execute({ type: "session.agentPurge.commit", input })),
+                });
+          } finally {
+            preservation.dispose();
+          }
         };
         try {
-          assertCurrent();
-          if (native) {
-            return await runExclusiveSqliteSessionWrite(
-              resolved,
-              async () => {
-                const committedPurge = runSqliteSessionDeletionTransaction(
-                  (current) => {
-                    assertCurrent();
-                    const result = commitSessionAgentPurgeInDatabase(
-                      current,
-                      { ...selection, ...prepared, materializedPlans },
-                      (target) =>
-                        applySessionEntryMaintenance(target, {
-                          activeSessionKey: "",
-                          archiveDirectory: selection.archiveDirectory,
-                          storePath: params.storePath,
-                          preservation: preservation.capture,
-                          refreshCandidates: preservation.refreshCandidates,
-                        }),
-                    );
-                    const publish = prepareCommittedSessionEntryRemovals(
-                      resolved.agentId,
-                      readOpenClawAgentDatabaseIdentity(current).identity,
-                      prepared.entryRemovals,
-                    );
-                    assertCurrent();
-                    return { ...result, publish };
-                  },
-                  database,
-                  { operationLabel: "session.entry.purge-deleted-agent" },
-                );
-                committedPurge.publish();
-                return committedPurge;
-              },
-              "session.agent-purge.commit",
-            );
+          return await attemptPurge();
+        } catch (error) {
+          if (
+            !(error instanceof SqliteSessionMutationConflictError) ||
+            error.operationLabel !== "personal session pins changed"
+          ) {
+            throw error;
           }
-          const sentPreservation = preservation.capture();
-          const input: SessionAgentPurgeCommit = {
-            ...selection,
-            entryRemovals: prepared.entryRemovals,
-            materializedPlans,
-            maintenance: {
-              activeSessionKey: "",
-              archiveDirectory: selection.archiveDirectory,
-              maintenance: normalizeResolvedMaintenanceConfigInput(resolveMaintenanceConfig()),
-              preservation: sentPreservation,
-              storePath: params.storePath,
-            },
-          };
-          const operation: Omit<
-            Parameters<
-              typeof runSessionEntryWorkerOperation<
-                SessionAgentPurgeCommitted,
-                SessionAgentPurgeResult
-              >
-            >[0],
-            "run"
-          > = {
-            database,
-            agentId: resolved.agentId,
-            retainedExecution: execution,
-            assertCurrent,
-            assertPrepared: () => {
-              preservation.capture();
-            },
-            assertCandidate: (candidate) =>
-              assertMaintenancePreservationCompatible(
-                sentPreservation,
-                preservation.capture(),
-                candidate.result.maintenancePlans,
-              ),
-            candidateKind: "session-agent-purge",
-            onCommitted: createSessionIdentityResultPublisher(resolved),
-          };
-          const captured = captureNativeSessionWorkerDeletion(entries);
-          return captured
-            ? await runSessionNativeBindingWorkerOperation<
-                SessionAgentPurgeCommitted,
-                SessionAgentPurgeResult
-              >({
-                ...operation,
-                captured,
-                entries,
-                execute: (worker, nativeBindings) =>
-                  worker.execute({
-                    type: "session.agentPurge.commit",
-                    input: { ...input, nativeBindings },
-                  }),
-              })
-            : await runSessionEntryWorkerOperation<
-                SessionAgentPurgeCommitted,
-                SessionAgentPurgeResult
-              >({
-                ...operation,
-                run: (worker, commit) =>
-                  commit(() => worker.execute({ type: "session.agentPurge.commit", input })),
-              });
-        } finally {
-          preservation.dispose();
+          // This guard refuses preparation before commit; unknown native outcomes are
+          // wrapped by the worker owner and must never be replayed here.
+          execution?.assertCurrent();
+          assertSourceCurrent();
+          return await attemptPurge();
         }
       },
     );

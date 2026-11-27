@@ -13,8 +13,9 @@ import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
-import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
 import type { Message } from "../../src/llm/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -135,12 +136,7 @@ if (wait > 0) {
 }
 const inspector = values.measure === "allocation" ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 512,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 512);
 }
 if (values.measure === "snapshot") {
   assert.ok(values.output, "Pass --output path-prefix for snapshots");

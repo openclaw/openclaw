@@ -14,8 +14,8 @@ describe("sandbox container environment validation", () => {
       value: "synthetic-private-before\0synthetic-private-after",
     },
   ])("rejects $key without exposing values", ({ backend, key, value }) => {
-    const result = validateConfigObject({
-      agents: { defaults: { sandbox: { backend, docker: { env: { [key]: value } } } } },
+    const result = validateAgents({
+      defaults: { sandbox: { backend, docker: { env: { [key]: value } } } },
     });
     assert(!result.ok);
     expect(result.issues).toHaveLength(1);
@@ -42,16 +42,15 @@ describe("sandbox container environment validation", () => {
   });
 
   it("accepts unused Docker defaults when every explicit agent uses a remote backend", () => {
-    expect(
-      validateAgents({
-        ownership: "explicit",
-        defaults: { sandbox: { backend: "docker", docker: dockerEnv } },
-        entries: {
-          synthetic_ssh: { sandbox: { backend: "ssh" } },
-          synthetic_openshell: { sandbox: { backend: "openshell" } },
-        },
-      }).ok,
-    ).toBe(true);
+    const result = validateAgents({
+      ownership: "explicit",
+      defaults: { sandbox: { backend: "docker", docker: dockerEnv } },
+      entries: {
+        synthetic_ssh: { sandbox: { backend: "ssh" } },
+        synthetic_openshell: { sandbox: { backend: "openshell" } },
+      },
+    });
+    expect(result.ok).toBe(true);
   });
 
   it("reports inherited invalid defaults once across container backends", () => {
@@ -64,8 +63,9 @@ describe("sandbox container environment validation", () => {
       },
     });
     assert(!result.ok);
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]?.path).toBe("agents.defaults.sandbox.docker.env.SYNTHETIC_VALUE");
+    expect(result.issues.map(({ path }) => path)).toEqual([
+      "agents.defaults.sandbox.docker.env.SYNTHETIC_VALUE",
+    ]);
   });
 
   it("attributes agent-owned podman values to their config path", () => {
@@ -77,24 +77,21 @@ describe("sandbox container environment validation", () => {
     };
     const result = validateConfigObject(config, { sourceRaw: config });
     assert(!result.ok);
-    expect(result.issues).toEqual([
-      expect.objectContaining({
-        path: "agents.entries.synthetic_agent.sandbox.docker.env.SYNTHETIC_VALUE",
-      }),
+    expect(result.issues.map(({ path }) => path)).toEqual([
+      "agents.entries.synthetic_agent.sandbox.docker.env.SYNTHETIC_VALUE",
     ]);
   });
 
   it("ignores agent environment overrides in shared scope", () => {
-    expect(
-      validateAgents({
-        defaults: {
-          sandbox: {
-            scope: "shared",
-            docker: { env: { SYNTHETIC_SHARED: "synthetic-single-line" } },
-          },
+    const result = validateAgents({
+      defaults: {
+        sandbox: {
+          scope: "shared",
+          docker: { env: { SYNTHETIC_SHARED: "synthetic-single-line" } },
         },
-        entries: { synthetic_agent: { sandbox: { docker: dockerEnv } } },
-      }).ok,
-    ).toBe(true);
+      },
+      entries: { synthetic_agent: { sandbox: { docker: dockerEnv } } },
+    });
+    expect(result.ok).toBe(true);
   });
 });

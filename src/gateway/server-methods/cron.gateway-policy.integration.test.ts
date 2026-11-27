@@ -27,6 +27,7 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
@@ -35,8 +36,9 @@ import { revokeCronCreatorAuthorityRunScope } from "../cron-creator-authority-gr
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { cronHandlers } from "./cron.js";
-import type { RespondFn } from "./types.js";
+import type { GatewayClient, RespondFn } from "./types.js";
 
 const gatewayCall = vi.hoisted(() => vi.fn());
 vi.mock("../../agents/tools/gateway.js", async (importOriginal) => ({
@@ -99,18 +101,14 @@ afterEach(() => {
 });
 
 async function withModelTurn(
-  source: "control-ui-admin" | "channel-owner",
+  source: "operator" | "channel-owner",
   run: (identity: AgentRuntimeIdentity) => Promise<void>,
 ) {
   const runId = "automation-policy-model";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const capability = expectDefined(
-    createCronCreatorAuthorityCapability(
-      runId,
-      { kind: "local" },
-      source === "channel-owner" ? { source, isCurrent: () => true } : { source },
-    ),
+    createCronCreatorAuthorityCapability(runId, { kind: "local" }, { source }),
     "model authority",
   );
   const identity: AgentRuntimeIdentity = {
@@ -155,10 +153,10 @@ function createPolicyFixture(storePath: string) {
     method: string,
     params: Record<string, unknown>,
     identity?: AgentRuntimeIdentity,
-    commitGuard?: () => void,
     scopes = identity ? ["operator.write"] : ["operator.admin"],
+    directClient?: GatewayClient,
   ) => {
-    const client = createSyntheticPluginRuntimeClient({ scopes });
+    const client = directClient ?? createSyntheticPluginRuntimeClient({ scopes });
     if (identity) {
       client.internal = { ...client.internal, agentRuntimeIdentity: identity };
     }
@@ -171,17 +169,7 @@ function createPolicyFixture(storePath: string) {
       respond,
       isWebchatConnect: () => false,
       extraHandlers: {
-        [method]: commitGuard
-          ? (options) =>
-              handler({
-                ...options,
-                // Inject commit-time changes after the router's admission checks.
-                sessionMutationCommitGuard: () => {
-                  options.sessionMutationCommitGuard?.();
-                  commitGuard();
-                },
-              })
-          : handler,
+        [method]: handler,
       },
     });
     return expectDefined(respond.mock.calls[0], "cron response");
@@ -230,7 +218,7 @@ async function withCron(run: (fixture: ReturnType<typeof createPolicyFixture>) =
 }
 
 describe("Gateway automation policy", () => {
-  it.each(["control-ui-admin", "channel-owner"] as const)(
+  it.each(["operator", "channel-owner"] as const)(
     "keeps %s model calls scoped and preserves ordinary updates",
     async (source) => {
       await withCron(async ({ cron, tool, invoke, readJobs }) => {
@@ -275,18 +263,45 @@ describe("Gateway automation policy", () => {
     },
   );
 
+  it.each(["operator.cron", "operator.write"])(
+    "allows %s to manage only the current conversation's jobs without a management policy",
+    async (scope) => {
+      await withCron(async ({ cron, invoke, readJobs }) => {
+        const owned = await addOwnedJob(cron);
+        const foreign = await cron.add({
+          ...jobInput,
+          owner: { sessionKey: "agent:main:other", agentId: "main", accountId: "default" },
+        });
+        await withModelTurn("channel-owner", async (identity) => {
+          const list = await invoke("cron.list", { includeDisabled: true }, identity, [scope]);
+          expect(list[0]).toBe(true);
+          expect(list[1]).toMatchObject({ jobs: [expect.objectContaining({ id: owned.id })] });
+          for (const method of ["cron.get", "cron.update", "cron.run", "cron.remove"]) {
+            const params = method === "cron.update" ? { patch: { description: "allowed" } } : {};
+            expectDenied(
+              await invoke(method, { id: foreign.id, ...params }, identity, [scope]),
+              method === "cron.get" ? "cron job not found" : "Automation not found",
+            );
+            const response = await invoke(method, { id: owned.id, ...params }, identity, [scope]);
+            expect(response[0], response[2]?.message).toBe(true);
+          }
+        });
+        expect((await readJobs()).jobs.map((job) => job.id)).toEqual([foreign.id]);
+      });
+    },
+  );
+
   it.each([
-    "policy absent",
+    "cron-only direct caller",
     "ordinary caller",
+    "session-only runtime",
     "read-only runtime",
-    "revoked before commit",
   ] as const)("keeps mutation authority restricted for %s", async (scenario) => {
     await withCron(async ({ cron, invoke, readJobs }) => {
       const job = await addOwnedJob(cron);
       const before = await readJobs();
-      setRuntimeConfigSnapshot(scenario === "policy absent" ? {} : managed);
+      setRuntimeConfigSnapshot({});
       for (const method of ["cron.update", "cron.remove", "cron.run"]) {
-        // Each method needs a fresh admitted run so revocation happens at its own commit.
         await withModelTurn("channel-owner", async (identity) => {
           const response = await invoke(
             method,
@@ -294,18 +309,21 @@ describe("Gateway automation policy", () => {
               id: job.id,
               ...(method === "cron.update" ? { patch: { description: "denied" } } : {}),
             },
-            scenario === "ordinary caller" ? undefined : identity,
-            scenario === "revoked before commit"
-              ? () => releaseAgentRunDelegatedAuthority(identity.delegatedAuthority)
-              : undefined,
-            [scenario === "read-only runtime" ? "operator.read" : "operator.write"],
+            scenario === "ordinary caller" || scenario === "cron-only direct caller"
+              ? undefined
+              : identity,
+            [
+              scenario === "read-only runtime"
+                ? "operator.read"
+                : scenario === "session-only runtime"
+                  ? "operator.sessions.write"
+                  : scenario === "cron-only direct caller"
+                    ? "operator.cron"
+                    : "operator.write",
+            ],
           );
-          if (scenario === "revoked before commit") {
-            expectDenied(response, "authority is no longer active");
-          } else {
-            expect(response[0]).toBe(false);
-            expect(response[2]?.message).toBe("missing scope: operator.admin");
-          }
+          expect(response[0]).toBe(false);
+          expect(response[2]?.message).toBe("missing scope: operator.admin");
         });
         expect(await readJobs()).toEqual(before);
       }
@@ -330,7 +348,7 @@ describe("Gateway automation policy", () => {
         const before = await readJobs();
         // Keep admin grants to prove command policy independently of caller-scope filtering.
         setRuntimeConfigSnapshot(commandRestricted);
-        await withModelTurn("control-ui-admin", async (identity) => {
+        await withModelTurn("operator", async (identity) => {
           const grant = expectDefined(
             bindCronManagementGrant(identity.operationalRunInstance.runId),
             "management grant",
@@ -352,7 +370,7 @@ describe("Gateway automation policy", () => {
       const job = await cron.add(commandJob);
       const before = await readJobs();
       setRuntimeConfigSnapshot(commandRestricted);
-      await withModelTurn("control-ui-admin", async (identity) => {
+      await withModelTurn("operator", async (identity) => {
         // The tool resolves the stored kind before sending a typed RPC payload.
         await expect(
           tool(identity).execute("kindless", {
@@ -370,10 +388,8 @@ describe("Gateway automation policy", () => {
     await withCron(async ({ cron, tool, invoke, readJobs, commandRunner }) => {
       const job = await cron.add(commandJob);
       setRuntimeConfigSnapshot(commandRestricted);
-      await withModelTurn("control-ui-admin", async (identity) => {
-        const create = await invoke("cron.add", commandJob, identity, undefined, [
-          "operator.admin",
-        ]);
+      await withModelTurn("operator", async (identity) => {
+        const create = await invoke("cron.add", commandJob, identity, ["operator.admin"]);
         expectDenied(create, "command automations");
         await expect(
           tool(identity).execute("run", { action: "run", jobId: job.id }),
@@ -404,7 +420,7 @@ describe("Gateway automation policy", () => {
     "constructs tools using the %s",
     async (_name, config, startup, commandAllowed, managementAllowed) => {
       setRuntimeConfigSnapshot(startup);
-      await withModelTurn("control-ui-admin", async (identity) => {
+      await withModelTurn("operator", async (identity) => {
         const automation = createCronTool({ config, runId: identity.operationalRunInstance.runId });
         expect(
           Value.Check(automation.parameters, {
@@ -417,6 +433,68 @@ describe("Gateway automation policy", () => {
           bindCronManagementGrant(identity.operationalRunInstance.runId, config) !== undefined,
         ).toBe(managementAllowed);
       });
+    },
+  );
+});
+
+it("allows only the current human owner or admin to edit and transfer an automation", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: true },
+    async (state) => {
+      const cfg = rolePolicyConfig();
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const alice = roleClient("view", "automation-alice");
+      const bob = roleClient("view", "automation-bob");
+      const aliceId = expectDefined(alice.authenticatedUserProfile, "Alice").profileId;
+      const bobId = expectDefined(bob.authenticatedUserProfile, "Bob").profileId;
+      const fixture = createPolicyFixture(state.path("cron", "jobs.json"));
+      const { cron, invoke } = fixture;
+      try {
+        const job = await cron.add(jobInput, {
+          createdActor: { type: "human", source: "profile", id: aliceId },
+        });
+        expect(job.ownerProfileId).toBe(aliceId);
+        const update = (client: GatewayClient, patch: Record<string, unknown>) =>
+          invoke("cron.update", { id: job.id, patch }, undefined, undefined, client);
+        expect((await update(alice, { description: "owned edit" }))[0]).toBe(true);
+        expect(
+          (await invoke("cron.update", { id: job.id, patch: { description: "admin edit" } }))[0],
+        ).toBe(true);
+        expectDenied(await update(bob, { description: "foreign edit" }), "Automation not found");
+        expectDenied(await update(bob, { ownerProfileId: bobId }), "Automation not found");
+        expectDenied(
+          await update(alice, { ownerProfileId: "missing-profile" }),
+          "existing human owner",
+        );
+        expect((await update(alice, { ownerProfileId: bobId }))[0]).toBe(true);
+        expect(cron.getJob(job.id)).toMatchObject({
+          ownerProfileId: bobId,
+          enabled: false,
+          createdActor: { id: aliceId },
+        });
+        expect(
+          (await fixture.readJobs()).jobs.find((stored) => stored.id === job.id),
+        ).toMatchObject({
+          ownerProfileId: bobId,
+          enabled: false,
+          runtimeAuthorityRecoveryRequired: true,
+          createdActor: { id: aliceId },
+        });
+        expectDenied(await update(alice, { description: "former owner" }), "Automation not found");
+        expect((await update(bob, { description: "new owner" }))[0]).toBe(true);
+        expectDenied(
+          await invoke("cron.remove", { id: job.id }, undefined, undefined, alice),
+          "Automation not found",
+        );
+        expect((await invoke("cron.remove", { id: job.id }, undefined, undefined, bob))[0]).toBe(
+          true,
+        );
+      } finally {
+        cron.stop();
+        await fixture.scheduler.stop();
+      }
     },
   );
 });

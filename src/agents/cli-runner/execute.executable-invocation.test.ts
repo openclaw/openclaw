@@ -1,8 +1,6 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { text } from "node:stream/consumers";
+import { execa } from "execa";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
@@ -14,40 +12,31 @@ const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePrepare
 afterEach(() => vi.useRealTimers());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function runVerifiedFixture(command: string, args: string[], abortSignal: AbortSignal) {
+async function runFixture(
+  command: string,
+  args: string[],
+  abortSignal: AbortSignal,
+  env?: Record<string, string>,
+) {
   const execute: CliBackendExecute = async function* (context) {
-    const child = spawn(context.command, context.args, {
+    const { stdout } = await execa(context.command, context.args, {
       argv0: context.argv0,
       cwd: context.cwd,
       env: context.env,
-      signal: context.abortSignal,
+      extendEnv: false,
+      cancelSignal: context.abortSignal,
       killSignal: "SIGKILL",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdin: "ignore",
+      stripFinalNewline: false,
     });
-    const closed = new Promise<void>((resolve) => {
-      child.once("close", () => resolve());
-    });
-    try {
-      const [[code], stdout, stderr] = await Promise.all([
-        once(child, "close"),
-        text(child.stdout),
-        text(child.stderr),
-      ]);
-      if (code !== 0) {
-        throw new Error(stderr || `Fixture CLI exited with code ${code}`);
-      }
-      yield { type: "result", subtype: "success", result: stdout };
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-      await closed;
-    }
+    yield { type: "result", subtype: "success", result: stdout };
   };
   const context = buildPreparedCliRunContext({
+    workspaceDir: path.dirname(command),
     backend: {
       command,
       args,
+      env,
       modelArg: undefined,
       sessionArgs: undefined,
       systemPromptFileArg: undefined,
@@ -87,22 +76,48 @@ it("runs a verified plugin CLI script through its resolved interpreter", async (
     await fs.writeFile(command, '@echo off\r\n"%~dp0\\cli.js" %*\r\n');
   }
 
-  await expect(
-    runVerifiedFixture(command, ["--fixture-option", "kept"], signal),
-  ).resolves.toMatchObject({
+  await expect(runFixture(command, ["--fixture-option", "kept"], signal)).resolves.toMatchObject({
     text: "fixture-script:--fixture-option|kept",
   });
 });
 
-it.skipIf(process.platform === "win32")(
-  "preserves a verified native CLI's symlink invocation name in a plugin process",
-  async ({ signal }) => {
-    const root = tempDirs.make("openclaw-plugin-cli-alias-");
+it.skipIf(process.platform === "win32")("preserves symlink argv0", async ({ signal }) => {
+  const root = tempDirs.make("openclaw-plugin-cli-alias-");
+  const command = path.join(root, "cli-fixture");
+  await fs.symlink(process.execPath, command);
+
+  await expect(
+    runFixture(command, ["-e", "process.stdout.write(process.argv0)"], signal),
+  ).resolves.toMatchObject({ text: command });
+});
+
+it.skipIf(process.platform === "win32").for([false, true])(
+  "routes local CLI temp files and respects explicit overrides (%s)",
+  async (explicit, { signal }) => {
+    const root = await fs.realpath(tempDirs.make("openclaw-cli-temp-"));
     const command = path.join(root, "cli-fixture");
     await fs.symlink(process.execPath, command);
-
-    await expect(
-      runVerifiedFixture(command, ["-e", "process.stdout.write(process.argv0)"], signal),
-    ).resolves.toMatchObject({ text: command });
+    const scratchRoot = path.join(root, explicit ? "short-temp" : ".openclaw/tmp");
+    if (explicit) {
+      await fs.mkdir(scratchRoot);
+    }
+    const result = await runFixture(
+      command,
+      [
+        "-e",
+        `
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const os = require("node:os");
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "validation-"));
+    process.stdout.write(JSON.stringify([directory, process.env.TMP, process.env.TEMP]));
+  `,
+      ],
+      signal,
+      explicit ? { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot } : undefined,
+    );
+    const [directory, tmp, temp] = JSON.parse(result.text!);
+    expect(path.dirname(directory)).toBe(scratchRoot);
+    expect([tmp, temp]).toEqual([path.dirname(directory), path.dirname(directory)]);
   },
 );

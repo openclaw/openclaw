@@ -14,6 +14,8 @@ export type StoreConfig = {
   vaultId: string;
   publicationId: string;
   writesEnabled: boolean;
+  /** Degree percentile at which a page counts as a hub for its body budget. */
+  hubPercentile?: number;
 };
 export type IdentityStore = {
   lookup(key: string): Promise<Manifest | undefined>;
@@ -34,6 +36,7 @@ export class RealVault {
       records: import("./model.js").LoadedRecord[],
       access: VaultAccess,
       evidence: import("./evidence-files.js").EvidenceInspector,
+      manifest: Manifest,
     ) => void,
   ) {}
   async identity() {
@@ -130,7 +133,7 @@ export class RealVault {
         access.scope,
         missing,
         this.observe
-          ? (records, _, evidence) => this.observe!(records, access, evidence)
+          ? (records, _, evidence) => this.observe!(records, access, evidence, before.manifest)
           : undefined,
         cache,
       ),

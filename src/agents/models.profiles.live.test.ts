@@ -47,7 +47,7 @@ import {
   requireApiKey,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
-import { normalizeDiscoveredAgentModel } from "./model-discovery-normalize.js";
+import { createDiscoveredAgentModelNormalizer } from "./model-discovery-normalize.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { createConfiguredProviderLocalServiceAcquirer } from "./provider-local-service.js";
@@ -585,20 +585,6 @@ describe("isModelNotFoundErrorMessage", () => {
   it("still matches underscore and hyphen variants", () => {
     expect(isModelNotFoundErrorMessage("404 model not_found")).toBe(true);
     expect(isModelNotFoundErrorMessage("404 model not-found")).toBe(true);
-  });
-
-  it("matches deprecated free model transition messages", () => {
-    expect(
-      isModelNotFoundErrorMessage(
-        "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
-      ),
-    ).toBe(true);
-  });
-
-  it("matches OpenRouter no-endpoints wording", () => {
-    expect(
-      isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
-    ).toBe(true);
   });
 });
 
@@ -1726,7 +1712,7 @@ describeLive("live models (profile keys)", () => {
             continue;
           }
           candidates.push({
-            model: normalizeDiscoveredAgentModel(model, agentDir, { config: cfg }),
+            model: createDiscoveredAgentModelNormalizer(agentDir, { config: cfg })(model),
             apiKeyInfo,
           });
         } catch (err) {

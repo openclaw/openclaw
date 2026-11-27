@@ -3,6 +3,7 @@ import { globSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   loadPatternListFromEnv,
+  matchesVitestCliSelection,
   matchesVitestGlob,
 } from "../../test/vitest/vitest.pattern-file.ts";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
@@ -13,7 +14,11 @@ import {
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
-import { listNodeTestConfigFiles } from "./ci-node-test-inventory.mts";
+import {
+  listNodeTestConfigFiles,
+  listNodeTestVolumeConfigFiles,
+  listWholeConfigFiles,
+} from "./ci-node-test-inventory.mts";
 import nativeBunQualification from "./ci-test-native-bun-qualification.json" with { type: "json" };
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
@@ -65,6 +70,7 @@ export const BUN_UI_TEST_ENV = {
 
 const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
 const exactTestFilePattern = /^[\w./-]+\.test\.[cm]?[jt]sx?$/u;
+const globMetacharacters = /[*?[\]{}()!+@]/u;
 const nativeBunTestHashes: Readonly<Record<string, string>> = nativeBunQualification.tests;
 const nativeBunHelperHashes: Readonly<Record<string, Readonly<Record<string, string>>>> =
   nativeBunQualification.helpers;
@@ -92,8 +98,16 @@ const nodeRequiredFiles = new Set([
   ...nodeRequiredProcessFiles,
   // Bun reports peer ECONNRESET when destroying a socket with a pending reply; fork compat review pending.
   "src/infra/exec-host.socket.test.ts",
+  // Cron uses Node/libuv headroom on delegated Linux cgroup mounts.
+  "src/cron/service.delegated-memory-admission.test.ts",
   // The macOS directory watch helper serves Node's libuv watchers only.
   "src/infra/directory-watch-host.test.ts",
+  // Git release launchers and service units are Node contracts; the suite skips on Bun.
+  "src/infra/git-release.test.ts",
+  // Migration authorization and process-boundary proofs require Node's native SQLite APIs.
+  "test/scripts/upgrade-survivor-sqlite-observer.test.ts",
+  "test/scripts/upgrade-survivor-bulk-access.test.ts",
+  "test/scripts/upgrade-survivor-migration-chain.test.ts",
   // Node's trace-exit, diagnostic reports, and native process/SQLite lifecycle.
   "src/cli/cli-process-diagnostics.test.ts",
   "test/scripts/bench-session-history.test.ts",
@@ -101,14 +115,45 @@ const nodeRequiredFiles = new Set([
   "src/infra/worker-heap-flag.test.ts",
   "src/logging/diagnostic-heap-profile.test.ts",
   "src/gateway/server-methods/diagnostics.heap-snapshot.test.ts",
+  // Consumed async-loader retention is specific to V8's suspended frames.
+  "src/agents/harness/lifecycle-hook-helpers.test.ts",
   // JavaScriptCore's conservative stack scanning cannot prove forced WeakRef collection.
+  "packages/ai/src/transports/openai-responses-websocket.test.ts",
+  "src/agents/agent-tools.execution-validation.test.ts",
   "src/config/sessions/session-accessor.pending-input-retention.test.ts",
-  "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
-  "ui/src/lib/reactive/session-progress-roster.test.ts",
+  "src/gateway/session-list-history-retention.test.ts",
+  "src/gateway/session-row-projection.retention.test.ts",
+  "src/gateway/session-database-retention.test.ts",
+  "ui/src/components/desktop/desktop-mobile-keyboard-retention.test.ts",
   "ui/src/pages/chat/chat-pane-retention.test.ts",
   "ui/src/pages/chat/chat-thread-retention.test.ts",
-  "ui/src/pages/chat/session-snapshot-store.test.ts",
+  "ui/src/pages/chat/components/chat-transcript-layout-retention.test.ts",
+  "ui/src/pages/chat/session-message-cache-retention.test.ts",
+  "ui/src/pages/chat/session-snapshot-store-retention.test.ts",
   "ui/src/pages/usage/usage-page-retention.test.ts",
+]);
+// Physical schema and worker lifecycle proofs exercise both host runtimes. Keep Bun coverage
+// while qualifying Node workers independently of any guest runtime choice.
+const bothHostFiles = new Set([
+  "test/scripts/node-cache-disabled-control.test.ts",
+  "test/scripts/node-cache-qualification.test.ts",
+  "test/scripts/vitest-pair-benchmark.test.ts",
+  // Cache fixtures spawn the host executable, so Bun cannot qualify Node's cache policy.
+  "test/vitest-performance-config.test.ts",
+  // Portable catalog lifecycle plus a separate V8 planner-count proof.
+  "src/agents/prepared-model-catalog-worker.integration.test.ts",
+  "src/agents/code-mode.bridge.lifecycle.test.ts",
+  "src/agents/code-mode-engine-parity.test.ts",
+  "src/agents/code-mode.failure-phase.test.ts",
+  "src/cli/update-cli/update-command-admission-terminal.test.ts",
+  // Cold Decision preparation must retain the same owner on both host runtimes.
+  "src/decisions/clawrouter.integration.test.ts",
+  "src/infra/sqlite-database-admission.worker.test.ts",
+  "src/infra/sqlite-schema-facts.physical-cache.test.ts",
+  "src/infra/update-run-recovery-admission.test.ts",
+  "src/state/openclaw-agent-db-schema-refresh.test.ts",
+  "src/state/openclaw-agent-db.worker-admission.test.ts",
+  "src/state/openclaw-agent-db-maintenance.schema-renewal.test.ts",
 ]);
 const knownConfigs = new Set([
   "ui/vitest.config.ts",
@@ -271,6 +316,7 @@ function resolveAllRuntimeSelections(
   selection: TestSelection,
   policy: "bun-all" | "dual-all",
   cwd: string,
+  configInventories?: ReadonlyMap<string, readonly string[]>,
 ): CiTestRuntimeSelection[] {
   const node: CiTestRuntimeSelection = { runtime: "node" };
   const args = selectionVitestArgs(selection);
@@ -305,18 +351,49 @@ function resolveAllRuntimeSelections(
             fullSuiteVitestShards.find((shard) => shard.config === config)?.projects ?? [config],
         )
       : [];
-  const inventories = ownerConfigs.map((config) => listNodeTestConfigFiles(config));
+  const inventories = ownerConfigs.map((config) => {
+    // These whole configs keep their isolation and argv; only exception membership
+    // needs their effective inventory instead of one general plan per candidate.
+    const inventory =
+      listNodeTestConfigFiles(config) ??
+      (config === "test/vitest/vitest.unit-fast-fake-timers.config.ts" ||
+      config === "test/vitest/vitest.unit-fast-isolated.config.ts"
+        ? listNodeTestVolumeConfigFiles(config)
+        : undefined);
+    if (inventory) {
+      return inventory;
+    }
+    // Focused targets can use an aggregate config while their single-project CI
+    // owner already supplies the complete file inventory.
+    const owner = fullSuiteVitestShards.find(
+      ({ projects }) => projects?.length === 1 && projects[0] === config,
+    );
+    const aggregateInventory = owner ? listWholeConfigFiles(owner.name) : undefined;
+    // Accounting already qualified this complete owner inventory. It supplies
+    // exception membership only; execution selectors and native qualification stay unchanged.
+    return (
+      aggregateInventory ?? (knownConfigs.has(config) ? configInventories?.get(config) : undefined)
+    );
+  });
   const unresolvedConfigs = ownerConfigs.filter((_, index) => !inventories[index]);
   const matches = (file: string, include: readonly string[]) =>
     include.some((pattern) => {
       const relative = relativePath(pattern);
+      // A literal path matches a suffix only when equal; group includes list hundreds of
+      // exact files, so compiling each as a glob for every suffix dominated plan building.
+      if (!globMetacharacters.test(relative)) {
+        return file === relative || file.endsWith(`/${relative}`);
+      }
       return file
         .split("/")
         .some((_, index, parts) => matchesVitestGlob(parts.slice(index).join("/"), relative));
     });
-  const files = exactTargets ? targets! : [...nodeRequiredFiles];
-  const exceptions = files.filter((file) => {
-    if (!nodeRequiredFiles.has(file) || (postIncludes && !matches(file, postIncludes))) {
+  const files = exactTargets ? targets! : [...nodeRequiredFiles, ...bothHostFiles];
+  const nodeFiles = files.filter((file) => {
+    if (
+      (!nodeRequiredFiles.has(file) && !bothHostFiles.has(file)) ||
+      (postIncludes && !matches(file, postIncludes))
+    ) {
       return false;
     }
     if (includes && !matches(file, includes)) {
@@ -349,6 +426,7 @@ function resolveAllRuntimeSelections(
         buildVitestRunPlans([file], cwd).some((plan) => unresolvedConfigs.includes(plan.config)))
     );
   });
+  const exceptions = nodeFiles.filter((file) => nodeRequiredFiles.has(file));
   if (
     (exactTargets && exceptions.length === files.length) ||
     (includes?.length && includes.every((file) => nodeRequiredFiles.has(relativePath(file))))
@@ -382,10 +460,19 @@ function resolveAllRuntimeSelections(
     args?.length === 0 &&
     (exactTargets || (configs.length === 1 && configs[0] === unitFastConfig))
   ) {
+    // Literal includes match only the identical path; testing each file against every
+    // literal as a compiled glob made this filter quadratic for full unit-fast groups.
+    const literalIncludes = new Set(
+      includes?.filter((pattern) => !globMetacharacters.test(pattern)),
+    );
+    const globIncludes = includes?.filter((pattern) => globMetacharacters.test(pattern)) ?? [];
     const inventory = exactTargets
       ? targets!
       : unitFastFiles(includes ? [...includes] : undefined).filter(
-          (file) => !includes || includes.some((pattern) => matchesVitestGlob(file, pattern)),
+          (file) =>
+            !includes ||
+            literalIncludes.has(file) ||
+            globIncludes.some((pattern) => matchesVitestGlob(file, pattern)),
         );
     const bunFiles = inventory.filter((file) => !nodeRequiredFiles.has(file));
     const nativeFiles = qualifiedNativeBunFiles(bunFiles, cwd);
@@ -410,21 +497,36 @@ function resolveAllRuntimeSelections(
     }
   }
 
+  // Changed rows can join sibling projects. Removing Node-only files can leave a
+  // project with no members, so Bun runs only projects owning a remaining file.
+  const bunIncludes = includes?.map(relativePath).filter((file) => !exceptions.includes(file));
+  const bunInventories =
+    bunIncludes?.length && configs.length > 1
+      ? configs.map((config) => listNodeTestConfigFiles(config))
+      : undefined;
+  const bunConfigs =
+    bunInventories?.every(Boolean) &&
+    bunIncludes!.every((file) => bunInventories.some((inventory) => inventory!.includes(file)))
+      ? configs.filter((_, index) =>
+          bunIncludes!.some((file) => bunInventories[index]!.includes(file)),
+        )
+      : undefined;
   return [
     ...(policy === "dual-all"
       ? [node]
-      : exceptions.length
+      : nodeFiles.length
         ? [
             {
               runtime: "node" as const,
               ...(selection.targets?.length
-                ? { targets: exceptions }
-                : { vitestArgs: exceptions.map((file) => path.resolve(cwd, file)) }),
+                ? { targets: nodeFiles }
+                : { vitestArgs: nodeFiles.map((file) => path.resolve(cwd, file)) }),
             },
           ]
         : []),
     {
       runtime: "bun",
+      ...(bunConfigs && bunConfigs.length < configs.length ? { configs: bunConfigs } : {}),
       ...(ui ? { env: BUN_UI_TEST_ENV } : {}),
       // Uncertain configs/argv use Bun; only named Node contracts are excluded.
       // Absolute globs work with both repository-root and scoped Vitest dirs.
@@ -445,17 +547,98 @@ export function resolveCiTestRuntimeSelections(
     : resolveAllRuntimeSelections(selection, policy, cwd);
 }
 
+/** Restrict execution, not policy: Node exceptions and native Bun keep their original membership. */
+export function filterCiTestRuntimeSelections(
+  selections: CiTestRuntimeSelection[],
+  env: NodeJS.ProcessEnv,
+): CiTestRuntimeSelection[] {
+  const runtime = env.OPENCLAW_CI_TEST_RUNTIME?.trim();
+  if (!runtime) {
+    return selections;
+  }
+  if (runtime !== "node" && runtime !== "bun") {
+    throw new Error(`Invalid OPENCLAW_CI_TEST_RUNTIME: ${runtime}; expected node or bun`);
+  }
+  return selections.filter((selection) => selection.runtime === runtime);
+}
+
+// Measurement consumes the same runtime and CLI owners as execution. It never
+// discovers files or changes a selection; opaque inputs have no denominator.
+export function resolveCiTestRuntimeInventory(
+  config: string,
+  files: readonly string[],
+  env: Record<string, string | undefined> | undefined,
+  policy: CiTestRuntimePolicy,
+  execution?: Pick<TestSelection, "configs" | "includePatterns" | "targets">,
+  // Complete config ownership, before projecting the selected files above.
+  configInventory?: readonly string[],
+) {
+  if (
+    env?.OPENCLAW_VITEST_INCLUDE_FILE ||
+    env?.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE ||
+    (env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON && env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON !== "[]")
+  ) {
+    return undefined;
+  }
+  const executionSelection = {
+    ...(execution ?? { configs: [config], includePatterns: files }),
+    env,
+  };
+  const selections =
+    configInventory === undefined || policy === "node"
+      ? resolveCiTestRuntimeSelections(executionSelection, policy)
+      : resolveAllRuntimeSelections(
+          executionSelection,
+          policy,
+          process.cwd(),
+          new Map([[config, configInventory]]),
+        );
+  return selections
+    .filter((selection) => !selection.configs || selection.configs.includes(config))
+    .map((selection) => {
+      if (selection.engine === "bun-test") {
+        return {
+          runtime: selection.runtime,
+          engine: selection.engine,
+          args: [],
+          files: selection.files.filter((file) => files.includes(file)),
+        };
+      }
+      if (selection.includeAfterShard) {
+        return undefined;
+      }
+      const args = selection.vitestArgs ?? [];
+      return {
+        runtime: selection.runtime,
+        engine: "vitest" as const,
+        args,
+        // Each candidate already belongs to this inventory; only runtime overrides can narrow it.
+        files: files.filter((file) =>
+          matchesVitestCliSelection(
+            file,
+            [file],
+            args,
+            "",
+            {},
+            selection.includePatterns ?? [file],
+          ),
+        ),
+      };
+    });
+}
+
 /** Match the shard runner's original process envelopes without splitting or dropping coverage. */
-export function ciTestShardRequiresBun(
+export function ciTestShardRuntimes(
   shard: TestShard,
   policy: CiTestRuntimePolicy,
   cwd = process.cwd(),
-): boolean {
+): TestRuntime[] {
   const selections = shard.targets?.length
     ? shard.targets.map((target) => ({ ...shard, targets: [target] }))
     : shard.groups?.length
       ? shard.groups.map((group) => ({
           ...group,
+          vitestArgs: group.vitestArgs ?? shard.vitestArgs,
           env: {
             ...shard.env,
             ...group.env,
@@ -467,7 +650,18 @@ export function ciTestShardRequiresBun(
           },
         }))
       : [shard];
-  return selections.some((selection) =>
-    resolveCiTestRuntimeSelections(selection, policy, cwd).some(({ runtime }) => runtime === "bun"),
+  const runtimes = new Set(
+    selections.flatMap((selection) =>
+      resolveCiTestRuntimeSelections(selection, policy, cwd).map(({ runtime }) => runtime),
+    ),
   );
+  return (["node", "bun"] as const).filter((runtime) => runtimes.has(runtime));
+}
+
+export function ciTestShardRequiresBun(
+  shard: TestShard,
+  policy: CiTestRuntimePolicy,
+  cwd = process.cwd(),
+): boolean {
+  return ciTestShardRuntimes(shard, policy, cwd).includes("bun");
 }

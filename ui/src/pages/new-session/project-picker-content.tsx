@@ -4,38 +4,123 @@ import {
   affects,
   createMemo,
   createOptimistic,
+  createSignal,
   Errored,
   For,
   Loading,
   refresh,
   Show,
+  useContext,
 } from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
+import { pathForRoute } from "../../app-route-paths.ts";
+import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
 import type { BrowserProjectRegistration } from "./draft-place-browser.ts";
-import { parentFolderDisplayName } from "./path.ts";
+import { isAbsolutePath, parentFolderDisplayName } from "./path.ts";
+import { PickerNavigation, pickerOptionRef } from "./picker-navigation.ts";
+import { createPickerScrollRef, PickerSkeleton } from "./picker.tsx";
 import { PlaceBrowser } from "./place-browser.tsx";
 import { disambiguate } from "./place-labels.ts";
 import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipProps } from "./project-chip.tsx";
+import { ProjectFolderIcon } from "./project-folder-icon.tsx";
+import { ProjectIcon } from "./project-icon.tsx";
+
+function ProjectRowIcon(props: Parameters<typeof ProjectIcon>[0]) {
+  const [visible, setVisible] = createSignal(typeof IntersectionObserver === "undefined");
+  let glyph!: HTMLSpanElement;
+  createIntersectionObserver(
+    () => (visible() ? [] : [glyph]),
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setVisible(true);
+      }
+    },
+  );
+  return (
+    <span
+      class="project-picker-icon"
+      ref={(element) => {
+        glyph = element;
+      }}
+    >
+      <Show when={visible()} fallback={<ProjectFolderIcon />}>
+        <ProjectIcon context={props.context} projectId={props.projectId} />
+      </Show>
+    </span>
+  );
+}
+
+function DevicePathEntry(props: ProjectChipProps) {
+  const [path, setPath] = createSignal(() => props.params.place.deviceFolder?.path ?? "");
+  const canUse = () =>
+    isAbsolutePath(path().trim()) &&
+    props.params.place.deviceFolderAvailable &&
+    !props.params.submitting &&
+    !props.params.pendingPlacement;
+  return (
+    <form
+      data-chat-autotype-exempt
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canUse()) {
+          props.params.place.selectDeviceFolder(path().trim());
+        }
+      }}
+    >
+      <label class="new-session-page__device-path-entry">
+        <span>{t("newSession.deviceFolderPath")}</span>
+        <input
+          type="text"
+          class="input"
+          value={path()}
+          placeholder={t("newSession.deviceFolderPathPlaceholder")}
+          ref={(node) => {
+            if (props.focus) {
+              props.focus.path = node;
+            }
+          }}
+          onInput={(event) => setPath(event.currentTarget.value)}
+        />
+      </label>
+      <div class="new-session-page__browser-actions">
+        <button
+          type="button"
+          class="new-session-page__browser-register"
+          onClick={() => props.params.place.browser.showRoot()}
+        >
+          {t("common.back")}
+        </button>
+        <button type="submit" class="new-session-page__browser-use" disabled={!canUse()}>
+          {t("newSession.browserUse")}
+        </button>
+      </div>
+    </form>
+  );
+}
 
 export function ProjectPickerContent(props: ProjectChipProps) {
+  const navigation = useContext(PickerNavigation);
+  const browseRef = pickerOptionRef();
   const applyFolder = (folder: string) => {
     if (!props.params.place.browser.browserNodeId) {
       props.params.place.applyFolder(folder);
     } else if (folder) {
       // An emptied draft names no device folder; keep the current device path.
-      props.params.place.selectDeviceFolder();
-      props.params.place.setDeviceFolderPath(folder);
+      props.params.place.selectDeviceFolder(folder);
     }
   };
   const selectClone = (cloneUrl: string) =>
@@ -43,7 +128,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
   const newWorkspaceIcon = <Icon name="folder" />;
   const deviceFolderIcon = <Icon name="folder" />;
   const workspaceIcon = <Icon name="folder" />;
-  const cloneIcon = <Icon name="gitBranch" />;
+  const cloneIcon = <Icon name="book" />;
   const view = createMemo(() => {
     const folder = props.params.place.folder.trim();
     const workspace = props.params.place.workspacePath();
@@ -62,6 +147,8 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       place.deviceFolderAvailable && place.isAdmin()
         ? findBrowsableDeviceFolderHost(place.deviceId, place.devices())
         : undefined;
+    const deviceLabel =
+      place.devices().find((device) => device.deviceId === place.deviceId)?.label ?? place.deviceId;
     const browserNodeId = place.browser.browserNodeId;
     const gatewayName = props.params.gateway.gatewayName;
     const browserLabel = browserNodeId
@@ -74,12 +161,15 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       canCallGatewayMethod(
         props.params.context?.gateway.snapshot,
         "projects.searchRemote",
-        "operator.read",
+        "operator.write",
       );
     const projectAddAvailable =
       !props.nativeTerminal &&
+      // Remote and pasted repositories open through projectGitUrl; the Gateway
+      // keeps that write-scoped so restricted roles cannot use its GitHub identity.
       readSessionMethodAccess(props.params.context?.gateway.snapshot, {
         method: "sessions.create",
+        params: { projectGitUrl: "" },
         sessionScope: true,
       }).allowed;
     return {
@@ -91,6 +181,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       recentItems,
       recentSuffixes,
       deviceBrowse,
+      deviceLabel,
       browserLabel,
       projectSearchAvailable,
       projectAddAvailable,
@@ -110,6 +201,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
     },
   );
   const projectsReady = createMemo(() => props.params.place.browser.projectsReady);
+  const projectCatalogError = createMemo(() => props.params.place.browser.projectCatalogError);
   const projects = createDeferred<readonly ProjectRecord[]>((previous) => {
     const source = projectSource();
     // A picker mounted during a shared refresh starts with the accepted rows.
@@ -178,10 +270,15 @@ export function ProjectPickerContent(props: ProjectChipProps) {
   const localProjects = createMemo(() => {
     // Retired catalogs clear immediately; a live refresh keeps local filtering responsive.
     const accepted = !props.nativeTerminal && projectsReady() ? projects() : [];
-    const query = view().query.toLowerCase();
-    // Match the visible name, not shared Git owners or parent checkout directories.
+    const query = foldSearchCase(view().query).normalize("NFC");
+    // Search only the display name and the identity projected by the Gateway, never origins or paths.
     return query
-      ? accepted.filter((project) => project.displayName.toLowerCase().includes(query))
+      ? accepted.filter((project) =>
+          [project.displayName, project.repositoryIdentity].some(
+            (value) =>
+              value !== undefined && foldSearchCase(value).normalize("NFC").includes(query),
+          ),
+        )
       : accepted;
   });
   const projectSearchRead = createMemo(() => props.params.place.browser.projectSearchRead);
@@ -196,6 +293,19 @@ export function ProjectPickerContent(props: ProjectChipProps) {
         })
       : null;
   });
+  const remoteProjects = createMemo(() => {
+    const localIdentities = new Set(
+      localProjects().map((project) => project.repositoryIdentity?.toLowerCase()),
+    );
+    return (projectSearchResult()?.projects ?? []).filter(
+      (project) => !localIdentities.has(project.fullName.toLowerCase()),
+    );
+  });
+  const searchSettled = createMemo(() => projectSearchRead()?.completed);
+  const scrollRef = createPickerScrollRef(
+    () => props.params.place.browser.popoverOpen("project"),
+    () => [view(), props.params.place.browser.projects, searchSettled()],
+  );
   const browseButton = () => (
     <button
       type="button"
@@ -208,7 +318,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
         props.params.pendingPlacement ||
         (!props.params.place.browseAvailable() && !view().browseNeedsAdmin)
       }
-      ref={(node) => props.focus && (props.focus.browse = node)}
+      ref={[browseRef, (node) => props.focus && (props.focus.browse = node)]}
       onClick={() => {
         if (
           props.params.place.browseAvailable() &&
@@ -221,7 +331,9 @@ export function ProjectPickerContent(props: ProjectChipProps) {
         }
       }}
     >
-      <span class="session-menu__check" aria-hidden="true" />
+      <span class="session-menu__icon" aria-hidden="true">
+        <Icon name="folder" />
+      </span>
       <span class="session-menu__text">{t("newSession.browse")}</span>
       <span class="new-session-page__menu-chevron" aria-hidden="true">
         <Icon name="chevronRight" />
@@ -231,7 +343,9 @@ export function ProjectPickerContent(props: ProjectChipProps) {
 
   return (
     <>
-      {props.params.place.browser.browserOpen ? (
+      {props.params.place.browser.devicePathEntryOpen ? (
+        <DevicePathEntry {...props} />
+      ) : props.params.place.browser.browserOpen ? (
         <PlaceBrowser
           pathRef={(node) => props.focus && (props.focus.path = node)}
           registeringProject={
@@ -249,255 +363,331 @@ export function ProjectPickerContent(props: ProjectChipProps) {
           }}
         />
       ) : (
-        <div class="new-session-page__picker-root">
-          <div class="new-session-page__menu-title">{t("newSession.projects")}</div>
-          {props.params.place.remotePlacement && !view().query ? (
-            <SessionMenuItem
-              item={{
-                value: "new-workspace",
-                label: t("newSession.newWorkspace"),
-                icon: newWorkspaceIcon,
-                sub: t("newSession.newWorkspaceDescription"),
-                checked: props.params.place.freshWorkspace,
-                onSelect: () => props.params.place.selectNewWorkspace(),
-              }}
-              submitting={props.params.submitting || props.params.pendingPlacement}
-            />
-          ) : undefined}
-          {props.params.place.deviceFolderOffered && !view().query ? (
-            <SessionMenuItem
-              item={{
-                value: "device-folder",
-                label: t("newSession.deviceFolder"),
-                icon: deviceFolderIcon,
-                sub:
-                  props.params.place.deviceFolderRuntimeUnsupportedReason ??
-                  t("newSession.deviceFolderDescription"),
-                disabled: Boolean(props.params.place.deviceFolderRuntimeUnsupportedReason),
-                title: props.params.place.deviceFolderRuntimeUnsupportedReason,
-                checked: Boolean(props.params.place.deviceFolder),
-                onSelect: () => props.params.place.selectDeviceFolder(),
-              }}
-              submitting={props.params.submitting || props.params.pendingPlacement}
-            />
-          ) : undefined}
-          <Show when={!view().query && view().deviceBrowse?.label}>
-            {(deviceLabel) => (
-              <button
-                type="button"
-                class="session-menu__item"
-                data-value="browse-device"
-                aria-pressed="false"
-                disabled={props.params.submitting || props.params.pendingPlacement}
-                ref={nativeListener("click", () =>
-                  props.params.place.browser.selectDeviceBrowser(
-                    props.params.place.deviceId,
-                    props.params.place.deviceFolder?.path.trim() || undefined,
-                  ),
-                )}
-              >
-                <span class="session-menu__check" aria-hidden="true" />
-                <span class="session-menu__text">
-                  {t("newSession.browseDevice", { device: deviceLabel() })}
-                </span>
-                <span class="new-session-page__menu-chevron" aria-hidden="true">
-                  <Icon name="chevronRight" />
-                </span>
-              </button>
-            )}
-          </Show>
-          {view().workspace && props.state.showWorkspace ? (
-            <SessionMenuItem
-              item={{
-                value: "workspace",
-                label: pathDisplayName(view().workspace),
-                icon: workspaceIcon,
-                checked:
-                  !props.params.place.freshWorkspace &&
-                  !props.params.place.browser.projectId &&
-                  view().folder === view().workspace,
-                onSelect: () => applyFolder(view().workspace),
-              }}
-              submitting={props.params.submitting}
-            />
-          ) : undefined}
-          <label class="new-session-page__project-search">
-            <span class="sr-only">{t("newSession.projectSearchPlaceholder")}</span>
-            <input
-              type="search"
-              placeholder={t("newSession.projectSearchPlaceholder")}
-              value={props.params.place.browser.projectQuery}
-              disabled={props.params.submitting || props.params.pendingPlacement}
-              onInput={(event: Event) =>
-                props.params.place.browser.changeProjectQuery(
-                  event.target instanceof HTMLInputElement ? event.target.value : "",
-                )
+        <div
+          class="new-session-page__environment-layout new-session-page__picker-navigation"
+          data-chat-autotype-exempt
+        >
+          <HeaderSearch
+            class="new-session-page__project-search"
+            label={t("newSession.projectSearchPlaceholder")}
+            query={props.params.place.browser.projectQuery}
+            autofocus="popover"
+            disabled={props.params.submitting || props.params.pendingPlacement}
+            inputProps={{ onCompositionEnd: recordCompositionEnd }}
+            inputRef={(node) => {
+              navigation?.inputRef(node);
+              if (props.focus) {
+                props.focus.search = node;
               }
-              onCompositionEnd={recordCompositionEnd}
-              ref={nativeListener("keydown", (event: KeyboardEvent) => {
-                if (
-                  event.key === "Enter" &&
-                  !isComposingKeyboardEvent(event) &&
-                  view().cloneInput &&
-                  view().projectAddAvailable
-                ) {
-                  event.preventDefault();
-                  selectClone(view().cloneInput!);
-                }
-              })}
-            />
-          </label>
-          <Loading on={projectsReady()}>
-            <For each={localProjects()} keyed={(project) => project.id}>
-              {(project) => {
-                const icon = <Icon name="gitBranch" />;
-                return (
-                  <SessionMenuItem
-                    item={{
-                      value: `project:${project().id}`,
-                      label: project().displayName,
-                      icon,
-                      checked: props.params.place.browser.projectId === project().id,
-                      title: project().repoRoot,
-                      onSelect: () => props.params.place.selectProjectId(project().id),
-                    }}
-                    submitting={props.params.submitting}
-                  />
-                );
-              }}
-            </For>
-          </Loading>
-          {view().cloneInput && view().projectAddAvailable ? (
-            <SessionMenuItem
-              item={{
-                value: "project-clone-url",
-                label: view().cloneInput!,
-                icon: cloneIcon,
-                sub: t("newSession.cloneProject"),
-                checked: props.params.place.browser.remoteProject?.cloneUrl === view().cloneInput,
-                onSelect: () => selectClone(view().cloneInput!),
-              }}
-              submitting={props.params.submitting}
-            />
-          ) : undefined}
-          {!view().cloneInput && view().query.length >= 2 && view().projectSearchAvailable ? (
-            <>
-              <div class="new-session-page__menu-title">{t("newSession.githubProjects")}</div>
-              <Errored
-                fallback={(error) => (
-                  <div class="new-session-page__project-error" role="alert">
-                    {formatUiError(error())}
-                  </div>
-                )}
-              >
-                <Loading
-                  on={projectSearchRead()}
-                  fallback={
-                    <div class="new-session-page__project-status" role="status">
-                      {t("common.loading")}
-                    </div>
+            }}
+            onQueryChange={(query) => {
+              navigation?.clear();
+              props.params.place.browser.changeProjectQuery(query);
+            }}
+            onInputKeyDown={(event) => {
+              if (navigation?.keydown(event)) {
+                return;
+              }
+              if (
+                event.key === "Enter" &&
+                !isComposingKeyboardEvent(event) &&
+                view().cloneInput &&
+                view().projectAddAvailable
+              ) {
+                event.preventDefault();
+                selectClone(view().cloneInput!);
+              }
+            }}
+          />
+          <div
+            class="new-session-page__picker-root new-session-page__picker-scroll"
+            ref={scrollRef}
+          >
+            {props.params.place.remotePlacement && !view().query ? (
+              <SessionMenuItem
+                item={{
+                  value: "new-workspace",
+                  label: t("newSession.newWorkspace"),
+                  icon: newWorkspaceIcon,
+                  title: t("newSession.newWorkspaceDescription"),
+                  checked: props.params.place.freshWorkspace,
+                  onSelect: () => props.params.place.selectNewWorkspace(),
+                }}
+                submitting={props.params.submitting || props.params.pendingPlacement}
+              />
+            ) : undefined}
+            {props.params.place.deviceFolderOffered && !view().query ? (
+              <SessionMenuItem
+                item={{
+                  value: "device-folder",
+                  label: t("newSession.deviceFolderOn", { device: view().deviceLabel }),
+                  icon: deviceFolderIcon,
+                  sub: props.params.place.deviceFolderRuntimeUnsupportedReason
+                    ? t("newSession.deviceFolderModelUnsupported")
+                    : undefined,
+                  disabled: Boolean(props.params.place.deviceFolderRuntimeUnsupportedReason),
+                  title:
+                    props.params.place.deviceFolderRuntimeUnsupportedReason ??
+                    t("newSession.deviceFolderDescription"),
+                  checked: Boolean(props.params.place.deviceFolder),
+                  // Admins pick the folder in the device browser; writers type its path.
+                  hasSubmenu: true,
+                  keepOpen: true,
+                  onSelect: () =>
+                    view().deviceBrowse
+                      ? props.params.place.browser.selectDeviceBrowser(
+                          props.params.place.deviceId,
+                          props.params.place.deviceFolder?.path.trim() || undefined,
+                        )
+                      : props.params.place.browser.enterDevicePath(props.params.place.deviceId),
+                }}
+                submitting={props.params.submitting || props.params.pendingPlacement}
+              />
+            ) : undefined}
+            {(view().workspace && props.state.showWorkspace) || props.state.recents.length > 0 ? (
+              <MenuHeading
+                class="new-session-page__menu-title"
+                label={t("newSession.recentFolders")}
+              />
+            ) : undefined}
+            {view().workspace && props.state.showWorkspace ? (
+              <SessionMenuItem
+                item={{
+                  value: "workspace",
+                  label: pathDisplayName(view().workspace),
+                  icon: workspaceIcon,
+                  checked:
+                    !props.params.place.freshWorkspace &&
+                    !props.params.place.browser.projectId &&
+                    view().folder === view().workspace,
+                  onSelect: () => applyFolder(view().workspace),
+                }}
+                submitting={props.params.submitting}
+              />
+            ) : undefined}
+            {props.state.recents.length > 0 ? (
+              <>
+                <For
+                  each={view().recentItems}
+                  keyed={(recent) =>
+                    recent.kind === "repository"
+                      ? `repository:${recent.url}`
+                      : `folder:${recent.folder}`
                   }
                 >
-                  {projectSearchResult()?.credential === "missing" ? (
-                    <div class="new-session-page__menu-note">{t("newSession.githubTokenHint")}</div>
-                  ) : undefined}
-                  {
-                    <For
-                      each={projectSearchResult()?.projects ?? []}
-                      keyed={(project) => project.cloneUrl}
-                    >
-                      {(project) => {
-                        const icon = <Icon name="gitBranch" />;
-                        return (
-                          <SessionMenuItem
-                            item={{
-                              value: `remote-project:${project().fullName}`,
-                              label: project().fullName,
-                              icon,
-                              sub: project().description ?? t("newSession.cloneProject"),
-                              checked:
-                                props.params.place.browser.remoteProject?.cloneUrl ===
-                                project().cloneUrl,
-                              title: project().webUrl,
-                              onSelect: () =>
-                                props.params.place.selectRemoteProject({
-                                  identity: project().fullName,
-                                  cloneUrl: project().cloneUrl,
-                                  ...(project().defaultBranch
-                                    ? { defaultBranch: project().defaultBranch }
-                                    : {}),
-                                }),
-                            }}
-                            submitting={props.params.submitting || !view().projectAddAvailable}
-                          />
-                        );
-                      }}
-                    </For>
+                  {(recent, index) => {
+                    const icon = <Icon name={recent().kind === "folder" ? "folder" : "github"} />;
+                    const item = createMemo(() => {
+                      const row = recent();
+                      return {
+                        value:
+                          row.kind === "repository"
+                            ? `repository:${row.url}`
+                            : `recent:${row.folder}`,
+                        label: row.displayName,
+                        icon,
+                        sub: view().recentSuffixes[index()],
+                        checked:
+                          row.kind === "repository"
+                            ? props.params.place.browser.remoteProject?.cloneUrl === row.url
+                            : !props.params.place.freshWorkspace &&
+                              !props.params.place.browser.projectId &&
+                              view().folder === row.folder,
+                        title: row.kind === "repository" ? row.url : row.folder,
+                        onSelect: () => {
+                          const selected = recent();
+                          if (selected.kind === "repository") {
+                            props.params.place.selectRemoteProject({
+                              identity: selected.displayName,
+                              cloneUrl: selected.url,
+                            });
+                          } else {
+                            applyFolder(selected.folder);
+                          }
+                        },
+                      };
+                    });
+                    return <SessionMenuItem item={item()} submitting={props.params.submitting} />;
+                  }}
+                </For>
+              </>
+            ) : undefined}
+            <Show when={projectCatalogError()}>
+              <div class="new-session-page__project-error" role="alert">
+                {formatUiError(projectCatalogError())}
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  disabled={
+                    props.params.submitting ||
+                    props.params.pendingPlacement ||
+                    props.params.place.browser.projectsLoading
                   }
-                </Loading>
-              </Errored>
-            </>
-          ) : undefined}
-          {(props.nativeTerminal || props.params.place.browser.projects.length === 0) &&
-          props.params.place.canWrite() &&
-          !props.params.place.isAdmin() ? (
-            <div class="new-session-page__menu-note">{t("newSession.projectsAdminHint")}</div>
-          ) : undefined}
-          {props.state.recents.length > 0 ? (
-            <>
-              <div class="new-session-page__menu-title">{t("newSession.recentFolders")}</div>
-              <For
-                each={view().recentItems}
-                keyed={(recent) =>
-                  recent.kind === "repository"
-                    ? `repository:${recent.url}`
-                    : `folder:${recent.folder}`
-                }
-              >
-                {(recent, index) => {
-                  const icon = <Icon name={recent().kind === "folder" ? "folder" : "gitBranch"} />;
-                  const item = createMemo(() => {
-                    const row = recent();
-                    return {
-                      value:
-                        row.kind === "repository"
-                          ? `repository:${row.url}`
-                          : `recent:${row.folder}`,
-                      label: row.displayName,
-                      icon,
-                      sub: view().recentSuffixes[index()],
-                      checked:
-                        row.kind === "repository"
-                          ? props.params.place.browser.remoteProject?.cloneUrl === row.url
-                          : !props.params.place.freshWorkspace &&
-                            !props.params.place.browser.projectId &&
-                            view().folder === row.folder,
-                      title: row.kind === "repository" ? row.url : row.folder,
-                      onSelect: () => {
-                        const selected = recent();
-                        if (selected.kind === "repository") {
-                          props.params.place.selectRemoteProject({
-                            identity: selected.displayName,
-                            cloneUrl: selected.url,
-                          });
-                        } else {
-                          applyFolder(selected.folder);
-                        }
-                      },
-                    };
-                  });
-                  return <SessionMenuItem item={item()} submitting={props.params.submitting} />;
+                  onClick={() => void props.params.place.browser.refreshProjects()}
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
+            </Show>
+            <Show when={!props.nativeTerminal && !view().cloneInput}>
+              <MenuHeading
+                class="new-session-page__menu-title"
+                label={t("newSession.localProjects")}
+              />
+              <Show when={!projectsReady() && !projectCatalogError()}>
+                <PickerSkeleton />
+              </Show>
+              <Loading on={projectsReady()}>
+                <For
+                  each={localProjects()}
+                  keyed={(project) => project.id}
+                  fallback={
+                    <Show when={projectsReady() && !projectCatalogError()}>
+                      {/* Restricted roles see only shared projects, so say why none appear. */}
+                      {!props.params.place.canWrite() &&
+                      props.params.place.browser.projects.length === 0 ? (
+                        <div class="new-session-page__menu-note">
+                          {t("newSession.noSharedProjects")}
+                        </div>
+                      ) : (
+                        <div class="new-session-page__menu-note new-session-page__empty">
+                          {view().query
+                            ? t("newSession.noLocalProjectMatches")
+                            : t("newSession.noLocalProjects")}
+                        </div>
+                      )}
+                    </Show>
+                  }
+                >
+                  {(project) => {
+                    const icon = (
+                      <ProjectRowIcon context={props.params.context} projectId={project().id} />
+                    );
+                    return (
+                      <SessionMenuItem
+                        item={{
+                          value: `project:${project().id}`,
+                          label: project().displayName,
+                          icon,
+                          sub: project().repositoryIdentity,
+                          checked: props.params.place.browser.projectId === project().id,
+                          title: project().repositoryIdentity ?? project().repoRoot,
+                          onSelect: () => props.params.place.selectProjectId(project().id),
+                        }}
+                        submitting={props.params.submitting}
+                      />
+                    );
+                  }}
+                </For>
+              </Loading>
+              <Show when={props.params.place.isAdmin() ? props.params.context : undefined}>
+                {(context) => (
+                  <a
+                    class="new-session-page__menu-note new-session-page__manage-projects"
+                    href={pathForRoute("projects", context().basePath)}
+                    onClick={(event) =>
+                      handleNavigationClick(event, () => context().navigate("projects"))
+                    }
+                  >
+                    {t("newSession.manageProjects")}
+                  </a>
+                )}
+              </Show>
+            </Show>
+            {view().cloneInput && view().projectAddAvailable ? (
+              <SessionMenuItem
+                item={{
+                  value: "project-clone-url",
+                  label: view().cloneInput!,
+                  icon: cloneIcon,
+                  sub: t("newSession.cloneProject"),
+                  checked: props.params.place.browser.remoteProject?.cloneUrl === view().cloneInput,
+                  onSelect: () => selectClone(view().cloneInput!),
                 }}
-              </For>
-            </>
-          ) : undefined}
-          {view().browseNeedsAdmin ? (
-            <openclaw-tooltip prop:content={t("newSession.browseRequiresAdmin")}>
-              {browseButton()}
-            </openclaw-tooltip>
-          ) : (
-            browseButton()
-          )}
+                submitting={props.params.submitting}
+              />
+            ) : undefined}
+            {!view().cloneInput && view().query.length >= 2 && view().projectSearchAvailable ? (
+              <>
+                <MenuHeading
+                  class="new-session-page__menu-title"
+                  label={t("newSession.githubProjects")}
+                />
+                <Errored
+                  fallback={(error) => (
+                    <div class="new-session-page__project-error" role="alert">
+                      {formatUiError(error())}
+                    </div>
+                  )}
+                >
+                  <Loading on={projectSearchRead()} fallback={<PickerSkeleton />}>
+                    {projectSearchResult()?.credential === "missing" ? (
+                      <div class="new-session-page__menu-note">
+                        {t("newSession.githubTokenHint")}
+                      </div>
+                    ) : undefined}
+                    {
+                      <For
+                        each={remoteProjects()}
+                        keyed={(project) => project.cloneUrl}
+                        fallback={
+                          <Show when={projectSearchResult()}>
+                            <div class="new-session-page__menu-note new-session-page__empty">
+                              {t("newSession.noAdditionalGithubProjects")}
+                            </div>
+                          </Show>
+                        }
+                      >
+                        {(project) => {
+                          const icon = <Icon name="github" />;
+                          return (
+                            <SessionMenuItem
+                              item={{
+                                value: `remote-project:${project().fullName}`,
+                                label: project().fullName,
+                                icon,
+                                sub: project().description ?? t("newSession.cloneProject"),
+                                checked:
+                                  props.params.place.browser.remoteProject?.cloneUrl ===
+                                  project().cloneUrl,
+                                title: project().webUrl,
+                                onSelect: () =>
+                                  props.params.place.selectRemoteProject({
+                                    identity: project().fullName,
+                                    cloneUrl: project().cloneUrl,
+                                    ...(project().defaultBranch
+                                      ? { defaultBranch: project().defaultBranch }
+                                      : {}),
+                                  }),
+                              }}
+                              submitting={props.params.submitting || !view().projectAddAvailable}
+                            />
+                          );
+                        }}
+                      </For>
+                    }
+                  </Loading>
+                </Errored>
+              </>
+            ) : undefined}
+            {(props.nativeTerminal || props.params.place.browser.projects.length === 0) &&
+            props.params.place.canWrite() &&
+            !props.params.place.isAdmin() ? (
+              <div class="new-session-page__menu-note">{t("newSession.projectsAdminHint")}</div>
+            ) : undefined}
+          </div>
+          {/* Gateway-host folder browsing needs operator.write; restricted roles pick shared projects. */}
+          <Show when={props.params.place.canWrite()}>
+            <div class="new-session-page__picker-foot">
+              {view().browseNeedsAdmin ? (
+                <openclaw-tooltip prop:content={t("newSession.browseRequiresAdminTooltip")}>
+                  {browseButton()}
+                </openclaw-tooltip>
+              ) : (
+                browseButton()
+              )}
+            </div>
+          </Show>
         </div>
       )}
     </>

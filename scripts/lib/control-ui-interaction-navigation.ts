@@ -25,11 +25,14 @@ export async function openNavigationDrawer(page: Page) {
 }
 
 export async function navigation(page: Page, view: "pages" | "sessions") {
-  const button = page.locator(`[data-navigation-view="${view}"]`).first();
+  const pages = view === "pages";
+  const button = page
+    .locator(pages ? "[data-rail-more]" : `[data-navigation-view="${view}"]`)
+    .first();
   if (!(await inViewport(button))) {
     await openNavigationDrawer(page);
   }
-  if ((await button.getAttribute("aria-pressed")) !== "true") {
+  if ((await button.getAttribute(pages ? "aria-expanded" : "aria-pressed")) !== "true") {
     await button.click();
   }
   await page
@@ -42,11 +45,12 @@ export async function prepareInteractionNavigation(page: Page) {
   await navigation(page, "pages");
 }
 
+/** Wait two frames; the returned timestamp interval excludes waiting for the first frame. */
 export async function frames(page: Page) {
-  await page.evaluate(
+  return page.evaluate(
     () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      new Promise<number>((resolve) => {
+        requestAnimationFrame((start) => requestAnimationFrame((end) => resolve(end - start)));
       }),
   );
 }
@@ -54,6 +58,44 @@ export async function frames(page: Page) {
 export async function prepareChat(page: Page) {
   await page.locator(activePane).getByText("Transcript 0 message 399.", { exact: false }).waitFor();
   await frames(page);
+}
+
+/** Traverse with native desktop input; Firefox caps each wheel event to one page. */
+export async function scrollTranscriptToTop(page: Page) {
+  const selector = `${activePane} .chat-thread`;
+  const thread = page.locator(selector);
+  let wheelEvents = 0;
+  if (page.viewportSize()!.width < 768) {
+    // Playwright's mobile WebKit driver has no wheel input. Keep the same
+    // scrollport jump for every mobile engine; this is not wheel latency.
+    await thread.evaluate((element) => element.scrollTo({ top: 0, behavior: "instant" }));
+  } else {
+    await thread.hover();
+    const { top, height } = await thread.evaluate((element) => ({
+      top: element.scrollTop,
+      height: element.clientHeight,
+    }));
+    const distance = Math.floor(height * 0.75);
+    // Allow partial native progress without an unbounded gesture loop.
+    const limit = Math.ceil(top / distance) * 2 + 2;
+    for (; wheelEvents < limit; wheelEvents++) {
+      const previous = await thread.evaluate((element) => element.scrollTop);
+      if (previous <= 0) {
+        break;
+      }
+      await page.mouse.wheel(0, -distance);
+      // Wheel delivery is asynchronous and engines may coalesce a gesture.
+      // Let it settle, then retry within the same bounded traversal.
+      await frames(page);
+    }
+    if ((await thread.evaluate((element) => element.scrollTop)) > 0) {
+      throw new Error(`Transcript did not reach the top after ${wheelEvents} wheel events`);
+    }
+  }
+  await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
+  await page.waitForFunction((query) => document.querySelector(query)?.scrollTop === 0, selector);
+  await frames(page);
+  return { wheelEvents };
 }
 
 export async function openInteractionPanel(

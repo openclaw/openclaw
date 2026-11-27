@@ -29,7 +29,7 @@ openclaw plugins uninstall <ids...> --keep-files
 openclaw plugins uninstall <ids...> --force
 ```
 
-`uninstall` removes plugin settings from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. It leaves only an exact `enabled: false` entry for each removed plugin id. This marker records the explicit uninstall choice so remaining model, provider, or channel selections do not automatically reinstall the package during startup repair. Reinstalling does not silently re-enable it; enabling the plugin again replaces the marker. For a package with multiple child entries, any child id resolves to the package owner; uninstall removes every sibling's policy and slot/channel references, the one package install record, and the managed directory once. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
+`uninstall` removes plugin settings from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. It leaves only an exact `enabled: false` entry for each removed plugin id. This marker records the explicit uninstall choice so remaining model, provider, or channel selections do not automatically reinstall the package during startup repair. Reinstalling does not silently re-enable it; enabling the plugin again replaces the marker. For a package with multiple child entries, any child id resolves to the package owner; uninstall removes every sibling's policy and slot/channel references, the one package install record, and the managed directory once. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine). Saved OAuth sign-ins for the plugin's HTTP MCP servers are removed too, so reinstalling the plugin starts signed out; a server under `mcp.servers` with the same name and URL keeps its credentials. If a sign-in cannot be removed, uninstall still completes and prints a warning.
 
 Plugin entry and allow/deny cleanup uses case-insensitive policy IDs. A mixed-case
 manifest ID leaves one lowercase disable marker, not conflicting entries
@@ -41,8 +41,9 @@ If a matching load-path reference is added again while the runtime drains, unins
 
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
-Manifest display names in the preview escape line breaks and strip terminal
-control sequences. The stored manifest and plugin selection keep their original values.
+Manifest display names and plugin ids in the preview escape line breaks and
+strip terminal control sequences. The stored manifest and plugin selection keep
+their original values.
 
 When several IDs are supplied, uninstall resolves the whole selection before
 removing anything. Repeated IDs and children of the same package select that
@@ -98,6 +99,12 @@ before retrying; data migrations require `openclaw doctor --fix`. Disabled plugi
 keep their pending inputs without running state migrations; unrelated pending
 migrations remain preserved.
 
+When a repair moves a setting, updates retain authored environment references
+such as `${LISTENER_HOST}`, including settings in a single owned `$include` file.
+The replacement plugin's Doctor contract handles both the resolved value and the
+authored reference before the config is saved. Values already saved as literals
+stay literals; the updater cannot recover a reference that an earlier update lost.
+
 Recovery keeps the published package generation when config rollback is not
 confirmed. The command reports the failure without claiming runtime activation.
 
@@ -119,7 +126,11 @@ A plugin selected through `plugins.load.paths` is operator-managed. Named update
 
 <AccordionGroup>
   <Accordion title="Resolving plugin id vs npm spec">
-    When you pass a plugin id, OpenClaw starts from its recorded install source. For a multi-entry package, a child id resolves to its package owner and updates every sibling together. If the new package version removes or renames children, OpenClaw removes the retired children's entries, allow/deny policy, exact child load paths, channel config, and memory/context slot selections while preserving retained/new children and unrelated plugins. Stored dist-tags such as `@beta` retain their selected release line.
+    When you pass a plugin id, OpenClaw starts from its recorded install source. For a multi-entry package, a child id resolves to its package owner and updates every sibling together. If the new package version removes or renames children, OpenClaw removes the retired children's entries, allow/deny policy, exact child load paths, channel config, and memory/context slot selections while preserving retained/new children and unrelated plugins.
+
+    On the stable update channel, trusted official plugins with saved prerelease channel tags (`@alpha`, `@beta`, `@next`, `@rc`, `@canary`, `@nightly`, or `@dev`) follow core's stable release. Updates prefer the version matching core, or `latest` when that version is unavailable, and warn before saving `latest` after success. The saved `@latest` selector keeps this core preference and version floor on every subsequent stable update. A compatible replacement must be stable and at least core's release cohort; otherwise the installed plugin and selector stay in place with a warning. This applies to named updates, `--all`, and managed core-update convergence. Older records do not distinguish automatically saved channel tags from user-selected tags, so both follow this policy. Use an exact version or an explicit selector in the current command to retain a deliberate selection.
+
+    Third-party plugins, custom dist-tags, and an explicit beta update channel keep their selected release line. This channel-tag recovery does not change exact-version or range selectors; the separate managed release-pin recovery below still applies.
 
     The narrow exception is a trusted official package completing a catalog-declared plugin id replacement. That update starts from the catalog package selector so the renamed manifest can replace the legacy id.
 
@@ -148,6 +159,8 @@ A plugin selected through `plugins.load.paths` is operator-managed. Named update
   </Accordion>
   <Accordion title="Version checks and integrity drift">
     Before a live npm update, OpenClaw checks the installed package version against the npm registry metadata. If the installed version and recorded artifact identity already match the resolved target, it avoids downloading or reinstalling. A requested selector change or managed release-pin recovery can still update the plugin index without rewriting `openclaw.json`.
+
+    ClawHub updates also retain an unchanged installation when the verified artifact digest, package, version, and archive kind match the install record. ClawHub compatibility and release-trust checks still run, and the installed package must pass the normal package validation and host-link audit. The archive is still downloaded and verified; damaged installs or changed artifacts use the normal replacement path. File-list-only releases without an attested archive digest are reinstalled.
 
     When a stored integrity hash exists and the fetched artifact hash changes, OpenClaw treats that as npm artifact drift. The interactive `openclaw plugins update` command prints the expected and actual hashes and asks for confirmation before proceeding. Non-interactive update helpers refuse the update unless the caller supplies an explicit continuation policy.
 
@@ -180,6 +193,13 @@ after editing its source; reload does not run the build. Multiple IDs use one Ga
 and one applied runtime generation. Repeated IDs are collapsed, and the Gateway
 resolves package siblings together. The request supports up to 64 distinct IDs.
 
+If the Gateway is offline, the command reports that it must be started before
+reloading a plugin and exits with code 1 without changing configuration.
+
+If startup quarantined an installed plugin, repair its files first, then reload
+it. Reload checks the repaired installation even when its path hasn't changed.
+A plugin that still fails verification stays unloaded.
+
 Bundled plugins share the running Gateway's code. Reload refreshes their
 registrations and returns `restartRequired: true`, even if their files have not
 changed. Restart the Gateway to load updated bundled code; rebuild first for
@@ -193,9 +213,10 @@ AOT hosts admit embedded plugins only. See
 Busy plugins admit replacement and fence new retained work on the old instance.
 Existing agent runs keep their original callbacks while new runs wait for the
 replacement. Before stopping services or channels, replacement waits up to
-60 seconds for retained work and in-flight calls to finish. Detailed readiness
-and Gateway logs show the queued work count and deadline; the command waits for
-the final applied receipt. Successful publication emits `plugins.changed` and
+60 seconds for retained work and in-flight calls to finish. The previous generation
+keeps serving during this drain, so a pending reload does not make `/readyz` fail.
+Gateway status and logs show the queued work count and deadline; the command waits
+for the final applied receipt. Successful publication emits `plugins.changed` and
 logs the applied replacement. If work exceeds the budget, the reload fails once
 and the previous generation resumes serving; unfinished runs are not forcibly
 disposed. Retry `openclaw plugins reload <id>` after that work finishes, or use
@@ -204,13 +225,19 @@ New agent runs across the Gateway wait behind either reload until it finishes
 or rolls back; with `--wait`, admitted-work draining alone can delay scheduled
 work for ten minutes. Later cleanup and recovery have their own deadlines.
 
+Plugins that declare `reload.turnHandover` in their manifest don't hold the
+reload for whole turns: running turns stop at their next model step and continue
+on the new version, so the reload finishes in seconds. Reload status says which
+plugins' turns hand over and which plugins keep turns waiting. See
+[Reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins).
+
 `--wait` keeps new runs behind the same replacement gate. Press Ctrl+C to cancel
 the wait; disconnecting its Gateway request also cancels it. Before publication,
 cancellation restores the previous generation when recovery succeeds, without
 cancelling admitted runs. Once publication commits, cancellation does not undo it.
 Service shutdown, resource cleanup, and recovery keep their existing deadlines.
-Detailed readiness, `openclaw status`, and `status --json` (`pluginReload`)
-expose the pending reload, its drain deadline, and why new runs are waiting.
+`openclaw status` and `status --json` (`pluginReload`) expose the pending reload,
+its drain deadline, and why new runs are waiting.
 The ten-minute budget is shared across drain stages. On expiry, the reload fails
 and restores the previous generation without cancelling its admitted work.
 Incoming messages retain their channel's existing queue and replay
@@ -225,6 +252,32 @@ It requires a Gateway-hosted conversation with turn-yield support. Stop cancels
 a pending handoff; it never force-releases leases or rolls back a committed reload.
 The handoff is process-local: if the Gateway exits before delivery, inspect the
 plugin state before retrying. Plain CLI reloads are not intercepted or deferred.
+
+### Development: reload edited bundled code
+
+When you work on bundled plugin code in a source checkout or a Node/Bun install,
+start the Gateway with `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1`. Then
+`openclaw plugins reload <id>` loads the plugin's edited code from disk and returns
+`restartRequired: false` with a warning. The plugin's code includes its package
+directory and the compiled chunks used only by plugins, including chunks it shares
+with other plugins. Chunks that core or the SDK also use keep their loaded code.
+Rebuild first when
+the installation loads compiled output; reload doesn't run the build.
+
+This mode is for development only:
+
+- It applies only to plugins named in an explicit reload. Startup, config-driven
+  reloads, and setup keep using the Gateway's code. A later config-driven reload
+  of the same plugin returns it to the code the Gateway started with.
+- Host, SDK, and build chunks shared with core keep their loaded code. Changes to
+  them still require a restart.
+- JavaScript modules can't be unloaded, so each reload keeps the previous code in
+  memory until the Gateway restarts.
+- Standalone executables ignore the variable, and reload reports the usual
+  `restartRequired: true` with a warning.
+
+Set the variable before the Gateway starts. Without it, bundled reload behaves as
+described above.
 
 ### Inspect retained references
 
@@ -243,6 +296,10 @@ host-attributed agent/session/run/service fields when available. Missing attribu
 is explicitly `unknown`. Derived consumers can name their parent reference.
 Gateway turn preparation attributes its leases to the run ID and the
 `gateway-agent-turn` service, including before embedded execution starts.
+Model catalog work (provider and native catalog lookups, catalog auth refreshes,
+and native login checks) holds a plugin only while a call into it is running, and
+attributes those calls to the agent ID and the `model-catalog-discovery` service,
+even when an agent run started it.
 The `omitted` count reports truncation. These are acquisition facts, not proof
 that a holder is currently executing or exclusively owns shared resources.
 

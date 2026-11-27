@@ -11,11 +11,13 @@ import {
 import { resolveAnthropicMessagesUrl } from "@openclaw/ai/transports";
 import "../../llm/ai-transport-host.js";
 import { readResponseBodySnippet } from "../../infra/http-error-body.js";
+import type { Model } from "../../llm/types.js";
 import {
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfigWithOriginTrust,
 } from "../../media-understanding/shared.js";
+import { assertProviderAuthAuthority } from "../../plugins/provider-auth-authority.js";
 import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -34,6 +36,7 @@ type NativePdfProviderRequestConfig = {
 };
 
 type NativePdfAnalysisParams = {
+  model?: Model;
   apiKey: string;
   modelId: string;
   prompt: string;
@@ -44,6 +47,7 @@ type NativePdfAnalysisParams = {
 };
 
 type NativePdfJsonRequest = {
+  model?: Model;
   provider: string;
   api: string;
   label: string;
@@ -90,6 +94,7 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
     timeoutMs: NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS,
     ...(params.signal ? { signal: params.signal } : {}),
     fetchFn: fetch,
+    beforeRequest: () => assertProviderAuthAuthority(params.model),
     allowPrivateNetwork,
     ssrfPolicy: resolveProviderTransportSsrFPolicy({
       baseUrl,
@@ -121,8 +126,6 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
     await release();
   }
 }
-
-type AnthropicResponseContent = Array<{ type: string; text?: string }>;
 
 export async function anthropicAnalyzePdf(
   params: NativePdfAnalysisParams & { maxTokens?: number },
@@ -168,6 +171,7 @@ export async function anthropicAnalyzePdf(
   const requestHeaders = identity?.headers ?? Object.fromEntries(headers);
 
   const json = await postNativePdfJson({
+    model: params.model,
     provider: "anthropic",
     api: "anthropic-messages",
     label: "Anthropic",
@@ -197,14 +201,16 @@ export async function anthropicAnalyzePdf(
     signal: params.signal,
   });
 
-  const responseContent = json.content as AnthropicResponseContent | undefined;
+  const responseContent = json.content;
   if (!Array.isArray(responseContent)) {
     throw new Error("Anthropic PDF response missing content array.");
   }
 
   const text = responseContent
     .flatMap((block) =>
-      block.type === "text" && typeof block.text === "string" ? [block.text] : [],
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? [block.text]
+        : [],
     )
     .join("");
 
@@ -214,10 +220,6 @@ export async function anthropicAnalyzePdf(
 
   return text.trim();
 }
-
-type GeminiCandidate = {
-  content?: { parts?: Array<{ text?: string }> };
-};
 
 export async function geminiAnalyzePdf(params: NativePdfAnalysisParams): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
@@ -234,6 +236,7 @@ export async function geminiAnalyzePdf(params: NativePdfAnalysisParams): Promise
     },
   }) ?? { baseUrl: params.baseUrl };
   const json = await postNativePdfJson({
+    model: params.model,
     provider: "google",
     api: "google-generative-ai",
     label: "Gemini",
@@ -260,13 +263,15 @@ export async function geminiAnalyzePdf(params: NativePdfAnalysisParams): Promise
     signal: params.signal,
   });
 
-  const candidates = json.candidates as GeminiCandidate[] | undefined;
+  const candidates = json.candidates;
   const candidate = Array.isArray(candidates) ? candidates[0] : undefined;
   if (!candidate) {
     throw new Error("Gemini PDF returned no candidates.");
   }
-  const text = (candidate.content?.parts ?? [])
-    .flatMap((part) => (typeof part.text === "string" ? [part.text] : []))
+  const content = isRecord(candidate) ? candidate.content : undefined;
+  const parts = isRecord(content) && Array.isArray(content.parts) ? content.parts : [];
+  const text = parts
+    .flatMap((part) => (isRecord(part) && typeof part.text === "string" ? [part.text] : []))
     .join("");
 
   if (!text.trim()) {

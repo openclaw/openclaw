@@ -16,19 +16,22 @@ import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor
 import type { SessionTranscriptTurnMessageAppend } from "./session-accessor.types.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SqliteSessionTurnOptions } from "./session-turn.types.js";
+import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { createExistingAgentSessionStoreTargetResolver } from "./targets-discovery.native.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-let resolveSessionWorkStartError:
-  | typeof import("./lifecycle.js").resolveSessionWorkStartError
-  | undefined;
 let readGatewaySessionStore: typeof import("../../gateway/session-utils-store-read.js").readGatewaySessionStore;
 let prepareRoutingLookup:
   | typeof import("../../gateway/session-utils-store-lookup.js").prepareGatewaySessionStoreTargetLookup
   | undefined;
 
-export async function prepareSessionTurnPredicates() {
-  resolveSessionWorkStartError = (await import("./lifecycle.js")).resolveSessionWorkStartError;
+export async function prepareSessionTurnRoutingDependencies(
+  predicate: SessionTranscriptTurnMutation["routingPredicate"],
+) {
+  // Most turns do not route a Goal. Keep Gateway discovery out of their worker isolates.
+  if (!predicate) {
+    return;
+  }
   const { prepareGatewaySessionStoreTargetLookup } =
     await import("../../gateway/session-utils-store-lookup.js");
   prepareRoutingLookup = prepareGatewaySessionStoreTargetLookup;
@@ -133,9 +136,6 @@ export function assertSessionTurnAcceptedResult(
   }
   if (entry.activeWriterRunId !== (guard.expectedWriterRunId ?? undefined)) {
     throw new Error(guard.errorMessage);
-  }
-  if (!resolveSessionWorkStartError) {
-    throw new Error("Session turn predicates were not prepared");
   }
   const error = resolveSessionWorkStartError(sessionKey, entry, {
     expectedSessionId: options.expectedSessionId,

@@ -5,8 +5,10 @@ import {
 } from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveRunProjectRequester } from "../../../gateway/project-access.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
+import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
 import { resolveRunEntryCliRuntime } from "../../embedded-agent-runner/run-entry-runtime.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
@@ -19,6 +21,7 @@ import {
   resolveSpawnedWorkspaceInheritance,
 } from "../../spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
+import { resolveSpawnBillingRoute } from "./subagent-spawn-billing-route.js";
 import {
   rejectSubagentSpawnRequest,
   type SpawnSubagentContext,
@@ -29,6 +32,7 @@ import { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
 import {
   resolveRequesterFastMode,
   resolveRequesterPreferences,
+  resolveSubagentCyberAccessProgram,
 } from "./subagent-spawn-requester-prefs.js";
 import {
   normalizeDeliveryContext,
@@ -40,6 +44,7 @@ import {
 export async function resolveSubagentChildPlan(params: {
   request: SpawnSubagentParams;
   ctx: SpawnSubagentContext;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   cfg: OpenClawConfig;
   requesterInternalKey: string;
   requesterAgentId: string;
@@ -51,11 +56,13 @@ export async function resolveSubagentChildPlan(params: {
    * status so durable-lineage key substitution does not weaken sandbox admission. */
   requesterSandboxed?: boolean;
   /** Captured by the trusted caller before any spawn preparation awaits. */
-  creatorProfileId?: string;
+  spawnedBy?: Parameters<typeof resolveRunProjectRequester>[1];
 }) {
   const requestedCwd = normalizeOptionalString(params.request.cwd);
   const senderRestricted = params.ctx.inheritedToolPolicySource === "sender";
-  const requesterRoot = params.ctx.sessionPermissionPolicy?.root ?? params.ctx.workspaceDir;
+  const participationRoot = params.operatorAuthority?.participationCeiling?.source?.root;
+  const requesterRoot =
+    participationRoot ?? params.ctx.sessionPermissionPolicy?.root ?? params.ctx.workspaceDir;
   if (
     senderRestricted &&
     (params.request.worktree ||
@@ -74,7 +81,7 @@ export async function resolveSubagentChildPlan(params: {
   const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
     config: params.cfg,
     targetAgentId: params.targetAgentId,
-    explicitWorkspaceDir: inheritedWorkspaceDir,
+    explicitWorkspaceDir: participationRoot ?? inheritedWorkspaceDir,
   });
   const requesterConversation = resolveSpawnRequesterConversationTarget(params.ctx);
   const requesterOrigin = normalizeDeliveryContext({
@@ -116,7 +123,7 @@ export async function resolveSubagentChildPlan(params: {
   );
   creationPolicy.actor = attributeDelegatedSessionCreator(
     creationPolicy.actor,
-    params.creatorProfileId,
+    params.spawnedBy?.profileId,
     params.requesterAgentId,
   );
   // A fresh child has no stored row yet; admission must include its inherited isolation.
@@ -128,7 +135,8 @@ export async function resolveSubagentChildPlan(params: {
       preparedSessionEntry: null,
     }).sandboxed;
   const childCwd =
-    requestedCwd ?? (senderRestricted && !childRuntimeSandboxed ? requesterRoot : undefined);
+    requestedCwd ??
+    ((senderRestricted || participationRoot) && !childRuntimeSandboxed ? requesterRoot : undefined);
   const spawnedCwd = childCwd ? resolveUserPath(childCwd) : undefined;
   const sandboxError = resolveSpawnSandboxError({
     backend: "subagent",
@@ -186,6 +194,7 @@ export async function resolveSubagentChildPlan(params: {
         ? (params.ctx.requesterModel ?? requesterPreferences?.model)
         : undefined,
     fastMode: params.request.fastMode,
+    cyberAccessProgram: params.request.cyberAccessProgram,
     workspaceDir: spawnedWorkspaceDir,
     requiresTools: params.request.outputSchema !== undefined,
   });
@@ -207,7 +216,7 @@ export async function resolveSubagentChildPlan(params: {
   // decides before model resolution, so re-check admission once the runtime is
   // knowable, mirroring the cron seam guard. The run seam enforces the same
   // invariant for fallback candidates and post-spawn runtime overrides.
-  if (childRuntimeSandboxed) {
+  if (childRuntimeSandboxed || params.operatorAuthority?.participationCeiling) {
     const { useCliExecution, cliExecutionProvider } = resolveRunEntryCliRuntime({
       config: params.cfg,
       provider: modelPlan.modelRef.provider,
@@ -218,7 +227,9 @@ export async function resolveSubagentChildPlan(params: {
     if (useCliExecution) {
       return rejectSubagentSpawnRequest(
         "forbidden",
-        `This spawn targets a sandboxed child, but model "${resolvedModel}" runs on host-executed CLI backend "${cliExecutionProvider}" and cannot honor the sandbox. Choose a sandbox-compatible (embedded/API) model for the child, or change the agent's sandbox policy explicitly.`,
+        params.operatorAuthority?.participationCeiling
+          ? "Participating helpers require the OpenClaw runtime; host-executed CLI models are unavailable."
+          : `This spawn targets a sandboxed child, but model "${resolvedModel}" runs on host-executed CLI backend "${cliExecutionProvider}" and cannot honor the sandbox. Choose a sandbox-compatible (embedded/API) model for the child, or change the agent's sandbox policy explicitly.`,
       );
     }
   }
@@ -231,6 +242,34 @@ export async function resolveSubagentChildPlan(params: {
     if (fastMode !== undefined) {
       modelPlan.initialSessionPatch.fastMode = fastMode;
     }
+  }
+  const cyberAccessProgram = resolveSubagentCyberAccessProgram({
+    ...params,
+    requested: params.request.cyberAccessProgram,
+    requesterModel: params.ctx.requesterModel,
+    childModel: resolvedModel,
+  });
+  if (cyberAccessProgram !== undefined) {
+    modelPlan.initialSessionPatch.cyberAccessProgram = cyberAccessProgram;
+  }
+  const resolvedModelMetadata = { resolvedModel, resolvedProvider: modelPlan.modelRef.provider };
+  const billingRoute = await resolveSpawnBillingRoute({
+    cfg: params.cfg,
+    agentId: params.targetAgentId,
+    workspaceDir: spawnedWorkspaceDir,
+    provider: modelPlan.modelRef.provider,
+    model: modelPlan.modelRef.model,
+    authProfileId: modelPlan.initialSessionPatch.authProfileOverride,
+  });
+  params.ctx.assertActive?.();
+  if (
+    params.operatorAuthority?.participationCeiling &&
+    billingRoute.resolvedRuntime !== "openclaw"
+  ) {
+    return rejectSubagentSpawnRequest(
+      "forbidden",
+      "Participating helpers require the OpenClaw runtime. Select an OpenClaw model for the child.",
+    );
   }
   const launchAuthorization: SubagentLaunchAuthorization | undefined = params.request.model?.trim()
     ? { modelOverride: modelPlan.modelRef }
@@ -257,11 +296,17 @@ export async function resolveSubagentChildPlan(params: {
       childRuntimeSandboxed,
       creationPolicy,
       targetAgentDir,
+      // projectId and inherited checkouts are bounded by the creator's live role.
+      projectRequester: resolveRunProjectRequester(params.cfg, params.spawnedBy ?? {}),
       modelPlan,
       launchAuthorization,
-      resolvedModelMetadata: {
-        resolvedModel,
-        resolvedProvider: modelPlan.modelRef.provider,
+      resolvedModelMetadata,
+      // Model facts echoed on the accepted spawn result.
+      acceptedModelFields: {
+        ...resolvedModelMetadata,
+        ...billingRoute,
+        modelApplied: modelPlan.modelApplied || undefined,
+        cyberAccessProgram,
       },
     },
   };

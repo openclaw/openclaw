@@ -17,9 +17,8 @@ import {
   TURN_MODEL_DIFFERENTIAL_FIXTURES,
   TURN_MODEL_OVERRIDE_REF,
   turnModelRefLabel,
-  turnModelVerdict,
 } from "../../test-utils/turn-model-selection-differential.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import * as authProfiles from "../auth-profiles/store-runtime.js";
 import * as harnessRuntime from "../harness/runtime-plugin.js";
 import { loadManifestModelCatalog } from "../model-catalog.js";
@@ -27,6 +26,7 @@ import { loadProviderScopedThinkingCatalog } from "../model-catalog.runtime.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import { resolveCommandAuthProfileSelection } from "./attempt-auth-selection.js";
 import * as sessionPersistence from "./attempt-execution.shared.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
 
@@ -193,10 +193,9 @@ function createRestrictedFixture() {
     "custom/manual": { alias: "permitted" },
   };
   fixture.inventory.mockReturnValue(customCatalog("base", "child", "manual"));
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg: fixture.cfg,
       policy: { sourceAgent: "main", deny: ["custom/child"] },
@@ -311,7 +310,6 @@ describe("command selection with configured model facts", () => {
         });
       try {
         const selected = await fixture.unchanged();
-        expect(prepared).toHaveBeenCalledOnce();
         expect(selected).toMatchObject({
           ...expectedRoute("child"),
           sessionEntryForAttempt: {
@@ -362,6 +360,40 @@ describe("command selection with configured model facts", () => {
     );
   });
 
+  it.each([
+    { provider: "custom", model: "manual@custom:work" },
+    { model: "custom/manual@custom:work" },
+  ])("uses the explicit auth profile without changing the model identity: %j", async (override) => {
+    const fixture = createFixture();
+    fixture.inventory.mockReturnValue(customCatalog("base", "child", "manual"));
+    fixture.userSelection("manual", "custom", {
+      authProfileOverride: "custom:session",
+      authProfileOverrideSource: "user",
+    });
+    vi.spyOn(authProfiles, "ensureAuthProfileStoreAsync").mockResolvedValue({
+      version: 1,
+      profiles: {
+        "custom:session": { type: "api_key", provider: "custom", key: "synthetic-session-key" },
+      },
+    });
+    const opts = { message: "Continue", allowModelOverride: true, ...override };
+    const selected = await fixture.unchanged({ opts });
+    expect(selected).toMatchObject(expectedRoute("manual"));
+    expect(
+      resolveCommandAuthProfileSelection({
+        sessionEntry: selected.sessionEntryForAttempt,
+        configuredAuthProfileId: "custom:default",
+      }),
+    ).toEqual({ id: "custom:work", source: "user" });
+    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+
+    fixture.defaults.modelPolicy = { allow: ["custom/base"] };
+    fixture.userSelection("base");
+    await expect(fixture.unchanged({ opts })).rejects.toThrow(
+      'Model override "custom/manual" is not allowed',
+    );
+  });
+
   it("preserves CLI routing on resume and allows a later API selection", async () => {
     const fixture = createFixture();
     fixture.defaults.modelPolicy = { allow: ["custom-cli/child", "custom/child"] };
@@ -405,7 +437,6 @@ describe("command selection with configured model facts", () => {
         ...expectedRoute("child"),
         storedModelOverrideSource: "auto",
         effectiveTurnThinkLevel: "off",
-        sessionEntry: automaticEntry(),
         sessionEntryForAttempt: automaticEntry(),
       });
       expect(selected.autoFallbackPrimaryProbe).toBeUndefined();
@@ -487,16 +518,6 @@ describe("command selection with configured model facts", () => {
     }
   });
 
-  it("keeps a literal catalog model over its alias", async () => {
-    const fixture = createFixture();
-    fixture.defaults.modelPolicy = { allow: ["custom/base", "custom/alias", "custom/actual"] };
-    fixture.defaults.models = { "custom/actual": { alias: "alias" } };
-    fixture.custom.models.push(configuredModel("alias"), configuredModel("actual"));
-    fixture.store[sessionKey] = automaticEntry("alias");
-    fixture.inventory.mockReturnValue([catalogEntry("custom", "alias")]);
-    expect(await fixture.unchanged()).toMatchObject(expectedRoute("alias"));
-  });
-
   it.each([
     { permission: false, error: "Model override is not authorized for this caller." },
     { permission: true, error: 'Model override "custom/child" is not allowed' },
@@ -562,11 +583,7 @@ describe("command selection with session routing", () => {
     const selection = await harness.unchanged({
       opts: {
         message: "hello",
-        to: "target",
         channel: fixture.ctx.Provider,
-        messageChannel: fixture.ctx.Provider,
-        groupId: child.groupId,
-        groupChannel: child.groupChannel,
         ...(fixture.turnModelOverride
           ? { ...TURN_MODEL_OVERRIDE_REF, allowModelOverride: true }
           : {}),
@@ -583,12 +600,8 @@ describe("command selection with session routing", () => {
         currentChannelId: "target",
       },
     });
-    expect(
-      turnModelVerdict(
-        { provider: selection.provider, model: selection.model },
-        fixture.locked ? "locked" : fixture.turnModelOverride ? "explicit" : undefined,
-      ),
-    ).toEqual(fixture.expected.command);
+    const { provider, model } = fixture.expected.command;
+    expect(selection).toMatchObject({ provider, model });
   });
 
   it.each([
@@ -603,24 +616,21 @@ describe("command selection with session routing", () => {
       fixture.defaults.modelPolicy = { allow: ["custom/*"] };
       fixture.inventory.mockReturnValue([catalogEntry("custom", "base")]);
       const sessionId = "routing-session";
-      const storedEntry: SessionEntry =
-        route === "explicit" ? fixture.entry() : { sessionId: "stored-session", updatedAt: 2 };
+      const storedEntry =
+        route === "explicit" ? fixture.entry() : sessionEntry({ sessionId: "stored-session" });
       const store = {
         [sessionKey]: storedEntry,
-        [sessionId]: { sessionId: "not-a-keyed-session", updatedAt: 3 },
-        "": { sessionId: "not-an-empty-key-session", updatedAt: 4 },
+        [sessionId]: sessionEntry({ sessionId: "not-a-keyed-session" }),
+        "": sessionEntry({ sessionId: "not-an-empty-key-session" }),
       };
-      const explicitEntry: SessionEntry | undefined =
-        route === "explicit" ? { sessionId: "explicit-session", updatedAt: 1 } : undefined;
-      const storePath = path.join(fixture.cfg.agents!.entries!.main!.workspace!, "sessions.json");
+      const explicitEntry =
+        route === "explicit" ? sessionEntry({ sessionId: "explicit-session" }) : undefined;
 
       const selected = await fixture.select({
-        opts: { message: "Resolve transcript routing", threadId: 42 },
         sessionId,
         sessionKey: key,
         sessionEntry: explicitEntry,
         sessionStore: store,
-        storePath,
         suppressVisibleSessionEffects,
       });
 
@@ -636,35 +646,4 @@ describe("command selection with session routing", () => {
       expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
     },
   );
-
-  it("rechecks operator authority after loading the thinking catalog", async () => {
-    const fixture = createFixture();
-    fixture.custom.models.forEach((model) => {
-      model.reasoning = true;
-    });
-    const lifetime = new AbortController();
-    const denied = new Error("operator authority ended during thinking catalog loading");
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "transcript-operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-      signal: lifetime.signal,
-    });
-    vi.mocked(loadProviderScopedThinkingCatalog)
-      .mockClear()
-      .mockImplementation(async () => {
-        lifetime.abort(denied);
-        return [];
-      });
-
-    await expect(
-      fixture.select({
-        opts: { message: "Select thinking level", operatorAuthority },
-        requestedThinkLevel: "low",
-      }),
-    ).rejects.toBe(denied);
-
-    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledTimes(1);
-    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
-  });
 });

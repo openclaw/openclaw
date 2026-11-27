@@ -14,6 +14,22 @@ import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-
 import { withLegacyStateWriteIndexes } from "../../state/openclaw-state-db-schema-v27-indexes.js";
 import { withLegacyPublicationDraft } from "../../state/openclaw-state-db-schema-v28-publication.js";
 import { withLegacyLocalWorkspaceManifests } from "../../state/openclaw-state-db-schema-v31-workspace-manifests.js";
+import {
+  withLegacyLocalWorkspaceCas,
+  WORKSPACE_CAS_COLUMNS,
+  WORKSPACE_CAS_TABLES,
+} from "../../state/openclaw-state-db-schema-v35-workspace-cas.js";
+import {
+  withLegacyTemplateStateSchema,
+  legacyTemplateStateIdentifier,
+} from "../../state/openclaw-state-db-schema-v36-template-names.js";
+import { withLegacyWorkerResourceReceipts } from "../../state/openclaw-state-db-schema-v37-resource-receipts.js";
+import { withLegacyRepositoryDiskAuthority } from "../../state/openclaw-state-db-schema-v38-repository-disk.js";
+import { withLegacyWorkerRetention } from "../../state/openclaw-state-db-schema-v39-worker-retention.js";
+import { withLegacyWorkspaceBootstrapDeferred } from "../../state/openclaw-state-db-schema-v40-lazy-additions.js";
+import { withLegacyWorkerProvisionSource } from "../../state/openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyApprovalProfile } from "../../state/openclaw-state-db-schema-v41-approval-profile.js";
+import { withLegacyWorkerLossRecovery } from "../../state/openclaw-state-db-schema-v42-worker-loss-recovery.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
 import { RETAINED_STATE_TABLES } from "../../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
@@ -32,11 +48,34 @@ import {
   type PortDescriptor,
   type PortTable,
 } from "./port-descriptor.js";
+import type { PostgresCatalogFact } from "./postgres-catalog.js";
 import { withLegacyPostgresIndexOrdering } from "./postgres-index-ordering.js";
+
+function legacyTemplateCatalogValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return legacyTemplateStateIdentifier(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(legacyTemplateCatalogValue);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, legacyTemplateCatalogValue(item)]),
+    );
+  }
+  return value;
+}
 
 export async function loadStatePortDescriptor(
   sourceVersion = OPENCLAW_STATE_SCHEMA_VERSION,
 ): Promise<PortDescriptor> {
+  return createStatePortDescriptor(sourceVersion);
+}
+
+function createStatePortDescriptor(
+  sourceVersion: number,
+  hasBootstrapDeferred = sourceVersion >= 39,
+): PortDescriptor {
   if (sourceVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
     const backup = stateEngineSchema.postgresMigrations?.find(
       (step) => step.version === sourceVersion + 1,
@@ -48,8 +87,10 @@ export async function loadStatePortDescriptor(
     // v29 removes credential tables; v30 fences policies; v31 adds per-path workspace baselines.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 34 ||
-      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33].includes(sourceVersion)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 42 ||
+      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41].includes(
+        sourceVersion,
+      )
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -59,15 +100,60 @@ export async function loadStatePortDescriptor(
   const source = sourceVersion < 29 ? statePostgresRuntime.clientCredentialSource : undefined;
   // The generated catalog owns these tagged facts; project only the copy fields.
   const isColumn = (
-    fact: (typeof statePostgresRuntime.expectedCatalog)[number],
+    fact: PostgresCatalogFact,
   ): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column";
   const historical = sourceVersion < 28;
   const legacyWorkspace = sourceVersion < 31;
-  const catalog = [
+  const legacyCas = sourceVersion < 35;
+  const legacyTemplates = sourceVersion < 36;
+  const legacyResourceReceipts = sourceVersion < 37;
+  const legacyRepositoryDisk = sourceVersion < 38;
+  const legacyRetention = sourceVersion < 39;
+  const legacyProvisionSource = sourceVersion < 40;
+  const legacyApprovalProfile = sourceVersion < 41;
+  const legacyWorkerLoss = sourceVersion < 42;
+  const currentCatalog: PostgresCatalogFact[] = [
     ...statePostgresRuntime.expectedCatalog,
     ...(source?.expectedCatalog ?? []),
   ].filter(
     (fact) =>
+      (!legacyWorkerLoss ||
+        fact.table !== "worker_session_placements" ||
+        !isColumn(fact) ||
+        fact.value.name !== "confirmed_loss_recovery_json") &&
+      (!legacyApprovalProfile ||
+        fact.table !== "operator_approvals" ||
+        !isColumn(fact) ||
+        fact.value.name !== "requested_by_profile_id") &&
+      (hasBootstrapDeferred ||
+        fact.table !== "workspace_setup_state" ||
+        !isColumn(fact) ||
+        fact.value.name !== "bootstrap_deferred") &&
+      (!legacyProvisionSource ||
+        fact.table !== "worker_environments" ||
+        !isColumn(fact) ||
+        fact.value.name !== "provision_source_json") &&
+      (!legacyRetention ||
+        fact.table !== "worker_environments" ||
+        !isColumn(fact) ||
+        fact.value.name !== "retention_json") &&
+      (!legacyRepositoryDisk ||
+        !isColumn(fact) ||
+        !(
+          (fact.table === "session_repository_workspaces" &&
+            fact.value.name === "disk_authority_json") ||
+          (fact.table === "worker_workspace_pending_results" &&
+            fact.value.name === "repository_disk_authority_json")
+        )) &&
+      (!legacyResourceReceipts ||
+        fact.table !== "worker_environments" ||
+        !isColumn(fact) ||
+        fact.value.name !== "resource_receipt_json") &&
+      (!legacyCas ||
+        (!WORKSPACE_CAS_TABLES.some((table) => table === fact.table) &&
+          (fact.table !== "local_workspace_projections" ||
+            !isColumn(fact) ||
+            !WORKSPACE_CAS_COLUMNS.some((column) => column === fact.value.name)))) &&
       (!legacyWorkspace ||
         (fact.table !== "local_workspace_manifest_nodes" &&
           (fact.table !== "local_workspace_projections" ||
@@ -82,18 +168,38 @@ export async function loadStatePortDescriptor(
           "github_repository_publication_requests",
         ].includes(fact.table)),
   );
+  const catalog = legacyTemplates
+    ? currentCatalog.map((fact) => ({
+        ...fact,
+        table: legacyTemplateStateIdentifier(fact.table),
+        value: legacyTemplateCatalogValue(fact.value),
+      }))
+    : currentCatalog;
   const columns = catalog.filter(isColumn);
   const keys = catalog.filter(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
   );
   const sourceSql = (sql: string, schemaSql = sql) => {
-    const workspace = legacyWorkspace ? withLegacyLocalWorkspaceManifests(sql) : sql;
+    const loss = legacyWorkerLoss ? withLegacyWorkerLossRecovery(sql) : sql;
+    const approval = legacyApprovalProfile ? withLegacyApprovalProfile(loss) : loss;
+    const bootstrap = hasBootstrapDeferred
+      ? approval
+      : withLegacyWorkspaceBootstrapDeferred(approval);
+    const provision = legacyProvisionSource
+      ? withLegacyWorkerProvisionSource(bootstrap)
+      : bootstrap;
+    const retention = legacyRetention ? withLegacyWorkerRetention(provision) : provision;
+    const disk = legacyRepositoryDisk ? withLegacyRepositoryDiskAuthority(retention) : retention;
+    const receipts = legacyResourceReceipts ? withLegacyWorkerResourceReceipts(disk) : disk;
+    const template = legacyTemplates ? withLegacyTemplateStateSchema(receipts) : receipts;
+    const cas = legacyCas ? withLegacyLocalWorkspaceCas(template) : template;
+    const workspace = legacyWorkspace ? withLegacyLocalWorkspaceManifests(cas) : cas;
     const publication = historical ? withLegacyPublicationDraft(workspace) : workspace;
     return sourceVersion < 33
       ? withLegacyPostgresIndexOrdering(
           publication,
           sourceVersion < 32 ? "sqlite" : "schema-nullability",
-          schemaSql,
+          legacyTemplates ? withLegacyTemplateStateSchema(schemaSql) : schemaSql,
         )
       : publication;
   };
@@ -102,9 +208,15 @@ export async function loadStatePortDescriptor(
     postgres: string,
     sqlite: string,
   ) => {
-    const tables = entry.tables.filter(
-      (table) => !legacyWorkspace || table.name !== "local_workspace_manifest_nodes",
-    );
+    const tables = entry.tables
+      .map((table) =>
+        legacyTemplates ? { ...table, name: legacyTemplateStateIdentifier(table.name) } : table,
+      )
+      .filter(
+        (table) =>
+          (!legacyWorkspace || table.name !== "local_workspace_manifest_nodes") &&
+          (!legacyCas || !WORKSPACE_CAS_TABLES.some((name) => name === table.name)),
+      );
     const names = new Set(tables.map((table) => table.name));
     return {
       sqlite: sourceSql(sqlite),
@@ -204,28 +316,41 @@ export async function loadStatePortDescriptor(
   if (sourceVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
     return descriptor;
   }
-  if (sourceVersion >= 27) {
-    return { ...descriptor, inspectSqliteSource: undefined, migrateSqliteSource: undefined };
+  const predecessor = {
+    ...descriptor,
+    inspectSqliteSource: undefined,
+    migrateSqliteSource: undefined,
+  };
+  // Both v39 layouts must survive an exact backup and restore before Doctor upgrades them.
+  if (sourceVersion === 39 && hasBootstrapDeferred) {
+    return {
+      ...predecessor,
+      selectSourceLayout: (hasColumn) =>
+        hasColumn("workspace_setup_state", "bootstrap_deferred")
+          ? predecessor
+          : createStatePortDescriptor(sourceVersion, false),
+    };
   }
-  const historicalSqlite = withLegacyStateWriteIndexes(descriptor.sqlite);
+  if (sourceVersion >= 27) {
+    return predecessor;
+  }
+  const historicalSqlite = withLegacyStateWriteIndexes(predecessor.sqlite);
   const legacyIndexes = statePostgresRuntime.preWriteIndexesV27Sql;
   return {
-    ...descriptor,
+    ...predecessor,
     sqlite: sourceVersion < 26 ? withLegacyStateHeadLayout(historicalSqlite) : historicalSqlite,
     postData:
-      descriptor.postData.replace(
+      predecessor.postData.replace(
         /CREATE INDEX "idx_state_leases_owner"[^;]+;/u,
         legacyIndexes.state_leases,
       ) +
       legacyIndexes.skill_usage +
       legacyIndexes.acp_replay_events,
-    expectedCatalog: descriptor.expectedCatalog.map((fact) =>
+    expectedCatalog: predecessor.expectedCatalog.map((fact) =>
       fact.kind === "indexes" &&
       (fact.table === "skill_usage" || fact.table === "acp_replay_events")
         ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
         : fact,
     ),
-    inspectSqliteSource: undefined,
-    migrateSqliteSource: undefined,
   };
 }

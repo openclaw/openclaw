@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { INCLUDE_KEY } from "../config/includes.js";
 import { parseConfigJson5 } from "../config/io.js";
@@ -10,7 +11,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { buildConfigSchemaCore } from "../config/schema.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { resolveFilesystemPath, resolveUserFilesystemPath } from "../infra/home-dir.js";
 import { collectRuntimeCapabilities } from "../infra/runtime-capabilities.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { parseBooleanValue } from "../utils/boolean.js";
@@ -430,15 +431,14 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
   const now = new Date();
   const configuredOutputPath = options.outputPath;
   const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
-  const raw = configuredOutputPath?.trim();
+  const raw = readNonBlankString(configuredOutputPath);
   let outputPath: string;
   if (!raw) {
     outputPath = path.join(stateDir, "logs", "support", filename);
   } else {
-    const resolved =
-      path.isAbsolute(raw) || raw.startsWith("~")
-        ? resolveHomeRelativePath(raw)
-        : path.resolve(raw);
+    const resolved = raw.startsWith("~")
+      ? resolveUserFilesystemPath(raw)
+      : resolveFilesystemPath(raw);
     outputPath = resolved;
     try {
       if (fs.statSync(resolved).isDirectory()) {

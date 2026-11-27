@@ -99,7 +99,6 @@ export class GitHistory {
     );
   }
   private repository() {
-    this.command(["--version"]);
     void new PublicationFiles(this.root); // Reject redirected vault roots before Git touches them.
     let stat: fs.Stats | undefined;
     try {
@@ -260,10 +259,17 @@ export class GitHistory {
         budget(additions.length),
       );
     }
+    return new Map(changes.map((c) => [c.path, oids.has(c) ? `100644 ${oids.get(c)}` : undefined]));
   }
   /** Synchronize only unstaged paths; retain all pre-existing staged content.
    * A crash before this cosmetic step can be retried from the checkpoint ref. */
-  private synchronizeIndex(changes: GitChange[], parent: string, temporary: string) {
+  private synchronizeIndex(
+    changes: GitChange[],
+    parent: string,
+    commit: string,
+    committed: ReadonlyMap<string, string | undefined>,
+    temporary: string,
+  ) {
     const index = path.join(this.gitDir, "index"),
       lock = index + ".lock";
     const fd = fs.openSync(lock, "wx", 0o600);
@@ -281,8 +287,21 @@ export class GitHistory {
       const before = parent
         ? this.entries(["ls-tree", "-r", "-z", parent])
         : new Map<string, string>();
-      const unchanged = changes.filter((c) => staged.get(c.path) === before.get(c.path));
-      this.apply(unchanged, temporary, path.dirname(temporary));
+      // The checkpoint already owns the exact blobs, including on replay. Reuse
+      // that tree instead of writing and hashing the batch a second time.
+      const entries = changes
+        .filter((c) => staged.get(c.path) === before.get(c.path))
+        .map((c) => `${committed.get(c.path) ?? `0 ${"0".repeat(commit.length)}`}\t${c.path}`);
+      if (entries.length) {
+        this.git(
+          ["update-index", "--index-info"],
+          entries.join("\n") + "\n",
+          { GIT_INDEX_FILE: temporary },
+          false,
+          undefined,
+          10000 + 20 * entries.length,
+        );
+      }
       fs.writeFileSync(fd, fs.readFileSync(temporary));
       fs.fsyncSync(fd);
       fs.renameSync(lock, index);
@@ -322,6 +341,7 @@ export class GitHistory {
     const temporary = fs.mkdtempSync(path.join(this.gitDir, "knowledge-index-"));
     try {
       let parent: string;
+      let committed: ReadonlyMap<string, string | undefined>;
       if (commit) {
         parent = this.git(
           ["rev-parse", "--verify", "--quiet", `${commit}^`],
@@ -329,6 +349,7 @@ export class GitHistory {
           undefined,
           true,
         );
+        committed = this.entries(["ls-tree", "-r", "-z", commit]);
       } else {
         const branch = this.git(["symbolic-ref", "--quiet", "HEAD"], undefined, undefined, true);
         if (!branch.startsWith("refs/heads/")) {
@@ -337,7 +358,7 @@ export class GitHistory {
         parent = this.git(["rev-parse", "--verify", "--quiet", "HEAD"], undefined, undefined, true);
         const index = path.join(temporary, "commit");
         this.git(["read-tree", parent || "--empty"], undefined, { GIT_INDEX_FILE: index });
-        this.apply(batch.changes, index, temporary);
+        committed = this.apply(batch.changes, index, temporary);
         const tree = this.git(["write-tree"], undefined, { GIT_INDEX_FILE: index });
         commit = this.git(
           ["commit-tree", tree, ...(parent ? ["-p", parent] : [])],
@@ -361,7 +382,13 @@ export class GitHistory {
       }
       // Do not adjust the index against a branch that has since moved.
       if (this.git(["rev-parse", "--verify", "HEAD"]) === commit) {
-        this.synchronizeIndex(batch.changes, parent, path.join(temporary, "working"));
+        this.synchronizeIndex(
+          batch.changes,
+          parent,
+          commit,
+          committed,
+          path.join(temporary, "working"),
+        );
       }
       return commit;
     } finally {

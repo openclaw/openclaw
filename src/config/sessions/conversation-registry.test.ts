@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import * as admissionTurn from "../../infra/sqlite-database-admission-turn.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
 import { withAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -12,6 +13,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
@@ -214,8 +216,30 @@ describe("conversation registry", () => {
         },
       );
       let pending: Promise<unknown> | undefined;
+      const captured = createDeferred();
+      const queued = createDeferred();
+      const capture = executionOwner.captureOpenClawAgentDatabaseExecutionAsync;
+      const enqueue = admissionTurn.runWithSqliteDatabaseAdmissionTurn;
       try {
         await awaitGateBeforeSettlement(entered.promise, held, "Writer did not acquire its lane");
+        const captureSpy = vi
+          .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecutionAsync")
+          .mockImplementation(async (...args) => {
+            const execution = await capture(...args);
+            captured.resolve();
+            return execution;
+          });
+        const queueSpy = vi
+          .spyOn(admissionTurn, "runWithSqliteDatabaseAdmissionTurn")
+          .mockImplementation((...args) => {
+            const result = enqueue(...args);
+            queued.resolve();
+            return result;
+          });
+        onTestFinished(() => {
+          captureSpy.mockRestore();
+          queueSpy.mockRestore();
+        });
         const identity = address("peer-a", "reef:peer-a", { accountId: undefined });
         pending =
           operation === "registration"
@@ -229,6 +253,11 @@ describe("conversation registry", () => {
               );
         const rejected = expect(pending).rejects.toThrow(
           "Agent database target changed before write admission",
+        );
+        await awaitGateBeforeSettlement(
+          Promise.all([captured.promise, queued.promise]),
+          pending,
+          "Conversation operation settled before capturing and queuing its target",
         );
         fs.renameSync(databasePath, `${databasePath}.previous`);
         fs.writeFileSync(databasePath, "");
@@ -351,7 +380,8 @@ describe("conversation registry", () => {
       parentPeerId: "parent-a",
       memberRoleIds: ["support", "admin"],
     };
-    await commitInitialization(scope, { routeContext });
+    // Keep observation times explicit; bookkeeping clamps future activity to its wall clock.
+    await commitInitialization(scope, { routeContext, entry: { updatedAt: 100 } });
     const canonicalConversation = (await list()).find(
       (conversation) => conversation.peerId === "canonical-ops",
     );
@@ -368,26 +398,25 @@ describe("conversation registry", () => {
       routeContext: { ...routeContext, memberRoleIds: ["admin", "support"] },
     });
 
-    await commitInitialization(scope, {
-      entry: { updatedAt: canonicalConversation!.lastSeenAt + 100 },
-    });
+    await commitInitialization(scope, { entry: { updatedAt: 200 } });
     const resumed = await read(conversationRef);
-    expect(resumed!.lastSeenAt).toBeGreaterThan(canonicalConversation!.lastSeenAt);
+    expect(resumed!.lastSeenAt).toBe(200);
     expect(resumed).toEqual({ ...canonicalConversation, lastSeenAt: resumed!.lastSeenAt });
 
     await upsertSessionEntry(scope, {
       totalTokens: 42,
-      updatedAt: resumed!.lastSeenAt + 100,
+      updatedAt: 300,
     });
     expect(await read(conversationRef)).toEqual(resumed);
     expect(await primary(scope, "ops-session")).toEqual(resumed);
 
     await commitInitialization(scope, {
       routeContext: { peerId: "canonical-ops", guildId: "guild-b" },
+      entry: { updatedAt: 400 },
     });
     const observed = await read(conversationRef);
     expect(observed).toMatchObject({ routeContext: { guildId: "guild-b" } });
-    expect(observed!.lastSeenAt).toBeGreaterThan(resumed!.lastSeenAt);
+    expect(observed!.lastSeenAt).toBe(400);
 
     await upsertSessionEntry(scope, { label: "generic current write", updatedAt: 200 });
     expect((await list()).filter((conversation) => conversation.role === "primary")).toEqual([

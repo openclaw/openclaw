@@ -2,7 +2,6 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   prepareAgentRunTerminalReply,
   sanitizeAgentRunTerminalReply,
-  type PreparedAgentRunTerminalReply,
 } from "../agent-run-terminal-reply.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import {
@@ -54,25 +53,27 @@ export function resolveCliSourceReplyMirror(params: {
   return { payloads, delivered, visibleText };
 }
 
-export type PreparedCliRunTerminalReply = PreparedAgentRunTerminalReply & {
-  sourceReplyMirror: { payloads: ReplyPayload[]; delivered: boolean; visibleText?: string };
-  completedFinalSource: boolean;
-};
-
-export function prepareCliRunTerminalReply(
-  context: PreparedCliRunContext,
-  output: CliOutput,
-): PreparedCliRunTerminalReply {
+export function prepareCliRunTerminalReply(context: PreparedCliRunContext, output: CliOutput) {
+  const rawText = output.rawFinalText ?? output.rawText ?? output.text;
+  const prepared = prepareAgentRunTerminalReply({ rawText });
   let sourceReplyMirror = resolveCliSourceReplyMirror({
     evidence: output,
     runParams: context.params,
     modelId: context.modelId,
   });
+  const explicitFinalSource = resolveExplicitFinalSourceReplyDeliveryEvidence(output);
   const completedFinalSource =
     sourceReplyMirror.payloads.length > 0 &&
-    resolveExplicitFinalSourceReplyDeliveryEvidence(output) === true &&
+    explicitFinalSource === true &&
     hasCompletedSourceReplyDeliveryEvidence(output);
-  if (resolveReplyExpectation(context.params) === "result-required" && !completedFinalSource) {
+  const replyExpectation = resolveReplyExpectation(context.params);
+  if (
+    (replyExpectation === "result-required" && !completedFinalSource) ||
+    // Progress completes an optional turn; a required turn still needs its visible final.
+    (replyExpectation === "required" &&
+      explicitFinalSource === false &&
+      prepared.terminalReply.disposition === "visible")
+  ) {
     sourceReplyMirror = { payloads: [], delivered: false };
   }
   // A delivery receipt without a mirrored body must not replace authored silence with empty output.
@@ -85,8 +86,6 @@ export function prepareCliRunTerminalReply(
       terminalReply: sanitizeAgentRunTerminalReply(text),
     };
   }
-  const rawText = output.rawFinalText ?? output.rawText ?? output.text;
-  const prepared = prepareAgentRunTerminalReply({ rawText });
   const finalText =
     prepared.terminalReply.disposition === "silent"
       ? ""
@@ -106,9 +105,28 @@ export function prepareCliRunTerminalReply(
     sourceReplyMirror,
     completedFinalSource,
     text,
+    // The final model message alone, transformed; `text` keeps earlier narration for delivery.
+    ...(prepared.terminalReply.disposition === "visible" ? { finalMessageText: finalText } : {}),
     terminalReply:
       prepared.terminalReply.disposition === "visible"
         ? sanitizeAgentRunTerminalReply(finalText)
         : prepared.terminalReply,
   };
+}
+
+/** A final source send completes the reply; later work and private results still need an outcome. */
+export function shouldSuppressCliAutomaticFinal(
+  output: CliOutput,
+  runParams: RunCliAgentParams,
+  delivered: boolean,
+): boolean {
+  return (
+    delivered &&
+    (runParams.sourceReplyDeliveryMode === "message_tool_only" ||
+      (output.terminalSourceReplyDelivered === true &&
+        resolveReplyExpectation(runParams) !== "result-required" &&
+        !output.errorText &&
+        !output.terminalFailure &&
+        !output.terminalInterruption))
+  );
 }

@@ -1,12 +1,14 @@
 // @vitest-environment node
-import { expect, it } from "vitest";
-import type { ModelCatalogEntry } from "../../api/types.ts";
+import { expect, it, vi } from "vitest";
+import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import { i18n } from "../../i18n/index.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import {
   normalizeChatFastModeInput,
   resolveChatModelUnavailableReason,
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
+  resolveChatModelSelectValues,
 } from "./model-select-state.ts";
 
 type ModelInput = Parameters<typeof resolveChatModelSelectState>[0];
@@ -34,7 +36,11 @@ function session(
   });
 }
 
-function modelState(params: Partial<Omit<ModelInput, "sessionKey">> = {}): ModelInput {
+function modelState(
+  params: Partial<Omit<ModelInput, "sessionKey">> & {
+    sessionsResult?: SessionsListResult | null;
+  } = {},
+): ModelInput {
   const sessionsResult = params.sessionsResult ?? createSessionsListResult();
   return {
     activeSession: params.activeSession ?? sessionsResult.sessions[0],
@@ -50,7 +56,7 @@ type FastInput = Parameters<typeof resolveChatFastModeSelectState>[0];
 
 type FastState = ReturnType<typeof resolveChatFastModeSelectState>;
 function expectFast(
-  input: Pick<FastInput, "sessionsResult"> & Partial<FastInput>,
+  input: { sessionsResult: SessionsListResult | null } & Partial<Omit<FastInput, "sessionsResult">>,
   expected: Partial<FastState>,
 ) {
   expect(
@@ -91,7 +97,7 @@ function runtime(id = "openclaw", source: "model" | "session" = "model") {
 }
 
 function expectModel(
-  params: Partial<ModelInput>,
+  params: Parameters<typeof modelState>[0],
   expected: Partial<ReturnType<typeof resolveChatModelSelectState>>,
 ) {
   const { options, ...fields } = expected;
@@ -155,6 +161,104 @@ it("uses the agent default rather than the global default", () => {
   );
 });
 
+it.each<[string, ModelCatalogEntry[], string]>([
+  [
+    "canonical available alias wins even when legacy appears first",
+    [
+      model("choice", "Legacy", "codex", { available: true }),
+      model("choice", "Canonical", "openai", { available: true }),
+    ],
+    "openai/choice",
+  ],
+  [
+    "available legacy alias wins over unavailable canonical",
+    [
+      model("choice", "Canonical", "openai", { available: false }),
+      model("choice", "Legacy", "codex", { available: true }),
+    ],
+    "codex/choice",
+  ],
+  [
+    "available automatic-only alias still suppresses an unavailable manual alias",
+    [
+      model("choice", "Legacy", "codex", { available: false, manualSelectionAllowed: true }),
+      model("choice", "Canonical", "openai", { available: true, manualSelectionAllowed: false }),
+    ],
+    "CODEX/CHOICE",
+  ],
+  [
+    "manual exclusion leaves the available legacy choice",
+    [
+      model("choice", "Canonical", "openai", { available: true, manualSelectionAllowed: false }),
+      model("choice", "Legacy", "codex", { available: true }),
+    ],
+    "codex/choice",
+  ],
+  [
+    "duplicate canonical identities retain the first available spelling",
+    [
+      model("Choice", "First", "OpenAI", { available: true }),
+      model("choice", "Later", "openai", { available: true }),
+      model("choice", "Legacy", "codex", { available: false }),
+    ],
+    "OpenAI/Choice",
+  ],
+])("resolves value-only model identities: %s", (_name, catalog, expected) => {
+  expect(
+    resolveChatModelSelectValues(
+      modelState({
+        chatModelCatalog: [
+          model("unrelated", "Canonical", "other", { alias: "choice", available: true }),
+          ...catalog,
+        ],
+        modelOverrides: { main: "CODEX/CHOICE" },
+        modelSelectionPolicy: { restricted: true, defaultModel: "CODEX/CHOICE" },
+      }),
+    ),
+  ).toEqual({ currentOverride: expected, defaultModel: expected });
+});
+
+it("preserves unknown value-only model identities instead of matching display aliases", () => {
+  expect(
+    resolveChatModelSelectValues(
+      modelState({
+        chatModelCatalog: [model("known", "Known", "openai", { alias: "proxy/retired" })],
+        modelOverrides: { main: " proxy/retired " },
+        agentDefaultModel: " custom/missing ",
+      }),
+    ),
+  ).toEqual({ currentOverride: "proxy/retired", defaultModel: "custom/missing" });
+});
+
+it.each<[string, Partial<Omit<ModelInput, "sessionsResult">>, string]>([
+  ["agent before global", {}, "openai/agent"],
+  ["global when the agent has no default", { agentDefaultModel: undefined }, "openai/global"],
+  [
+    "restricted policy before configured defaults",
+    { modelSelectionPolicy: { restricted: true, defaultModel: "openai/policy" } },
+    "openai/policy",
+  ],
+  [
+    "restricted policy with no permitted default",
+    { modelSelectionPolicy: { restricted: true, defaultModel: null } },
+    "",
+  ],
+  ["retired catalog", { catalogRetired: true }, ""],
+  ["uninitialized catalog", { catalogInitialized: false }, ""],
+])("resolves value-only model defaults: %s", (_name, input, expectedDefault) => {
+  expect(
+    resolveChatModelSelectValues(
+      modelState({
+        chatModelCatalog: ["agent", "global", "policy"].map((id) => model(id, id)),
+        modelOverrides: { main: null },
+        agentDefaultModel: "openai/agent",
+        sessionsResult: session("global", "openai"),
+        ...input,
+      }),
+    ),
+  ).toEqual({ currentOverride: "", defaultModel: expectedDefault });
+});
+
 type UnavailableReason = NonNullable<ModelCatalogEntry["unavailableReason"]>;
 const unavailableModel = (reason: UnavailableReason, provider = "openai") =>
   model("example", "Example", provider, { available: false, unavailableReason: reason });
@@ -207,7 +311,7 @@ it.each([
     );
   },
 );
-it("keeps a saved off preference clearable on a no-op route", () => {
+it("hides speed controls while preserving a saved off preference on a no-op route", () => {
   const sessionsResult = session("claude-sonnet-5", "anthropic");
   expectFast(
     {
@@ -219,7 +323,7 @@ it("keeps a saved off preference clearable on a no-op route", () => {
         model("claude-opus-5", "Opus 5", "anthropic", { supportsFastMode: true }),
       ],
     },
-    { supported: true, disabled: false, nextValue: "" },
+    { supported: false, disabled: true, nextValue: "", persistedOverride: "off" },
   );
 });
 
@@ -255,7 +359,6 @@ const alternative = { agentRuntime: runtime("codex"), available: true, supportsF
 it.each<[Partial<ModelCatalogEntry> | null, string, boolean | undefined]>([
   [{}, "openclaw", true],
   [null, "openclaw", undefined],
-  [{ supportsFastMode: false }, "openclaw", undefined],
   [{ serviceTiers: undefined }, "openclaw", undefined],
   [{ available: undefined }, "openclaw", undefined],
   [{ available: false }, "openclaw", undefined],
@@ -290,6 +393,52 @@ it.each<[Partial<ModelCatalogEntry> | null, string, boolean | undefined]>([
   },
 );
 
+it.each<[string, string, Partial<ModelCatalogEntry> | null, FastInput["fastModeTarget"]]>([
+  [
+    "saved Fast on a route that cannot carry it",
+    "openai",
+    { supportsFastMode: false },
+    { fastMode: true },
+  ],
+  ["an inherited default on such a route", "openai", { supportsFastMode: false }, {}],
+  [
+    "saved Ultrafast on such a route",
+    "openai",
+    { supportsFastMode: false },
+    { fastMode: "ultrafast" },
+  ],
+  ["a provider without a Fast mapping", "example-router", null, {}],
+])("does not present Fast as running for %s", (_case, provider, fields, target) => {
+  const input = fastRoute(
+    { ...fields, provider, serviceTiers: ["priority", "ultrafast"] },
+    { modelProvider: provider, fastMode: undefined, effectiveFastMode: true, ...target },
+  );
+  expectFast(
+    {
+      ...input,
+      currentModelOverride: `${provider}/model`,
+      catalog: fields === null ? [] : input.catalog,
+    },
+    {
+      active: false,
+      label: provider === "openai" ? "Standard" : "Default",
+      hint: undefined,
+      nextValue: "",
+      ultrafastSupported: undefined,
+    },
+  );
+});
+
+it("keeps Fast running while the selected route's applicability is unknown", () => {
+  expectFast(
+    fastRoute(
+      { provider: "anthropic", supportsFastMode: undefined },
+      { modelProvider: "anthropic", fastMode: undefined, effectiveFastMode: true },
+    ),
+    { active: true, label: "Fast", supported: true },
+  );
+});
+
 it.each(["ultra", "ultrafast"])("normalizes %s to Ultrafast", (value) => {
   expect(normalizeChatFastModeInput(value)).toBe("ultrafast");
 });
@@ -302,12 +451,12 @@ it("uses Standard for a model's authoritative Standard-only capability without c
       currentOverride: "off",
       label: "Standard",
       disabled: true,
-      supported: true,
+      supported: false,
       ultrafastSupported: false,
     });
     expectFast(
       fastRoute({ supportsFastMode: false, serviceTiers: ["priority", "ultrafast"] }, { fastMode }),
-      { disabled: !fastMode },
+      { disabled: true, supported: false },
     );
   }
 });
@@ -319,7 +468,7 @@ it.each<[string[], Partial<FastState>]>([
   ],
   [
     ["default"],
-    { active: false, currentOverride: "off", label: "Standard", disabled: true, supported: true },
+    { active: false, currentOverride: "off", label: "Standard", disabled: true, supported: false },
   ],
 ])("recovers saved Ultrafast with tiers %j", (serviceTiers, expected) => {
   expectFast(fastRoute({ supportsServiceTierRecovery: true, serviceTiers }), {
@@ -337,4 +486,19 @@ it("preserves the wire preference without route recovery capability", () => {
     }),
     { currentOverride: "ultrafast", label: "Ultrafast", ultrafastSupported: false },
   );
+});
+
+it("routes the default model fallback through the catalog", () => {
+  const translate = vi.spyOn(i18n, "t");
+  try {
+    const state = resolveChatModelSelectState(
+      modelState({
+        sessionsResult: createSessionsListResult({ defaultsModel: "", defaultsProvider: "" }),
+      }),
+    );
+    expect(translate).toHaveBeenCalledWith("chat.modelControls.defaultModel", undefined);
+    expect(state.defaultLabel).toBe(i18n.t("chat.modelControls.defaultModel"));
+  } finally {
+    translate.mockRestore();
+  }
 });

@@ -25,7 +25,7 @@ import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 it("refreshes a retained pane from a persisted profile-only selection through the Gateway lifecycle broadcaster", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({});
+    setRuntimeConfigSnapshot({ agents: { defaults: { model: "anthropic/claude-opus-4-6" } } });
     // The picker supplies prepared capabilities; omission would start unrelated catalog discovery.
     const model = {
       provider: "anthropic",
@@ -81,7 +81,11 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       desktopNavigationExpanded: false,
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: async () => undefined },
-      shellNavigation: { recoverDeletedActiveSession() {}, selectChatSession() {} },
+      shellNavigation: {
+        recoverDeletedActiveSession() {},
+        selectChatSession() {},
+        synchronizeSessionUrl() {},
+      },
       invalidate() {},
     });
     await refreshChatMetadata(retained);

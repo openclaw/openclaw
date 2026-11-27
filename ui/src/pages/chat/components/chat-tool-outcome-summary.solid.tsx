@@ -1,39 +1,30 @@
-import { Show, createMemo } from "solid-js";
+import { Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { resolveToolApprovalReviewOutcome } from "../../../lib/chat/tool-approval-reviews.ts";
+import { isToolCardError, isToolCardSkipped } from "../../../lib/chat/tool-cards.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
-import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
-/** Status belongs in the disclosure; diagnostics stay in the expanded tool output. */
-export function ToolOutcomeSummary(props: {
-  cards: readonly ToolCard[];
-  includeCount?: boolean;
-  activity?: Parameters<typeof summarizeToolCardOutcomes>[1];
-}) {
-  const outcomes = createMemo(() => summarizeToolCardOutcomes(props.cards, props.activity));
-  const outcome = () =>
-    outcomes().exitCode === undefined || outcomes().exitCode === 0
-      ? t("chat.toolCards.failed")
-      : t("chat.toolCards.exitCode", { code: String(outcomes().exitCode) });
+/**
+ * One operation's own outcome. Nested calls keep theirs on their own rows:
+ * an agent recovers from routine failures, so a step or group never tallies them.
+ */
+export function ToolOutcomeSummary(props: { card: ToolCard }) {
+  const exitCode = () => props.card.exitCode;
   return (
     <>
-      <Show when={outcomes().failed > 0}>
+      <Show when={isToolCardError(props.card)}>
         <span class="chat-tool-failure">
-          {props.includeCount !== false
-            ? t("chat.toolCards.failureCount", { count: String(outcomes().failed) })
-            : outcome()}
+          {exitCode() === undefined || exitCode() === 0
+            ? t("chat.toolCards.failed")
+            : t("chat.toolCards.exitCode", { code: String(exitCode()) })}
         </span>
       </Show>
-      <Show when={outcomes().skipped > 0}>
-        <span class="chat-tool-skipped">
-          {props.includeCount !== false
-            ? t("chat.toolCards.skippedCount", { count: String(outcomes().skipped) })
-            : t("chat.toolCards.skipped")}
-        </span>
+      <Show when={isToolCardSkipped(props.card)}>
+        <span class="chat-tool-skipped">{t("chat.toolCards.skipped")}</span>
       </Show>
     </>
   );

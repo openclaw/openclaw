@@ -41,7 +41,11 @@ function createHostedComputerTool(options: Parameters<typeof createVisionCompute
     operationalRunInstance,
     approvalAuthority: authority,
     gatewayContextResolver: () => gatewayContext,
-    receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+    receiptAuthority: () => {
+      if (!validateAgentRunDelegatedAuthority(authority)) {
+        throw new Error("agent tool caller authority is no longer active");
+      }
+    },
   });
 }
 
@@ -380,6 +384,17 @@ describe("computer Gateway and node targets", () => {
       expect(listNodesMock).toHaveBeenCalledTimes(target === "gateway" ? 0 : 1);
     },
   );
+
+  it("explains the paired-node retry for an explicit Gateway target when no Gateway provider is configured", async () => {
+    gatewayComputerStatusMock.mockResolvedValue({ configured: false, available: false });
+    listNodesMock.mockResolvedValue([macComputerNode()]);
+    const tool = createHostedComputerTool();
+
+    await expect(
+      tool.execute("unconfigured-gateway", { action: "screenshot", target: "gateway" }),
+    ).rejects.toThrow(/Gateway computer is not configured.*Omit target, or use target: node/);
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
 
   it("surfaces Gateway cleanup failure without dropping execution cleanup", async () => {
     gatewayComputerStatusMock.mockResolvedValue({

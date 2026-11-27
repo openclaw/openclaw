@@ -61,12 +61,39 @@ the session.
   </Step>
 </Steps>
 
+### No model configured
+
+OpenClaw does not pick a model for you. When no primary is set and no
+configured provider lists a model, the agent has no model:
+
+- Agent turns stop before any model call and reply with how to choose one:
+  pick a model in **Settings → Models**, send `/model <provider/model>` in
+  chat, or run `openclaw models set <provider/model>`. Attachment
+  preprocessing, such as audio transcription with a configured or detected
+  media provider, runs earlier in the turn and can still run.
+- Chat commands that need no model, such as `/help`, `/status`, `/models`,
+  `/model` and `/new`, still run. `/status` shows the model as not configured.
+  Commands that change model settings, such as `/think` and `/fast`, reply with
+  the setup message.
+- `openclaw models status` and the Gateway startup log report the model as not
+  configured.
+- No utility model is derived and no provider catalog is loaded on behalf of
+  an unconfigured primary.
+
+Signing in to a provider during onboarding writes its default model as the
+primary. Releases through 2026.11.6 picked a model when none was configured:
+`openai/gpt-6-astra`, or the first configured provider model when OpenAI did
+not list it. On update from those releases, `openclaw doctor --fix` writes the
+model the install was running as `agents.defaults.model.primary`, so it keeps
+working unchanged. The OpenAI model is written only when OpenAI credentials are
+available.
+
 Related model-config surfaces:
 
 - `agents.defaults.models` stores aliases and per-model settings. After legacy-policy migration, adding an entry does not restrict model overrides.
 - `agents.defaults.modelSelectionScope` chooses the scope of chat commands and Gateway session model updates without an explicit scope. The default is the current session. See [Model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope).
-- `agents.defaults.modelPolicy.allow` is the optional override allowlist. Use exact refs or trailing prefix wildcards such as `provider/*` and `provider/namespace/*`. Omit it or set `[]` to allow any model. Per-agent `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent.
-- `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks. It accepts a `provider/model` string, alias, or `{ primary, fallbacks }` object. Those tasks include generated dashboard session titles, supported channel thread or topic titles, progress narration, rolling [Activity recaps](/web/control-ui/settings#activity-tab), Side chat, and saved transcript summaries. Utility fallbacks use the same retry policy, alias resolution, and model-selection policy as configured model fallbacks, independently of `model.fallbacks`. Per-agent `agents.entries.*.utilityModel` inherits the default chain when unset. A fallback-only object inherits the primary; an explicit primary without `fallbacks`, or `fallbacks: []`, clears the inherited list. When unset, OpenClaw uses the primary provider's declared small-model default when one exists, otherwise the agent's primary model. Set it to an empty string to disable utility routing. Generated titles retry once with the primary model when a distinct utility chain is exhausted. For dashboard titles, automatic utility derivation and the regular fallback follow the effective session provider and auth profile. An explicit utility model keeps its configured provider and auth. An empty utility model skips only the alternate small-model route, not dashboard title generation. Utility tasks are separate model calls and may send bounded task content to the selected model provider. Activity recaps use bounded transcript excerpts and the previous recap, preserve cached text when the utility chain is exhausted, and do not fall back to the primary model.
+- `agents.defaults.modelPolicy.allow` is the optional override allowlist. Use exact refs or trailing prefix wildcards such as `provider/*`, `provider/namespace/*`, and `provider/family-*`. Omit it or set `[]` to allow any model. Per-agent `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent.
+- `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks. It accepts a `provider/model` string, alias, or `{ primary, fallbacks }` object. Those tasks include generated dashboard session titles, supported channel thread or topic titles, progress narration, rolling [Activity recaps](/web/control-ui/settings#activity-tab), Side chat, and saved transcript summaries. Utility fallbacks use the same retry policy, alias resolution, and model-selection policy as configured model fallbacks, independently of `model.fallbacks`. Per-agent `agents.entries.*.utilityModel` inherits the default chain when unset. A fallback-only object inherits the primary; an explicit primary without `fallbacks`, or `fallbacks: []`, clears the inherited list. When unset, OpenClaw uses the primary provider's declared small-model default when one exists and the published catalog does not report it missing. If that default is absent, Auto tries the configured utility fallbacks in order, skipping models known to be absent, then the listed primary model. If no alternative is offered, execution retains the declared default so failure remains visible. Missing, degraded, or differently account-scoped catalog data does not remap explicit selections or establish that a model is unavailable; execution still validates the selected model. A multi-vendor router such as ClawRouter declares one per vendor of the primary model, used only when the router's current model catalog lists it. Otherwise OpenClaw uses the agent's primary model. Set it to an empty string to disable utility routing. Generated titles retry once with the primary model when a distinct utility chain is exhausted. For dashboard titles, automatic utility derivation and the regular fallback follow the effective session provider and auth profile. An explicit utility model keeps its configured provider and auth. An empty utility model skips only the alternate small-model route, not dashboard title generation. Utility tasks are separate model calls and may send bounded task content to the selected model provider. Activity recaps use bounded transcript excerpts and the previous recap, preserve cached text when the utility chain is exhausted, and do not fall back to the primary model.
 - `agents.defaults.decisionModel` selects a plugin's typed decision model as `provider/model` for choices, scores, and boolean probabilities. It is disabled when unset or empty. Per-agent `agents.entries.*.decisionModel` inherits when unset and disables decisions when empty. The Control UI has a separate **Decision** picker beside Utility; decision models never appear in chat, primary, fallback, or utility choices. Supporting plugins call the [decision runtime](/plugins/sdk-overview/capabilities#decision-models-contract-version-1); selection alone does not start background work or replace the chat model.
 - `agents.defaults.imageModel` is used only when the primary model cannot accept images.
 - `agents.defaults.pdfModel` is used by the `pdf` tool. If unset, the tool falls back to `imageModel`, then the resolved session/default model.
@@ -76,9 +103,12 @@ Related model-config surfaces:
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
 If repeated utility-model failures stop session-observer assessments, the watching
-Control UI chat shows one warning for that run, naming the model and suggesting a
-capable utility model or `utilityModel.fallbacks`. The explicit route stays selected;
-the next run tries it again. Model-free activity headlines remain available.
+Control UI chat shows one warning for that run when a utility model or fallback
+is explicitly configured, naming the model and suggesting a
+capable utility model or `utilityModel.fallbacks`. Missing model IDs and exhausted fallback attempts are named in the notice without including raw provider errors or auth-profile IDs. The explicit route stays selected;
+the next run tries it again. Automatically selected utility models stop assessments
+without a chat warning; Gateway logs retain the failure details. Model-free activity
+headlines remain available. `models status` uses the Gateway’s agent-scoped utility decision when available, rather than reconstructing private account availability from public model rows.
 
 Title generation requests thinking off where supported. Custom OpenAI-compatible
 endpoints with an inferred Z.AI (`zai`) thinking format keep the provider's default
@@ -126,9 +156,10 @@ Other selection rules:
 - When a wildcard model policy excludes the configured default, automatic selection uses the first permitted catalog model and logs a warning naming the requested and selected models. Explicit overrides still fail when the policy disallows them.
 - Changing the global or per-agent primary does not rewrite existing session pins, including automatic creation pins. Select the effective agent default with `/model`, the model picker, `session_status(model=...)`, or `sessions.patch`, or reset with `/model default` or `sessions.patch {model: null}`, to follow subsequent default changes. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
-- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published provider rows, including rows matched by a trailing `provider/*` policy entry, and discovers native harness models for that agent on first use. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
-- When a chat already has messages, the Control UI asks before switching models. Local models skip the confirmation. Choose **Don’t ask again** to skip future confirmations for this Gateway in this browser. Accepted changes appear in the chat history.
-- Configured models stay in the picker when their sign-in, key, or CLI login is missing: they show as unavailable instead of disappearing. This covers the primary, fallbacks, utility and tool models, and each `agents.defaults.models` or per-agent `models` entry.
+- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published provider rows, including rows matched by a trailing `provider/*` policy entry, and discovers native harness models for that agent on first use. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, or exact policy entry. An alias or settings entry under `agents.defaults.models` does not keep it visible. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI chat model picker and selected-model button omit redundant family aliases, such as `opus` for `Opus 5.5`. Aliases remain searchable and selectable, and distinctive custom aliases stay in the label.
+- When a chat already has messages, the Control UI asks before switching models. Local models skip the confirmation. Choose **Don’t ask again** to skip future confirmations for this Gateway in this browser. A change appears in the chat history with the next message you send. Changing the selection alone does not add a notice.
+- Configured models stay in the picker when their sign-in, key, or CLI login is missing: they show as unavailable instead of disappearing. This covers the primary, fallbacks, utility and tool models, and exact `modelPolicy.allow` refs. Entries under `agents.defaults.models` or per-agent `models` only hold aliases and per-model settings; they do not add a model to the picker.
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 - Chat and New Session keep the Default reset choice pinned in its provider group, then the selected model, then that provider's [recommended models](/concepts/recommended-models). The provider's other models wait behind **All models (N)**; providers without recommendations list every model. The terminal `/models` picker shows the current and recommended models with an **All models (N)** row for the rest. Text `/models <provider>` pages put the current model first, then the recommended models, instead of alphabetizing the catalog. Models settings puts the selected model first. Other rows keep the Gateway's catalog order. Picker search checks the full list, not just the visible rows.
 - Signing in to a provider keeps existing choices visible in open Control UI and terminal model pickers while discovery refreshes in the background. Changes to model restrictions, operator roles, or catalog mode still retire the old choices until the replacement catalog is ready.
@@ -147,10 +178,14 @@ model still updates the preference.
 
 The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
 and native apps. Chat and session metadata read published rows without starting
-provider discovery. Ordinary `models.list` requests reuse the published catalog;
-provider response-cache expiry alone does not rebuild it. Startup, changed
-configuration or credentials, plugin and hosted metadata updates, and explicit
-**Refresh** own provider catalog acquisition. Startup discovers provider inventory
+provider discovery. Ordinary `models.list` requests return the published catalog
+immediately. When a provider's live model list is older than 15 minutes and its
+response cache has expired, the request also lists that provider again in the
+background without marking it pending, so pickers show no loading state; newly
+launched provider models appear without a restart, and open pickers update when
+the new list is published. A provider that caches its list
+for longer than 15 minutes keeps that longer lifetime. Startup, changed configuration or credentials, plugin and hosted metadata
+updates, and explicit **Refresh** also acquire the provider catalog. Startup discovers provider inventory
 in the background; a later configuration or credential change rediscovers only
 the affected providers. Native harnesses such as Codex discover models and account
 readiness on demand for the selected agent: opening its model picker or catalog,
@@ -192,9 +227,10 @@ a background refresh. Hover, focus, or tap it to see which providers are refresh
 existing models stay usable, and the open picker updates when discovery completes.
 An empty picker shows “Loading models…” until its first models arrive.
 Gateway startup and credential changes
-also refresh the affected catalog. Use **Refresh** in Models or
-`openclaw models list --refresh` to request another refresh, including newly
-released models. **Retry** requests discovery again after a failure.
+also refresh the affected catalog, and opening a picker relists any provider list
+older than 15 minutes whose response cache has expired. Use **Refresh** in Models or
+`openclaw models list --refresh` to request a refresh right away. **Retry**
+requests discovery again after a failure.
 
 If a credential refresh loses its plugin generation, OpenClaw retries publication
 once against current plugins. If a newer publication supersedes that refresh,
@@ -286,7 +322,7 @@ Fix it by adding the model or a provider wildcard to the named `modelPolicy.allo
 
 For local/GGUF models, the allowlist needs the full provider-prefixed ref, for example `ollama/gemma4:26b` or `lmstudio/Gemma4-26b-a4-it-gguf` — check `openclaw models list --provider <provider>` for the exact string. Bare filenames or display names are not enough once the allowlist is active.
 
-To limit providers without listing every model, use trailing prefix wildcard entries. A provider-wide `provider/*` matches every model under that provider. A narrower prefix such as `clawrouter/anthropic/*` matches only that namespace:
+To limit providers without listing every model, use trailing prefix wildcard entries. A provider-wide `provider/*` matches every model under that provider. A narrower prefix such as `clawrouter/anthropic/*` matches only that namespace, and a model-name prefix such as `openai/gpt-*` matches only models whose IDs start with `gpt-`. Agent and role policies use the same wildcard grammar:
 
 ```json5
 {
@@ -355,6 +391,11 @@ configured `agentRuntime` remains the default:
   },
 }
 ```
+
+In **Settings → Models**, the **Model** and **Fallback model** menus show the
+available harness choices. Choosing one saves it as the global default for that
+specific model. Other models keep their own settings, and agent-specific
+overrides still take precedence. Choosing a harness in chat changes only that session.
 
 The Gateway keeps one underlying model and checks each additional runtime against
 the current account, route, and enabled harness. A choice does not grant access,
@@ -460,7 +501,7 @@ Without a scope flag, selections change only the current session. `agents.defaul
 - **Global default:** Owner/admin `/model <model> -g` (or `--global`) changes this session and requests an update for the shared `agents.defaults.model` fallback. It does not overwrite other agents' explicit primaries or other sessions' model pins. New and existing unpinned sessions, and cron jobs that inherit this default, can use the changed model on their next run.
 - Immutable configuration stays unchanged. Asynchronous write errors are logged without reverting the session selection. Explicit model and auth-profile pins survive `/new`, `/reset`, session rollover, compaction, and cooldown windows while valid.
 - **Use the configured default:** `/model default -s` clears the current session model selection without writing configured defaults. A compatible auth-profile pin remains. An incompatible pin is cleared. Selecting the effective configured default by name also clears the session model pin, but agent/global scope still requests a write to that configured target. This does not restore an older configured default changed by a previous selection.
-- **Follow compatible runtime selections:** Model-only changes preserve a session runtime pin when it supports the selected provider. Otherwise, the pin is cleared and the selected model follows its configured runtime automatically. An explicitly requested incompatible runtime is still rejected without changing either selection. Use `/model <provider/model> --runtime <runtime> -s` to switch runtimes, or `--runtime default` to follow configured routing. Explicit runtime rows and **Default** in the Control UI still select or reset the runtime.
+- **Runtime when switching models:** A model-only switch to another provider clears the previous session runtime pin and uses the new model's configured runtime. Within the same provider, a compatible pin stays in place; an incompatible pin is cleared. An explicitly requested incompatible runtime is still rejected without changing either selection. Use `/model <provider/model> --runtime <runtime> -s` to switch runtimes, or `--runtime default` to follow configured routing. Explicit runtime rows and **Default** in the Control UI still select or reset the runtime.
 - If the agent is idle, a model change applies to the next run immediately. If a run is already active, the switch is queued for the next clean retry point. It can be queued for a later point, if tool activity or reply output already started.
 - A user-selected `/model` ref is strict for that session: if it becomes unreachable, the reply fails visibly instead of silently falling back through `agents.defaults.model.fallbacks`. Configured defaults and cron job primaries still use fallback chains.
 - If you select another model while a live switch is queued, the newer selection stays pending for the next safe retry opportunity.
@@ -513,13 +554,24 @@ catalog refresh; correct authored `models.json` pricing directly. Other schema
 errors and invalid model API or token limits still reject the affected catalog,
 even on a model with malformed pricing.
 
+Usage reports capture local pricing before rendering and keep those prices for
+the operation. Gateway catalog publication updates the retained local source,
+including an absent file. After editing `models.json` externally, restart the
+Gateway to publish the new prices.
+
 ### Hosted catalog updates
 
 OpenClaw can refresh the model metadata shipped by installed provider plugins
 without waiting for a new OpenClaw release. The Gateway makes one background
-JSON `GET` at startup and then checks at most every six hours. The request sends
-no prompts, credentials, model usage, or configuration payload beyond the
-normal HTTP user agent and conditional cache headers.
+JSON `GET` at startup and then checks at most every six hours. Changing
+`models.catalogRefresh.url` or `models.catalogRefresh.enabled` on a running
+Gateway checks the new source at once. The request sends no prompts,
+credentials, model usage, or configuration payload beyond the normal HTTP user
+agent and conditional cache headers.
+
+On memory-constrained hosts, automatic checks wait while available memory is at
+or below 20% of the process limit and retry after one minute. The current catalog
+stays available; manual `openclaw models refresh` remains immediate.
 
 The downloaded bundle is stored in the shared SQLite state database. The Gateway
 prepares a new catalog generation in the background, including each agent's
@@ -549,7 +601,9 @@ rules.
 
 The Gateway owns catalog writes while it is running. `openclaw models refresh`
 requires exclusive offline ownership and reports the saved download; the next
-Gateway start loads compatible metadata. An explicit Gateway model-list refresh
+Gateway start loads compatible metadata. Without a running Gateway, local
+catalog reads such as `openclaw models list` describe listed models with the
+saved hosted metadata too. An explicit Gateway model-list refresh
 triggers adoption after returning the current rows; it does not wait for adoption
 or another agent's discovery. A corrupt saved bundle leaves the accepted
 generation serving.
@@ -605,6 +659,16 @@ values. A self-hosted mirror can be selected with an HTTPS
 [configuration reference](/gateway/config-runtime#models).
 
 Custom providers configured under `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored separately as generated plugin-owned catalog shards and load automatically. This file is merged with config by default. Set `models.mode: "replace"` to use only your configured providers.
+
+When OpenClaw writes `models.json` and the provider-plugin catalogs, it omits a
+configured or discovered provider that the models registry cannot load. For
+example, it omits a provider whose models have no `api` at provider or model
+level when no provider plugin supplies one. The other providers still load.
+OpenClaw logs one warning that names the provider and the missing field each
+time these catalogs change. Set `models.providers.<id>.api` to load the
+provider again. A provider that you added only to `models.json` stays in the
+file. If the registry cannot load it, the registry reports the error for the
+whole file until you fix that entry.
 
 In the default `merge` mode, configured model rows are combined with eligible
 provider discovery. They supply metadata and request overrides for matching

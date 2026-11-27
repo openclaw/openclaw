@@ -1,12 +1,5 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
-
-export async function readRequestBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
+export { readRequestText as readRequestBody } from "../../test/helpers/gateway-integration-fixtures.js";
+import type { ServerResponse } from "node:http";
 
 export function writeTuiModelHttpJson(res: ServerResponse, status: number, body: unknown) {
   const text = JSON.stringify(body);

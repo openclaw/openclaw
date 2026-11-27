@@ -1,20 +1,42 @@
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeBackgroundPreference,
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
+  CRON_FAILURE_DISMISSALS_KEY,
+  readCronFailureDismissals,
+} from "../../packages/gateway-protocol/src/schema/cron-failure-dismissals.js";
+import {
+  normalizeGitCoauthorOrganizationIdentity,
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import {
+  parseSidebarSessionReference,
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import {
   GIT_COAUTHOR_PREFERENCE_KEY,
   USER_PREFS_PROFILE_KEY_LIMIT,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema-ensure.js";
 import { isOwnedBackgroundPreference } from "./user-background.store.js";
-import { publishUserPreferencesChange } from "./user-preferences-publication.js";
+import {
+  assertUserPreferenceWriteNotHeld,
+  publishUserPreferencesChange,
+} from "./user-preferences-publication.js";
 import type {
   PreparedUserPreferenceUpdate,
   UserPreferenceError,
@@ -22,6 +44,10 @@ import type {
 import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 
 type UserPreferencesDatabase = Pick<OpenClawStateKyselyDatabase, "user_preferences">;
+const personalPinPreferenceKeys: readonly string[] = [
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+];
 
 export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
   table: "user_preferences",
@@ -29,9 +55,17 @@ export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
 });
 
 export function updatesGitCoauthorPreference(update: PreparedUserPreferenceUpdate): boolean {
+  const keys = new Set([GIT_COAUTHOR_PREFERENCE_KEY, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]);
   return (
-    update.serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
-    update.deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY)
+    update.serialized.some(({ prefKey }) => keys.has(prefKey)) ||
+    update.deletionKeys.some((key) => keys.has(key))
+  );
+}
+
+export function updatesPersonalSessionPins(update: PreparedUserPreferenceUpdate): boolean {
+  return (
+    update.serialized.some(({ prefKey }) => personalPinPreferenceKeys.includes(prefKey)) ||
+    update.deletionKeys.some((key) => personalPinPreferenceKeys.includes(key))
   );
 }
 
@@ -41,6 +75,9 @@ export function deleteUserPreference(
   key: string,
 ): void {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  if (personalPinPreferenceKeys.includes(key)) {
+    assertUserPreferenceWriteNotHeld(database);
+  }
   if (!tableExists(database, "user_preferences")) {
     return;
   }
@@ -51,7 +88,7 @@ export function deleteUserPreference(
       .where("profile_id", "=", profileId)
       .where("pref_key", "=", key),
   );
-  publishUserPreferencesChange(database);
+  publishUserPreferencesChange(database, { profileId, keys: [key] });
 }
 
 export function selectUserPreferenceValues(
@@ -75,6 +112,49 @@ export function selectUserPreferenceValues(
   );
 }
 
+/** Worker-side union keeps another profile's reference protective when one person unpins. */
+export function selectPersonalPinnedSessionKeys(database: EngineConnection): string[] {
+  if (!tableExists(database, "user_preferences")) {
+    return [];
+  }
+  const keys = new Set<string>();
+  const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  for (const row of iterateSqliteQuerySync(
+    database,
+    db
+      .selectFrom("user_preferences")
+      .select(["pref_key", "value_json"])
+      .where("pref_key", "in", personalPinPreferenceKeys),
+  )) {
+    const entries: unknown = JSON.parse(row.value_json);
+    if (!Array.isArray(entries)) {
+      continue;
+    }
+    if (row.pref_key === UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY) {
+      for (const group of entries) {
+        if (!isRecord(group) || !Array.isArray(group.sessionKeys)) {
+          continue;
+        }
+        // Group membership stores raw session keys, unlike sidebar shortcut references.
+        for (const value of group.sessionKeys) {
+          const key = normalizeOptionalString(value);
+          if (key) {
+            keys.add(key);
+          }
+        }
+      }
+      continue;
+    }
+    for (const entry of entries) {
+      const key = parseSidebarSessionReference(entry);
+      if (key) {
+        keys.add(key);
+      }
+    }
+  }
+  return [...keys].toSorted();
+}
+
 function readPreferenceKeys(database: EngineConnection, profileId: string): Set<string> {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
   return new Set(
@@ -82,6 +162,15 @@ function readPreferenceKeys(database: EngineConnection, profileId: string): Set<
       database,
       db.selectFrom("user_preferences").select("pref_key").where("profile_id", "=", profileId),
     ).rows.map((row) => row.pref_key),
+  );
+}
+
+function userPreferenceKeyCount(keys: ReadonlySet<string>): number {
+  // Gateway-owned profile records do not consume the generic preference allowance.
+  return (
+    keys.size -
+    Number(keys.has(GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY)) -
+    Number(keys.has(CRON_FAILURE_DISMISSALS_KEY))
   );
 }
 
@@ -95,6 +184,7 @@ export function mergeUserPreferences(
     return;
   }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  assertUserPreferenceWriteNotHeld(database);
   const targetKeys = readPreferenceKeys(database, targetProfileId);
   const rows = executeSqliteQuerySync(
     database,
@@ -105,11 +195,22 @@ export function mergeUserPreferences(
       .orderBy("pref_key", "asc"),
   ).rows;
   for (const row of rows) {
+    if (row.pref_key === CRON_FAILURE_DISMISSALS_KEY) {
+      const receipts = readCronFailureDismissals(JSON.parse(row.value_json));
+      for (const [id, at] of readProfileCronFailureDismissals(database, targetProfileId)) {
+        receipts.set(id, Math.max(receipts.get(id) ?? 0, at));
+      }
+      saveProfileCronFailureDismissals(database, targetProfileId, receipts);
+      continue;
+    }
     if (targetKeys.has(row.pref_key)) {
       continue;
     }
-    if (targetKeys.size >= USER_PREFS_PROFILE_KEY_LIMIT) {
-      break;
+    if (
+      row.pref_key !== GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY &&
+      userPreferenceKeyCount(targetKeys) >= USER_PREFS_PROFILE_KEY_LIMIT
+    ) {
+      continue;
     }
     // A discarded source upload must not leave its custom selection dangling on the target.
     const background =
@@ -161,12 +262,78 @@ export function readUserPreferences(
   );
 }
 
+function readProfileCronFailureDismissals(db: EngineConnection, profileId: string) {
+  const entries = readUserPreferences(db, profileId, [CRON_FAILURE_DISMISSALS_KEY]);
+  return readCronFailureDismissals(entries[CRON_FAILURE_DISMISSALS_KEY]);
+}
+
+function upsertUserPreferenceValues(
+  sqlite: EngineConnection,
+  profileId: string,
+  entries: PreparedUserPreferenceUpdate["serialized"],
+) {
+  const updatedAtMs = Date.now();
+  executeSqliteQuerySync(
+    sqlite,
+    getNodeSqliteKysely<UserPreferencesDatabase>(sqlite)
+      .insertInto("user_preferences")
+      .values(
+        entries.map(({ prefKey, valueJson }) => ({
+          profile_id: profileId,
+          pref_key: prefKey,
+          value_json: valueJson,
+          updated_at_ms: updatedAtMs,
+        })),
+      )
+      .onConflict((conflict) =>
+        conflict.columns(["profile_id", "pref_key"]).doUpdateSet({
+          value_json: (eb) => eb.ref("excluded.value_json"),
+          updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
+        }),
+      ),
+  );
+}
+
+function saveProfileCronFailureDismissals(
+  db: EngineConnection,
+  profileId: string,
+  receipts: ReadonlyMap<string, number>,
+) {
+  upsertUserPreferenceValues(db, profileId, [
+    {
+      prefKey: CRON_FAILURE_DISMISSALS_KEY,
+      valueJson: JSON.stringify(Object.fromEntries(receipts)),
+    },
+  ]);
+  publishUserPreferencesChange(db, { profileId, keys: [CRON_FAILURE_DISMISSALS_KEY] });
+}
+
+/** Called inside the profile worker transaction. A late browser import never replaces a reviewed run. */
+export function acknowledgeProfileCronFailure(
+  db: EngineConnection,
+  profileId: string,
+  failure: NonNullable<PreparedUserPreferenceUpdate["cronFailure"]>,
+): number {
+  const receipts = readProfileCronFailureDismissals(db, profileId);
+  const previous = receipts.get(failure.jobId);
+  if (previous !== undefined && (failure.adopt || previous >= failure.failedAtMs)) {
+    return previous;
+  }
+  receipts.set(failure.jobId, failure.failedAtMs);
+  saveProfileCronFailureDismissals(db, profileId, receipts);
+  return failure.failedAtMs;
+}
+
 export function writeUserPreferences(
   sqlite: EngineConnection,
   profileId: string,
   update: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {
-  const { serialized, deletionKeys, expected } = update;
+  const { expected } = update;
+  let { serialized, deletionKeys } = update;
+  if (updatesPersonalSessionPins(update)) {
+    assertUserPreferenceWriteNotHeld(sqlite);
+  }
   const background = serialized.find((entry) => entry.prefKey === USER_BACKGROUND_PREFERENCE_KEY);
   if (background || deletionKeys.includes(USER_BACKGROUND_PREFERENCE_KEY)) {
     if (!expected.some((entry) => entry.prefKey === USER_BACKGROUND_PREFERENCE_KEY)) {
@@ -185,6 +352,23 @@ export function writeUserPreferences(
       profileId,
       expected.map(({ prefKey }) => prefKey),
     );
+    if (update.organizationPolicy !== undefined) {
+      const organization = normalizeGitCoauthorOrganizationIdentity(
+        current[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY],
+      );
+      if (!organization || organization.policy !== update.organizationPolicy) {
+        // Match the policy-filtered read. Enabling GitHub fallback must not revive dormant credit.
+        delete current[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY];
+        if (
+          serialized.some(
+            ({ prefKey, valueJson }) =>
+              prefKey === GIT_COAUTHOR_PREFERENCE_KEY && valueJson === "true",
+          )
+        ) {
+          deletionKeys = [...deletionKeys, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY];
+        }
+      }
+    }
     for (const { prefKey, valueJson } of expected) {
       if (
         valueJson === null
@@ -196,17 +380,38 @@ export function writeUserPreferences(
       }
     }
   }
+  const suppliedCredit = serialized.find(
+    ({ prefKey }) => prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+  );
+  const choosesConsent =
+    serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
+    deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY);
+  if (suppliedCredit && !choosesConsent) {
+    const previous = readUserPreferences(sqlite, profileId, [
+      GIT_COAUTHOR_PREFERENCE_KEY,
+      GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+    ]);
+    if (
+      previous[GIT_COAUTHOR_PREFERENCE_KEY] === true &&
+      normalizeGitCoauthorOrganizationIdentity(previous[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY])
+        ?.policy !==
+        normalizeGitCoauthorOrganizationIdentity(JSON.parse(suppliedCredit.valueJson))?.policy
+    ) {
+      // An old or absent proxy mapping cannot authorize disclosure under a replacement policy.
+      serialized = [...serialized, { prefKey: GIT_COAUTHOR_PREFERENCE_KEY, valueJson: "false" }];
+    }
+  }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(sqlite);
   if (serialized.length > 0) {
     const currentKeys = readPreferenceKeys(sqlite, profileId);
     const nextKeys = new Set(currentKeys);
     deletionKeys.forEach((key) => nextKeys.delete(key));
     serialized.forEach((entry) => nextKeys.add(entry.prefKey));
-    if (nextKeys.size > USER_PREFS_PROFILE_KEY_LIMIT) {
+    if (userPreferenceKeyCount(nextKeys) > USER_PREFS_PROFILE_KEY_LIMIT) {
       return err({
         code: "profile-key-limit",
         limit: USER_PREFS_PROFILE_KEY_LIMIT,
-        currentCount: currentKeys.size,
+        currentCount: userPreferenceKeyCount(currentKeys),
       });
     }
   }
@@ -219,31 +424,15 @@ export function writeUserPreferences(
         .where("pref_key", "in", deletionKeys),
     );
   }
-  const updatedAtMs = Date.now();
   if (serialized.length > 0) {
-    executeSqliteQuerySync(
-      sqlite,
-      db
-        .insertInto("user_preferences")
-        .values(
-          serialized.map((entry) => ({
-            profile_id: profileId,
-            pref_key: entry.prefKey,
-            value_json: entry.valueJson,
-            updated_at_ms: updatedAtMs,
-          })),
-        )
-        .onConflict((conflict) =>
-          conflict.columns(["profile_id", "pref_key"]).doUpdateSet({
-            value_json: (eb) => eb.ref("excluded.value_json"),
-            updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
-          }),
-        ),
-    );
+    upsertUserPreferenceValues(sqlite, profileId, serialized);
   }
   if (updatesGitCoauthorPreference(update)) {
     publishUserProfileAuthorityChange(sqlite, profileId);
   }
-  publishUserPreferencesChange(sqlite);
+  publishUserPreferencesChange(sqlite, {
+    profileId,
+    keys: [...deletionKeys, ...serialized.map((row) => row.prefKey)],
+  });
   return ok(undefined);
 }

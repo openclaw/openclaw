@@ -4,6 +4,9 @@ import {
   runSubagentStateWorkerOperation,
   useSubagentControlFixture,
 } from "./subagent-control.test-support.js";
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "../../../auto-reply/reply/queue.js";
@@ -23,7 +26,11 @@ import { registerInternalHook, unregisterInternalHook } from "../../../hooks/int
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { isPidAlive } from "../../../shared/pid-alive.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
+import { getSession, listRunningSessions } from "../../bash-process-registry.js";
+import { createExecTool } from "../../bash-tools.exec-run.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killAllControlledSubagentRuns, killSessionSubagentRuns } from "./subagent-control-kill.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -122,16 +129,29 @@ function registerChild(
   });
 }
 
-it.each([false, true])(
-  "reset preserves a replacement child and retires only suppressed terminal work (suppressed=%s)",
-  async (suppressed) => {
+it.each([
+  { suppressed: false, pendingWake: true, nested: false },
+  { suppressed: true, pendingWake: true, nested: false },
+  { suppressed: false, pendingWake: false, nested: false },
+  { suppressed: false, pendingWake: false, nested: true },
+])(
+  "reset preserves a replacement child (suppressed=$suppressed, pendingWake=$pendingWake, nested=$nested)",
+  async ({ suppressed, pendingWake, nested }) => {
     const storePath = await writeSession(parentKey, "reset-parent", "reset-parent-revision");
     const { read, patch } = sessions(storePath);
+    if (nested) {
+      await writeSession(childKey("active-parent"), "active-parent");
+      await registerChild("active-parent", read(childKey("active-parent")), {
+        controllerSessionKey: parentKey,
+      });
+      await pauseRun("active-parent");
+    }
     const key = childKey("replaced");
     await writeSession(key, "original-child", "original-revision");
     await registerChild("original-run", read(key), {
       childSessionKey: key,
       controllerSessionKey: undefined,
+      requesterSessionKey: nested ? childKey("active-parent") : parentKey,
       task: "old retained assignment",
       expectsCompletionMessage: false,
     });
@@ -143,7 +163,11 @@ it.each([false, true])(
         suppressSessionEffects: suppressed ? true : undefined,
       };
       entry.completion = { required: false, capturedAt: 1_000, resultText: "stopped" };
-      entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      if (pendingWake) {
+        entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      } else {
+        delete entry.requesterSettleWake;
+      }
     });
     await patch(key, { sessionId: "replacement-child", lifecycleRevision: "replacement-revision" });
     const replacement = read(key);
@@ -157,15 +181,15 @@ it.each([false, true])(
     const respond = vi.fn();
     try {
       await resetRpc(respond);
-      expectResetResponse(respond, suppressed);
+      expectResetResponse(respond, suppressed || !pendingWake);
       const parent = read(parentKey);
-      if (suppressed) {
+      if (suppressed || !pendingWake) {
         expect(parent?.lifecycleRevision).not.toBe("reset-parent-revision");
         expect(subagentRuns.get("original-run")).toMatchObject({
           execution: {
             outcome: { status: "error", error: "original session incarnation changed" },
           },
-          suppressCompletionDelivery: true,
+          ...(suppressed ? { suppressCompletionDelivery: true } : {}),
         });
         expect(subagentRuns.get("original-run")?.requesterSettleWake).toBeUndefined();
       } else {
@@ -208,6 +232,30 @@ const pauseRun = (id: string) =>
   updateRun(id, (entry) => {
     expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
   });
+
+it("RPC reset cancels live descendants beneath a completed child", async () => {
+  const storePath = await writeSession(parentKey, "parent", "before-reset");
+  const { read } = sessions(storePath);
+  for (const id of ["completed-parent", "live-descendant"]) {
+    await writeSession(childKey(id), id);
+    await registerChild(id, read(childKey(id)), {
+      controllerSessionKey: id === "completed-parent" ? parentKey : childKey("completed-parent"),
+      requesterSessionKey: id === "completed-parent" ? parentKey : childKey("completed-parent"),
+      expectsCompletionMessage: false,
+    });
+  }
+  await updateRun("completed-parent", (entry) => {
+    entry.execution = { status: "terminal", endedAt: 1_000, outcome: { status: "ok" } };
+    delete entry.requesterSettleWake;
+  });
+  await pauseRun("live-descendant");
+  const respond = vi.fn();
+  await resetRpc(respond);
+  expectResetResponse(respond, true);
+  expect(read(parentKey)?.lifecycleRevision).not.toBe("before-reset");
+  expect(displayStatus("live-descendant")).toBe("killed");
+  expect(subagentRuns.get("completed-parent")?.execution.outcome).toEqual({ status: "ok" });
+});
 
 it.each(
   (["chat", "rpc"] as const).flatMap((boundary) =>
@@ -446,4 +494,77 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
       unregisterInternalHook("command:reset", replaceParent);
     }
   },
+);
+
+it.each(["chat", "rpc"] as const)(
+  "%s reset stops the session's background service and a survivor before committing",
+  async (boundary) => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const storePath = await writeSession(parentKey, "parent", "before-reset");
+    const { read } = sessions(storePath);
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "reset-exec-"));
+    const sleeper = `${JSON.stringify(process.execPath)} -e 'setTimeout(() => {}, 60000)'`;
+    const pids: number[] = [];
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_SERVICE_MARKER: "reset-exec-test",
+          OPENCLAW_EXEC_SHELL_SNAPSHOT: "0",
+          SHELL: "/bin/sh",
+        },
+        async () => {
+          const exec = createExecTool({
+            host: "gateway",
+            mode: "full",
+            ask: "off",
+            allowBackground: true,
+            notifyOnExit: false,
+            scopeKey: parentKey,
+            cwd,
+          });
+          const service = await exec.execute("service", {
+            command: `echo PID=$$; exec ${sleeper}`,
+            background: true,
+          });
+          const { sessionId } = service.details as { sessionId: string };
+          for (
+            let attempt = 0;
+            attempt < 100 && !/PID=\d+/.test(getSession(sessionId)?.aggregated ?? "");
+            attempt += 1
+          ) {
+            await new Promise((resolve) => {
+              setTimeout(resolve, 50);
+            });
+          }
+          pids.push(Number(/PID=(\d+)/.exec(getSession(sessionId)!.aggregated)![1]));
+          const left = await exec.execute("left", {
+            command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
+          });
+          pids.push(
+            Number(/PID=(\d+)/.exec((left.details as { aggregated: string }).aggregated)![1]),
+          );
+        },
+      );
+      expect(pids.every(isPidAlive)).toBe(true);
+      const respond = vi.fn();
+      await (boundary === "chat" ? resetChat() : resetRpc(respond));
+      if (boundary === "rpc") {
+        expectResetResponse(respond, true);
+      }
+      expect(read(parentKey)?.lifecycleRevision).not.toBe("before-reset");
+      expect(pids.filter(isPidAlive)).toEqual([]);
+      expect(listRunningSessions().filter((session) => session.scopeKey === parentKey)).toEqual([]);
+    } finally {
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already stopped.
+        }
+      }
+    }
+  },
+  60_000,
 );

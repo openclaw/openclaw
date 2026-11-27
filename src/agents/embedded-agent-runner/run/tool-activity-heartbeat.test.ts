@@ -1,5 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../../../packages/agent-core/src/internal-hooks.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import {
   clearToolActivityRun,
@@ -14,10 +18,6 @@ import {
 } from "../../before-tool-call-metadata.js";
 import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { isCodeModeControlTool, markCodeModeControlTool } from "../../code-mode-control-tools.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "../../runtime/internal-hooks.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import {
   getToolTerminalPresentation,

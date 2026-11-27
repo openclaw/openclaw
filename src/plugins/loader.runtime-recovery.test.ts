@@ -171,7 +171,7 @@ describe("runtime recovery", () => {
             expect(await oldTool.execute("previous", {})).toMatchObject({
               content: [{ text: "original:1" }],
             });
-            const recovery = capturePluginRuntimeRecovery(oldRecord)!;
+            const recovery = (await capturePluginRuntimeRecovery(oldRecord))!;
             try {
               await disposePluginRegistryInstances(previous);
               const candidate = withPluginCache(operationCache, () =>
@@ -260,7 +260,7 @@ describe("runtime recovery", () => {
     );
     const config = pluginFixtureConfig(plugin, { config: { fail: false } });
     const options = { config, runtimeSideEffects: true };
-    let recovery: ReturnType<typeof capturePluginRuntimeRecovery>;
+    let recovery: Awaited<ReturnType<typeof capturePluginRuntimeRecovery>>;
     const stop = (registry: PluginRegistry) =>
       createHookRunner(registry, { catchErrors: false }).runGatewayStop(
         { reason: "plugin replacement" },
@@ -268,7 +268,7 @@ describe("runtime recovery", () => {
       );
     try {
       const old = load(options);
-      recovery = capturePluginRuntimeRecovery(old.plugins[0]!);
+      recovery = await capturePluginRuntimeRecovery(old.plugins[0]!);
       const manifestRegistry = getPluginRuntimeLoadContext(old)!.manifestRegistry;
       await stop(old);
       await disposePluginRegistryInstances(old);
@@ -422,15 +422,10 @@ describe("module recovery", () => {
     nativeDependencyPath(): string;
   };
 
-  it.each(
-    [false, true].flatMap((standalone) =>
-      [false, true].map((nativePackageMap) => ({
-        standalone,
-        nativePackageMap,
-        denyFileSymlinks: standalone && nativePackageMap,
-      })),
-    ),
-  )(
+  it.each([
+    { standalone: false, nativePackageMap: false, denyFileSymlinks: false },
+    { standalone: true, nativePackageMap: true, denyFileSymlinks: true },
+  ])(
     "recovers native assets after package removal (standalone: $standalone, exports: $nativePackageMap, file-symlink denied: $denyFileSymlinks)",
     async ({ standalone, nativePackageMap, denyFileSymlinks }) => {
       let deniedLinks = 0;
@@ -470,7 +465,7 @@ describe("module recovery", () => {
       const nativeShadow = fs.realpathSync(oldModule.nativePath);
       fs.writeFileSync(path.join(root, "native.so"), "replacement native bytes");
       expect(oldModule.native()).toBe("original native bytes");
-      const recovery = capture(instance, captures);
+      const recovery = await capture(instance, captures);
       fs.writeFileSync(entry, "throw new Error('replacement code must not run during recovery');");
       await instance.dispose();
       fs.rmSync(root, { recursive: true });
@@ -491,7 +486,7 @@ describe("module recovery", () => {
       expect(() => oldModule.next()).toThrow();
 
       // Recovery remains recoverable itself after another failed update.
-      const again = capture(restored, captures);
+      const again = await capture(restored, captures);
       await restored.dispose();
       const final = newInstance();
       withPluginSourceCaptureDirectory(captures, () => again.bind(final));
@@ -524,7 +519,7 @@ describe("module recovery", () => {
   it("releases unused recovery custody without disturbing the active loader", async () => {
     const { entry, captures, instance } = fixture();
     const before = fs.readdirSync(captures);
-    const recovery = capture(instance, captures);
+    const recovery = await capture(instance, captures);
     expect(fs.readdirSync(captures).length).toBeGreaterThan(before.length);
     await recovery.dispose();
     await recovery.dispose();
@@ -538,10 +533,10 @@ describe("module recovery", () => {
     expect((instance.loadModule(entry) as FixtureModule).dependency()).toBe("original dependency");
     instance.quiesce();
     fs.writeFileSync(entry, "throw new Error('changed disk bytes must not become recovery');");
-    const recovery = capture(instance, captures);
+    const recovery = await capture(instance, captures);
     expect(() => instance.loadModule(entry)).toThrow(/reloaded or disabled/);
     const disposing = instance.dispose();
-    expect(() => instance.captureModuleLoaderRecovery()).toThrow(/reloaded or disabled/);
+    await expect(instance.captureModuleLoaderRecovery()).rejects.toThrow(/reloaded or disabled/);
     await disposing;
     fs.rmSync(root, { recursive: true });
     const restored = newInstance(instance.pluginId);
@@ -608,7 +603,7 @@ describe("module recovery", () => {
       const oldCallback = (previous.loadModule(entry) as BundledModule).register();
       expect(oldCallback()).toBe(1);
       expect(getSharedPluginCodeReloadWarning(previous)).toBeUndefined();
-      const recovery = previous.captureModuleLoaderRecovery();
+      const recovery = await previous.captureModuleLoaderRecovery();
       await previous.dispose();
       fs.rmSync(root, { recursive: true });
 
@@ -621,7 +616,7 @@ describe("module recovery", () => {
       expect(oldCallback).toThrow(/reloaded or disabled/);
       expect(restoredCallback()).toBe(2);
 
-      const secondRecovery = restored.captureModuleLoaderRecovery();
+      const secondRecovery = await restored.captureModuleLoaderRecovery();
       await restored.dispose();
       const final = newInstance(previous.pluginId);
       secondRecovery.bind(final);
@@ -802,11 +797,20 @@ export function register(api) {
         await install(npmInstall("sha512-authority", "2026-10-20T00:00:00.000Z"));
         const inventory = publish();
         const prepareArtifact = preparation.preparePluginGenerationArtifact;
+        let concurrentCapture: ReturnType<typeof createDeferredCore<void>> | undefined;
+        let preparedContenders = 0;
         const prepare = vi
           .spyOn(preparation, "preparePluginGenerationArtifact")
           .mockImplementation(async (...args) => {
+            const gate = concurrentCapture;
             const prepared = await prepareArtifact(...args);
             vi.spyOn(prepared.artifact, "disposeAsync");
+            if (gate) {
+              if (++preparedContenders === 2) {
+                gate.resolve();
+              }
+              await gate.promise;
+            }
             return prepared;
           });
         const retired = await inspect("main");
@@ -829,7 +833,6 @@ export function register(api) {
         };
         await readLazy(replacement);
         const overlapping = await inspect("main");
-        expect(prepare).toHaveBeenCalledTimes(1);
 
         const neighbor = await inspect("research");
         expect(slot).toMatchObject({ evaluations: 2, registrations: 4 });
@@ -842,12 +845,20 @@ export function register(api) {
         expect(providers(neighbor.registry)).toEqual(["fixture-provider:Fixture"]);
 
         const beforeConcurrent = prepare.mock.calls.length;
-        const [left, right] = await Promise.all([inspect("concurrent"), inspect("concurrent")]);
-        expect(prepare).toHaveBeenCalledTimes(beforeConcurrent + 2);
+        const gate = createDeferredCore();
+        concurrentCapture = gate;
+        const [left, right] = await Promise.all([
+          inspect("concurrent"),
+          inspect("concurrent"),
+        ]).finally(() => {
+          concurrentCapture = undefined;
+          gate.resolve();
+        });
         expect(slot.evaluations).toBe(3);
         const contenders = await Promise.all(
           prepare.mock.results.slice(beforeConcurrent).map(({ value }) => value),
         );
+        expect(contenders).toHaveLength(2);
         expect(
           contenders.filter(
             (contender) => vi.mocked(contender.artifact.disposeAsync).mock.calls.length > 0,

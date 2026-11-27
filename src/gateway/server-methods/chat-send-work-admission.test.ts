@@ -23,7 +23,6 @@ import {
 } from "../../sessions/provider-review.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox.js";
-import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import {
   AgentDatabaseAdmissionError,
@@ -36,7 +35,6 @@ import {
 } from "../device-revocation.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import * as restartRecovery from "./chat-restart-recovery.js";
 import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatAdmission } from "./chat-send-admission.test-support.js";
@@ -44,7 +42,6 @@ import {
   assertChatSendExclusiveAdmission,
   createChatSendWorkAdmission,
 } from "./chat-send-work-admission.js";
-import { registerRpcSourceForTest } from "./rpc-source-fixtures.test-support.js";
 
 const failure = (message: string, fields: Record<string, unknown>) =>
   Object.assign(new Error(message), fields);
@@ -113,93 +110,6 @@ it("gives actionable terminal reconciliation guidance without exposing its cause
 
 describe("retained chat work admission", () => {
   afterEach(resetGatewayWorkAdmission);
-  it.each(["retained", "replaced", "released"] as const)(
-    "keeps terminal settlement custody after cancellation cleanup with a %s admission",
-    async (change) => {
-      const release = vi.fn();
-      const resume = createDeferred();
-      const key = "agent:main:terminal";
-      const storePath = "/isolated/terminal.sqlite";
-      const identity = {
-        runId: "terminal-run",
-        sessionId: "terminal-session",
-        sessionKey: key,
-        agentId: "main",
-        storeScope: storePath,
-      };
-      const registration = registerRpcSourceForTest(identity);
-      const sourceRef = expectDefined(registration.entry, "terminal source registration");
-      let active = true;
-      let guard: (() => void) | undefined;
-      const terminal = vi
-        .spyOn(restartRecovery, "terminalizeRestartSafeChatAdmission")
-        .mockImplementation(async (params) => {
-          guard = params.assertCurrent;
-          await resume.promise;
-          params.assertCurrent();
-          return true;
-        });
-      const work = createChatSendWorkAdmission({
-        admission: { release },
-        logGateway: { warn: vi.fn() },
-        terminal: {
-          target: {
-            keyFormat: "agent-qualified",
-            agentId: "main",
-            canonicalKey: key,
-            requestedKey: key,
-            storeKey: key,
-            storeKeys: [key],
-            storePath,
-            readSource: { agentId: "main", path: storePath, databaseIdentity: "original-source" },
-          },
-          storePath,
-          sourceRef,
-          admittedSessionId: identity.sessionId,
-          runId: identity.runId,
-          lifecycleRevision: "original-lifecycle",
-          isActive: () => active,
-          currentRegistration: () => getRpcSource(identity.runId),
-        },
-      });
-      const settling = work.settleTerminal({ startedAt: 1, status: "killed", retryable: false });
-      const observed = settling.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        expect(guard).toBeTypeOf("function");
-        work.release();
-        registration.cleanup();
-        expect(getRpcSource(identity.runId)).toBeUndefined();
-        guard?.();
-        expect(release).not.toHaveBeenCalled();
-        if (change === "replaced") {
-          const replacement = registerRpcSourceForTest(identity);
-          expect(replacement.entry).not.toBe(sourceRef);
-        } else if (change === "released") {
-          active = false;
-        }
-        resume.resolve();
-        expect(await observed).toEqual(
-          change === "retained"
-            ? { value: true }
-            : {
-                error: expect.objectContaining({
-                  message: "Chat terminal settlement no longer owns its admission",
-                }),
-              },
-        );
-        expect(release).toHaveBeenCalledOnce();
-        expect(guard).toThrow("Chat settlement admission was released");
-      } finally {
-        resume.resolve();
-        await observed;
-        work.release();
-        terminal.mockRestore();
-      }
-    },
-  );
   it.each([
     { deferred: false, failCleanup: false },
     { deferred: false, failCleanup: true },

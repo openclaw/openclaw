@@ -93,7 +93,7 @@ first-run failures see
 
   <Accordion title="Can I use Gemini CLI or Antigravity OAuth?">
     OpenClaw does not offer new Gemini CLI OAuth or Antigravity OAuth setup.
-    Connect Google with an AI Studio API key or Vertex AI instead.
+    Connect Google with a Gemini API key or Vertex AI instead.
 
     The optional `google-gemini-cli` runtime remains available for advanced
     setups using a supported Google API-key profile. Existing valid legacy
@@ -159,7 +159,7 @@ first-run failures see
   </Accordion>
 
   <Accordion title="Can I use Bun?">
-    Yes. Node remains the primary, default, and recommended runtime, but Bun 1.4.3+
+    Yes. Node remains the primary, default, and recommended runtime, but Bun 1.4.4+
     with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node
     host as an explicit opt-in. Bun can also run package scripts; use
     `pnpm install` for dependency installation.

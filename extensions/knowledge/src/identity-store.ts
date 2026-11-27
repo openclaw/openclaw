@@ -1,22 +1,16 @@
-import {
-  constants,
-  closeSync,
-  fsyncSync,
-  lstatSync,
-  openSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
+import { constants, closeSync, lstatSync, openSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
+  observeSqliteConnection,
   tableExists,
   tableHasColumn,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
+import { syncKnowledgeDirectory } from "./directory-sync.js";
 import type { IdentityStore } from "./real-vault.js";
 import {
   ensureKnowledgeSchema,
@@ -33,12 +27,10 @@ const unavailable = () =>
     "Knowledge identity checkpoint unavailable; preserve the database and resolve recovery before reading.",
   );
 
-/** Operational database schema. A store written before version stamping is
- * dated by its tables; only a zero-byte file is new. In rollback-journal mode
- * a database stays zero bytes until its first commit, and a crash during that
- * commit is rolled back before `detect` runs under the write lock, so an
- * interrupted initialization resumes while a foreign database is refused. */
-const stateSchema = (filename: string): KnowledgeSchema => ({
+/** Date unstamped stores by their tables; only a zero-byte file is new.
+ * Capture its size after SQLite recovers any interrupted initialization,
+ * before the migration takes the write lock. */
+const stateSchema = (empty = false): KnowledgeSchema => ({
   store: "state",
   steps: [
     {
@@ -94,7 +86,7 @@ const stateSchema = (filename: string): KnowledgeSchema => ({
   ],
   detect: (db) => {
     if (!tableExists(db, "identities")) {
-      return statSync(filename).size === 0 ? 0 : undefined;
+      return empty ? 0 : undefined;
     }
     if (!tableExists(db, "mutations")) {
       return 1;
@@ -177,8 +169,11 @@ export class SqliteIdentityStore implements IdentityStore {
     if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) {
       throw unavailable();
     }
-    const db = openNodeSqliteDatabase(this.filename, { timeout: BUSY_TIMEOUT_MS });
+    const db = observeSqliteConnection(
+      openNodeSqliteDatabase(this.filename, { timeout: BUSY_TIMEOUT_MS }),
+    );
     try {
+      const current = isKnowledgeSchemaCurrent(db, stateSchema());
       const after = lstatSync(this.filename);
       if (before.dev !== after.dev || before.ino !== after.ino || after.nlink !== 1) {
         throw unavailable();
@@ -187,12 +182,8 @@ export class SqliteIdentityStore implements IdentityStore {
       // again. Filesystems recycle freed inodes, so an admitted inode must
       // also still carry the current stamp; a stale or new file is re-admitted.
       const physical = `${after.dev}:${after.ino}`;
-      if (
-        created ||
-        !admitted.has(physical) ||
-        !isKnowledgeSchemaCurrent(db, stateSchema(this.filename))
-      ) {
-        this.admit(db, created);
+      if (created || !admitted.has(physical) || !current) {
+        this.admit(db, created, after.size === 0);
         admitted.add(physical);
       }
       return run(db);
@@ -202,19 +193,14 @@ export class SqliteIdentityStore implements IdentityStore {
   }
   // Bring one physical database to the current schema, indexes and tables.
   // Each statement commits on its own, so admission never rolls back with run().
-  private admit(db: DatabaseSync, created: boolean) {
+  private admit(db: DatabaseSync, created: boolean, empty: boolean) {
     try {
-      ensureKnowledgeSchema(db, stateSchema(this.filename));
+      ensureKnowledgeSchema(db, stateSchema(empty));
     } catch (e) {
       throw e instanceof UnrecognizedSchema ? unavailable() : e;
     }
     if (created) {
-      const parent = openSync(path.dirname(this.filename), constants.O_RDONLY);
-      try {
-        fsyncSync(parent);
-      } finally {
-        closeSync(parent);
-      }
+      syncKnowledgeDirectory(path.dirname(this.filename));
     }
     installAdditiveTables(db);
   }

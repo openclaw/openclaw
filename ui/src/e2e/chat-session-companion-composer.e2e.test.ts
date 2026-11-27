@@ -1,3 +1,4 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatSendShortcut } from "../app/settings.ts";
@@ -67,6 +68,31 @@ function composerHeight(composer: Locator) {
 }
 
 suite.define(() => {
+  it("sends a picked image without a written question", async () => {
+    await withSideChat(async (gateway, composer, page) => {
+      const side = page.locator("openclaw-chat-session-rail");
+      const fileName = "image-only.png";
+      const image =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      await side.locator(".agent-chat__photo-input").setInputFiles({
+        name: fileName,
+        mimeType: "image/png",
+        buffer: Buffer.from(image, "base64"),
+      });
+      await side.locator('.chat-attachment-thumb[aria-busy="false"] img').waitFor();
+      expect(await composer.inputValue()).toBe("");
+      const send = side.getByRole("button", { name: "Ask", exact: true });
+      await expect.poll(() => send.isEnabled()).toBe(true);
+      await send.click();
+      expect((await gateway.waitForRequest(ask)).params).toMatchObject({
+        question: "What does this image show?",
+        attachments: [{ mimeType: "image/png", fileName, content: image }],
+      });
+      await side.getByText("The next step is ready.", { exact: true }).waitFor();
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
+    });
+  });
+
   it("previews and sends a Side chat image, then retries without consuming the next draft", async () => {
     await withSideChat(async (gateway, composer, page) => {
       const side = page.locator("openclaw-chat-session-rail");
@@ -105,7 +131,7 @@ suite.define(() => {
         details: { reason: "image-input-unsupported" },
       });
       await text(
-        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
+        "This side chat model can’t read images. Choose a model that supports images, then try again.",
       ).waitFor();
       expect(await text("No utility model is configured for this session.").count()).toBe(0);
       const retry = side.getByRole("button", { name: "Retry", exact: true });
@@ -115,7 +141,12 @@ suite.define(() => {
       await gateway.deferNext(ask);
       await retry.click();
       await expect.poll(async () => (await gateway.getRequests(ask)).length).toBe(2);
-      expect((await gateway.getRequests(ask))[1]?.params).toEqual(original.params);
+      const { askId: originalId, ...originalInput } = asRecord(original.params);
+      const { askId: retryId, ...retryInput } = asRecord(
+        (await gateway.getRequests(ask))[1]?.params,
+      );
+      expect(retryInput).toEqual(originalInput);
+      expect(retryId).not.toBe(originalId);
       const answer = "The image shows a sunny landscape.";
       await gateway.resolveDeferred(ask, { answer, ts: 2 });
       await text(answer).waitFor();

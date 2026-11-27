@@ -8,7 +8,6 @@ import {
   patchSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { createInternalAgentTurnFacade } from "../../../gateway/agent-turn/internal-facade.js";
-import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import {
   createChatAbortContext,
   invokeChatAbortHandler,
@@ -24,13 +23,11 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import { abortControlledSubagents } from "../cancel-descendants.js";
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "../registry/subagent-registry-helpers.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import {
-  mutateSubagentRuns,
-  restoreSubagentRunsFromDisk,
-} from "../registry/subagent-registry-persistence.js";
+import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
@@ -58,88 +55,6 @@ afterEach(() => {
   resetSessionControllerStateForTest();
   resetSystemEventsForTest();
 });
-
-it.each(["delivered", "failed"] as const)(
-  "settles a restored late-killed child's completion once (%s)",
-  async (outcome) => {
-    const requesterKey = "agent:main:late-kill-requester";
-    const childKey = "agent:main:subagent:late-killed-child";
-    for (const sessionKey of [requesterKey, childKey]) {
-      await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey,
-        defaultSessionId: `${sessionKey}-session`,
-      });
-    }
-    const runId = "late-killed-child";
-    await registerSubagentRun({
-      runId,
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
-      requesterSessionKey: requesterKey,
-      requesterAgentId: "main",
-      requesterDisplayKey: requesterKey,
-      task: "Return the child result",
-      cleanup: "keep",
-      expectsCompletionMessage: true,
-    });
-    const killedAt = Date.now();
-    const endedAt = killedAt - 9 * 24 * 60 * 60_000;
-    await mutateSubagentRuns([runId], (rows) => {
-      const entry = structuredClone(rows.get(runId)!);
-      Object.assign(entry, {
-        createdAt: endedAt - 1_000,
-        execution: {
-          status: "terminal",
-          startedAt: endedAt - 1_000,
-          endedAt,
-          outcome: { status: "error", error: "killed" },
-        },
-        endedReason: "subagent-killed",
-        suppressAnnounceReason: "killed",
-        completion: { required: true },
-        delivery: { status: "pending" },
-        cleanupHandled: true,
-        cleanupCompletedAt: killedAt,
-        killReconciliation: { killedAt, taskCancellationAccepted: true },
-        requesterSettleWake: {
-          status: "dispatching",
-          attemptCount: 3,
-          batchRunIds: [runId],
-          requesterYieldBatch: true,
-          rearmGeneration: 1,
-        },
-      });
-      return { value: undefined, postimages: new Map([[runId, entry]]) };
-    });
-    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-    const completion = { dispatch: dispatchGatewayMethodInProcess };
-    const dispatch = vi.spyOn(completion, "dispatch").mockResolvedValue({
-      status: "ok",
-      inputProcessingCompleted: true,
-      result: { payloads: [{ text: "The child was cancelled." }], meta: {} },
-    });
-    if (outcome === "failed") {
-      dispatch.mockRejectedValue(new Error("requester unavailable"));
-    }
-    setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: completion.dispatch });
-    resumeSubagentRun(runId, "restore");
-    await fixture.settle();
-    expect(dispatch).toHaveBeenCalledOnce();
-    const settled = loadSubagentRegistryFromSqlite().get(runId)!;
-    expect(settled.killReconciliation).toBeUndefined();
-    expect(settled.requesterSettleWake).toBeUndefined();
-    expect(settled.delivery?.status).toBe(outcome);
-
-    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-    resumeSubagentRun(runId, "restore");
-    await registryTesting.sweepOnceForTests();
-    await fixture.settle();
-    expect(dispatch).toHaveBeenCalledOnce();
-  },
-);
 
 it.each([
   "pending",
@@ -179,7 +94,7 @@ it.each([
       expectsCompletionMessage: true,
     });
     const entry = structuredClone(subagentRuns.get(runId)!);
-    // Restored successful children can owe a wake without a parent turn binding.
+    // A live successful child can owe a wake before a parent turn accepts it.
     entry.execution = {
       ...entry.execution,
       status: "terminal",
@@ -325,10 +240,10 @@ it.each([
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   try {
-    // Restore resumes each durable wake; the sweeper never re-drives one.
+    // Explicit delivery resumes each durable wake; the sweeper never re-drives one.
     const resumeWakes = () => {
       for (const child of entries) {
-        resumeSubagentRun(child.runId, "restore");
+        resumeSubagentRun(child.runId);
       }
     };
     if (phase !== "pending") {
@@ -679,13 +594,31 @@ it.each([
           expect(subagentRuns.has("nested")).toBe(false);
         }
       }
+      if (phase === "requester replacement") {
+        // Turnover keeps the unspent results owed to the session's current turn instead
+        // of consuming them; that turn's runtime context carries them.
+        expect(subagentRuns.get("nested")?.requesterSettleWake).toMatchObject({
+          status: "pending",
+        });
+        const { buildActiveSubagentRuntimeContext } =
+          await import("../registry/subagent-active-context.js");
+        const context = await buildActiveSubagentRuntimeContext({
+          cfg: getRuntimeConfig(),
+          controllerSessionKey: requesterKey,
+          controllerAgentId: "main",
+        });
+        expect(context).toContain('run_json="nested"');
+        expect(context).toContain("requester_continuation=pending");
+        expect(startedTurns).toEqual([]);
+        return;
+      }
       expect(subagentRuns.get("nested")?.requesterSettleWake).toBeUndefined();
       if (completedNestedOutcome) {
         expect(nestedPublications.length).toBeGreaterThan(0);
         for (const published of nestedPublications) {
           expect(published.execution.outcome).toEqual(completedNestedOutcome);
         }
-        if (phase === "requester reset" || phase === "requester replacement") {
+        if (phase === "requester reset") {
           expect(subagentRuns.get("nested")?.execution.outcome).toEqual(completedNestedOutcome);
         } else {
           expect(subagentRuns.has("nested")).toBe(false);

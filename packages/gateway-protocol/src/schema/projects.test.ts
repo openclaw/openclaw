@@ -25,12 +25,22 @@ it("validates closed project method inputs", () => {
     [{ includeObserved: "yes" }, { extra: true }],
   );
   check(S.validateProjectsRegisterParams, [{ path: "/repo", name: "OpenClaw" }], [{ path: "" }]);
-  check(S.validateProjectsAddParams, [{ gitUrl }], [{ gitUrl: "", unexpected: true }]);
+  check(S.validateProjectsAddParams, [{ gitUrl }], [{ gitUrl: "" }, { gitUrl, unexpected: true }]);
   check(S.validateProjectsSearchRemoteParams, [{ query: "openclaw" }], [{ query: "" }]);
   check(
     S.validateProjectsRemoveParams,
     [{ id: "openclaw-2", deleteCheckout: true }],
     [{ id: "workspace:main" }],
+  );
+  check(
+    S.validateProjectsRenameParams,
+    [{ projectId: "openclaw-2", name: "OpenClaw" }],
+    [
+      { projectId: "workspace:main", name: "Main" },
+      { projectId: "openclaw", name: " " },
+      { projectId: "openclaw", name: "x".repeat(129) },
+      { projectId: "openclaw" },
+    ],
   );
 });
 it("accepts remote search results", () => {

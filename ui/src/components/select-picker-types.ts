@@ -1,8 +1,11 @@
 import type { JSX } from "@solidjs/web";
+import type { IconName } from "./icon-data.ts";
 
 export type PickerOption = {
   value: string;
   label: string;
+  /** Trailing part of the full label to keep visible in a compact picker. */
+  labelSuffix?: string;
   description?: string;
   labelStyle?: string;
   disabled?: boolean;
@@ -27,11 +30,20 @@ export type PickerParams<Option extends PickerOption> = {
   variant?: "submenu";
   /** Show the choices as a page of the enclosing sheet instead of a floating popup. */
   sheet?: boolean;
+  /**
+   * Show the choices as a bottom sheet at phone width. Defaults to lists long enough to search,
+   * where an anchored popup leaves a few rows above the keyboard.
+   */
+  phoneSheet?: boolean;
   /** `true` searches long lists; `"always"` keeps the field for short lists too. */
   searchable?: boolean | "always";
+  /** Supply intrinsic-width content for large flat catalogs; undefined declines windowing. */
+  windowed?: (visibleOptions: readonly Option[]) => JSX.Element;
   searchPlaceholder?: string;
   groupBy?: (option: Option) => PickerGroup | undefined;
   showOptionTooltips?: boolean;
+  /** Trigger chevron for anchored menus; submenus and sheets keep their own direction. */
+  triggerIcon?: IconName;
   showSelectedDescription?: boolean;
   onOpen?: () => void;
   /** Exposes this mounted picker's controls to an enclosing focus boundary. */

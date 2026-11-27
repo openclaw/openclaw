@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -179,7 +180,9 @@ it("preserves a bound ordinary-path receipt when native resolution expands its p
   const identity = captureManagedUpdateLeaseDatabaseIdentity(alias);
   expect(identity.databasePath).toBe(alias);
   const pinned = await prepareManagedHandoffLeaseDatabase(alias, identity);
-  pinned(true, () => undefined);
+  const canonical = await prepareManagedHandoffLeaseDatabase(databasePath);
+  // A pinned alias must inherit this call chain's writer as well as original acquisition.
+  canonical(true, () => pinned(true, () => undefined));
   expect(captureManagedUpdateLeaseDatabaseIdentity(alias)).toEqual(identity);
   expect(fs.existsSync(databasePath + ".lock")).toBe(false);
 });
@@ -330,7 +333,10 @@ describe("cold journal recovery", () => {
       mutationSql: "UPDATE managed_update_handoffs SET owner='uncommitted-owner'",
     });
   const bytes = () =>
-    [databasePath, `${databasePath}-journal`].map((file) => fs.readFileSync(file));
+    [databasePath, `${databasePath}-journal`].map((file) => ({
+      file,
+      bytes: fs.readFileSync(file),
+    }));
 
   beforeEach(() => {
     installKey = path.join(root, "installation");
@@ -378,7 +384,7 @@ describe("cold journal recovery", () => {
         });
       }
       await expect(recover()).rejects.toThrow("definitely dead original executor");
-      expect(bytes()).toEqual(before);
+      expectFilesEqual(bytes(), before);
     },
   );
 
@@ -427,6 +433,9 @@ describe("cold journal recovery", () => {
       return prepared;
     });
     await expect(recover()).rejects.toThrow("database or journal changed");
-    expect(bytes()).toEqual([mainBytes, changedJournal]);
+    expectFilesEqual(bytes(), [
+      { file: databasePath, bytes: mainBytes },
+      { file: `${databasePath}-journal`, bytes: changedJournal ?? null },
+    ]);
   });
 });

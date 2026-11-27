@@ -115,10 +115,10 @@ export function registerNativeCancellationCases(
         client: createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } }),
       });
       const waitForAgent = vi
-        .spyOn(runtime.recovery, "waitForAgent")
+        .spyOn(runtime.lifecycle, "waitForAgent")
         .mockImplementation(
           <T>(
-            params: Parameters<typeof runtime.recovery.waitForAgent>[0],
+            params: Parameters<typeof runtime.lifecycle.waitForAgent>[0],
             timeoutMs?: number,
           ): Promise<T> => {
             const completion = waitFacade
@@ -278,7 +278,6 @@ export function registerNativeCancellationCases(
             requesterSessionKey: requester,
           });
         }
-        const accepted = transition === "after interruption";
         const interrupted = transition !== "before interruption";
         if (interrupted) {
           await vi.advanceTimersByTimeAsync(9);
@@ -326,13 +325,17 @@ export function registerNativeCancellationCases(
           });
           options.assertNoModelExecution();
         } else {
-          // Revocation refuses the caller result even when the native owner already
-          // accepted the stop; the registry assertions below prove that settlement.
-          await wait(expect(pending).rejects.toThrow("Subagent cancellation owner changed"));
+          if (interrupted) {
+            // The kill scope admitted this Stop before control changed; it finishes and reports.
+            expect((await wait(pending)).details).toMatchObject({ found: true, killed: true });
+          } else {
+            // Control changed before the kill scope admitted the Stop, so nothing stops.
+            await wait(expect(pending).rejects.toThrow("Subagent cancellation owner changed"));
+          }
           expect(target.input.abortSignal.aborted).toBe(interrupted);
           expect(onAbort).toHaveBeenCalledTimes(Number(interrupted));
           expect(resolveSubagentSessionStatus(subagentRuns.get(targetRunId))).toBe(
-            accepted ? "killed" : "running",
+            interrupted ? "killed" : "running",
           );
           expect(subagentRuns.get(targetRunId)?.killIntent).toBeUndefined();
           options.assertNoModelExecution();

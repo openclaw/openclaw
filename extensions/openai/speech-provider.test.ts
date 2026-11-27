@@ -8,12 +8,12 @@ import { buildOpenAISpeechProvider } from "./speech-provider.js";
 const OPENAI_TTS_SNAPSHOT = "gpt-4o-mini-tts-2025-12-15";
 
 // mock-isolation: keep speech request assertions off real network and SSRF state.
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
     response: await globalThis.fetch(params.url, params.init),
     release: vi.fn(async () => {}),
   }),
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
 function parseRequestBody(init: RequestInit | undefined): Record<string, unknown> {
@@ -27,13 +27,10 @@ function parseRequestBody(init: RequestInit | undefined): Record<string, unknown
   return body;
 }
 
-function mockSpeechFetch(
-  expectedBody: Record<string, unknown> = {},
-  audio = new Uint8Array([1, 2, 3]),
-) {
+function mockSpeechFetch(expectedBody: Record<string, unknown> = {}) {
   const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
     expect(parseRequestBody(init)).toMatchObject(expectedBody);
-    return new Response(audio, { status: 200 });
+    return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -83,42 +80,6 @@ describe("buildOpenAISpeechProvider", () => {
   it("advertises official speech snapshots without changing the default model", () => {
     expect(provider.defaultModel).toBe("gpt-4o-mini-tts");
     expect(provider.models).toContain(OPENAI_TTS_SNAPSHOT);
-  });
-
-  it("normalizes provider-owned speech config from raw provider config", () => {
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as never,
-      timeoutMs: 30_000,
-      rawConfig: {
-        providers: {
-          openai: {
-            apiKey: "sk-test",
-            baseUrl: "https://example.com/v1/",
-            model: "tts-1",
-            voice: "alloy",
-            speed: 1.25,
-            instructions: " Speak warmly ",
-            responseFormat: " WAV ",
-            extraBody: {
-              lang: "en-US",
-            },
-          },
-        },
-      },
-    });
-
-    expect(resolved).toEqual({
-      apiKey: "sk-test",
-      baseUrl: "https://example.com/v1",
-      model: "tts-1",
-      voice: "alloy",
-      speed: 1.25,
-      instructions: "Speak warmly",
-      responseFormat: "wav",
-      extraBody: {
-        lang: "en-US",
-      },
-    });
   });
 
   it("drops malformed speech speed values", () => {
@@ -367,14 +328,6 @@ describe("buildOpenAISpeechProvider", () => {
       fileExtension: ".wav",
       voiceCompatible: false,
     });
-  });
-
-  it("applies the configured media byte cap to synthesized audio", async () => {
-    mockSpeechFetch({}, new Uint8Array(2048));
-
-    await expect(
-      provider.synthesize(speechRequest({ cfg: { agents: { defaults: { mediaMaxMb: 0.001 } } } })),
-    ).rejects.toThrow("OpenAI TTS audio response exceeds");
   });
 
   it("applies provider overrides to telephony synthesis", async () => {

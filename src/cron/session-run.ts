@@ -1,38 +1,68 @@
-/** Scheduled shared-session turns use the ordinary reply admission and delivery owners. */
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
+import type { ScheduledSessionAutomation } from "../auto-reply/reply/session-event-contract.js";
 import {
   captureSessionEventTargetForHost as captureSessionEventTarget,
   enqueueSessionEventForHost as enqueueSessionEvent,
 } from "../auto-reply/reply/session-event-handoff.js";
+import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+/** Scheduled shared-session turns use the ordinary reply admission and delivery owners. */
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { prepareAutomationSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveHookExternalContentSource } from "../security/external-content-source.js";
 import { isCronWithinActiveHours } from "./active-hours.js";
 import { isCronExecutionIdle } from "./execution-idle.js";
+import { requiresExternalCronDelivery } from "./isolated-agent/delivery-target.js";
 import {
   buildCronDeliveryTrace,
   finalizeCronPromptForResolvedTools,
   resolveCronDeliveryContext,
 } from "./isolated-agent/run-delivery-trace.js";
+import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import { CronOperatorSourceError } from "./operator-source-error.js";
+import { resolveCronAgentErrorClassification } from "./run-error-reason.js";
 import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.js";
 import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
 import type { CronServiceDeps } from "./service/state.js";
-import { resolveCronJobsStorePathFromConfig } from "./store.js";
-import type { CronResolvedDeliveryState } from "./types.js";
+import { resolveCronDeliverySessionKey } from "./session-target.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "./store.js";
+import type { CronResolvedDeliveryState, CronRunErrorClassification } from "./types.js";
 
 type SessionRun = NonNullable<CronServiceDeps["runSessionEvent"]>;
+
+function sameDeliveryThread(
+  current: { channel: string; to: string; threadId?: string | number },
+  admittedThreadId: string | number | undefined,
+): boolean {
+  if (current.threadId === admittedThreadId) {
+    return true;
+  }
+  if (current.threadId !== undefined && admittedThreadId !== undefined) {
+    return false;
+  }
+  // A missing thread is not a wildcard. Only the transport can prove that
+  // the unchanged address already names this exact thread.
+  const threadId = current.threadId ?? admittedThreadId;
+  return (
+    threadId !== undefined &&
+    getLoadedChannelPluginForRead(current.channel)?.threading?.isThreadAddressedByTarget?.({
+      to: current.to,
+      threadId,
+    }) === true
+  );
+}
 
 export async function runCronSessionTurn(
   params: Parameters<SessionRun>[0] & {
     cfg: OpenClawConfig;
     agentId: string;
     sessionKey: string;
+    cronStorePath?: string;
   },
 ): ReturnType<SessionRun> {
   const { job } = params;
@@ -53,15 +83,44 @@ export async function runCronSessionTurn(
     params.sessionPreparation?.notices ??
     (await prepareAutomationSystemEvents(queueKey, job.id, job.state.runningAtMs));
   let noticesStarted = false;
-  let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
-  let controlUiAdmin: true | undefined;
-  using operatorLease = new DisposableStack();
+  let operator: Awaited<
+    ReturnType<typeof import("../gateway/cron-operator-source.js").restoreCronOperatorSource>
+  >;
+  using _ = { [Symbol.dispose]: () => operator?.release() };
+  let operatorAdmissionFailure: CronRunErrorClassification | undefined;
   const assertCurrent = () => {
     params.assertCurrent();
-    operatorAuthority?.assertCurrent();
     if (!noticesStarted) {
       notices.assertCurrent();
     }
+  };
+  const restoreOperator = async (
+    signal?: AbortSignal,
+  ): Promise<Pick<ScheduledSessionAutomation, "operatorAuthority">> => {
+    operator?.release();
+    operator = undefined;
+    const { restoreCronOperatorSource } = await import("../gateway/cron-operator-source.js");
+    try {
+      operator = await restoreCronOperatorSource({
+        job,
+        target: { agentId: params.agentId, sessionKey: params.sessionKey },
+        signal,
+        deliveryAttemptFence: params.deliveryAttemptFence,
+      });
+    } catch (error) {
+      // The event receipt reports display text; cron still owns the retry decision.
+      if (error instanceof CronOperatorSourceError) {
+        operatorAdmissionFailure = { kind: "permanent" };
+      } else if (
+        isOperatorAuthorityUnavailable(error) ||
+        (error instanceof GatewayDispatchUnavailableError && error.retryable)
+      ) {
+        operatorAdmissionFailure = { kind: "reason", reason: "server_error" };
+      }
+      throw error;
+    }
+    assertCurrent();
+    return { operatorAuthority: operator?.authority };
   };
   try {
     const delivery =
@@ -71,30 +130,36 @@ export async function runCronSessionTurn(
       assertCurrent,
     });
     assertCurrent();
-    if (job.operatorSource) {
-      const { restoreCronOperatorSource } = await import("../gateway/cron-operator-source.js");
-      const operator = await restoreCronOperatorSource({
-        job,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        entry: expectedTarget,
-        signal: params.abortSignal,
-        deliveryAttemptFence: params.deliveryAttemptFence,
-      });
-      if (operator) {
-        operatorLease.defer(operator.release);
-        operatorAuthority = operator.authority;
-        controlUiAdmin = operator.controlUiAdmin ? true : undefined;
-      }
-      assertCurrent();
-    }
+    const admission = job.operatorSource ? await restoreOperator(params.abortSignal) : undefined;
     const requestedChat = delivery?.deliveryRequested && delivery.deliveryPlan.mode !== "webhook";
+    const deliverySessionKey = resolveCronDeliverySessionKey(job);
+    // Only a result committed to this same destination can satisfy an internal announcement.
+    const conversationDelivery = Boolean(
+      requestedChat &&
+      delivery &&
+      !delivery.resolvedDelivery.ok &&
+      !delivery.resolvedDelivery.sourceConversationUnavailable &&
+      !requiresExternalCronDelivery(delivery.deliveryPlan, delivery.resolvedDelivery) &&
+      deliverySessionKey &&
+      resolveSystemEventQueueKey(
+        resolveCronAgentSessionKey({
+          sessionKey: deliverySessionKey,
+          agentId: params.agentId,
+          mainKey: params.cfg.session?.mainKey,
+          cfg: params.cfg,
+        }),
+        params.agentId,
+      ) === queueKey,
+    );
     const deliverySuppressionReason =
       delivery && !delivery.resolvedDelivery.ok
         ? delivery.resolvedDelivery.deliverySuppressionReason
         : undefined;
     const deliveryError =
-      requestedChat && !delivery.resolvedDelivery.ok && !deliverySuppressionReason
+      requestedChat &&
+      !delivery.resolvedDelivery.ok &&
+      !conversationDelivery &&
+      !deliverySuppressionReason
         ? delivery.resolvedDelivery.error.message
         : undefined;
     // Failed owner resolution cannot inherit a remembered group route.
@@ -118,15 +183,17 @@ export async function runCronSessionTurn(
       if (delivery) {
         const current = await resolveCronDeliveryContext({ ...params, cfg });
         assertCurrent();
-        if (
-          !current.deliveryRequested ||
-          !current.resolvedDelivery.ok ||
-          !route ||
-          current.resolvedDelivery.channel !== route.channel ||
-          current.resolvedDelivery.to !== route.to ||
-          current.resolvedDelivery.accountId !== route.accountId ||
-          current.resolvedDelivery.threadId !== route.threadId
-        ) {
+        const sameRoute = conversationDelivery
+          ? !current.resolvedDelivery.ok &&
+            !current.resolvedDelivery.sourceConversationUnavailable &&
+            !requiresExternalCronDelivery(current.deliveryPlan, current.resolvedDelivery)
+          : current.resolvedDelivery.ok &&
+            route &&
+            current.resolvedDelivery.channel === route.channel &&
+            current.resolvedDelivery.to === route.to &&
+            current.resolvedDelivery.accountId === route.accountId &&
+            sameDeliveryThread(current.resolvedDelivery, route.threadId);
+        if (!current.deliveryRequested || !sameRoute) {
           throw new Error(
             "Automation delivery policy or route changed while queued; inspect the run and retry with the current destination",
           );
@@ -140,7 +207,7 @@ export async function runCronSessionTurn(
       params.sessionPreparation?.scratch ??
       (
         await readCronScratchSnapshot(
-          resolveCronJobsStorePathFromConfig(params.cfg),
+          params.cronStorePath ?? (await resolveCronJobsStorePathFromConfigAsync(params.cfg)),
           { kind: "job", jobId: job.id, createdAtMsFallback: job.createdAtMs },
           {},
           { assertCurrent, signal: params.abortSignal },
@@ -155,11 +222,12 @@ export async function runCronSessionTurn(
       isCronScratchEffectivelyEmpty(scratch?.content)
     ) {
       return {
-        status: "skipped",
+        status: "ok",
         summary: "Automation scratch is explicitly empty",
         executionStarted: false,
         delivered: false,
         deliveryAttempted: false,
+        deliverySuppressionReason: "empty",
       };
     }
     const baseSessionKey = parseAgentSessionKey(params.sessionKey)?.rest ?? params.sessionKey;
@@ -180,9 +248,10 @@ export async function runCronSessionTurn(
       scheduledAutomation: {
         job,
         occurrence: params.occurrence,
-        operatorAuthority,
-        controlUiAdmin,
+        ...admission,
+        readmitOperator: admission ? restoreOperator : undefined,
         admissionSource: params.admissionSource,
+        providerRunSlot: params.providerRunSlot,
         prepare: params.prepare,
         preparePrompt: async (cfg) => {
           const { applyLegacyHeartbeatPromptContribution } =
@@ -213,11 +282,12 @@ export async function runCronSessionTurn(
         },
         executionIdentity: params.executionIdentity,
         deliveryAttemptFence:
-          requestedChat && route && params.deliveryAttemptFence
+          requestedChat && (route || conversationDelivery)
             ? {
+                recordWithheld: params.deliveryAttemptFence?.recordWithheld,
                 beforeAttempt: beforeDeliver,
                 assertCurrent: () => {
-                  params.deliveryAttemptFence!.assertCurrent();
+                  params.deliveryAttemptFence?.assertCurrent();
                   assertDeliveryCurrent();
                 },
               }
@@ -283,12 +353,26 @@ export async function runCronSessionTurn(
     });
     // Source, notice, and Cron custody remain live until the controller settles.
     const result = await receipt.settled;
+    const conversationDelivered =
+      conversationDelivery && result.conversationResultCommitted === true;
+    const delivered = result.deliveryAmbiguous
+      ? undefined
+      : result.delivered || conversationDelivered;
     return {
       ...result.automationResult,
       status: result.admissionDeferred ? "skipped" : result.status === "completed" ? "ok" : "error",
       admissionDeferred: result.admissionDeferred,
       admissionDeferredReason: result.admissionDeferredReason,
       interruptedByRestart: result.interruptedByRestart,
+      errorClassification:
+        operatorAdmissionFailure ??
+        (result.terminalOutcome
+          ? resolveCronAgentErrorClassification(
+              result.terminalOutcome,
+              result.errorReason,
+              result.automationResult?.errorClassification,
+            )
+          : result.automationResult?.errorClassification),
       error:
         result.error ??
         (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),
@@ -296,7 +380,7 @@ export async function runCronSessionTurn(
       sessionId,
       sessionKey: expectedTarget.sessionKey,
       executionStarted: result.executionStarted,
-      delivered: result.deliveryAmbiguous ? undefined : result.delivered,
+      delivered,
       deliveryState: result.deliveryAmbiguous
         ? ({
             status: "unknown",
@@ -304,7 +388,7 @@ export async function runCronSessionTurn(
           } satisfies CronResolvedDeliveryState)
         : undefined,
       deliveryError: result.deliveryError ?? deliveryError,
-      deliveryAttempted: result.deliveryAttempted,
+      deliveryAttempted: result.deliveryAttempted || conversationDelivered,
       deliverySuppressionReason: result.deliverySuppressionReason ?? deliverySuppressionReason,
       ...(delivery
         ? {
@@ -314,24 +398,24 @@ export async function runCronSessionTurn(
               sourceDeliveryOutcome: result.sourceDeliveryOutcome ?? {
                 visibleDeliveries: [],
                 verifiedMessageToolDelivery: false,
-                satisfiesSourceDelivery: result.delivered && !result.deliveryAmbiguous,
+                satisfiesSourceDelivery: delivered === true,
                 unverifiedMessageToolDelivery: false,
               },
-              fallbackUsed: false,
-              delivered: result.deliveryAmbiguous ? undefined : result.delivered,
+              fallbackUsed: conversationDelivered,
+              delivered,
             }),
           }
         : {}),
       ...(result.nextCheckMs !== undefined ? { nextCheck: { delayMs: result.nextCheckMs } } : {}),
     };
   } catch (error) {
-    if (!(error instanceof CronOperatorSourceError)) {
+    if (!operatorAdmissionFailure) {
       throw error;
     }
     return {
       status: "error",
-      error: error.message,
-      errorClassification: { kind: "permanent" },
+      error: error instanceof Error ? error.message : String(error),
+      errorClassification: operatorAdmissionFailure,
       executionStarted: false,
     };
   } finally {

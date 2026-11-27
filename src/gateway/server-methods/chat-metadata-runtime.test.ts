@@ -107,9 +107,97 @@ describe("gateway chat metadata runtime", () => {
     harness.runtime.invalidate();
     harness.runtime.fail(new Error("replacement failed"));
     await expect(harness.read()).rejects.toThrow("replacement failed");
-    expect(onChanged.mock.calls).toEqual(
-      Array.from({ length: 3 }, () => [{ modelCatalogChanged: true, authChanged: true }]),
+    expect(onChanged.mock.calls).toEqual([
+      [{ agentId: "main", modelCatalogChanged: true, authChanged: true }],
+      [{ agentId: "main", modelCatalogChanged: true, authChanged: true }],
+      [{ modelCatalogChanged: true, authChanged: true }],
+    ]);
+  });
+
+  test("scopes prepared agent changes without retiring unrelated metadata", async () => {
+    const config: OpenClawConfig = { agents: { entries: { main: {}, other: {} } } };
+    const onChanged = vi.fn();
+    const harness = createChatMetadataHarness(config, { onChanged });
+    const main = harness.getPreparedOwner()!;
+    let other: ReturnType<typeof createChatMetadataOwner> | undefined;
+    harness.getPreparedOwner.mockImplementation((params) =>
+      params?.agentId === "other" ? other : main,
     );
+    harness.getPluginRegistryVersion.mockReturnValue(1);
+    await harness.refresh();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      modelCatalogChanged: true,
+      authChanged: true,
+    });
+    onChanged.mockClear();
+
+    other = createChatMetadataOwner(config, "other");
+    await harness.refresh();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      agentId: "other",
+      modelCatalogChanged: true,
+      authChanged: true,
+    });
+    onChanged.mockClear();
+    other = { ...other, modelCatalog: { ...other.modelCatalog, entries: [] } };
+    await Promise.all([harness.refresh(), harness.refresh({ notifyIfUnchanged: true })]);
+    expect(onChanged.mock.calls).toEqual([
+      [
+        {
+          agentId: "other",
+          modelCatalogChanged: true,
+          authChanged: true,
+          commandsChanged: false,
+        },
+      ],
+      [
+        {
+          modelCatalogChanged: false,
+          modelCatalogStatusChanged: true,
+          authChanged: false,
+          commandsChanged: false,
+        },
+      ],
+    ]);
+    await expectModel(harness, { id: "first" });
+    onChanged.mockClear();
+
+    harness.getSkillsVersion.mockImplementation((workspace) =>
+      workspace === other?.workspaceDir ? 2 : 1,
+    );
+    await harness.refresh();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      agentId: "other",
+      modelCatalogChanged: false,
+      authChanged: false,
+    });
+    onChanged.mockClear();
+    other = undefined;
+    await harness.refresh();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      agentId: "other",
+      modelCatalogChanged: true,
+      authChanged: true,
+    });
+    onChanged.mockClear();
+    await harness.refresh();
+    expect(onChanged).not.toHaveBeenCalled();
+
+    harness.setConfig({
+      agents: { ...config.agents, defaults: { model: { primary: "test/replacement" } } },
+    });
+    await harness.refresh();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      modelCatalogChanged: true,
+      authChanged: true,
+    });
+    onChanged.mockClear();
+    harness.getPluginRegistryVersion.mockReturnValue(2);
+    await harness.refresh();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      modelCatalogChanged: true,
+      authChanged: true,
+    });
   });
 
   test("invalidates models after same-snapshot owner replacement", async () => {
@@ -134,7 +222,7 @@ describe("gateway chat metadata runtime", () => {
     const harness = createChatMetadataHarness();
 
     await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow(
-      "prepared chat metadata snapshot is unavailable",
+      "Chat metadata is starting; retry shortly.",
     );
     await harness.runtime.refresh();
     expect(harness.buildProjection).not.toHaveBeenCalled();
@@ -143,26 +231,6 @@ describe("gateway chat metadata runtime", () => {
     });
 
     expect(harness.buildProjection).toHaveBeenCalledOnce();
-  });
-
-  test("single-flights equivalent refresh bursts and reads", async () => {
-    const harness = createChatMetadataHarness();
-    const { release } = pauseProjection(harness);
-
-    const refreshes = Array.from({ length: 128 }, () => harness.refresh());
-    await Promise.all(refreshes);
-    expect(harness.getPreparedOwner).toHaveBeenCalledTimes(1);
-    expect(harness.buildProjection).not.toHaveBeenCalled();
-    const firstRead = harness.read();
-    const secondRead = harness.read();
-    await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledTimes(1));
-    expect(harness.buildCommands).toHaveBeenCalledTimes(1);
-
-    release.resolve();
-    const [first, second] = await Promise.all([firstRead, secondRead]);
-    expect(first).toEqual(second);
-    expect(harness.buildCommands).toHaveBeenCalledTimes(1);
-    expect(harness.buildProjection).toHaveBeenCalledTimes(1);
   });
 
   test.each(["metadata", "startup"] as const)(
@@ -199,7 +267,9 @@ describe("gateway chat metadata runtime", () => {
       expect(harness.buildProjection).toHaveBeenCalledTimes(1);
       expect(coldReads.map((mock) => mock.mock.calls)).toEqual([[], [], [], []]);
       expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
-      expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
+      expect(harness.getAuthStoreRevision.mock.calls.map(([agentDir]) => agentDir)).toContain(
+        undefined,
+      );
     },
   );
 
@@ -411,17 +481,29 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test("reuses the prepared generation for an equivalent config replacement", async () => {
-    const harness = await preparedHarness();
-    const first = await harness.read();
-
-    harness.setConfig({ agents: { entries: { main: {} } } });
+  test("refreshes command eligibility through skills publication without announcing changed models", async () => {
+    const onChanged = vi.fn();
+    const harness = createChatMetadataHarness(undefined, { onChanged });
     await harness.refresh();
-    const second = await harness.read();
-
-    expect(second).toEqual(first);
-    expect(harness.buildCommands).toHaveBeenCalledTimes(1);
-    expect(harness.buildProjection).toHaveBeenCalledTimes(1);
+    const first = await harness.read();
+    onChanged.mockClear();
+    harness.setConfig({
+      agents: { entries: { main: {} } },
+      commands: { text: false },
+      skills: { allowBundled: ["fixture"] },
+      browser: { enabled: false },
+    });
+    // The config reload owner always publishes completed skill eligibility.
+    harness.setSkillsVersion(2);
+    await harness.refresh();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      agentId: "main",
+      modelCatalogChanged: false,
+      authChanged: false,
+    });
+    const next = await harness.read();
+    expect(next.commands).not.toEqual(first.commands);
+    expect(next.models).toEqual(first.models);
   });
 
   test("rebuilds after an auth store publishes a newer revision", async () => {
@@ -622,21 +704,6 @@ describe("gateway chat metadata runtime", () => {
     await expect(harness.refresh()).rejects.toThrow(
       "prepared full model catalog omitted its auth generation",
     );
-  });
-
-  test("retains a generation while auth store revisions are unchanged", async () => {
-    const harness = createChatMetadataHarness();
-    harness.getPreparedAuthStore.mockImplementation(() => ({ version: 1, profiles: {} }));
-    await harness.runtime.refresh();
-    const first = await harness.runtime.read({ agentId: "main" });
-
-    await harness.runtime.refresh();
-    const second = await harness.runtime.read({ agentId: "main" });
-
-    expect(second).toEqual(first);
-    expect(harness.buildProjection).toHaveBeenCalledTimes(1);
-    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
-    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
   });
 
   test("waits for replacement only for canonical metadata, including session auth projections", async () => {

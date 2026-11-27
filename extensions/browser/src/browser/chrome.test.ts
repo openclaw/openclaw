@@ -48,6 +48,60 @@ function replyToShutdown(proc: ReturnType<typeof makeChromeTestProc>, close?: ()
   };
 }
 
+async function withChromeCdpClock(wsUrl: string, timeoutMs: number, run: () => Promise<void>) {
+  const endpoint = new URL(wsUrl);
+  const requests = new Set<ReturnType<typeof http.request>>();
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const request = http.request;
+  let closed = false;
+
+  // Node's HTTP socket deadline is native. Keep it on the command's virtual
+  // clock so PID proof measures the CDP reply rather than host scheduling.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const requestTimer = vi.spyOn(http, "request").mockImplementation((...args) => {
+    const pending = request(...args);
+    if (
+      pending.getHeader("host") !== endpoint.host ||
+      pending.path !== endpoint.pathname + endpoint.search
+    ) {
+      return pending;
+    }
+    requests.add(pending);
+    pending.once("socket", (socket) => {
+      if (closed) {
+        return;
+      }
+      socket.setTimeout(0);
+      const timer = setTimeout(() => pending.emit("timeout"), timeoutMs);
+      timers.add(timer);
+      const clear = () => {
+        clearTimeout(timer);
+        timers.delete(timer);
+      };
+      pending.once("upgrade", clear);
+      pending.once("error", clear);
+      pending.once("close", clear);
+    });
+    return pending;
+  });
+  try {
+    await run();
+  } finally {
+    closed = true;
+    try {
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
+      for (const pending of requests) {
+        pending.destroy();
+      }
+    } finally {
+      requestTimer.mockRestore();
+      vi.useRealTimers();
+    }
+  }
+}
+
 async function stopChromeWithProc(proc: ReturnType<typeof makeChromeTestProc>, timeoutMs: number) {
   await stopOpenClawChrome(
     {
@@ -187,6 +241,22 @@ describe("browser chrome helpers", () => {
     expect(formatted).not.toContain("supersecret123");
   });
 
+  it.each(["http://127.0.0.1", "ws://127.0.0.1", "http://localhost"])(
+    "reports a refused %s CDP connection",
+    async (origin) => {
+      const closed = createTcpServer(() => {});
+      const port = await listenOnLoopback(closed);
+      await new Promise<void>((resolve) => {
+        closed.close(() => resolve());
+      });
+
+      await expect(diagnoseChromeCdp(`${origin}:${port}`, 500, 500)).resolves.toMatchObject({
+        ok: false,
+        connectionRefused: true,
+      });
+    },
+  );
+
   it("surfaces Windows listener checks from a real empty-reply CDP probe", async () => {
     // A broken portproxy accepts the WSL-side socket and closes it without an
     // HTTP body. The host checks must survive the full probe/format path.
@@ -282,15 +352,20 @@ describe("browser chrome helpers", () => {
   });
 
   it("verifies the exact managed browser pid through CDP SystemInfo", async () => {
+    const reply = vi.fn((method: string) => {
+      expect(method).toBe("SystemInfo.getProcessInfo");
+      return { processInfo: [{ type: "browser", id: 44001 }] };
+    });
     await withMockChromeCdpServer({
       wsPath: "/devtools/browser/process-owner",
-      reply: (method) => {
-        expect(method).toBe("SystemInfo.getProcessInfo");
-        return { processInfo: [{ type: "browser", id: 44001 }] };
-      },
+      reply,
       run: async (baseUrl) => {
-        await expect(isChromeCdpOwnedByPid(baseUrl, 44001, 100)).resolves.toBe(true);
-        await expect(isChromeCdpOwnedByPid(baseUrl, 44002, 100)).resolves.toBe(false);
+        const wsUrl = `${baseUrl.replace("http:", "ws:")}/devtools/browser/process-owner`;
+        await withChromeCdpClock(wsUrl, 100, async () => {
+          await expect(isChromeCdpOwnedByPid(baseUrl, 44001, 100)).resolves.toBe(true);
+          await expect(isChromeCdpOwnedByPid(baseUrl, 44002, 100)).resolves.toBe(false);
+          expect(reply).toHaveBeenCalledTimes(2);
+        });
       },
     });
   });
@@ -381,44 +456,15 @@ describe("browser chrome helpers", () => {
       },
       run: async (baseUrl) => {
         const browserWsUrl = `${baseUrl.replace("http://", "ws://")}/devtools/browser/replacement`;
-        const endpoint = new URL(browserWsUrl);
         const timeoutMs = 10;
         mockVersionEndpoint(browserWsUrl);
 
-        // Node's HTTP socket deadline is native; give this fixture's real upgrade
-        // the same clock as the CDP command without racing the host scheduler.
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        const request = http.request;
-        let pendingRequest: ReturnType<typeof http.request> | undefined;
-        let clearRequestTimeout: (() => void) | undefined;
-        const requestTimer = vi.spyOn(http, "request").mockImplementation((...args) => {
-          const pending = request(...args);
-          if (pending.getHeader("host") !== endpoint.host || pending.path !== endpoint.pathname) {
-            return pending;
-          }
-          pendingRequest = pending;
-          pending.once("socket", (socket) => {
-            socket.setTimeout(0);
-            const timer = setTimeout(() => pending.emit("timeout"), timeoutMs);
-            const clear = () => clearTimeout(timer);
-            clearRequestTimeout = clear;
-            pending.once("upgrade", clear);
-            pending.once("error", clear);
-            pending.once("close", clear);
-          });
-          return pending;
-        });
-        try {
+        await withChromeCdpClock(browserWsUrl, timeoutMs, async () => {
           await stopChromeWithProc(proc, timeoutMs);
 
           expect(methods).toEqual(["SystemInfo.getProcessInfo"]);
           expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-        } finally {
-          clearRequestTimeout?.();
-          pendingRequest?.destroy();
-          requestTimer.mockRestore();
-          vi.useRealTimers();
-        }
+        });
       },
     });
   });

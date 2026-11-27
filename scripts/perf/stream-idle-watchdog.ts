@@ -4,6 +4,12 @@
  *   node --expose-gc --import ./scripts/tsx.mjs scripts/perf/stream-idle-watchdog.ts --mode timing
  *   node --expose-gc --import ./scripts/tsx.mjs scripts/perf/stream-idle-watchdog.ts --mode allocation
  * --owner accepts an equivalent owner module for comparisons without a build.
+ * --accept-before-iterate measures the request-to-iterator handoff; for example,
+ * --turns 8192 --deltas 1 --concurrency 65 --accept-before-iterate. Use --mode
+ * counts separately to count timer creation.
+ * --watchdog-sessions 4096 includes request admission/release across resident
+ * session watchdogs. Per-turn timings include concurrent scheduling; this mode
+ * measures hand-off correctness cost, with unchanged timer counts as its budget.
  * Synthetic concurrent streams notify real provider activity and alternate text
  * and tool-call fragments; all events must preserve identity and order. Timing
  * excludes allocation profiling. Acceptance: fewer allocations/CPU per event,
@@ -20,6 +26,8 @@ import { createAssistantMessageEventStream } from "@openclaw/llm-core/event-stre
 import type { AssistantMessage, AssistantMessageEvent, Model } from "@openclaw/llm-core/types";
 import type { streamWithIdleTimeout } from "../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import type { StreamFn } from "../../src/agents/runtime/index.js";
+import { createSessionControllerWatchdog } from "../../src/sessions/session-controller.watchdog.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -29,16 +37,40 @@ const { values } = parseArgs({
     turns: { type: "string", default: "64" },
     deltas: { type: "string", default: "256" },
     concurrency: { type: "string", default: "8" },
+    "accept-before-iterate": { type: "boolean", default: false },
+    "watchdog-sessions": { type: "string", default: "0" },
   },
 });
-assert(values.mode === "timing" || values.mode === "allocation");
+assert(["timing", "allocation", "counts"].includes(values.mode));
 const count = (label: "turns" | "deltas" | "concurrency", fallback: number) =>
   parseStrictIntegerOption({ raw: values[label], fallback, min: 1, label });
 const turns = count("turns", 64);
 const deltas = count("deltas", 256);
 const concurrency = count("concurrency", 8);
+const sessionCount = parseStrictIntegerOption({
+  raw: values["watchdog-sessions"],
+  fallback: 0,
+  min: 0,
+  label: "watchdog-sessions",
+});
+assert(sessionCount === 0 || sessionCount >= concurrency);
+const watchdogs = Array.from({ length: sessionCount }, () =>
+  createSessionControllerWatchdog({
+    startedAtMs: Date.now(),
+    isCurrent: () => true,
+    readPhase: () => "active",
+    requestStop: () => {
+      throw new Error("unexpected stall");
+    },
+    expireCleanup: () => {
+      throw new Error("unexpected cleanup expiry");
+    },
+  }),
+);
+const attempts = watchdogs.map((watchdog) => watchdog.attachAttempt({ assertCurrent() {} }));
+const ownerPath = resolve(values.owner);
 const owner: { streamWithIdleTimeout: typeof streamWithIdleTimeout } = await import(
-  pathToFileURL(resolve(values.owner)).href
+  pathToFileURL(ownerPath).href
 );
 const model: Model = {
   id: "synthetic-stream",
@@ -74,24 +106,29 @@ const events: AssistantMessageEvent[] = Array.from({ length: deltas }, (_, index
     : { type: "text_delta", contentIndex: 0, delta: String(index % 10) },
 );
 
-async function run(turnCount: number) {
+async function run(turnCount: number, samples?: number[]) {
   let checksum = 0;
   let nextTurn = 0;
   await Promise.all(
     Array.from({ length: concurrency }, async () => {
       while (nextTurn++ < turnCount) {
+        const turnStarted = performance.now();
+        const watchdogAttempt = attempts.length
+          ? attempts[(nextTurn - 1) % attempts.length]
+          : undefined;
         const source = createAssistantMessageEventStream();
         const caller = new AbortController();
         let signal: AbortSignal | undefined;
         const provider: StreamFn = (_model, _context, options) => {
           signal = options?.signal;
+          if (values["accept-before-iterate"]) {
+            notifyLlmRequestActivity(signal);
+          }
           return source;
         };
-        const stream = await owner.streamWithIdleTimeout(provider, 120_000)(
-          model,
-          { messages: [] },
-          { signal: caller.signal },
-        );
+        const stream = await owner.streamWithIdleTimeout(provider, 120_000, undefined, {
+          watchdogAttempt,
+        })(model, { messages: [] }, { signal: caller.signal });
         const iterator = stream[Symbol.asyncIterator]();
         for (const event of events) {
           const pending = iterator.next();
@@ -103,6 +140,7 @@ async function run(turnCount: number) {
         }
         source.end(message);
         assert((await iterator.next()).done, "stream did not finish");
+        samples?.push(performance.now() - turnStarted);
       }
     }),
   );
@@ -114,21 +152,35 @@ await run(Math.min(turns, 8));
 globalThis.gc?.();
 const inspector = values.mode === "allocation" ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16_384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
+  await startCollectedHeapSampling(inspector, 4096);
+}
+const originalSetTimeout = globalThis.setTimeout;
+let timerCreations = 0;
+if (values.mode === "counts") {
+  globalThis.setTimeout = new Proxy(originalSetTimeout, {
+    apply(target, receiver, args) {
+      if (new Error().stack?.split("\n")[2]?.includes(ownerPath)) {
+        timerCreations++;
+      }
+      return Reflect.apply(target, receiver, args);
+    },
   });
 }
 const beforeLoad = loadavg();
 const startCpu = process.cpuUsage();
 const startThreadCpu = process.threadCpuUsage();
 const started = performance.now();
-const checksum = await run(turns);
+let checksum: number;
+const samples: number[] = [];
+try {
+  checksum = await run(turns, samples);
+} finally {
+  globalThis.setTimeout = originalSetTimeout;
+}
 const elapsedMs = performance.now() - started;
 const cpu = process.cpuUsage(startCpu);
 const threadCpu = process.threadCpuUsage(startThreadCpu);
+samples.sort((a, b) => a - b);
 let sampledBytes: number | undefined;
 if (inspector) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -144,6 +196,11 @@ console.log(
     turns,
     deltas,
     concurrency,
+    watchdogSessions: sessionCount,
+    turnMedianMs: samples[Math.floor(samples.length / 2)],
+    turnP95Ms: samples[Math.floor(samples.length * 0.95)],
+    acceptBeforeIterate: values["accept-before-iterate"],
+    timerCreations: values.mode === "counts" ? timerCreations : undefined,
     events: turns * deltas,
     checksum,
     elapsedMs,
@@ -157,3 +214,6 @@ console.log(
     hostLoadAfter: loadavg(),
   }),
 );
+for (const watchdog of watchdogs) {
+  watchdog.close();
+}

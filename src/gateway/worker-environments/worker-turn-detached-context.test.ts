@@ -45,6 +45,7 @@ import {
   dispatchInitialWorkerPlacement,
   placements,
   readWorkerTurnTranscriptStorageRows as readRows,
+  reconcileUnchangedLocalWorkspace,
   root,
   seedActivePlacement,
   sessionTarget,
@@ -121,7 +122,23 @@ function recorder(excludeFromContext = false) {
   });
 }
 
-let hasUnjoinedOwner = false;
+let unjoinedOwners = 0;
+
+function assertFixtureJoined() {
+  if (unjoinedOwners > 0) {
+    throw new Error("prior worker fixture remains unjoined; retained state must not be replaced");
+  }
+}
+
+async function runFixtureModelFallback<T>(params: Parameters<typeof runWithModelFallback<T>>[0]) {
+  // A settled candidate still leaves the fallback owner able to read and write this fixture.
+  unjoinedOwners++;
+  try {
+    return await runWithModelFallback(params);
+  } finally {
+    unjoinedOwners--;
+  }
+}
 
 async function launchProbe(
   runId: string,
@@ -151,8 +168,7 @@ async function launchProbe(
   const tunnel = createWorkerTurnTunnel({
     runWorkspaceCommand: unexpected,
     syncWorkspace: unexpected,
-    quiesceWorkspace: unexpected,
-    reconcileWorkspace: unexpected,
+    reconcileWorkspace: reconcileUnchangedLocalWorkspace,
     launchTurn: async (request) => {
       const { plan } = request;
       launch = {
@@ -186,7 +202,7 @@ async function launchProbe(
     placements,
     ...(waitForInitialPlacement ? { waitForInitialPlacement } : {}),
   });
-  hasUnjoinedOwner = true;
+  unjoinedOwners++;
   const pending = provider
     .executeTurn(
       { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: input.runId },
@@ -203,7 +219,7 @@ async function launchProbe(
   try {
     outcome = await pending;
   } finally {
-    hasUnjoinedOwner = false;
+    unjoinedOwners--;
     input.preparedRunAdmission?.close();
   }
   expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
@@ -223,10 +239,9 @@ async function withAsyncReadHook<T>(
   run: () => Promise<T>,
   phase: "before" | "after" = "after",
 ) {
-  const original = SessionManager.openModelContextAsync.bind(SessionManager);
-  const read = vi
-    .spyOn(SessionManager, "openModelContextAsync")
-    .mockImplementation(async (...args) => {
+  const wrap =
+    <A extends unknown[]>(original: (...args: A) => Promise<SessionManager>) =>
+    async (...args: A) => {
       if (phase === "before") {
         await hook();
       }
@@ -235,7 +250,11 @@ async function withAsyncReadHook<T>(
         await hook();
       }
       return result;
-    });
+    };
+  const openModelContextAsync = wrap(SessionManager.openModelContextAsync.bind(SessionManager));
+  const read = vi
+    .spyOn(SessionManager, "openModelContextAsync")
+    .mockImplementation(openModelContextAsync);
   try {
     return { result: await run(), calls: read.mock.calls.length };
   } finally {
@@ -259,18 +278,16 @@ function afterNextModelContextSnapshot(afterSnapshot: () => Promise<void>) {
 
 describe("worker detached model-context branch parity", () => {
   beforeEach(async () => {
-    if (hasUnjoinedOwner) {
-      throw new Error("prior worker fixture remains unjoined; retained state must not be replaced");
-    }
+    assertFixtureJoined();
     await setupWorkerTurnLauncherTest();
   });
   afterEach(async () => {
-    if (!hasUnjoinedOwner) {
+    if (unjoinedOwners === 0) {
       await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
     }
   });
   afterAll(async () => {
-    if (!hasUnjoinedOwner) {
+    if (unjoinedOwners === 0) {
       await closeStateDatabaseForTest();
     }
   });
@@ -313,7 +330,7 @@ describe("worker detached model-context branch parity", () => {
       let candidate = 0;
       let workerLaunches = 0;
       const commitComplete = new Error("synthetic worker commit complete");
-      const result = await runWithModelFallback({
+      const result = await runFixtureModelFallback({
         cfg: undefined,
         provider: "fixture-provider",
         model: "primary",
@@ -360,6 +377,8 @@ describe("worker detached model-context branch parity", () => {
             },
           );
           if (candidate === 1) {
+            // Do not let fallback handling reinterpret an assertion failure as a candidate error.
+            expect.soft(assertFixtureJoined).toThrow("prior worker fixture remains unjoined");
             if (launched.outcome.kind !== "rejected") {
               throw new Error("expected primary failure");
             }
@@ -380,6 +399,7 @@ describe("worker detached model-context branch parity", () => {
           return "fallback completed";
         },
       });
+      expect(assertFixtureJoined).not.toThrow();
       expect(result.result).toBe("fallback completed");
       expect(candidate).toBe(2);
       expect(workerLaunches).toBe(2);

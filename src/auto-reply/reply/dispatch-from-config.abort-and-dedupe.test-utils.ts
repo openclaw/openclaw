@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createApprovalNativeRouteReporter } from "../../infra/approval-native-route-coordinator.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
@@ -28,6 +29,7 @@ import {
   replyMediaPathMocks,
   sessionBindingMocks,
   sessionStoreMocks,
+  transcriptMocks,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
@@ -47,6 +49,7 @@ import {
   createMessageToolOnlyDispatchArgs,
 } from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
+import type { InternalGetReplyFromConfig } from "./get-reply.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const FAST_ABORT_SESSION_MODEL = Object.freeze({
@@ -413,21 +416,15 @@ describe("dispatchReplyFromConfig", () => {
 
   it("fast-resolves /approve before acquiring the active session operation", async () => {
     setNoAbort();
-    mocks.tryFastApproveFromMessage.mockResolvedValue({
-      handled: true,
-      reply: { text: "✅ Approval allow-once submitted." },
-    });
+    const reply = { text: "✅ Approval allow-once submitted." };
+    mocks.tryFastApproveFromMessage.mockResolvedValue({ handled: true, reply });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) as ReplyPayload);
-    sessionStoreMocks.currentEntry = {
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6-20260205",
-      modelOverrideRouteResolution: "resolved",
-      thinkingLevel: "high",
-    };
+    sessionStoreMocks.currentEntry = FAST_ABORT_SESSION_MODEL;
     const onModelSelected = vi.fn();
     const ctx = buildTestCtx({
       Provider: "imessage",
+      MessageSid: "approval-command-message",
       Surface: "imessage",
       Body: "/approve exec-1 allow-once",
       BodyForCommands: "/approve exec-1 allow-once",
@@ -458,10 +455,12 @@ describe("dispatchReplyFromConfig", () => {
         sessionKey: "agent:main:imessage:direct:peer",
       }),
     );
+    await settleReplyDispatcher({ dispatcher });
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ contextFreeCommand: true }),
+    );
     expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: "✅ Approval allow-once submitted.",
-    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(reply);
     expect(onModelSelected).toHaveBeenCalledWith({
       provider: "anthropic",
       model: "claude-opus-4-6-20260205",
@@ -1073,7 +1072,7 @@ describe("dispatchReplyFromConfig", () => {
     ]);
     mockPersistentAcpRuntime(runtime);
 
-    const cfg = createLiveAcpConfig(256);
+    const cfg = { ...createLiveAcpConfig(256), tts: { auto: "always" } } satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = createPersistentAcpContext("stream this");
 
@@ -1261,24 +1260,21 @@ describe("dispatchReplyFromConfig", () => {
       onDeferred: vi.fn(),
       onSettled: vi.fn(),
     };
-    const firstReplyResolver = vi.fn(
-      async (_ctx: MsgContext, opts?: GetReplyOptions): Promise<ReplyPayload | undefined> => {
-        await opts?.turnAdoptionLifecycle?.onAdopted();
-        const operation = (
-          opts as { replyOperation?: { abortForRestart: () => boolean } } | undefined
-        )?.replyOperation;
-        expect(operation?.abortForRestart()).toBe(true);
-        return await new Promise<never>(() => {});
-      },
-    );
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher: createDispatcher(),
-      replyOptions: { turnAdoptionLifecycle },
-      replyResolver: firstReplyResolver,
+    const firstReplyResolver = vi.fn<InternalGetReplyFromConfig>(async (_ctx, opts) => {
+      await opts?.turnAdoptionLifecycle?.onAdopted();
+      expect(opts?.replyOperation?.abortForRestart()).toBe(true);
+      return undefined;
     });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyOptions: { turnAdoptionLifecycle },
+        replyResolver: firstReplyResolver,
+      }),
+    ).rejects.toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
     expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledOnce();
 
     const duplicateReplyResolver = vi.fn(

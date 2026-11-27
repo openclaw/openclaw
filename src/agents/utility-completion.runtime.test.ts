@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -89,6 +89,7 @@ function runtimeLease(
       configuredCatalogEntries: [],
       pluginRegistry: snapshot.pluginRegistry,
     },
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: release,
   };
 }
@@ -267,32 +268,40 @@ const request = async (overrides: Partial<Request> = {}): Promise<Request> => ({
 });
 const run = async (overrides: Partial<Request> = {}) =>
   runUtilityCompletion(await request(overrides), complete);
-const failThenAnswer = (reason: "timeout" | "rate_limit" = "timeout") => {
+const failThenAnswer = (reason: "timeout" | "rate_limit" | "model_not_found" = "timeout") => {
   complete
-    .mockRejectedValueOnce(new FailoverError("Provider unavailable", { reason }))
+    .mockRejectedValueOnce(
+      reason === "model_not_found"
+        ? Object.assign(new Error("Codex app-server model not found: small"), {
+            code: "model_not_found",
+          })
+        : new FailoverError("Provider unavailable", { reason }),
+    )
     .mockResolvedValue(answer);
 };
 beforeEach(() => {
   complete.mockReset();
 });
 
-it("resolves fallback aliases and keeps credentials and main-model fallbacks independent", async () => {
-  failThenAnswer();
-  await expect(run()).resolves.toEqual(answer);
-  expect(
-    complete.mock.calls.map(([call]) => [call.provider, call.model, call.authProfileId]),
-  ).toEqual([
-    ["local", "small", "local:utility"],
-    ["other", "backup", undefined],
-  ]);
-});
+it.each(["timeout", "model_not_found"] as const)(
+  "recovers from %s with independent utility fallbacks and credentials",
+  async (reason) => {
+    failThenAnswer(reason);
+    await expect(run()).resolves.toEqual(answer);
+    expect(
+      complete.mock.calls.map(([call]) => [call.provider, call.model, call.authProfileId]),
+    ).toEqual([
+      ["local", "small", "local:utility"],
+      ["other", "backup", undefined],
+    ]);
+  },
+);
 
 it("preserves operator model restrictions for utility fallbacks", async () => {
   failThenAnswer("rate_limit");
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "fixture",
     scopes: ["operator.write"],
-    assertCurrent() {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
       policy: { allow: ["local/*", "other/*"], deny: ["other/backup"] },

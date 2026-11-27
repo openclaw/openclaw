@@ -161,18 +161,22 @@ export async function completeCleanupBookkeeping(
               draft.delivery.discardReason === "expired"))) ||
           (draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
             draft.suppressAnnounceReason !== "killed"));
-      retireImmediately = retireAfterSettle && cleanupParams.skipRequesterSettleWake === true;
+      retireImmediately =
+        retireAfterSettle &&
+        cleanupParams.skipRequesterSettleWake === true &&
+        cleanupParams.retainForCleanup !== true;
       if (!retireImmediately) {
         draft.cleanupCompletedAt = cleanupParams.completedAt;
         if (suppressSessionEffects) {
-          draft.execution.restartRecovery = undefined;
           draft.execution.suppressSessionEffects = true;
-          draft.terminalOwner = undefined;
         }
         if (draft.collect) {
           draft.requesterSettleWake = undefined;
         } else if (!cleanupParams.skipRequesterSettleWake) {
-          markRequesterSettleWakePending(draft, { retireAfterSettle });
+          if (retireAfterSettle) {
+            draft.retireAfterSettle = true;
+          }
+          markRequesterSettleWakePending(draft);
         }
       }
     },

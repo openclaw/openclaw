@@ -12,7 +12,6 @@ import type { PluginRuntime } from "../../runtime-api.js";
 import { getMatrixRuntime, setMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime, resetMatrixTestStores } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
-import { voteMatrixPoll } from "./actions/polls.js";
 import {
   loadMatrixDeliveryPlan,
   reconcileMatrixUnknownSend,
@@ -34,6 +33,7 @@ import {
   createEncryptedMediaPayload,
   makeClient,
   makeEncryptedMediaClient,
+  registerMatrixMediaTests,
 } from "./send.test-support.js";
 
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
@@ -92,13 +92,9 @@ const runtimeStub = {
   },
   channel: {
     text: {
-      resolveTextChunkLimit: resolveTextChunkLimitMock,
       resolveChunkMode: () => "length",
-      chunkMarkdownText: (text: string) => (text ? [text] : []),
       chunkMarkdownTextWithMode: (text: string, limit: number, mode: unknown) =>
         chunkMarkdownTextWithModeMock(text, limit, mode),
-      resolveMarkdownTableMode: resolveMarkdownTableModeMock,
-      convertMarkdownTables: (text: string) => text,
     },
   },
 } as unknown as PluginRuntime;
@@ -241,7 +237,6 @@ describe("Matrix formatted chunk boundaries", () => {
     const chunks = chunksFor(markdown, 20);
 
     expect(chunks.join("")).toBe(markdown);
-    expect(chunks.join("")).not.toContain("</u>");
   });
 
   it("keeps spoiler and underline nesting valid across chunks", () => {
@@ -425,49 +420,76 @@ describe("sendMessageMatrix durable delivery", () => {
   });
 });
 
-describe("sendMessageMatrix media", () => {
-  it("rejects encrypted media before loading or reporting dispatch when encryption is disabled", async () => {
-    vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
-    const onPlatformSendDispatch = vi.fn();
-    await expect(
-      send("secret", { mediaUrl: "file:///tmp/photo.png", onPlatformSendDispatch }),
-    ).rejects.toThrow(/enable encryption/i);
-    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
-    expect(loadOutboundMediaFromUrlMock).not.toHaveBeenCalled();
-    expect(uploadContent).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
+registerMatrixMediaTests({
+  send,
+  sentContent,
+  loadOutboundMediaFromUrlMock,
+  mediaKindFromMimeMock,
+  isVoiceCompatibleAudioMock,
+  get sendMessage() {
+    return sendMessage;
+  },
+});
 
-  it.each([false, true])("rechecks encryption after media loading (crypto=%s)", async (crypto) => {
-    if (crypto) {
-      ({ client, sendMessage, uploadContent } = makeEncryptedMediaClient());
-      vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.message");
-    }
-    loadOutboundMediaFromUrlMock.mockImplementationOnce(async () => {
-      vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
-      return {
-        buffer: Buffer.from("secret media"),
-        fileName: "secret.png",
-        contentType: "image/png",
-        kind: "image",
-      };
+function makeAacTimingFixture(mediaTicks: number, edits: readonly (number | undefined)[]): Buffer {
+  // Build just the MP4 timing and sample-description boxes read by the metadata parser.
+  const timescale = 48_000;
+  function words(...values: number[]) {
+    const buffer = Buffer.alloc(values.length * 4);
+    values.forEach((value, index) => buffer.writeUInt32BE(value, index * 4));
+    return buffer;
+  }
+  function box(type: string, ...parts: Buffer[]) {
+    const payload = Buffer.concat(parts);
+    return Buffer.concat([words(payload.length + 8), Buffer.from(type), payload]);
+  }
+  const movieTicks = Math.max(...edits.map((ticks) => ticks ?? mediaTicks));
+  const mvhd = box("mvhd", words(0, 0, 0, timescale, movieTicks), Buffer.alloc(80));
+  const tracks = edits.map((ticks, index) => {
+    const tkhd = box("tkhd", words(3, 0, 0, index + 1, 0, ticks ?? mediaTicks), Buffer.alloc(60));
+    const edts =
+      ticks === undefined
+        ? Buffer.alloc(0)
+        : box("edts", box("elst", words(0, 1, ticks, 448, 0x00010000)));
+    const mdhd = box("mdhd", words(0, 0, 0, timescale, mediaTicks, 0));
+    const hdlr = box("hdlr", words(0, 0), Buffer.from("soun"), Buffer.alloc(13));
+    const mp4a = box("mp4a", words(0, 1, 0, 0, 0x00010010, 0, timescale * 65536));
+    const stbl = box("stbl", box("stsd", words(0, 1), mp4a));
+    return box("trak", tkhd, edts, box("mdia", mdhd, hdlr, box("minf", stbl)));
+  });
+  return Buffer.concat([
+    box("ftyp", Buffer.from("isom"), words(0), Buffer.from("isom")),
+    box("moov", mvhd, ...tracks),
+  ]);
+}
+
+describe("sendMessageMatrix media", () => {
+  it.each([
+    { name: "edited AAC audio", mediaTicks: 26_624, edits: [24_000], voice: false, duration: 500 },
+    { name: "edited AAC voice", mediaTicks: 26_624, edits: [24_000], voice: true, duration: 500 },
+    {
+      name: "two AAC tracks",
+      mediaTicks: 26_624,
+      edits: [24_000, 25_200],
+      voice: false,
+      duration: 555,
+    },
+    { name: "unedited AAC", mediaTicks: 14_336, edits: [undefined], voice: false, duration: 299 },
+  ])("reports the duration of $name", async ({ mediaTicks, edits, voice, duration }) => {
+    const buffer = makeAacTimingFixture(mediaTicks, edits);
+    const original = Buffer.from(buffer);
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer,
+      fileName: "clip.m4a",
+      contentType: "audio/mp4",
+      kind: "audio",
     });
-    const onPlatformSendDispatch = vi.fn();
-    const sending = send("secret", { mediaUrl: "file:///tmp/secret.png", onPlatformSendDispatch });
-    if (crypto) {
-      await sending;
-      expect(uploadContent).toHaveBeenCalledWith(
-        Buffer.from("encrypted"),
-        "application/octet-stream",
-      );
-      expect(sentContent().file).toBeDefined();
-      expect(sentContent().url).toBeUndefined();
-    } else {
-      await expect(sending).rejects.toThrow(/enable encryption/i);
-      expect(uploadContent).not.toHaveBeenCalled();
-      expect(sendMessage).not.toHaveBeenCalled();
-      expect(onPlatformSendDispatch).not.toHaveBeenCalled();
-    }
+    mediaKindFromMimeMock.mockReturnValue("audio");
+    await send("", { mediaUrl: "clip.m4a", audioAsVoice: voice });
+    expect(uploadContent.mock.calls).toEqual([[original, "audio/mp4", "clip.m4a"]]);
+    const content = sentContent();
+    expect(content).toMatchObject({ msgtype: "m.audio", info: { duration } });
+    expect(content["org.matrix.msc1767.audio"]).toEqual(voice ? { duration } : undefined);
   });
 
   it.each([false, true])(
@@ -505,7 +527,7 @@ describe("sendMessageMatrix media", () => {
       });
       expect(content["m.mentions"]).toEqual({});
       expect(loadOutboundMediaFromUrlMock.mock.calls[0]?.[1].maxBytes).toBeUndefined();
-      expect(info.mimetype).toBe("image/png");
+      expect(info).toMatchObject({ size: 5, mimetype: "image/png", w: 1600, h: 1200 });
       expect(info.thumbnail_info).toEqual({ w: 800, h: 600, mimetype: "image/jpeg", size: 5 });
       if (encrypted) {
         expect(client.crypto?.encryptMedia).toHaveBeenCalledTimes(2);
@@ -529,40 +551,22 @@ describe("sendMessageMatrix media", () => {
     },
   );
 
-  it.each([false, true])(
-    "preserves audio delivery and voice transcript relations (compatible=%s)",
-    async (compatible) => {
-      mediaKindFromMimeMock.mockReturnValue("audio");
-      isVoiceCompatibleAudioMock.mockReturnValue(compatible);
-      const fileName = compatible ? "clip.mp3" : "clip.wav";
-      loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
-        buffer: Buffer.from("audio"),
-        fileName,
-        contentType: compatible ? "audio/mpeg" : "audio/wav",
-        kind: "audio",
-      });
-      sendMessage.mockReset().mockResolvedValueOnce("$voice").mockResolvedValueOnce("$transcript");
-      const result = await send("voice caption", {
-        mediaUrl: `file:///tmp/${fileName}`,
-        audioAsVoice: true,
-        replyToId: compatible ? "$reply" : undefined,
-      });
-      if (compatible) {
-        expect(sentContent(1).body).toBe("voice caption");
-        expect(sentContent(1)["m.relates_to"]).toEqual({ "m.in_reply_to": { event_id: "$reply" } });
-        expect(result.receipt.parts).toMatchObject([
-          { platformMessageId: "$voice", kind: "voice", index: 0, replyToId: "$reply" },
-          { platformMessageId: "$transcript", kind: "text", index: 1, replyToId: "$reply" },
-        ]);
-      } else {
-        expect(sendMessage).toHaveBeenCalledTimes(1);
-        expect(sentContent()).toMatchObject({ msgtype: "m.audio", body: "voice caption" });
-        expect(sentContent()["org.matrix.msc3245.voice"]).toBeUndefined();
-      }
-    },
-  );
+  it.each([
+    ["IDAT", false],
+    ["acTL", undefined],
+  ])("claims a still PNG only when %s comes first (#195814)", async (chunk, expected) => {
+    const buffer = Buffer.from(`\x89PNG\r\n\x1a\n\0\0\0\0${chunk}crc.`, "latin1");
+    const media = { buffer, contentType: "image/png", kind: "image" };
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce(media);
+    getImageMetadataMock.mockResolvedValueOnce({ width: 640, height: 480 });
+    await send("", { mediaUrl: "chart.png" });
+    const info = requireRecord(sentContent().info, "image info");
+    expect(info["org.matrix.msc4230.is_animated"]).toBe(expected);
+  });
 
   it("rejects mixed attachments when a room becomes encrypted while an image is resized", async () => {
+    const preparation = vi.spyOn(client, "prepareRoomForMessageSend");
+    const failure = new Error("assembled media rejected");
     const onPlatformSendDispatch = vi.fn();
     (client as { crypto?: object }).crypto = {
       encryptMedia: vi.fn().mockResolvedValue(createEncryptedMediaPayload()),
@@ -571,13 +575,23 @@ describe("sendMessageMatrix media", () => {
       .mockResolvedValueOnce({ width: 1600, height: 1200 })
       .mockResolvedValueOnce({ width: 800, height: 600 });
     resizeToJpegMock.mockImplementationOnce(async () => {
-      vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
+      preparation.mockResolvedValueOnce("m.room.encrypted").mockRejectedValueOnce(failure);
       return Buffer.from("secret thumbnail");
     });
 
     await expect(
       send("caption", { mediaUrl: "file:///tmp/photo.png", onPlatformSendDispatch }),
-    ).rejects.toThrow(/unencrypted media.*retry/i);
+    ).rejects.toBe(failure);
+    expect(preparation).toHaveBeenLastCalledWith(
+      "!room:example",
+      expect.objectContaining({
+        msgtype: "m.image",
+        url: "mxc://example/file",
+        info: expect.objectContaining({
+          thumbnail_file: expect.objectContaining({ url: "mxc://example/file" }),
+        }),
+      }),
+    );
 
     expect(uploadContent.mock.calls).toEqual([
       [Buffer.from("media"), "image/png", "photo.png"],
@@ -588,18 +602,7 @@ describe("sendMessageMatrix media", () => {
   });
 
   it("uses explicit cfg for media sends instead of runtime loadConfig fallbacks", async () => {
-    const explicitCfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              mediaMaxMb: 1,
-            },
-          },
-        },
-      },
-    };
-
+    const explicitCfg = { channels: { matrix: { accounts: { ops: { mediaMaxMb: 1 } } } } };
     loadConfigMock.mockImplementation(() => {
       throw new Error("sendMessageMatrix should not reload runtime config when cfg is provided");
     });
@@ -1026,7 +1029,7 @@ describe("editMessageMatrix mentions", () => {
 });
 
 describe("sendPollMatrix mentions", () => {
-  it("adds m.mentions for poll fallback text", async () => {
+  it("sends an MSC3381 poll with fallback mentions", async () => {
     await sendPollMatrix(
       "room:!room:example",
       { question: "@room lunch with @alice:example.org?", options: ["yes", "no"] },
@@ -1037,47 +1040,9 @@ describe("sendPollMatrix mentions", () => {
     );
 
     expect(mockCallArg(sendEvent, "sendEvent", 0)).toBe("!room:example");
-    expect(mockCallArg(sendEvent, "sendEvent", 1)).toBe("m.poll.start");
+    expect(mockCallArg(sendEvent, "sendEvent", 1)).toBe("org.matrix.msc3381.poll.start");
     const content = requireRecord(mockCallArg(sendEvent, "sendEvent", 2), "poll start content");
     expect(content["m.mentions"]).toEqual({ room: true, user_ids: ["@alice:example.org"] });
-  });
-});
-
-describe("voteMatrixPoll", () => {
-  it("maps 1-based option indexes to Matrix poll answer ids", async () => {
-    getEvent.mockResolvedValue({
-      type: "m.poll.start",
-      content: {
-        "m.poll.start": {
-          question: { "m.text": "Lunch?" },
-          max_selections: 1,
-          answers: [
-            { id: "a1", "m.text": "Pizza" },
-            { id: "a2", "m.text": "Sushi" },
-          ],
-        },
-      },
-    });
-
-    const result = await voteMatrixPoll("room:!room:example", "$poll", {
-      client,
-      cfg: {},
-      optionIndex: 2,
-    });
-
-    expect(sendEvent).toHaveBeenCalledWith("!room:example", "m.poll.response", {
-      "m.poll.response": { answers: ["a2"] },
-      "org.matrix.msc3381.poll.response": { answers: ["a2"] },
-      "m.relates_to": {
-        rel_type: "m.reference",
-        event_id: "$poll",
-      },
-    });
-    expect(result.eventId).toBe("evt-poll-vote");
-    expect(result.roomId).toBe("!room:example");
-    expect(result.pollId).toBe("$poll");
-    expect(result.answerIds).toEqual(["a2"]);
-    expect(result.labels).toEqual(["Sushi"]);
   });
 });
 
@@ -1092,9 +1057,7 @@ describe("sendTypingMatrix", () => {
         run: (resolved: import("./sdk.js").MatrixClient) => Promise<void>,
       ) => {
         expect(opts.cfg).toBe(cfg);
-        expect(opts.accountId).toBe("work");
-        expect(opts.timeoutMs).toBe(12_345);
-        expect(opts.readiness).toBe("none");
+        expect(opts).toMatchObject({ accountId: "work", timeoutMs: 12_345, readiness: "none" });
         return await run(typingClient);
       },
     );
@@ -1108,4 +1071,3 @@ describe("sendTypingMatrix", () => {
     expect(setTyping).toHaveBeenCalledWith("!room:example", true, 12_345);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

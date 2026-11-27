@@ -1,15 +1,32 @@
-import { createMemo, Errored, For, isPending, Loading, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
+import {
+  CatalogDiscoveryChip,
+  CatalogDiscoveryChips,
+  CatalogDiscoverySection,
+  CatalogDiscoverySearch,
+} from "../../components/solid/catalog-discovery.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { registryCategoryIcon } from "../../components/solid/registry-category-icon.tsx";
+import { SettingsEmpty, SettingsGroup } from "../../components/solid/settings-ui.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { formatNumber } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
-import { PluginCardSummary } from "../plugins/plugin-card.tsx";
-import { SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
-import type { SkillsProps } from "./view-types.ts";
+import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";
+import { renderCatalogGridSkeleton } from "../plugins/catalog-skeleton.tsx";
+import { PluginCardSummary, renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
+import {
+  SkillTile,
+  installedReference,
+  SkillStateStatus,
+  verdictForSkill,
+} from "./skill-status.tsx";
 import "../../styles/skills-discovery.css";
+import type { SkillsPresentation, SkillsProps } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
 
@@ -18,20 +35,54 @@ type SkillDiscoveryEntry = {
   name: string;
   description: string;
   attribution: string;
+  /** What the row shows after the name: the publisher handle when there is one. */
+  byline: string;
   skill?: SkillStatusEntry;
   library?: SkillLibraryEntry;
   remote?: ClawHubSearchResult;
 };
 
-function installedReference(skill: SkillStatusEntry): string | null {
-  const link = skill.clawhub;
-  if (!link?.valid) {
-    return null;
+type SkillCategory = NonNullable<SkillsPresentation["clawhubCategory"]>;
+const OVERVIEW_PREVIEW_SIZE = 4;
+
+/** A shelf previews this page in feed order. Its action starts a separate category browse. */
+function groupOverview(rows: SkillDiscoveryEntry[], taxonomy: SkillCategory[]) {
+  if (!taxonomy.length || !rows.length) {
+    return { shelves: [], ungrouped: rows };
   }
-  return link.requestedReference ?? (link.ownerHandle ? `@${link.ownerHandle}/${link.slug}` : null);
+  const buckets = new Map<string, { category: SkillCategory; rows: SkillDiscoveryEntry[] }>();
+  for (const category of taxonomy) {
+    buckets.set(category.slug, { category, rows: [] });
+  }
+  const ungrouped: SkillDiscoveryEntry[] = [];
+  for (const row of rows) {
+    let matched = false;
+    for (const slug of new Set(row.remote?.categories)) {
+      const bucket = buckets.get(slug);
+      if (bucket) {
+        matched = true;
+        if (bucket.rows.length < OVERVIEW_PREVIEW_SIZE) {
+          bucket.rows.push(row);
+        }
+      }
+    }
+    if (!matched) {
+      ungrouped.push(row);
+    }
+  }
+  return { shelves: [...buckets.values()].filter((bucket) => bucket.rows.length), ungrouped };
 }
 
-function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps }) {
+function linkedOwner(skill: SkillStatusEntry): string | null {
+  const link = skill.clawhub;
+  return link?.valid && link.ownerHandle ? `@${link.ownerHandle}` : null;
+}
+
+function DiscoveryRow(props: {
+  entry: SkillDiscoveryEntry;
+  skills: SkillsProps;
+  contentRef?: (element: HTMLDivElement) => void;
+}) {
   const reference = () => props.entry.remote?.installRef ?? "";
   const installed = () => Boolean(props.entry.skill || props.entry.library);
   const icon = () => {
@@ -43,7 +94,7 @@ function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps 
     return operation?.kind === "clawhub" && operation.ref === reference();
   };
   return (
-    <article class="plugin-catalog-card oc-card oc-card-interactive" data-skill-id={props.entry.id}>
+    <article class="plugin-catalog-card plugin-catalog-row" data-skill-id={props.entry.id}>
       {(installed() || !props.entry.remote?.installOnly) && (
         <button
           type="button"
@@ -61,58 +112,86 @@ function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps 
           }}
         />
       )}
-      <div class="plugin-catalog-card__head">
-        <div class="installed-plugins-card__head">
-          <span class="installed-plugins-card__art plugin-catalog-card__art" aria-hidden="true">
-            {icon() ? (
-              <img src={icon()} alt="" loading="lazy" />
-            ) : (
-              (props.entry.skill?.emoji ?? <Icon name="bookOpenText" />)
-            )}
-          </span>
-          <div class="installed-plugins-card__identity">
+      <div class="plugin-catalog-card__content" ref={(element) => props.contentRef?.(element)}>
+        <div class="plugin-catalog-row__main">
+          <SkillTile imageUrl={icon()} emoji={props.entry.skill?.emoji} />
+          <div class="plugin-catalog-row__text">
             <div class="plugin-card-title-row">
-              <h2>{props.entry.name}</h2>
+              <h3>{props.entry.name}</h3>
+              {props.entry.remote?.official ? renderPluginOfficialBadge() : undefined}
+              <span class="plugin-card-author">{props.entry.byline}</span>
             </div>
-            <span class="plugin-card-author">{props.entry.attribution}</span>
+            <PluginCardSummary summary={props.entry.description} />
+            {props.entry.remote?.trustState && (
+              <span class="muted skill-discovery-card__notice">
+                {t("skillsPage.notScannedByClawHub")}
+              </span>
+            )}
+          </div>
+          <div class="plugin-catalog-card__action">
+            {installed() ? (
+              <SkillStateStatus
+                skill={props.entry.skill ?? { disabled: !props.entry.library!.enabled }}
+                verdict={
+                  props.entry.skill
+                    ? verdictForSkill(props.entry.skill, props.skills.state.clawhubVerdicts)
+                    : null
+                }
+              />
+            ) : (
+              <button
+                type="button"
+                class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
+                disabled={
+                  props.skills.saving ||
+                  !props.skills.state.connected ||
+                  !props.skills.canInstall ||
+                  props.skills.loading ||
+                  props.skills.state.skillOperation !== null
+                }
+                aria-label={t("skillsPage.addNamed", { name: props.entry.name })}
+                onClick={() => props.skills.onClawHubInstall(reference())}
+              >
+                {t(busy() ? "skillsPage.adding" : "skillsPage.add")}
+              </button>
+            )}
           </div>
         </div>
-        <div class="plugin-catalog-card__action">
-          {installed() ? (
-            <SkillStateStatus
-              skill={props.entry.skill ?? { disabled: !props.entry.library!.enabled }}
-              verdict={
-                props.entry.skill
-                  ? verdictForSkill(props.entry.skill, props.skills.state.clawhubVerdicts)
-                  : null
-              }
-            />
-          ) : (
-            <button
-              type="button"
-              class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
-              disabled={
-                props.skills.saving ||
-                !props.skills.state.connected ||
-                !props.skills.canInstall ||
-                props.skills.loading ||
-                props.skills.state.skillOperation !== null
-              }
-              aria-label={t("skillsPage.installNamed", { name: props.entry.name })}
-              onClick={() => props.skills.onClawHubInstall(reference())}
-            >
-              {t(busy() ? "skillsPage.installing" : "skillsPage.install")}
-            </button>
-          )}
-        </div>
       </div>
-      <PluginCardSummary summary={props.entry.description} />
-      {props.entry.remote?.trustState && (
-        <span class="muted skill-discovery-card__notice">
-          {t("skillsPage.notScannedByClawHub")}
-        </span>
-      )}
     </article>
+  );
+}
+
+/** Installed skills in one line: their marks, the section name and the first names. */
+function InstalledShelf(props: { entries: SkillDiscoveryEntry[]; onOpen: () => void }) {
+  const marked = createMemo(() =>
+    props.entries.toSorted(
+      (left, right) => Number(Boolean(right.skill?.emoji)) - Number(Boolean(left.skill?.emoji)),
+    ),
+  );
+  return (
+    <button type="button" class="skill-installed-shelf" onClick={() => props.onOpen()}>
+      <span class="skill-installed-shelf__stack" aria-hidden="true">
+        <For each={marked().slice(0, 5)} keyed={(entry) => entry.id}>
+          {(entry) => <SkillTile emoji={entry().skill?.emoji} />}
+        </For>
+      </span>
+      <span class="skill-installed-shelf__text">
+        <strong>
+          {t("skillGroups.installed")} (
+          <data value={props.entries.length}>{formatNumber(props.entries.length)}</data>)
+        </strong>
+        <span class="skill-installed-shelf__names" aria-hidden="true">
+          {props.entries
+            .slice(0, 12)
+            .map((entry) => entry.name)
+            .join(", ")}
+        </span>
+      </span>
+      <span class="skill-installed-shelf__chevron" aria-hidden="true">
+        <Icon name="chevronRight" />
+      </span>
+    </button>
   );
 }
 
@@ -121,12 +200,12 @@ export function SkillDiscovery(props: SkillsProps) {
   const connected = createMemo(() => props.state.connected);
   const epoch = createMemo(() => props.clawhubSearchEpoch);
   const pending = createMemo(() => isPending(props.readClawHubSearch), { loadingValue: true });
-  let input: HTMLInputElement | undefined;
-  const entries = createMemo<SkillDiscoveryEntry[]>(() => {
+  const [scope, setScope] = createSignal<"all" | "installed">("all");
+  const category = createMemo(() => props.state.clawhubCategory);
+  const catalog = createMemo(() => {
     const skills = props.mutationSkills;
     const libraries = props.libraryEntries ?? [];
     const results = props.state.clawhubSearchResults ?? [];
-    const queryValue = props.state.clawhubSearchQuery;
     const items: SkillDiscoveryEntry[] = libraries
       .filter((entry) => !entry.removed)
       .map((library) => ({
@@ -134,6 +213,7 @@ export function SkillDiscovery(props: SkillsProps) {
         name: library.slug,
         description: library.description,
         attribution: library.ownerLabel,
+        byline: library.ownerLabel,
         library,
         skill: skills.find(
           (skill) => skill.source === "openclaw-library" && skill.name === library.name,
@@ -150,9 +230,11 @@ export function SkillDiscovery(props: SkillsProps) {
         name: skill.name,
         description: skill.description,
         attribution: installedReference(skill) ?? skill.source,
+        byline: linkedOwner(skill) ?? installedReference(skill) ?? skill.source,
         skill,
       });
     }
+    const remoteRows: SkillDiscoveryEntry[] = [];
     const remoteIds = new Set<string>();
     for (const remote of results) {
       const reference = remote.installRef;
@@ -170,55 +252,103 @@ export function SkillDiscovery(props: SkillsProps) {
       );
       if (installed) {
         installed.remote = remote;
+        remoteRows.push(installed);
       } else {
-        items.push({
+        remoteRows.push({
           id: `remote:${reference}`,
           name: remote.displayName,
           description: remote.summary ?? "",
           attribution: reference,
+          byline: remote.ownerHandle ? `@${remote.ownerHandle}` : reference,
           remote,
         });
       }
     }
-    const filter = queryValue.trim().toLowerCase();
+    return { installed: items, remote: remoteRows };
+  });
+  const installed = createMemo(() => {
+    // Canonical-form comparison: a composed (NFC) query must match decomposed (NFD) copy.
+    const filter = props.state.clawhubSearchQuery.trim().toLowerCase().normalize("NFC");
     // Remote matches retain the registry's semantic ranking, even if their copy lacks the query.
-    return items.filter(
+    return catalog().installed.filter(
       (entry) =>
         entry.remote ||
         !filter ||
-        `${entry.name} ${entry.description} ${entry.attribution}`.toLowerCase().includes(filter),
+        `${entry.name} ${entry.description} ${entry.attribution}`
+          .toLowerCase()
+          .normalize("NFC")
+          .includes(filter),
     );
   });
-  onSettled(() => {
-    if (input?.isConnected) {
-      input.focus({ preventScroll: true });
+  const hasInstalled = createMemo(() => catalog().installed.length > 0);
+  // Retried taxonomy can change overflow without resizing the retained strip.
+  const chipsRevision = createMemo(() => ({
+    categories: props.readCategories()?.categories,
+    installed: hasInstalled(),
+  }));
+  // During a search, installed matches that ClawHub also returned stay in the registry's ranking.
+  const installedRows = createMemo(() =>
+    scope() === "installed" ? installed() : installed().filter((entry) => !entry.remote),
+  );
+  const installedSection = createMemo(() =>
+    !category() && (scope() === "installed" || query().trim()) ? installedRows() : [],
+  );
+  const remoteRows = createMemo(() => (scope() === "all" ? catalog().remote : []));
+  const shelf = () => scope() === "all" && !category() && !query().trim() && installed().length > 0;
+  const selectBuiltin = (next: "all" | "installed") => {
+    setScope(next);
+    props.onCategoryChange(null);
+  };
+  const categoryChips = new Map<string, HTMLButtonElement>();
+  const selectCategory = (next: SkillCategory) => {
+    setScope("all");
+    props.onCategoryChange(next);
+  };
+  const sections = createMemo(() => {
+    if (category() || query().trim() || scope() !== "all") {
+      return { shelves: [], ungrouped: remoteRows() };
     }
+    // An unavailable directory is empty; a pending directory has not placed any rows yet.
+    const directory = props.readCategories();
+    return directory && groupOverview(remoteRows(), directory.categories);
   });
+  const remoteTitle = () => category()?.label ?? t("skillsPage.clawHub");
+  const groupingPending = () =>
+    props.state.connected &&
+    scope() === "all" &&
+    !category() &&
+    !query().trim() &&
+    !props.readCategories();
+  const loadingResults = () => (
+    <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
+      {renderCatalogGridSkeleton({ label: t("skillsPage.searching"), cards: 6 })}
+    </CatalogDiscoverySection>
+  );
+  const inventoryReady = () =>
+    props.libraryEntries !== undefined &&
+    !props.loading &&
+    (!props.error || props.state.skillsReport);
   return (
-    <section class="plugin-catalog-results skill-discovery" aria-label={t("skillsPage.title")}>
-      <label class="plugin-catalog-search">
-        <span aria-hidden="true">
-          <Icon name="search" />
-        </span>
+    <section
+      class="plugin-catalog-results plugin-catalog-results--rows skill-discovery"
+      aria-label={t("skillsPage.title")}
+    >
+      <CatalogDiscoverySearch>
         <input
-          ref={(element) => {
-            input = element;
-          }}
           type="search"
           class="settings-input"
           name="skills-search"
           autocomplete="off"
-          autofocus
           aria-label={t("skillDiscovery.search")}
           placeholder={t("skillDiscovery.search")}
           value={props.state.clawhubSearchQuery}
           onInput={(event) => props.onClawHubQueryChange(event.currentTarget.value)}
         />
-      </label>
+      </CatalogDiscoverySearch>
       {props.error && (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {props.error}
-        </div>
+        </InlineAlert>
       )}
       {!props.state.connected && (
         <p role="status" class="muted">
@@ -229,58 +359,189 @@ export function SkillDiscovery(props: SkillsProps) {
         fallback={(error, reset) => (
           <Loading fallback={null}>
             <Show when={!isPending(props.readClawHubSearch)}>
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 {formatUiError(error())}{" "}
                 <button
                   type="button"
                   class="btn btn--sm"
                   onClick={() => {
-                    props.onClawHubQueryChange(query());
+                    if (props.hasNextPage) {
+                      props.onLoadMore();
+                    } else {
+                      props.onClawHubQueryChange(query());
+                    }
                     reset();
                   }}
                 >
                   {t("common.retry")}
                 </button>
-              </div>
+              </InlineAlert>
             </Show>
           </Loading>
         )}
       >
-        <Loading on={[query(), connected(), epoch()]} fallback={null}>
+        <Loading on={[query(), category(), connected(), epoch()]} fallback={null}>
           {props.readClawHubSearch() && null}
         </Loading>
       </Errored>
       {props.state.clawhubInstallMessage && (
-        <div
-          role={props.state.clawhubInstallMessage!.kind === "error" ? "alert" : "status"}
-          class={[
-            "callout",
-            {
-              danger: props.state.clawhubInstallMessage!.kind === "error",
-              success: props.state.clawhubInstallMessage!.kind !== "error",
-            },
-          ]}
+        <InlineAlert
+          tone={props.state.clawhubInstallMessage!.kind === "error" ? "danger" : "success"}
         >
           {props.state.clawhubInstallMessage!.text}
-        </div>
+        </InlineAlert>
       )}
-      <div
-        class="plugin-catalog-grid plugin-catalog-grid--results"
-        aria-busy={props.loading || pending() ? "true" : "false"}
+      <CatalogDiscoveryChips label={t("skillsPage.categories")} revision={chipsRevision()}>
+        <CatalogDiscoveryChip
+          icon={<Icon name="layoutGrid" />}
+          active={scope() === "all" && !category()}
+          onClick={() => selectBuiltin("all")}
+        >
+          {t("skillsPage.tabs.all")}
+        </CatalogDiscoveryChip>
+        <Show when={hasInstalled()}>
+          <CatalogDiscoveryChip
+            icon={<Icon name="bookOpenText" />}
+            active={scope() === "installed"}
+            onClick={() => selectBuiltin("installed")}
+          >
+            {t("skillsPage.installed")}
+          </CatalogDiscoveryChip>
+        </Show>
+        <Show
+          when={props.readCategories()}
+          fallback={<span class="skeleton plugin-catalog-chip--skeleton" aria-hidden="true" />}
+        >
+          {(directory) => (
+            <For each={directory().categories} keyed={(item) => item.slug}>
+              {(item) => (
+                <CatalogDiscoveryChip
+                  ref={(button) => categoryChips.set(item().slug, button)}
+                  icon={registryCategoryIcon(item().icon)}
+                  active={category()?.slug === item().slug}
+                  onClick={() => selectCategory(item())}
+                >
+                  {item().label}
+                </CatalogDiscoveryChip>
+              )}
+            </For>
+          )}
+        </Show>
+      </CatalogDiscoveryChips>
+      <Show when={props.readCategories()?.error}>
+        {(message) => (
+          <InlineAlert tone="warning" role="alert">
+            {message()}{" "}
+            <button type="button" class="btn btn--sm" onClick={() => props.onRetryCategories()}>
+              {t("common.retry")}
+            </button>
+          </InlineAlert>
+        )}
+      </Show>
+      {/* Place the grouped overview after the wrapping strip settles. Installed and search stay independent. */}
+      <Show
+        when={!groupingPending()}
+        fallback={
+          props.state.connected &&
+          (shelf() || pending() || remoteRows().length > 0) &&
+          loadingResults()
+        }
       >
-        <For each={entries()} keyed={(entry) => entry.id}>
-          {(entry) => <DiscoveryCard entry={entry()} skills={props} />}
-        </For>
-      </div>
+        <div class="plugin-catalog-results__body">
+          <Show when={shelf()}>
+            <InstalledShelf entries={installed()} onOpen={() => setScope("installed")} />
+          </Show>
+          <Show when={installedSection().length > 0}>
+            <CatalogDiscoverySection id="installed" title={t("skillGroups.installed")}>
+              <PluginCatalogGrid items={installedSection()} results busy={props.loading}>
+                {(entry, contentRef) => (
+                  <DiscoveryRow entry={entry()} skills={props} contentRef={contentRef} />
+                )}
+              </PluginCatalogGrid>
+            </CatalogDiscoverySection>
+          </Show>
+          <Show
+            when={remoteRows().length > 0 && sections()}
+            fallback={
+              <Show when={scope() === "all" && pending() && props.state.connected}>
+                {loadingResults()}
+              </Show>
+            }
+          >
+            <For each={sections()?.shelves} keyed={(section) => section.category.slug}>
+              {(section) => (
+                <CatalogDiscoverySection
+                  id={"category-" + section().category.slug}
+                  title={section().category.label}
+                  viewAllLabel={t("skillsPage.viewAll")}
+                  // Previews have at most four rows; the next section must not paint below a provisional shelf.
+                  eager
+                  onViewAll={() => {
+                    // The shelf button leaves the DOM; keep keyboard navigation on its matching chip.
+                    const next = section().category;
+                    categoryChips.get(next.slug)?.focus();
+                    selectCategory(next);
+                  }}
+                >
+                  <div class="plugin-catalog-grid">
+                    <For each={section().rows} keyed={(entry) => entry.id}>
+                      {(entry) => <DiscoveryRow entry={entry()} skills={props} />}
+                    </For>
+                  </div>
+                </CatalogDiscoverySection>
+              )}
+            </For>
+            <Show when={sections()?.ungrouped.length}>
+              <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
+                <PluginCatalogGrid
+                  items={sections()?.ungrouped ?? []}
+                  results
+                  busy={props.loading || pending()}
+                >
+                  {(entry, contentRef) => (
+                    <DiscoveryRow entry={entry()} skills={props} contentRef={contentRef} />
+                  )}
+                </PluginCatalogGrid>
+              </CatalogDiscoverySection>
+            </Show>
+          </Show>
+          <Show when={scope() === "all" && props.hasNextPage && sections()}>
+            <div class="plugin-catalog-load-more">
+              <button
+                type="button"
+                class="btn btn--sm oc-action oc-action-secondary"
+                disabled={pending()}
+                onClick={() => props.onLoadMore()}
+              >
+                {t(pending() ? "skillsPage.loadingMore" : "skillsPage.loadMore")}
+              </button>
+            </div>
+          </Show>
+        </div>
+      </Show>
       <Errored fallback={() => null}>
-        <Loading on={[query(), connected(), epoch()]} fallback={null}>
+        <Loading on={[query(), category(), connected(), epoch()]} fallback={null}>
           {props.readClawHubSearch() &&
-            entries().length === 0 &&
-            !props.loading &&
+            (category() || inventoryReady()) &&
+            !props.hasNextPage &&
+            installedSection().length + remoteRows().length === 0 &&
+            !shelf() &&
             props.state.connected && (
-              <p class="muted" role="status">
-                {t("skillsPage.empty")}
-              </p>
+              <SettingsGroup>
+                <SettingsEmpty
+                  message={
+                    <span role="status">
+                      {t(
+                        category()
+                          ? "skillsPage.noFilteredSkills"
+                          : query().trim()
+                            ? "skillsPage.noMatches"
+                            : "skillsPage.empty",
+                      )}
+                    </span>
+                  }
+                />
+              </SettingsGroup>
             )}
         </Loading>
       </Errored>

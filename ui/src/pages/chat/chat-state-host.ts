@@ -13,6 +13,7 @@ import type {
   ChatGuardianNotice,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
+import type { DraftPreferenceState } from "../new-session/draft-preference-state.ts";
 import type { PendingChatAbort } from "./chat-abort-request.ts";
 import type { ChatErrorState } from "./chat-error-state.ts";
 import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
@@ -41,10 +42,14 @@ export type ChatPageHost = ChatHost &
   ChatRealtimeState &
   PullRequestRefreshHost &
   Omit<SessionWorkspaceHost, "handleOpenSidebar"> & {
+    inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandPresentation;
+    prepareInlineCommands: (isCurrent: () => boolean, onReady: () => void) => Promise<void>;
+    clearInlineCommandError: () => void;
     handleOpenSidebar: (content: SidebarSelection | null) => SidebarOpenResult;
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
+    accessPreferences?: DraftPreferenceState;
     assistantName: string;
     assistantAvatar: string | null;
     assistantAvatarStatus: "none" | "local" | "remote" | "data" | null;
@@ -63,6 +68,7 @@ export type ChatPageHost = ChatHost &
     resourceBasePath: string;
     chatAvatarUrl: string | null;
     senderAgentAvatars?: ReadonlyMap<string, string | null>;
+    cacheChatAvatarSource?: (agentId: string, source: string | null) => void;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
     chatAvatarReason: string | null;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
@@ -83,6 +89,7 @@ export type ChatPageHost = ChatHost &
     selectedChatSessionArchived: boolean;
     selectedChatSessionIncognito: boolean;
     agentsList: AgentsListResult | null;
+    readChatAgentsList: () => AgentsListResult | null;
     agentsSelectedId: string | null;
     pendingAbort: PendingChatAbort | null;
     pendingSessionMessageReloadSessionKey: string | null;

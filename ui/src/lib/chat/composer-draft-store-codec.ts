@@ -1,4 +1,5 @@
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isSessionPermissionMode } from "../protocol-validators.generated/session-input.js";
 import type {
   DurableComposerDraft,
   DurableComposerDraftAttachment,
@@ -8,6 +9,7 @@ import type {
 import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { readHumanMentions } from "./human-mentions.ts";
 import { isChatReplyTarget } from "./reply-target.ts";
+import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 
 export type StoredDurableComposerDraft = DurableComposerDraft &
   DurableComposerDraftScope & {
@@ -79,9 +81,23 @@ export function parseStoredDraft(value: unknown): StoredDurableComposerDraft | n
     !Array.isArray(record.attachments) ||
     !record.attachments.every(isStoredAttachment) ||
     (record.questionDrafts !== undefined &&
-      (!Array.isArray(record.questionDrafts) || !record.questionDrafts.every(isQuestionDraft)))
+      (!Array.isArray(record.questionDrafts) || !record.questionDrafts.every(isQuestionDraft))) ||
+    (record.selectionAnnotations !== undefined &&
+      (!Array.isArray(record.selectionAnnotations) ||
+        !record.selectionAnnotations.every((annotation) =>
+          readChatSelectionAnnotation(annotation),
+        )))
   ) {
     return null;
+  }
+  if (
+    record.attachmentVersion !== undefined &&
+    (typeof record.attachmentVersion !== "string" || !record.attachmentVersion)
+  ) {
+    record.attachmentVersion = undefined;
+  }
+  if (record.permissionMode !== undefined && !isSessionPermissionMode(record.permissionMode)) {
+    record.permissionMode = undefined;
   }
   const selection = record.modelSelection;
   if (
@@ -91,9 +107,21 @@ export function parseStoredDraft(value: unknown): StoredDurableComposerDraft | n
       typeof selection.agentId !== "string" ||
       typeof selection.model !== "string" ||
       typeof selection.thinkingLevel !== "string" ||
-      (selection.agentRuntime !== undefined && typeof selection.agentRuntime !== "string"))
+      (selection.agentRuntime !== undefined && typeof selection.agentRuntime !== "string") ||
+      (selection.cyberAccessProgram !== undefined &&
+        selection.cyberAccessProgram !== "standard" &&
+        selection.cyberAccessProgram !== "daybreak_blue" &&
+        selection.cyberAccessProgram !== "daybreak_red"))
   ) {
     record.modelSelection = undefined;
+  } else if (selection) {
+    record.modelSelection = {
+      agentId: selection.agentId,
+      model: selection.model,
+      agentRuntime: selection.agentRuntime,
+      thinkingLevel: selection.thinkingLevel,
+      cyberAccessProgram: selection.cyberAccessProgram,
+    };
   }
   record.mentions = readHumanMentions(record.text, record.mentions);
   // SAFETY: the complete stored shape and every attachment payload were validated above.

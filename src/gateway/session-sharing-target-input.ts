@@ -10,6 +10,7 @@ import {
   getRpcSourceIdentity,
 } from "../sessions/session-controller.rpc-sources.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { resolveSessionMethodScope } from "../shared/session-method-scopes-base.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { operatorSessionCap } from "./operator-role-policy.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
@@ -96,7 +97,11 @@ export function resolveDirectSessionTargets(
   method: string,
   params: unknown,
 ): SessionMutationTarget[] {
-  if (method === "sessions.create" || method === "sessions.list") {
+  if (
+    method === "sessions.create" ||
+    method === "sessions.list" ||
+    method === "chat.pendingInputs.own"
+  ) {
     return [];
   }
   const record = asOptionalRecord(params);
@@ -144,7 +149,7 @@ export function resolveProtectedSessionTargets(params: {
     !params.adminBypass &&
     directTargets.length > 0 &&
     Boolean(gatewayClientSessionCreator(params.client)) &&
-    params.sessionCap() === "none";
+    ["none", "invited"].includes(params.sessionCap() ?? "");
   const protectedTargets = hidesForeignSessions
     ? directTargets
     : (params.talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
@@ -225,7 +230,11 @@ export function resolveTalkSessionTargetInput(
   | { kind: "request"; sessionKey?: string }
   | ({ kind: "relay" } & NonNullable<ReturnType<typeof resolveUnifiedTalkSessionTarget>>)
   | undefined {
-  if (method === "talk.session.steer") {
+  if (
+    method === "talk.session.steer" ||
+    method === "talk.session.appendAudio" ||
+    method === "talk.session.close"
+  ) {
     const sessionId = readSessionSharingStringParam(params, "sessionId");
     const retained = sessionId ? resolveUnifiedTalkSessionTarget(sessionId, connId) : undefined;
     return retained ? { kind: "relay", ...retained } : undefined;
@@ -260,9 +269,22 @@ export function resolveTalkSessionTargetInput(
 
 export function resolveSessionMutationTargets(params: {
   method: string;
+  participationRequired?: true;
+  hasInvitedAccessCeiling?: boolean;
+  sessionScope?: string;
+  client?: GatewayClient | null;
   requestParams: unknown;
   context: GatewayRequestContext;
 }): SessionMutationTarget[] | undefined {
+  if (
+    (params.method === "session.typing" || params.method === "session.suggestions.add") &&
+    (params.participationRequired ||
+      (params.sessionScope === "operator.sessions.write" && params.hasInvitedAccessCeiling))
+  ) {
+    const sessionKey = readSessionSharingStringParam(params.requestParams, "sessionKey");
+    const agentId = readSessionSharingStringParam(params.requestParams, "agentId");
+    return sessionKey ? [{ sessionKey, ...(agentId ? { agentId } : {}) }] : undefined;
+  }
   if (params.method === "sessions.patchMany") {
     const targets =
       params.requestParams &&
@@ -316,7 +338,12 @@ export function resolveSessionMutationTargets(params: {
   if (directTargets.length) {
     return directTargets;
   }
-  if (params.method === "board.event" || params.method === "board.action") {
+  if (
+    params.method === "board.event" ||
+    params.method === "board.action" ||
+    (params.method === "board.data.read" &&
+      resolveSessionMethodScope(params.method, params.requestParams) === "operator.sessions.read")
+  ) {
     const ticket = readSessionSharingStringParam(params.requestParams, "ticket");
     const claims = ticket
       ? resolveAuthorizedBoardViewTicketClaims(ticket, { gatewayContext: params.context })

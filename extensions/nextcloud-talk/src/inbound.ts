@@ -44,7 +44,7 @@ import {
   saveNextcloudTalkInboundMedia,
 } from "./inbound-media.js";
 import {
-  normalizeNextcloudTalkAllowEntry,
+  nextcloudTalkIngressIdentity,
   normalizeNextcloudTalkAllowlist,
   resolveNextcloudTalkGroupRequireMention,
   resolveNextcloudTalkAllowlistMatch,
@@ -150,12 +150,7 @@ export async function handleNextcloudTalkInbound(params: {
     await core.channel.inbound.ingress.resolveStable({
       channelId: CHANNEL_ID,
       accountId: account.accountId,
-      identity: {
-        key: "nextcloud-talk-user-id",
-        normalize: (value) => normalizeNextcloudTalkAllowEntry(value) || null,
-        sensitivity: "pii",
-        entryIdPrefix: "nextcloud-talk-entry",
-      },
+      identity: nextcloudTalkIngressIdentity,
       cfg: config as OpenClawConfig,
       readStoreAllowFrom: async () =>
         await pairing.readStoreForDmPolicy(CHANNEL_ID, account.accountId),
@@ -353,6 +348,21 @@ export async function handleNextcloudTalkInbound(params: {
   let sourceModality: "audio" | "voice" | undefined;
   let authorizedMediaUnavailable = false;
   let performedAsyncMediaWork = false;
+  const logMediaNonOutcome = (
+    reason: Parameters<typeof logNextcloudTalkMediaNonOutcome>[0]["reason"],
+    details?: Pick<
+      Parameters<typeof logNextcloudTalkMediaNonOutcome>[0],
+      "status" | "sizeBytes" | "maxBytes"
+    >,
+  ) =>
+    logNextcloudTalkMediaNonOutcome({
+      log: (messageLocal) => runtime.log?.(messageLocal),
+      reason,
+      accountId: account.accountId,
+      messageId: message.messageId,
+      senderId,
+      ...details,
+    });
   // Claim retirement may race a store write that ignores or narrowly loses the abort.
   // Clear local adoption state before best-effort deletion so no later branch can dispatch it.
   const deleteStagedMedia = async () => {
@@ -365,13 +375,7 @@ export async function handleNextcloudTalkInbound(params: {
     try {
       await core.channel.media.deleteMediaBuffer(mediaId);
     } catch {
-      logNextcloudTalkMediaNonOutcome({
-        log: (messageLocal) => runtime.log?.(messageLocal),
-        reason: "media_cleanup_failed",
-        accountId: account.accountId,
-        messageId: message.messageId,
-        senderId,
-      });
+      logMediaNonOutcome("media_cleanup_failed");
     }
   };
   const throwIfIngressAborted = () => ingressAbortSignal?.throwIfAborted();
@@ -384,34 +388,16 @@ export async function handleNextcloudTalkInbound(params: {
   let mediaHandedOff = false;
   try {
     if (hasInboundMedia && !mediaSenderAllowed) {
-      logNextcloudTalkMediaNonOutcome({
-        log: (messageLocal) => runtime.log?.(messageLocal),
-        reason: "media_sender_not_allowlisted",
-        accountId: account.accountId,
-        messageId: message.messageId,
-        senderId,
-      });
+      logMediaNonOutcome("media_sender_not_allowlisted");
       if (!rawBody) {
         return;
       }
     } else if (message.attachmentIssue) {
       authorizedMediaUnavailable = true;
-      logNextcloudTalkMediaNonOutcome({
-        log: (messageLocal) => runtime.log?.(messageLocal),
-        reason: message.attachmentIssue,
-        accountId: account.accountId,
-        messageId: message.messageId,
-        senderId,
-      });
+      logMediaNonOutcome(message.attachmentIssue);
     } else if (message.attachment?.hideDownload) {
       authorizedMediaUnavailable = true;
-      logNextcloudTalkMediaNonOutcome({
-        log: (messageLocal) => runtime.log?.(messageLocal),
-        reason: "media_hidden_download",
-        accountId: account.accountId,
-        messageId: message.messageId,
-        senderId,
-      });
+      logMediaNonOutcome("media_hidden_download");
     } else if (message.attachment) {
       const mediaMaxBytes = resolveNextcloudTalkMediaMaxBytes({
         // SAFETY: runtime ingress receives full OpenClawConfig; local CoreConfig is narrower.
@@ -421,12 +407,7 @@ export async function handleNextcloudTalkInbound(params: {
       });
       if (message.attachment.declaredSizeBytes > mediaMaxBytes) {
         authorizedMediaUnavailable = true;
-        logNextcloudTalkMediaNonOutcome({
-          log: (messageLocal) => runtime.log?.(messageLocal),
-          reason: "media_declared_oversize",
-          accountId: account.accountId,
-          messageId: message.messageId,
-          senderId,
+        logMediaNonOutcome("media_declared_oversize", {
           sizeBytes: message.attachment.declaredSizeBytes,
           maxBytes: mediaMaxBytes,
         });
@@ -438,13 +419,7 @@ export async function handleNextcloudTalkInbound(params: {
         });
         if (!attachmentReference.ok) {
           authorizedMediaUnavailable = true;
-          logNextcloudTalkMediaNonOutcome({
-            log: (messageLocal) => runtime.log?.(messageLocal),
-            reason: attachmentReference.reason,
-            accountId: account.accountId,
-            messageId: message.messageId,
-            senderId,
-          });
+          logMediaNonOutcome(attachmentReference.reason);
         } else {
           performedAsyncMediaWork = true;
           throwIfIngressAborted();
@@ -461,12 +436,7 @@ export async function handleNextcloudTalkInbound(params: {
           throwIfIngressAborted();
           if (!authenticatedSource.ok) {
             authorizedMediaUnavailable = true;
-            logNextcloudTalkMediaNonOutcome({
-              log: (messageLocal) => runtime.log?.(messageLocal),
-              reason: authenticatedSource.reason,
-              accountId: account.accountId,
-              messageId: message.messageId,
-              senderId,
+            logMediaNonOutcome(authenticatedSource.reason, {
               status: authenticatedSource.status,
             });
           } else {
@@ -499,13 +469,7 @@ export async function handleNextcloudTalkInbound(params: {
               if (!canonicalized.ok) {
                 await deleteStagedMedia();
                 authorizedMediaUnavailable = true;
-                logNextcloudTalkMediaNonOutcome({
-                  log: (messageLocal) => runtime.log?.(messageLocal),
-                  reason: "media_unsupported",
-                  accountId: account.accountId,
-                  messageId: message.messageId,
-                  senderId,
-                });
+                logMediaNonOutcome("media_unsupported");
               } else {
                 stagedMediaId = canonicalized.media.id;
                 stagedMedia = {
@@ -522,12 +486,7 @@ export async function handleNextcloudTalkInbound(params: {
               throwIfIngressAborted();
               authorizedMediaUnavailable = true;
               const failure = classifyNextcloudTalkMediaFailure(error);
-              logNextcloudTalkMediaNonOutcome({
-                log: (messageLocal) => runtime.log?.(messageLocal),
-                reason: failure.reason,
-                accountId: account.accountId,
-                messageId: message.messageId,
-                senderId,
+              logMediaNonOutcome(failure.reason, {
                 status: failure.status,
                 ...(failure.reason === "media_download_oversize"
                   ? { maxBytes: mediaMaxBytes }

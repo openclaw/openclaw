@@ -91,7 +91,35 @@ async function createSignalOutboundSender(params: {
     text: string,
     { replyToId, ...options }: Omit<Parameters<SignalSendFn>[2], "cfg" | "maxBytes" | "accountId">,
   ) => {
-    const replyOptions = await resolveSignalReplyOptions({ ...params, to, replyToId });
+    const normalizedReplyToId = normalizeOptionalString(replyToId);
+    let replyOptions: Pick<
+      Parameters<SignalSendFn>[2],
+      "replyToId" | "replyToAuthor" | "replyToBody"
+    > = {};
+    if (normalizedReplyToId) {
+      const accountId = resolveSignalAccount({
+        cfg: params.cfg,
+        accountId: params.accountId,
+      }).accountId;
+      const persistedContext = await resolveSignalReplyContextWithPersistence({
+        accountId,
+        to,
+        replyToId: normalizedReplyToId,
+      });
+      const replyToAuthor =
+        persistedContext?.ambiguous === true ? undefined : persistedContext?.author;
+      const replyToBody =
+        persistedContext?.ambiguous === true
+          ? ""
+          : [persistedContext?.body, formatSignalMediaText(persistedContext?.media ?? [])]
+              .filter(Boolean)
+              .join("\n");
+      replyOptions = {
+        replyToId: normalizedReplyToId,
+        ...(replyToAuthor ? { replyToAuthor } : {}),
+        ...(replyToBody ? { replyToBody } : {}),
+      };
+    }
     return await send(to, text, {
       cfg: params.cfg,
       ...options,
@@ -139,41 +167,6 @@ async function sendSignalOutbound(params: {
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
   });
-}
-
-async function resolveSignalReplyOptions(params: {
-  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-  to: string;
-  accountId?: string | null;
-  replyToId?: string | null;
-}): Promise<
-  { replyToId: string; replyToAuthor?: string; replyToBody?: string } | Record<string, never>
-> {
-  const replyToId = normalizeOptionalString(params.replyToId);
-  if (!replyToId) {
-    return {};
-  }
-  const accountId = resolveSignalAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).accountId;
-  const persistedContext = await resolveSignalReplyContextWithPersistence({
-    accountId,
-    to: params.to,
-    replyToId,
-  });
-  const replyToAuthor = persistedContext?.ambiguous === true ? undefined : persistedContext?.author;
-  const replyToBody =
-    persistedContext?.ambiguous === true
-      ? ""
-      : [persistedContext?.body, formatSignalMediaText(persistedContext?.media ?? [])]
-          .filter(Boolean)
-          .join("\n");
-  return {
-    replyToId,
-    ...(replyToAuthor ? { replyToAuthor } : {}),
-    ...(replyToBody ? { replyToBody } : {}),
-  };
 }
 
 function inferSignalTargetChatType(rawTo: string) {
@@ -543,11 +536,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             channel: "signal",
             accountId: ctx.accountId ?? undefined,
           });
+          // Standalone whitespace cannot be sent. Keep the raw fallback when no formatted packet remains.
           let chunks = markdownToSignalTextChunks(ctx.text, limit ?? Number.POSITIVE_INFINITY, {
             tableMode,
             chunkMode:
               ctx.formatting?.chunkMode ?? resolveChunkMode(ctx.cfg, "signal", ctx.accountId),
-          });
+          }).filter((chunk) => chunk.text.trim());
           if (chunks.length === 0 && ctx.text) {
             chunks = [{ text: ctx.text, styles: [] }];
           }

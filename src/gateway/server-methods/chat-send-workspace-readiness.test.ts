@@ -49,7 +49,7 @@ it("reads an existing chat workspace without inheriting its previous preparation
           });
           expect(respond).toHaveBeenCalledWith(
             true,
-            { runId, status: "started" },
+            { runId, status: "started", messageSeq: 1 },
             undefined,
             expect.anything(),
           );

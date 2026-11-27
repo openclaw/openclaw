@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { WorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -73,6 +75,9 @@ export type SessionSourceValidation = {
 };
 
 export type PreparedSessionSourceAuthority = {
+  readCustody?: readonly SessionStoreReadCustody[];
+  /** Original workspace targets, observed by the effect owner before its live grant. */
+  workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
   transaction?: SessionSourceTransactionGrant;
   /** Process-held sources require native atomicity when writing a durable target. */
   nativeSource?: boolean;
@@ -93,6 +98,14 @@ export type PreparedSessionSourceAuthority = {
   scopedSources?: ReadonlyMap<SessionSourceAssertion, PreparedSessionSourceAuthority>;
 };
 
+export type PreparedSessionSourceEffect = {
+  readCustody?: readonly SessionStoreReadCustody[];
+  workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
+  assertCurrent: () => void;
+  release?: () => void | Promise<void>;
+  scopedSources?: ReadonlyMap<SessionSourceAssertion, PreparedSessionSourceEffect>;
+};
+
 export type SessionSourceAssertion = (() => void) & {
   nativeSource?: boolean;
   opaqueCommitGuard?: boolean;
@@ -107,6 +120,10 @@ export type SessionSourceAssertion = (() => void) & {
   assertScopeCurrent?: () => void;
   prepareSessionSource?: () => Promise<PreparedSessionSourceAuthority>;
   prepareSessionSourceScope?: () => Promise<PreparedSessionSourceAuthority | undefined>;
+  /** Prepare one external effect; legacy callbacks retain their synchronous final check. */
+  prepareSessionSourceEffect?: () => Promise<PreparedSessionSourceEffect>;
+  /** Preserve database custody at file effects without rechecking admitted tool policy. */
+  prepareSessionSourceStorageEffect?: () => Promise<PreparedSessionSourceEffect>;
 };
 
 /** Sources supplied to worker mutation APIs must own asynchronous predicate preparation. */
@@ -157,13 +174,99 @@ export function acceptSessionSourceValidation(
 }
 
 const sessionSourceScopes = new AsyncLocalStorage<
-  ReadonlyMap<SessionSourceAssertion, PreparedSessionSourceAuthority>
+  ReadonlyMap<SessionSourceAssertion, Pick<PreparedSessionSourceAuthority, "assertCurrent">>
 >();
+
+const synchronousSources = new WeakSet<SessionSourceAssertion>();
+// Compositions own their dispatch; nesting must not enter the same guard twice.
+const composedSources = new WeakSet<SessionSourceAssertion>();
+let validatedSources: Map<SessionSourceAssertion, object> | undefined;
+
+/** Host-owned immutable bindings only; opaque callbacks must never acquire this contract. */
+export function bindSynchronousSessionSource(assertion: SessionSourceAssertion): void {
+  synchronousSources.add(assertion);
+}
+
+/** Prepared consumers share validation only until this synchronous call returns. */
+export function withSessionSourceValidation<T>(run: () => T): T {
+  const previous = validatedSources;
+  validatedSources = new Map();
+  try {
+    return run();
+  } finally {
+    previous?.clear();
+    validatedSources = previous;
+  }
+}
+
+function assertSessionSource(assertion: SessionSourceAssertion, run = assertion): void {
+  if (!synchronousSources.has(assertion)) {
+    const previous = validatedSources;
+    previous?.clear();
+    validatedSources = undefined;
+    try {
+      run();
+    } finally {
+      previous?.clear();
+      validatedSources = previous;
+    }
+    return;
+  }
+  const validate = () => {
+    // The issued closure captures the exact instance/generation/claim. A prepared
+    // scope is a different binding; neither copies nor another wrapper share it.
+    const key = sessionSourceScopes.getStore()?.get(assertion) ?? assertion;
+    if (validatedSources!.get(assertion) !== key) {
+      run();
+      validatedSources!.set(assertion, key);
+    }
+  };
+  if (validatedSources) {
+    validate();
+  } else {
+    withSessionSourceValidation(validate);
+  }
+}
+
+/** Bind prepared facts for indirect source reads made by the final effect assertion. */
+export async function prepareSessionSourceEffect(
+  assertion: SessionSourceAssertion,
+): Promise<PreparedSessionSourceEffect> {
+  const prepared = assertion.prepareSessionSourceEffect
+    ? await assertion.prepareSessionSourceEffect()
+    : { assertCurrent: assertion };
+  const scopes = new Map([
+    ...(sessionSourceScopes.getStore() ?? []),
+    ...(prepared.scopedSources ?? []),
+  ]);
+  scopes.set(assertion, prepared);
+  let active = true;
+  return {
+    workspaceEvidence: prepared.workspaceEvidence,
+    readCustody: prepared.readCustody,
+    assertCurrent: () => {
+      if (!active) {
+        throw new Error("Session source effect authority is released");
+      }
+      runWithAsyncStore(sessionSourceScopes, scopes, prepared.assertCurrent);
+    },
+    release: async () => {
+      if (active) {
+        active = false;
+        await prepared.release?.();
+      }
+    },
+  };
+}
 
 /** Classify request/SDK callbacks before adapters compose them with prepared internal authority. */
 export function captureExternalSessionCommitGuard(guard: SessionSourceAssertion | undefined) {
   return guard && !guard.prepareSessionSource
-    ? Object.assign(() => guard(), { nativeSource: true, opaqueCommitGuard: true })
+    ? Object.assign(() => guard(), {
+        nativeSource: true,
+        opaqueCommitGuard: true,
+        prepareSessionSourceStorageEffect: guard.prepareSessionSourceStorageEffect?.bind(guard),
+      })
     : guard;
 }
 
@@ -256,7 +359,7 @@ export function createDynamicSessionSourceAssertion(
   refuse: () => never,
 ): PreparedSessionSourceAssertion {
   const prepareSelected = <T>(
-    prepare: (assertion: SessionSourceAssertion | undefined) => Promise<T>,
+    prepare: (assertion: ReturnType<typeof composeSessionSourceAssertion>) => Promise<T>,
   ) => {
     const selected = select();
     return prepare(
@@ -278,6 +381,23 @@ export function createDynamicSessionSourceAssertion(
         select()?.onSessionCompactionCommitted?.(transition, entry),
       prepareSessionSource: () => prepareSelected(prepareSessionSourceAuthority),
       prepareSessionSourceScope: () => prepareSelected(prepareSessionSourceScope),
+      prepareSessionSourceEffect: () =>
+        prepareSelected((source) => source.prepareSessionSourceEffect()),
+      prepareSessionSourceStorageEffect: async () => {
+        const selected = select();
+        const prepared = await composeSessionSourceAssertion([
+          selected,
+        ]).prepareSessionSourceStorageEffect();
+        return {
+          assertCurrent: () => {
+            if (select() !== selected) {
+              refuse();
+            }
+            prepared.assertCurrent();
+          },
+          release: prepared.release,
+        };
+      },
     },
   );
   return Object.defineProperty(assertion, "nativeSource", {
@@ -286,20 +406,29 @@ export function createDynamicSessionSourceAssertion(
   });
 }
 
+const forwardSessionSources = (assertSources: () => void) => assertSources();
+
 /** Preserve each owner's error/lifetime wrapper while preparing its storage-dependent sources. */
 export function composeSessionSourceAssertion(
   sources: readonly (SessionSourceAssertion | undefined)[],
-  check: (assertSources: () => void) => void = (assertSources) => assertSources(),
+  check: (assertSources: () => void) => void = forwardSessionSources,
   options?: {
-    preparedCheck: (assertSources: () => void) => void;
+    preparedCheck?: (assertSources: () => void) => void;
     hasOpaqueCheck?: boolean;
+    /** This wrapper only validates its captured binding; it invokes opaque work through sources. */
+    synchronousCheck?: true;
   },
-): PreparedSessionSourceAssertion {
+): PreparedSessionSourceAssertion & {
+  prepareSessionSourceEffect: () => Promise<PreparedSessionSourceEffect>;
+  prepareSessionSourceStorageEffect: () => Promise<PreparedSessionSourceEffect>;
+} {
   function prepare(scoped: true): Promise<PreparedSessionSourceAuthority | undefined>;
   function prepare(scoped?: false): Promise<PreparedSessionSourceAuthority>;
   async function prepare(scoped = false): Promise<PreparedSessionSourceAuthority | undefined> {
     const prepared: PreparedSessionSourceAuthority[] = [];
-    const scopedSources = new Map<SessionSourceAssertion, PreparedSessionSourceAuthority>();
+    const scopedSources = scoped
+      ? new Map<SessionSourceAssertion, PreparedSessionSourceAuthority>()
+      : undefined;
     const release = () => releaseSessionSourceAuthorities(prepared);
     const assertCurrentSources = () => {
       for (const source of prepared) {
@@ -316,7 +445,7 @@ export function composeSessionSourceAssertion(
         const value = scoped
           ? await prepareSessionSourceScope(source)
           : await prepareSessionSourceAuthority(source);
-        if (scoped && value && source) {
+        if (scopedSources && value && source) {
           for (const [assertion, nested] of value.scopedSources ?? []) {
             scopedSources.set(assertion, nested);
           }
@@ -332,10 +461,12 @@ export function composeSessionSourceAssertion(
           },
         );
       }
-      if (scoped && scopedSources.size === 0) {
+      if (scopedSources?.size === 0) {
         return undefined;
       }
       return {
+        workspaceEvidence: prepared.flatMap((source) => source.workspaceEvidence ?? []),
+        readCustody: prepared.flatMap((source) => source.readCustody ?? []),
         nativeSource: prepared.some((source) => source.nativeSource),
         opaqueCommitGuard: prepared.some((source) => source.opaqueCommitGuard),
         hasOpaqueCheck: options?.hasOpaqueCheck || prepared.some((source) => source.hasOpaqueCheck),
@@ -343,16 +474,18 @@ export function composeSessionSourceAssertion(
         assertPreparedCurrent: () => (options?.preparedCheck ?? check)(assertPreparedSources),
         ...(scoped ? { scopedSources } : {}),
         checks: prepared.flatMap((source, index) =>
-          source.checks.map(({ refuse, ...preparedCheck }) => ({
-            ...preparedCheck,
-            refuse: (facts) => {
-              check(() => {
-                prepared.slice(0, index).forEach((previous) => previous.assertCurrent());
-                refuse(facts);
-              });
-              throw new Error("Source authority refusal was suppressed");
-            },
-          })),
+          source.checks.length === 0
+            ? source.checks
+            : source.checks.map(({ refuse, ...preparedCheck }) => ({
+                ...preparedCheck,
+                refuse: (facts) => {
+                  check(() => {
+                    prepared.slice(0, index).forEach((previous) => previous.assertCurrent());
+                    refuse(facts);
+                  });
+                  throw new Error("Source authority refusal was suppressed");
+                },
+              })),
         ),
         release,
       };
@@ -376,14 +509,71 @@ export function composeSessionSourceAssertion(
   }
   const assertSources = () => {
     for (const source of sources) {
-      source?.();
+      if (source) {
+        if (composedSources.has(source)) {
+          source();
+        } else {
+          assertSessionSource(source);
+        }
+      }
     }
   };
-  const assertion: PreparedSessionSourceAssertion = Object.assign(
-    () => {
-      const scoped = sessionSourceScopes.getStore()?.get(assertion);
-      return scoped ? scoped.assertCurrent() : check(assertSources);
-    },
+  const prepareEffect = async (): Promise<PreparedSessionSourceEffect> => {
+    const prepared: PreparedSessionSourceEffect[] = [];
+    const scopedSources = new Map<SessionSourceAssertion, PreparedSessionSourceEffect>();
+    try {
+      for (const source of sources) {
+        if (!source) {
+          continue;
+        }
+        const value = source.prepareSessionSourceEffect
+          ? await source.prepareSessionSourceEffect()
+          : { assertCurrent: source };
+        prepared.push(value);
+        for (const [nested, authority] of value.scopedSources ?? []) {
+          scopedSources.set(nested, authority);
+        }
+        // A legacy composed assertion must not resolve itself recursively through the scope.
+        if (source.prepareSessionSourceEffect) {
+          scopedSources.set(source, value);
+        }
+      }
+      return {
+        workspaceEvidence: prepared.flatMap((source) => source.workspaceEvidence ?? []),
+        readCustody: prepared.flatMap((source) => source.readCustody ?? []),
+        assertCurrent: () =>
+          check(() => {
+            for (const source of prepared) {
+              source.assertCurrent();
+            }
+          }),
+        scopedSources,
+        release: () => releaseSessionSourceAuthorities(prepared),
+      };
+    } catch (error) {
+      let failure = error;
+      try {
+        check(() => {
+          throw error;
+        });
+      } catch (translated) {
+        failure = translated;
+      }
+      await releaseSessionSourceAuthorities(prepared, [failure]);
+      throw failure;
+    }
+  };
+  const synchronous = sources.every((source) => !source || synchronousSources.has(source));
+  const forward = check === forwardSessionSources && synchronous;
+  const run = () => {
+    const scoped = sessionSourceScopes.getStore()?.get(assertion);
+    return scoped ? scoped.assertCurrent() : check(assertSources);
+  };
+  const assertion: PreparedSessionSourceAssertion & {
+    prepareSessionSourceEffect: () => Promise<PreparedSessionSourceEffect>;
+    prepareSessionSourceStorageEffect: () => Promise<PreparedSessionSourceEffect>;
+  } = Object.assign(
+    () => (forward && validatedSources ? run() : assertSessionSource(assertion, run)),
     {
       onSessionCompactionCommitted: (
         transition: SessionAdmissionTransition,
@@ -395,8 +585,34 @@ export function composeSessionSourceAssertion(
       },
       prepareSessionSource: () => prepare(),
       prepareSessionSourceScope: () => prepare(true),
+      prepareSessionSourceEffect: prepareEffect,
+      prepareSessionSourceStorageEffect: async () => {
+        const prepared: PreparedSessionSourceEffect[] = [];
+        try {
+          for (const source of sources) {
+            if (source?.prepareSessionSourceStorageEffect) {
+              prepared.push(await source.prepareSessionSourceStorageEffect());
+            }
+          }
+          return {
+            assertCurrent: () => {
+              for (const source of prepared) {
+                source.assertCurrent();
+              }
+            },
+            release: () => releaseSessionSourceAuthorities(prepared),
+          };
+        } catch (error) {
+          await releaseSessionSourceAuthorities(prepared, [error]);
+          throw error;
+        }
+      },
     },
   );
+  composedSources.add(assertion);
+  if ((options?.synchronousCheck || check === forwardSessionSources) && synchronous) {
+    bindSynchronousSessionSource(assertion);
+  }
   if (sources.some((source) => source?.retain)) {
     Object.assign(assertion, {
       retain: () => {
@@ -416,4 +632,22 @@ export function composeSessionSourceAssertion(
     enumerable: true,
     get: () => sources.some((source) => source?.nativeSource),
   });
+}
+
+/** Direct call: Stop only. Prepared writes add the caller's session fences, which outlive run close. */
+export function composePreparedOnlySessionSource(caller?: {
+  operationalRunInstance?: object;
+  approvalSignals?: readonly AbortSignal[];
+  receiptAuthority?: SessionSourceAssertion;
+}) {
+  if (!caller?.operationalRunInstance) {
+    return undefined;
+  }
+  const assertNotStopped = () =>
+    caller.approvalSignals?.forEach((signal) => signal.throwIfAborted());
+  const fences = composeSessionSourceAssertion([caller.receiptAuthority], (assertSources) => {
+    assertNotStopped();
+    assertSources();
+  });
+  return Object.assign(assertNotStopped, fences);
 }

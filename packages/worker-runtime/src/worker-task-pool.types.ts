@@ -34,6 +34,8 @@ export type WorkerTaskPoolOptions<Output> = {
 
 export type WorkerTaskPoolOwnerOptions = {
   retainedTransport?: true;
+  /** Internal interactive owners retain their newest idle worker until explicit retirement. */
+  retainOneIdleWorker?: true;
   decodeResourceError?: (error: unknown) => Error;
 };
 
@@ -64,6 +66,12 @@ export type WorkerTaskOptions<Input> = {
   /** Only callbacks with their own deadline may replace the pool clock during host waits. */
   hostTimeout?: "owner";
   signal?: AbortSignal;
+  /**
+   * Class 0: access checks and other point reads. The pending caps never refuse it, it runs
+   * before queued bulk work on one reserved worker, and its input carries every fact it needs:
+   * it cannot call back into the host.
+   */
+  pointRead?: true;
   transferList?: (input: Input) => readonly Transferable[];
   onRequest?: (value: unknown, context: WorkerTaskRequestContext) => Promise<WorkerTaskResponse>;
   /** Task-scoped observations; these do not settle work or renew its deadline. */
@@ -78,6 +86,8 @@ export type WorkerTaskOptions<Input> = {
 
 /** Internal codecs may answer a worker while their caller cannot run Promise reactions. */
 export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> & {
+  /** Retained owners may exclude queueing behind owner-controlled work from their budget. */
+  timeoutFrom?: "dispatch";
   /** Host diagnostics classify this operation before publishing bounded labels. */
   diagnosticOperation?: string;
   /** Optional shared sequence word; wakeups are hints, never task receipts. */
@@ -133,6 +143,7 @@ export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> 
     retire: boolean;
     closing?: RetainedOperation<void>;
     complete?: () => void;
+    onCloseError?: (error: unknown) => void;
   };
   inputBytes: number;
   computePermit?: WorkerComputePermit;
@@ -144,6 +155,7 @@ export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> 
   transferMs: number;
   hostWaitMs: number;
   hostWaitStartedAt?: number;
+  memoryWaitStartedAt?: number;
 };
 export type Slot<Input, Output> = {
   nativeSections: WorkerNativeSectionState;
@@ -155,6 +167,7 @@ export type Slot<Input, Output> = {
   releaseResources?: () => Promise<void>;
   task?: Task<Input, Output>;
   idleTimer?: NodeJS.Timeout;
+  idleSince?: number;
   retiring?: RetainedOperation<void>;
   /** The retirement owner has joined this exact slot's native termination barrier. */
   retired?: true;

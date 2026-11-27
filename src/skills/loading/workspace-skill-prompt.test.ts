@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -74,6 +74,33 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
 
   afterEach(() => restoreMockSkillsHomeEnv(envSnapshot));
 
+  it("projects agent prompt limits without traversing unrelated plugin configuration", async () => {
+    const readPlugins = vi.fn(() => ({ enabled: false }));
+    const config = {
+      get plugins() {
+        return readPlugins();
+      },
+      agents: {
+        entries: {
+          writer: {
+            agentDir: "/synthetic/agents/writer",
+            skillsLimits: { maxSkillsPromptChars: 0 },
+          },
+          reader: { agentDir: "/synthetic/agents/reader" },
+        },
+      },
+      skills: { limits: { maxSkillsInPrompt: 1, maxSkillsPromptChars: 10_000 } },
+    };
+    const entries = [makeEntry(makeSkill("alpha")), makeEntry(makeSkill("zulu"))];
+    const writer = await buildSkillSnapshot("/fake", { entries, config, agentId: "writer" });
+    const reader = await buildSkillSnapshot("/fake", { entries, config, agentId: "reader" });
+    expect(writer.prompt).toBe("");
+    expect(reader.prompt).toContain("<name>alpha</name>");
+    expect(reader.prompt).not.toContain("<name>zulu</name>");
+    expect(reader.discoverySkills).toHaveLength(2);
+    expect(readPlugins).not.toHaveBeenCalled();
+  });
+
   it("keeps eligible discovery independent from the prompt budget and hidden skills", async () => {
     const visible = makeSkill("alpha");
     const omitted = makeSkill("zulu");
@@ -84,8 +111,12 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
       config: { skills: { limits: { maxSkillsInPrompt: 1 } } },
     });
 
-    expect(snapshot.resolvedSkills).toEqual([visible]);
-    expect(snapshot.discoverySkills).toEqual([visible, omitted]);
+    const resourceRootIdentity = { error: expect.stringContaining("ENOENT") };
+    expect(snapshot.resolvedSkills).toEqual([{ ...visible, resourceRootIdentity }]);
+    expect(snapshot.discoverySkills).toEqual([
+      { ...visible, resourceRootIdentity },
+      { ...omitted, resourceRootIdentity },
+    ]);
     expect(snapshot.prompt).toContain("<name>alpha</name>");
     expect(snapshot.prompt).not.toContain("<name>zulu</name>");
     expect(snapshot.prompt).not.toContain("<name>hidden</name>");

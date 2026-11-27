@@ -9,7 +9,7 @@
  * output files receive pair/arm suffixes. Both owners warm up before every pass.
  * --boundary harness|cli selects the real wrapper. Baseline modules must retain
  * their relative imports (for example a temporary adjacent copy from the base).
- * A 205-property attempt matches the dispatch literal's breadth; 40 synthetic plugin
+ * 205-property attempt/internal inputs match the dispatch literal's breadth; 40 synthetic plugin
  * configs and 64 concurrent retained owners model a busy shared Gateway's input shape.
  * Each wrapper prepares and binds authority, retains it across an async turn,
  * then closes. The harness uses an empty policy-session scope to exclude storage
@@ -17,6 +17,8 @@
  * Compare timing without heap sampling; allocation includes minor- and major-collected
  * samples; promotion excludes minor-collected samples. Sampling is an estimate,
  * not V8's exact promoted-byte counter. No forced GC inside the measured workload.
+ * For exact promotion/scavenge totals, add --trace-gc-nvp in a separate timing pass;
+ * sum promoted= and gc=s events between each measurement's start/end markers.
  */
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
@@ -34,6 +36,7 @@ import {
 import type { RunCliAgentParams } from "../../src/agents/cli-runner/types.js";
 import type { ReplyToolAuthorityInput } from "../../src/auto-reply/reply/reply-tool-authority.types.js";
 import { captureRuntimeConfig } from "../../src/config/runtime-source-projection.js";
+import { decideTurnGrant } from "../../src/gateway/operator-admission.js";
 
 const { values } = parseArgs({
   options: {
@@ -81,13 +84,11 @@ const baselineCli: typeof captureCliRunToolAuthority =
     ? (await import(pathToFileURL(values.baseline).href)).captureCliRunToolAuthority
     : captureCliRunToolAuthority;
 const route = { provider: "synthetic", model: "synthetic-model" };
-let authorityChecks = 0;
 const authority = createAdmittedRunOperatorAuthority({
+  canonicalIdentity: null,
   profileId: "synthetic-operator",
   scopes: ["operator.read", "operator.write", "operator.admin"],
-  assertCurrent() {
-    authorityChecks++;
-  },
+  grant: decideTurnGrant(["operator.read", "operator.write", "operator.admin"]),
 });
 const config = captureRuntimeConfig({
   plugins: {
@@ -141,6 +142,7 @@ const admission = prepareAgentRunAdmission({
   },
 });
 const admittedRunContext = await admission.admit("embedded", "authority-benchmark");
+const internal = { admittedRunContext, sessionPersistence: "detached" as const };
 const cliAttempt: RunCliAgentParams = {
   ...route,
   config,
@@ -160,7 +162,7 @@ const cliAttempt: RunCliAgentParams = {
   admittedRunContext,
 };
 // Runtime attempts include optional fields even when absent; model their property cost.
-for (const params of [attempt, cliAttempt]) {
+for (const params of [attempt, internal, cliAttempt]) {
   for (let index = Object.keys(params).length; index < 205; index++) {
     Reflect.set(params, `unrelatedAttemptField${index}`, undefined);
   }
@@ -174,16 +176,11 @@ async function workload(
     if (values.boundary === "harness") {
       await Promise.all(
         Array.from({ length: Math.min(64, count - offset) }, () =>
-          harness(
-            { admittedRunContext, sessionPersistence: "detached" },
-            attempt,
-            undefined,
-            async (prepared) => {
-              fingerprint ??= prepared.toolAuthorityFingerprint;
-              assert.equal(prepared.toolAuthorityFingerprint, fingerprint);
-              await setImmediate();
-            },
-          ),
+          harness(internal, attempt, undefined, async (prepared) => {
+            fingerprint ??= prepared.toolAuthorityFingerprint;
+            assert.equal(prepared.toolAuthorityFingerprint, fingerprint);
+            await setImmediate();
+          }),
         ),
       );
       continue;
@@ -215,7 +212,6 @@ async function measure(
     values.output && (values.baseline ? `${values.output}.${label}.json` : values.output);
   await workload(256, harness, cli);
   collectGarbage();
-  authorityChecks = 0;
   const inspector = new Session();
   inspector.connect();
   if (values.mode !== "timing") {
@@ -227,12 +223,14 @@ async function measure(
   }
   const before = process.memoryUsage();
   const hostLoad = os.loadavg();
+  console.log(JSON.stringify({ measurement: label, phase: "start" }));
   const cpu = process.cpuUsage();
   const started = performance.now();
   await workload(iterations, harness, cli);
   const elapsedMs = performance.now() - started;
   const cpuUsage = process.cpuUsage(cpu);
   const after = process.memoryUsage();
+  console.log(JSON.stringify({ measurement: label, phase: "end" }));
   let sampledBytes: number | undefined;
   if (values.mode !== "timing") {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -250,8 +248,8 @@ async function measure(
     mode: values.mode,
     boundary: values.boundary,
     attemptProperties: Object.keys(attempt).length,
+    internalProperties: Object.keys(internal).length,
     fingerprint,
-    authorityChecks,
     hostLoad,
     elapsedMs,
     cpuMs: (cpuUsage.user + cpuUsage.system) / 1000,

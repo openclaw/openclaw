@@ -1,4 +1,3 @@
-import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type { InternalSessionEntry as SessionEntry, PersistedSessionRunStatus } from "./types.js";
 
 /** `null` requires a revision-less row; omitting the field skips the revision fence. */
@@ -6,61 +5,28 @@ export type SessionLifecycleRevisionExpectation = string | null;
 
 /** Authoritative lifecycle snapshot required for an atomic transcript admission. */
 export type SessionTranscriptTurnExpectedState = {
+  /** A deferred shell observation can attach only while its private dispatch receipt is outstanding. */
+  pendingShellCall?: { runId: string; key: string };
   /** When supplied, fences exact pending-final custody; null requires its absence. */
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"] | null;
   /** Rejects a run-owned turn after another admitted run takes writer ownership. */
   expectedWriterRunId?: string;
   abortedLastRun: boolean | undefined;
-  /** Fences recovery-only transcript writes against concurrent ownership changes. */
-  mainRestartRecoveryCycleId: string | undefined;
-  mainRestartRecoveryRevision: number | undefined;
-  restartRecoveryBeforeAgentReplyState: SessionRestartRecoveryState["restartRecoveryBeforeAgentReplyState"];
-  restartRecoveryDeliveryReceiptState: SessionRestartRecoveryState["restartRecoveryDeliveryReceiptState"];
-  restartRecoveryDeliveryToolCallId: SessionRestartRecoveryState["restartRecoveryDeliveryToolCallId"];
-  restartRecoveryDeliveryRequestFingerprint: SessionRestartRecoveryState["restartRecoveryDeliveryRequestFingerprint"];
-  restartRecoveryDeliveryRunId: SessionRestartRecoveryState["restartRecoveryDeliveryRunId"];
-  restartRecoveryDeliverySourceRunId: SessionRestartRecoveryState["restartRecoveryDeliverySourceRunId"];
-  restartRecoveryRequesterAccountId: SessionRestartRecoveryState["restartRecoveryRequesterAccountId"];
-  restartRecoveryRequesterSenderId: SessionRestartRecoveryState["restartRecoveryRequesterSenderId"];
-  restartRecoverySameChannelThreadRequired: SessionRestartRecoveryState["restartRecoverySameChannelThreadRequired"];
-  restartRecoveryOperatorSource: SessionEntry["restartRecoveryOperatorSource"];
-  restartRecoveryRequesterSource?: SessionEntry["restartRecoveryRequesterSource"];
-  restartRecoverySourceIngress: SessionRestartRecoveryState["restartRecoverySourceIngress"];
-  restartRecoverySourceMessageChannel?: SessionRestartRecoveryState["restartRecoverySourceMessageChannel"];
-  restartRecoverySourceReplyDeliveryMode: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
-  restartRecoveryTerminalRunIds: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
   status: PersistedSessionRunStatus | undefined;
 };
 
 /** Lifecycle fields committed with an accepted transcript turn. */
 export type SessionTranscriptTurnLifecyclePatch = {
+  activeWriterRunId?: SessionEntry["activeWriterRunId"];
   abortedLastRun?: boolean;
   endedAt?: number;
   lifecycleRunId?: SessionEntry["lifecycleRunId"];
+  lifecycleRestartScope?: SessionEntry["lifecycleRestartScope"];
   lastRunId?: SessionEntry["lastRunId"];
   lastRunError?: SessionEntry["lastRunError"];
   lastInteractionAt?: number;
+  lastActivityAt?: number;
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
-  mainRestartRecovery?: SessionEntry["mainRestartRecovery"];
-  restartRecoveryBeforeAgentReplyState?: SessionRestartRecoveryState["restartRecoveryBeforeAgentReplyState"];
-  restartRecoveryDeliveryReceiptState?: SessionRestartRecoveryState["restartRecoveryDeliveryReceiptState"];
-  restartRecoveryDeliveryToolCallId?: SessionRestartRecoveryState["restartRecoveryDeliveryToolCallId"];
-  restartRecoveryDeliveryContext?: SessionRestartRecoveryState["restartRecoveryDeliveryContext"];
-  restartRecoveryDeliveryRequestFingerprint?: SessionRestartRecoveryState["restartRecoveryDeliveryRequestFingerprint"];
-  restartRecoveryDeliveryRunId?: SessionRestartRecoveryState["restartRecoveryDeliveryRunId"];
-  restartRecoveryDeliverySourceRunId?: SessionRestartRecoveryState["restartRecoveryDeliverySourceRunId"];
-  restartRecoveryRequesterAccountId?: SessionRestartRecoveryState["restartRecoveryRequesterAccountId"];
-  restartRecoveryRequesterSenderId?: SessionRestartRecoveryState["restartRecoveryRequesterSenderId"];
-  restartRecoverySameChannelThreadRequired?: SessionRestartRecoveryState["restartRecoverySameChannelThreadRequired"];
-  restartRecoveryOperatorSource?: SessionEntry["restartRecoveryOperatorSource"];
-  restartRecoveryRequesterSource?: SessionEntry["restartRecoveryRequesterSource"];
-  restartRecoverySourceIngress?: SessionRestartRecoveryState["restartRecoverySourceIngress"];
-  restartRecoverySourceMessageChannel?: SessionRestartRecoveryState["restartRecoverySourceMessageChannel"];
-  restartRecoverySourceReplyDeliveryMode?: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
-  restartRecoveryForceSafeTools?: SessionEntry["restartRecoveryForceSafeTools"];
-  restartRecoveryRuns?: SessionEntry["restartRecoveryRuns"];
-  /** Durable tombstones merged with the fresh row inside the SQLite write transaction. */
-  restartRecoveryTerminalRunIds?: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
   runtimeMs?: number;
   startedAt?: number;
   status?: PersistedSessionRunStatus;

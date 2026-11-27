@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { notifyRenderLifecycleForTest } from "../pages/chat/render-lifecycle.ts";
 import {
   evaluateControlUiContext,
@@ -12,8 +13,12 @@ import {
   requireString,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
+import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -32,10 +37,7 @@ const MAX_BURST_MUTATION_BATCHES = 180;
 // ordinary characters must not invalidate the pane themselves.
 const MAX_STEADY_COMPOSER_INVALIDATIONS = 1;
 
-// Shipped live-tool ceiling: ui/src/pages/chat/tool-stream.ts TOOL_STREAM_LIMIT.
-const TOOL_STREAM_LIMIT_CONTRACT = 50;
-// Realistic agent cadence: narration deltas separate complete tool lifecycles.
-// Calls stay above the shipped limit to prove eviction under sustained load.
+// Cross the former 50-call boundary without losing operations from the active turn.
 const TOOL_FLOOD_PAIR_COUNT = 60;
 // The lifecycle spans the 80ms projection throttle so start/update/input_delta
 // exercise its deferred flush before result forces the final projection.
@@ -273,7 +275,7 @@ function toolFloodActivity(index: number, phase: "start" | "result") {
 
 async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): Promise<void> {
   await page.evaluate(
-    ({ runId: targetRunId, seqSeed, activity }) => {
+    ({ runId: targetRunId, seqSeed, activity, warmup }) => {
       const scope = window as ScopedWindow;
       const gateway = scope.openclawControlUiE2eGateway;
       if (!gateway) {
@@ -287,17 +289,27 @@ async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): P
       };
       scope.ocToolProjectionProbe = probe;
       let seq = seqSeed;
-      const emitToolPhase = (phase: string, data: Record<string, unknown>) => {
+      const emitAgent = (stream: string, data: unknown, sequence = ++seq) =>
         gateway.emit("agent", {
-          data: { name: "edit", phase, toolCallId: "call-1", ...data },
+          data,
           runId: targetRunId,
-          seq: ++seq,
+          seq: sequence,
           sessionKey: "main",
-          stream: "tool",
+          stream,
           ts: Date.now(),
         });
-      };
-      const cardSelector = '[data-message-id^="tool:assistant:call-1:"]';
+      const emitToolPhase = (phase: string, data: Record<string, unknown>) =>
+        emitAgent("tool", { name: "edit", phase, toolCallId: "call-1", ...data });
+      // A terminal event publishes immediately and resets the owner's 80 ms clock.
+      const warmupResult = { name: "edit", phase: "result", toolCallId: "call-0", isError: false };
+      emitAgent("tool", { ...warmupResult, result: "warmup" }, seqSeed - 2);
+      emitAgent("item", warmup, seqSeed - 1);
+      const firstCards = () =>
+        [...document.querySelectorAll(".chat-tool-row")].filter((row) =>
+          [...row.querySelectorAll(".chat-tool-row__file-link, .chat-tool-row__target")].some(
+            (target) => target.textContent === "file-1.ts",
+          ),
+        );
       gateway.emit("chat", {
         deltaText: " working on step 1",
         message: {
@@ -309,28 +321,21 @@ async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): P
         sessionKey: "main",
         state: "delta",
       });
-      gateway.emit("agent", {
-        data: activity,
-        runId: targetRunId,
-        seq: ++seq,
-        sessionKey: "main",
-        stream: "item",
-        ts: Date.now(),
-      });
+      emitAgent("item", activity);
       emitToolPhase("start", { args: { path: "src/file-1.ts" } });
       setTimeout(() => emitToolPhase("update", { partialResult: "partial output 1" }), 10);
       setTimeout(() => emitToolPhase("input_delta", { diff: { added: 1, removed: 1 } }), 20);
       // Sample before the 80ms owner timer. An eager non-terminal projection
       // makes the card visible here and fails the absence contract.
       setTimeout(() => {
-        probe.beforeThrottleCardCount = document.querySelectorAll(cardSelector).length;
+        probe.beforeThrottleCardCount = firstCards().length;
       }, 50);
       // Leave result un-emitted. After the owner timer and two render frames,
       // the running card must expose the latest update/input_delta projection.
       setTimeout(() => {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            const cards = document.querySelectorAll(cardSelector);
+            const cards = firstCards();
             probe.afterThrottleCardCount = cards.length;
             probe.afterThrottleText = cards[0]?.textContent ?? null;
             probe.ready = true;
@@ -338,7 +343,12 @@ async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): P
         });
       }, 120);
     },
-    { runId, seqSeed: TOOL_FLOOD_SEQ_SEED, activity: toolFloodActivity(1, "start") },
+    {
+      runId,
+      seqSeed: TOOL_FLOOD_SEQ_SEED,
+      activity: toolFloodActivity(1, "start"),
+      warmup: toolFloodActivity(0, "result"),
+    },
   );
   await page.waitForFunction(
     () => (window as ScopedWindow).ocToolProjectionProbe?.ready === true,
@@ -503,16 +513,23 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
 suite.define(() => {
   it("commits a streamed delta burst in frame-bound transcript batches", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      // Missing Resource Timing entries must not prevent menu readiness.
+      await page.addInitScript(() => performance.setResourceTimingBufferSize(0));
+      const heldMenu = await holdModuleResponse(
+        page,
+        /\/board-widget-menu[^/]*\.(?:js|tsx)(?:\?.*)?$/u,
+      );
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.describe", "models.list"],
+        deferredMethods: ["models.list"],
+        heldMethods: ["sessions.describe"],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.messages.subscribe");
       await settleInitialModelCatalog(page, gateway);
       const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
 
-      // Release the startup fact read after Send so it observes the running turn,
-      // then join its publication before measuring stream invalidations.
+      // Keep every startup fact read parked until Send, then release them together
+      // so the latest observation publishes the running turn before measurement.
       await gateway.waitForRequest("sessions.describe");
       await gateway.resolveDeferred("sessions.describe");
       const applicationHandle = await getControlUiContextHandle(page);
@@ -548,6 +565,23 @@ suite.define(() => {
           ),
         )
         .toBe(true);
+      // Exercise the lazy menus and observe rendered readiness, independent of
+      // resource timing entries or whether their modules were already evaluated.
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      await pane.locator(".chat-header-session-menu__trigger").click();
+      await heldMenu.request;
+      const sessionMenu = pane.locator("openclaw-chat-header-session-menu");
+      expect(await sessionMenu.getByRole("menuitem", { name: "Advanced" }).count()).toBe(0);
+      heldMenu.release();
+      await sessionMenu.getByRole("menuitem", { name: "Advanced" }).waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await pane.getByRole("button", { name: "Add attachment", exact: true }).click();
+      await pane
+        .locator(".agent-chat__capability-menu .oc-menu-item:not([disabled])")
+        .first()
+        .waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await pane.evaluate((element: ChatPaneElement) => element.updateComplete);
       await waitForChatScrollIdle(page);
       await installRenderProbe(page);
       await resetRenderProbe(page);
@@ -586,13 +620,32 @@ suite.define(() => {
     });
   });
 
-  it("keeps the live tool stream bounded under complete tool lifecycles", async () => {
+  it("defers live tool projection and retains every completed operation", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.messages.subscribe");
       const runId = await openStreamingTurn(page, gateway, "tool flood probe");
 
+      // An earlier running call creates the activity group; expand it so the probe sees rows.
+      const call0 = { name: "edit", phase: "start", toolCallId: "call-0" };
+      for (const [stream, data, seq] of [
+        ["item", toolFloodActivity(0, "start"), TOOL_FLOOD_SEQ_SEED - 4],
+        ["tool", { ...call0, args: { path: "src/file-0.ts" } }, TOOL_FLOOD_SEQ_SEED - 3],
+      ] as const) {
+        const ts = Date.now();
+        await gateway.emitGatewayEvent("agent", {
+          runId,
+          sessionKey: "main",
+          stream,
+          data,
+          seq,
+          ts,
+        });
+      }
+      const activity = page.locator(".chat-activity-group > .chat-activity-group__summary");
+      await activity.click();
+      await expect.poll(() => activity.getAttribute("aria-expanded")).toBe("true");
       await probeDeferredToolProjection(page, runId);
       const projection = await page.evaluate(() => (window as ScopedWindow).ocToolProjectionProbe!);
       expect(projection.beforeThrottleCardCount).toBe(0);
@@ -602,34 +655,26 @@ suite.define(() => {
       expect(projection.afterThrottleText).toContain("-1");
 
       await completeFirstToolLifecycle(page, runId);
-      const firstCard = page.locator('[data-message-id^="tool:assistant:call-1:"]');
+      const firstCard = page
+        .locator(".chat-tool-row")
+        .filter({ has: page.getByText("file-1.ts", { exact: true }) });
       expect(await firstCard.count()).toBe(1);
       expect(await firstCard.textContent()).toContain("Edited");
 
       await emitRemainingToolLifecycleFlood(page, runId, TOOL_FLOOD_PAIR_COUNT);
-      // Uninterrupted narration no longer separates tool cards. Expand the
-      // real grouped activity before counting its retained invocation rows.
-      const firstRetainedCall = TOOL_FLOOD_PAIR_COUNT - TOOL_STREAM_LIMIT_CONTRACT + 1;
-      // The live disclosure shows a purpose headline; count its retained rows below.
-      const activity = page.locator(".chat-activity-group > .chat-activity-group__summary");
-      await activity.waitFor();
-      await activity.click();
-      const floodCards = page.locator('[data-message-id^="tool:assistant:call-"]');
-      // Eviction drops the oldest entries and keeps the freshest ones.
       await expect
-        .poll(() => floodCards.count(), { timeout: 15_000 })
-        .toBe(TOOL_STREAM_LIMIT_CONTRACT);
-      expect(await page.locator('[data-message-id^="tool:assistant:call-1:"]').count()).toBe(0);
-      expect(
-        await page
-          .locator(`[data-message-id^="tool:assistant:call-${firstRetainedCall}:"]`)
-          .count(),
-      ).toBe(1);
-      expect(
-        await page
-          .locator(`[data-message-id^="tool:assistant:call-${TOOL_FLOOD_PAIR_COUNT}:"]`)
-          .count(),
-      ).toBe(1);
+        .poll(
+          async () =>
+            (
+              await page
+                .locator(".chat-tool-row__file-link, .chat-tool-row__target")
+                .allTextContents()
+            ).filter((text) => /^file-[1-9]\d*\.ts$/.test(text)),
+          { timeout: 15_000 },
+        )
+        .toEqual(
+          Array.from({ length: TOOL_FLOOD_PAIR_COUNT }, (_, index) => `file-${index + 1}.ts`),
+        );
     });
   });
 
@@ -671,7 +716,7 @@ suite.define(() => {
       scrollAwayAndBack: false,
     },
     {
-      name: "keeps composer edits local after scrolling returns to the same offset",
+      name: "keeps composer edits local after scrolling returns to the same reading position",
       scrollAwayAndBack: true,
     },
   ])("$name", async ({ scrollAwayAndBack }) => {
@@ -696,10 +741,11 @@ suite.define(() => {
         ? await (async () => {
             const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
             await thread.hover();
-            // Keep the saved offset inside the range when virtualizer measurements shrink it.
+            // Move clear of the end before saving the reader's visible anchor.
             await page.mouse.wheel(0, -200);
             await waitForChatScrollIdle(page);
             const originalTop = await thread.evaluate((element) => element.scrollTop);
+            const originalAnchor = await captureTopVisibleVirtualRow(thread);
             // Real reader input retires end-follow; an 8 px offset is still at the end.
             await page.mouse.wheel(0, -100);
             await expect
@@ -708,14 +754,28 @@ suite.define(() => {
             // Virtualizer measurements can adjust the wheel's final offset.
             await waitForChatScrollIdle(page);
             const awayTop = await thread.evaluate((element) => element.scrollTop);
-            await page.mouse.wheel(0, originalTop - awayTop);
-            await expect
-              .poll(() => thread.evaluate((element) => element.scrollTop))
-              .toBe(originalTop);
+            // Newly measured rows can change absolute offsets. Return the same
+            // visible row to its original position inside the viewport.
+            const returnDelta = await thread.evaluate((element, anchor) => {
+              const row = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].find(
+                (candidate) => candidate.dataset.virtualRowKey === anchor.key,
+              );
+              if (!row) {
+                throw new Error("Expected the original reader anchor while returning");
+              }
+              return (
+                row.getBoundingClientRect().top -
+                element.getBoundingClientRect().top -
+                anchor.viewportTop
+              );
+            }, originalAnchor);
+            await page.mouse.wheel(0, returnDelta);
+            await waitForChatScrollIdle(page);
             return {
               originalTop,
               awayTop,
-              restoredTop: await thread.evaluate((element) => element.scrollTop),
+              originalAnchor,
+              restoredAnchor: await captureTopVisibleVirtualRow(thread),
             };
           })()
         : null;
@@ -723,7 +783,10 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       if (scroll) {
         expect(scroll.awayTop).toBeLessThan(scroll.originalTop);
-        expect(scroll.restoredTop).toBe(scroll.originalTop);
+        expect(scroll.restoredAnchor.key).toBe(scroll.originalAnchor.key);
+        expect(
+          Math.abs(scroll.restoredAnchor.viewportTop - scroll.originalAnchor.viewportTop),
+        ).toBeLessThanOrEqual(1);
       }
       await installRenderProbe(page);
       await resetRenderProbe(page);

@@ -13,6 +13,7 @@ import type {
 } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { hasAuthoredProviderRequestParams } from "../model-extra-params.js";
+import { resolveNativeCommandAuthRoute } from "../model-native-command-auth.js";
 import {
   resolveAgentRuntimePolicyAgentId,
   resolveModelRouteIntent,
@@ -20,11 +21,14 @@ import {
 } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection-config.js";
 import { canonicalizeProviderModelId } from "../provider-model-route.js";
-import type { PreparedAgentRuntimeAuthAttempt } from "../runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
+import type {
+  PreparedAgentRuntimeAuthAttempt,
+  AgentRuntimeAuthPlan,
+} from "../runtime-plan/types.js";
 import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
+import { resolveAgentHarnessSupport } from "./route-support.js";
 import type {
   AgentHarness,
   AgentHarnessPreparedAuthSupport,
@@ -47,13 +51,15 @@ export function resolveAgentHarnessPreparedAuthSupport(params: {
   }
   const source =
     params.source ??
-    (plan.forwardedAuthProfileId
-      ? "profile"
-      : plan.selectedAuthMode
-        ? "direct"
-        : plan.harnessAuthProvider
-          ? "harness"
-          : "none");
+    (plan.selectedAuthMode === "native-command"
+      ? "harness"
+      : plan.forwardedAuthProfileId
+        ? "profile"
+        : plan.selectedAuthMode
+          ? "direct"
+          : plan.harnessAuthProvider
+            ? "harness"
+            : "none");
   return {
     source,
     ...(plan.selectedAuthMode ? { mode: plan.selectedAuthMode } : {}),
@@ -205,7 +211,14 @@ export function buildAgentHarnessSupportContext(
           }),
           requestTransportOverrides: modelProviderFacts.requestTransportOverrides,
         });
+  const native = resolveNativeCommandAuthRoute({
+    ...params,
+    agentId,
+    api: modelProviderFacts.api,
+    baseUrl: modelProviderFacts.baseUrl,
+  });
   const modelProvider = {
+    ...(native?.supported ? { nativeCommandAuth: { runtimeId: native.runtimeId } } : {}),
     ...modelProviderFacts,
     runtimePolicy,
   };
@@ -251,12 +264,14 @@ export function resolveAutoAgentHarnessId(
     config?: OpenClawConfig;
     modelProvider?: AgentHarnessSupportContext["modelProvider"];
     preparedModelProvider?: boolean;
+    mode?: "execution" | "projection";
   } & AgentRuntimePolicyScope,
 ): string | undefined {
   return resolveAutoAgentHarnessSelection(
     listRegisteredAgentHarnesses().map(({ harness }) => harness),
     params.provider,
     () => buildAgentHarnessSupportContext({ ...params, requestedRuntime: "auto" }),
+    params.mode !== "execution",
   ).selected?.id;
 }
 
@@ -264,6 +279,7 @@ export function resolveAutoAgentHarnessSelection(
   harnesses: readonly AgentHarness[],
   provider: string,
   createSupportContext: () => AgentHarnessSupportContext,
+  projection = false,
 ) {
   const hintedCandidates = harnesses.map((harness) => ({
     harness,
@@ -272,7 +288,9 @@ export function resolveAutoAgentHarnessSelection(
   let supportContext: AgentHarnessSupportContext | undefined;
   const candidates = hintedCandidates.map(({ harness, support }) => ({
     harness,
-    support: support ?? harness.supports((supportContext ??= createSupportContext())),
+    support:
+      support ??
+      resolveAgentHarnessSupport(harness, (supportContext ??= createSupportContext()), projection),
   }));
   const selected = candidates.filter(isSupportedHarness).toSorted((left, right) => {
     const priorityDelta = (right.support.priority ?? 0) - (left.support.priority ?? 0);

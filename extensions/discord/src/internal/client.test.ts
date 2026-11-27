@@ -154,56 +154,51 @@ describe("Client.deployCommands", () => {
     }
   });
 
-  it("bulk overwrites the desired set when Discord rejects a create at its command cap", async () => {
-    const retainedCommands = [createTestCommand("retained")];
+  it.each([false, true])("only bulk overwrites at the command cap: %s", async (atCap) => {
+    const retained = createTestCommand("retained");
     const replacement = createTestCommand("replacement");
-    const existing = [
-      ...retainedCommands.map((command, index) => existingCommand(command, `retained-id-${index}`)),
-      existingCommand(createTestCommand("stale"), "stale-id"),
-    ];
+    const desired = [retained, replacement];
     const post = vi.fn(async () => {
-      throw new DiscordError(new Response(null, { status: 400 }), {
-        message: "Maximum number of application commands reached (100).",
-        code: 30032,
-      });
+      if (!atCap) {
+        throw new Error("Discord unavailable");
+      }
+      throw new DiscordError(new Response(null, { status: 400 }), { code: 30032 });
     });
-    const { client, ...rest } = deployFixture([...retainedCommands, replacement], existing, {
-      post,
-    });
-
+    const { client, ...rest } = deployFixture(
+      desired,
+      [
+        existingCommand(retained, "retained-id"),
+        existingCommand(createTestCommand("stale"), "stale-id"),
+      ],
+      { post },
+    );
+    if (!atCap) {
+      await expect(client.deployCommands()).rejects.toThrow("Discord unavailable");
+      expectNoWrites(rest.delete, rest.put);
+      return;
+    }
     await client.deployCommands();
-
     expect(rest.delete).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledWith(Routes.applicationCommands("app1"), {
       body: replacement.serialize(),
     });
     expect(rest.put).toHaveBeenCalledExactlyOnceWith(Routes.applicationCommands("app1"), {
-      body: [...retainedCommands, replacement].map((command) => command.serialize()),
+      body: desired.map((command) => command.serialize()),
     });
   });
 
-  it("keeps stale commands when a replacement create fails below the cap", async () => {
-    const post = vi.fn(async () => {
-      throw new Error("Discord unavailable");
-    });
-    const { client, delete: deleteRequest } = deployFixture(
-      [createTestCommand("replacement")],
-      [existingCommand(createTestCommand("stale"), "stale-id")],
-      { post },
-    );
-
-    await expect(client.deployCommands()).rejects.toThrow("Discord unavailable");
-
-    expect(deleteRequest).not.toHaveBeenCalled();
-  });
-
-  it("skips unchanged command deploys across client restarts using the hash store", async () => {
+  it("persists the hash after an obsolete command is already gone and reuses it on restart", async () => {
     const { store: commandDeployHashStore } = createTestHashStore();
     const deploy = async () => {
       const client = createInternalTestClient([createTestCommand("one")], {
         commandDeployHashStore,
       });
-      const rest = attachRestMock(client, { get: vi.fn(async () => []) });
+      const rest = attachRestMock(client, {
+        get: vi.fn(async () => [existingCommand(createTestCommand("stale"), "stale-id")]),
+        delete: vi.fn(async () => {
+          throw new DiscordError(new Response(null, { status: 404 }), { code: 10063 });
+        }),
+      });
       await client.deployCommands();
       return rest;
     };
@@ -211,7 +206,8 @@ describe("Client.deployCommands", () => {
     const second = await deploy();
     expect(first.get).toHaveBeenCalledTimes(1);
     expect(first.post).toHaveBeenCalledTimes(1);
-    expectNoWrites(second.get, second.post);
+    expect(first.delete).toHaveBeenCalledOnce();
+    expectNoWrites(second.get, second.post, second.delete);
   });
 
   it("caches REST object fetches briefly and invalidates from gateway updates", async () => {
@@ -241,7 +237,9 @@ describe("Client gateway event queue", () => {
     return new Client({ clientId: "app1", token: "token", eventQueue }, { listeners });
   }
 
-  it("holds a listener slot until its underlying promise resolves", async () => {
+  it.each([29_999, 30_000])("orders listeners across clock changes (%dms)", async (elapsed) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     const firstStarted = createDeferred<void>();
     const firstSettlement = createDeferred<void>();
     const started: string[] = [];
@@ -254,15 +252,15 @@ describe("Client gateway event queue", () => {
       started.push("second");
     });
     const client = createQueuedClient([first, second]);
-
     const dispatch = client.dispatchGatewayEvent("READY", {});
     await firstStarted.promise;
-
     expect(started).toEqual(["first"]);
-
+    vi.advanceTimersByTime(elapsed);
+    vi.setSystemTime(Date.now() + (elapsed < 30_000 ? 3_600_000 : -3_600_000));
     firstSettlement.resolve();
     await dispatch;
     expect(started).toEqual(["first", "second"]);
+    expect(warning).toHaveBeenCalledTimes(elapsed < 30_000 ? 0 : 1);
   });
 
   it("logs a listener failure when its underlying promise rejects", async () => {

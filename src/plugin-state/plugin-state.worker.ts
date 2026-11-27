@@ -18,6 +18,7 @@ import type {
 } from "./plugin-state-operation-contract.js";
 import { executePluginStateOperation } from "./plugin-state-operation.kernel.js";
 import { withPluginStateWorkerReceipt } from "./plugin-state-publication.js";
+import { preparePluginStateReceiptInput } from "./plugin-state-receipt-input.js";
 import {
   compareAndApplyPluginStateEntry,
   observePluginStateEntry,
@@ -187,12 +188,17 @@ const operationHandlers = new Map<
   PluginStateOperationHandler<PluginStateOperationDefinitions>
 >();
 
-function operationHandlerKey(input: PluginStateOperationInput): string {
+function operationHandlerKey(
+  input: Extract<PluginStateOperationInput, { exportName: string }>,
+): string {
   return JSON.stringify([input.module.modulePath, input.module.boundaryRoot, input.exportName]);
 }
 
 /** Load plugin code before entering any native read or write transaction. */
 export async function preparePluginStateOperation(input: PluginStateOperationInput): Promise<void> {
+  if ("deleteKeys" in input) {
+    return;
+  }
   const key = operationHandlerKey(input);
   if (operationHandlers.has(key)) {
     return;
@@ -227,6 +233,7 @@ export function executePluginStateCommand(
   hasRetainedDatabase: boolean,
 ): PluginStateWriteOperations[keyof PluginStateWriteOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
+  const submitted = preparePluginStateReceiptInput(command);
   // Initial grants may wait for the host, so request them before taking the writer.
   // Commit grants still recheck session authority inside the transaction.
   const admit = (stage: "transaction" | "commit") =>
@@ -261,7 +268,17 @@ export function executePluginStateCommand(
   }
   if (command.type === "pluginState.executeOperation") {
     try {
-      const handler = operationHandlers.get(operationHandlerKey(command.input));
+      const operationInput = command.input;
+      const handler: PluginStateOperationHandler<PluginStateOperationDefinitions> | undefined =
+        "deleteKeys" in operationInput
+          ? (_command, tx) => {
+              for (const key of operationInput.deleteKeys) {
+                for (const index of operationInput.writeStores) {
+                  tx.delete(index, key);
+                }
+              }
+            }
+          : operationHandlers.get(operationHandlerKey(operationInput));
       if (!handler) {
         throw new Error("Plugin state operation was not prepared");
       }
@@ -301,6 +318,7 @@ export function executePluginStateCommand(
           (store) => {
             const result = withPluginStateWorkerReceipt(
               store.db,
+              submitted,
               () => executePluginStateOperation(store, command.input, handler),
               (): PluginStateOperationCommit => ({
                 pluginStateOperation: {
@@ -356,7 +374,7 @@ export function executePluginStateCommand(
       admit("transaction");
       runOpenClawStateWriteTransaction(
         (store) => {
-          withPluginStateWorkerReceipt(store.db, () =>
+          withPluginStateWorkerReceipt(store.db, submitted, () =>
             deletePluginStateEntry(store.db, command.input),
           );
           admit("commit");
@@ -368,7 +386,7 @@ export function executePluginStateCommand(
     return ok(
       runOpenClawStateWriteTransaction(
         (store) => {
-          const result = withPluginStateWorkerReceipt(store.db, () => {
+          const result = withPluginStateWorkerReceipt(store.db, submitted, () => {
             switch (command.type) {
               case "pluginState.appendJournal":
                 return registerPluginStateSequencedJournalEntryInDatabase(store, command.input);

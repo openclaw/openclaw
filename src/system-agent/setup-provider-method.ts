@@ -2,7 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
@@ -34,7 +34,7 @@ export async function withSetupProviderAuthMethod<T>(
 ): Promise<T | StageFailure> {
   await using cache = createPluginCache();
   const activation = params.activation;
-  const loaded = await withPluginLifecycleLease(
+  const loaded = await withPluginLifecycleLeaseAsync(
     { signal: params.signal ?? activation?.signal },
     async () =>
       withPluginCache(cache, async (): Promise<SetupProviderAuthMethod | StageFailure> => {

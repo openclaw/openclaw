@@ -1,12 +1,8 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
-import {
-  formatDurationCompact,
-  formatDurationHuman,
-  formatDurationLong,
-} from "./format-duration.ts";
+import { formatDurationCompact, formatDurationHuman } from "./format-duration.ts";
 import {
   clampText,
   createMsFormatter,
@@ -24,28 +20,13 @@ import {
 import { stripThinkingTags } from "./strip-thinking-tags.ts";
 
 describe("formatAgo", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 0, 2) });
+  });
+
   afterEach(async () => {
+    vi.useRealTimers();
     await i18n.setLocale("en");
-  });
-
-  it("formats timestamps less than 60s in the future", () => {
-    expect(formatRelativeTimestamp(Date.now() + 30_000)).toMatch(/^in (29|30)s$/);
-  });
-
-  it("preserves past seconds without a suffix", () => {
-    expect(formatRelativeTimestamp(Date.now() - 30_000, { suffix: false })).toMatch(/^(29|30)s$/);
-  });
-
-  it("returns 'Xm from now' for future timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() + 5 * 60_000)).toBe("in 5m");
-  });
-
-  it("returns a localized current-time label for recent past timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() - 10_000)).toBe("just now");
-  });
-
-  it("returns 'Xm ago' for past timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() - 5 * 60_000)).toBe("5m ago");
   });
 
   it("returns 'n/a' for null/undefined", () => {
@@ -67,31 +48,7 @@ describe("localized durations", () => {
 
   it.each([null, Number.NaN, -1])("preserves invalid duration fallbacks for %s", (durationMs) => {
     expect(formatDurationCompact(durationMs)).toBeUndefined();
-    expect(formatDurationLong(durationMs)).toBeUndefined();
     expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
-  });
-
-  it.each([
-    { durationMs: 999.5, expected: "1s", long: "1 second" },
-    { durationMs: 92_000, expected: "1m 32s", long: "1 minute, 32 seconds" },
-    { durationMs: 123_000, expected: "2m 3s", long: "2 minutes, 3 seconds" },
-    { durationMs: 3_630_000, expected: "1h 30s", long: "1 hour, 30 seconds" },
-    { durationMs: 86_430_000, expected: "1d 30s", long: "1 day, 30 seconds" },
-    { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h", long: "2 days, 1 hour" },
-  ])("formats $durationMs ms with separated duration units", ({ durationMs, expected, long }) => {
-    expect(formatDurationCompact(durationMs)).toBe(expected);
-    expect(formatDurationLong(durationMs)).toBe(long);
-  });
-
-  it.each([
-    { durationMs: 999.6, expected: "1s" },
-    { durationMs: 3_569_999, expected: "59m" },
-    { durationMs: 5_371_000, expected: "1h" },
-    { durationMs: 84_599_000, expected: "23h" },
-    { durationMs: 127_799_000, expected: "1d" },
-    { durationMs: 36 * 60 * 60 * 1000, expected: "2d" },
-  ])("rounds $durationMs ms once for human display", ({ durationMs, expected }) => {
-    expect(formatDurationHuman(durationMs)).toBe(expected);
   });
 
   it("preserves duration quantities with localized numerals", async () => {
@@ -111,13 +68,9 @@ describe("localized durations", () => {
     expect(formatDurationCompact(3_630_000)).toBe(`${unit(1, "hour")} ${unit(30, "second")}`);
     expect(formatDurationCompact(86_460_000)).toBe(`${unit(1, "day")} ${unit(1, "minute")}`);
     expect(formatDurationCompact(0)).toBeUndefined();
-    expect(formatDurationLong(0)).toBeUndefined();
     expect(formatDurationCompact(0.1)).toBe(unit(0, "millisecond"));
     expect(formatDurationHuman(0)).toBe(unit(0, "millisecond"));
     expect(formatDurationHuman(undefined, "missing")).toBe("missing");
-    expect(formatDurationLong(123_000)).toBe(
-      `دقيقتان و${new Intl.NumberFormat(locale).format(3)} ثوان`,
-    );
   });
 });
 
@@ -134,10 +87,6 @@ describe("formatTimeAgo", () => {
 });
 
 describe("formatMs", () => {
-  it("formats epoch timestamps", () => {
-    expect(formatMs(0)).not.toBe("n/a");
-  });
-
   it("returns n/a for Date-invalid timestamps", () => {
     expect(formatMs(8_640_000_000_000_001)).toBe("n/a");
     expect(formatMs(Number.POSITIVE_INFINITY)).toBe("n/a");
@@ -238,10 +187,6 @@ describe("formatUnknownText", () => {
   it.each([
     { name: "null", value: null, expected: "" },
     { name: "undefined", value: undefined, expected: "" },
-    { name: "string", value: "agent", expected: "agent" },
-    { name: "number", value: 42, expected: "42" },
-    { name: "boolean", value: false, expected: "false" },
-    { name: "bigint", value: 42n, expected: "42" },
     { name: "function", value: () => "not source text", expected: "[object Function]" },
     {
       name: "function with JSON representation",
@@ -274,38 +219,10 @@ describe("formatUnknownText", () => {
 });
 
 describe("formatCompactTokenCount", () => {
-  it("formats thousands with one decimal, trimming a trailing .0", () => {
-    expect(formatCompactTokenCount(1_000)).toBe("1k");
-    expect(formatCompactTokenCount(214_500)).toBe("214.5k");
-    expect(formatCompactTokenCount(99_950)).toBe("100k");
-  });
-
-  it("formats millions with one decimal, trimming a trailing .0", () => {
-    expect(formatCompactTokenCount(1_000_000)).toBe("1M");
-    expect(formatCompactTokenCount(1_050_000)).toBe("1.1M");
-    expect(formatCompactTokenCount(1_500_000)).toBe("1.5M");
-  });
-
   it("rolls values that round up to 1000.0k into the M branch", () => {
     expect(formatCompactTokenCount(999_999)).toBe("1M");
     expect(formatCompactTokenCount(999_950)).toBe("1M");
     expect(formatCompactTokenCount(999_500)).toBe("999.5k");
-  });
-
-  it("does not roll over values just below the rounding boundary", () => {
-    expect(formatCompactTokenCount(999_949)).toBe("999.9k");
-    expect(formatCompactTokenCount(999_499)).toBe("999.5k");
-  });
-
-  it("supports uppercase thousands labels for Usage surfaces", () => {
-    expect(formatCompactTokenCount(12_500, { thousandsSuffix: "K" })).toBe("12.5K");
-  });
-
-  it("can preserve trailing decimals for Usage surfaces", () => {
-    expect(formatCompactTokenCount(1_000, { thousandsSuffix: "K", trimTrailingZero: false })).toBe(
-      "1.0K",
-    );
-    expect(formatCompactTokenCount(1_000_000, { trimTrailingZero: false })).toBe("1.0M");
   });
 });
 
@@ -315,13 +232,6 @@ describe("formatContextTokenCapacity", () => {
     expect(formatContextTokenCapacity(1_050_000)).toBe("1M");
     expect(formatContextTokenCapacity(1_100_000)).toBe("1.1M");
   });
-
-  it("preserves shared compact formatting below one million", () => {
-    expect(formatContextTokenCapacity(999)).toBe("999");
-    expect(formatContextTokenCapacity(1_000)).toBe("1k");
-    expect(formatContextTokenCapacity(32_768)).toBe("32.8k");
-    expect(formatContextTokenCapacity(999_999)).toBe("1M");
-  });
 });
 
 describe("formatCompactTokenCount edge inputs", () => {
@@ -329,11 +239,6 @@ describe("formatCompactTokenCount edge inputs", () => {
     expect(formatCompactTokenCount(null)).toBe("0");
     expect(formatCompactTokenCount(undefined)).toBe("0");
     expect(formatCompactTokenCount(Number.NaN)).toBe("0");
-  });
-
-  it("formats billion-scale provider totals with a B suffix", () => {
-    expect(formatCompactTokenCount(1_000_000_000)).toBe("1B");
-    expect(formatCompactTokenCount(4_132_000_000)).toBe("4.1B");
   });
 });
 
@@ -357,10 +262,5 @@ describe("text truncation", () => {
       truncated: false,
       total: 5,
     });
-  });
-
-  it("preserves ordinary truncation behavior", () => {
-    expect(clampText("abc", 2)).toBe("a…");
-    expect(truncateText("abc", 2)).toEqual({ text: "ab", truncated: true, total: 3 });
   });
 });

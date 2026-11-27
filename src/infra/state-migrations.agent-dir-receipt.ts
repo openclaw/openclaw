@@ -42,10 +42,11 @@ export function recordCompletedLegacyAgentDirMigration(sourceRoot: string, targe
   };
   requireMissingReceipt();
   replaceFileAtomicSync({
+    allowDrvfsRenameRecovery: true,
     filePath,
     content,
     mode: 0o600,
-    dirMode: fs.statSync(targetRoot).mode & 0o7777,
+    dirMode: "preserve",
     tempPrefix: ".legacy-agent-dir-migration",
     beforeRename: requireMissingReceipt,
     syncTempFile: true,

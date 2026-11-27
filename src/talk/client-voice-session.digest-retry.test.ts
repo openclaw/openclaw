@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
 import {
@@ -12,9 +16,11 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import * as targetReads from "../config/sessions/session-transcript-read-worker-runtime.js";
 import { readSessionTranscriptBoundedMessageTailPageAsync } from "../gateway/session-transcript-readers.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { agentDatabaseWriteAdmissionState } from "../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
@@ -458,7 +464,7 @@ describe("client voice session lifecycle", () => {
         const successor = path.join(harness.stateDir, "successor");
         const env = captureEnv(["OPENCLAW_STATE_DIR"]);
         const lookup = voiceSessionReads.lookupClientVoiceSessions;
-        const read = vi
+        using _ = vi
           .spyOn(voiceSessionReads, "lookupClientVoiceSessions")
           .mockImplementationOnce(async (...args) => {
             const candidates = await lookup(...args);
@@ -478,7 +484,6 @@ describe("client voice session lifecycle", () => {
             closed === "original" ? "open" : "closed",
           );
         } finally {
-          read.mockRestore();
           env.restore();
           await Promise.all([originalClose.drain(), successorClose?.drain()]);
           await cleanupSessionStateForTest({ stateDir: successor, rootPath: successor });
@@ -510,7 +515,7 @@ describe("client voice session lifecycle", () => {
       const release = createDeferred();
       // oxlint-disable-next-line typescript/unbound-method -- Invoked below with the original registry receiver.
       const close = VoiceTranscriptOperationRegistry.prototype.close;
-      const barrier = vi
+      using _ = vi
         .spyOn(VoiceTranscriptOperationRegistry.prototype, "close")
         .mockImplementationOnce(function (this: VoiceTranscriptOperationRegistry, key, operation) {
           return close.call(this, key, async () => {
@@ -530,11 +535,85 @@ describe("client voice session lifecycle", () => {
       } finally {
         release.resolve();
         await stale;
-        barrier.mockRestore();
       }
     });
   });
   describe("startup", () => {
+    it("finishes concurrent cold Talk creation while the first writer prepares authority", async ({
+      signal,
+    }) => {
+      const storePath = path.join(harness.stateDir, "concurrent", "sessions.sqlite");
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      // Keep file identity stable while the first writer initializes its cold schema.
+      await fs.writeFile(storePath, "");
+      const firstEntered = createDeferred();
+      const releaseFirst = createDeferred();
+      const secondEntered = createDeferred();
+      const resolveTarget = targetReads.resolveSessionSqliteTargetInWorker;
+      const discoveries: Array<ReturnType<typeof resolveTarget>> = [];
+      const discoveryLifetime = new AbortController();
+      using capture = vi.spyOn(targetReads, "resolveSessionSqliteTargetInWorker");
+      capture.mockImplementation((...args) => {
+        const pending = resolveTarget(...args);
+        discoveries.push(pending);
+        if (discoveries.length === 2) {
+          secondEntered.resolve();
+        }
+        return withinTest(pending, discoveryLifetime.signal);
+      });
+      const first = ensureClientVoiceAgentSessionEntry({
+        agentId: "main",
+        storePath,
+        sessionKey: "agent:main:talk:first",
+        requester: Object.assign(() => {}, {
+          prepareSessionSource: async () => {
+            firstEntered.resolve();
+            await releaseFirst.promise;
+            return { checks: [], assertCurrent() {} };
+          },
+        }),
+      });
+      void first.catch(() => {});
+      let second: Promise<string> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(firstEntered.promise, first, "First writer did not enter"),
+          signal,
+        );
+        second = ensureClientVoiceAgentSessionEntry({
+          agentId: "main",
+          storePath,
+          sessionKey: "agent:main:talk:second",
+        });
+        void second.catch(() => {});
+        await withinTest(
+          awaitGateBeforeSettlement(
+            secondEntered.promise,
+            second,
+            "Second discovery did not enter",
+          ),
+          signal,
+        );
+        expect(agentDatabaseWriteAdmissionState.acquisition).toBeDefined();
+        releaseFirst.resolve();
+        const ids = await withinTest(Promise.all([first, second]), signal);
+        expect(ids.every(Boolean)).toBe(true);
+        expect(ids[0]).not.toBe(ids[1]);
+        for (const [index, name] of ["first", "second"].entries()) {
+          expect(
+            loadSessionEntry({ agentId: "main", storePath, sessionKey: `agent:main:talk:${name}` })
+              ?.sessionId,
+          ).toBe(ids[index]);
+        }
+      } finally {
+        // Break a failed discovery wait before joining the real reads and accepted writes.
+        discoveryLifetime.abort(new Error("Talk creation test finished"));
+        releaseFirst.resolve();
+        await Promise.allSettled([first, second]);
+        await Promise.allSettled(discoveries);
+      }
+    });
+
     it("stamps required Talk creation once in a fresh agent", async () => {
       const agentId = "fresh";
       const target = { agentId, sessionKey: `agent:${agentId}:talk:new` };

@@ -144,6 +144,7 @@ describe("runGatewayConversationList", () => {
       target: `reef:${accountId}-peer`,
       firstSeenAt: 200 - index * 100,
       lastSeenAt: 200 - index * 100,
+      label: `${accountId} Cafe\u0301`,
     }));
     vi.spyOn(conversationRegistry, "listConversations").mockImplementation(
       async (_scope, options = {}) =>
@@ -160,12 +161,11 @@ describe("runGatewayConversationList", () => {
         })),
       },
       agentId: "personal",
+      query: "CAFÉ",
       limit: 1,
     });
-
-    expect(result.conversations).toMatchObject([
-      { accountId: "personal", target: "reef:personal-peer" },
-    ]);
+    const { peerId: _peerId, ...expected } = rows[1]!;
+    expect(result.conversations).toMatchObject([expected]);
   });
 
   it.each(["direct", "group"] as const)(

@@ -3,8 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
-import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
-import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
+import { copyContextWindowOption, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder } from "./model-catalog-order.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
@@ -16,18 +15,31 @@ import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
-export function prepareConfiguredRuntimeFacts(params: {
+type ConfiguredRuntimeFactsInput = {
   agentFacts: {
     input: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
     configuredModelRefs: readonly ModelCatalogRef[];
   };
   workspaceFacts: {
     pluginMetadataSnapshot: PluginMetadataSnapshot;
-    inlineProviderModels: readonly InlineModelEntry[];
   };
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-}): PreparedModelRuntimeCatalogFacts {
+};
+
+export function prepareConfiguredRuntimeFacts(params: ConfiguredRuntimeFactsInput) {
+  return prepareRuntimeFacts(params, false);
+}
+
+/** Startup exposes captured rows; full refresh overlays only configured membership. */
+export function prepareCapturedRuntimeFacts(params: ConfiguredRuntimeFactsInput) {
+  return prepareRuntimeFacts(params, true);
+}
+
+function prepareRuntimeFacts(
+  params: ConfiguredRuntimeFactsInput,
+  includeCapturedRows: boolean,
+): PreparedModelRuntimeCatalogFacts {
   const templateModelRegistry = params.templateModelRegistry;
   const replace = params.agentFacts.input.config.models?.mode === "replace";
   const keyOf = createModelCatalogIdentityKeyResolver();
@@ -35,16 +47,13 @@ export function prepareConfiguredRuntimeFacts(params: {
     modelCatalogRowToEntry(model),
   );
   const runtimeByIdentity = groupRecords(runtimeEntries, keyOf);
-  const catalog = [
-    ...(replace ? [] : params.templateModelRegistry.getAll().map(modelCatalogRowToEntry)),
-    ...runtimeEntries,
-  ];
-  const catalogByIdentity = indexFirstByKey(catalog, keyOf);
+  const capturedEntries = replace ? [] : templateModelRegistry.getAll().map(modelCatalogRowToEntry);
+  const catalogByIdentity = indexFirstByKey([...capturedEntries, ...runtimeEntries], keyOf);
   const configuredEntries = dedupeByKey(
     [
       ...buildConfiguredModelCatalog({
         cfg: params.agentFacts.input.config,
-        catalog,
+        catalog: catalogByIdentity,
         manifestPlugins: params.workspaceFacts.pluginMetadataSnapshot,
       }).map((entry) => {
         const key = keyOf(entry);
@@ -80,20 +89,12 @@ export function prepareConfiguredRuntimeFacts(params: {
     routeVariants: configuredEntries,
     ...(runtimeEntries.length > 0 ? { staticEntries: runtimeEntries } : {}),
   };
-  return {
+  const facts = {
     templateModelRegistry,
     modelCatalog,
     configuredRuntimeModels: params.configuredRuntimeModels,
-    inlineProviderModels: params.workspaceFacts.inlineProviderModels,
   };
-}
-
-/** Startup can expose captured rows; full refresh overlays only configured membership. */
-export function prepareCapturedRuntimeFacts(
-  params: Parameters<typeof prepareConfiguredRuntimeFacts>[0],
-): PreparedModelRuntimeCatalogFacts {
-  const facts = prepareConfiguredRuntimeFacts(params);
-  if (params.agentFacts.input.config.models?.mode === "replace") {
+  if (!includeCapturedRows || replace) {
     return facts;
   }
   const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
@@ -105,11 +106,21 @@ export function prepareCapturedRuntimeFacts(
     config: params.agentFacts.input.config,
     metadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
   });
-  const keyOf = createModelCatalogIdentityKeyResolver();
   const declaredByIdentity = indexFirstByKey(
     manifestCatalog.filter((entry) => entry.inference !== undefined),
     keyOf,
   );
+  // Preserve raw identities for configured membership before publishing canonical provider aliases.
+  for (const entry of capturedEntries) {
+    const provider = normalizeProvider(entry.provider);
+    if (provider !== entry.provider) {
+      entry.provider = provider;
+      // Both the configured alias and its canonical row may expose these mutable options.
+      if (entry.contextWindows) {
+        entry.contextWindows = entry.contextWindows.map(copyContextWindowOption);
+      }
+    }
+  }
   const entries = dedupeByKey(
     [
       ...facts.modelCatalog.entries.map((entry) => {
@@ -123,12 +134,7 @@ export function prepareCapturedRuntimeFacts(
       // Typed-only rows have no conversational registry Model. Carry their canonical
       // manifest facts into the same prepared generation instead of inventing chat defaults.
       ...manifestCatalog.filter((entry) => entry.inference?.chat === false),
-      // Static hooks also answer runtime provider aliases; publish canonical rows once.
-      ...params.templateModelRegistry.getAll().map((model) => {
-        const entry = modelCatalogRowToEntry(model);
-        entry.provider = normalizeProvider(entry.provider);
-        return entry;
-      }),
+      ...capturedEntries,
     ],
     keyOf,
   );

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as pendingInputs from "../../../config/sessions/session-accessor.pending-inputs.js";
-import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import { prepareForeignPendingUserTurns } from "./pre-persisted-user-turn.js";
 
 it("freezes foreign input exclusion across reload and provider conversion", async () => {
@@ -12,7 +12,7 @@ it("freezes foreign input exclusion across reload and provider conversion", asyn
     storePath: path.resolve("foreign-input-freeze.sqlite"),
   };
   const entries = new Map<string, string>();
-  const reads = vi.fn(() => new Map(entries));
+  const reads = vi.fn(async () => new Map(entries));
   using _ = vi
     .spyOn(pendingInputs, "prepareForeignLiveSessionPendingInputEntries")
     .mockResolvedValueOnce(reads);
@@ -22,15 +22,15 @@ it("freezes foreign input exclusion across reload and provider conversion", asyn
     timestamp: 1,
     idempotencyKey: "foreign:user",
   };
-  const activeSession = { agent: { state: { messages: [foreign] } } };
+  const activeSession = { agent: { state: { messages: [foreign] } }, subscribe: () => () => {} };
 
   const reconcile = await prepareForeignPendingUserTurns({ getSessionTarget: () => target });
   entries.set("foreign-entry", "foreign:user");
-  expect(reconcile?.(activeSession, undefined)?.ownsEntry("foreign-entry")).toBe(true);
+  expect((await reconcile?.(activeSession, undefined))?.ownsEntry("foreign-entry")).toBe(true);
   expect(activeSession.agent.state.messages).toEqual([]);
   entries.clear();
   activeSession.agent.state.messages = [foreign];
-  const frozen = reconcile?.(activeSession, undefined);
+  const frozen = await reconcile?.(activeSession, undefined);
   expect(activeSession.agent.state.messages).toEqual([]);
   expect(frozen?.ownsEntry("foreign-entry")).toBe(true);
   const calls = reads.mock.calls.length;

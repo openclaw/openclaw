@@ -165,6 +165,15 @@ describe("method scope resolution and authorization", () => {
       WRITE,
       OWN_WRITE,
     ],
+    // URL clones reuse or register repositories with the Gateway's GitHub identity.
+    [
+      "sessions.create",
+      { projectGitUrl: "https://github.com/openclaw/openclaworg.git" },
+      WRITE,
+      OWN_WRITE,
+    ],
+    ["projects.searchRemote", { query: "openclaw" }, WRITE, READ],
+    ["worktrees.list", {}, WRITE, READ],
     ["sessions.create", { agentId: "main", incognito: true }, ADMIN, WRITE],
     ["sessions.create", { key: incognitoKey }, ADMIN, WRITE],
     ["sessions.create", { parentSessionKey: incognitoKey }, ADMIN, WRITE],
@@ -181,7 +190,8 @@ describe("method scope resolution and authorization", () => {
     ["sessions.patch", guarded, WRITE],
     ["sessions.patch", { ...guarded, permissionMode: "full" }, ADMIN, WRITE],
     ["sessions.dispatch", { ...ownKey, deviceId: "device-1" }, WRITE],
-    ["sessions.dispatch", { ...ownKey, profileId: "development" }, ADMIN, WRITE],
+    ["sessions.dispatch", { ...ownKey, profileId: "development" }, WRITE, READ],
+    ["sessions.dispatch", ownKey, ADMIN, WRITE],
     ["sessions.move", move({ kind: "gateway" }), WRITE],
     ["sessions.move", move({ kind: "profile", profileId: "development" }), ADMIN, WRITE],
   ] satisfies [string, unknown, string | string[], string?][])(
@@ -322,6 +332,7 @@ describe("session-scoped method admission", () => {
 
   it.each([
     ["sessions.diff", ownSession, true],
+    ["openclawId.status", {}, true],
     ["controlUi.sessionPullRequests.subscribe", { sessionKeys: [ownKey.key] }, true],
     ["controlUi.sessionPullRequests.checks", ownSession, true],
     ["sessions.files.assets", { ...ownSession, path: "index.html", refs: ["a.png"] }, true],
@@ -375,6 +386,8 @@ describe("session-scoped method admission", () => {
     ["sessions.delete", { ...ownKey, archivedOnly: true }],
     ["agent", { message: "/reset" }],
     ["tools.invoke", {}],
+    ["openclawId.people", {}],
+    ["openclawId.authority", {}],
     ["plugins.sessionAction", { pluginId: "custom", actionId: "protected" }],
   ] as const)("does not turn the session grant into broader authority for %s", (method, params) => {
     admission(method, [OWN_WRITE], params).toMatchObject({ allowed: false });
@@ -408,5 +421,34 @@ describe("session-scoped method admission", () => {
       missingScope: WRITE,
     });
     deny(WRITE, "sessions.patch", [READ], { label: "updated" });
+  });
+});
+
+describe("session-only dictation admission", () => {
+  const scopes = ["operator.sessions.write"];
+  const sessionKey = "agent:main:guest-dictation";
+
+  it.each([
+    ["talk.catalog", { sessionKey }],
+    [
+      "talk.session.create",
+      { sessionKey, mode: "transcription", transport: "gateway-relay", brain: "none" },
+    ],
+    ["talk.session.appendAudio", { sessionId: "recording", audioBase64: "AAA=" }],
+    ["talk.session.close", { sessionId: "recording" }],
+  ])("admits %s through the session scope", (method, params) => {
+    expect(authorizeOperatorScopesForMethod(method, scopes, params).allowed).toBe(true);
+  });
+
+  it.each([
+    ["talk.catalog", {}],
+    ["talk.catalog", { sessionKey, provider: "other" }],
+    ["talk.session.create", { mode: "transcription" }],
+    ["talk.session.create", { sessionKey, mode: "realtime" }],
+    ["talk.session.create", { sessionKey, mode: "transcription", provider: "other" }],
+    ["talk.session.create", { sessionKey, mode: "transcription", model: "other" }],
+    ["talk.config", {}],
+  ])("does not grant broad access via %s", (method, params) => {
+    expect(authorizeOperatorScopesForMethod(method, scopes, params).allowed).toBe(false);
   });
 });

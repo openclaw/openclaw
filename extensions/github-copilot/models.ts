@@ -5,7 +5,10 @@ import type {
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  normalizeModelCompat,
+  resolveDefaultModelMaxTokens,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
@@ -25,7 +28,6 @@ import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 export const PROVIDER_ID = "github-copilot";
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
-const DEFAULT_MAX_TOKENS = 8192;
 
 export function resolveCopilotForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
@@ -64,7 +66,9 @@ export function resolveCopilotForwardCompatModel(
     ...(staticOverride?.contextTokens !== undefined
       ? { contextTokens: staticOverride.contextTokens }
       : {}),
-    maxTokens: staticOverride?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    maxTokens:
+      staticOverride?.maxTokens ??
+      resolveDefaultModelMaxTokens(staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW),
     ...(staticOverride?.thinkingLevelMap
       ? { thinkingLevelMap: staticOverride.thinkingLevelMap }
       : {}),
@@ -281,7 +285,11 @@ function mapCopilotApiModelToDefinition(
   const nativeContextWindow = asPositiveSafeInteger(limits?.max_context_window_tokens);
   // Catalogs retain provider facts; runtime construction supplies an estimate for omissions.
   const contextTokens = asPositiveSafeInteger(limits?.max_prompt_tokens);
-  const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
+  const maxTokens =
+    asPositiveSafeInteger(limits?.max_output_tokens) ??
+    resolveDefaultModelMaxTokens(
+      asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW,
+    );
   const api = resolveCopilotApi(entry);
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id, api), supports?.reasoning_effort);
   // Copilot lists effort levels instead of Anthropic's capability tree. Only

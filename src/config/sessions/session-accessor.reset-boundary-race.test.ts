@@ -14,7 +14,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "./session-accessor.sqlite-active-events.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";

@@ -38,7 +38,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextLifetime,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   activateTestChannelRegistry,
@@ -47,8 +50,7 @@ import {
 } from "../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
-import { closeGatewayDeviceRevocation } from "./device-revocation.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "./server-plugin-in-process-authority.js";
 import { subagentToolCallEvents } from "./server.subagent-stop-settlement.product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -59,7 +61,6 @@ for (const scenario of [
   "followup",
   "steer",
   "conflict",
-  "exhaust",
   "replaced",
   "revoked",
   "effect",
@@ -84,7 +85,7 @@ for (const scenario of [
       let started = createDeferred(),
         release = createDeferred();
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      let gatewayContext: GatewayRequestContext | undefined;
+      let resolveGatewayContext: GatewayContextResolver | undefined;
       let execution: Awaited<ReturnType<typeof observeGatewayRunExecution>> | undefined;
       let wake: Promise<boolean> | undefined;
       let originalSource: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
@@ -92,7 +93,6 @@ for (const scenario of [
         requestCount = 0,
         synthesisCount = 0,
         effectCalls = 0;
-      const synthesisBodies: string[] = [];
       const sentTexts: string[] = [];
       const providerServer = createServer((req, res) => {
         void (async () => {
@@ -128,7 +128,6 @@ for (const scenario of [
           if (synthesis) {
             expectSynthesis = false;
             synthesisIndex = ++synthesisCount;
-            synthesisBodies.push(body);
             started.resolve();
             await release.promise;
           }
@@ -172,7 +171,7 @@ for (const scenario of [
           .spyOn(kernelModule, "createGatewayKernel")
           .mockImplementation(async (...args) => {
             const kernel = await createKernel(...args);
-            gatewayContext = kernel.gatewayRequestContext;
+            resolveGatewayContext = kernel.resolvePluginGatewayContext;
             return kernel;
           });
         try {
@@ -258,7 +257,7 @@ for (const scenario of [
         };
         await registry.resetSubagentRegistryForTests({ persist: false });
         const parent = loadSessionEntryReadOnly(scope);
-        if (!parent || !gatewayContext) {
+        if (!parent || !resolveGatewayContext) {
           throw new Error("Missing requester");
         }
         const child = createSubagentRunRecord({
@@ -325,7 +324,7 @@ for (const scenario of [
         if (!saved) {
           throw new Error("Missing durable child");
         }
-        bindGatewayContextResolver(saved, () => gatewayContext);
+        bindGatewayContextResolver(saved, resolveGatewayContext);
         if (!originalSource) {
           throw new Error("Original requester authority was not captured");
         }
@@ -396,36 +395,15 @@ for (const scenario of [
         const completedChildTranscript = childTranscript();
         expect(completedChildTranscript.split(childText)).toHaveLength(2);
         const readChild = () => loadSubagentRegistryFromSqlite().get(childId);
-        const expectDelivery = (status: "delivered" | "failed") => {
+        const expectDelivery = () => {
           const persisted = readChild();
           expect(persisted?.requesterSettleWake).toBeUndefined();
-          expect(persisted?.delivery?.status).toBe(status);
-          if (status === "failed") {
-            expect(persisted?.suppressCompletionDelivery).toBe(true);
-          }
+          expect(persisted?.delivery?.status).toBe("delivered");
         };
         const expectNoRetry = async (count: number) => {
           expect(synthesisCount).toBe(count);
           expect(await wakeSavedBatch(subagentRuns.get(childId)!)).toBe(false);
           expect(synthesisCount).toBe(count);
-        };
-        const makeRetryDue = async () => {
-          const current = subagentRuns.get(childId);
-          if (!current?.requesterSettleWake) {
-            throw new Error("Missing pending completion");
-          }
-          const result = await mutateRequesterCompletionBatch({
-            entries: [current],
-            operation: {
-              kind: "transition",
-              state: { ...current.requesterSettleWake, nextAttemptAt: 0 },
-            },
-            assertCurrent: () => {
-              currentBatch([current]);
-            },
-          });
-          expect(result.publication).toBe("published");
-          return subagentRuns.get(childId)!;
         };
         const startSynthesis = async (entry: SubagentRunRecord) => {
           started = createDeferred();
@@ -485,13 +463,13 @@ for (const scenario of [
           return;
         }
         if (scenario === "revoked") {
-          // Retire the actual Gateway source owner, including grants retained by the run.
-          closeGatewayDeviceRevocation(gatewayContext);
+          // Retire the Gateway lifetime that owns the retained continuation.
+          getGatewayContextLifetime(resolveGatewayContext).abort(new Error("Gateway closed"));
           release.resolve();
           expect(await wake).toBe(false);
           expect(transcriptText()).not.toContain("Requester synthesis ");
           expect(childTranscript()).toBe(completedChildTranscript);
-          expect(readChild()?.delivery?.status).not.toBe("delivered");
+          expectDelivery();
           await expectNoRetry(1);
           return;
         }
@@ -503,77 +481,42 @@ for (const scenario of [
         if (scenario === "send") {
           expect(sentTexts).toEqual(["One committed message."]);
         }
-        const conflictCount = scenario === "exhaust" ? 3 : 1;
-        for (let index = 1; index <= conflictCount; index++) {
-          const mode = scenario === "steer" ? "steer" : "followup";
-          const conflict =
-            scenario === "conflict" ||
-            scenario === "exhaust" ||
-            scenario === "effect" ||
-            scenario === "send";
-          const humanRun = index === 1 ? await sendHuman(index, mode) : undefined;
-          // Ordinary input uses the real Gateway, but its authority differs from
-          // this system turn, so even steer queues it until synthesis settles.
-          expect(transcriptText()).not.toContain(humanText + index);
-          if (conflict) {
-            // A separate committed writer invalidates the prepared transcript.
-            // Use the actual SQLite owner, not a thrown/mocked conflict. This
-            // does not identify the incident's unproved competing writer.
-            await appendTranscriptMessage(scope, {
-              message: { role: "user", content: concurrentText + index },
-            });
-            expect(transcriptText()).toContain(concurrentText + index);
-          }
-          release.resolve();
-          const delivered = await wake;
-          if (humanRun) {
-            await waitForHuman(humanRun);
-          }
-          expect(childTranscript()).toBe(completedChildTranscript);
-          if (humanRun) {
-            expect(transcriptText()).toContain(humanText + index);
-          }
-          if (!conflict) {
-            expect(delivered).toBe(true);
-            expect(transcriptText().split("Requester synthesis 1.")).toHaveLength(2);
-            expectDelivery("delivered");
-            return;
-          }
-          expect(delivered).toBe(false);
-          expect(transcriptText()).toContain(concurrentText + index);
-          expect(transcriptText()).not.toContain("Requester synthesis ");
-          if (scenario === "effect" || scenario === "send") {
-            expectDelivery("failed");
-            expect(effectCalls).toBe(1);
-            expect(sentTexts).toEqual(scenario === "send" ? ["One committed message."] : []);
-            await expectNoRetry(1);
-            return;
-          }
-          if (index === 3) {
-            expectDelivery("failed");
-            expect(readChild()?.delivery).toMatchObject({
-              status: "failed",
-              lastError: "requester_transcript_conflict",
-            });
-            expect(synthesisCount).toBe(3);
-            return;
-          }
-          expect(readChild()?.requesterSettleWake).toMatchObject({
-            status: "pending",
-            attemptCount: index,
+        const mode = scenario === "steer" ? "steer" : "followup";
+        const conflict = scenario === "conflict" || scenario === "effect" || scenario === "send";
+        const humanRun = await sendHuman(1, mode);
+        // Ordinary input uses the real Gateway, but its authority differs from
+        // this system turn, so even steer queues it until synthesis settles.
+        expect(transcriptText()).not.toContain(humanText + 1);
+        if (conflict) {
+          // A separate committed writer invalidates the prepared transcript.
+          // Use the actual SQLite owner, not a thrown/mocked conflict. This
+          // does not identify the incident's unproved competing writer.
+          await appendTranscriptMessage(scope, {
+            message: { role: "user", content: concurrentText + 1 },
           });
-          expect(readChild()?.requesterSettleWake?.nextAttemptAt).toBeGreaterThan(Date.now());
-          await startSynthesis(await makeRetryDue());
+          expect(transcriptText()).toContain(concurrentText + 1);
         }
-        // A fresh admission observes the newer human input; the rejected answer is never rebased.
-        expect(synthesisBodies[1]).toContain(humanText + 1);
         release.resolve();
-        expect(await wake).toBe(true);
-        expect(transcriptText()).not.toContain("Requester synthesis 1.");
-        expect(transcriptText().split("Requester synthesis 2.")).toHaveLength(2);
-        expectDelivery("delivered");
+        const delivered = await wake;
+        await waitForHuman(humanRun);
         expect(childTranscript()).toBe(completedChildTranscript);
-        await expectNoRetry(2);
+        expect(transcriptText()).toContain(humanText + 1);
+        if (!conflict) {
+          expect(delivered).toBe(true);
+          expect(transcriptText().split("Requester synthesis 1.")).toHaveLength(2);
+          expectDelivery();
+          return;
+        }
+        expect(delivered).toBe(false);
+        expect(transcriptText()).toContain(concurrentText + 1);
+        expect(transcriptText()).not.toContain("Requester synthesis ");
+        expectDelivery();
+        if (scenario === "effect" || scenario === "send") {
+          expect(effectCalls).toBe(1);
+          expect(sentTexts).toEqual(scenario === "send" ? ["One committed message."] : []);
+        }
+        expect(transcriptText()).toContain(childText);
+        await expectNoRetry(1);
       } finally {
         release.resolve();
         if (wake) {

@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { stateWorkerResourceReceiptMigration } from "../../state/openclaw-state-db-schema-v37-resource-receipts.js";
 import { resolveSchemaMigrationBackupTables } from "../../state/schema-migration-backup-scope.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { extractSqliteTableSchema } from "../sqlite-schema-sql.js";
 import { admitDatabasePortDescriptor } from "./port-descriptor.js";
 import { loadStatePortDescriptor } from "./state-port-descriptor.js";
 import { resolveStatePortRoots, statePortProvider } from "./state-port.js";
@@ -193,6 +196,32 @@ it("retains the exact predecessor credential tables for PostgreSQL update recove
   expect(current.tables.some((entry) => entry.name === "exec_approvals_config")).toBe(true);
 });
 
+it("keeps receipt migration and predecessor backups aligned with native column positions", async () => {
+  // v36 renamed Template tables but preserved this released worker table verbatim.
+  const released = readFileSync(
+    new URL("../../../test/fixtures/sqlite/openclaw-state-schema-v35.sql", import.meta.url),
+    "utf8",
+  );
+  using source = openNodeSqliteDatabase(":memory:");
+  source.exec(extractSqliteTableSchema(released, "worker_environments"));
+  for (const version of [36, 37]) {
+    if (version === 37) {
+      stateWorkerResourceReceiptMigration.migrate(source, 36);
+    }
+    const descriptor = await loadStatePortDescriptor(version);
+    expect(
+      descriptor.expectedCatalog.filter(
+        (fact) => fact.table === "worker_environments" && fact.kind === "column",
+      ),
+    ).toMatchObject(
+      rows(source, "PRAGMA table_info(worker_environments)").map((column) => ({
+        table: "worker_environments",
+        value: { name: column.name, position: Number(column.cid) + 1 },
+      })),
+    );
+  }
+});
+
 it("captures only the credential retirement scope plus required schema metadata and statistics", () => {
   expect(backupTables(28, 29)).toEqual([
     "config_machine_state",
@@ -257,5 +286,56 @@ it("preserves v30 workspace recovery shape and admits incremental storage only a
     "schema_meta",
     "sqlite_stat1",
     "sqlite_stat4",
+  ]);
+});
+
+it("preserves schema 33/34 workspace inputs and ports shared digests and fingerprints at schema 35", async () => {
+  for (const version of [33, 34, 35]) {
+    const descriptor = await loadStatePortDescriptor(version);
+    const workspace = descriptor.fragments!.find(
+      (fragment) => fragment.id === "local_workspace_projections",
+    )!;
+    using source = openNodeSqliteDatabase(":memory:");
+    source.exec(workspace.sqlite);
+    const columns = new Set(
+      source
+        .prepare("PRAGMA table_info(local_workspace_projections)")
+        .all()
+        .map((column) => column.name),
+    );
+    for (const column of [
+      "tree_root_digest",
+      "source_paths_digest",
+      "canonical_fingerprints",
+      "projection_fingerprints",
+    ]) {
+      expect(columns.has(column)).toBe(version === 35);
+    }
+    for (const table of ["local_workspace_tree_packs", "local_workspace_source_path_sets"]) {
+      expect(
+        source.prepare(`SELECT name FROM sqlite_schema WHERE name = ?`).get(table) !== undefined,
+      ).toBe(version === 35);
+      expect(workspace.tables.some((entry) => entry.name === table)).toBe(version === 35);
+      if (version === 35) {
+        expect(workspace.tables.find((entry) => entry.name === table)?.pk).toEqual([
+          table === "local_workspace_tree_packs" ? "tree_digest" : "path_digest",
+        ]);
+      }
+      expect((workspace.preData + workspace.postData).includes(`CREATE TABLE "${table}"`)).toBe(
+        version === 35,
+      );
+    }
+    // The online converter still needs its retained source at both versions.
+    expect(source.prepare("PRAGMA table_info(local_workspace_manifest_nodes)").all()).toHaveLength(
+      3,
+    );
+  }
+  expect(backupTables(34, 35)).toEqual([
+    "config_machine_state",
+    "local_workspace_manifest_nodes",
+    "local_workspace_projections",
+    "local_workspace_source_path_sets",
+    "local_workspace_tree_packs",
+    "schema_meta",
   ]);
 });

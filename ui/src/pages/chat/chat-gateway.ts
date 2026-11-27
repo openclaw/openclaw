@@ -10,10 +10,7 @@ import { resolveAssistantMessagePhase } from "../../../../src/shared/chat-messag
 import { t } from "../../i18n/index.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import {
-  isHiddenAssistantStreamText,
-  shouldHideAssistantChatMessage,
-} from "../../lib/chat/message-visibility.ts";
+import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
@@ -79,19 +76,8 @@ function resolveGatewayErrorText(
 ): string {
   const errorText = payload.errorMessage?.trim();
   if (errorText) {
-    if (
-      payload.state === "error" &&
-      (payload.errorKind === "state_contention" ||
-        payload.stopReason === "aborted-partial-persistence-failed")
-    ) {
-      return errorText;
-    }
-    const summary =
-      errorText.startsWith("⚠️") || errorText.startsWith("Error:")
-        ? errorText
-        : `Error: ${errorText}`;
     const detail = formatGatewayErrorDetail(payload);
-    return detail ? `${summary}\n\n${detail}` : summary;
+    return detail ? `${errorText}\n\n${detail}` : errorText;
   }
   const messageText = message ? extractText(message)?.trim() : null;
   return messageText || "chat error";
@@ -183,7 +169,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   if (!sessionMatches) {
     if (payload.state === "final") {
       const finalMessage = normalizedFinalMessage;
-      if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+      if (finalMessage && !isAssistantHeartbeatAckForDisplay(finalMessage)) {
         const cacheAgentId = isUiGlobalSessionKey(payload.sessionKey)
           ? (payload.agentId ?? resolveUiDefaultAgentId(state))
           : payload.agentId;
@@ -220,7 +206,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   if (injectedMessageId) {
     if (
       normalizedFinalMessage &&
-      !shouldHideAssistantChatMessage(normalizedFinalMessage) &&
+      !isAssistantHeartbeatAckForDisplay(normalizedFinalMessage) &&
       !state.chatMessages.some(
         (message) => readSessionMessageIdentity(message)?.id === injectedMessageId,
       )
@@ -336,7 +322,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         diagnosticOwnerRunId === payload.runId &&
         payload.errorMessage?.trim() &&
         (projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage ||
-          (chatgptUsageLimitKind && state.chatRunError?.kind !== errorKind))
+          (errorKind && state.chatRunError?.kind !== errorKind))
       ) {
         // Late diagnostics belong to the active, pending, or latest locally terminal run;
         // publishing them over a newer response falsely marks the new run failed.
@@ -352,7 +338,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       payload.state === "aborted" ||
       (payload.state === "final" &&
         (!incomingFinal ||
-          shouldHideAssistantChatMessage(incomingFinal) ||
+          isAssistantHeartbeatAckForDisplay(incomingFinal) ||
           (!hasPairingQr && hasSessionProjectionAcceptedFinal(previousTerminalRun, incomingFinal))))
     ) {
       reconcileOwnedTerminalRun();
@@ -383,7 +369,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   if (state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizedFinalMessage;
-      if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+      if (finalMessage && !isAssistantHeartbeatAckForDisplay(finalMessage)) {
         publishVisibleTerminal(finalMessage, [...state.chatMessages, finalMessage], payload.runId);
         return null;
       }
@@ -489,7 +475,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     if (authoritativeTerminalMatches && !hasPairingQr) {
       // History already owns this run's terminal message. Discard the live
       // projection; terminal cleanup below clears its remaining stream.
-    } else if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+    } else if (finalMessage && !isAssistantHeartbeatAckForDisplay(finalMessage)) {
       publishTerminalStream(finalMessage, materializeVisibleStream());
     } else {
       publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
@@ -497,7 +483,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     reconcileOwnedTerminalRun();
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
-    if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
+    if (normalizedMessage && !isAssistantHeartbeatAckForDisplay(normalizedMessage)) {
       const visibleMessages = materializeVisibleStream({
         replacementMessages: [normalizedMessage],
         includeCurrent: false,
@@ -513,7 +499,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   } else if (payload.state === "error") {
     const payloadMessage = normalizeFinalAssistantMessage(payload.message);
     const visiblePayloadMessage =
-      payloadMessage && !shouldHideAssistantChatMessage(payloadMessage) ? payloadMessage : null;
+      payloadMessage && !isAssistantHeartbeatAckForDisplay(payloadMessage) ? payloadMessage : null;
     const projectedErrorMessage = Boolean(
       visiblePayloadMessage &&
       isSessionProjectionErrorMessage(visiblePayloadMessage, payload.errorMessage),

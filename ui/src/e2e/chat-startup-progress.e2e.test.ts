@@ -7,6 +7,7 @@ import type { GatewaySessionRow } from "../../../src/gateway/session-utils.types
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 let proofDir: string;
@@ -18,7 +19,7 @@ beforeEach(() => {
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("keeps observed run activity out of the next turn's waiting status", async () => {
+  it("keeps observed run activity separate from the next turn", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -119,7 +120,9 @@ suite.define(() => {
         .fill("Check the next workspace.");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       await gateway.waitForRequest("chat.send");
-      await working.getByText("Waiting for turn to start…", { exact: true }).waitFor();
+      const workingLabel = working.getByText("Working", { exact: true });
+      await workingLabel.waitFor({ state: "attached" });
+      expect(await workingLabel.getAttribute("class")).toContain("sr-only");
       // A late event from the previous run must not claim the next run's progress.
       await gateway.emitGatewayEvent("agent", {
         sessionKey,
@@ -135,7 +138,9 @@ suite.define(() => {
             requestAnimationFrame(() => resolve());
           }),
       );
-      expect(await working.textContent()).toContain("Waiting for turn to start");
+      expect(await working.isVisible()).toBe(true);
+      expect(await workingLabel.textContent()).toBe("Working");
+      expect(await workingLabel.getAttribute("class")).toContain("sr-only");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -143,9 +148,7 @@ suite.define(() => {
 
   it("preserves tool and approval activity received before the send ACK", async () => {
     const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
+      ...createControlUiE2eContextOptions(),
       ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
     });
     const page = await context.newPage();
@@ -197,7 +200,7 @@ suite.define(() => {
           toolCallId: "synthetic-exec",
         },
       });
-      const tool = page.locator(".chat-tool-msg-summary", { hasText: "pwd" });
+      const tool = page.locator(".chat-thread .chat-tool-disclosure__content", { hasText: "pwd" });
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => tool.count()).toBe(1);
       await expect.poll(() => working.textContent()).toContain("Waiting for approval");
@@ -211,6 +214,8 @@ suite.define(() => {
         );
       }
       await gateway.resolveDeferred("chat.send", { status: "started", runId });
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
+      expect(await tool.isVisible()).toBe(true);
       if (capture) {
         await writeFile(
           path.join(proofDir, "preack-adopted.png"),
@@ -226,9 +231,7 @@ suite.define(() => {
 
   it("retains current startup progress through delayed history", async () => {
     const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
+      ...createControlUiE2eContextOptions(),
       ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
     });
     const page = await context.newPage();
@@ -266,7 +269,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
-      await expect.poll(() => working.textContent()).toContain("Naming worktree…");
+      await expect.poll(() => working.textContent()).toContain("Naming worktree");
       const before = (await gateway.getRequests("chat.history")).length;
       await gateway.deferNext("chat.history");
       await gateway.emitGatewayEvent("session.message", {
@@ -290,7 +293,7 @@ suite.define(() => {
         state: "status",
         phase: "creating_worktree",
       });
-      await expect.poll(() => working.textContent()).toContain("Creating worktree…");
+      await expect.poll(() => working.textContent()).toContain("Creating worktree");
       await gateway.resolveDeferred("chat.history", { messages: [], sessionInfo, inFlightRun });
       // Capture the observed result before asserting so the red run leaves honest visual evidence.
       if (capture) {
@@ -299,8 +302,8 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working]),
         );
       }
-      await expect.poll(() => working.textContent()).not.toContain("Naming worktree…");
-      await expect.poll(() => working.textContent()).toContain("Creating worktree…");
+      await expect.poll(() => working.textContent()).not.toContain("Naming worktree");
+      await expect.poll(() => working.textContent()).toContain("Creating worktree");
       await gateway.emitChatFinal({
         runId,
         sessionKey,
@@ -364,7 +367,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
-      await expect.poll(() => working.textContent()).toContain("Provisioning environment…");
+      await expect.poll(() => working.textContent()).toContain("Provisioning environment");
       const screenshot = async (fileName: string) => {
         if (artifactDir) {
           await writeFile(
@@ -375,15 +378,15 @@ suite.define(() => {
       };
       await screenshot("00-before.png");
       const states: Array<[WorkerEnvironmentStartStatus, string, string]> = [
-        [{ mode: "snapshot" }, "Starting from snapshot…", "01-snapshot.png"],
+        [{ mode: "snapshot" }, "Starting from snapshot", "01-snapshot.png"],
         [
           { mode: "cold", reason: "no-snapshot-yet", phase: "preparing" },
-          "Preparing cloud environment…",
+          "Preparing cloud environment",
           "02-preparing.png",
         ],
         [
           { mode: "cold", reason: "no-snapshot-yet", phase: "saving" },
-          "Saving snapshot…",
+          "Saving snapshot",
           "03-saving.png",
         ],
       ];

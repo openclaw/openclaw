@@ -22,6 +22,33 @@ normalized outcome codes. It never stores prompts, message bodies, tool
 arguments, tool results, attachments, filenames, URLs, command output, or raw
 error text.
 
+## Choose the right audit view
+
+- **Run, tool, or message activity:** use [`openclaw audit`](/cli/audit) to
+  find recorded events across runs. Without `--explain`, `--run <id>` filters
+  activity by run correlation; it does not select an exact execution.
+- **Identity and decisions for one execution:** use
+  `openclaw audit --run <id> --explain` to find retained executions, then
+  `openclaw audit --execution <id> --explain` to inspect one. You can also use the Control UI's
+  [Run inspector](/web/control-ui/settings#activity-tab). Identity collection
+  is opt-in and applies only to newly admitted runs. The inspector does not
+  infer a receipt from an activity row.
+- **Administrative changes:** open **Recent changes** on Ask OpenClaw
+  ([Change history](/cli/openclaw#change-history)) for recent applied system
+  operations, config changes, and role assignments. The `openclaw.changes.list`
+  RPC requires `operator.admin` and reads a separate journal, not run receipts.
+  To look up a terminal operator approval without an exact execution link, use
+  [approval history](/gateway/protocol/rpc-devices-nodes-and-approvals#approval-families).
+
+An empty result means that view returned no matching retained evidence. Check
+that you are querying the Gateway that handled the action, using the right
+selector and time range, and that collection was enabled for that event at
+the time. Queue delays, uncovered paths, failed writes, and retention limits
+can all leave gaps. A recorded approval decision does not, on its own, prove
+the approved action ran.
+
+## Evidence sources
+
 The Gateway also keeps an adjacent execution identity context for newly
 admitted agent runs. This context is authoritative for the identity facts it
 contains; it does not make the activity ledger lossless and does not turn audit
@@ -95,14 +122,11 @@ operational warning and never abort the run. Normal Gateway and direct-local
 CLI shutdown flushes accepted work when the writer lifecycle permits, but
 abrupt termination can still lose queued evidence.
 
-When identity collection is enabled, restart recovery stores only the safe
-execution/context/run ids and timestamp with its existing private recovery
-owner. A later ambiguous retry references that token instead of rebuilding
-identity from the new process. When collection or the audit ledger is disabled,
-recovery creates, stores, and propagates no new identity token. If the original
-queued context was lost, exact inspection stays explicitly unavailable; the
-retry never manufactures replacement evidence. Raw identity references are not
-stored in the recovery token.
+A restart resume is a new admitted input and receives ordinary current-turn audit
+facts when identity collection is enabled. The Gateway does not retain or restore
+an execution-identity token for an interrupted turn. Existing evidence remains
+inspectable under its original identity; the new turn does not manufacture missing
+evidence for the old one.
 
 Each admitted outer turn receives a new opaque `executionId`; `contextId`
 identifies its immutable evidence record, while the existing `runId` remains a
@@ -127,9 +151,10 @@ invoker. When admission has a verified human requester, `representedSubject`
 records that person's installation-local pseudonym separately. A supported
 explicit user selection can therefore create a child representing Bob while
 the parent execution continues as Alice. This does not mean Bob personally
-requested or approved the tool call. Agent-initiated `sessions_create` and
-`sessions_send` executions also record the trusted agent invoker and prepared
-human subject when available; they do not invent spawn lineage. The lineage
+requested or approved the tool call. Agent-initiated `sessions_send` executions also record the trusted agent invoker
+and prepared human subject when available; they do not invent spawn lineage.
+`sessions_create` uses the visible-spawn creation path, so its opening execution
+records the same lineage as `sessions_spawn`. The lineage
 projection for `sessions_spawn` links the
 parent context, execution, run, and agent when the exact private parent token
 was available. Its delegation reference covers the spawn relation plus the
@@ -194,9 +219,8 @@ do not authenticate a person, service, or invoker. Shared hook authentication
 and direct `/hooks/agent` requests therefore remain unattributed unless another
 authoritative principal producer exists. A mapping transform that suppresses a
 request before admission returns its normal HTTP response but creates no run,
-execution identity, task, or decision receipt. Restart recovery records system
-attribution only after the current durable recovery owner admits the exact
-attempt.
+execution identity, task, or decision receipt. A post-restart system input records
+its attribution only after ordinary current-authority admission.
 
 Authenticated Gateway attach records immutable audit facts once. Session
 creation separately reads the current primary profile ID so a profile
@@ -207,7 +231,10 @@ also retain the prepared display label after secret redaction and the
 128-character bound. A resolved durable profile, including one established by
 verified trusted-proxy or Tailscale identity, supplies a pseudonymized person
 invoker. A paired device adds device assurance but never becomes a person.
-Shared tokens, passwords, auth-none connections, and other profileless clients
+Unidentified operator connections can receive the Gateway's durable
+[shared owner profile](/concepts/user-model), including authenticated ephemeral
+CLI and backend clients. That profile supplies attribution, not a verified
+personal login or additional permissions. Connections without a durable profile
 remain unattributed. If authenticated user evidence promises a durable profile
 but profile resolution fails, the invoker is `unknown` rather than guessed from
 headers, device ids, connection ids, or credentials.
@@ -489,8 +516,15 @@ what was recorded, not as proof of what happened:
   A rejected metadata record does not stop the queue from accepting later records.
 - Shutdown drops waiting metadata at its existing deadline but joins submitted
   worker operations before releasing the writer.
-  The writer submits up to 32 already-queued items together, preserving each
-  item's independent commit. Lock contention retains the unprocessed suffix;
+  Idle arrivals and lone queued items dispatch immediately. After an in-flight write
+  settles, a partial batch of at least two items can wait one fixed 5 ms window before submitting
+  up to 32 queued items in one transaction, preserving FIFO order. Later arrivals do
+  not extend that window. A full batch, maintenance, or shutdown flushes it immediately.
+  Per-item savepoints isolate rejected records, except for prevalidated single-statement
+  inserts in plain SQLite event batches, where statement atomicity provides isolation.
+  Successful items are acknowledged to the queue only after the shared commit. Queue acceptance itself
+  still does not acknowledge persistence. Lock contention retains the unprocessed suffix;
+  a failed batch commit retains the whole batch for a contention retry;
   an unknown worker outcome replays the unacknowledged batch with its original
   identities, so already committed records and their bindings are not duplicated.
   After the third consecutive unknown outcome, the writer reports and drops that
@@ -504,13 +538,24 @@ compliance archive; if you need one, use an external system fed by
 
 ## Storage, retention, and migration
 
-Records live in the shared state database (`state/openclaw.sqlite`). The existing
-shared-state worker executes audit writes and maintenance off the Gateway thread,
-including schema/key first use and write-triggered pruning. Queries never return records older than 30
-days, and the ledger is capped at 100,000 rows; expired rows are pruned during
-startup, hourly maintenance, and later writes. Each ledger or progress cleanup
+The Gateway's shared-state backend owns activity, execution evidence, and
+administrative change history. By default this is SQLite at
+`state/openclaw.sqlite` under the state directory. Check the Gateway's
+effective `state` engine (`database.families.state.engine`, or
+`database.engine` if unset). On PostgreSQL, that path is a
+[local anchor](/reference/database-engines#anchors-and-backups), not a SQLite
+copy of the audit rows; the matched PostgreSQL schema stores them.
+
+The shared-state worker executes audit writes and maintenance off the Gateway
+thread. Activity queries do not return rows older than 30 days, even before
+physical pruning. The activity ledger can prune rows sooner when it reaches its
+100,000-row cap. Expired rows are pruned during startup, hourly maintenance,
+and later writes. Each ledger or progress cleanup
 transaction deletes at most 1,024 expired rows and schedules more work until
 settled. Retention maintenance keeps running even when collection is disabled.
+
+Administrative change history keeps the latest 50,000 entries per journal
+scope, rather than using the activity ledger's 30-day cutoff.
 
 Outbound `queued` and `platform-started` records live in the narrowly owned
 `outbound_message_progress` table. The table is created if needed on
@@ -537,8 +582,8 @@ additive table is created lazily on first use without a schema-version bump.
 Fresh and upgraded installations do not populate identity contexts until an
 operator enables collection.
 First-use schema creation, HMAC-key access, canonical context construction, and
-SQLite persistence happen in the process-owned audit queue drain, never in
-agent admission. Audit writes use the shared worker's SQLite busy timeout. A
+persistence happen in the process-owned audit queue drain, never in
+agent admission. On SQLite, audit writes use the shared worker's busy timeout. A
 competing writer can delay that worker until the timeout, while the Gateway
 thread remains nonblocking. Failed lock attempts retain FIFO retries with
 bounded asynchronous backoff.

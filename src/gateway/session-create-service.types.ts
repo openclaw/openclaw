@@ -1,6 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ErrorShape, SessionVisibility } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { ModelRef } from "../agents/model-selection.js";
 import type {
@@ -9,6 +10,7 @@ import type {
   SessionToolOverrides,
 } from "../config/sessions.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.types.js";
+import type { SessionCreationOperation } from "../config/sessions/session-creation-operation.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -21,11 +23,13 @@ import type {
   ModelAccountConnectAction,
   UserModelAccountSelection,
 } from "./model-account-authority.js";
+import type { operatorSessionCap } from "./operator-role-policy.js";
 import type {
   GatewayOperatorRoleActor,
   SessionMutationAuthorization,
 } from "./server-methods/shared-types.js";
 import type { SessionCreatePhase } from "./session-create-diagnostics.js";
+import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 
 type TrustedCatalogSessionTarget = {
   model: string;
@@ -45,7 +49,9 @@ export type PreparedGatewaySessionLifecycle = {
   repositoryWorkspaceId?: string;
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   /** Reacquire source custody only around the final persistence operation. */
-  withCommit?: <T>(run: (assertSourceCurrent: SessionSourceAssertion) => Promise<T>) => Promise<T>;
+  withCommit?: <T>(
+    run: (assertSourceCurrent: SessionSourceAssertion, signal?: AbortSignal) => Promise<T>,
+  ) => Promise<T>;
   rollback?: () => Promise<void>;
 };
 
@@ -87,18 +93,21 @@ export type GatewaySessionCommitResult =
       key: string;
       agentId: string;
       entry: SessionEntry;
-      resolved: { modelProvider: string; model: string };
+      resolved: { modelProvider?: string; model?: string };
       resetExisting: boolean;
     }
-  | { ok: false; error: ErrorShape };
+  | { ok: false; error: ErrorShape; initializationNotCommitted?: true };
 
 export type CreateGatewaySessionResult =
   | (Extract<GatewaySessionCommitResult, { ok: true }> & {
       postCommit: { status: "completed" } | { status: "failed"; error: unknown };
     })
-  | Extract<GatewaySessionCommitResult, { ok: false }>;
+  | (Extract<GatewaySessionCommitResult, { ok: false }> & {
+      initializationRolledBack?: true;
+    });
 
 export type CreateGatewaySessionParams = {
+  creationOperation?: SessionCreationOperation;
   onPhase?: (phase: SessionCreatePhase) => void;
   cfg: OpenClawConfig;
   operatorAuthority?: Promise<
@@ -113,7 +122,6 @@ export type CreateGatewaySessionParams = {
   label?: string;
   /** Creation-only title seed; never renames an existing session. */
   displayName?: string;
-  displayNameGenerated?: boolean;
   category?: string;
   model?: string;
   agentRuntime?: string;
@@ -155,6 +163,8 @@ export type CreateGatewaySessionParams = {
   /** Canonical agent default prepared by the RPC adapter, used only without a selected root. */
   defaultSessionRoot?: string;
   permissionMode?: SessionEntry["permissionMode"];
+  /** Direct profiled operator creation only; never inherited by autonomous callers. */
+  applyAgentPermissionDefault?: boolean;
   toolOverrides?: SessionToolOverrides;
   communication?: SessionEntry["communication"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */
@@ -167,16 +177,18 @@ export type CreateGatewaySessionParams = {
   /** Clear a prior node binding when a new Gateway-host session replaces it. */
   clearExecBinding?: boolean;
   clearSpawnedCwd?: boolean;
+  /** Explicit worktree creation keeps the active-parent refusal. */
+  worktree?: boolean;
   fork?: boolean;
   forkFrom?: "last-completed";
-  /** Live requester capability for an agent's current-transcript fork; never a wire parameter. */
-  activeParentFork?: { requesterSessionKey: string; assertCurrent: () => void };
-  /** Live spawn-owned selection; public model inputs remain raw. */
-  preparedModelSelection?: { ref: ModelRef; assertCurrent: () => void };
-  /** Effective host-prepared spawn mode, bound to the live requester until commit. */
+  /** Trusted requester for an agent's current-transcript fork; never a wire parameter. */
+  activeParentFork?: { requesterSessionKey: string; assertCurrent?: () => void };
+  /** Trusted spawn-owned selection; public model inputs remain raw. */
+  preparedModelSelection?: { ref: ModelRef; assertCurrent?: () => void };
+  /** Effective host-prepared spawn mode, retaining any caller assertion until commit. */
   preparedPermissionSelection?: {
     mode: NonNullable<SessionEntry["permissionMode"]>;
-    assertCurrent: () => void;
+    assertCurrent?: () => void;
   };
   /**
    * Controls whether a distinct child terminates its parent. Omission preserves
@@ -191,10 +203,16 @@ export type CreateGatewaySessionParams = {
   waitForModelCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
+  /** Host-verified catalog handoff origin for a new ordinary conversation; never a wire input. */
+  initialCatalogContinuation?: { id: string; catalogId: string; hostId: string; threadId: string };
   /** Trusted prepared assistant reply committed with a new ordinary session, never a wire input. */
   initialAssistantMessage?: { message: SessionTranscriptAssistantMessage; idempotencyKey?: string };
   /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */
   atomicInitialization?: true;
+  /** Trusted ordinary creation owner retains this pending row for later exact-incarnation completion. */
+  deferInitialization?: true;
+  /** Internal ordinary Template admission; never accepted from sessions.create params. */
+  templateInitialization?: SessionEntry["templateInitialization"];
   /** Public callers need admin before reconfiguring an adopted keyed session. */
   allowExistingModelSelection?: boolean;
   /** Admitted operator scopes; omitted only by trusted in-process callers. */
@@ -207,6 +225,7 @@ export type CreateGatewaySessionParams = {
   creation?: {
     via: SessionCreatedVia;
     surface?: SessionEntry["createdSurface"];
+    createdIndependently?: true;
     actor?: SessionCreatedActor;
     /** Host-verified human requester for matching spawn-owner inheritance. */
     requesterProfileId?: string;
@@ -215,6 +234,7 @@ export type CreateGatewaySessionParams = {
     /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
     requesterSenderIsOwner?: boolean;
     sandbox?: "required";
+    openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
     skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     /** Trusted config-resolved spawn model provenance for the `model` field. */
     spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
@@ -233,6 +253,58 @@ export type CreateGatewaySessionParams = {
   afterSessionCommitted?: SessionEntryCreateWithTranscriptOptions["afterCommitted"];
   bindSharingCreation?: SessionEntryCreateWithTranscriptOptions["bindCreation"];
   followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
+  readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
+  getCurrentSessionAccessCap?: () => ReturnType<typeof operatorSessionCap>;
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
   commitGuard?: SessionSourceAssertion;
+};
+
+export type GatewaySessionResetParams = {
+  creationOperation?: SessionCreationOperation;
+  key: string;
+  agentId?: string;
+  spawnedCwd?: string;
+  sessionRoot?: string;
+  permissionMode?: SessionEntry["permissionMode"];
+  /** Existing-row changes stay admin-gated across reset preparation and commit. */
+  fastModeSelection?: { value: FastMode; allowExistingChange: boolean };
+  /** Prepares session-owned resources while the target lifecycle fence is held. */
+  prepareLifecycle?: PrepareGatewaySessionLifecycle;
+  onLifecycleCleanupError?: (error: unknown) => void;
+  /** Bind session exec to host=node with this node id; caller scope-checks. */
+  execNode?: string;
+  /** Working directory interpreted only by execNode. */
+  execCwd?: string;
+  /** Clear a prior node binding when a new Gateway-host session replaces it. */
+  clearExecBinding?: boolean;
+  // A plain New Chat must return to the agent workspace instead of inheriting the previous
+  // turn's session worktree cwd; only worktree-requested resets carry a spawnedCwd forward.
+  clearSpawnedCwd?: boolean;
+  reason: "new" | "reset";
+  commandSource: string;
+  /** Trusted provenance for a reset that materializes a previously missing row. */
+  creation?: {
+    via: SessionCreatedVia;
+    actor?: SessionCreatedActor;
+    openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+  };
+  /** Admitted scopes for resets that can clear an existing permission boundary. */
+  requestingOperatorScopes?: readonly string[];
+  /** Authenticated durable operator identity for missing-session materialization. */
+  requestingOperatorProfileId?: string;
+  readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
+  getCurrentSessionAccessCap?: () => ReturnType<typeof operatorSessionCap>;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Trusted host actor; system-owned resets must identify themselves explicitly. */
+  operatorRoleActor?: GatewayOperatorRoleActor;
+  /** Exact plugin namespace authorized by the scoped plugin runtime. */
+  authorizedPluginId?: string;
+  /** Arms local checkout attribution in the authoritative reset commit. */
+  armSessionDiffBaselineCapture?: boolean;
+  workerPlacementContext?: SessionWorkerPlacementContext;
+  assertCurrent?: () => void;
+  assertAuthorizedInstance?: () => void;
+  /** Optional caller-observed session ID that must still be current at lifecycle admission. */
+  expectedSessionId?: string;
+  onCommitted?: (commit: { key: string; sessionId: string }) => void;
 };

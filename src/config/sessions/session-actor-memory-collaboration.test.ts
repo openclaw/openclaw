@@ -8,7 +8,7 @@ import {
   readMemory,
   failSessionActorMemoryPublication,
 } from "./session-actor-memory-publication.test-support.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import {
   addSessionSuggestionInWorker,
@@ -22,6 +22,7 @@ import {
   addSessionMemberInWorker,
   recordSessionParticipantInWorker,
   removeSessionMemberInWorker,
+  setSessionMemberAccessInWorker,
 } from "./session-sharing-store.async.js";
 import { readSessionMembersInWorker } from "./session-sharing-store.js";
 import { listSessionSuggestions } from "./session-suggestion-store.read.js";
@@ -135,11 +136,31 @@ describe("memory collaboration through the public adapters", () => {
         identityId: "viewer",
         addedBy: "owner",
         addedAt: 10,
+        access: "suggest",
       });
       expect(grant.inserted).toBe(true);
       expect((await readSessionMembersInWorker(scope)).members).toEqual([
-        { identityId: "viewer", addedBy: "owner", addedAt: 10 },
+        { identityId: "viewer", addedBy: "owner", addedAt: 10, access: "suggest" },
       ]);
+      expect(
+        await setSessionMemberAccessInWorker(scope, { identityId: "absent", access: "send" }),
+      ).toBeUndefined();
+      expect(
+        await setSessionMemberAccessInWorker(scope, { identityId: "viewer", access: "read" }),
+      ).toEqual({ changed: true, previousAccess: "suggest" });
+      expect((await readSessionMembersInWorker(scope)).members).toEqual([
+        { identityId: "viewer", addedBy: "owner", addedAt: 10, access: "read" },
+      ]);
+      expect(
+        await setSessionMemberAccessInWorker(scope, { identityId: "viewer", access: "read" }),
+      ).toEqual({ changed: false, previousAccess: "read" });
+      await expect(
+        setSessionMemberAccessInWorker(scope, {
+          identityId: "viewer",
+          access: "send",
+          expectedSessionId: "replaced",
+        }),
+      ).rejects.toThrow("session changed");
       await removeSessionMemberInWorker(scope, "viewer", grant.member);
       await addSessionMemberInWorker(scope, {
         identityId: "viewer",
@@ -154,7 +175,7 @@ describe("memory collaboration through the public adapters", () => {
     } finally {
       stop();
     }
-    expect(observed).toEqual([true, false, true]);
+    expect(observed).toEqual([true, true, false, true]);
   });
 
   it("serializes participant increments and owner assignment with ordinary turn patches", async () => {

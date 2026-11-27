@@ -3,16 +3,18 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { baseProps, plugin } from "./catalog-results.test-support.ts";
 import {
   renderPluginCatalogResults as PluginCatalogResults,
   type PluginCatalogResultsProps,
 } from "./catalog-results.tsx";
-import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell } from "./detail-shell.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import { renderPluginContentCapabilities } from "./overview.tsx";
+import { PluginArtTile } from "./presentation.tsx";
 import baseStyles from "../../styles/base.css?inline";
+import carapaceStyles from "../../styles/carapace-control-ui.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 import pluginStyles from "../../styles/plugins.css?inline";
 import settingsStyles from "../../styles/settings.css?inline";
@@ -56,7 +58,13 @@ let styles: HTMLStyleElement;
 beforeEach(async () => {
   await page.viewport(1440, 900);
   styles = document.createElement("style");
-  styles.textContent = [baseStyles, componentStyles, settingsStyles, pluginStyles].join("\n");
+  styles.textContent = [
+    baseStyles,
+    componentStyles,
+    settingsStyles,
+    carapaceStyles,
+    pluginStyles,
+  ].join("\n");
   document.head.append(styles);
   container = document.createElement("div");
   document.body.append(container);
@@ -83,8 +91,242 @@ async function renderCatalog(props: Partial<PluginCatalogResultsProps>) {
   await nextFrame();
 }
 
+it("windows large catalogs without losing keyboard traversal, reordered cards, or resized rows", async () => {
+  container.className = "content";
+  Object.assign(container.style, { height: "500px", width: "1100px", overflow: "auto" });
+  const entries = Array.from({ length: 1_000 }, (_, index) =>
+    plugin(`window-${String(index).padStart(4, "0")}`),
+  );
+  const [items, setItems] = createSignal(entries);
+  const [messages, setMessages] = createSignal<PluginCatalogResultsProps["messages"]>({});
+  const [progress, setProgress] = createSignal<PluginCatalogResultsProps["installProgress"]>();
+  render(() => (
+    <PluginCatalogResults
+      {...catalogProps()}
+      query=""
+      category="tools"
+      result={{ items: items() }}
+      messages={messages()}
+      installProgress={progress()}
+    />
+  ));
+  const card = (index: number) =>
+    find(`[data-plugin-id="window-${String(index).padStart(4, "0")}"]`);
+  const cards = () => [...container.querySelectorAll<HTMLElement>(".plugin-catalog-card")];
+  await waitForSolid(() => {
+    expect(cards().length).toBeLessThan(100);
+    expect(cards().length).toBeGreaterThan(4);
+    expect(container.scrollHeight).toBeGreaterThan(10_000);
+  });
+  await nextFrame();
+  const boundary = Math.max(
+    ...cards()
+      .map((node) => Number(node.dataset.pluginId!.slice(-4)))
+      .filter((index) => index < 100),
+  );
+  const boundaryCard = card(boundary);
+  const focused = boundaryCard.querySelector<HTMLButtonElement>(".plugin-catalog-card__install")!;
+  find(".plugin-card-author", boundaryCard).focus();
+  flush();
+  expect(card(boundary + 1)).not.toBeNull();
+  await userEvent.keyboard("{Tab}");
+  expect(document.activeElement).toBe(focused);
+  await userEvent.keyboard("{Tab}");
+  expect(document.activeElement).toBe(
+    card(boundary + 1).querySelector(".plugin-catalog-card__primary-link"),
+  );
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+  expect(document.activeElement).toBe(focused);
+  const retainedCard = card(boundary);
+  setItems([plugin("ranked-first"), ...entries]);
+  await waitForSolid(() => {
+    expect(card(boundary)).toBe(retainedCard);
+    expect(document.activeElement).toBe(focused);
+    expect(retainedCard.parentElement!.getAttribute("aria-posinset")).toBe(String(boundary + 2));
+    expect(retainedCard.parentElement!.getAttribute("aria-setsize")).toBe("1001");
+  });
+  setItems([entries[0]!, plugin("ranked-first"), ...entries.slice(1)]);
+  await waitForSolid(() => {
+    expect(card(0).parentElement!.getAttribute("aria-posinset")).toBe("1");
+    expect(card(boundary)).toBe(retainedCard);
+    expect(document.activeElement).toBe(focused);
+  });
+
+  const moved = entries.toSpliced(boundary, 1);
+  moved.splice(500, 0, entries[boundary]!);
+  setItems(moved);
+  flush();
+  expect(card(boundary)).toBe(retainedCard);
+  expect(focused.isConnected).toBe(true);
+  await nextFrame();
+  expect(retainedCard.parentElement!.getAttribute("aria-posinset")).toBe("501");
+  setItems(entries);
+  await nextFrame();
+  expect(card(boundary)).toBe(retainedCard);
+  // Native keyed moves also blur on the unwindowed catalog; preserve the node
+  // without adding a separate focus-restoration policy to the windowing owner.
+  focused.focus();
+  expect(document.activeElement).toBe(focused);
+
+  container.scrollTop = 0;
+  await nextFrame();
+  setProgress(
+    new Map<string, PluginInstallProgress>([
+      [
+        "install:window-0000",
+        {
+          startedAt: Date.now(),
+          activities: [{ activityId: "dependencies", stage: "dependencies", status: "started" }],
+        },
+      ],
+    ]),
+  );
+  await nextFrame();
+  const installAction = card(0).querySelector<HTMLButtonElement>("button")!;
+  installAction.click();
+  await waitForSolid(() => {
+    const popup = find(".plugin-install-action__popup", card(0));
+    expect(popup.matches(":popover-open")).toBe(true);
+    const bounds = popup.getBoundingClientRect();
+    const anchor = installAction.getBoundingClientRect();
+    expect(Math.abs(bounds.left - anchor.left)).toBeLessThan(2);
+    expect(bounds.top).toBeGreaterThanOrEqual(anchor.bottom);
+    expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+  });
+  setProgress(undefined);
+  await nextFrame();
+  const firstTop = card(0).getBoundingClientRect().top;
+  const nextRow = cards().find((node) => node.getBoundingClientRect().top > firstTop + 1)!;
+  expect(nextRow).toBeDefined();
+  const compactHeight = card(0).getBoundingClientRect().height;
+  setMessages({
+    "install:window-0000": { kind: "error", text: "Visible error details. ".repeat(30) },
+  });
+  await waitForSolid(() => {
+    const tall = card(0).getBoundingClientRect();
+    expect(tall.height).toBeGreaterThan(compactHeight);
+    expect(nextRow.getBoundingClientRect().top).toBeGreaterThanOrEqual(tall.bottom);
+  });
+  setMessages({});
+  await waitForSolid(() => {
+    const first = card(0).getBoundingClientRect();
+    expect(first.height).toBeCloseTo(compactHeight);
+    expect(nextRow.getBoundingClientRect().top).toBeGreaterThanOrEqual(first.bottom);
+  });
+  container.style.width = "360px";
+  await page.viewport(390, 844);
+  await waitForSolid(() => {
+    expect(card(1).getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      card(0).getBoundingClientRect().bottom,
+    );
+    expect(cards().length).toBeLessThan(100);
+  });
+  card(999).querySelector<HTMLAnchorElement>(".plugin-catalog-card__primary-link")!.focus();
+  await nextFrame();
+  const bounds = card(999).getBoundingClientRect();
+  const viewport = container.getBoundingClientRect();
+  expect(bounds.top).toBeLessThan(viewport.bottom);
+  expect(bounds.bottom).toBeGreaterThan(viewport.top);
+});
+
+it("retains focused cards when crossing the catalog windowing threshold in both directions", async () => {
+  container.className = "content";
+  Object.assign(container.style, { height: "500px", width: "1100px", overflow: "auto" });
+  const entries = Array.from({ length: 61 }, (_, index) => plugin(`threshold-${index}`));
+  const [items, setItems] = createSignal(entries.slice(0, 60));
+  render(() => (
+    <PluginCatalogResults
+      {...catalogProps()}
+      query=""
+      category="tools"
+      result={{ items: items() }}
+    />
+  ));
+  const cards = () => container.querySelectorAll(".plugin-catalog-card");
+  await waitForSolid(() => expect(cards()).toHaveLength(60));
+  await nextFrame();
+  const middle = find('[data-plugin-id="threshold-30"]');
+  const focused = middle.querySelector<HTMLAnchorElement>(".plugin-card-author")!;
+  focused.focus();
+
+  for (const count of [61, 60, 61]) {
+    setItems(entries.slice(0, count));
+    flush();
+    expect(find('[data-plugin-id="threshold-30"]')).toBe(middle);
+    expect(document.activeElement).toBe(focused);
+    await nextFrame();
+    await waitForSolid(() => {
+      expect(find('[data-plugin-id="threshold-30"]')).toBe(middle);
+      expect(document.activeElement).toBe(focused);
+      if (count === 60) {
+        expect(cards()).toHaveLength(60);
+        expect(middle.parentElement!.style.position).toBe("");
+      } else {
+        expect(cards().length).toBeLessThan(61);
+        expect(middle.parentElement!.style.position).toBe("absolute");
+      }
+    });
+  }
+  find('[data-plugin-id="threshold-60"]')
+    .querySelector<HTMLAnchorElement>(".plugin-catalog-card__primary-link")!
+    .focus();
+  await nextFrame();
+  const last = find('[data-plugin-id="threshold-60"]').getBoundingClientRect();
+  const viewport = container.getBoundingClientRect();
+  expect(last.top).toBeLessThan(viewport.bottom);
+  expect(last.bottom).toBeGreaterThan(viewport.top);
+});
+
+it("windows both publisher groups while keeping their search endpoints reachable", async () => {
+  container.className = "content";
+  Object.assign(container.style, { height: "500px", width: "1100px", overflow: "auto" });
+  const items = Array.from({ length: 1_000 }, (_, index) =>
+    plugin(`search-${String(index).padStart(4, "0")}`, {
+      catalog: { official: index % 2 === 0 },
+    }),
+  );
+  const [messages, setMessages] = createSignal<PluginCatalogResultsProps["messages"]>({});
+  render(() => (
+    <PluginCatalogResults
+      {...catalogProps()}
+      result={{ items }}
+      query="search"
+      messages={messages()}
+    />
+  ));
+  await nextFrame();
+  const groups = [...container.querySelectorAll<HTMLElement>("[data-catalog-section]")];
+  expect(groups.map((group) => group.dataset.catalogSection)).toEqual(["official", "community"]);
+  await waitForSolid(() => {
+    expect(container.querySelectorAll(".plugin-catalog-card").length).toBeLessThan(100);
+    for (const group of groups) {
+      expect(group.querySelector("[aria-setsize]")?.getAttribute("aria-setsize")).toBe("500");
+    }
+  });
+  expect(container.querySelector(".plugin-catalog-grid--results")).toBeNull();
+  const firstOfficial = find('[data-plugin-id="search-0000"]');
+  const height = firstOfficial.getBoundingClientRect().height;
+  setMessages({
+    "install:search-0000": { kind: "error", text: "Visible error details. ".repeat(100) },
+  });
+  await waitForSolid(() =>
+    expect(firstOfficial.getBoundingClientRect().height).toBeGreaterThan(height),
+  );
+  for (const id of ["search-0998", "search-0999", "search-0000"]) {
+    const card = find(`[data-plugin-id="${id}"]`);
+    const link = card.querySelector<HTMLAnchorElement>(".plugin-catalog-card__primary-link")!;
+    link.focus();
+    await nextFrame();
+    const bounds = card.getBoundingClientRect();
+    const viewport = container.getBoundingClientRect();
+    expect(document.activeElement).toBe(link);
+    expect(bounds.top).toBeLessThan(viewport.bottom);
+    expect(bounds.bottom, id).toBeGreaterThan(viewport.top);
+  }
+});
+
 it.each([263, 362])(
-  "keeps long identity text clear of the action within a %ipx card",
+  "keeps long identity text compact and clear of the action within a %ipx card",
   async (width) => {
     const onInstall = vi.fn();
     const progress = {
@@ -101,14 +343,30 @@ it.each([263, 362])(
       grid.style.gridTemplateColumns = `${width}px`;
       await nextFrame();
       const card = find(".plugin-catalog-card");
-      const identity = find(".installed-plugins-card__identity", card);
+      const identity = find(".plugin-catalog-row__text", card);
       const action = card.querySelector("button")!;
-      const bounds = identity.getBoundingClientRect();
-      for (const text of identity.querySelectorAll<HTMLElement>("h3,.plugin-card-author")) {
-        const right = text.getBoundingClientRect().right;
-        expect(right).toBeLessThanOrEqual(bounds.right + 1);
-        expect(right).toBeLessThan(action.getBoundingClientRect().left);
+      const text = identity.getBoundingClientRect();
+      const button = action.getBoundingClientRect();
+      expect(text.width).toBeGreaterThan(0);
+      const name = find("h3", card);
+      const publisher = find(".plugin-card-author", card);
+      for (const field of [name, publisher]) {
+        const glyphs = document.createRange();
+        glyphs.selectNodeContents(field);
+        expect(new Set(Array.from(glyphs.getClientRects(), (fragment) => fragment.top)).size).toBe(
+          1,
+        );
+        expect(field.getBoundingClientRect().right).toBeLessThanOrEqual(text.right + 1);
       }
+      expect(name.textContent).toBe(entry.catalog.name);
+      expect(publisher.textContent).toBe("@" + entry.catalog.author);
+      // A large progress button moves to the next line rather than reducing the name to a column of letters.
+      if (button.top < text.bottom) {
+        expect(text.right).toBeLessThanOrEqual(button.left);
+      } else {
+        expect(text.width).toBeGreaterThan(120);
+      }
+      expect(button.right).toBeLessThanOrEqual(card.getBoundingClientRect().right);
       expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
       expect(action.disabled).toBe(false);
       if (busy) {
@@ -117,7 +375,7 @@ it.each([263, 362])(
         expect(getComputedStyle(spinner!).animationName).toBe("btn-spinner-spin");
         expect(action.getAttribute("aria-busy")).toBe("true");
       }
-      action.click();
+      await page.elementLocator(action).click();
       if (busy) {
         await expect.poll(() => action.getAttribute("aria-expanded")).toBe("true");
         expect(card.querySelector('[role="status"]')?.textContent).toContain(
@@ -129,26 +387,37 @@ it.each([263, 362])(
   },
 );
 
-it.each([263, 362])("centers installed status dots in a %ipx card header", async (width) => {
-  await renderCatalog({
-    result: { items: [{ ...entry, local: { ...entry.local, installed: true, state: "enabled" } }] },
-  });
-  find(".plugin-catalog-grid").style.gridTemplateColumns = `${width}px`;
-  const card = find(".plugin-catalog-card");
-  const header = find(".plugin-catalog-card__head", card).getBoundingClientRect();
-  const dot = find(".settings-status__dot", card).getBoundingClientRect();
-  expect(dot.width).toBeGreaterThan(0);
-  expect(Math.abs(dot.y + dot.height / 2 - (header.y + header.height / 2))).toBeLessThan(1);
-  expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
-});
+it.each([263, 362])(
+  "keeps the Installed label visible inside a %ipx Featured row",
+  async (width) => {
+    await renderCatalog({
+      intent: "featured",
+      query: "",
+      result: {
+        items: [{ ...entry, local: { ...entry.local, installed: true, state: "enabled" } }],
+      },
+    });
+    find(".plugin-catalog-grid").style.gridTemplateColumns = `${width}px`;
+    const card = find(".plugin-catalog-card");
+    const status = find(".plugin-catalog-card__status", card);
+    expect(status.getAttribute("aria-label")).toBe("Installed (Enabled)");
+    expect(status.textContent).toBe("Installed");
+    const dot = find(".settings-status__dot", status).getBoundingClientRect();
+    expect(dot.width).toBeGreaterThan(0);
+    expect(status.getBoundingClientRect().right).toBeLessThanOrEqual(
+      card.getBoundingClientRect().right,
+    );
+    expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
+  },
+);
 
 it.each([
   [40, false],
   [80, false],
   [40, true],
 ] as const)(
-  "fits a %i-pixel icon with official background=%s and preserves settled artwork",
-  async (width, whiteBackground) => {
+  "fits a %i-pixel icon with official status=%s and preserves settled artwork",
+  async (width, official) => {
     const icon = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="40"><rect width="100%" height="100%" fill="red"/></svg>`)}`;
     const currentSource = "https://example.com/current.svg";
     const failedSource = "https://example.com/failed.svg";
@@ -157,7 +426,11 @@ it.each([
       [failedSource]: "data:image/svg+xml,not-an-svg",
     });
     const items = [
-      { ...entry, id: "loaded-artwork", catalog: { ...entry.catalog, imageUrl: currentSource } },
+      {
+        ...entry,
+        id: "loaded-artwork",
+        catalog: { ...entry.catalog, official, imageUrl: currentSource },
+      },
       {
         ...entry,
         id: "failed-artwork",
@@ -165,11 +438,11 @@ it.each([
       },
     ];
     const artwork = (slug = "demo", name = "Demo") => (
-      <PluginArtTile slug={slug} name={name} iconUrl={icon} whiteBackground={whiteBackground} />
+      <PluginArtTile slug={slug} name={name} iconUrl={icon} whiteBackground={official} />
     );
     render(() => (
       <>
-        {whiteBackground ? (
+        {official ? (
           artwork("official", "Official")
         ) : (
           <>
@@ -201,8 +474,21 @@ it.each([
     expect(loadedImage.hidden).toBe(false);
     expect(loadedCard.querySelector(".skeleton")).toBeNull();
     expect(failedCard.querySelector("img")).toBeNull();
-    expect(failedCard.querySelector(".plugins-tile--fallback")?.textContent?.trim()).toBe("BA");
-    if (whiteBackground) {
+    expect(failedCard.querySelector(".skeleton")).toBeNull();
+    const artworkSlot = find(".plugin-catalog-card__art", loadedCard);
+    const artworkSize = loadedImage.getBoundingClientRect();
+    expect(artworkSize.width).toBeGreaterThanOrEqual(artworkSlot.clientWidth - 2);
+    expect(artworkSize.height).toBeLessThanOrEqual(artworkSlot.clientHeight);
+    expect(getComputedStyle(loadedImage)).toMatchObject({ objectFit: "contain", padding: "0px" });
+    expect(getComputedStyle(artworkSlot).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(loadedImage.parentElement).toBe(artworkSlot);
+    const fallback = find(
+      ".plugin-catalog-card__art--fallback svg",
+      failedCard,
+    ).getBoundingClientRect();
+    expect(fallback.width).toBeGreaterThan(0);
+    expect(fallback.height).toBeGreaterThan(0);
+    if (official) {
       const image = container.querySelector<HTMLImageElement>(".plugins-icon")!;
       expect(image.parentElement!.classList.contains("plugins-tile--white")).toBe(true);
       expect(getComputedStyle(image.parentElement!).backgroundColor).toBe("rgb(255, 255, 255)");
@@ -286,12 +572,22 @@ it.each([390, 768, 1366, 1440])(
     );
     const readme = find(".plugin-catalog-detail__readme-section");
     const capabilities = find(".plugin-capabilities");
-    const gap = () =>
-      readme.getBoundingClientRect().top - capabilities.getBoundingClientRect().bottom;
+    const sidebar = find(".plugin-catalog-detail__sidebar");
+    const oneColumn =
+      getComputedStyle(find(".plugin-catalog-detail__content")).gridTemplateColumns.split(/\s+/u)
+        .length === 1;
+    // One column puts the facts between what the plugin adds and its README.
+    const above = oneColumn ? sidebar : capabilities;
+    const gap = () => readme.getBoundingClientRect().top - above.getBoundingClientRect().bottom;
+    if (oneColumn) {
+      expect(
+        sidebar.getBoundingClientRect().top - capabilities.getBoundingClientRect().bottom,
+      ).toBeLessThanOrEqual(32);
+    }
     expect(gap()).toBeGreaterThanOrEqual(20);
     expect(gap()).toBeLessThanOrEqual(32);
     await expect
-      .element(page.getByRole("heading", { name: /MCP Servers\s*2/, exact: true }))
+      .element(page.getByRole("heading", { name: "MCP servers", exact: true }))
       .toBeVisible();
     const server = page.getByText("workspace", { exact: true });
     await server.click();

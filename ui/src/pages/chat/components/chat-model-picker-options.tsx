@@ -1,10 +1,18 @@
-import { createMemo, Show, useContext } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
+import type { JSX } from "@solidjs/web";
+import { createMemo, createSignal, Errored, For, Loading, Show, useContext } from "solid-js";
+import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
+import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
-import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
+import { Tooltip } from "../../../components/solid/tooltip.tsx";
+import { registerModelFavoritesEnglish } from "../../../i18n/locales/en-model-favorites.ts";
+import { formatDurationHuman } from "../../../lib/format-duration.ts";
 import "../../../components/tooltip.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
+import { ChatContextWindowControl } from "./chat-context-window-control.tsx";
+import { ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
 import {
   formatModelContextMeta,
   formatModelLabel,
@@ -12,30 +20,88 @@ import {
   modelPickerOptionKey,
   type ChatModelPickerOptionProps,
   type ChatModelPickerTargetOptionProps,
+  type ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
-import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
 import { ChatModelSearchContext, type ChatModelSearchRow } from "./chat-model-picker-search.ts";
+import type { createModelPickerWindow } from "./chat-model-picker-window.tsx";
+import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
 
-function ModelShortcut(props: { rowKey: string }) {
+export function ModelList(props: {
+  label: string;
+  id: string;
+  more?: boolean;
+  children: JSX.Element;
+}) {
   const search = useContext(ChatModelSearchContext);
-  const number = createMemo(() => search?.row(props.rowKey)?.shortcut);
   return (
-    <kbd
-      class="shortcut-kbd"
-      aria-hidden="true"
-      hidden={number() === undefined}
-      data-chat-model-shortcut="true"
-      data-shortcut={number()}
-      data-chat-model-shortcut-number={number()}
+    <div
+      id={search?.listId(props.id)}
+      class="chat-controls__provider-model-list"
+      data-chat-model-list="true"
+      data-chat-model-more={props.more ? "" : undefined}
+      role="listbox"
+      aria-label={props.label}
+    >
+      {props.children}
+    </div>
+  );
+}
+
+export function ChatModelCooldown(props: { until: number }) {
+  const search = useContext(ChatModelSearchContext);
+  const label = createMemo(() => {
+    const remaining =
+      props.until - (search?.open() !== false ? readVisibleTime(30_000) : Date.now());
+    // The Gateway still owns availability after the deadline; only retire the countdown.
+    return remaining > 0
+      ? t("chat.modelControls.cooldown", {
+          time: formatDurationHuman(Math.ceil(remaining / 60_000) * 60_000),
+        })
+      : undefined;
+  });
+  return (
+    <Show when={label()}>
+      {(text) => <span class="chat-controls__model-cooldown">{text()}</span>}
+    </Show>
+  );
+}
+
+registerEnglishCatalog(registerModelFavoritesEnglish);
+
+export function ChatModelProviderIcon(props: {
+  provider: string;
+  presentation?: ProviderPresentation;
+}) {
+  return (
+    <ProviderBrandIcon
+      provider={props.provider}
+      presentation={props.presentation}
+      class="chat-controls__provider-icon"
     />
   );
 }
 
-export function ChatModelProviderIcon(props: { provider: string }) {
-  return <ProviderBrandIcon provider={props.provider} class="chat-controls__provider-icon" />;
+export function ChatModelTargetIcon() {
+  return (
+    <span
+      class="chat-controls__provider-icon provider-brand-icon provider-brand-icon--fallback"
+      aria-hidden="true"
+    >
+      ›
+    </span>
+  );
 }
 
 type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
+
+function optionBlocksSelection(entry: ModelPresentationProps["entry"]) {
+  return (
+    entry.disabled &&
+    (entry.unavailableReason === "missing-auth" ||
+      entry.unavailableReason === "auth-failed" ||
+      entry.unavailableReason === "cooldown")
+  );
+}
 
 function optionPresentation(options: ModelPresentationProps) {
   const selected = isModelPickerOptionSelected(
@@ -43,39 +109,47 @@ function optionPresentation(options: ModelPresentationProps) {
     options.selectedModelValue,
     options.selectedAgentRuntime,
   );
-  const modelLabel = formatModelLabel(options.entry);
-  const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId);
+  const modelLabel = formatModelLabel(options.entry.label, options.groupLabel);
+  const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId, t);
   const runtimeLabel = runtime?.label ?? "";
   const routeDetail = runtime?.detail ?? "";
   const chatOnlyHelp =
     options.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
   const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
-  // Resetting a recorded pin remains possible even when its default model is unavailable.
+  // A missing default may still reset a recorded pin; auth and cooldown blocks stay inert.
   const resetsPin = options.entry.isDefault && options.sessionModelPinned;
-  const needsAuth =
-    options.entry.disabled &&
-    (options.entry.unavailableReason === "missing-auth" ||
-      options.entry.unavailableReason === "auth-failed");
-  const onModelSetup = needsAuth ? options.onModelSetup : undefined;
-  const modelMeta = needsAuth
-    ? runtime?.detail !== undefined
-      ? runtimeLabel
-      : ""
-    : [formatModelContextMeta(options.entry), runtimeLabel].filter(Boolean).join(" · ");
-  const accessibleStatus = needsAuth
-    ? t("modelSetup.candidates.signInNeeded")
-    : options.entry.unavailableReason === "unsupported-runtime"
-      ? t("chat.modelControls.runtimeUnavailable")
-      : "";
+  const blocked = optionBlocksSelection(options.entry);
+  const coolingDown = blocked && options.entry.unavailableReason === "cooldown";
+  const needsAuth = blocked && !coolingDown;
+  const cooldownUntil =
+    coolingDown && !options.hideCooldown ? options.entry.unavailableUntil : undefined;
+  const context =
+    selected && !coolingDown && (options.contextWindow?.options.length ?? 0) > 1
+      ? options.contextWindow
+      : undefined;
+  const contextOption = context?.options.find((option) => option.id === context.selected);
+  const modelMeta = blocked
+    ? ""
+    : (contextOption?.label ?? formatModelContextMeta(options.entry, t));
+  const accessibleStatus = coolingDown
+    ? t("chat.modelControls.cooldownStatus")
+    : needsAuth
+      ? t("modelSetup.candidates.signInNeeded")
+      : options.entry.unavailableReason === "unsupported-runtime"
+        ? t("chat.modelControls.runtimeUnavailable")
+        : "";
   return {
     selected,
+    context: contextOption ? context : undefined,
     modelLabel,
     runtimeLabel,
     chatOnlyHelp,
     detail,
     resetsPin,
     needsAuth,
-    onModelSetup,
+    blocked,
+    coolingDown,
+    cooldownUntil,
     modelMeta,
     accessibleStatus,
   };
@@ -85,20 +159,40 @@ function createOptionPresentation(props: ChatModelPickerOptionProps) {
   return createMemo(() => optionPresentation(props));
 }
 
-export function modelOptionSearchRow(options: ModelPresentationProps): ChatModelSearchRow {
-  const view = optionPresentation(options);
+export function modelOptionSearchRow(
+  options: ModelPresentationProps,
+  defaultLabel: string,
+): ChatModelSearchRow {
+  const selected = isModelPickerOptionSelected(
+    options.entry,
+    options.selectedModelValue,
+    options.selectedAgentRuntime,
+  );
+  const runtimeLabel =
+    formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId)?.label ?? "";
+  const resetsPin = options.entry.isDefault && options.sessionModelPinned;
   return {
     key: modelPickerOptionKey(options.entry),
-    name: view.modelLabel.toLocaleLowerCase(),
-    keywords: [options.entry.isDefault ? t("chat.modelControls.default") : "", view.runtimeLabel]
+    name: formatModelLabel(options.entry.label, options.groupLabel).toLocaleLowerCase(),
+    keywords: [
+      options.entry.isDefault ? defaultLabel : "",
+      runtimeLabel,
+      options.entry.agentRuntimeId,
+    ]
       .join(" ")
       .toLocaleLowerCase(),
-    providerLabel: providerDisplayLabel(options.entry.provider).toLocaleLowerCase(),
+    providerLabel: defaultProviderLabel(
+      options.entry.provider,
+      options.entry.presentation,
+    ).toLocaleLowerCase(),
     reference: options.entry.value,
-    selected: view.selected,
-    hasShortcut: !view.selected,
+    recommended: options.entry.recommended,
+    selected,
+    hasShortcut: !selected,
     disabled:
-      options.disabled || Boolean(options.entry.disabled && !view.onModelSetup && !view.resetsPin),
+      options.disabled ||
+      optionBlocksSelection(options.entry) ||
+      Boolean(options.entry.disabled && !resetsPin),
   };
 }
 
@@ -107,47 +201,124 @@ type OptionPresentation = ReturnType<ReturnType<typeof createOptionPresentation>
 function ModelOptionButton(
   props: ChatModelPickerOptionProps & { presentation: OptionPresentation },
 ) {
+  const providerDisplayLabel = (provider: string) =>
+    defaultProviderLabel(provider, props.entry.presentation);
   const search = useContext(ChatModelSearchContext);
-  const key = createMemo(() => modelPickerOptionKey(props.entry));
+  const defaultLabel = createMemo(() =>
+    props.entry.isDefault ? t("chat.modelControls.default") : "",
+  );
+  const key = createMemo(() => props.rowKey ?? modelPickerOptionKey(props.entry));
+  const modelName = createMemo(() =>
+    formatModelLabel(props.entry.label, props.groupLabel).toLocaleLowerCase(),
+  );
   // Query changes should reach only rows whose displayed search facts changed.
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
-  const highlighted = createMemo(() => search?.highlighted() === key());
+  const highlighted = createMemo(() => search?.isHighlighted(key()));
+  const blocked = () =>
+    props.disabled ||
+    props.presentation.blocked ||
+    Boolean(props.entry.disabled && !props.presentation.resetsPin);
+  const reorderingEnabled = () => props.reorder && !props.reorder.disabled;
+  let pressedButton = false;
+  function FavoriteButton() {
+    const [popped, setPopped] = createSignal(false);
+    return (
+      <button
+        type="button"
+        class="chat-controls__model-favorite"
+        data-chat-model-favorite={props.entry.value}
+        data-popped={popped() ? "" : undefined}
+        aria-pressed={props.favorite?.selected ? "true" : "false"}
+        // Unavailable models still allow favorites; override the row's disabled state.
+        aria-disabled={props.favorite?.disabled ? "true" : "false"}
+        aria-label={t(
+          props.favorite?.selected ? "chat.modelFavorites.remove" : "chat.modelFavorites.add",
+          {
+            model: [props.presentation.modelLabel, props.presentation.runtimeLabel]
+              .filter(Boolean)
+              .join(" · "),
+          },
+        )}
+        disabled={props.favorite?.disabled}
+        onKeyDown={(event) => {
+          // The star is independent of model selection and picker shortcuts.
+          if (event.key !== "Escape" && event.key !== "Tab" && event.key !== "/") {
+            event.stopPropagation();
+          }
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+          setPopped(!props.favorite?.selected);
+          props.favorite?.onToggle(event);
+        }}
+        onAnimationEnd={() => setPopped(false)}
+      >
+        <Icon name="star" />
+      </button>
+    );
+  }
   return (
-    <button
+    <div
       ref={search?.rowRef(key)}
       id={search?.optionId(key())}
       class={[
         "chat-controls__inline-select-option chat-controls__model-option",
+        props.reorder?.indicator ? `reorder-drop-${props.reorder.indicator}` : undefined,
         {
-          "chat-controls__inline-select-option--selected": props.presentation.selected,
+          "reorder-dragging": props.reorder?.dragging,
+          "chat-controls__inline-select-option--selected":
+            props.presentation.selected && !props.presentation.blocked,
         },
       ]}
+      draggable={reorderingEnabled() ? "true" : undefined}
+      onPointerDown={(event) => {
+        pressedButton = event.target instanceof Element && Boolean(event.target.closest("button"));
+      }}
+      onDragStart={(event) => {
+        if (pressedButton) {
+          event.preventDefault();
+        } else {
+          props.reorder?.onDragStart(event);
+        }
+      }}
+      onDragEnd={() => props.reorder?.onDragEnd()}
+      onDragOver={(event) => props.reorder?.onDragOver(event)}
+      onDragLeave={(event) => props.reorder?.onDragLeave(event)}
+      onDrop={(event) => props.reorder?.onDrop(event)}
       data-chat-model-option={props.entry.value}
       data-chat-model-key={key()}
       data-chat-model-rank={rank()}
-      data-chat-model-highlighted={highlighted() ? "" : undefined}
+      data-chat-model-highlighted={highlighted() && !props.presentation.blocked ? "" : undefined}
       style={{ "--chat-model-rank": rank() }}
       data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
       data-chat-model-default={props.entry.isDefault ? "true" : undefined}
       data-chat-model-index={props.index}
       data-chat-model-keywords={[
-        props.entry.isDefault ? t("chat.modelControls.default") : "",
+        defaultLabel(),
         props.presentation.runtimeLabel,
+        props.entry.agentRuntimeId,
       ]
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase()}
-      data-chat-model-name={props.presentation.modelLabel.toLocaleLowerCase()}
+      data-chat-model-name={modelName()}
       data-chat-model-provider-label={providerDisplayLabel(
         props.entry.provider,
       ).toLocaleLowerCase()}
       role="option"
+      aria-keyshortcuts={
+        [
+          search?.row(key())?.shortcut,
+          reorderingEnabled() ? "Alt+ArrowUp Alt+ArrowDown" : undefined,
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
       aria-posinset={search?.row(key())?.position}
       aria-setsize={search?.row(key())?.size}
       hidden={hidden()}
       aria-selected={props.presentation.selected ? "true" : "false"}
-      title={props.presentation.accessibleStatus || undefined}
       aria-label={[
         props.presentation.modelLabel,
         props.presentation.runtimeLabel,
@@ -156,43 +327,47 @@ function ModelOptionButton(
       ]
         .filter(Boolean)
         .join(". ")}
-      type="button"
-      disabled={
-        props.disabled ||
-        Boolean(
-          props.entry.disabled && !props.presentation.onModelSetup && !props.presentation.resetsPin,
-        )
-      }
-      data-chat-model-setup={props.presentation.onModelSetup ? "true" : undefined}
-      onMouseEnter={handleModelOptionMouseEnter}
-      onClick={(event) => {
-        // Auth-gated rows lead to setup rather than trapping a click on a disabled model.
-        if (props.entry.disabled && !props.presentation.resetsPin) {
-          event.stopPropagation();
-          props.presentation.onModelSetup?.();
+      tabindex={blocked() ? -1 : 0}
+      aria-disabled={blocked() ? "true" : undefined}
+      data-chat-model-auth-blocked={props.presentation.needsAuth ? "" : undefined}
+      data-chat-model-cooldown={props.presentation.coolingDown ? "" : undefined}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) {
           return;
         }
-        props.onSelect(props.entry, event);
+        if (
+          reorderingEnabled() &&
+          event.altKey &&
+          (event.key === "ArrowUp" || event.key === "ArrowDown")
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          props.reorder?.onMove(event.key === "ArrowUp" ? -1 : 1);
+        } else if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          if (!blocked()) {
+            event.currentTarget.click();
+          }
+        }
+      }}
+      onClick={(event) => {
+        if (!blocked()) {
+          props.onSelect(props.entry, event);
+        }
       }}
     >
       <span class="chat-controls__model-option-provider">
-        <ChatModelProviderIcon provider={props.entry.provider} />
+        <ChatModelProviderIcon
+          provider={props.entry.provider}
+          presentation={props.entry.presentation}
+        />
       </span>
       <span class="chat-controls__model-option-copy">
         <span class="chat-controls__model-option-title">
           <span class="chat-controls__model-option-name">{props.presentation.modelLabel}</span>
           <Show when={props.entry.isDefault}>
             <span class="chat-controls__model-state-label chat-controls__model-state-label--default">
-              {t("chat.modelControls.default")}
-            </span>
-          </Show>
-          <Show when={props.presentation.modelMeta}>
-            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
-          </Show>
-          <Show when={props.presentation.needsAuth}>
-            <span class="chat-controls__model-option-auth-warning" data-chat-model-auth-warning>
-              <Icon name="alertTriangle" />
-              <span>{props.presentation.accessibleStatus}</span>
+              {defaultLabel()}
             </span>
           </Show>
           <Show when={props.entry.supportsTools === false}>
@@ -200,39 +375,69 @@ function ModelOptionButton(
               <Icon name="info" />
             </span>
           </Show>
+          <Show when={props.presentation.modelMeta || props.presentation.cooldownUntil}>
+            <span
+              class={[
+                "chat-controls__model-option-meta",
+                { "chat-controls__context-placeholder": Boolean(props.presentation.context) },
+              ]}
+            >
+              <Show when={props.presentation.cooldownUntil} fallback={props.presentation.modelMeta}>
+                {(until) => <ChatModelCooldown until={until()} />}
+              </Show>
+              <Show when={props.presentation.context}>
+                <Icon name="chevronDown" />
+              </Show>
+            </span>
+          </Show>
         </span>
       </span>
-      <span class="chat-controls__model-option-action">
-        <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
+      <span class="chat-controls__model-favorite-slot">
+        <Show when={!props.presentation.blocked && props.presentation.selected}>
           <span class="chat-controls__inline-select-check" aria-hidden="true">
             <Icon name="check" />
           </span>
         </Show>
+        <Show when={props.favorite}>
+          <FavoriteButton />
+        </Show>
       </span>
-    </button>
+    </div>
   );
 }
 
 export function ChatModelPickerOption(props: ChatModelPickerOptionProps) {
   const presentation = createOptionPresentation(props);
   return (
-    <Show
-      when={presentation().detail}
-      fallback={<ModelOptionButton {...props} presentation={presentation()} />}
+    <div
+      class={[
+        "chat-controls__model-option-wrap",
+        { "chat-controls__model-option-wrap--context": Boolean(presentation().context) },
+      ]}
     >
-      <openclaw-tooltip prop:content={presentation().detail}>
+      <Tooltip
+        class="chat-controls__model-tooltip"
+        content={[presentation().modelLabel, presentation().detail].filter(Boolean).join(". ")}
+        delay={800}
+        describe={Boolean(presentation().detail)}
+      >
         <ModelOptionButton {...props} presentation={presentation()} />
-      </openclaw-tooltip>
-    </Show>
+      </Tooltip>
+      <Show when={presentation().context}>
+        {(context) => (
+          <ChatContextWindowControl contextWindow={context()} sessionKey={props.sessionKey!} />
+        )}
+      </Show>
+    </div>
   );
 }
 
-export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
+function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
   const search = useContext(ChatModelSearchContext);
   const key = createMemo(() => `target:${props.groupId}:${props.entry.value}`);
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
-  const highlighted = createMemo(() => search?.highlighted() === key());
+  const highlighted = createMemo(() => search?.isHighlighted(key()));
   return (
     <button
       ref={search?.rowRef(key)}
@@ -249,28 +454,105 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
       data-chat-model-name={props.entry.label.toLocaleLowerCase()}
       data-chat-model-provider-label={props.groupLabel.toLocaleLowerCase()}
       role="option"
+      aria-keyshortcuts={search?.row(key())?.shortcut?.toString()}
       aria-posinset={search?.row(key())?.position}
       aria-setsize={search?.row(key())?.size}
       aria-selected="false"
       type="button"
       disabled={props.disabled}
-      onMouseEnter={handleModelOptionMouseEnter}
       onClick={(event) => props.onSelect(props.groupId, props.entry.value, event)}
     >
       <span
         class="chat-controls__model-option-provider chat-controls__target-icon"
         aria-hidden="true"
       >
-        <Icon name="terminal" />
+        <ChatModelTargetIcon />
       </span>
       <span class="chat-controls__model-option-copy">
         <span class="chat-controls__model-option-title">
           <span class="chat-controls__model-option-name">{props.entry.label}</span>
         </span>
       </span>
-      <span class="chat-controls__model-option-action">
-        <ModelShortcut rowKey={key()} />
-      </span>
     </button>
+  );
+}
+
+export function ChatModelPickerTargets(panel: {
+  group: ChatModelPickerTargetGroup;
+  disabled: boolean;
+  startIndex: number;
+  window: ReturnType<typeof createModelPickerWindow>;
+  onSelect: ChatModelPickerTargetOptionProps["onSelect"];
+  onRetry: ChatModelPickerParams["onTargetRetry"];
+}) {
+  function TargetOptions(props: { group: ChatModelPickerTargetGroup }) {
+    const options = createMemo(() => props.group.completion.promise);
+    return (
+      <ModelList label={props.group.label} id={`target:${props.group.id}`}>
+        <For
+          each={options().filter((entry) =>
+            panel.window.has(`target:${props.group.id}:${entry.value}`),
+          )}
+          keyed={(entry) => entry.value}
+        >
+          {(entry) => {
+            const key = createMemo(() => `target:${props.group.id}:${entry().value}`);
+            return (
+              <>
+                {panel.window.renderRow(key(), () => (
+                  <ChatModelPickerTargetOption
+                    disabled={panel.disabled}
+                    entry={entry()}
+                    groupId={props.group.id}
+                    groupLabel={props.group.label}
+                    index={
+                      panel.startIndex +
+                      props.group.options.findIndex((option) => option.value === entry().value)
+                    }
+                    onSelect={panel.onSelect}
+                  />
+                ))}
+              </>
+            );
+          }}
+        </For>
+      </ModelList>
+    );
+  }
+  function TargetState(props: { group: ChatModelPickerTargetGroup; error?: boolean }) {
+    return (
+      <>
+        {panel.window.renderRow(`state:target:${props.group.id}`, () => (
+          <ChatModelCatalogState
+            state={{ hasSnapshot: false, status: props.error ? "error" : "loading" }}
+            hasOptions={false}
+            hasSelectableOptions={false}
+            errorLabel={props.group.errorLabel}
+            retryTarget={
+              panel.onRetry
+                ? {
+                    disabled: panel.disabled,
+                    groupId: props.group.id,
+                    onRetry: panel.onRetry!,
+                  }
+                : undefined
+            }
+          />
+        ))}
+        <ModelList label={props.group.label} id={`target:${props.group.id}`}>
+          {null}
+        </ModelList>
+      </>
+    );
+  }
+
+  return (
+    <Show when={panel.group.completion} keyed>
+      <Errored fallback={() => <TargetState group={panel.group} error />}>
+        <Loading fallback={<TargetState group={panel.group} />}>
+          <TargetOptions group={panel.group} />
+        </Loading>
+      </Errored>
+    </Show>
   );
 }

@@ -4,23 +4,29 @@ import type { ChatType } from "../channels/chat-type.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createInternalHookEvent,
-  triggerInternalHook,
-  type AgentBootstrapHookContext,
-} from "../hooks/internal-hooks.js";
+import type { AgentBootstrapHookContext } from "../hooks/internal-hook-types.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { rememberBoundedKey } from "../infra/dedupe.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+} from "./agent-scope.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
 import { buildBootstrapContextForFiles } from "./embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
-import { resolveWorkspaceBootstrapPath } from "./workspace-bootstrap-policy.js";
+import {
+  resolveWorkspaceBootstrapPath,
+  WORKSPACE_BOOTSTRAP_FILENAMES,
+} from "./workspace-bootstrap-policy.js";
 import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -199,10 +205,24 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
   const origins = new Map(
     classificationResult.classifications.map((entry) => [entry.relativePath, entry.originClass]),
   );
-  return candidates.filter(
-    (_file, index) =>
-      !isMemoryOriginEligibleForAutomaticInjection(origins.get(relativePaths[index]!)),
-  );
+  return candidates.filter((_file, index) => {
+    const relativePath = relativePaths[index]!;
+    const originClass = origins.get(relativePath);
+    if (isMemoryOriginEligibleForAutomaticInjection(originClass)) {
+      return false;
+    }
+    // Quarantine persists across turns: report each excluded file once per process.
+    const warningKey = `memory-provenance-exclusion\u0000${resolveUserPath(params.workspaceDir)}\u0000${relativePath}\u0000${originClass ?? ""}`;
+    if (
+      params.warn &&
+      rememberBoundedKey(seenBootstrapWarnings, warningKey, BOOTSTRAP_WARNING_DEDUPE_LIMIT)
+    ) {
+      params.warn(
+        `excluding ${relativePath} from automatic memory context: memory provenance is ${originClass ?? "unclassified"}; run \`openclaw doctor\` for the last recorded write`,
+      );
+    }
+    return true;
+  });
 }
 
 /** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
@@ -240,8 +260,9 @@ export async function resolveBootstrapFilesForRun(
   if (executionWorkspaceDir && executionWorkspaceDir !== resolveUserPath(params.workspaceDir)) {
     const executionAgentsPath = path.join(executionWorkspaceDir, DEFAULT_AGENTS_FILENAME);
     // Execution projects contribute instructions, never agent identity or memory.
+    // This pass keeps only the project's AGENTS.md, so it skips the personal file read.
     for (const file of await resolveBootstrapFiles(
-      { ...params, workspaceDir: executionWorkspaceDir },
+      { ...params, workspaceDir: executionWorkspaceDir, bootstrapUserProfileId: undefined },
       "registered",
     )) {
       if (
@@ -262,36 +283,86 @@ async function resolveBootstrapFiles(
   hooks: BootstrapHookApplication,
 ): Promise<WorkspaceBootstrapFile[]> {
   const access = getAgentWorkspaceAccess(params.workspaceDir);
+  // Personal instructions belong to the editor's configured agent workspace,
+  // independently of the worktree that owns project bootstrap files.
+  const personalWorkspaceDir = resolveUserPath(
+    params.bootstrapUserProfileId && params.config
+      ? resolveAgentWorkspaceDir(params.config, resolveSessionAgentId(params))
+      : params.workspaceDir,
+  );
+  const personalAccess = getAgentWorkspaceAccess(personalWorkspaceDir);
   const sessionKey = params.sessionKey ?? params.sessionId;
   const session = {
     sessionKey,
     chatType: params.chatType,
     workspaceDir: params.workspaceDir,
   };
-  const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(
-    params.workspaceDir,
-    params.readOnlyState,
-  );
-  const rawFiles = await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  const sessionAgentId =
+    params.agentId ??
+    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
+  const configuredSharedUserDir =
+    params.config && sessionAgentId
+      ? resolveAgentConfig(params.config, sessionAgentId)?.sharedUserDir
+      : undefined;
+  const sharedUserDir = configuredSharedUserDir && resolveUserPath(configuredSharedUserDir);
+  const [workspaceSetupCompleted, rawFiles, sharedUserFiles, personalFile] =
+    await settleCurrentReadPreparations([
+      isWorkspaceSetupCompletedForContext(params.workspaceDir, params.readOnlyState),
+      loadWorkspaceBootstrapFiles(
+        params.workspaceDir,
+        sharedUserDir
+          ? WORKSPACE_BOOTSTRAP_FILENAMES.filter((name) => name !== DEFAULT_USER_FILENAME)
+          : undefined,
+      ),
+      sharedUserDir ? loadWorkspaceBootstrapFiles(sharedUserDir, [DEFAULT_USER_FILENAME]) : [],
+      loadPersonalUserBootstrapFile(
+        personalWorkspaceDir,
+        params.bootstrapUserProfileId,
+        params.warn,
+      ),
+    ] as const);
   for (const file of rawFiles) {
     file.origin = { kind: "agent-workspace", rootPath: resolveUserPath(params.workspaceDir) };
   }
-  const personalFile = await loadPersonalUserBootstrapFile(
-    params.workspaceDir,
-    params.bootstrapUserProfileId,
-    params.warn,
-  );
+  const sharedUserFile = sharedUserFiles[0];
+  if (sharedUserFile) {
+    // Operator-owned and outside the workspace, so memory provenance does not classify it.
+    sharedUserFile.origin = { kind: "other", rootPath: sharedUserDir };
+    const nextIndex = rawFiles.findIndex(
+      (file) =>
+        WORKSPACE_BOOTSTRAP_FILENAMES.indexOf(file.name) >
+        WORKSPACE_BOOTSTRAP_FILENAMES.indexOf(DEFAULT_USER_FILENAME),
+    );
+    rawFiles.splice(nextIndex < 0 ? rawFiles.length : nextIndex, 0, sharedUserFile);
+  } else if (sharedUserDir) {
+    params.warn?.(`shared USER.md not found in ${sharedUserDir}`);
+  }
   const userIndex = rawFiles.findIndex((file) => file.name === DEFAULT_USER_FILENAME);
   if (personalFile) {
     rawFiles.splice(userIndex < 0 ? rawFiles.length : userIndex + 1, 0, personalFile);
   }
   const ineligibleAutomaticMemoryFiles = await resolveIneligibleAutomaticMemoryFiles({
-    files: rawFiles,
+    files: rawFiles.filter(
+      (file) =>
+        file !== sharedUserFile &&
+        !(file === personalFile && personalWorkspaceDir !== resolveUserPath(params.workspaceDir)),
+    ),
     workspaceDir: params.workspaceDir,
     config: params.config,
     agentId: params.agentId,
     warn: params.warn,
   });
+  if (personalFile && personalWorkspaceDir !== resolveUserPath(params.workspaceDir)) {
+    ineligibleAutomaticMemoryFiles.push(
+      ...(await resolveIneligibleAutomaticMemoryFiles({
+        files: [personalFile],
+        workspaceDir: personalWorkspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        warn: params.warn,
+      })),
+    );
+  }
   const rootMemoryFile = rawFiles.find(
     (file) => file.name === DEFAULT_MEMORY_FILENAME && !file.missing,
   );
@@ -319,16 +390,13 @@ async function resolveBootstrapFiles(
   let hooked = bootstrapFiles;
   if (hooks === "registered") {
     const hookSessionKey = params.sessionKey ?? params.sessionId ?? "unknown";
-    const agentId =
-      params.agentId ??
-      (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
     const context: AgentBootstrapHookContext = {
       workspaceDir: params.workspaceDir,
       bootstrapFiles,
       cfg: params.config,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
-      agentId,
+      agentId: sessionAgentId,
     };
     const event = createInternalHookEvent("agent", "bootstrap", hookSessionKey, context);
     await triggerInternalHook(event);
@@ -361,7 +429,10 @@ async function resolveBootstrapFiles(
     workspaceSetupCompleted,
     params.workspaceDir,
   );
-  if (getAgentWorkspaceAccess(params.workspaceDir) !== access) {
+  if (
+    getAgentWorkspaceAccess(params.workspaceDir) !== access ||
+    getAgentWorkspaceAccess(personalWorkspaceDir) !== personalAccess
+  ) {
     throw new Error("Workspace access changed while preparing bootstrap context");
   }
   const { workspaceDir, warn } = params;

@@ -21,7 +21,6 @@ import { selectWeightedShard } from "./vitest.weighted-sharding.ts";
 // ~259s at 11 shards. The tallest shard is bounded by shard count and the
 // ~116s per-shard job floor, not by this map; see docs/ci.md.
 const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
-  ["activity-run-inspector.e2e.test.ts", 23],
   ["agent-file-lifecycle.e2e.test.ts", 35],
   ["appearance-settings-defaults.e2e.test.ts", 19],
   ["board-fixture.e2e.test.ts", 25],
@@ -60,7 +59,6 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
   ["composer-draft-store.e2e.test.ts", 16],
   ["config-safe-write.e2e.test.ts", 14],
   ["cron-filters.e2e.test.ts", 17],
-  ["desktop-panel.e2e.test.ts", 27],
   ["device-scope-upgrade.e2e.test.ts", 19],
   ["device-token-reconnect.e2e.test.ts", 12],
   ["github-link-hovercard.e2e.test.ts", 11],
@@ -85,9 +83,7 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
   ["session-management.archive.e2e.test.ts", 16],
   ["session-management.delete.e2e.test.ts", 16],
   ["session-management.group-defaults.e2e.test.ts", 16],
-  ["session-management.groups.e2e.test.ts", 31],
   ["session-management.sidebar.e2e.test.ts", 26],
-  ["session-ownership.e2e.test.ts", 39],
   ["session-placement.move.e2e.test.ts", 34],
   ["session-progress-hovercard.e2e.test.ts", 19],
   ["settings-prefs-reconnect.e2e.test.ts", 19],
@@ -109,10 +105,14 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 // These source fixtures borrow one invocation's compiled subprocess generation.
 // New borrowers may add preparation elsewhere until this measured group is refreshed.
 const UI_E2E_SHARED_WORKER_FILES = new Set([
+  "ui/src/e2e/guest-person-identities.e2e.test.ts",
   "ui/src/e2e/model-providers-profile-outcomes.e2e.test.ts",
+  "ui/src/e2e/plugin-panel-icons.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/question-guest.e2e.test.ts",
+  "ui/src/e2e/route-asset-requests.e2e.test.ts",
   "ui/src/e2e/screen-requester-routing.e2e.test.ts",
+  "ui/src/e2e/team-scale-cold-load.e2e.test.ts",
 ]);
 
 function estimateFileSeconds(moduleId: string): number {
@@ -129,7 +129,9 @@ export class UiE2eSequencer extends BaseSequencer {
   override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
     // eslint-disable-next-line unicorn/no-array-sort -- BaseSequencer.sort is Vitest's ordering API.
     const ordered = await super.sort(files);
-    const parallel = ordered.filter((file) => file.project.config.sequence.groupOrder === 0);
+    const parallel = ordered.filter((file) =>
+      [0, 2].includes(file.project.config.sequence.groupOrder),
+    );
     if (parallel.some((file) => this.ctx.cache.getTestSpecificationResult(file))) {
       // Keep native failed-first and observed-duration ordering on warm reruns.
       return ordered;
@@ -138,10 +140,10 @@ export class UiE2eSequencer extends BaseSequencer {
     return ordered.toSorted((left, right) => {
       const groupOrder =
         left.project.config.sequence.groupOrder - right.project.config.sequence.groupOrder;
-      if (groupOrder || left.project.config.sequence.groupOrder !== 0) {
+      if (groupOrder || !seconds.has(left)) {
         return groupOrder;
       }
-      // Bundled and private fixtures share this worker pool; do not queue builds last.
+      // Start expensive fixtures first within each parallel phase, including real Gateways.
       return (
         seconds.get(right)! - seconds.get(left)! ||
         left.moduleId.localeCompare(right.moduleId) ||

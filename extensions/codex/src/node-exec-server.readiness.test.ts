@@ -1,4 +1,3 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { access } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -8,9 +7,11 @@ import * as tempPaths from "openclaw/plugin-sdk/temp-path";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
+import type { CodexStdioChild } from "./app-server/stdio-worker.js";
 import * as transport from "./app-server/transport-stdio.js";
 import * as transportLifecycle from "./app-server/transport.js";
 import { createCodexNodeExecServerCommand } from "./node-exec-server.js";
+import { createCodexNodeResourceReadiness } from "./node-resource-readiness.js";
 
 // Pinned Codex 0.154.0 transport.rs emits this line before entering its stdio loop.
 const READY = " INFO codex_exec_server::server::transport: codex-exec-server listening on stdio\n";
@@ -30,11 +31,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function startFixture(readyBeforeRegistrationReturns = false) {
+async function startFixture(readyBeforeRegistrationReturns = false, repositoryPending = false) {
   const controller = new AbortController();
   const receiver = vi.fn((_receive: (message: Uint8Array) => void | Promise<void>) => () => {});
   const send = vi.fn(async (_message: Uint8Array) => {});
   const assertExecAuthorized = vi.fn();
+  const { readiness: repositoryReadiness } = createCodexNodeResourceReadiness({
+    required: repositoryPending,
+    signal: controller.signal,
+    assertCurrent: assertExecAuthorized,
+  });
   const released = Promise.withResolvers<void>();
   const release = vi.fn(() => released.resolve());
   const command = createCodexNodeExecServerCommand();
@@ -44,8 +50,7 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
     onInput: () => {},
     frames: { send, onMessage: receiver },
   } satisfies OpenClawPluginNodeHostCommandIo;
-  const { promise: childCreated, resolve: resolveChild } =
-    Promise.withResolvers<ChildProcessWithoutNullStreams>();
+  const { promise: childCreated, resolve: resolveChild } = Promise.withResolvers<CodexStdioChild>();
   let privateHome: string | undefined;
   const create = transport.createStdioTransport;
   vi.spyOn(transport, "createStdioTransport").mockImplementation(
@@ -86,7 +91,11 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
     {
       sessionKey: placement.sessionKey,
       sendNodeEvent: async () => {},
-      acquireManagedWorkspaceAsync: async () => ({ workspaceDir: placement.cwd, release }),
+      acquireManagedWorkspaceAsync: async () => ({
+        workspaceDir: placement.cwd,
+        release,
+        repositoryReadiness,
+      }),
       prepareExecAuthorization: () => assertExecAuthorized,
     },
   );
@@ -127,6 +136,26 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
 }
 
 describe("Codex node native readiness", () => {
+  it("rejects batched startup metadata without waiting for pending resources", async () => {
+    const harness = await startFixture(true, true);
+    try {
+      await vi.waitFor(() => expect(harness.receiver).toHaveBeenCalledOnce());
+      const receive = harness.receiver.mock.calls[0]![0];
+      const delivered = Promise.resolve(
+        receive(Buffer.from(JSON.stringify({ id: 1, method: "fs/getMetadataBatch" }))),
+      );
+      void delivered.catch(() => {});
+      await vi.waitFor(() => expect(harness.send).toHaveBeenCalledOnce());
+      await delivered;
+      expect(JSON.parse(Buffer.from(harness.send.mock.calls[0]![0]).toString())).toMatchObject({
+        id: 1,
+        error: { code: -32001 },
+      });
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
   it("retains workspace resources until the in-flight shutdown receipt settles", async () => {
     const createWorkspace = tempPaths.tempWorkspace;
     const cleanupStarted = vi.fn();
@@ -274,4 +303,24 @@ describe("Codex node native readiness", () => {
       }
     },
   );
+
+  it("decodes the exec-server exit diagnostic without a U+FFFD when the retained byte tail splits a multi-byte sequence", async () => {
+    const harness = await startFixture();
+    try {
+      // 150 lines of 20 three-byte CJK chars + newline = 9150 bytes. The retained
+      // 4 KiB tail starts at byte 5054 (0x11e), a continuation byte inside a
+      // 3-byte char, so decoding the raw tail produced a leading U+FFFD.
+      // Each line is 61 bytes < 4 KiB, so it passes the per-line diagnostic check.
+      await harness.stderr(("汉".repeat(20) + "\n").repeat(150));
+      expect(harness.receiver).not.toHaveBeenCalled();
+      harness.child.stdin.end(JSON.stringify({ exit: 1 }) + "\n");
+      const error = await harness.outcome;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/exited/);
+      expect((error as Error).message).not.toContain("\uFFFD");
+      expect((error as Error).message).toContain("汉");
+    } finally {
+      await harness.cleanup();
+    }
+  });
 });

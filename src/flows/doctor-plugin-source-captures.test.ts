@@ -6,7 +6,13 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
+import { writeArtifact as write } from "../plugins/public-surface.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  changedStoreFiles,
+  snapshotStoreFiles,
+} from "../test-utils/store-snapshot.test-support.js";
+import { decideDoctorContributionPending } from "./doctor-health-context.test-support.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
@@ -65,11 +71,7 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-async function runCaptureReport(repair = false, update = false) {
-  const contribution = resolveDoctorHealthContributions().find(
-    (entry) => entry.id === "doctor:legacy-plugin-source-captures",
-  );
-  expect(contribution, "capture cleanup must be registered with Doctor").toBeDefined();
+function captureContext(repair: boolean, update = false) {
   const ctx = createDoctorHealthFlowContext({
     env: {
       HOME: parent,
@@ -80,6 +82,20 @@ async function runCaptureReport(repair = false, update = false) {
     options: { repair },
   });
   ctx.prompter.shouldRepair = repair;
+  return ctx;
+}
+
+const captureContribution = () => {
+  const contribution = resolveDoctorHealthContributions().find(
+    (entry) => entry.id === "doctor:legacy-plugin-source-captures",
+  );
+  expect(contribution, "capture cleanup must be registered with Doctor").toBeDefined();
+  return contribution!;
+};
+
+async function runCaptureReport(repair = false, update = false) {
+  const contribution = captureContribution();
+  const ctx = captureContext(repair, update);
   if (update) {
     await runDoctorHealthContributionList(ctx, [contribution!]);
   } else {
@@ -105,13 +121,6 @@ async function duringMaintenance(run: () => Promise<string>) {
   }
 }
 
-function write(root: string, filename: string, contents: string) {
-  const file = path.join(root, filename);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-  return file;
-}
-
 function inspectAsLaterProcess() {
   // The fixtures model captures left by an earlier process, without sleeps or backdated files.
   vi.spyOn(performance, "timeOrigin", "get").mockReturnValue(Date.now() + 1_000);
@@ -125,7 +134,7 @@ function mockStats(rewrite: (target: fs.PathLike) => object) {
 }
 
 function capture(filename: string, contents = "capture", root = systemTmp) {
-  return write(root, `openclaw-plugin-build-${filename}`, contents);
+  return write(path.join(root, `openclaw-plugin-build-${filename}`), contents);
 }
 
 // Native argv/UID classification is covered by darwin-process-command.test.ts
@@ -161,7 +170,7 @@ it.each([
   { mode: "removal failed", reason: "Could not remove" },
 ])("preserves legacy captures without a removal receipt when $mode", async ({ mode, reason }) => {
   const captureRoot = path.join(systemTmp, "openclaw-plugin-build-legacy");
-  const file = write(captureRoot, "nested/source.cjs", "captured source");
+  const file = write(path.join(captureRoot, "nested/source.cjs"), "captured source");
   if (mode === "nested file changed") {
     let fileReads = 0;
     mockStats((target) =>
@@ -209,11 +218,14 @@ it("reclaims only tokenless capture roots and prints a receipt after successful 
   const catalogRoot = path.join(systemTmp, "openclaw-model-catalog-old");
   const catalog = capture("one/package-0/source.cjs", "12345", catalogRoot);
   const second = capture("two/package-0/source.cjs", "678", catalogRoot);
-  const managed = write(tmp, "plugin-captures/owner/captures/source.cjs", "managed");
+  const managed = write(path.join(tmp, "plugin-captures/owner/captures/source.cjs"), "managed");
   const token = capture("modern/owner.sqlite", "custody");
-  const nested = write(tmp, "unrelated/openclaw-plugin-build-nested/source.cjs", "nested");
+  const nested = write(
+    path.join(tmp, "unrelated/openclaw-plugin-build-nested/source.cjs"),
+    "nested",
+  );
   const ordinaryFile = capture("file", "ordinary", tmp);
-  const outside = write(parent, "outside/sentinel", "x".repeat(1024));
+  const outside = write(path.join(parent, "outside/sentinel"), "x".repeat(1024));
   fs.symlinkSync(path.dirname(outside), path.join(tmp, "openclaw-plugin-build-link"), "junction");
   fs.symlinkSync(path.dirname(outside), path.join(path.dirname(plugin), "external"), "junction");
   fs.symlinkSync(path.dirname(plugin), path.join(path.dirname(plugin), "cycle"), "junction");
@@ -250,4 +262,32 @@ it("keeps inspection errors advisory and empty temporary directories silent", as
   expect(output).toContain("fixture service inspection unavailable");
   expect(output).toContain("fixture permission denied");
   expect(output).not.toContain("Removed ");
+});
+
+it("has pending work exactly while a capture root would be reclaimed, and decides without writing", async () => {
+  const pending = (repair = true) =>
+    decideDoctorContributionPending(captureContribution(), captureContext(repair));
+  await expect(pending()).resolves.toBe("none");
+
+  const legacy = capture("old/source.cjs", "abc", path.join(stateDir, "tmp"));
+  inspectAsLaterProcess();
+  const before = snapshotStoreFiles(parent);
+  await expect(pending()).resolves.toBe("work");
+  await expect(pending(false)).resolves.toBe("none");
+  expect(changedStoreFiles(before, snapshotStoreFiles(parent))).toEqual([]);
+  await duringMaintenance(() => runCaptureReport(true));
+  expect(fs.existsSync(legacy)).toBe(false);
+  await expect(pending()).resolves.toBe("none");
+
+  // A managed root is reclaimed under its custody lock, which only the cleanup may take.
+  const managed = path.join(stateDir, "tmp", "plugin-captures", "managed-root");
+  write(path.join(managed, "owner.sqlite"), "custody");
+  fs.mkdirSync(path.join(managed, "native"));
+  const old = new Date(Date.now() - 2 * 60 * 60 * 1_000);
+  fs.utimesSync(managed, old, old);
+  await expect(pending()).resolves.toBe("work");
+
+  fs.rmSync(managed, { recursive: true });
+  readCommand.mockRejectedValue(new Error("fixture service inspection unavailable"));
+  await expect(pending()).resolves.toBe("undecidable");
 });

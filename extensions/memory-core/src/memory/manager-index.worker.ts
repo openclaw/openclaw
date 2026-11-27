@@ -19,7 +19,7 @@ serveWorkerTasks<MemoryIndexTaskResult>(async (input, channel, control) => {
   if (task.kind === "transcript-stats") {
     // Pure chunk preparation must not cold-load session storage during shutdown drain.
     const { readTranscriptStatsBatchReadOnlySync } =
-      await import("openclaw/plugin-sdk/memory-core-host-engine-sessions");
+      await import("openclaw/plugin-sdk/memory-core-host-transcript-stats");
     return {
       kind: "transcript-stats",
       stats: readTranscriptStatsBatchReadOnlySync(

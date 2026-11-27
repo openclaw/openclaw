@@ -1,8 +1,23 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { PostgresPhysicalFacts } from "./database-engine/physical-facts.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { PostgresPhysicalFacts } from "./database-engine/physical-facts-contract.js";
+import type { PostgresSqlConnection } from "./sql-connection.js";
 import type { SqliteSchemaMarkers } from "./sqlite-pinned-read-snapshot.js";
-import type { SqliteSchemaFacts } from "./sqlite-schema-admission.js";
 import type { SqliteTempTrackingSchema } from "./sqlite-temp-generation-schema.js";
+
+export type SqliteSchemaFacts = {
+  readonly admissionId: string;
+  readonly revision: number;
+  readonly userVersion: number;
+  readonly textEncoding: string;
+  readonly schemaVersion: number;
+  readonly tables: ReadonlySet<string>;
+  readonly views: ReadonlySet<string>;
+  readonly tableSql: ReadonlyMap<string, string | null>;
+  readonly indexes: ReadonlySet<string>;
+  readonly indexDefinitions: ReadonlyMap<string, { table: string; sql: string | null }>;
+  readonly triggers: ReadonlyMap<string, { table: string; sql: string | null }>;
+};
 
 type SqliteReadRevision = {
   schema: SqliteSchemaFacts;
@@ -15,6 +30,11 @@ export type PostgresReadSnapshotRevision = Readonly<{
   snapshot: object;
   writeRevision: number;
 }>;
+
+export const postgresReadSnapshots = resolveGlobalSingleton(
+  Symbol.for("openclaw.postgresReadSnapshots"),
+  () => new WeakMap<PostgresSqlConnection, PostgresReadSnapshotRevision>(),
+);
 
 export type SqliteReadOperationRevision =
   | (SqliteReadRevision & { snapshot?: undefined; writeRevision: number })
@@ -33,6 +53,7 @@ export type SchemaMutationListener = (observed?: SqliteSchemaMarkers) => void;
 
 export type SqliteSchemaOwner = {
   admitted: boolean;
+  publicationReady: boolean;
   revision: number;
   facts?: SqliteSchemaFacts;
   readDepth: number;
@@ -63,6 +84,11 @@ export type SqliteSchemaOwner = {
   isolatedTempTables: Set<string>;
   installTempTrackingSchema?: (schema: SqliteTempTrackingSchema) => void;
 };
+
+export const sqliteSchemaOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteSchemaFacts"),
+  () => new WeakMap<DatabaseSync, SqliteSchemaOwner>(),
+);
 
 export function observeSqliteTransactionState(
   database: DatabaseSync,

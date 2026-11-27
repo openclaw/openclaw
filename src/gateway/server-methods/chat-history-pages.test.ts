@@ -1,5 +1,65 @@
 import { expect, it } from "vitest";
-import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
+import type { ChatHistoryPageParams } from "../../config/sessions/session-history-types.js";
+import {
+  encodeChatHistoryResponsePage,
+  prepareChatHistoryResponsePage,
+} from "../chat-history-response-page.js";
+
+it("serializes message content once for budgeting and encoding, fresh on each request", () => {
+  let reads = 0;
+  let text = "tool output 漢字🦞";
+  const message = {
+    role: "toolResult",
+    get content() {
+      reads++;
+      return text;
+    },
+    __openclaw: { id: "result", seq: 1 },
+  };
+  const params: ChatHistoryPageParams = {
+    encodeResponse: true,
+    entry: undefined,
+    provider: undefined,
+    sessionId: "session",
+    storePath: undefined,
+    sessionAgentId: "main",
+    canonicalKey: "agent:main:session",
+    max: 100,
+    maxHistoryBytes: 512 * 1024,
+    effectiveMaxChars: 8000,
+    offset: undefined,
+    messageId: undefined,
+  };
+  for (const content of [text, "updated tool output"]) {
+    text = content;
+    reads = 0;
+    const response = encodeChatHistoryResponsePage(
+      { messages: [message] },
+      params,
+    ).encodedResponse!;
+    expect(reads).toBe(1);
+    expect(Buffer.from(response.messages).toString()).toBe(
+      JSON.stringify([{ role: "toolResult", content, __openclaw: { id: "result", seq: 1 } }]),
+    );
+    expect(response.messagesBytes).toBe(response.messages.byteLength);
+  }
+});
+
+it("reuses a history page when budgeting does not replace or omit messages", () => {
+  const messages = [
+    { role: "assistant", content: "Calling read", __openclaw: { id: "call", seq: 1 } },
+    { role: "toolResult", content: "File contents", __openclaw: { id: "result", seq: 2 } },
+  ];
+  Object.freeze(messages);
+  const page = prepareChatHistoryResponsePage(
+    { messages, pagination: { offset: 0, totalMessages: 2, rawPageMessages: 2 } },
+    { entry: undefined, maxHistoryBytes: 512 * 1024, messageId: undefined },
+  );
+  expect(page.messages).toBe(messages);
+  expect(page.messagesBytes).toBe(Buffer.byteLength(JSON.stringify(messages)));
+  expect(page.omission).toBeUndefined();
+  expect(page.hasMore).toBe(false);
+});
 
 it("keeps oversized cursor identities inside the response byte limit", () => {
   const messageId = "x".repeat(1_000_000);
@@ -54,4 +114,40 @@ it.each([
     expect(page.messagesBytes).toBe(Buffer.byteLength(JSON.stringify(page.messages)));
   }
   expect(page.messagesBytes).toBeLessThan(512 * 1024);
+});
+
+it("only measures the selected history window and its boundary group", () => {
+  let reads = 0;
+  let activityReads = 0;
+  const messages = Array.from({ length: 2_000 }, (_, index) => ({
+    role: "toolResult",
+    timestamp: index,
+    get content() {
+      reads++;
+      return "x".repeat(4_000);
+    },
+    __openclaw: { id: `message-${index}`, seq: index + 1 },
+  }));
+  const activity = messages.map((message) => ({
+    messageId: message["__openclaw"].id,
+    get items() {
+      activityReads++;
+      return [];
+    },
+  }));
+  for (const messageId of [undefined, "message-1000"]) {
+    reads = activityReads = 0;
+    const page = prepareChatHistoryResponsePage(
+      { messages, activity },
+      { entry: undefined, maxHistoryBytes: 34_000, messageId },
+    );
+    expect(page.messages).toHaveLength(8);
+    expect(reads).toBeLessThanOrEqual(page.messages.length + 2);
+    expect(activityReads).toBeLessThanOrEqual(page.messages.length + 2);
+    expect(page.messages).toMatchObject(
+      Array.from({ length: 8 }, (_, index) => ({
+        __openclaw: { id: `message-${index + (messageId ? 996 : 1992)}` },
+      })),
+    );
+  }
 });

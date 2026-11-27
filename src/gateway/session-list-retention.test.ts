@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
@@ -44,7 +46,25 @@ it("retains a frequently read sidebar baseline beyond 32 views and evicts the co
     const release = retainSessionListForegroundWork();
     try {
       const cold = await read(2);
-      const hot = await read(3);
+      let hot = await read(3);
+      const partitionCounts = () =>
+        getSessionRowSelectionMetrics().partitions.reduce(
+          (sum, counter) => ({
+            hits: sum.hits + counter.hits,
+            misses: sum.misses + counter.misses,
+          }),
+          { hits: 0, misses: 0 },
+        );
+      const before = partitionCounts();
+      sessionChanges.emit({ ...scope, scope: "transcript", facts: { kind: "unchanged" } });
+      hot = await read(3);
+      expect(hot.sessions.map((row) => row.key)).toEqual([
+        "agent:main:retained-0",
+        "agent:main:retained-1",
+      ]);
+      const after = partitionCounts();
+      expect(after.misses).toBe(before.misses);
+      expect(after.hits).toBeGreaterThan(before.hits);
       for (let limit = 4; limit < 284; limit++) {
         await read(limit);
         expect(

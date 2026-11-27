@@ -13,12 +13,13 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   bindActiveOperatorTurnAuthority,
-  bindActiveCronAuthorityCurrentness,
   bindActiveCronCreatorAuthorityResolver,
   bindCronManagementGrant,
+  bindCronManagementToolConstruction,
   bindCronRequesterGrant,
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -35,7 +36,7 @@ import * as gatewayModule from "./tools/gateway.js";
 function admittedFixture(
   runId: string,
   kind: "local" | "unknown" = "unknown",
-  source: "control-ui-admin" | "channel-owner" = "control-ui-admin",
+  source: "operator" | "channel-owner" = "operator",
   callerScopedCreation?: true,
 ) {
   const caller = admittedCaller(runId);
@@ -43,8 +44,7 @@ function admittedFixture(
   const scope = createCronCreatorAuthorityCapability(
     runId,
     { kind },
-    source === "channel-owner" ? { source, isCurrent: () => true } : { source },
-    undefined,
+    { source },
     undefined,
     undefined,
     callerScopedCreation,
@@ -94,6 +94,38 @@ function creatorFixture(
   return { resolve, creator };
 }
 
+it("retains management construction before late admission without granting another caller or settled turn", async () => {
+  const runId = "late-cli-owner";
+  const caller = admittedCaller(runId);
+  const scope = createCronCreatorAuthorityCapability(
+    runId,
+    { kind: "unknown" },
+    { source: "channel-owner" },
+  )!;
+  let construct: ReturnType<typeof bindCronManagementToolConstruction>;
+  await runWithCronCreatorAuthorityCapability(scope, async () => {
+    expect(bindCronManagementToolConstruction("other-run")).toBeUndefined();
+    // CLI preparation can precede the native runtime's delegated caller admission.
+    construct = withoutGatewayToolCallerIdentity(() => bindCronManagementToolConstruction(runId));
+    expect(construct).toBeTypeOf("function");
+    await runInDetachedAsyncContext(async () => {
+      expect(construct!(() => bindCronManagementGrant(runId))).toBeUndefined();
+      await withGatewayToolCallerIdentity(admittedCaller("other-run"), () => {
+        expect(construct!(() => bindCronManagementGrant(runId))).toBeUndefined();
+      });
+      await withGatewayToolCallerIdentity(caller, () => {
+        expect(construct!(() => bindCronManagementGrant(runId))?.managementOnly).toBe(true);
+      });
+    });
+  });
+  const later = admittedFixture("later-owner");
+  await later.run(() => {
+    expect(bindCronManagementGrant(later.scope.runId)).toBeDefined();
+    // An expired callback cannot fall through to an unrelated ambient management scope.
+    expect(construct!(() => bindCronManagementGrant(later.scope.runId))).toBeUndefined();
+  });
+});
+
 it("retains the original caller predicate and rejects resolver use after revocation", async () => {
   let current = true;
   const capability = createCronCreatorAuthorityCapability(
@@ -103,12 +135,11 @@ it("retains the original caller predicate and rejects resolver use after revocat
     () => current,
   )!;
   await runWithCronCreatorAuthorityCapability(capability, async () => {
-    expect(bindActiveCronAuthorityCurrentness("other-run")).toBeUndefined();
-    const captured = bindActiveCronAuthorityCurrentness(capability.runId);
     const { creator, resolve } = creatorFixture(capability, "message");
     current = false;
-    expect(captured?.()).toBe(false);
-    await expect(creator!()).rejects.toThrow("Automation caller authority is no longer active");
+    await expect(creator!()).rejects.toThrow(
+      "This agent run is no longer active. Start a new turn to retry.",
+    );
     expect(resolve).not.toHaveBeenCalled();
   });
 });
@@ -131,10 +162,10 @@ it("binds an explicit exact-run origin and expires retained operator authority",
   expect(() => retained?.assertActive()).toThrow();
 });
 it.each([
-  ["local", "control-ui-admin", undefined],
-  ["unknown", "control-ui-admin", undefined],
+  ["local", "operator", undefined],
+  ["unknown", "operator", undefined],
   ["unknown", "channel-owner", undefined],
-  ["unknown", "control-ui-admin", true],
+  ["unknown", "operator", true],
 ] as const)(
   "separates management, creation, and runtime authority for %s/%s (fresh=%s)",
   async (kind, source, callerScopedCreation) => {
@@ -179,13 +210,18 @@ it.each([
         const grant = requester!();
         expect(resolveCronCreatorAuthorityGrantProvenance(grant, runId)).toEqual({
           capturesRuntimeAuthority: false,
+          callerScopedCreation: true,
         });
         expect(consumeCronCreatorAuthorityGrant(grant).authority).toBeUndefined();
-        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
+        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
+          /no longer active|access has ended/,
+        );
         const pending = requester!();
         revokeCronCreatorAuthorityRunScope(scope);
-        expect(() => consumeCronCreatorAuthorityGrant(pending)).toThrow("no longer active");
-        expect(() => requester!()).toThrow("no longer active");
+        expect(() => consumeCronCreatorAuthorityGrant(pending)).toThrow(
+          /no longer active|access has ended/,
+        );
+        expect(() => requester!()).toThrow(/no longer active|access has ended/);
       }
       releaseAgentRunDelegatedAuthority(authority);
       expect(bindCronManagementGrant(runId)).toBeUndefined();
@@ -214,7 +250,7 @@ it("exposes add but refuses incomplete capture and retired requester authority",
   setRuntimeConfigSnapshot({});
   onTestFinished(clearRuntimeConfigSnapshot);
   const runId = "remote-admin-capture";
-  const { authority, caller, run } = admittedFixture(runId, "unknown", "control-ui-admin", true);
+  const { authority, caller, run } = admittedFixture(runId, "unknown", "operator", true);
   caller.sessionKey = "agent:main:remote";
   await run(async () => {
     const callGatewayTool = vi.fn();
@@ -245,7 +281,9 @@ it("exposes add but refuses incomplete capture and retired requester authority",
     const requester = bindCronRequesterGrant(runId)!;
     const grant = requester();
     releaseAgentRunDelegatedAuthority(authority);
-    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
-    expect(() => requester()).toThrow("no longer active");
+    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
+      /no longer active|access has ended/,
+    );
+    expect(() => requester()).toThrow(/no longer active|access has ended/);
   });
 });

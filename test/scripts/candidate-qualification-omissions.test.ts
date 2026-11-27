@@ -1,6 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { buildFrozenTargetWorkflowRequest } from "../../scripts/lib/frozen-target-workflow-request.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -11,6 +18,12 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = readWorkflow(".github/workflows/full-release-validation.yml");
 const targetSha = "a".repeat(40);
 const contextRef = "release/2026.9.7";
+// The workflow verifies this descriptor before the request and dispatch steps.
+const qualificationAdmission = JSON.stringify({ runId: "55", runAttempt: 1 });
+const qualificationBaselines = JSON.stringify({
+  upgradeBaseline: "openclaw@2026.9.6",
+  upgradeSurvivorBaselines: ["openclaw@2026.9.6"],
+});
 function workflowEnv() {
   return {
     ...process.env,
@@ -39,9 +52,15 @@ it.each([
   { distinct: true, context: true, explicit: false, omissions: true },
   { distinct: true, context: false, explicit: false, omissions: false },
   { distinct: false, context: true, explicit: true, omissions: true },
-])("selects omission mode for %j", ({ distinct, context, explicit, omissions }) => {
+  { distinct: true, context: true, explicit: false, admitted: true, omissions: false },
+  { distinct: true, context: true, explicit: true, admitted: true, omissions: false },
+])("selects omission mode for %j", ({ distinct, context, explicit, admitted, omissions }) => {
+  expect(
+    step("resolve_target", "Plan frozen source admission").env?.QUALIFICATION_ADMISSION_JSON,
+  ).toBe("${{ steps.publication_dispatch.outputs.qualification_admission_json }}");
   const result = buildFrozenTargetWorkflowRequest({
     ...workflowEnv(),
+    QUALIFICATION_ADMISSION_JSON: admitted ? qualificationAdmission : "",
     ADMISSION_WORKFLOW: "parent",
     ADMISSION_WORKFLOW_REF: "refs/heads/release-ci/aaaaaaaaaaaa-1",
     ADMISSION_SELECTED_ROOT: ".",
@@ -56,8 +75,26 @@ it.each([
   });
   expect(result.allowFrozenTargetScenarioOmissions).toBe(omissions);
 });
-it.each([false, true])("seals canonical omission authorization (cross revision=%s)", (distinct) => {
-  const root = tempDirs.make("release-canonical-qualification-");
+function writeChildWaiverFixture(root: string, waivers: unknown[] = []) {
+  const scripts = join(root, "workflow/scripts");
+  mkdirSync(join(scripts, "lib"), { recursive: true });
+  symlinkSync(
+    resolve("scripts/find-reusable-release-child.mjs"),
+    join(scripts, "find-reusable-release-child.mjs"),
+  );
+  const verifier = join(root, "qualification-verifier/scripts");
+  mkdirSync(verifier, { recursive: true });
+  symlinkSync(
+    resolve("scripts/find-reusable-release-child.mjs"),
+    join(verifier, "find-reusable-release-child.mjs"),
+  );
+  writeFileSync(
+    join(scripts, "lib/release-validation-waivers.json"),
+    JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers }),
+  );
+}
+
+function canonicalRequest(root: string, distinct: boolean, admitted: boolean) {
   // The real CLI checks its physical entrypoint; a symlink would import it
   // without executing main and would not model an Actions checkout.
   for (const path of [
@@ -84,9 +121,9 @@ it.each([false, true])("seals canonical omission authorization (cross revision=%
         GITHUB_SHA: (distinct ? "b" : "a").repeat(40),
         RELEASE_PROFILE: "beta",
         RELEASE_SOAK: "false",
-        ...emptyInputs(
-          "QUALIFICATION_ADMISSION_JSON QUALIFICATION_BASELINES_JSON UPGRADE_SURVIVOR_SCENARIOS",
-        ),
+        ...emptyInputs("UPGRADE_SURVIVOR_SCENARIOS"),
+        QUALIFICATION_ADMISSION_JSON: admitted ? qualificationAdmission : "",
+        QUALIFICATION_BASELINES_JSON: admitted ? qualificationBaselines : "",
         ALLOW_UNRELEASED_CHANGELOG: "true",
         PACKAGE_PUBLISHED: "false",
         // This is the original workflow expression's value for a nonempty release context.
@@ -94,18 +131,34 @@ it.each([false, true])("seals canonical omission authorization (cross revision=%
       },
     },
   );
-  const request = readFixtureJson(root, "full-release-candidate-request.json");
-  expect(request.allowFrozenTargetScenarioOmissions).toBe(distinct);
+  return readFixtureJson(root, "full-release-candidate-request.json");
+}
+
+it.each([
+  { distinct: false, admitted: false },
+  { distinct: true, admitted: false },
+  { distinct: true, admitted: true },
+])("seals canonical omission authorization for %j", ({ distinct, admitted }) => {
+  const request = canonicalRequest(
+    tempDirs.make("release-canonical-qualification-"),
+    distinct,
+    admitted,
+  );
+  expect(request.allowFrozenTargetScenarioOmissions).toBe(distinct && !admitted);
 });
 
 it.each([
-  ["plugin-prerelease", false],
-  ["plugin-prerelease", true],
-  ["release-checks", false],
-  ["release-checks", true],
+  ["plugin-prerelease", false, false, "independent"],
+  ["plugin-prerelease", true, false, "independent"],
+  ["release-checks", false, false, "independent"],
+  ["release-checks", true, false, "independent"],
+  ["plugin-prerelease", true, true, "independent"],
+  ["plugin-prerelease", true, true, "candidate"],
+  ["release-checks", true, true, "independent"],
+  ["release-checks", true, true, "candidate"],
 ] as const)(
-  "keeps release context without equal-SHA omissions in %s (cross revision=%s)",
-  (kind, distinct) => {
+  "keeps release context and sealed omission mode in %s (cross revision=%s, admitted=%s, phase=%s)",
+  (kind, distinct, admitted, phase) => {
     const root = tempDirs.make("release-qualification-inputs-");
     const bin = join(root, "bin");
     mkdirSync(bin);
@@ -114,7 +167,7 @@ it.each([
     const ref = `release-ci/${sha.slice(0, 12)}-1`;
     const titlePrefix =
       kind === "plugin-prerelease" ? "Plugin Prerelease" : "OpenClaw Release Checks";
-    const title = `${titlePrefix} full-release-validation-77-1-${kind}-independent`;
+    const title = `${titlePrefix} full-release-validation-77-1-${kind}-${phase}`;
     const gh = join(bin, "gh");
     writeFileSync(
       gh,
@@ -131,12 +184,28 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
 `,
     );
     chmodSync(gh, 0o755);
-    execFileSync("bash", ["-c", String(step("normal_ci", "Dispatch CI").run)], {
+    const job = `${kind === "plugin-prerelease" ? "plugin_prerelease" : "release_checks"}_${phase}`;
+    const dispatchStep = step(
+      job,
+      `Dispatch ${kind === "plugin-prerelease" ? "plugin prerelease" : "release checks"} ${phase} phase`,
+    );
+    expect(dispatchStep.env?.CANDIDATE_REQUEST_JSON).toBe(
+      "${{ needs.resolve_target.outputs.candidate_request_json }}",
+    );
+    writeChildWaiverFixture(root);
+    const run = String(dispatchStep.run)
+      .replaceAll(
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
+        String(admitted),
+      )
+      .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.9.23");
+    execFileSync("bash", ["-c", run], {
       cwd: root,
       timeout: 10_000,
       env: {
         ...workflowEnv(),
-        PATH: bin + delimiter + process.env.PATH,
+        PATH: bin + delimiter + dirname(process.execPath) + delimiter + process.env.PATH,
+        GITHUB_WORKSPACE: root,
         CALLS: calls,
         GITHUB_OUTPUT: join(root, "output"),
         GITHUB_STEP_SUMMARY: join(root, "summary"),
@@ -145,7 +214,8 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
         CHILD_WORKFLOW_REF: ref,
         PARENT_WORKFLOW_SHA: sha,
         TARGET_REF: targetSha,
-        PHASE: "independent",
+        PHASE: phase,
+        CANDIDATE_REQUEST_JSON: JSON.stringify(canonicalRequest(root, distinct, admitted)),
         TEST_TITLE: title,
         PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: "[]",
         EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
@@ -166,6 +236,121 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
       .find((args) => args[0] === "workflow")!;
     expect(dispatch).toContain("target_context_ref=release/2026.9.7");
     expect(dispatch).toContain(ref);
-    expect(dispatch.includes("allow_frozen_target_scenario_omissions=true")).toBe(distinct);
+    expect(dispatch.includes("allow_frozen_target_scenario_omissions=true")).toBe(
+      distinct && !admitted,
+    );
+  },
+);
+
+it.each([false, true])(
+  "does not look up or dispatch a waived child (admitted P=%s)",
+  (admitted) => {
+    const root = tempDirs.make("release-waived-parent-");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "gh"), "#!/bin/sh\nexit 91\n", { mode: 0o755 });
+    writeChildWaiverFixture(root, [
+      {
+        targetVersion: "2026.9.23",
+        targetSha,
+        childRole: "normalCi",
+        reason: "Synthetic whole-child waiver",
+      },
+    ]);
+    const run = String(step("normal_ci", "Dispatch CI").run)
+      .replaceAll(
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
+        String(admitted),
+      )
+      .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.9.23");
+    const output = execFileSync("bash", ["-c", run], {
+      cwd: root,
+      timeout: 10_000,
+      encoding: "utf8",
+      env: {
+        ...workflowEnv(),
+        PATH: bin + delimiter + dirname(process.execPath) + delimiter + process.env.PATH,
+        GITHUB_WORKSPACE: root,
+        GITHUB_STEP_SUMMARY: join(root, "summary"),
+        CHILD_EVIDENCE_REUSE: "false",
+        CHILD_WORKFLOW_KIND: "ci",
+        TARGET_REF: targetSha,
+      },
+    });
+    expect(output).toContain("Waived ci.yml; no child run is required.");
+  },
+);
+
+it.each([false, true])(
+  "adopts child evidence with current policy without dispatch (admitted P=%s)",
+  (admitted) => {
+    const root = tempDirs.make("release-reuse-policy-");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const calls = join(root, "calls");
+    const node = join(bin, "node");
+    writeFileSync(
+      node,
+      `#!` +
+        process.execPath +
+        `
+const fs = require('node:fs');
+if (process.argv.includes("--waiver-only")) process.exit(3);
+fs.writeFileSync(process.env.CALLS, JSON.stringify({args: process.argv.slice(2), version: process.env.TARGET_VERSION, directory: process.env.CHILD_WORKFLOW_DIRECTORY}));
+`,
+    );
+    chmodSync(node, 0o755);
+    const gh = join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/bin/sh
+exit 91
+`,
+    );
+    chmodSync(gh, 0o755);
+    const run = String(step("normal_ci", "Dispatch CI").run)
+      .replaceAll(
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
+        String(admitted),
+      )
+      .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.9.23");
+    execFileSync("bash", ["-c", run], {
+      cwd: root,
+      timeout: 10_000,
+      env: {
+        ...workflowEnv(),
+        PATH: bin + delimiter + process.env.PATH,
+        CALLS: calls,
+        GITHUB_WORKSPACE: root,
+        GITHUB_STEP_SUMMARY: join(root, "summary"),
+        CHILD_EVIDENCE_REUSE: "true",
+        CHILD_WORKFLOW_KIND: "ci",
+        TARGET_REF: targetSha,
+      },
+    });
+    const observed = JSON.parse(readFileSync(calls, "utf8"));
+    expect(observed).toMatchObject({
+      version: "2026.9.23",
+      directory: join(root, "workflow/.github/workflows"),
+    });
+    expect(observed.args.slice(0, 2)).toEqual([
+      (admitted ? "qualification-verifier" : "workflow") +
+        "/scripts/find-reusable-release-child.mjs",
+      "ci.yml",
+    ]);
+    expect(observed.args).toContain("target_ref=" + targetSha);
+    for (const job of [
+      "normal_ci",
+      "plugin_prerelease_independent",
+      "plugin_prerelease_candidate",
+      "release_checks_independent",
+      "release_checks_candidate",
+      "npm_telegram",
+      "performance",
+    ]) {
+      expect(step(job, "Checkout admitted qualification verifier").with).toMatchObject({
+        path: "qualification-verifier",
+      });
+    }
   },
 );

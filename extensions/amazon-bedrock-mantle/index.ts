@@ -69,7 +69,7 @@ export default definePluginEntry({
       },
       resolveConfigApiKey: ({ env }) =>
         resolveMantleBearerToken(env) ? "env:AWS_BEARER_TOKEN_BEDROCK" : undefined,
-      prepareRuntimeAuth: resolveMantleRuntimeBearerToken,
+      prepareRuntimeAuthV2: resolveMantleRuntimeBearerToken,
       normalizeResolvedModel: normalizeMantleResolvedModel,
       supportsSystemPromptCacheBoundary: true,
       createStreamFn: ({ model }) =>

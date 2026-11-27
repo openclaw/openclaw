@@ -30,6 +30,7 @@ import {
   type McpAppContextEventDetail,
   MCP_APP_VIEW_EXPIRED_EVENT,
 } from "./mcp-app-security.ts";
+import { requestMcpAppDisplayMode } from "./mcp-app-sidebar.ts";
 import type {
   McpAppBinding,
   McpAppResources,
@@ -72,6 +73,8 @@ export function createMcpAppView(
     | undefined;
   let titleInput: string | undefined;
   let surfaceInput: McpAppViewProps["surface"] | undefined;
+  let presentedMode: McpAppViewProps["displayMode"] | undefined;
+  let appIdentity: McpAppViewPayload["appIdentity"];
 
   function inputChanged() {
     if (!started || disposed || inputFlushPending) {
@@ -213,6 +216,8 @@ export function createMcpAppView(
     } catch (error) {
       if (!abort.signal.aborted) {
         errorState = error;
+        host.onHeightChange?.(null, true);
+        updateReservedHeight();
         publishState();
       }
     }
@@ -227,7 +232,11 @@ export function createMcpAppView(
   function updateReservedHeight() {
     if (mountElement) {
       mountElement.style.minHeight =
-        host.surface === "conversation" && !host.fillContainer && host.displayMode === "inline"
+        !errorState &&
+        inactive !== "ended" &&
+        host.surface === "conversation" &&
+        !host.fillContainer &&
+        host.displayMode === "inline"
           ? `${activeResources?.frameHeight ?? host.height}px`
           : "";
       if (host.onHeightChange) {
@@ -238,6 +247,10 @@ export function createMcpAppView(
 
   function updatePresentation() {
     confirmation.update();
+    if (presentedMode !== host.displayMode) {
+      presentedMode = host.displayMode;
+      requestMcpAppDisplayMode(host, appIdentity);
+    }
     if (host.displayMode === "fullscreen") {
       promoteToPopoverTopLayer(host, () => [host]);
     } else {
@@ -292,7 +305,9 @@ export function createMcpAppView(
         host.sessionKey === binding.sessionKey &&
         context.gateway.snapshot.client === binding.client
       ) {
+        host.onHeightChange?.(null, true);
         setInactive("ended");
+        updateReservedHeight();
         confirmation.cancel();
         host.dispatchEvent(
           new CustomEvent(MCP_APP_VIEW_EXPIRED_EVENT, { bubbles: true, composed: true }),
@@ -406,6 +421,7 @@ export function createMcpAppView(
     let resources: McpAppResources | null = null;
     try {
       const payload = await requestOwner<McpAppViewPayload>(binding, "mcp.app.view", {}, signal);
+      appIdentity = payload.appIdentity;
       const mount = mountElement;
       signal.throwIfAborted();
       setInactive(payload.messageSupported === false ? "reconstructed" : null);
@@ -451,17 +467,20 @@ export function createMcpAppView(
           translate("mcpApp.errors.invalidSandboxUrl"),
         ),
         addCleanup,
+        payload.sandboxShellHtml,
       );
       signal.throwIfAborted();
       if (!iframe.contentWindow) {
         throw new Error(translate("mcpApp.errors.sandboxUnavailable"));
       }
 
+      let appReady = false;
       let modes = negotiateMcpAppDisplayModes(payload.displayModes);
-      host.displayMode =
+      const initialDisplayMode = () =>
         payload.displayMode && modes.available.includes(payload.displayMode)
           ? payload.displayMode
           : modes.initial;
+      host.displayMode = initialDisplayMode();
       let modelContext = payload.hostContext?.["openai/modelContext"] ?? null;
       let contextGeneration = 0;
       const buildHostContext = () => {
@@ -640,24 +659,22 @@ export function createMcpAppView(
           !host.fillContainer &&
           host.displayMode !== "fullscreen"
         ) {
-          const nextHeight = Math.min(1200, Math.max(160, Math.round(height)));
+          const measured = Math.min(1200, Math.max(160, Math.round(height)));
+          const nextHeight = host.onHeightChange?.(measured, appReady) ?? measured;
           createdResources.frameHeight = nextHeight;
           iframe.style.height = `${nextHeight}px`;
           updateReservedHeight();
-          host.onHeightChange?.(nextHeight);
           bridge.setHostContext(buildHostContext());
         }
       };
       const initialized = new Promise<void>((resolve) => {
         bridge.oninitialized = () => {
+          appReady = true;
           modes = negotiateMcpAppDisplayModes(
             payload.displayModes,
             bridge.getAppCapabilities()?.availableDisplayModes,
           );
-          host.displayMode =
-            payload.displayMode && modes.available.includes(payload.displayMode)
-              ? payload.displayMode
-              : modes.initial;
+          host.displayMode = initialDisplayMode();
           resolve();
         };
       });

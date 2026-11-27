@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createEmbeddedLobsterRunner } from "./lobster-runner.js";
 
@@ -47,31 +47,63 @@ const schema = {
 
 for (const value of ["dynamic-execution", "embedded-aot"]) {
   describe(`Lobster schema validation (${value})`, () => {
-    it("validates pipeline input before accepting its saved resume", async () => {
+    let cwd: string;
+    let runner: ReturnType<typeof createEmbeddedLobsterRunner>;
+    const run = (params: Parameters<typeof runner.run>[0]) => runner.run(params);
+    const defaults = () => ({ cwd, timeoutMs: 5000, maxStdoutBytes: 32768 });
+    beforeEach(() => {
       profile.value = value;
-      const cwd = tempDirs.make("lobster-validation-");
+      cwd = tempDirs.make("lobster-validation-");
       vi.stubEnv("LOBSTER_STATE_DIR", path.join(cwd, "state"));
-      const runner = createEmbeddedLobsterRunner();
-      const defaults = { cwd, timeoutMs: 5000, maxStdoutBytes: 32768 };
-      const input = await runner.run({
-        ...defaults,
-        action: "run",
-        pipeline: `ask --prompt Question --schema '${JSON.stringify(schema)}'`,
-      });
-      expect(input.status).toBe("needs_input");
-      const token = input.requiresInput?.resumeToken;
-      expect(token).toBeTruthy();
-      await expect(
-        runner.run({ ...defaults, action: "resume", token, responseJson: '{"answer":0}' }),
-      ).rejects.toThrow(/schema validation/);
-      await expect(
-        runner.run({ ...defaults, action: "resume", token, responseJson: '{"answer":2}' }),
-      ).resolves.toMatchObject({ status: "ok", output: [{ answer: 2 }] });
+      runner = createEmbeddedLobsterRunner();
     });
 
+    it.each(["pipeline", "workflow"])(
+      "validates %s input before accepting its saved resume",
+      async (kind) => {
+        let pipeline = `ask --prompt Question --schema '${JSON.stringify(schema)}'`;
+        if (kind === "workflow") {
+          pipeline = path.join(cwd, "workflow.json");
+          await fs.writeFile(
+            pipeline,
+            JSON.stringify({
+              steps: [{ id: "question", input: { prompt: "Question", responseSchema: schema } }],
+            }),
+          );
+        }
+        const input = await run({ ...defaults(), action: "run", pipeline });
+        expect(input.status).toBe("needs_input");
+        const token = input.requiresInput?.resumeToken;
+        expect(token).toBeTruthy();
+        const resume = (responseJson: string) =>
+          run({ ...defaults(), action: "resume", token, responseJson });
+        await expect(
+          resume(kind === "pipeline" ? '{"answer":0}' : '{"answer":"wrong"}'),
+        ).rejects.toThrow(/schema validation/);
+        await expect(resume('{"answer":2}')).resolves.toMatchObject({
+          status: "ok",
+          output: [{ answer: 2 }],
+        });
+        if (kind === "workflow") {
+          for (const malformed of [
+            { enum: [] },
+            { required: ["x", "x"] },
+            { type: "bad" },
+            { $schema: "https://example.test/schema" },
+          ]) {
+            await expect(
+              run({
+                ...defaults(),
+                action: "run",
+                pipeline: `ask --schema '${JSON.stringify(malformed)}'`,
+              }),
+            ).rejects.toThrow(/schema is invalid/);
+          }
+        }
+      },
+    );
+
     it("retains registered LLM schemas across runner recreation and clears failed results", async () => {
-      profile.value = value;
-      const cwd = tempDirs.make("lobster-llm-validation-");
       let data = { answer: 2 };
       const server = createServer((request, response) => {
         request.resume();
@@ -79,27 +111,24 @@ for (const value of ["dynamic-execution", "embedded-aot"]) {
         response.end(JSON.stringify({ ok: true, result: { output: { data } } }));
       });
       const port = await listenOnLoopback(server);
-      vi.stubEnv("LOBSTER_STATE_DIR", path.join(cwd, "state"));
       vi.stubEnv("LOBSTER_LLM_ADAPTER_URL", `http://127.0.0.1:${port}`);
       vi.stubEnv("LOBSTER_LLM_ADAPTER_TOKEN", "");
       vi.stubEnv("LOBSTER_LLM_MODEL", "test-model");
       vi.stubEnv("LOBSTER_RUN_STATE_KEY", "");
       vi.stubEnv("LOBSTER_LLM_SCHEMA_VERSION", "test");
       const id = `https://example.test/runner/${value}`;
-      const run = (outputSchema: Record<string, unknown>) =>
+      const invoke = (outputSchema: Record<string, unknown>) =>
         createEmbeddedLobsterRunner().run({
-          cwd,
-          timeoutMs: 5000,
-          maxStdoutBytes: 32768,
+          ...defaults(),
           action: "run",
           pipeline: `llm.invoke --provider http --prompt test --disable-cache true --max-validation-retries 0 --output-schema '${JSON.stringify(outputSchema)}'`,
         });
       try {
-        await expect(run({ ...schema, $id: id })).resolves.toMatchObject({ status: "ok" });
+        await expect(invoke({ ...schema, $id: id })).resolves.toMatchObject({ status: "ok" });
         data = { answer: 0 };
-        await expect(run({ $ref: id })).rejects.toThrow(/output failed schema validation/);
+        await expect(invoke({ $ref: id })).rejects.toThrow(/output failed schema validation/);
         data = { answer: 3 };
-        await expect(run({ $ref: id })).resolves.toMatchObject({
+        await expect(invoke({ $ref: id })).resolves.toMatchObject({
           status: "ok",
           output: [{ output: { data: { answer: 3 } } }],
         });
@@ -108,45 +137,6 @@ for (const value of ["dynamic-execution", "embedded-aot"]) {
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
         });
-      }
-    });
-
-    it("validates workflow input and rejects unsupported schema dialects", async () => {
-      profile.value = value;
-      const cwd = tempDirs.make("lobster-workflow-validation-");
-      vi.stubEnv("LOBSTER_STATE_DIR", path.join(cwd, "state"));
-      const runner = createEmbeddedLobsterRunner();
-      const defaults = { cwd, timeoutMs: 5000, maxStdoutBytes: 32768 };
-      const workflow = path.join(cwd, "workflow.json");
-      await fs.writeFile(
-        workflow,
-        JSON.stringify({
-          steps: [{ id: "question", input: { prompt: "Question", responseSchema: schema } }],
-        }),
-      );
-      const input = await runner.run({ ...defaults, action: "run", pipeline: workflow });
-      expect(input.status).toBe("needs_input");
-      const token = input.requiresInput?.resumeToken;
-      expect(token).toBeTruthy();
-      await expect(
-        runner.run({ ...defaults, action: "resume", token, responseJson: '{"answer":"wrong"}' }),
-      ).rejects.toThrow(/schema validation/);
-      await expect(
-        runner.run({ ...defaults, action: "resume", token, responseJson: '{"answer":3}' }),
-      ).resolves.toMatchObject({ status: "ok" });
-      for (const malformed of [
-        { enum: [] },
-        { required: ["x", "x"] },
-        { type: "bad" },
-        { $schema: "https://example.test/schema" },
-      ]) {
-        await expect(
-          runner.run({
-            ...defaults,
-            action: "run",
-            pipeline: `ask --schema '${JSON.stringify(malformed)}'`,
-          }),
-        ).rejects.toThrow(/schema is invalid/);
       }
     });
   });

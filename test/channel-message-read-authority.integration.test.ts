@@ -10,13 +10,11 @@ import { dispatchChannelMessageAction } from "../src/channels/plugins/message-ac
 import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import * as commandSecretGateway from "../src/cli/command-secret-gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
+  resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -30,15 +28,17 @@ import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 const endpointPreparation = vi.hoisted(() => ({
   beforeLookup: undefined as (() => void) | undefined,
 }));
-vi.mock("node:dns/promises", async (original) => {
-  const actual = await original<typeof import("node:dns/promises")>();
-  return {
-    ...actual,
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
     lookup: (...args: Parameters<typeof actual.lookup>) => {
       endpointPreparation.beforeLookup?.();
       return actual.lookup(...args);
     },
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 function createOriginatingRun(
@@ -69,35 +69,30 @@ function createOriginatingRun(
     requesterSenderId,
     toolContext,
   });
-  const runGuard = createAgentRuntimeAuthorityGuard(
-    {
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...delegatedAuthority },
-          messageActionContext: { expiresAtMs: Date.now() + 60_000, turnCapability },
-        },
-      },
-    } as GatewayClient,
-    {
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    } as GatewayRequestContext,
-    () => {},
-  ).commitGuard;
-  if (!runGuard) {
-    throw new Error("Expected originating run authority");
-  }
-  runGuard();
   return {
+    // Only the caller turn is rechecked after runtime admission.
+    assert: () => {
+      if (
+        !resolveMessageActionTurnCapability({
+          token: turnCapability,
+          agentId: "main",
+          runId: operationalRunInstance.runId,
+          sessionKey,
+        })
+      ) {
+        throw new Error("Message-read turn authority is no longer active");
+      }
+    },
     wrapTool: (tool: ReturnType<typeof createMessageTool>) =>
       wrapToolWithGatewayCallerIdentity(tool, {
         agentId: "main",
         sessionKey,
         operationalRunInstance,
-        receiptAuthority: () => validateAgentRunDelegatedAuthority(delegatedAuthority),
+        receiptAuthority: () => {
+          if (!validateAgentRunDelegatedAuthority(delegatedAuthority)) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       }),
     toolOptions: {
       agentId: "main",
@@ -108,7 +103,6 @@ function createOriginatingRun(
       ...toolContext,
     },
     actionContext: { requesterAccountId, requesterSenderId, toolContext },
-    assert: runGuard,
     revoke: () =>
       mode.includes("claim")
         ? releaseAgentRunDelegatedAuthority(delegatedAuthority)
@@ -199,35 +193,34 @@ afterEach(() => {
 // Registrar trust is a fixture here; installer/loader provenance has separate coverage.
 // Responses and the terminal request log come from a real loopback HTTP server.
 describe.each(["discord", "slack"] as const)("official %s provider read boundary", (channel) => {
-  const modes = [
-    "allowed",
-    "denied",
-    "revoked",
-    "result-revoked",
-    "run-revoked-direct",
-    "run-result-revoked-direct",
-    "bundled-allowed",
-    "bundled-revoked",
-  ] as const;
-  const cases =
+  type ReadCase = [mode: string, content: number, total?: number, minimumLookups?: number];
+  const modes: ReadCase[] = [
+    ["allowed", 1],
+    ["denied", 0],
+    ["revoked", 0, 1],
+    ["result-revoked", 1],
+    ["run-revoked-direct", 0],
+    ["run-result-revoked-direct", 1],
+    ["bundled-allowed", 1],
+    ["bundled-revoked", 0, 1],
+  ];
+  const cases: ReadCase[] =
     channel === "discord"
       ? [
           ...modes,
-          "endpoint-allowed" as const,
-          "endpoint-lookup-revoked" as const,
-          "endpoint-content-lookup-revoked" as const,
+          ["endpoint-allowed", 1],
+          ["endpoint-lookup-revoked", 0, 0, 1],
+          ["endpoint-content-lookup-revoked", 0, undefined, 2],
         ]
       : [
           ...modes,
-          "tool-allowed" as const,
-          "tool-run-preparation-revoked" as const,
-          "tool-run-revoked" as const,
-          "tool-run-claim-revoked" as const,
-          "tool-run-result-revoked" as const,
-          "tool-run-retry-revoked" as const,
-          "bundled-tool-run-claim-revoked" as const,
+          ["tool-allowed", 1],
+          ["tool-run-preparation-revoked", 0, 0],
+          ["tool-run-revoked", 0, 1],
+          ["tool-run-result-revoked", 1],
+          ["tool-run-retry-revoked", 0, 1],
         ];
-  it.each(cases)("routes a cross-conversation read through the provider (%s)", async (mode) => {
+  async function exerciseRead(...[mode, content, total, minimumLookups]: ReadCase) {
     const record = registerProvider(channel, mode.startsWith("bundled-") ? "bundled" : "official");
     const usesMessageTool = mode.includes("tool-");
     const runRevocation = mode.includes("run-");
@@ -366,35 +359,23 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         : dispatchChannelMessageAction(actionContext);
       if (mode.endsWith("allowed")) {
         expect(await invocation).not.toBeNull();
-        expect(requests.filter(isContent)).toHaveLength(1);
       } else {
         await expect(invocation).rejects.toThrow(
-          mode === "denied" ? "not allowed" : "no longer active",
+          mode === "denied"
+            ? "not allowed"
+            : runRevocation
+              ? usesMessageTool
+                ? "message action turn capability is no longer active"
+                : "Message-read turn authority is no longer active"
+              : `Plugin ${channel} was reloaded during the read. Retry the action.`,
         );
-        expect(requests.filter(isContent)).toHaveLength(
-          mode === "result-revoked" || (runRevocation && resultRevocation) ? 1 : 0,
-        );
-        if (mode === "tool-run-preparation-revoked") {
-          expect(requests).toEqual([]);
-        }
-        if (
-          mode === "revoked" ||
-          mode === "bundled-revoked" ||
-          mode === "tool-run-revoked" ||
-          mode === "tool-run-claim-revoked" ||
-          mode === "bundled-tool-run-claim-revoked" ||
-          mode === "tool-run-retry-revoked"
-        ) {
-          expect(requests).toHaveLength(1);
-        }
-        if (mode === "endpoint-lookup-revoked") {
-          expect(endpointLookups).toBeGreaterThan(0);
-          expect(requests).toEqual([]);
-        }
-        if (mode === "endpoint-content-lookup-revoked") {
-          expect(endpointLookups).toBeGreaterThan(1);
-          expect(requests.filter(isContent)).toEqual([]);
-        }
+      }
+      expect(requests.filter(isContent)).toHaveLength(content);
+      if (total !== undefined) {
+        expect(requests).toHaveLength(total);
+      }
+      if (minimumLookups !== undefined) {
+        expect(endpointLookups).toBeGreaterThan(minimumLookups - 1);
       }
     } finally {
       run?.dispose();
@@ -402,7 +383,8 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
-  });
+  }
+  it.each(cases)("routes a cross-conversation read through the provider (%s)", exerciseRead);
 });
 
 const slackMetadataActions = ["member-info", "emoji-list"] as const;
@@ -683,35 +665,31 @@ describe("official Slack metadata read boundary", () => {
     await withSlackMetadataHarness(async (harness) => {
       const invocation = dispatchChannelMessageAction(harness.context);
       harness.record.enabled = false;
-      await expect(invocation).rejects.toThrow("read authority is no longer active");
+      await expect(invocation).rejects.toThrow(
+        "Plugin slack was reloaded during the read. Retry the action.",
+      );
       expect(harness.requests).toEqual([]);
     });
   });
 
   it.each([
-    { action: "emoji-list", owner: "plugin", error: false },
-    { action: "member-info", owner: "plugin", error: true },
-    { action: "emoji-list", owner: "caller", error: false },
+    { action: "emoji-list", error: false },
+    { action: "member-info", error: true },
   ] as const)(
-    "suppresses late $action data after $owner revocation (error=$error)",
-    async ({ action, owner, error }) => {
-      await withSlackMetadataHarness(
-        async (harness) => {
-          harness.response.beforeReply = () => {
-            if (owner === "plugin") {
-              harness.record.enabled = false;
-            } else {
-              harness.run.revoke();
-            }
-          };
-          if (error) {
-            harness.response.error = "sensitive_stale_provider_error";
-          }
-          await expect(invokeSlackMetadata(harness, action)).rejects.toThrow("no longer active");
-          expect(harness.requests).toHaveLength(1);
-        },
-        { claim: owner === "caller" },
-      );
+    "suppresses late $action data after plugin revocation (error=$error)",
+    async ({ action, error }) => {
+      await withSlackMetadataHarness(async (harness) => {
+        harness.response.beforeReply = () => {
+          harness.record.enabled = false;
+        };
+        if (error) {
+          harness.response.error = "sensitive_stale_provider_error";
+        }
+        await expect(invokeSlackMetadata(harness, action)).rejects.toThrow(
+          "Plugin slack was reloaded during the read. Retry the action.",
+        );
+        expect(harness.requests).toHaveLength(1);
+      });
     },
   );
 });

@@ -1,10 +1,53 @@
 /** Read-only inspection of engine-owned container identities, state, labels and ports. */
+import { get, type IncomingMessage } from "node:http";
+import { text } from "node:stream/consumers";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DOCKER_SANDBOX_ENGINE,
   execContainer,
   type SandboxContainerEngine,
 } from "./container-engine.js";
+import { parseInspectedSandboxMounts } from "./docker-mount-source.js";
+
+function isStoppedContainerState(state: unknown): boolean {
+  return isRecord(state) && state.Running === false && state.Paused === false && state.Pid === 0;
+}
+
+/** Check for a stopped sandbox without changing its Docker target. */
+export async function dockerSandboxIsStopped(
+  engine: SandboxContainerEngine,
+  id: string,
+  signal: AbortSignal,
+  endpoint?: string,
+): Promise<boolean> {
+  if (!endpoint) {
+    const result = await execContainer(engine, ["inspect", "-f", "{{json .State}}", id], {
+      signal,
+    });
+    return isStoppedContainerState(JSON.parse(result.stdout));
+  }
+  // The captured Unix endpoint lets the warm path use Docker's inspect API directly.
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
+    get(
+      {
+        socketPath: endpoint.slice("unix://".length),
+        path: `/containers/${id}/json`,
+        signal,
+        agent: false,
+      },
+      resolve,
+    ).once("error", reject);
+  });
+  if (response.statusCode !== 200) {
+    response.resume();
+    throw new Error(`Docker could not inspect sandbox ${id} (HTTP ${response.statusCode}).`);
+  }
+  const inspected: unknown = JSON.parse(await text(response));
+  if (!isRecord(inspected) || !isRecord(inspected.State)) {
+    throw new Error("Docker inspect did not return sandbox state.");
+  }
+  return isStoppedContainerState(inspected.State);
+}
 
 /** Termination proof is stricter than provisioning's best-effort existence probe. */
 export async function containerHasTerminated(
@@ -28,7 +71,7 @@ export async function containerHasTerminated(
     throw new Error(`Could not verify sandbox ${id} termination: ${inspected.stderr.trim()}`);
   }
   const state: unknown = JSON.parse(inspected.stdout);
-  return isRecord(state) && state.Running === false && state.Paused === false && state.Pid === 0;
+  return isStoppedContainerState(state);
 }
 
 export async function readDockerContainerLabel(
@@ -38,7 +81,7 @@ export async function readDockerContainerLabel(
   return await readContainerLabel(DOCKER_SANDBOX_ENGINE, containerName, label);
 }
 
-export async function readContainerLabel(
+async function readContainerLabel(
   engine: SandboxContainerEngine,
   containerName: string,
   label: string,
@@ -105,11 +148,19 @@ export async function dockerContainerState(name: string) {
 export async function containerState(
   engine: SandboxContainerEngine,
   name: string,
-  options: { strict?: boolean } = {},
+  options: { strict?: boolean; includePaused?: boolean } = {},
 ) {
-  const result = await execContainer(engine, ["inspect", "-f", "{{.State.Running}}", name], {
-    allowFailure: true,
-  });
+  // .ID keeps Docker's typed template path; raw JSON can omit an empty Tmpfs field.
+  const result = await execContainer(
+    engine,
+    [
+      "inspect",
+      "-f",
+      '{"Id":{{json .ID}},"State":{{json .State}},"Labels":{{json .Config.Labels}},"ReadonlyRootfs":{{json .HostConfig.ReadonlyRootfs}},"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}',
+      name,
+    ],
+    { allowFailure: true },
+  );
   if (result.code !== 0) {
     if (
       options.strict &&
@@ -121,9 +172,29 @@ export async function containerState(
         `Unable to inspect ${engine.displayName} sandbox ${name}: ${result.stderr.trim() || `exit ${result.code}`}`,
       );
     }
-    return { exists: false, running: false };
+    return { exists: false as const, running: false };
   }
-  return { exists: true, running: result.stdout.trim() === "true" };
+  const data: unknown = JSON.parse(result.stdout);
+  if (!isRecord(data) || typeof data.Id !== "string" || !/^[a-f0-9]{64}$/u.test(data.Id)) {
+    throw new Error("Container inspect did not return an immutable container ID.");
+  }
+  if (
+    !isRecord(data.State) ||
+    typeof data.State.Running !== "boolean" ||
+    typeof data.State.Paused !== "boolean"
+  ) {
+    throw new Error("Container inspect did not return runtime state.");
+  }
+  const configHash = isRecord(data.Labels) ? data.Labels["openclaw.configHash"] : null;
+  return {
+    exists: true as const,
+    running: data.State.Running,
+    ...(options.includePaused ? { paused: data.State.Paused } : {}),
+    id: data.Id,
+    readOnlyRoot: data.ReadonlyRootfs === true,
+    configHash: typeof configHash === "string" && configHash ? configHash : null,
+    mounts: parseInspectedSandboxMounts(data.Mounts, data.Tmpfs),
+  };
 }
 
 function isPodmanContainerNotFound(stderr: string): boolean {

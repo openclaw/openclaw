@@ -53,7 +53,7 @@ describe("agent file native status", () => {
     const first = createDeferred<AgentFileOutcome>();
     mounted.state.agentFileRead = first.promise;
     mounted.state.agentFileOutcome = first.promise;
-    await waitForSolid(() => mounted.button(/^Loading/, true));
+    await waitForSolid(() => mounted.button("Refresh", true));
 
     first.resolve({ error: "Synthetic file unavailable" });
     await mounted.text("Synthetic file unavailable");

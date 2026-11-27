@@ -33,7 +33,7 @@ const {
   enqueueSystemEventEntry: enqueue,
   captureSessionEventTargetForHost: captureTarget,
   enqueueSessionEventForHost: handoff,
-  agentCommandFromIngress: dispatch,
+  agentCommandFromGatewayIngress: dispatch,
   upsertSessionEntryCore: touchSession,
   loadSessionEntry: lookupSession,
   registerApnsRegistration: registerApns,
@@ -404,7 +404,7 @@ describe("voice transcript events", () => {
               loaded: buildSessionLookup(sessionKey),
               assertCurrent: () => {
                 if (opts === firstConnection && !current) {
-                  throw new Error("Node event session authority changed");
+                  throw new Error("Node event session changed. Retry the event.");
                 }
               },
               pending,
@@ -420,7 +420,7 @@ describe("voice transcript events", () => {
         firstConnection,
       );
       if (phase === "reservation") {
-        await expect(first).rejects.toThrow("Node event session authority changed");
+        await expect(first).rejects.toThrow("Node event session changed. Retry the event.");
       } else {
         await entered.promise;
       }
@@ -607,11 +607,19 @@ describe("notifications changed events", () => {
     expect(handoff).toHaveBeenCalledTimes(1);
   });
   it.each([
-    ["removed", undefined, "agent:ops:main", "ops", "com.example.mail"],
-    ["posted", "node-key", "agent:main:node-key", "main", undefined],
+    ["removed", undefined, "agent:ops:main", "ops", "com.example.mail", "notification:notif"],
+    // Posted updates are keyed by hex node id and key, so the queue's lowercasing keeps them apart.
+    [
+      "posted",
+      "node-key",
+      "agent:main:node-key",
+      "main",
+      undefined,
+      "notification:6e6f6465:6e6f746966",
+    ],
   ] as const)(
     "routes %s notifications with session key %s",
-    async (change, requestedKey, sessionKey, agentId, packageName) => {
+    async (change, requestedKey, sessionKey, agentId, packageName, contextKey) => {
       if (requestedKey) {
         lookupSession.mockReturnValueOnce({
           ...buildSessionLookup(requestedKey),
@@ -621,14 +629,19 @@ describe("notifications changed events", () => {
       const { notify } = nodeFixture();
       await notify({ change, packageName, sessionKey: requestedKey });
 
-      const routing = { sessionKey, contextKey: "notification:notif" };
+      const routing = { sessionKey, contextKey };
       expect(enqueue).toHaveBeenCalledWith(
         `Notification ${change} (node=node key=notif${packageName ? ` package=${packageName}` : ""})`,
         expect.objectContaining(routing),
       );
       expect(handoff).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ source: "device", agentId, sessionKey }),
+        expect.objectContaining({
+          source: "device",
+          agentId,
+          sessionKey,
+          replyExpectation: "optional",
+        }),
       );
     },
   );
@@ -687,15 +700,16 @@ describe("agent request events", () => {
   it.each(["voice touch", "agent dispatch", "receipt delivery"] as const)(
     "keeps accepted detached %s visible to suspension",
     async (phase) => {
-      const dispatchGate = createDeferred<never>();
-      const receipt = createDeferred<DurableMessageBatchSendResult>();
-      const touch = createDeferred();
+      const gate = createDeferred();
       if (phase === "voice touch") {
-        touchSession.mockImplementationOnce(() => touch.promise);
+        touchSession.mockImplementationOnce(() => gate.promise);
       } else if (phase === "agent dispatch") {
-        dispatch.mockImplementationOnce(() => dispatchGate.promise);
+        dispatch.mockImplementationOnce(() => gate.promise);
       } else {
-        sendBatch.mockImplementationOnce(() => receipt.promise);
+        sendBatch.mockImplementationOnce(async () => {
+          await gate.promise;
+          return sentDurableMessageBatchResult;
+        });
       }
 
       await runAdmittedNodeEvent(
@@ -717,13 +731,7 @@ describe("agent request events", () => {
 
       await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
       expectSuspendBusyWithRootWork(`${phase}-busy`);
-      if (phase === "voice touch") {
-        touch.resolve();
-      } else if (phase === "agent dispatch") {
-        dispatchGate.resolve(undefined as never);
-      } else {
-        receipt.resolve(sentDurableMessageBatchResult);
-      }
+      gate.resolve();
       await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       expectSuspendReady(`${phase}-ready`);
     },
@@ -777,10 +785,9 @@ describe("agent request events", () => {
     });
 
     const { request } = nodeFixture("node-revoked-before-detached-start");
-    await request(
-      { sessionKey: "agent:main:revoked-before-detached-start" },
-      { isConnectionCurrent },
-    );
+    await expect(
+      request({ sessionKey: "agent:main:revoked-before-detached-start" }, { isConnectionCurrent }),
+    ).resolves.toEqual(eventResult("agent.request", "pairing_changed"));
 
     await waitForFast(() => {
       expect(runtimeMocks.deleteMediaBuffer).toHaveBeenCalledWith("saved-after-admission");
@@ -824,7 +831,7 @@ describe("agent request events", () => {
   it("records a visible durable omission when inline image persistence fails", async () => {
     parseAttachments.mockResolvedValueOnce({
       message: "describe",
-      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg", sourceIndex: 0 }],
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
       imageOrder: ["inline"],
       offloadedRefs: [],
     });

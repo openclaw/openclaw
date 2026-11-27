@@ -61,7 +61,11 @@ test("device-folder turn settlement and reclaim release ownership without synchr
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     workspace: f.workspace,
   };
-  await recoverWorkspaceBeforeTurn(result);
+  await recoverWorkspaceBeforeTurn({
+    ...result,
+    tunnel,
+    turn: sessionIdentity(REQUEST.sessionId),
+  });
   await reconcileWorkspaceAfterTurn({
     ...result,
     tunnel,

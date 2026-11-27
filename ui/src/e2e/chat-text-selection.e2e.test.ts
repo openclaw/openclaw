@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -7,7 +9,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { chatMessage } from "./chat-flow.test-support.ts";
+import { captureUiProofEnabled, chatMessage } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -18,6 +20,133 @@ const first = "Select this message without painting its image or surrounding spa
 const last = "Selection ends here, with only the conversation text highlighted.";
 
 suite.define(() => {
+  it("selects the whole paragraph across a resolved session link", async () => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), colorScheme: "light" },
+      async ({ page }) => {
+        const linkedKey = "agent:main:dashboard:selection-reference";
+        const before = "Read the notes in ";
+        const after =
+          " before writing the summary. Keep the complete paragraph selected, including its reference, when copying it or adding it to chat.";
+        const title = "Selection reference";
+        const gateway = await installMockGateway(page, {
+          sessions: [{ key: linkedKey, kind: "direct", displayName: title }],
+          historyMessages: [
+            chatMessage("user", before + linkedKey + after),
+            chatMessage("assistant", "The next message must remain outside the selection."),
+          ],
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const link = page.locator(".chat-text .markdown-session-link--titled");
+        await link.waitFor();
+        const paragraph = page
+          .locator(".chat-text p")
+          .filter({ has: page.locator(".markdown-session-link--titled") });
+        for (const side of ["after", "before"] as const) {
+          const point = await paragraph.evaluate((element, selectedSide) => {
+            const node = selectedSide === "before" ? element.firstChild! : element.lastChild!;
+            const range = document.createRange();
+            range.setStart(node, 2);
+            range.setEnd(node, 3);
+            const rect = range.getBoundingClientRect();
+            return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+          }, side);
+          await page.mouse.click(point.x, point.y, { clickCount: 3 });
+          if (captureUiProofEnabled && side === "after") {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator(".chat-thread"),
+              [paragraph, link],
+              { animations: "disabled", elements: [page.locator(".chat-thread")] },
+            );
+            await writeFile(
+              path.join(suite.artifactDir, "triple-click-selection.png"),
+              frame.elements[0]!.png,
+            );
+          }
+          expect
+            .soft(await page.evaluate(() => window.getSelection()?.toString().trim()))
+            .toBe(before + title + after);
+          await page.keyboard.press("Escape");
+        }
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      },
+    );
+  });
+
+  it("keeps double-click drags inside the source message", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const prompt = "Fix the spacing on the alert row, then capture before and after proof.";
+      const reply = "I will align that row and verify the change.";
+      const gateway = await installMockGateway(page, {
+        historyMessages: [chatMessage("user", prompt), chatMessage("assistant", reply)],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const user = page.getByText(prompt, { exact: true });
+      const assistant = page.getByText(reply, { exact: true });
+      await user.waitFor();
+      await assistant.waitFor();
+      const selection = () => page.evaluate(() => window.getSelection()?.toString());
+      await user.dblclick({ position: { x: 5, y: 10 } });
+      expect(await selection()).toBe("Fix");
+      for (const [source, destination, expected] of [
+        [user, assistant, prompt],
+        [assistant, user, reply],
+      ] as const) {
+        const from = await source.boundingBox();
+        const to = await destination.boundingBox();
+        if (!from || !to) {
+          throw new Error("Selection messages have no visible bounds");
+        }
+        const backwards = source === assistant;
+        const x = from.x + (backwards ? from.width - 5 : 5);
+        const endX = to.x + (backwards ? 5 : to.width - 5);
+        await page.mouse.click(x, from.y + 10);
+        await page.mouse.down({ clickCount: 2 });
+        await page.mouse.move(endX, to.y + 10, { steps: 8 });
+        await page.mouse.up({ clickCount: 2 });
+        if (captureUiProofEnabled && !backwards) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".chat-thread"),
+            [user, assistant],
+            { animations: "disabled", elements: [page.locator(".chat-thread")] },
+          );
+          await writeFile(
+            path.join(suite.artifactDir, "double-click-selection.png"),
+            frame.elements[0]!.png,
+          );
+        }
+        expect(await selection()).toBe(expected);
+        await page.getByRole("toolbar", { name: "Selection actions" }).waitFor();
+        await page.keyboard.press("Escape");
+      }
+      const thread = page.locator(".chat-thread");
+      const bounds = await thread.boundingBox();
+      if (!bounds) {
+        throw new Error("Transcript has no visible bounds");
+      }
+      for (const x of [70, bounds.width - 30]) {
+        await thread.focus();
+        await page.keyboard.press("ControlOrMeta+A");
+        expect(await selection()).toContain(prompt);
+        expect(await selection()).toContain(reply);
+        await thread.click({ position: { x, y: 400 } });
+        expect.soft(await selection(), "clicking either blank side clears selection").toBe("");
+      }
+      const from = await user.boundingBox();
+      const outside = await page.locator(".agent-chat__composer-combobox textarea").boundingBox();
+      if (!from || !outside) {
+        throw new Error("No outside-release geometry");
+      }
+      await page.mouse.click(from.x + 5, from.y + 10);
+      await page.mouse.down({ clickCount: 2 });
+      await page.mouse.move(outside.x + 5, outside.y + 10, { steps: 8 });
+      await page.mouse.up({ clickCount: 2 });
+      expect.soft(await selection(), "release outside the transcript stays bounded").toBe(prompt);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
+  });
   it.each(["dark", "light"] as const)("paints only text in %s mode", async (colorScheme) => {
     await suite.withPage(
       { ...createControlUiE2eContextOptions(), colorScheme },
@@ -171,10 +300,8 @@ suite.define(() => {
         if (await work.count()) {
           await work.click();
         }
-        const disclosure = pane.locator('.chat-bubble-activity__summary[aria-label="Reasoning"]');
-        if (await disclosure.count()) {
-          await disclosure.click();
-        }
+        // Collapsed reasoning is a one-line preview; its prose is selectable once opened.
+        await pane.getByRole("button", { name: "Reasoning", exact: true }).click();
         const reasoning = pane.locator(".chat-thinking").getByText(reasoningText, { exact: true });
         await reasoning.waitFor();
         await reasoning.scrollIntoViewIfNeeded();

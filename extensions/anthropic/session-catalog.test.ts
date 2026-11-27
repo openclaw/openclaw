@@ -102,9 +102,8 @@ const nodeHostMocks = await vi.hoisted(async () => {
 // mock-isolation: Shared owner preserves real exports with fresh command-resolution mocks.
 vi.mock("openclaw/plugin-sdk/node-host", nodeHostMocks.mockRuntime);
 
-function projectFile(home: string, ...parts: string[]): string {
-  return path.join(home, ".claude", "projects", "-workspace", ...parts);
-}
+const projectFile = (home: string, ...parts: string[]) =>
+  path.join(home, ".claude", "projects", "-workspace", ...parts);
 
 async function writeClaudeExecutable(directory: string, source = "#!/bin/sh\n"): Promise<string> {
   await fs.mkdir(directory, { recursive: true });
@@ -254,12 +253,11 @@ async function writeDesktopMetadata(
 async function writeIndexedDesktopSession(
   home: string,
   sessionId: string,
-  localSessionId: string,
   metadata: Record<string, unknown> = {},
 ): Promise<void> {
   await writeIndexedSession(home, sessionId, { projectPath: "/work/openclaw", isSidechain: false });
   await writeDesktopMetadata(home, "fixture", {
-    sessionId: localSessionId,
+    sessionId: DESKTOP_SESSION_ID,
     cliSessionId: sessionId,
     cwd: "/work/openclaw",
     title: "Desktop session",
@@ -267,126 +265,29 @@ async function writeIndexedDesktopSession(
   });
 }
 
-function encodeVarint(value: number): Buffer {
-  const bytes: number[] = [];
-  let remaining = value;
-  while (remaining >= 0x80) {
-    bytes.push((remaining & 0x7f) | 0x80);
-    remaining = Math.floor(remaining / 0x80);
-  }
-  bytes.push(remaining);
-  return Buffer.from(bytes);
-}
+const DESKTOP_SESSION_ID = "local_11111111-1111-1111-1111-111111111111";
 
-function snappyLiteralChunk(value: Buffer): Buffer {
-  if (value.length <= 60) {
-    return Buffer.concat([Buffer.from([(value.length - 1) << 2]), value]);
-  }
-  const length = value.length - 1;
-  const lengthBytes: number[] = [];
-  let remaining = length;
-  while (remaining > 0) {
-    lengthBytes.push(remaining & 0xff);
-    remaining = Math.floor(remaining / 0x100);
-  }
-  return Buffer.concat([Buffer.from([(59 + lengthBytes.length) << 2, ...lengthBytes]), value]);
-}
+// Fixed synthetic stores with Chromium's encoding byte. The first three use
+// Snappy literal/copy records; the others cover mixed encodings, deletion and WAL alignment.
+const DESKTOP_TABLES = {
+  Release:
+    "0wHwoQAonwFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAAXsiaWQiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIiLCJuYW1lIjoiUmVsZWFzZSJ9eyJjb2RlOmxvY2FsXzExMTExMTExLTExMTEtMTExMS0xMTExLTExMTExMTExMTExMSI6IppuACQifQAAAAABAAAAAefpa/4AAQN4ALQBAAAAAAEAAAAAj9ki1AAAuQEPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABX+4CLJHVH2w==",
+  Changed:
+    "0wHwoQAonwFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAAXsiaWQiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIiLCJuYW1lIjoiQ2hhbmdlZCJ9eyJjb2RlOmxvY2FsXzExMTExMTExLTExMTEtMTExMS0xMTExLTExMTExMTExMTExMSI6IppuACQifQAAAAABAAAAAU1BpcIAAQN4ALQBAAAAAAEAAAAAj9ki1AAAuQEPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABX+4CLJHVH2w==",
+  "Normal poll update":
+    "3gHwrAAoqgFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAAXsiaWQiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIiLCJuYW1lIjoiTm9ybWFsIHBvbGwgdXBkYXRlIn17ImNvZGU6bG9jYWxfMTExMTExMTEtMTExMS0xMTExLTExMTEtMTExMTExMTExMTExIjoimnkAJCJ9AAAAAAEAAAABNGNRxwABA3gAvwEAAAAAAQAAAAAPuebJAADEAQ8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFf7gIskdUfb",
+  "encoded groups":
+    "ACOgAV9odHRwczovL2NsYXVkZS5haQABYS1sYXRpbgEBAAAAAAAAAXsiaWQiOiJjZy0xIiwibmFtZSI6IlJlbGUSKQxhc2UifXsiY29kZTpsb2NhbF8xIjoiY2ctMSJ9eyJpZCI6ImNnLTEiLCJuYW1lIjoiUmVsZWFzZSJ9eyJjb2RlOmxvY2FsXzEiOiJjZy0xIn17ImlkIjoiY2ctMiIsIm5hbWUiOiJDYWbpIn17ImNvZGU6bG9jYWxfMiI6ImNnLTIifRQPpwJiLW1peGVkAQEAAAAAAAAAewAiAGkAZAAiADoAIgBjAGcALQAzACIALAAiAG4AYQBtAGUAIgA6ACIAFHjRUyIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADMAIgA6ACIAYwBnAC0AMwAiAH0AewAiAGkAZAAiADoAIgBjAGcALQA0ACIALAAiAG4AYQBtAGUAIgA6ACIAPtie3SIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADQAIgA6ACIAYwBnAC0ANAAiAH0AewAiAGkAZAAiADoAIgBjAGcALQA1ACIALAAiAG4AYQBtAGUAIgA6ACIAUABsAGEAaQBuACIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADUAIgA6ACIAYwBnAC0ANQAiAH0AFA8DYy1lbXB0eQECAAAAAAAAAXt9HAc2AQAAAAAAAAF7ImlkIjoiY2ctNiIsIm5hbWUiOiJSZW1vdmVkIn17ImNvZGU6bG9jYWxfNiI6ImNnLTYifRQRAGQtZGVsZXRlZAACAAAAAAAAHQg2AQEAAAAAAAABeyJpZCI6ImNnLTciLCJuYW1lIjoiRGVsZXRlZCJ9eyJjb2RlOmxvY2FsXzciOiJjZy03In0AAAAAAQAAAACd8iUQAAEDeACzBQAAAAABAAAAAIdnuwQAALgFDwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAV/uAiyR1R9s=",
+  "WAL encoded groups":
+    "xm3qWssAAQEAAAAAAAAAAQAAAAEbX2h0dHBzOi8vY2xhdWRlLmFpAAFhLWxhdGluoAEBeyJpZCI6ImNnLTEiLCJuYW1lIjoiUmVsZRIpDGFzZSJ9eyJjb2RlOmxvY2FsXzEiOiJjZy0xIn17ImlkIjoiY2ctMSIsIm5hbWUiOiJSZWxlYXNlIn17ImNvZGU6bG9jYWxfMSI6ImNnLTEifXsiaWQiOiJjZy0yIiwibmFtZSI6IkNhZukifXsiY29kZTpsb2NhbF8yIjoiY2ctMiJ9ekJJHIkAAQIAAAAAAAAAAQAAAAEZX2h0dHBzOi8vY2xhdWRlLmFpAAFiLWNqa2EAewAiAGkAZAAiADoAIgBjAGcALQAzACIALAAiAG4AYQBtAGUAIgA6ACIAFHjRUyIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADMAIgA6ACIAYwBnAC0AMwAiAH0A+jIeafIAAQMAAAAAAAAAAQAAAAEbX2h0dHBzOi8vY2xhdWRlLmFpAAFjLWVtb2ppxwEAewAiAGkAZAAiADoAIgBjAGcALQA0ACIALAAiAG4AYQBtAGUAIgA6ACIAPtie3SIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADQAIgA6ACIAYwBnAC0ANAAiAH0AewAiAGkAZAAiADoAIgBjAGcALQA1ACIALAAiAG4AYQBtAGUAIgA6ACIAUABsAGEAaQBuACIAfQB7ACIAYwBvAGQAZQA6AGwAbwBjAGEAbABfADUAIgA6ACIAYwBnAC0ANQAiAH0A",
+};
 
-const CLAUDE_GROUP_USER_KEY = Buffer.from("_https://claude.ai\0\x01dframe-store", "latin1");
-
-function levelDbInternalKey(sequence: number, kind = 1): Buffer {
-  const trailer = Buffer.alloc(8);
-  trailer.writeBigUInt64LE((BigInt(sequence) << 8n) | BigInt(kind));
-  return Buffer.concat([CLAUDE_GROUP_USER_KEY, trailer]);
-}
-
-const LEVELDB_RESTART = Buffer.from([0, 0, 0, 0, 1, 0, 0, 0]);
-
-function levelDbDataBlock(
-  entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
-): Buffer {
-  const encoded: Buffer[] = [];
-  let previousKey: Uint8Array = Buffer.alloc(0);
-  for (const entry of entries) {
-    const key = levelDbInternalKey(entry.sequence, entry.kind ?? 1);
-    let shared = 0;
-    while (shared < previousKey.length && previousKey[shared] === key[shared]) {
-      shared += 1;
-    }
-    const value = Buffer.from(entry.value);
-    encoded.push(
-      encodeVarint(shared),
-      encodeVarint(key.length - shared),
-      encodeVarint(value.length),
-      key.subarray(shared),
-      value,
-    );
-    previousKey = key;
-  }
-  return Buffer.concat([...encoded, LEVELDB_RESTART]);
-}
-
-function snappyGroupRecords(groupId: string, groupName: string, localSessionId: string): Buffer {
-  const group = `{"id":"${groupId}","name":"${groupName}"}`;
-  const assignmentPrefix = `{"code:${localSessionId}":"`;
-  const key = levelDbInternalKey(1);
-  const valueLength =
-    Buffer.byteLength(group) + Buffer.byteLength(assignmentPrefix) + groupId.length + 2;
-  const firstChunk = Buffer.concat([
-    encodeVarint(0),
-    encodeVarint(key.length),
-    encodeVarint(valueLength),
-    key,
-    Buffer.from(`${group}${assignmentPrefix}`),
-  ]);
-  const groupIdOffset = firstChunk.length - firstChunk.indexOf(groupId);
-  const tail = Buffer.concat([Buffer.from('"}'), LEVELDB_RESTART]);
-  const decodedLength = firstChunk.length + groupId.length + tail.length;
-  return Buffer.concat([
-    encodeVarint(decodedLength),
-    snappyLiteralChunk(firstChunk),
-    Buffer.from([((groupId.length - 1) << 2) | 2, groupIdOffset & 0xff, groupIdOffset >> 8]),
-    snappyLiteralChunk(tail),
-  ]);
-}
-
-function levelDbTable(data: Buffer, compression: 0 | 1): Buffer {
-  const dataWithTrailer = Buffer.concat([data, Buffer.from([compression, 0, 0, 0, 0])]);
-  const handle = Buffer.concat([encodeVarint(0), encodeVarint(data.length)]);
-  const indexEntry = Buffer.concat([Buffer.from([0, 1, handle.length, 0x78]), handle]);
-  const index = Buffer.concat([indexEntry, LEVELDB_RESTART]);
-  const indexWithTrailer = Buffer.concat([index, Buffer.alloc(5)]);
-  const footer = Buffer.alloc(48);
-  Buffer.concat([
-    encodeVarint(0),
-    encodeVarint(0),
-    encodeVarint(dataWithTrailer.length),
-    encodeVarint(index.length),
-  ]).copy(footer);
-  return Buffer.concat([dataWithTrailer, indexWithTrailer, footer]);
-}
-
-async function writeDesktopGroupStore(
-  home: string,
-  groupId: string,
-  groupName: string,
-  localSessionId: string,
-): Promise<void> {
+async function writeDesktopGroupStore(home: string, fixture: keyof typeof DESKTOP_TABLES) {
   const dir = path.join(home, "Library/Application Support/Claude/Local Storage/leveldb");
+  const file = path.join(dir, fixture.startsWith("WAL") ? "000001.log" : "000001.ldb");
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "000001.ldb"),
-    levelDbTable(snappyGroupRecords(groupId, groupName, localSessionId), 1),
-  );
-}
-
-async function writeDesktopGroupStoreEntries(
-  home: string,
-  entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
-): Promise<void> {
-  const dir = path.join(home, "Library/Application Support/Claude/Local Storage/leveldb");
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, "000001.ldb"), levelDbTable(levelDbDataBlock(entries), 0));
+  await fs.writeFile(file, Buffer.from(DESKTOP_TABLES[fixture], "base64"));
+  return file;
 }
 
 async function writeBrokenClaudeNpmShim(binDir: string): Promise<string> {
@@ -565,6 +466,28 @@ afterEach(async () => {
 });
 
 describe("Claude session catalog", () => {
+  it("pins a selected local file and fences duplicate or relocated Claude project entries", async () => {
+    const home = await createHome();
+    const moved = await createHome();
+    const id = "9a9c88e8-982a-413a-827f-caa4a46d9920";
+    await writeUnindexedCliSessions(home, { [id]: "first" });
+    const source = (await listPage({}, home)).sessions[0]?.sourceHomeId;
+    expect(source).toMatch(/^[0-9a-f]{64}$/);
+    await expect(readPage({ threadId: id }, home, undefined, source)).resolves.toMatchObject({
+      threadId: id,
+    });
+    await writeUnindexedCliSessions(moved, { [id]: "second" });
+    await expect(readPage({ threadId: id }, moved, undefined, source)).rejects.toThrow(
+      "unavailable",
+    );
+    await writeUnindexedCliSessions(home, { [id]: "duplicate" }, "another-project");
+    const refreshed = await listClaudeSessions(home, { sessionId: id, forceRefresh: true });
+    expect(refreshed.records[0]?.sourceHomeId).toBeUndefined();
+    await expect(readPage({ threadId: id }, home, undefined, source)).rejects.toThrow(
+      "unavailable",
+    );
+  });
+
   it("reports the discovery frontier and finds and reads an exact ID beyond it", async () => {
     const home = await createHome();
     const watches = createClaudeCatalogWatchDriver(home);
@@ -935,24 +858,14 @@ describe("Claude session catalog", () => {
         invocableCommands: [] as string[],
       },
     ];
-    const runtime = {
-      nodes: {
-        list: vi.fn(async () => ({ nodes })),
-        invoke: vi.fn(async () =>
-          nodePayload({
-            sessions: [nodeSession(threadId, { source: "claude-desktop" })],
-          }),
+    const provider = captureCatalogProvider(
+      nodeRuntime(
+        nodes,
+        vi.fn(async () =>
+          nodePayload({ sessions: [nodeSession(threadId, { source: "claude-desktop" })] }),
         ),
-      },
-      config: { current: () => ({}) },
-      agent: {
-        session: {
-          listSessionEntries: () => [],
-          createSessionEntry: vi.fn(),
-        },
-      },
-    } as unknown as PluginRuntime;
-    const provider = captureCatalogProvider(runtime);
+      ),
+    );
 
     for (const [advertised, invocable] of [
       [commands, []],
@@ -1065,22 +978,11 @@ describe("Claude session catalog", () => {
 
   it("imports a Claude Desktop custom group for its matching catalog row", async () => {
     const home = await createHome();
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const sessionId = "desktop-custom-group";
-    const localSessionId = "local_11111111-1111-1111-1111-111111111111";
-    await writeIndexedDesktopSession(home, sessionId, localSessionId);
-    await writeDesktopGroupStore(
-      home,
-      "cg-22222222-2222-2222-2222-222222222222",
-      "Release",
-      localSessionId,
-    );
-
-    const groupFile = path.join(
-      home,
-      "Library/Application Support/Claude/Local Storage/leveldb/000001.ldb",
-    );
+    await writeIndexedDesktopSession(home, sessionId);
+    const groupFile = await writeDesktopGroupStore(home, "Release");
     const fixedGroupTime = new Date("2026-07-20T12:00:00.000Z");
     await fs.utimes(groupFile, fixedGroupTime, fixedGroupTime);
     await expect(listPage({}, home)).resolves.toMatchObject({
@@ -1092,12 +994,7 @@ describe("Claude session catalog", () => {
       expect(page.sessions[0]?.customGroup).toBe("Release"),
     );
     expect(readFile.mock.calls.filter(([target]) => target === groupFile)).toEqual([]);
-    await writeDesktopGroupStore(
-      home,
-      "cg-22222222-2222-2222-2222-222222222222",
-      "Changed",
-      localSessionId,
-    );
+    await writeDesktopGroupStore(home, "Changed");
     await fs.utimes(groupFile, fixedGroupTime, fixedGroupTime);
     expect((await listClaudeSessions(home, { forceRefresh: true })).records[0]?.customGroup).toBe(
       "Changed",
@@ -1110,12 +1007,7 @@ describe("Claude session catalog", () => {
         spy.mock.calls.filter(([target]) => typeof target === "string" && target.startsWith(home)),
       await listPage({}, home),
     );
-    await writeDesktopGroupStore(
-      home,
-      "cg-22222222-2222-2222-2222-222222222222",
-      "Normal poll update",
-      localSessionId,
-    );
+    await writeDesktopGroupStore(home, "Normal poll update");
     now += 60_001;
     expect((await listPage({}, home)).sessions[0]?.customGroup).toBe("Normal poll update");
   });
@@ -1123,22 +1015,17 @@ describe("Claude session catalog", () => {
   it("retains the current Claude Desktop pull request when history is truncated", async () => {
     const home = await createHome();
     const sessionId = "desktop-pull-requests";
-    await writeIndexedDesktopSession(
-      home,
-      sessionId,
-      "local_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      {
-        prNumber: 111772,
-        prs: [
-          { prNumber: 111772, state: "MERGED" },
-          { prNumber: 111179, state: "MERGED", dismissed: true },
-          ...Array.from({ length: 1_000 }, (_value, index) => ({
-            prNumber: index + 1,
-            state: "CLOSED",
-          })),
-        ],
-      },
-    );
+    await writeIndexedDesktopSession(home, sessionId, {
+      prNumber: 111772,
+      prs: [
+        { prNumber: 111772, state: "MERGED" },
+        { prNumber: 111179, state: "MERGED", dismissed: true },
+        ...Array.from({ length: 1_000 }, (_value, index) => ({
+          prNumber: index + 1,
+          state: "CLOSED",
+        })),
+      ],
+    });
 
     await expect(listPage({}, home)).resolves.toMatchObject({
       sessions: [
@@ -1154,30 +1041,19 @@ describe("Claude session catalog", () => {
     });
   });
 
-  it.each(["decoder garbage", "newer empty entry"] as const)(
+  it.each(["encoded groups", "WAL encoded groups"] as const)(
     "reads Desktop custom groups with %s",
     async (scenario) => {
-      const home = await createHome();
-      const sessionId = "desktop-group";
-      const localSessionId = "local_33333333-3333-3333-3333-333333333333";
-      const groupId = "cg-44444444-4444-4444-4444-444444444444";
-      await writeIndexedDesktopSession(home, sessionId, localSessionId);
-      await writeDesktopGroupStoreEntries(home, [
-        {
-          sequence: 1,
-          value:
-            (scenario === "decoder garbage"
-              ? `{"id":"${groupId}","name":"Rele\u0012)\fase"}`
-              : "") + `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`,
-        },
-        ...(scenario === "newer empty entry" ? [{ sequence: 2, value: "{}" }] : []),
-      ]);
-      const page = await listPage({}, home);
-      expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
-      if (scenario === "decoder garbage") {
-        expect(page.sessions[0]).toMatchObject({ customGroup: "Release" });
-      } else {
-        expect(page.sessions[0]).not.toHaveProperty("customGroup");
+      const names = ["Release", "Café", "研发", "🦞", "Plain", null, null];
+      for (const [index, name] of names.entries()) {
+        const home = await createHome();
+        const sessionId = "desktop-group";
+        await writeIndexedDesktopSession(home, sessionId, { sessionId: `local_${index + 1}` });
+        await writeDesktopGroupStore(home, scenario);
+        const page = await listPage({}, home);
+        expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
+        expect(page.sessions[0]?.customGroup).toBe(name ?? undefined);
+        expect(Object.hasOwn(page.sessions[0]!, "customGroup")).toBe(name !== null);
       }
     },
   );
@@ -1280,20 +1156,20 @@ describe("Claude session catalog", () => {
     }
   });
 
-  it("imports indexed CLI titles and colors through a symlinked root", async () => {
+  it("searches canonical CLI titles and imports colors through a symlinked root", async () => {
     const home = await createHome();
     const transcripts = Object.fromEntries(
       ["custom", "automatic", "prompt"].map((sessionId) => [
         sessionId,
         [
-          sdkCliMessage(sessionId, "First prompt"),
+          sdkCliMessage(sessionId, "Cafe\u0301 first prompt"),
           ...(sessionId !== "prompt"
-            ? [{ type: "ai-title", aiTitle: "Automatic title", sessionId }]
+            ? [{ type: "ai-title", aiTitle: "Cafe\u0301 automatic title", sessionId }]
             : []),
           ...(sessionId === "custom"
             ? [
                 { type: "custom-title", customTitle: "Earlier rename", sessionId },
-                { type: "custom-title", customTitle: "My renamed session", sessionId },
+                { type: "custom-title", customTitle: "Cafe\u0301 renamed session", sessionId },
                 { type: "ai-title", aiTitle: "Later automatic title", sessionId },
                 { type: "agent-color", agentColor: "red", sessionId },
                 { type: "agent-color", agentColor: "blue", sessionId },
@@ -1320,12 +1196,12 @@ describe("Claude session catalog", () => {
       path.join(home, ".claude", "projects"),
       path.join(scanHome, ".claude", "projects"),
     );
-    const sessions = (await listPage({}, scanHome)).sessions;
+    const sessions = (await listPage({ searchTerm: "CAFÉ" }, scanHome)).sessions;
     expect(Object.fromEntries(sessions.map((session) => [session.threadId, session.name]))).toEqual(
       {
-        custom: "My renamed session",
-        automatic: "Automatic title",
-        prompt: "First prompt",
+        custom: "Cafe\u0301 renamed session",
+        automatic: "Cafe\u0301 automatic title",
+        prompt: "Cafe\u0301 first prompt",
       },
     );
     expect(sessions.find((session) => session.threadId === "custom")).toMatchObject({
@@ -1337,8 +1213,8 @@ describe("Claude session catalog", () => {
     const home = await createHome();
     const watches = createClaudeCatalogWatchDriver(home);
     const sessionId = "large-colored-session";
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     await writeProject({
       home,
       entries: [{ sessionId, summary: "Stale index title" }],
@@ -1391,6 +1267,12 @@ describe("Claude session catalog", () => {
 
   it("serves an unchanged assembled scan without reparsing transcript files", async () => {
     const home = await createHome();
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    await writeDesktopMetadata(home, "missing", {
+      cliSessionId: "missing-desktop-transcript",
+      title: "Missing",
+    });
     const sessionIds = ["cached-session-a", "cached-session-b"];
     await writeUnindexedCliSessions(
       home,
@@ -1409,6 +1291,8 @@ describe("Claude session catalog", () => {
 
     // Polls re-read until the watch vouches for coverage; from then on an unchanged tree is free.
     await expectClaudeCatalogQuiescent(home, spies, homeCalls, first);
+    now += 15_001;
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3_600_000);
     const records = await listClaudeSessions(home);
     for (const spy of spies) {
       spy.mockClear();
@@ -1417,24 +1301,10 @@ describe("Claude session catalog", () => {
     for (const spy of spies) {
       expect(homeCalls(spy)).toEqual([]);
     }
-  });
-
-  it("does not shorten cache validity for Desktop rows with no captured transcript", async () => {
-    const home = await createHome();
-    await writeUnindexedCliSessions(home, { existing: "Existing" });
-    await writeDesktopMetadata(home, "missing", {
-      cliSessionId: "missing-desktop-transcript",
-      title: "Missing",
-    });
-    let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const openSpy = vi.spyOn(fs, "open");
-    const first = await listPage({}, home);
-    openSpy.mockClear();
-
-    now += 15_001;
-    await expect(listPage({}, home)).resolves.toEqual(first);
-    expect(openSpy).not.toHaveBeenCalled();
+    now += 300_001;
+    vi.mocked(Date.now).mockReturnValue(Date.now() - 7_200_000);
+    await listPage({}, home);
+    expect(spies.some((spy) => homeCalls(spy).length > 0)).toBe(true);
   });
 
   it("retries a transient project snapshot read on the short I/O recovery bound", async () => {
@@ -1459,8 +1329,8 @@ describe("Claude session catalog", () => {
       }
       return readdir(...args);
     });
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     expect((await listPage({}, home)).sessions).toEqual([]);
     now += 10_000;
     failOther = true;
@@ -1536,7 +1406,7 @@ describe("Claude session catalog", () => {
         });
       }
       let now = 1_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.spyOn(performance, "now").mockImplementation(() => now);
       expect((await listPage({}, home)).sessions).toEqual([]);
       now += 15_001;
       expect((await listPage({}, home)).sessions).toMatchObject([
@@ -1687,7 +1557,7 @@ describe("Claude session catalog", () => {
         expect(page.items[0]?.truncated).toBe(true);
         await expect(
           provider.read({ ...request, cursor: cursor?.replace(/^block:\d+:/u, "block:999:") }),
-        ).rejects.toThrow("transcript cursor is invalid");
+        ).rejects.toThrow("chat history cursor is invalid");
         await fs.appendFile(
           projectFile(home, `${sessionId}.jsonl`),
           `${JSON.stringify(message(sessionId, "assistant", "Appended reply", 5))}\n`,
@@ -1731,20 +1601,21 @@ describe("Claude session catalog", () => {
           cursor,
           limit: 1,
         }),
-      ).rejects.toThrow("transcript cursor is invalid");
+      ).rejects.toThrow("chat history cursor is invalid");
     }
     expect(listNodes).not.toHaveBeenCalled();
   });
 
-  it("forwards paired-node cursors exactly and rejects malformed response cursors", async () => {
+  it("preserves paired-node metadata and cursors, rejecting malformed cursors", async () => {
     const catalogCursor = "catalog+/=_cursor";
     const transcriptCursor = "transcript+/=_cursor";
+    const sessions = [nodeSession("session-a", { customGroup: "相談ごと 🦞" })];
     let catalogNextCursor = "catalog+/=_next";
     let transcriptNextCursor = "transcript+/=_next";
     const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) => ({
       payloadJSON: JSON.stringify(
         command === CLAUDE_SESSIONS_LIST_COMMAND
-          ? { sessions: [], nextCursor: catalogNextCursor }
+          ? { sessions, nextCursor: catalogNextCursor }
           : { threadId: "session-a", items: [], nextCursor: transcriptNextCursor },
       ),
     }));
@@ -1763,7 +1634,7 @@ describe("Claude session catalog", () => {
 
     await expect(
       provider.list({ hostIds: ["node:node-a"], cursors: { "node:node-a": catalogCursor } }),
-    ).resolves.toMatchObject([{ nextCursor: catalogNextCursor }]);
+    ).resolves.toMatchObject([{ nextCursor: catalogNextCursor, sessions }]);
     expect(invoke).toHaveBeenLastCalledWith(
       expect.objectContaining({
         command: CLAUDE_SESSIONS_LIST_COMMAND,
@@ -1793,7 +1664,7 @@ describe("Claude session catalog", () => {
     transcriptNextCursor = " ";
     await expect(
       provider.read({ hostId: "node:node-a", threadId: "session-a", limit: 1 }),
-    ).rejects.toThrow("Claude node returned an invalid transcript page");
+    ).rejects.toThrow("Claude node returned an invalid chat history page");
   });
 
   it("pages transcripts identically when every reverse-scan read returns short", async () => {
@@ -1816,7 +1687,7 @@ describe("Claude session catalog", () => {
     expect(older.nextCursor).toBeUndefined();
     for (const cursor of [` ${latest.nextCursor} `, " ", null]) {
       await expect(readPage({ threadId: sessionId, cursor, limit: 1 }, home)).rejects.toThrow(
-        "transcript cursor is invalid",
+        "chat history cursor is invalid",
       );
     }
   });
@@ -1832,7 +1703,7 @@ describe("Claude session catalog", () => {
     );
 
     await expect(readPage({ threadId: sessionId, limit: 2 }, home)).rejects.toThrow(
-      "Claude transcript changed while it was being read",
+      "Claude chat history changed while it was being read",
     );
   });
 

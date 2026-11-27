@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
@@ -8,7 +8,8 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   readSkillUsageInDatabase as readUsage,
   recordSkillUsageInDatabase as recordUsage,
-} from "../skills/workshop/skill-usage.kernel.js";
+} from "../skills/runtime/skill-usage.kernel.js";
+import { stateV24Schema } from "./openclaw-historical-imports.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync as closeState,
@@ -25,10 +26,7 @@ import { withStateMigrationBackupForTest as withBackup } from "./openclaw-state-
 import { assertSqliteMigrationScopePreserved as assertScope } from "./sqlite-migration-scope.test-support.js";
 
 // v25 changed metadata; v26 changed only this table's physical layout.
-const legacySchema = readFileSync(
-  new URL("../../test/fixtures/sqlite/openclaw-state-schema-v24.sql", import.meta.url),
-  "utf8",
-).replace(
+const legacySchema = stateV24Schema().replace(
   /(CREATE TABLE IF NOT EXISTS session_state_heads \([\s\S]*?\n\) STRICT);/u,
   "$1, WITHOUT ROWID;",
 );
@@ -97,7 +95,12 @@ it.each(["runtime", "doctor"] as const)(
          github_personal_publication_requests github_repository_publication_requests
          acp_replay_events skill_usage state_leases device_identities device_auth_tokens
          gateway_origin_device_tokens exec_approvals_config local_workspace_projections
-         local_workspace_manifest_nodes sqlite_stat1 sqlite_stat4`.split(/\s+/),
+         local_workspace_manifest_nodes local_workspace_source_path_sets local_workspace_tree_packs
+         claw_installs template_installs claw_workspace_files template_workspace_files
+         claw_package_refs template_package_refs claw_cron_refs template_cron_refs
+         claw_mcp_server_refs template_mcp_server_refs agent_provenance worker_environments
+         operator_approvals session_repository_workspaces worker_workspace_pending_results worker_session_placements
+         sqlite_stat1 sqlite_stat4`.split(/\s+/),
         () => {
           if (owner === "doctor") {
             expect(repairState(options).warnings).toEqual([]);

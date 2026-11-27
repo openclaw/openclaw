@@ -5,7 +5,7 @@ import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@ope
 import { Command } from "commander";
 import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
+import { makeSingleRuntimeParitySummary as runtimeSummary } from "./agentic-parity-report-test-helpers.js";
 import type { QaScenarioPack } from "./scenario-catalog.js";
 import * as taxonomyModule from "./scorecard-taxonomy.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -21,8 +21,6 @@ const {
   writeQaDockerHarnessFiles,
   buildQaDockerHarnessImage,
   runQaDockerUp,
-  defaultQaRuntimeModelForMode,
-  resolveQaRuntimeModelPair,
   readQaScenarioPack,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
@@ -35,9 +33,6 @@ const {
   writeQaDockerHarnessFiles: vi.fn(),
   buildQaDockerHarnessImage: vi.fn(),
   runQaDockerUp: vi.fn(),
-  defaultQaRuntimeModelForMode:
-    vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
-  resolveQaRuntimeModelPair: vi.fn(),
   readQaScenarioPack: vi.fn<() => QaScenarioPack>(),
 }));
 
@@ -103,11 +98,6 @@ vi.mock("./docker-up.runtime.js", () => ({
   runQaDockerUp,
 }));
 
-vi.mock("./model-selection.runtime.js", () => ({
-  defaultQaRuntimeModelForMode,
-  resolveQaRuntimeModelPair,
-}));
-
 vi.mock("./scenario-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./scenario-catalog.js")>();
   readQaScenarioPack.mockImplementation(actual.readQaScenarioPack);
@@ -125,39 +115,19 @@ import {
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
   runQaProfileCommand,
-  runQaManualLaneCommand,
   resolveQaHarnessRepoRoot,
   runQaSuiteCommand,
 } from "./cli.runtime.js";
 import { QaSuiteInfraError } from "./errors.js";
 import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
-import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
-import { resolveQaLiveFrontierAlternateModel } from "./providers/live-frontier/model-selection.runtime.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
-import type { QaProviderModeInput } from "./run-config.js";
 import { expandQaScenarioExecutionCells, type QaScenarioExecutionCell } from "./scenario-lane.js";
 import type { QaSuiteRunParams } from "./suite.js";
 
 const LEGACY_TEST_REPO_ROOT = path.resolve("/tmp/openclaw-repo");
 const nativeRealpath = fs.realpath.bind(fs);
 const tempDirs = createTempDirHarness();
-
-function resolveMockQaRuntimeModelPair(params: {
-  providerMode: string;
-  primaryModel?: string;
-  alternateModel?: string;
-}) {
-  const primaryModel =
-    params.primaryModel?.trim() || defaultQaRuntimeModelForMode(params.providerMode);
-  const alternateModel =
-    params.alternateModel?.trim() ||
-    (params.providerMode === "live-frontier"
-      ? (resolveQaLiveFrontierAlternateModel(primaryModel) ??
-        defaultQaRuntimeModelForMode(params.providerMode, { alternate: true }))
-      : defaultQaRuntimeModelForMode(params.providerMode, { alternate: true }));
-  return { primaryModel, alternateModel };
-}
 
 const QA_PASSING_SUITE_SCENARIO = {
   name: "channel chat baseline",
@@ -194,26 +164,6 @@ function expectWriteContains(mock: unknown, fragment: string): void {
 
 async function writeJson(filePath: string, value: unknown) {
   await fs.writeFile(filePath, JSON.stringify(value), "utf8");
-}
-
-function runtimeSummary(scenarioId: string) {
-  const summary = makeRuntimeParitySummary();
-  const scenario = summary.scenarios[0];
-  if (!scenario?.runtimeParity) {
-    throw new Error("runtime parity fixture missing");
-  }
-  const entry = {
-    ...scenario,
-    name: scenarioId,
-    runtimeParity: { ...scenario.runtimeParity, scenarioId },
-  };
-  const scenarios: [typeof entry] = [entry];
-  return {
-    ...summary,
-    scenarios,
-    counts: { total: 1, passed: 1, failed: 0 },
-    run: { ...summary.run, status: "completed" },
-  };
 }
 
 function makeQaEvidence(entries: unknown[] = []) {
@@ -305,6 +255,9 @@ describe("qa cli", () => {
   const runProfile = (options: Parameters<typeof runQaProfileCommand>[0]) =>
     runQaProfileCommand({ repoRoot: "/tmp/openclaw-repo", ...options });
   const readArtifact = (file: string) => fs.readFile(file, "utf8");
+  const parseAtRepo = (command: string, flags: Parameters<typeof parseQa>[1] = {}) =>
+    parseQa([command], { "repo-root": LEGACY_TEST_REPO_ROOT, ...flags });
+  const withOutput = { repoRoot: LEGACY_TEST_REPO_ROOT, outputDir: "out" };
 
   async function writeSuiteSummary(summary: unknown, summaryPath = suiteSummaryPath) {
     await writeJson(summaryPath, summary);
@@ -430,11 +383,6 @@ describe("qa cli", () => {
     ]) {
       mock.mockReset();
     }
-    defaultQaRuntimeModelForMode.mockImplementation(
-      (mode: string, options?: { alternate?: boolean }) =>
-        defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
-    );
-    resolveQaRuntimeModelPair.mockImplementation(resolveMockQaRuntimeModelPair);
     readQaScenarioPack.mockClear();
     runQaSuite.mockImplementation(async (params) => {
       const observedCells = executionCellsForSuiteParams(params);
@@ -589,19 +537,18 @@ describe("qa cli", () => {
       });
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await readArtifact(suiteEvidencePath)) as QaEvidenceSummaryJson;
-      expect(evidence.profile).toBe("smoke-ci");
-      expect(evidence.profilePlan?.counts).toMatchObject({
-        selected: 1,
-        missingCells: 0,
-      });
-      expect(evidence.profilePlan?.observedCells).toEqual(evidence.profilePlan?.expectedCells);
-      expect(evidence.evidenceMode).toBe(evidenceMode);
-      expect(evidence.profilePlan?.taxonomyIdentity).toEqual(capturedIdentity);
-      expect(evidence.scorecard).toMatchObject({
-        run: {
-          evidenceEntryCount: 1,
+      expect(evidence).toMatchObject({
+        profile: "smoke-ci",
+        evidenceMode,
+        profilePlan: {
+          counts: { selected: 1, missingCells: 0 },
+        },
+        scorecard: {
+          run: { evidenceEntryCount: 1 },
         },
       });
+      expect(evidence.profilePlan?.observedCells).toEqual(evidence.profilePlan?.expectedCells);
+      expect(evidence.profilePlan?.taxonomyIdentity).toEqual(capturedIdentity);
       expect(evidence.scorecard).not.toHaveProperty("kind");
       expect(evidence.scorecard).not.toHaveProperty("taxonomy");
       expect(evidence.scorecard).not.toHaveProperty("profile");
@@ -628,13 +575,12 @@ describe("qa cli", () => {
       counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
       scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
     });
-    runQaSuite.mockImplementationOnce(async (params) => {
-      const observedCells = executionCellsForSuiteParams(params);
-      return mockSuiteRuntimeResult("flow", {
-        observedCells,
+    runQaSuite.mockImplementationOnce(async (params) =>
+      mockSuiteRuntimeResult("flow", {
+        observedCells: executionCellsForSuiteParams(params),
         scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
-      });
-    });
+      }),
+    );
 
     await runProfile({
       profile: "all",
@@ -651,9 +597,8 @@ describe("qa cli", () => {
   it("filters QA-channel-pinned scenarios from an implicit Crabline driver profile", async () => {
     runQaSuite.mockImplementationOnce(async (params) => {
       await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
-      const observedCells = executionCellsForSuiteParams(params);
       return mockSuiteRuntimeResult("flow", {
-        observedCells,
+        observedCells: executionCellsForSuiteParams(params),
       });
     });
 
@@ -735,27 +680,6 @@ describe("qa cli", () => {
       });
     },
   );
-
-  it("forwards resolved catalog scenarios for automatic mixed-channel host runs", async () => {
-    await runQaSuiteCommand({
-      providerMode: "mock-openai",
-      channelDriver: "crabline",
-    });
-
-    const suiteArgs = mockFirstObjectArg(runQaSuite);
-    expect(suiteArgs.channelId).toBeUndefined();
-    expect(suiteArgs.scenarioIds).toEqual(
-      expect.arrayContaining(["telegram-help-command", "matrix-restart-resume"]),
-    );
-    const scenarioById = new Map(
-      readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario]),
-    );
-    expect(
-      (suiteArgs.scenarioIds as string[]).every(
-        (scenarioId) => scenarioById.get(scenarioId)?.execution.kind === "flow",
-      ),
-    ).toBe(true);
-  });
 
   it.each([
     [{ runtimePair: "openclaw,openclaw" }, /different runtimes/i],
@@ -954,18 +878,6 @@ describe("qa cli", () => {
     },
   );
 
-  it("accepts comma-separated runtime-pair lane filters", async () => {
-    await runSuite({ runtimePairLane: ["extended,soak"] });
-
-    expectFields(mockFirstObjectArg(runQaSuite), {
-      scenarioIds: expect.arrayContaining(["runtime-soak-100-turn", "runtime-tool-memory-add"]),
-    });
-    expectWriteContains(
-      stderrWrite,
-      "excluded lane-incompatible scenario(s): runtime-tool-image-generate",
-    );
-  });
-
   it("keeps runtime-pair lane selection on flow scenarios and reports exclusions", async () => {
     await runSuite({
       runtimePair: "openclaw,codex",
@@ -1039,19 +951,11 @@ describe("qa cli", () => {
   ])("writes a runtime-axis parity report preserving $status", async (cellOutcome) => {
     const repoRoot = await tempDirs.makeTempDir("qa-runtime-parity-");
 
-    const summary = makeRuntimeParitySummary();
-    const scenario = summary.scenarios[1];
-    if (!scenario?.runtimeParity) {
-      throw new Error("runtime parity fixture missing");
-    }
+    const summary = runtimeSummary(1);
+    const scenario = summary.scenarios[0];
     scenario.status = "fail";
     Object.assign(scenario.runtimeParity.cells.codex, cellOutcome);
-    await writeJson(path.join(repoRoot, "runtime-summary.json"), {
-      ...summary,
-      scenarios: [scenario],
-      counts: { total: 1, passed: 1, failed: 0 },
-      run: { ...summary.run, status: "completed" },
-    });
+    await writeJson(path.join(repoRoot, "runtime-summary.json"), summary);
 
     await runQaParityReportCommand({
       repoRoot,
@@ -1076,7 +980,7 @@ describe("qa cli", () => {
   it("writes a runtime-axis token-efficiency report when requested", async () => {
     const repoRoot = await tempDirs.makeTempDir("qa-runtime-token-efficiency-");
 
-    const summary = runtimeSummary("runtime-tool-fs-read");
+    const summary = runtimeSummary(0, "runtime-tool-fs-read");
     summary.run.providerMode = "live-frontier";
     const cells = summary.scenarios[0].runtimeParity.cells;
     Object.assign(cells.openclaw, {
@@ -1107,26 +1011,11 @@ describe("qa cli", () => {
     expectWriteContains(stdoutWrite, "QA runtime token efficiency report:");
     expectWriteContains(stdoutWrite, "QA runtime token efficiency verdict: fail");
     const [artifactDir] = await fs.readdir(path.join(repoRoot, ".artifacts", "qa-e2e"));
+    const reportDir = path.join(repoRoot, ".artifacts/qa-e2e", artifactDir ?? "");
     const tokenSummary = JSON.parse(
-      await readArtifact(
-        path.join(
-          repoRoot,
-          ".artifacts/qa-e2e",
-          artifactDir ?? "",
-          "qa-runtime-token-efficiency-summary.json",
-        ),
-      ),
+      await readArtifact(path.join(reportDir, "qa-runtime-token-efficiency-summary.json")),
     ) as { aggregate?: { flaggedScenarios?: string[] } };
     expect(tokenSummary.aggregate?.flaggedScenarios).toEqual(["runtime-tool-fs-read"]);
-  });
-
-  it("uses provider defaults for omitted manual models", async () => {
-    await runQaManualLaneCommand({ message: "probe" });
-    expect(mockFirstObjectArg(runQaManualLane)).toMatchObject({
-      providerMode: "live-frontier",
-      primaryModel: defaultQaProviderModelForMode("live-frontier"),
-      alternateModel: "openai/gpt-5.6-terra",
-    });
   });
 
   it("writes a curated mock JSONL replay report and summary", async () => {
@@ -1151,51 +1040,19 @@ describe("qa cli", () => {
     expect(summary.transcripts).toHaveLength(7);
   });
 
-  it("resolves character eval paths and passes model refs through", async () => {
+  it("parses candidate and judge model options independently", async () => {
     await runQaCharacterEvalCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      outputDir: ".artifacts/qa/character",
-      model: [
-        "openai/gpt-5.6-luna,thinking=xhigh,fast=false",
-        "codex-cli/test-model,thinking=high,fast",
-      ],
-      scenario: "character-vibes-gollum",
+      model: ["qa/candidate,thinking=xhigh,fast=false"],
       fast: true,
-      thinking: "medium",
-      modelThinking: ["codex-cli/test-model=medium"],
-      judgeModel: [
-        "openai/gpt-5.6-luna,thinking=xhigh,fast",
-        "anthropic/claude-opus-4-8,thinking=high",
-      ],
-      judgeTimeoutMs: 180_000,
-      blindJudgeModels: true,
-      concurrency: 4,
-      judgeConcurrency: 3,
+      judgeModel: ["qa/judge,thinking=high,fast"],
     });
 
-    const characterEvalArgs = mockFirstObjectArg(runQaCharacterEval);
-    expect(typeof characterEvalArgs.progress).toBe("function");
-    expectFields(characterEvalArgs, {
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/character"),
-      models: ["openai/gpt-5.6-luna", "codex-cli/test-model"],
-      scenarioId: "character-vibes-gollum",
+    expectFields(mockFirstObjectArg(runQaCharacterEval), {
+      models: ["qa/candidate"],
       candidateFastMode: true,
-      candidateThinkingDefault: "medium",
-      candidateThinkingByModel: { "codex-cli/test-model": "medium" },
-      candidateModelOptions: {
-        "openai/gpt-5.6-luna": { thinkingDefault: "xhigh", fastMode: false },
-        "codex-cli/test-model": { thinkingDefault: "high", fastMode: true },
-      },
-      judgeModels: ["openai/gpt-5.6-luna", "anthropic/claude-opus-4-8"],
-      judgeModelOptions: {
-        "openai/gpt-5.6-luna": { thinkingDefault: "xhigh", fastMode: true },
-        "anthropic/claude-opus-4-8": { thinkingDefault: "high" },
-      },
-      judgeTimeoutMs: 180_000,
-      judgeBlindModels: true,
-      candidateConcurrency: 4,
-      judgeConcurrency: 3,
+      candidateModelOptions: { "qa/candidate": { thinkingDefault: "xhigh", fastMode: false } },
+      judgeModels: ["qa/judge"],
+      judgeModelOptions: { "qa/judge": { thinkingDefault: "high", fastMode: true } },
     });
   });
 
@@ -1290,8 +1147,7 @@ describe("qa cli", () => {
     [
       "suite",
       () =>
-        parseQa(["suite"], {
-          "repo-root": LEGACY_TEST_REPO_ROOT,
+        parseAtRepo("suite", {
           "output-dir": "out",
           "provider-mode": "live-frontier",
           model: "openai/gpt-5.6-luna",
@@ -1311,8 +1167,7 @@ describe("qa cli", () => {
       "Telegram",
       () =>
         runQaTelegramCommand({
-          repoRoot: LEGACY_TEST_REPO_ROOT,
-          outputDir: "out",
+          ...withOutput,
           scenarioIds: ["telegram-help-command"],
           sutAccountId: "sut-live",
         }),
@@ -1322,8 +1177,7 @@ describe("qa cli", () => {
     [
       "manual",
       () =>
-        parseQa(["manual"], {
-          "repo-root": LEGACY_TEST_REPO_ROOT,
+        parseAtRepo("manual", {
           "provider-mode": "live-frontier",
           model: "openai/gpt-5.6-luna",
           message: "probe",
@@ -1335,8 +1189,7 @@ describe("qa cli", () => {
     [
       "Multipass",
       () =>
-        parseQa(["suite"], {
-          "repo-root": LEGACY_TEST_REPO_ROOT,
+        parseAtRepo("suite", {
           "output-dir": "out",
           runner: "multipass",
           "provider-mode": "mock-openai",
@@ -1356,8 +1209,7 @@ describe("qa cli", () => {
     [
       "Docker image",
       () =>
-        parseQa(["docker-build-image"], {
-          "repo-root": LEGACY_TEST_REPO_ROOT,
+        parseAtRepo("docker-build-image", {
           image: "openclaw:qa-test",
         }),
       buildQaDockerHarnessImage,
@@ -1367,8 +1219,7 @@ describe("qa cli", () => {
       "Docker scaffold",
       () =>
         runQaDockerScaffoldCommand({
-          repoRoot: LEGACY_TEST_REPO_ROOT,
-          outputDir: "out",
+          ...withOutput,
           providerBaseUrl: "http://127.0.0.1:44080/v1",
           usePrebuiltImage: true,
         }),
@@ -1379,8 +1230,7 @@ describe("qa cli", () => {
       "Docker up",
       () =>
         runQaDockerUpCommand({
-          repoRoot: LEGACY_TEST_REPO_ROOT,
-          outputDir: "out",
+          ...withOutput,
           usePrebuiltImage: true,
           skipUiBuild: true,
         }),

@@ -34,7 +34,7 @@ interface RuntimeBuffer {
 
 const runtimeBuffer = (globalThis as { Buffer?: RuntimeBuffer }).Buffer;
 
-function copyString(content: string): string {
+export function copyString(content: string): string {
   // Copy selected code units without normalizing lone surrogates or retaining the source backing.
   return runtimeBuffer ? runtimeBuffer.from(content, "utf16le").toString("utf16le") : content;
 }

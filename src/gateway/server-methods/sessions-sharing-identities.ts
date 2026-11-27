@@ -32,18 +32,15 @@ export function knownSessionIdentities(params: {
   if (params.actor.state === "present") {
     remember(params.actor.actor);
   }
-  for (const creator of params.creators) {
-    remember(creator);
-  }
+  // Human candidates come from current profiles, never historical session provenance.
+  params.creators.filter((creator) => creator.type !== "human").forEach(remember);
   for (const profile of params.profiles) {
     remember({
       type: "human",
       id: profile.id,
       identity: { type: "profile", id: profile.id },
       label: profile.label,
-      ...(profile.hasAvatar
-        ? { avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.updatedAt) }
-        : {}),
+      avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.updatedAt),
     });
   }
   return [...identities.values()];

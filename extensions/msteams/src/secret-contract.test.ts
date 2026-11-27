@@ -4,13 +4,18 @@ import {
   createResolverContext,
   resolveSecretRefValues,
 } from "openclaw/plugin-sdk/secret-ref-runtime";
-import { describe, expect, it } from "vitest";
-import { collectRuntimeConfigAssignments } from "./secret-contract.js";
+import { describe, expect, it, vi } from "vitest";
+
+// mock-isolation: secret metadata must not evaluate the inactive channel's setup wizard.
+vi.mock("openclaw/plugin-sdk/setup", () => {
+  throw new Error("Microsoft Teams secret metadata must not load the setup wizard");
+});
 
 async function resolveMSTeamsSecretAssignments(
   msteams: NonNullable<OpenClawConfig["channels"]>["msteams"],
   env: NodeJS.ProcessEnv,
 ) {
+  const { collectRuntimeConfigAssignments } = await import("../secret-contract-api.js");
   const sourceConfig: OpenClawConfig = { channels: { msteams } };
   const resolvedConfig: OpenClawConfig = structuredClone(sourceConfig);
   const context = createResolverContext({ sourceConfig, env });

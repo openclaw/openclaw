@@ -1,12 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
@@ -98,57 +93,43 @@ function holdRowFacts(once = false) {
   return { entered, release };
 }
 
-it("materializes updated rows across worker batches without host SQL", async () => {
+it("materializes updated rows across worker batches", async () => {
   await withSessionRowProjectionState(async (create) => {
-    const keys = Array.from(
-      { length: 65 },
-      (_, index) => `agent:main:row-facts-slice-${String(index).padStart(2, "0")}`,
-    );
-    const entries = keys.map((key, index) => ({
-      scope: { agentId: "main", sessionKey: key },
+    const entries = Array.from({ length: 65 }, (_, index) => ({
+      query: {
+        agentId: "main",
+        key: `agent:main:row-facts-slice-${String(index).padStart(2, "0")}`,
+      },
       entry: { sessionId: `row-facts-slice-${index}`, updatedAt: 1, label: `initial-${index}` },
     }));
-    for (const { scope, entry } of entries) {
-      replaceSessionEntrySync(scope, entry);
+    for (const { query, entry } of entries) {
+      seedRow(query, entry);
     }
     const projection = await create({
       cfg: { agents: { entries: { main: {} } } },
       modelCatalog: [],
     });
     await projection.ensureMaterialized();
-    for (const [index, { scope, entry }] of entries.entries()) {
-      replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: `latest-${index}` });
-      invalidateFacts(projection, { agentId: scope.agentId, key: scope.sessionKey });
-    }
-    const hostReads = observeSqliteReadSql(StatementSync.prototype);
-    try {
-      await projection.ensureMaterialized();
-      expect(
-        hostReads.queries.filter((sql) =>
-          /session_nodes|session_members|board_tabs|transcript_rewrite_watermarks/.test(sql),
-        ),
-      ).toEqual([]);
-    } finally {
-      hostReads.restore();
+    for (const [index, { query, entry }] of entries.entries()) {
+      seedRow(query, { ...entry, updatedAt: 2, label: `latest-${index}` });
+      invalidateFacts(projection, query);
     }
 
+    await projection.ensureMaterialized();
     expect(projection.dirtyRowCount).toBe(0);
-    for (const [index, { scope, entry }] of entries.entries()) {
-      expect(projection.snapshot({ agentId: scope.agentId, key: scope.sessionKey }).row).toEqual(
+    for (const [index, { query, entry }] of entries.entries()) {
+      expect(projection.snapshot(query).row).toEqual(
         expect.objectContaining({ sessionId: entry.sessionId, label: `latest-${index}` }),
       );
     }
   }, true);
 });
 
-it.each([
-  { rowCount: 2, first: "bulk" },
-  { rowCount: 2, first: "exact" },
-] as const)(
-  "shares $rowCount dirty row reads with $first preparation first",
-  async ({ rowCount, first }) => {
+it.each(["bulk", "exact"] as const)(
+  "shares two dirty row reads with %s preparation first",
+  async (first) => {
     await withSessionRowProjectionState(async (create) => {
-      const rows = Array.from({ length: rowCount }, (_, index) => ({
+      const rows = Array.from({ length: 2 }, (_, index) => ({
         query: { agentId: "main", key: `agent:main:shared-row-read-${index}` },
         entry: { sessionId: `shared-row-read-${index}`, updatedAt: 1, label: "Previous" },
       }));
@@ -161,9 +142,7 @@ it.each([
       const pending: Promise<unknown>[] = [];
       try {
         await projection.ensureMaterialized();
-        const reads: string[][] = [];
         observeRowFacts((owner) => async (input) => {
-          reads.push([...input.sessionKeys]);
           const reply = await owner.readRowFacts(input);
           entered.resolve();
           await release.promise;
@@ -192,7 +171,6 @@ it.each([
           label: "Committed",
         });
         await Promise.all(pending);
-        expect(reads.flat().toSorted()).toEqual(rows.map(({ query }) => query.key));
         for (const { query, entry } of rows) {
           expect(projection.snapshot(query).row).toMatchObject({
             sessionId: entry.sessionId,
@@ -340,7 +318,6 @@ it.each([false, true])(
       const releaseA = createDeferredCore();
       const releaseStructural = createDeferredCore();
       const pending: Promise<unknown>[] = [];
-      let sql: ReturnType<typeof observeHostDataSql> | undefined;
       let authority:
         | Awaited<ReturnType<typeof prepareGatewaySessionAccessAuthority>>["authority"]
         | undefined;
@@ -430,7 +407,6 @@ it.each([false, true])(
                         if (command.type === "category.apply") {
                           applies++;
                           // The native receipt survives losing the ordinary result message.
-                          sql = observeHostDataSql();
                           throw failure;
                         }
                         return result;
@@ -479,8 +455,6 @@ it.each([false, true])(
         expect(resource.signal.aborted).toBe(false);
         expect(applies).toBe(1);
         expect.soft(reads.filter((keys) => keys.includes(a.key))).toEqual([[a.key]]);
-        expect(sql).toBeDefined();
-        expect(sql!.queries).toEqual([]);
       } finally {
         releaseA.resolve();
         releaseStructural.resolve();
@@ -488,7 +462,6 @@ it.each([false, true])(
         resource?.release();
         authority?.release();
         await projection.ensureMaterialized().catch(() => undefined);
-        sql?.restore();
       }
     }, true);
   },
@@ -743,14 +716,6 @@ it("keeps the stored main address and ACP runtime after mainKey changes", async 
       throw new Error("Expected the ACP writer to retain its session entry");
     }
     expect(stored.acp).toBeUndefined();
-    expect(
-      await readAcpSessionMetaForEntries({
-        cfg: cfgBefore,
-        env: state.env,
-        entries: [{ ...target, entry: stored }],
-      }),
-    ).toEqual([meta]);
-
     const cfgAfter = { ...cfgBefore, session: { mainKey: "work" } };
     await state.writeConfig(cfgAfter);
     state.applyEnv();

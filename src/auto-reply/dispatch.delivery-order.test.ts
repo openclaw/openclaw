@@ -325,7 +325,7 @@ describe("foreground reply delivery order", () => {
     expect(deliveries).toEqual(finals("second chat final", "first chat final"));
   });
 
-  it.each(["status command", "queue admission notice"] as const)(
+  it.each(["status command", "queue admission notice", "queued"] as const)(
     "delivers %s immediately while later ordinary output retains the active turn's fence",
     async (noticeKind) => {
       const deliveries: Delivery[] = [];
@@ -341,8 +341,10 @@ describe("foreground reply delivery order", () => {
         "notice-message": async (params) => {
           const payload = { text: notice, isStatusNotice: true };
           params.dispatcher.sendFinalReply(
-            noticeKind === "queue admission notice"
-              ? setReplyPayloadMetadata(payload, { queueAdmissionNotice: true })
+            noticeKind !== "status command"
+              ? setReplyPayloadMetadata(payload, {
+                  queueAdmissionNotice: noticeKind === "queued" ? "queued" : true,
+                })
               : payload,
           );
           return queuedFinalResult();

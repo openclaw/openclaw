@@ -1,11 +1,13 @@
 import type {
   SessionCatalog,
+  SessionCatalogProfileRelation,
   SessionsCatalogArchiveParams,
   SessionsCatalogImportParams,
   SessionsCatalogImportResult,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { SidebarNavigationView } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -46,7 +48,8 @@ export interface SessionDataInputs {
   readonly isConnected: boolean;
   readonly connected: boolean;
   readonly navigationVisible: boolean;
-  readonly navigationView: "sessions" | "online" | "pages";
+  readonly navigationCollapsed: boolean;
+  readonly navigationView: SidebarNavigationView;
   readonly contextualSidebar?: ContextualSidebar;
   readonly sidebarAgentsMode: "chip" | "roster";
   shouldPublishSessionData(): boolean;
@@ -69,6 +72,7 @@ export interface SessionCatalogDataOwner {
   readonly context: ApplicationContext;
   readonly isSessionDataHostConnected: boolean;
   readonly sessionCatalogRowsVisible: boolean;
+  readonly sessionCatalogProfileRelation?: SessionCatalogProfileRelation;
   sessionCatalogs: SessionCatalog[];
   sessionCatalogRefreshStatus: PanelRefreshStatus;
   loadingMoreSessionCatalogIds: ReadonlySet<string>;
@@ -319,6 +323,7 @@ async function replayFreshSessionCatalogHost(
     previousCatalogs: [],
     client,
     agentId,
+    profileRelation: owner.sessionCatalogProfileRelation,
     pageDepths: owner.sessionCatalogPageDepths,
     isCurrent,
     canRequestPage: () => isCurrent() && document.visibilityState !== "hidden",
@@ -360,6 +365,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     live: owner.sessionCatalogLive,
     client,
     agentId,
+    profileRelation: owner.sessionCatalogProfileRelation,
     generation,
     currentGeneration: () => owner.sessionScopeGeneration,
     currentClient: () => owner.sessionCatalogGatewayClient(),
@@ -375,7 +381,45 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
       owner.sessionCatalogRefreshStatus = completePanelRefresh();
       owner.requestSessionDataUpdate();
     },
-    continueRefresh: () => discoverHiddenSessionCatalogPages(owner),
+    continueRefresh: async () => {
+      const discoveryGeneration = owner.sessionScopeGeneration;
+      const scope = owner.sessionCatalogLive.refreshScope;
+      const discoveryClient = visibleSessionCatalogClient(owner);
+      if (!discoveryClient || !owner.isSessionDataHostConnected) {
+        return;
+      }
+      // Empty prefixes belong to this finite cursor sweep, not a window that root
+      // refreshes must replay. Errors and repeated cursors stop the affected host.
+      while (
+        discoveryGeneration === owner.sessionScopeGeneration &&
+        scope === owner.sessionCatalogLive.refreshScope &&
+        discoveryClient === visibleSessionCatalogClient(owner) &&
+        owner.isSessionDataHostConnected
+      ) {
+        const hiddenIds = new Set(owner.sessionCatalogIdsWithoutVisibleRows());
+        const pages = owner.sessionCatalogs.flatMap((catalog) => {
+          if (!hiddenIds.has(catalog.id) || catalog.pending || catalog.error) {
+            return [];
+          }
+          const hostIds = catalog.hosts
+            .filter((host) => host.nextCursor && !host.pending && !host.error)
+            .map((host) => host.hostId);
+          return hostIds.length > 0 ? [{ catalogId: catalog.id, hostIds }] : [];
+        });
+        if (pages.length === 0) {
+          return;
+        }
+        const revision = owner.sessionCatalogRevision;
+        await Promise.all(
+          pages.map(({ catalogId, hostIds }) =>
+            loadMoreSessionCatalog(owner, catalogId, hostIds, true),
+          ),
+        );
+        if (revision === owner.sessionCatalogRevision) {
+          return;
+        }
+      }
+    },
     applyError: (error) => {
       withdrawFreshSessionCatalogs(owner, sessionCatalogRequestError(error));
       owner.sessionCatalogRefreshStatus = failPanelRefresh(
@@ -388,50 +432,6 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     refresh: () => refreshSessionCatalogsInBackground(owner),
   });
   owner.requestSessionDataUpdate();
-}
-
-function hiddenSessionCatalogPages(owner: SessionCatalogDataOwner) {
-  const hiddenIds = new Set(owner.sessionCatalogIdsWithoutVisibleRows());
-  return owner.sessionCatalogs.flatMap((catalog) => {
-    if (!hiddenIds.has(catalog.id) || catalog.pending || catalog.error) {
-      return [];
-    }
-    const hostIds = catalog.hosts
-      .filter((host) => host.nextCursor && !host.pending && !host.error)
-      .map((host) => host.hostId);
-    return hostIds.length > 0 ? [{ catalogId: catalog.id, hostIds }] : [];
-  });
-}
-
-async function discoverHiddenSessionCatalogPages(owner: SessionCatalogDataOwner): Promise<void> {
-  const generation = owner.sessionScopeGeneration;
-  const scope = owner.sessionCatalogLive.refreshScope;
-  const client = visibleSessionCatalogClient(owner);
-  if (!client || !owner.isSessionDataHostConnected) {
-    return;
-  }
-  // Empty prefixes belong to this finite cursor sweep, not a window that root
-  // refreshes must replay. Errors and repeated cursors stop the affected host.
-  while (
-    generation === owner.sessionScopeGeneration &&
-    scope === owner.sessionCatalogLive.refreshScope &&
-    client === visibleSessionCatalogClient(owner) &&
-    owner.isSessionDataHostConnected
-  ) {
-    const pages = hiddenSessionCatalogPages(owner);
-    if (pages.length === 0) {
-      return;
-    }
-    const revision = owner.sessionCatalogRevision;
-    await Promise.all(
-      pages.map(({ catalogId, hostIds }) =>
-        loadMoreSessionCatalog(owner, catalogId, hostIds, true),
-      ),
-    );
-    if (revision === owner.sessionCatalogRevision) {
-      return;
-    }
-  }
 }
 
 export function invalidateSessionCatalogs(owner: SessionCatalogDataOwner): void {
@@ -496,6 +496,9 @@ export async function loadMoreSessionCatalog(
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       agentId,
       catalogId,
+      ...(owner.sessionCatalogProfileRelation && catalog.capabilities.profileRelation
+        ? { profileRelation: owner.sessionCatalogProfileRelation }
+        : {}),
       hostIds: Object.keys(cursors),
       cursors,
     });
@@ -651,4 +654,25 @@ export async function importSessionCatalog(
   }
   void owner.refreshSidebarSessions(params.agentId);
   return result;
+}
+
+/** A relation is sent only for catalogs whose descriptor negotiated the capability. */
+export function selectSessionCatalogProfileRelation(
+  catalogs: readonly SessionCatalog[],
+  { ownerId, involvingMe }: { ownerId: string | null; involvingMe: boolean },
+  selfId?: string,
+): SessionCatalogProfileRelation | undefined {
+  if (
+    !catalogs.some((catalog) => catalog.capabilities.profileRelation) ||
+    (!involvingMe && !ownerId)
+  ) {
+    return undefined;
+  }
+  return {
+    relationship: involvingMe ? "involving" : "owned",
+    target:
+      ownerId && !involvingMe && ownerId !== selfId
+        ? { type: "local-profile", id: ownerId }
+        : { type: "me" },
+  };
 }

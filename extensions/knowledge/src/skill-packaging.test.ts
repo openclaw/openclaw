@@ -12,13 +12,13 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const names = [
   "knowledge-automation",
   "knowledge-capture",
+  "knowledge-claim-consolidation",
   "knowledge-correct",
   "knowledge-entities",
   "knowledge-ingest",
   "knowledge-meeting-ingest",
   "knowledge-recall",
   "knowledge-source-ingest",
-  "knowledge-unlinked-claims",
 ];
 
 it("packaged skills have discoverable metadata and self-contained readable references", async () => {
@@ -89,6 +89,8 @@ it("bundled skill payload includes all skill entrypoints, references and upstrea
       expect(files.has(`skills/${name}/references/source-manifest.md`)).toBeTruthy();
       expect(files.has(`skills/${name}/scripts/source-manifest.mjs`)).toBeTruthy();
       expect(files.has(`skills/${name}/scripts/discrawl-normalize.mjs`)).toBeTruthy();
+      expect(files.has(`skills/${name}/scripts/slack-read-normalize.mjs`)).toBeTruthy();
+      expect(files.has(`skills/${name}/references/scribe-runs.md`)).toBeTruthy();
     }
   }
   await expect(readFile(path.join(root, "THIRD_PARTY_NOTICES.md"), "utf8")).resolves.toBeTruthy();

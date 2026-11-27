@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { ignoreMissingPath } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import {
@@ -26,7 +27,6 @@ import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
-import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import {
   publishServiceFile,
   matchesServiceFilePublication,
@@ -56,6 +56,29 @@ export function resolveLaunchAgentPlistPathForLabel(
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
+/**
+ * Removes a plist whose service is already booted out, keeping a copy in Trash when allowed.
+ * macOS privacy protection can deny ~/.Trash to an app-launched helper while the user's
+ * LaunchAgents directory stays writable; stopping halfway would leave the Gateway unloaded
+ * with its definition still in place.
+ */
+export async function removeBootedOutLaunchAgentPlist(
+  plistPath: string,
+  trashPath: string,
+): Promise<{ trashed: boolean }> {
+  try {
+    await fs.mkdir(path.dirname(trashPath), { recursive: true });
+    await fs.rename(plistPath, trashPath);
+    return { trashed: true };
+  } catch (error) {
+    if (!hasErrnoCode(error, "EPERM") && !hasErrnoCode(error, "EACCES")) {
+      throw error;
+    }
+  }
+  await fs.unlink(plistPath);
+  return { trashed: false };
+}
+
 function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {
   return path.join(resolveGatewayStateDir(env), LAUNCH_AGENT_ENV_DIR_NAME);
 }
@@ -66,6 +89,58 @@ export function resolveLaunchAgentEnvFilePath(env: GatewayServiceEnv, label: str
 
 export function resolveLaunchAgentEnvWrapperPath(env: GatewayServiceEnv, label: string): string {
   return path.join(resolveLaunchAgentEnvDir(env), `${label}-env-wrapper.sh`);
+}
+
+/** Doctor owns quote-shape recovery; runtime reads must preserve literal quotes. */
+export async function inspectLaunchAgentEnvironmentQuotes(env: GatewayServiceEnv) {
+  const filePath = resolveLaunchAgentEnvFilePath(env, resolveLaunchAgentLabel(env));
+  const original = await fs.readFile(filePath, "utf8").catch((error: unknown) => {
+    return ignoreMissingPath(error) ?? null;
+  });
+  if (!original?.startsWith(`${LAUNCH_AGENT_ENV_FILE_HEADER}\n`)) {
+    return null;
+  }
+  const keys: string[] = [];
+  // Consume whole shell values, including multiline data and escaped apostrophes,
+  // so an export-looking line inside another value is never treated as an entry.
+  const contents = original.replace(
+    /^export ([A-Za-z_][A-Za-z0-9_]*)='((?:[^']|'\\'')*)'(?=\n|$)/gm,
+    (entry, key: string, value: string) => {
+      if (value.length < 2 || !value.startsWith('"') || !value.endsWith('"')) {
+        return entry;
+      }
+      keys.push(key);
+      return `export ${key}='${value.slice(1, -1)}'`;
+    },
+  );
+  if (!keys.length) {
+    return null;
+  }
+  return {
+    filePath,
+    keys,
+    // Caller holds this service's operation lock across inspection and consent.
+    repair: async (assertCurrent: () => void) => {
+      const verify = async () => {
+        if ((await fs.readFile(filePath, "utf8")) !== original) {
+          throw new Error("Service env file changed after inspection; rerun doctor.");
+        }
+        assertCurrent();
+      };
+      await verify();
+      const backupPath = `${filePath}.quotes-${randomUUID()}.bak`;
+      assertCurrent();
+      await fs.writeFile(backupPath, original, { flag: "wx", mode: 0o600, flush: true });
+      await publishServiceFile({
+        filePath,
+        contents,
+        mode: LAUNCH_AGENT_ENV_FILE_MODE,
+        beforeRename: verify,
+        assertCurrent,
+      });
+      return backupPath;
+    },
+  };
 }
 
 function collectLaunchAgentEnvironmentEntries(
@@ -447,6 +522,7 @@ export async function writeLaunchAgentPlist(
   });
 
   if (definitionTransaction.preservePolicy?.length) {
+    const { preserveServicePolicyXml } = await import("./service-policy-xml.js");
     plist = preserveServicePolicyXml(
       plist,
       await normalizeLaunchdPlistXml(await fs.readFile(plistPath)),

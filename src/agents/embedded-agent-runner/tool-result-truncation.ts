@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -14,11 +13,7 @@ import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionManager } from "../sessions/index.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
-import {
-  calculateMaxToolResultCharsWithCap,
-  resolveAutoLiveToolResultMaxChars,
-  resolveLiveToolResultMaxChars,
-} from "../tool-result-limits.js";
+import { resolveLiveToolResultMaxChars } from "../tool-result-limits.js";
 import { readCacheTtlCheckpoint } from "./cache-ttl-checkpoint.js";
 import * as truncationNotice from "./context-truncation-notice.js";
 import { log } from "./logger.js";
@@ -36,8 +31,13 @@ import {
 import { projectToolResultMessage } from "./tool-result-projection-message.js";
 import {
   estimateToolResultTextChars,
+  getToolResultHistoryTextBudget,
+  MIN_KEEP_CHARS,
+  resolveEffectiveMinKeepChars,
+  getToolResultTextBudget,
   isToolResultTextBlock,
-  readPreparedToolResultTextChars,
+  keepToolResultTextPrefix,
+  prepareToolResultTextChars,
   sliceToolResultTextTailToBudget,
   sliceToolResultTextToBudget,
 } from "./tool-result-text-budget.js";
@@ -292,7 +292,6 @@ export function pruneExpiredCacheTtlToolResults(params: {
   return next ?? unchanged;
 }
 
-const MIN_KEEP_CHARS = 2_000;
 const RECOVERY_MIN_KEEP_CHARS = 0;
 const TOOL_RESULT_WARNING_DEDUPE_LIMIT = 1_024;
 export const toolResultWarningDedupe = {
@@ -310,17 +309,6 @@ const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
   `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; narrow args]`;
 const AGGREGATE_ELISION_MARKER =
   "[tool result elided: aggregate tool-result budget exceeded; rerun the command if the output is needed]";
-
-function resolveEffectiveMinKeepChars(
-  maxChars: number,
-  options: ToolResultTruncationOptions,
-  suffixFactory: (truncatedChars: number) => string,
-): number {
-  const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
-  const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
-  const suffixFloor = estimateToolResultTextChars(suffixFactory(1), budgetOptions);
-  return Math.max(0, Math.min(minKeepChars, maxChars - suffixFloor));
-}
 
 function appendBoundedTruncationSuffix(params: {
   keptText: string;
@@ -459,20 +447,6 @@ export function resolveLiveToolResultAggregateMaxChars(params: {
   );
 }
 
-function getToolResultTextBudget(msg: AgentMessage): number {
-  if (!msg || msg.role !== "toolResult") {
-    return 0;
-  }
-  const content = (msg as { content?: unknown }).content;
-  return Array.isArray(content)
-    ? content.reduce(
-        (total, block) =>
-          total + (isToolResultTextBlock(block) ? estimateToolResultTextChars(block.text) : 0),
-        0,
-      )
-    : 0;
-}
-
 export function truncateToolResultMessage(
   msg: Extract<AgentMessage, { role: "toolResult" }>,
   maxChars: number,
@@ -488,9 +462,7 @@ export function truncateToolResultMessage(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
-  const suffixFactory = options.suffix ?? truncationNotice.forMessage(msg);
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
-  const minKeepChars = resolveEffectiveMinKeepChars(maxChars, options, suffixFactory);
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
     return msg;
@@ -498,14 +470,15 @@ export function truncateToolResultMessage(
 
   const blockTextChars = content.map((block) =>
     isToolResultTextBlock(block)
-      ? (readPreparedToolResultTextChars(block, block.text, budgetOptions.minimumRawWeight ?? 1) ??
-        estimateToolResultTextChars(block.text, budgetOptions))
+      ? prepareToolResultTextChars(block, block.text, budgetOptions.minimumRawWeight ?? 1)
       : 0,
   );
   const totalTextChars = blockTextChars.reduce((sum, chars) => sum + chars, 0);
   if (totalTextChars <= maxChars) {
     return msg;
   }
+  const suffixFactory = options.suffix ?? truncationNotice.forMessage(msg);
+  const minKeepChars = resolveEffectiveMinKeepChars(maxChars, options, suffixFactory);
 
   // A caller's raw-text safety floor changes cost, not which semantic blocks
   // are short. Reserve their actual weighted cost before shrinking larger text.
@@ -534,20 +507,22 @@ export function truncateToolResultMessage(
   const remainingBudget = Math.max(0, maxChars - preservedChars);
   const reducibleChars = totalTextChars - preservedChars;
   const reducibleNoticeChars = preserveSmallBlocks ? largeBlockNoticeChars : totalNoticeChars;
-  const noticeScale =
-    reducibleNoticeChars > 0 ? Math.min(1, remainingBudget / reducibleNoticeChars) : 0;
-  const distributableBudget = Math.max(0, remainingBudget - reducibleNoticeChars);
-
+  if (reducibleNoticeChars > remainingBudget) {
+    return {
+      ...msg,
+      content: keepToolResultTextPrefix(blocks, maxChars, suffixFactory, budgetOptions),
+    } as AgentMessage; // SAFETY: Existing block shapes are retained; the only new block is text.
+  }
+  const distributableBudget = remainingBudget - reducibleNoticeChars;
   const newContent = blocks.map(({ block, textChars, small, noticeChars }) => {
     if (!isToolResultTextBlock(block)) {
       return block;
     }
     const preserveBlock = preserveSmallBlocks && small;
     const blockShare = reducibleChars > 0 ? textChars / reducibleChars : 0;
-    const noticeBudget = noticeChars * noticeScale;
     const blockBudget = preserveBlock
       ? textChars
-      : Math.floor(noticeBudget + distributableBudget * blockShare);
+      : Math.floor(noticeChars + distributableBudget * blockShare);
     const blockMinKeepChars = preserveBlock ? textChars : Math.floor(minKeepChars * blockShare);
     const truncatedText = truncateToolResultText(block.text, blockBudget, {
       suffix: suffixFactory,
@@ -612,11 +587,8 @@ function resolveAggregateElisionMarkers(
   ) {
     return undefined;
   }
-  // Avoid pointing recovery at already-deleted spill files.
-  if (!existsSync(spill.path)) {
-    return undefined;
-  }
-  // The original footer already disclosed this path, so preserving it adds no disclosure.
+  // Publication owns this path. Preserve the disclosed pointer without probing the
+  // filesystem during prompt projection; a later read can report an expired artifact.
   const kind = spill.truncated ? "partial" : "full";
   const count = spill.truncated
     ? ` (${spill.chars === undefined ? "capped content" : `first ${spill.chars} chars`})`
@@ -668,7 +640,7 @@ export function truncateOversizedToolResultsInMessages(
       if (projectionKey) {
         projectionState.frozen.add(projectionKey);
         if (
-          plan.changedIndices.size > 0 &&
+          plan.changedIndices.has(index) &&
           projectedMessage?.role === "toolResult" &&
           projectedMessage !== originalMessage
         ) {
@@ -695,10 +667,7 @@ function resolveToolResultBudgets(params: {
   const maxChars = Math.max(
     1,
     params.maxCharsOverride ??
-      calculateMaxToolResultCharsWithCap(
-        params.contextWindowTokens,
-        resolveAutoLiveToolResultMaxChars(params.contextWindowTokens),
-      ),
+      resolveLiveToolResultMaxChars({ contextWindowTokens: params.contextWindowTokens }),
   );
   return {
     maxChars,
@@ -906,14 +875,38 @@ function buildToolResultReplacementPlan(params: {
   maxChars: number;
   aggregateBudgetChars: number;
   protectTrailingToolResults?: boolean;
+  preserveSentToolResults?: boolean;
 }) {
   // Plan on message positions; transcript entry IDs belong only to the rewrite boundary.
+  const { textLengths, totalChars, largestChars } = getToolResultHistoryTextBudget(params.messages);
+  if (largestChars <= params.maxChars && totalChars <= params.aggregateBudgetChars) {
+    return {
+      messages: params.messages,
+      changedIndices: new Set<number>(),
+      oversizedReplacementCount: 0,
+      aggregateReplacementCount: 0,
+      aggregatePressureExceeded: false,
+      oversizedReducibleChars: 0,
+      aggregateReducibleChars: 0,
+    };
+  }
+  const lastAssistant =
+    params.protectTrailingToolResults || params.preserveSentToolResults
+      ? params.messages.findLastIndex((message) => message.role === "assistant")
+      : -1;
   const trailingStart = params.protectTrailingToolResults
-    ? params.messages.findLastIndex((message) => message.role === "assistant") + 1
+    ? lastAssistant + 1
     : params.messages.length;
+  // The latest assistant separates consumed results from the current tool batch.
+  // With no assistant boundary, do not assume orphan results are unsent.
+  const eligibleStart = params.preserveSentToolResults
+    ? lastAssistant < 0
+      ? params.messages.length
+      : lastAssistant + 1
+    : 0;
   const candidates = params.messages.flatMap((message, index) => {
-    const textLength = getToolResultTextBudget(message);
-    return message.role === "toolResult" && textLength > 0
+    const textLength = textLengths[index]!;
+    return index >= eligibleStart && message.role === "toolResult" && textLength > 0
       ? [{ index, source: message, message, textLength, aggregateTextLength: textLength }]
       : [];
   });
@@ -1043,10 +1036,11 @@ export function estimateToolResultReductionPotential(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
+  preserveSentToolResults?: boolean;
 }) {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
   const plan = buildToolResultReplacementPlan({
-    messages: params.messages,
+    ...params,
     maxChars,
     aggregateBudgetChars,
   });
@@ -1065,6 +1059,7 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
   protectTrailingToolResults?: boolean;
+  preserveSentToolResults?: boolean;
   projectionState?: ToolResultPromptProjectionState;
   sessionFile?: string;
   sessionId?: string;
@@ -1100,6 +1095,10 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
       aggregateBudgetChars,
     });
     const replacements = branch.flatMap((entry, index) => {
+      // Replaying an existing projection is not an authorized history edit.
+      if (params.preserveSentToolResults && !plan.changedIndices.has(index)) {
+        return [];
+      }
       const message = plan.messages[index]!;
       return entry.message === message || JSON.stringify(entry.message) === JSON.stringify(message)
         ? []
@@ -1179,6 +1178,7 @@ export function sessionLikelyHasOversizedToolResults(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  preserveSentToolResults?: boolean;
 }): boolean {
   const estimate = estimateToolResultReductionPotential(params);
   return estimate.oversizedCount > 0 || estimate.aggregateReducibleChars > 0;

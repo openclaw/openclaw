@@ -3,6 +3,7 @@
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionMemberPermissionLevel } from "../../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type {
   GatewaySessionRow,
@@ -23,6 +24,7 @@ import type {
   ChatSessionSharingState,
   ChatSessionSharingOutcome,
 } from "./components/chat-session-sharing-shared.tsx";
+import { handleChatInputHistoryKey } from "./input-history.ts";
 
 const { confirmPublicShare, copyPublicShare } = vi.hoisted(() => ({
   confirmPublicShare: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
@@ -38,10 +40,14 @@ afterEach(() => {
 type SharingPane = TestChatPane & {
   loadSessionSharing: (row: GatewaySessionRow, force?: boolean) => Promise<void>;
   syncSelectedSessionSharing: (row: GatewaySessionRow | undefined) => void;
+  invalidateSessionSharing: (payload: unknown) => void;
   sessionSharingCacheKey: (sessionKey: string) => string;
   mutateSessionSharing: (
     row: GatewaySessionRow,
-    change: { visibility: SessionVisibility } | { identityId: string; member: boolean },
+    change:
+      | { visibility: SessionVisibility }
+      | { identityId: string; member: boolean }
+      | { identityId: string; access: SessionMemberPermissionLevel },
   ) => Promise<ChatSessionSharingOutcome>;
   setSessionPublicShare: (
     row: GatewaySessionRow,
@@ -191,6 +197,35 @@ const mutations = [
 ] as const;
 
 describe("public session sharing", () => {
+  it("keeps the roster and acknowledged public link when the refresh after publication fails", async () => {
+    const row = sessionRow();
+    const publicShare = { token: `v1.${"a".repeat(96)}`, createdAt: 1 };
+    const roster = { ...sharingResult(row), members: [{ identityId: "alice", addedAt: 1 }] };
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.publicShare.set") {
+        return { ok: true, sessionKey: row.key, publicShare };
+      }
+      if (method === "session.members.listEvidence") {
+        if (request.mock.calls.length === 1) {
+          return roster;
+        }
+        throw new Error("Membership read failed");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const { pane } = sharingPane(request);
+    await pane.loadSessionSharing(row);
+    confirmPublicShare.mockResolvedValue(true);
+
+    await pane.setSessionPublicShare(row, true);
+
+    expect(sharingState(pane, row)).toMatchObject({
+      loading: false,
+      error: "Membership read failed",
+      result: { ...roster, publicShare },
+    });
+  });
+
   it.each([true, false])(
     "confirms publication, copies a mounted link (advertised=%s), and revokes independently of team visibility",
     async (advertised) => {
@@ -238,6 +273,13 @@ describe("public session sharing", () => {
         enabled: false,
       });
       expect(confirmPublicShare).toHaveBeenCalledTimes(1);
+      expect(confirmPublicShare).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Make this session public?",
+          message: expect.stringContaining("disabling access cannot recall downloaded copies"),
+          confirmLabel: "Make public",
+        }),
+      );
       expect(request.mock.calls.every(([method]) => method !== "session.visibility.set")).toBe(
         true,
       );
@@ -361,6 +403,7 @@ describe("chat pane sharing authorization", () => {
     });
     expect(sharingState(pane, row)).toEqual({
       loading: false,
+      sessionId: row.sessionId,
       result: sharingResult(row),
     });
   });
@@ -432,6 +475,29 @@ describe("chat pane sharing authorization", () => {
     expect(sharingState(pane, row)).toBe(failed);
   });
 
+  it("keeps an invalidated roster from seeding a replacement session's read", async () => {
+    const stale = sessionRow();
+    const replacement = { ...sessionRow(), sessionId: "session-replacement" };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...sharingResult(stale),
+        members: [{ identityId: "alice", addedAt: 1 }],
+      })
+      .mockRejectedValueOnce(new Error("Membership read failed"));
+    const { pane, state } = sharingPane(request);
+    await pane.loadSessionSharing(stale);
+    pane.invalidateSessionSharing(undefined);
+    state.sessionsResult = sharingSessionsResult(replacement);
+
+    await pane.loadSessionSharing(replacement);
+
+    expect(sharingState(pane, replacement)).toEqual({
+      loading: false,
+      error: "Membership read failed",
+    });
+  });
+
   it("releases a stale same-key sharing load for the replacement session", async () => {
     const stale = sessionRow();
     const replacement = { ...sessionRow(), sessionId: "session-replacement" };
@@ -460,6 +526,7 @@ describe("chat pane sharing authorization", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(sharingState(pane, replacement)).toEqual({
       loading: false,
+      sessionId: replacement.sessionId,
       result: sharingResult(replacement),
     });
   });
@@ -607,6 +674,33 @@ it("preserves a member sharing refresh failure in the current connection", async
   expect(sessions.reconcileMutation).toHaveBeenCalledOnce();
 });
 
+it("sets invited access through the advertised method and reconciles its result", async () => {
+  const row = sessionRow();
+  const request = vi.fn(async (method: string) => {
+    if (method === "session.members.setAccess") {
+      return { ok: true };
+    }
+    if (method === "session.members.listEvidence") {
+      return sharingResult(row);
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+  const sessions = refreshingSessions();
+  const { pane } = sharingPane(request, sessions);
+  const change = { identityId: "alice", access: "suggest" as const };
+  expect(await pane.mutateSessionSharing(row, change)).toEqual({ status: "unavailable" });
+  expect(request).not.toHaveBeenCalled();
+  setSharingAuthorization(pane, { methods: [...SHARING_METHODS, "session.members.setAccess"] });
+  expect(await pane.mutateSessionSharing(row, change)).toEqual({ status: "success" });
+  expect(request).toHaveBeenCalledWith("session.members.setAccess", {
+    sessionKey: row.key,
+    agentId: "main",
+    identityId: "alice",
+    access: "suggest",
+  });
+  expect(sessions.reconcileMutation).toHaveBeenCalledOnce();
+});
+
 describe("chat pane sharing mutation phase ownership", () => {
   it.each([
     { mutation: mutations[0], phase: "session refresh", rejectRead: false },
@@ -673,3 +767,37 @@ it.each(mutations)(
     expect(sharingState(pane, row)?.result).toEqual(sharingResult(row));
   },
 );
+
+it("retires draft invitation access when live membership evidence arrives", async () => {
+  const row = sessionRow();
+  const request = vi
+    .fn()
+    .mockResolvedValue({ ...sharingResult(row), members: [{ identityId: "alice", addedAt: 1 }] });
+  const { pane, state } = sharingPane(request);
+  state.chatMessage = "@Alice @Zoe";
+  state.chatMentions = [
+    { profileId: "alice", start: 0, end: 6, access: "send" },
+    { profileId: "zoe", start: 7, end: 11, access: "read" },
+  ];
+  state.chatMessages = [{ role: "user", content: "Earlier turn", timestamp: 1 }];
+  const pressKey = (key: "ArrowUp" | "ArrowDown") =>
+    handleChatInputHistoryKey(state, {
+      key,
+      selectionStart: 0,
+      selectionEnd: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 0,
+    });
+  pressKey("ArrowUp");
+  await pane.loadSessionSharing(row);
+  pressKey("ArrowDown");
+  expect(state.chatMentions).toEqual([
+    { profileId: "alice", start: 0, end: 6 },
+    { profileId: "zoe", start: 7, end: 11, access: "read" },
+  ]);
+  expect(state.chatMessage).toBe("@Alice @Zoe");
+});

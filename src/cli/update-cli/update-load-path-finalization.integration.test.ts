@@ -12,7 +12,6 @@ import {
   listUpdateRuns,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
@@ -121,6 +120,11 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
         const recordsWarning = command !== "resume-unowned" && command !== "resume-write-failure";
         if (command.startsWith("resume")) {
           const parent = createUpdateRun({ trigger: "cli" });
+          recordUpdateRunStep(parent.runId, { step: "openclaw doctor", status: "completed" });
+          recordUpdateRunStep(parent.runId, {
+            step: "post-update verification",
+            status: "in_progress",
+          });
           if (command !== "resume-unowned") {
             adoptUpdateRun(parent.runId);
           }
@@ -212,10 +216,6 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
           throw new Error(runStatus.runStatusError);
         }
         expect(runStatus.lastRun?.runId).toBe(latest.runId);
-        if (recordsWarning) {
-          expect(renderUpdateRunReport(latest).markdown).toContain("plugins.load.paths");
-          expect(renderUpdateRunReport(latest).markdown).toContain("verify it against 2026.9.4");
-        }
         expect(getUpdateRun(original.runId)).toEqual(retained);
         expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual(records);
         expect(await fs.readFile(state.configPath, "utf8")).toBe(configBytes);

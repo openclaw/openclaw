@@ -6,7 +6,6 @@ import {
   sectionOf,
   TABLE_OFFSETS,
   TOTALS_WIDTH,
-  UNAVAILABLE,
   type UsageCostQuarterBlock,
   type UsageQuarterRange,
 } from "./session-cost-usage-quarters.js";
@@ -22,42 +21,6 @@ import type { CostUsageTotals } from "./session-cost-usage.types.js";
 
 const QUARTER_COLUMNS = TABLE_OFFSETS[QUARTERS]!;
 export const quarterColumn = (index: number) => QUARTER_COLUMNS + index;
-
-function addOwnedUint32(
-  target: Float64Array,
-  width: number,
-  field: number,
-  owners: Int32Array,
-  rows: number,
-  data: Uint32Array,
-  offset: number,
-) {
-  for (let row = 0; row < rows; row += 1) {
-    const owner = owners[row]!;
-    if (owner >= 0) {
-      const index = owner * width + field;
-      target[index] = target[index]! + data[offset + row]!;
-    }
-  }
-}
-
-function addOwnedFloat64(
-  target: Float64Array,
-  width: number,
-  field: number,
-  owners: Int32Array,
-  rows: number,
-  data: Float64Array,
-  offset: number,
-) {
-  for (let row = 0; row < rows; row += 1) {
-    const owner = owners[row]!;
-    if (owner >= 0) {
-      const index = owner * width + field;
-      target[index] = target[index]! + data[offset + row]!;
-    }
-  }
-}
 
 /** Add one stored column into `target[owner * width + field]` for rows with an owner. */
 export function addColumn(
@@ -75,21 +38,21 @@ export function addColumn(
   }
   const offset = block.offsets[columnIndex]!;
   if (data instanceof Uint32Array) {
-    addOwnedUint32(target, width, field, owners, rows, data, offset);
+    for (let row = 0; row < rows; row += 1) {
+      const owner = owners[row]!;
+      if (owner >= 0) {
+        const index = owner * width + field;
+        target[index] = target[index]! + data[offset + row]!;
+      }
+    }
   } else {
-    addOwnedFloat64(target, width, field, owners, rows, data, offset);
-  }
-}
-
-function copyUint32(target: Float64Array, rows: number, data: Uint32Array, offset: number) {
-  for (let row = 0; row < rows; row += 1) {
-    target[row] = data[offset + row]!;
-  }
-}
-
-function copyFloat64(target: Float64Array, rows: number, data: Float64Array, offset: number) {
-  for (let row = 0; row < rows; row += 1) {
-    target[row] = data[offset + row]!;
+    for (let row = 0; row < rows; row += 1) {
+      const owner = owners[row]!;
+      if (owner >= 0) {
+        const index = owner * width + field;
+        target[index] = target[index]! + data[offset + row]!;
+      }
+    }
   }
 }
 
@@ -104,9 +67,15 @@ export function readColumn(
   if (!data) {
     target.fill(0, 0, rows);
   } else if (data instanceof Uint32Array) {
-    copyUint32(target, rows, data, block.offsets[columnIndex]!);
+    const offset = block.offsets[columnIndex]!;
+    for (let row = 0; row < rows; row += 1) {
+      target[row] = data[offset + row]!;
+    }
   } else {
-    copyFloat64(target, rows, data, block.offsets[columnIndex]!);
+    const offset = block.offsets[columnIndex]!;
+    for (let row = 0; row < rows; row += 1) {
+      target[row] = data[offset + row]!;
+    }
   }
   return target;
 }
@@ -172,7 +141,7 @@ export function locateRows(
   let last = -1;
   for (let row = 0; row < rows; row += 1) {
     const start = block.monthStartMs + quarters[row]! * QUARTER_MS;
-    const slot = start < range.startMs || start > range.endMs ? -1 : range.slot(start);
+    const slot = start < range.startMs || start > range.endMs ? -1 : range.slot(start, block, row);
     slotOfRow[row] = slot;
     dayOfRow[row] = slot < 0 ? -1 : slot >> 8;
     if (slot >= 0) {
@@ -241,9 +210,7 @@ function addTotalsToObject(target: CostUsageTotals, source: Float64Array, offset
   target.cacheReadCost += source[offset + 8]!;
   target.cacheWriteCost += source[offset + 9]!;
   target.missingCostEntries += source[offset + 10]!;
-  if (source[offset + UNAVAILABLE]) {
-    target.usageReport = { state: "unavailable" };
-  }
+  target.cacheUnmeasuredInput += source[offset + 11]!;
 }
 
 const summaryScratch = { days: new Float64Array(64 * TOTALS_WIDTH) };
@@ -264,12 +231,12 @@ export function addUsageQuartersToDailyTotals(params: {
   const dayCount = range.dates.length;
   summaryScratch.days = growFloat64(summaryScratch.days, dayCount * TOTALS_WIDTH);
   const { days } = summaryScratch;
-  // Rows ascend in time, so this block's report days arrive in order.
-  const order: number[] = [];
+  // A backward transition can revisit a local date within the same UTC block.
+  const order = new Set<number>();
   for (let row = first; row <= last; row += 1) {
     const day = dayOfRow[row]!;
-    if (day >= 0 && order.at(-1) !== day) {
-      order.push(day);
+    if (day >= 0 && !order.has(day)) {
+      order.add(day);
       days.fill(0, day * TOTALS_WIDTH, (day + 1) * TOTALS_WIDTH);
     }
   }

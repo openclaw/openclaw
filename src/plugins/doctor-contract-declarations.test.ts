@@ -11,6 +11,7 @@ const DOCTOR_CONTRACT_SURFACES = [
   "resolveSessionStoreAgentIds",
   "sessionRouteStateOwners",
   "stateMigrations",
+  "recoveryCli",
 ] as const satisfies readonly (keyof PluginManifestDoctorContract)[];
 
 const sourceManifestEnv: NodeJS.ProcessEnv = {
@@ -62,7 +63,9 @@ describe("bundled plugin doctor contract declarations", () => {
           const declared =
             surface === "sessionRouteStateOwners" && record.sessionRouteStateOwners !== undefined
               ? false
-              : value === true || (surface === "stateMigrations" && Array.isArray(value));
+              : value === true ||
+                (surface === "stateMigrations" && Array.isArray(value)) ||
+                (surface === "recoveryCli" && Array.isArray(value) && value.length > 0);
           expect(summary[surface], `${record.id}:${surface}`).toBe(declared);
         }
       }),

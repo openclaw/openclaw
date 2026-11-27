@@ -8,17 +8,7 @@ import {
   readAgentRuntimeRestrictionErrorDetails,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
-import {
-  modelFallbackOverrideFromAvailability,
-  resolveModelFallbackAvailability,
-} from "../../agents/agent-scope.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
-import {
-  findNormalizedProviderValue,
-  parseModelRef,
-} from "../../agents/model-selection-normalize.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   prepareSessionCapabilityRead,
   withPreparedSessionCapabilityRead,
@@ -34,6 +24,7 @@ import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/sessio
 import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -42,9 +33,7 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
-import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
-import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
@@ -54,6 +43,7 @@ import {
   resolveRequestedSessionAgentId,
 } from "../session-request-agent.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
+import { resolveGatewaySessionTurnModelRef } from "../session-utils-store-lineage.js";
 import {
   withGatewaySessionEntry,
   withQualifiedGatewaySessionEntry,
@@ -64,114 +54,14 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
-import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
+import { readIncognitoActivePath } from "./chat-send-active-leaf.js";
+import { chatSendIncarnationChangedError } from "./chat-send-admission-errors.js";
+import { chatSendPreparationConfig } from "./chat-send-preparation-config.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-// These inputs prepare model/runtime selection, native restrictions, command/retry
-// semantics, and creator defaults. Sharing authorization rechecks live policy;
-// unrelated logging and UI publications do not invalidate a prepared send.
-// Plugin-owned settings belong to the admitted runtime generation; core plugin
-// admission policy still affects preparation and must remain current.
-function chatSendPreparationConfig(
-  cfg: OpenClawConfig,
-  agentId: string,
-  entry?: SessionEntry,
-  request?: Pick<NormalizedChatSendRequest, "explicitOrigin">,
-  sessionKey?: string,
-) {
-  const defaults = cfg.agents?.defaults;
-  const agent = resolveAgentEntry(cfg, agentId);
-  const selected = resolveSessionModelRef(cfg, entry, agentId);
-  const fallbacks =
-    modelFallbackOverrideFromAvailability(
-      resolveModelFallbackAvailability({
-        cfg,
-        agentId,
-        sessionKey,
-        hasSessionModelOverride: Boolean(entry?.modelOverride),
-        modelOverrideSource:
-          entry?.modelOverrideSource === "default" ? undefined : entry?.modelOverrideSource,
-        modelSelectionLocked: entry?.modelSelectionLocked,
-      }),
-    ) ?? [];
-  const modelRefs = [
-    selected,
-    ...fallbacks.flatMap((model) => {
-      const parsed = parseModelRef(model, selected.provider);
-      return parsed ? [parsed] : [];
-    }),
-  ];
-  const providers = Object.fromEntries(
-    [...new Set(modelRefs.map(({ provider }) => provider))].map((id) => {
-      const provider = findNormalizedProviderValue(cfg.models?.providers, id);
-      return [
-        id,
-        provider
-          ? {
-              ...provider,
-              models: provider.models?.filter(({ id: model }) =>
-                modelRefs.some((ref) => ref.provider === id && ref.model === model),
-              ),
-            }
-          : undefined,
-      ];
-    }),
-  );
-  const channels = [
-    ...new Set(
-      [
-        "webchat",
-        request?.explicitOrigin?.originatingChannel,
-        sessionDeliveryChannel(entry),
-      ].filter((channel): channel is string => Boolean(channel)),
-    ),
-  ];
-  return {
-    defaultModel: defaults?.model,
-    agentModel: agent?.model,
-    defaultModels: defaults?.models,
-    agentModels: agent?.models,
-    defaultModelPolicy: defaults?.modelPolicy,
-    agentModelPolicy: agent?.modelPolicy,
-    runtime: agent?.runtime,
-    models: { mode: cfg.models?.mode, providers },
-    auth: cfg.auth,
-    workspace: agent?.workspace ?? defaults?.workspace,
-    agentDir: agent?.agentDir,
-    timeoutSeconds: defaults?.timeoutSeconds,
-    defaultSandbox: defaults?.sandbox,
-    agentSandbox: agent?.sandbox,
-    tools: cfg.tools,
-    agentTools: agent?.tools,
-    plugins: {
-      enabled: cfg.plugins?.enabled,
-      allow: cfg.plugins?.allow,
-      deny: cfg.plugins?.deny,
-      load: cfg.plugins?.load,
-      slots: cfg.plugins?.slots,
-      entries: Object.fromEntries(
-        Object.entries(cfg.plugins?.entries ?? {}).map(
-          ([id, { enabled, hooks, subagent, llm }]) => [id, { enabled, hooks, subagent, llm }],
-        ),
-      ),
-    },
-    channels: {
-      defaults: cfg.channels?.defaults,
-      selected: Object.fromEntries(channels.map((channel) => [channel, cfg.channels?.[channel]])),
-    },
-    roles: cfg.gateway?.roles,
-    nodeCommands: cfg.gateway?.nodes?.commands,
-    commands: cfg.commands,
-    sendPolicy: cfg.session?.sendPolicy,
-    reset: cfg.session?.reset,
-    resetByType: cfg.session?.resetByType,
-    resetByChannel: cfg.session?.resetByChannel,
-  };
-}
 
 // Preparing the canonical creator defaults does not itself persist a session.
 export async function prepareChatSendSessionEntry(params: {
@@ -242,6 +132,13 @@ async function loadChatSendSessionContext(params: {
     { sessionKey: rawSessionKey, agentId: requestedAgentId },
   ]);
   const assertConfigCurrent = () => assertRoutingCurrent(context.getRuntimeConfig());
+  if (!request.stopCommand) {
+    await waitForAgentInputAdmission(requestedAgentId, {
+      cfg: runtimeConfig,
+      sessionKey: sessionLoadKey,
+      owner: context.agentDatabaseStartup,
+    });
+  }
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = await measureDiagnosticsTimelineSpan(
     "gateway.chat_send.load_session",
@@ -283,7 +180,6 @@ async function loadChatSendSessionContext(params: {
   ) {
     throw new Error("Session preparation changed; retry.");
   }
-  const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
   const { cfg, agentId, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
   const expectedSessionRoutingContract = normalizeOptionalString(p.expectedSessionRoutingContract);
   const expectedLeafEntryId =
@@ -299,7 +195,7 @@ async function loadChatSendSessionContext(params: {
       clientRunId,
       pendingChatSendKey,
       sessionLoadOptions,
-      sessionLoadMs,
+      sessionLoadMs: roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs),
       cfg,
       agentId,
       selectedAgent: requestedAgent,
@@ -325,7 +221,6 @@ async function loadChatSendSessionContext(params: {
 
 /** Load and validate the session/model facts shared by later admission and dispatch phases. */
 export async function prepareChatSendSession(params: {
-  isDirectExternalUser?: boolean;
   request: NormalizedChatSendRequest;
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
@@ -337,8 +232,11 @@ export async function prepareChatSendSession(params: {
   }
   const loadedValue = loaded.value;
   const { request, client } = params;
-  const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
+  const { p } = request;
   const { cfg, agentId, sessionKey, entry, legacyKey } = loadedValue;
+  if (request.targetPrecondition?.matches(entry) === false) {
+    return { ok: false as const, error: chatSendIncarnationChangedError() };
+  }
   if (isIncognitoSessionKey(sessionKey) && !entry) {
     return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
   }
@@ -377,34 +275,12 @@ export async function prepareChatSendSession(params: {
       return { ok: false as const, error: creationError };
     }
   }
-  const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
-  const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
-    config: cfg,
-  });
+  // Stop starts no turn, so it must not depend on reading the parent session.
+  const resolvedSessionModel = request.stopCommand
+    ? resolveSessionModelRef(cfg, entry, agentId)
+    : await resolveGatewaySessionTurnModelRef({ cfg, agentId, sessionKey, entry });
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideMs: p.timeoutMs });
   const now = Date.now();
-  const restartSafeRequest = await createRestartSafeChatRequest({
-    goalOperation: request.goalOperation,
-    cfg,
-    eligible:
-      !readChatInputRecoveryAdmission(p.idempotencyKey) &&
-      (isBrowserOperatorUiClient(request.clientInfo) || params.isDirectExternalUser === true) &&
-      turnKind === "main" &&
-      normalizedAttachments.length === 0 &&
-      !request.reconnectResumeRequested &&
-      explicitOrigin === undefined &&
-      p.deliver !== true &&
-      p.thinking === undefined &&
-      p.fastMode === undefined &&
-      p.fastAutoOnSeconds === undefined &&
-      p.timeoutMs === undefined &&
-      request.systemInputProvenance === undefined &&
-      request.systemProvenanceReceipt === undefined &&
-      !request.suppressCommandInterpretation,
-    message: rawMessage,
-    mentions: p.mentions,
-    senderIsOwner: hasGatewayAdminScope(client),
-  });
 
   return {
     ok: true as const,
@@ -413,10 +289,8 @@ export async function prepareChatSendSession(params: {
       requestedSessionId,
       backingSessionId,
       resolvedSessionModel,
-      resolvedSessionAuthProvider,
       timeoutMs,
       now,
-      restartSafeRequest,
     },
   };
 }
@@ -479,7 +353,6 @@ export function withCurrentChatSendSession<T>(params: {
   getRuntimeConfig: () => OpenClawConfig;
   includeMembership: boolean;
   includeActivePath?: boolean;
-  includeLifecycle?: boolean;
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
 }) {
   const { session } = params;
@@ -518,19 +391,39 @@ export function withCurrentChatSendSession<T>(params: {
     return params.consume(latest, membership, assertSourceCurrent);
   };
   if (isIncognitoSessionKey(session.sessionKey)) {
-    return withGatewaySessionEntry(
-      session.sessionLoadKey,
-      { ...session.sessionLoadOptions, includeMembership: params.includeMembership },
-      consume,
-      session.cfg,
-      assertConfigCurrent,
-    );
+    const expectedLeafEntryId = session.expectedLeafEntryId;
+    const readEntry = (transcript?: SessionTranscriptAnchorFacts) =>
+      withGatewaySessionEntry(
+        session.sessionLoadKey,
+        { ...session.sessionLoadOptions, includeMembership: params.includeMembership },
+        transcript
+          ? (latest, membership, assertSourceCurrent) => {
+              // Matches the facts qualified worker reads attach to their entry snapshot.
+              const current = { ...latest, transcript };
+              return consume(current, membership, assertSourceCurrent);
+            }
+          : consume,
+        session.cfg,
+        assertConfigCurrent,
+      );
+    return params.includeActivePath && expectedLeafEntryId !== undefined
+      ? readIncognitoActivePath(
+          {
+            canonicalKey: session.sessionTarget.storeKey,
+            entry: session.entry,
+            storePath: session.storePath,
+          },
+          session.agentId,
+          expectedLeafEntryId,
+        ).then(readEntry)
+      : readEntry();
   }
   return withQualifiedGatewaySessionEntry({
     cfg: session.cfg,
     target: session.sessionTarget,
     logicalStorePath: session.storePath,
     includeMembership: params.includeMembership,
+    includeLifecycle: true,
     transcript:
       params.includeActivePath && session.expectedLeafEntryId !== undefined
         ? {
@@ -541,7 +434,6 @@ export function withCurrentChatSendSession<T>(params: {
             includeSession: true,
           }
         : undefined,
-    includeLifecycle: params.includeLifecycle,
     consume,
     assertConfigCurrent,
   }).catch((error: unknown) => {
@@ -568,7 +460,9 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
 }): Promise<ErrorShape | undefined> {
   const { request, session, client, context } = params;
   const { entry, cfg, agentId, sessionKey, resolvedSessionModel } = session;
+  // Without a configured model there is no native runtime to restrict.
   if (
+    !resolvedSessionModel ||
     request.turnKind !== "main" ||
     request.stopCommand ||
     (!entry && session.requestedSessionId) ||
@@ -595,7 +489,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
   const restrictionFor = (
     config: OpenClawConfig,
     selectedEntry: Parameters<typeof resolveSessionNativeRuntimeRestriction>[0]["entry"],
-    model: typeof resolvedSessionModel,
+    model: NonNullable<typeof resolvedSessionModel>,
     persistedEntry?: SessionEntry,
   ) =>
     resolveSessionNativeRuntimeRestriction({
@@ -658,12 +552,22 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
     agentId,
     getRuntimeConfig: context.getRuntimeConfig,
   });
+  // An uncreated session runs on the configured default unless it inherits a parent's pick,
+  // which a configuration change does not replace.
+  const configuredModel = resolveSessionModelRef(cfg, undefined, agentId);
+  const inheritsParentModel =
+    configuredModel?.provider !== resolvedSessionModel.provider ||
+    configuredModel.model !== resolvedSessionModel.model;
+  const currentModelFor = (config: OpenClawConfig) =>
+    inheritsParentModel ? resolvedSessionModel : resolveSessionModelRef(config, undefined, agentId);
   const preparedRestriction = await prepareSessionCapabilityRead(() => {
     const currentConfig = context.getRuntimeConfig();
-    const currentModel = resolveSessionModelRef(currentConfig, undefined, agentId);
-    return readAgentRuntimeRestrictionErrorDetails(
-      restrictionFor(currentConfig, prepared.entry, currentModel)?.details,
-    );
+    const currentModel = currentModelFor(currentConfig);
+    return currentModel
+      ? readAgentRuntimeRestrictionErrorDetails(
+          restrictionFor(currentConfig, prepared.entry, currentModel)?.details,
+        )
+      : undefined;
   });
   let committed: Awaited<ReturnType<typeof commitReplySessionInitialization>>;
   try {
@@ -678,7 +582,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
         prepared.assertSkillSelection();
         const currentConfig = context.getRuntimeConfig();
         const currentCreation = resolveOperatorSessionCreation(client);
-        const currentModel = resolveSessionModelRef(currentConfig, undefined, agentId);
+        const currentModel = currentModelFor(currentConfig);
         const creationError = authorizeGatewaySessionCreation({
           cfg: currentConfig,
           client,
@@ -691,6 +595,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
           session.sessionRoutingChanged(currentConfig) ||
           currentCreation.actor?.id !== prepared.entry.createdActor?.id ||
           resolveCreatorSandbox(currentConfig, currentCreation) !== prepared.entry.sandbox ||
+          !currentModel ||
           currentModel.provider !== resolvedSessionModel.provider ||
           currentModel.model !== resolvedSessionModel.model ||
           currentRestriction?.reason !== details.reason ||

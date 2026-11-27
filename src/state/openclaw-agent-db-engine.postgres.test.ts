@@ -6,10 +6,12 @@ import { getEnvironmentData, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { admitStoreSearch } from "../infra/database-engine/adapters.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { SearchSchema, StoreSchema } from "../infra/database-engine/contract.js";
+import { createPostgresEngineTestFixture } from "../infra/database-engine/engine-store.test-support.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
@@ -21,6 +23,7 @@ import {
   admitAgentEngineSearchExtensions,
   openAgentEngineStore,
 } from "./openclaw-agent-db-engine.js";
+import { withoutAgentPostgresMemberAccess } from "./openclaw-agent-member-access-schema.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -115,6 +118,41 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
       } finally {
         opened.forEach((item) => item.close());
         anchor?.close();
+      }
+    });
+  });
+
+  it("retries first creation without publishing an uninitialized anchor", () => {
+    const filename = path.join(dirs.make("pg-interrupted-creation-"), "agent.sqlite");
+    using local = openNodeSqliteDatabase(filename);
+    const selection = {
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: "postgresql://127.0.0.1:1/unavailable", schemaPrefix: "interrupted" },
+    };
+    withEngineStoreAdmission(() => {
+      expect(() =>
+        withDatabaseEngineSelection(selection, () =>
+          openAgentEngineStore(local, "retry", filename),
+        ),
+      ).toThrow("Cannot open PostgreSQL connection");
+      expect(
+        local.prepare("SELECT name FROM sqlite_master WHERE name = 'openclaw_engine_anchor'").all(),
+      ).toEqual([]);
+      selection.postgres.connection = connection!;
+      const retried = withDatabaseEngineSelection(selection, () =>
+        openAgentEngineStore(local, "retry", filename),
+      );
+      if (!isPostgresSqlConnection(retried)) {
+        throw new Error("Expected PostgreSQL agent store");
+      }
+      try {
+        expect(retried.prepare("SELECT agent_id, role FROM schema_meta").get()).toEqual({
+          agent_id: "retry",
+          role: "agent",
+        });
+      } finally {
+        retried.exec(`DROP SCHEMA "${getPostgresPhysicalFacts(retried)!.namespace}" CASCADE`);
+        retried.close();
       }
     });
   });
@@ -214,6 +252,47 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
     });
   });
 
+  it("rolls back a dimension rebuild with its owner transaction, including retained admission", () => {
+    withEngineStoreAdmission(() => {
+      const changed = structuredClone(vector);
+      changed.vector!.chunks!.postgres!.dimensions = 4;
+      const bytes = Buffer.alloc(24);
+      bytes.writeDoubleLE(1, 0);
+      db.prepare(`INSERT INTO memory_index_chunks
+        (id, path, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES ('kept', 'kept.md', 1, 1, 'hash', 'fixture', 'kept memory', ?, 1)`).run(bytes);
+      expect(() =>
+        db.runTransaction(
+          () => {
+            db.exec("DELETE FROM memory_index_chunks");
+            admitAgentEngineSearchExtensions(db, { "memory.vector": changed }, () => {}, true);
+          },
+          {
+            withCommit() {
+              throw new Error("Rebuild owner retired");
+            },
+          },
+        ),
+      ).toThrow("Rebuild owner retired");
+      expect(get("SELECT embedding FROM memory_index_chunks WHERE id = 'kept'")?.embedding).toEqual(
+        new Uint8Array(bytes),
+      );
+      expect(
+        get("SELECT embedding::text AS vector FROM memory_index_chunks_vec WHERE id = 'kept'"),
+      ).toEqual({ vector: "[1,0,0]" });
+      expect(JSON.parse(extensions())["memory.vector"]).toEqual(vector);
+      expect(
+        get(
+          "SELECT atttypmod AS dimensions FROM pg_attribute WHERE attrelid = 'memory_index_chunks_vec'::regclass AND attname = 'embedding'",
+        ),
+      ).toEqual({ dimensions: 3 });
+      admitAgentEngineSearchExtensions(db, { "memory.vector": vector }, () => {
+        throw new Error("Rollback must retain the old admission");
+      });
+      db.exec("DELETE FROM memory_index_chunks WHERE id = 'kept'");
+    });
+  });
+
   it("locks first-use installation and shares its admission with another handle", () => {
     withEngineStoreAdmission(() => {
       using nextAnchor = openNodeSqliteDatabase(databasePath);
@@ -283,6 +362,7 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
         version: 31,
         postgresVectorDecoderVersion: 1,
         postgresVectorSearchVersion: 1,
+        postgresTextSearchVersion: 1,
       };
       let db = open(predecessor);
       const namespace = getPostgresPhysicalFacts(db)!.namespace;
@@ -408,3 +488,250 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
     });
   });
 });
+
+describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () => {
+  it.each([false, true])(
+    "upgrades v42 pending-input endings (absent optional table: %s)",
+    (absentPendingTable) => {
+      withEngineStoreAdmission(() => {
+        const pathname = path.join(dirs.make("pg-pending-endings-"), "agent.sqlite");
+        using anchor = openNodeSqliteDatabase(pathname);
+        const migration = agentEngineSchema.postgresMigrations!.find(
+          (step) => step.version === 43,
+        )!;
+        // This predecessor's runtime DDL matches origin/main v42 exactly: neither new column exists.
+        const predecessor: StoreSchema = {
+          ...agentEngineSchema,
+          ...migration.fromSchema,
+          version: 42,
+        };
+        const opened: PostgresSqlConnection[] = [];
+        const open = (schema: StoreSchema) => {
+          const result = openEngineStore({
+            anchor,
+            schema,
+            input: { connection: connection!, schemaPrefix: "pending_endings_migration" },
+            inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
+            prepareAnchor() {},
+            openSqlite() {
+              throw new Error("Expected PostgreSQL");
+            },
+          });
+          if (!isPostgresSqlConnection(result)) {
+            throw new Error("Expected PostgreSQL");
+          }
+          opened.push(result);
+          return result;
+        };
+        let db = open(predecessor);
+        const namespace = getPostgresPhysicalFacts(db)!.namespace;
+        try {
+          db.exec("INSERT INTO schema_meta VALUES ('primary', 'agent', 42, 'main', NULL, 1, 1)");
+          expect(
+            db
+              .prepare(`SELECT column_name FROM information_schema.columns
+              WHERE table_schema = ? AND table_name = 'session_pending_inputs'
+              AND column_name IN ('end_cause', 'origin_source_json')`)
+              .all(namespace),
+          ).toEqual([]);
+          if (absentPendingTable) {
+            // PostgreSQL admission requires the full catalog. Exercise the migration's
+            // missing-table guard directly, without claiming that drift is admissible.
+            db.runTransaction(() => {
+              db.exec("DROP TABLE session_pending_inputs");
+              db.exec(migration.sql);
+            });
+            expect(
+              db.prepare("SELECT to_regclass('session_pending_inputs') AS pending").get(),
+            ).toEqual({ pending: null });
+          } else {
+            db.exec(`INSERT INTO session_nodes
+              (session_key, current_session_id, entry_json, updated_at)
+              VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained"}', 1);
+              INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+              VALUES ('retained', 'agent:main:retained', 1, 1);
+              INSERT INTO session_members (session_key, identity_id, added_by, added_at)
+              VALUES ('agent:main:retained', 'reader', 'owner', 1);`);
+            const rows = [
+              [
+                "nested-stop",
+                "cancelled",
+                { __openclaw: { pendingInputCancelledByUser: true } },
+                "user-stop",
+              ],
+              ["hidden", "cancelled", { display: false }, "user-stop"],
+              ["ordinary", "cancelled", { content: "Retained cancellation" }, null],
+              ["queued", "queued", { display: false }, null],
+            ] as const;
+            const insert = db.prepare(`INSERT INTO session_pending_inputs
+              (input_id, session_key, session_id, idempotency_key, run_id, request_hash,
+               message_json, lifecycle_generation, state, accepted_at)
+              VALUES (?, 'agent:main:retained', 'retained', ?, ?, 'hash', ?, 'old', ?, 1)`);
+            for (const [id, state, message] of rows) {
+              insert.run(id, id, id, JSON.stringify(message), state);
+            }
+            db.close();
+            publishSqliteDatabaseSchemaChange(anchor);
+            db = open(agentEngineSchema);
+            expect(getPostgresPhysicalFacts(db)?.version).toBe(agentEngineSchema.version);
+            expect(db.prepare("SELECT identity_id, access FROM session_members").all()).toEqual([
+              { identity_id: "reader", access: null },
+            ]);
+            db.exec("UPDATE session_members SET access='suggest'");
+            expect(db.prepare("SELECT access FROM session_members").get()).toEqual({
+              access: "suggest",
+            });
+            expect(() => db.exec("UPDATE session_members SET access='admin'")).toThrow(
+              /check constraint/i,
+            );
+            expect(
+              db
+                .prepare(`SELECT column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = ? AND table_name = 'session_pending_inputs'
+                AND column_name IN ('end_cause', 'origin_source_json')
+                ORDER BY column_name`)
+                .all(namespace),
+            ).toEqual([
+              { column_name: "end_cause", data_type: "text", is_nullable: "YES" },
+              { column_name: "origin_source_json", data_type: "text", is_nullable: "YES" },
+            ]);
+            expect(
+              db
+                .prepare(`SELECT input_id, message_json, end_cause, origin_source_json
+                FROM session_pending_inputs ORDER BY seq`)
+                .all(),
+            ).toEqual(
+              rows.map(([id, , message, endCause]) => ({
+                input_id: id,
+                message_json: JSON.stringify(message),
+                end_cause: endCause,
+                origin_source_json: null,
+              })),
+            );
+          }
+          expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+            schema_version: absentPendingTable ? 43 : agentEngineSchema.version,
+          });
+        } finally {
+          if (db.isOpen) {
+            db.exec(`DROP SCHEMA "${namespace}" CASCADE`);
+          }
+          opened.forEach((item) => item.close());
+        }
+      });
+    },
+  );
+});
+
+it.skipIf(!connection)(
+  "refuses the sealed preview v44 without changing its PostgreSQL rows or seal",
+  () => {
+    withEngineStoreAdmission(() => {
+      const preview = {
+        ...agentEngineSchema,
+        version: 44,
+        postgres: withoutAgentPostgresMemberAccess(agentEngineSchema.postgres),
+        postgresMigrations: [],
+      };
+      expect(sha256Hex(preview.postgres)).toBe(
+        "38fe283c062187f9d65be297054542e5310dbc89dbbc3136edb0fee3513891ce",
+      );
+      using fixture = createPostgresEngineTestFixture({
+        directory: dirs.make("pg-archive-preview-"),
+        connection: connection!,
+        schemaPrefix: "archive_preview_test",
+        schema: preview,
+      });
+      const old = fixture.open();
+      old.exec(
+        "INSERT INTO schema_meta VALUES ('primary','agent',44,'preview',NULL,1,1); INSERT INTO session_nodes(session_key,current_session_id,entry_json,updated_at,archive_undo_marker) VALUES ('retained','one','{}',1,'preview')",
+      );
+      const seal = getPostgresPhysicalFacts(old)?.schemaHash;
+      expect(seal).toEqual(expect.any(String));
+      old.close();
+      fixture.invalidate();
+      expect(() => fixture.open(agentEngineSchema)).toThrow(/matching|seal|fingerprint/iu);
+      fixture.invalidate();
+      const unchanged = fixture.open(preview);
+      expect(getPostgresPhysicalFacts(unchanged)).toMatchObject({ version: 44, schemaHash: seal });
+      expect(unchanged.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+        schema_version: 44,
+      });
+      expect(
+        unchanged.prepare("SELECT entry_json,archive_undo_marker FROM session_nodes").get(),
+      ).toEqual({ entry_json: "{}", archive_undo_marker: "preview" });
+    });
+  },
+);
+
+it.skipIf(!connection)(
+  "upgrades a populated PostgreSQL v44 without rewriting nodes and keeps the v44 reader floor",
+  () => {
+    withEngineStoreAdmission(() => {
+      const step = agentEngineSchema.postgresMigrations!.find(
+        (candidate) => candidate.version === 45,
+      )!;
+      const source = {
+        ...agentEngineSchema,
+        ...step.fromSchema,
+        version: 44,
+        postgresMigrations: [],
+      };
+      using fixture = createPostgresEngineTestFixture({
+        directory: dirs.make("pg-archive-undo-"),
+        connection: connection!,
+        schemaPrefix: "archive_undo_test",
+        schema: source,
+      });
+      // Exact eee7a1bd v44 runtime DDL, including search functions and invitation checks.
+      expect(sha256Hex(source.postgres!)).toBe(
+        "fa0cb6755416c336737e9d319bd7163b6eb42d7d5ac26b896f5250889cc92a73",
+      );
+      const old = fixture.open();
+      old.exec(`INSERT INTO schema_meta VALUES ('primary', 'agent', 44, 'main', NULL, 1, 1);
+      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, archived_at)
+      VALUES ('retained', 'one', '{ "sessionId": "one" }', 1, 1);
+      INSERT INTO session_members(session_key, identity_id, added_by, added_at, access)
+      VALUES ('retained','reader','owner',1,'suggest')`);
+      const retained = `SELECT xmin::text AS xmin, ctid::text AS ctid, entry_json, archived_at FROM session_nodes`;
+      const before = old.prepare(retained).all();
+      expect(() => old.prepare("SELECT archive_undo_marker FROM session_nodes").all()).toThrow(
+        /does not exist/iu,
+      );
+      old.close();
+      fixture.invalidate();
+      const db = fixture.open({ ...agentEngineSchema, ...step.schema, version: 45 });
+      expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+        schema_version: 45,
+      });
+      expect(db.prepare(retained).all()).toEqual(before);
+      expect(
+        db.prepare("SELECT access FROM session_members WHERE identity_id='reader'").get(),
+      ).toEqual({ access: "suggest" });
+      expect(db.prepare("SELECT archive_undo_marker FROM session_nodes").all()).toEqual([
+        { archive_undo_marker: null },
+      ]);
+      expect(
+        db
+          .prepare(
+            `SELECT data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = ? AND table_name = 'session_nodes' AND column_name='archive_undo_marker'`,
+          )
+          .get(db.schema),
+      ).toEqual({ data_type: "text", is_nullable: "YES", column_default: null });
+      fixture.invalidate();
+      // The nullable marker is never issued on PostgreSQL, so a v44 reader may still open v45.
+      const previousReader = fixture.open(source);
+      expect(previousReader.prepare(retained).all()).toEqual(before);
+      previousReader.close();
+      db.close();
+      fixture.invalidate();
+      const reopened = fixture.open(agentEngineSchema);
+      expect(getPostgresPhysicalFacts(reopened)).toMatchObject({
+        version: 45,
+        schemaHash: expect.any(String),
+      });
+      expect(reopened.prepare(retained).all()).toEqual(before);
+    });
+  },
+);

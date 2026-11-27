@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import {
@@ -19,13 +20,21 @@ import {
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
 import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
-import { splitMediaFromOutput } from "../../../../src/media/parse.js";
+import { splitMediaOutput } from "../../../../src/media/parse-output.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
-import { getMediaFileExtension } from "../media-file-extension.ts";
+import { readTemplatePluginInstallNotice } from "../../../../src/shared/template-install-notice.js";
+import { getMediaFileExtension, labelForMediaPath } from "../media-file-extension.ts";
+import { AutomationCreationCardBlock } from "./automation-creation-card.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
+import { getMessageDerivations, readMessageDerivations } from "./message-derivations.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
-import { resolveMessageSender, resolveMessageSenderLabel } from "./sender-label.ts";
+import {
+  normalizeSenderIdentity,
+  resolveMessageSender,
+  resolveMessageSenderLabel,
+  type SenderIdentity,
+} from "./sender-label.ts";
 
 function imageDataUrl(data: unknown, mimeType: unknown): string | undefined {
   return typeof data === "string"
@@ -128,6 +137,25 @@ function readMessageDelivery(value: unknown): MessageDelivery | undefined {
     replyToCurrent: delivery.replyToCurrent,
     replyToId: readStringField(delivery, "replyToId"),
   };
+}
+
+// Session creation records its agent-written opening as inter-session
+// provenance; the transcript sender stays an opaque id without an identity.
+/** Identifies the agent that wrote a session's opening message. */
+function resolveAgentOpeningSender(message: Record<string, unknown>): SenderIdentity | null {
+  const provenance = asOptionalRecord(message.provenance);
+  const sourceTool = provenance?.sourceTool;
+  if (
+    message.role !== "user" ||
+    provenance?.kind !== "inter_session" ||
+    (sourceTool !== "sessions_create" && sourceTool !== "sessions_spawn")
+  ) {
+    return null;
+  }
+  const agentId = parseAgentSessionKeyParts(
+    readStringField(provenance, "sourceSessionKey") ?? "",
+  )?.agentId;
+  return agentId ? { identity: { type: "agent", id: agentId } } : null;
 }
 
 export function readMessageSenderSession(value: unknown): NormalizedMessage["senderSession"] {
@@ -372,11 +400,9 @@ function resolveDeliveryReplyTarget(
       : null;
 }
 
-const normalizedMessages = new WeakMap<object, NormalizedMessage>();
-
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const original = asOptionalRecord(message);
-  const cached = original && normalizedMessages.get(original);
+  const cached = original && readMessageDerivations(original)?.normalized;
   if (cached) {
     return cached;
   }
@@ -409,7 +435,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     }
     audioAsVoice = delivery?.audioAsVoice === true;
     const extracted = extractCanvasShortcodes(text);
-    const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
+    // Leave Markdown images to the renderer; only lift explicit MEDIA directives here.
+    const parsed = splitMediaOutput(extracted.text, { extractAudioDirectives: false });
     const parts: MessageContentItem[] = [];
     const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
 
@@ -423,19 +450,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
             ? "document"
             : inferredKind;
-        const label = (() => {
-          try {
-            if (/^https?:\/\//i.test(url)) {
-              const parsedUrl = new URL(url);
-              const name = parsedUrl.pathname.split("/").pop()?.trim();
-              return name || parsedUrl.hostname || url;
-            }
-          } catch {
-            // Malformed URLs still get a filename label from the original path below.
-          }
-          const name = url.split(/[\\/]/).pop()?.trim();
-          return name || url;
-        })();
+        const label = labelForMediaPath(url);
         parts.push({
           type: "attachment",
           attachment: {
@@ -506,9 +521,16 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         return [image];
       }
       const type = item.type;
+      if (type === "automation_creation_card") {
+        return isAssistantMessage && value instanceof AutomationCreationCardBlock ? [value] : [];
+      }
       if (type === "plugin_view") {
         const inline = isAssistantMessage ? readPluginInlineViewBlock(item) : undefined;
         return inline ? [inline] : [];
+      }
+      if (type === "template_plugin_install") {
+        const receipt = isAssistantMessage ? readTemplatePluginInstallNotice(item) : undefined;
+        return receipt ? [receipt] : [];
       }
       if (type === "clawhub") {
         const recommendation = isAssistantMessage ? readClawHubRecommendation(item) : null;
@@ -546,10 +568,12 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       if (
         text !== undefined &&
         (type === "text" ||
-          (role === "user" && type === "input_text") ||
-          (role === "assistant" && (type === "input_text" || type === "output_text")))
+          (type === "input_text" && (role === "user" || isAssistantMessage)) ||
+          (type === "output_text" && isAssistantMessage))
       ) {
-        return normalizeText(text, true);
+        return isAssistantMessage && item.openclawFallback === true
+          ? []
+          : normalizeText(text, true);
       }
       return [
         {
@@ -576,10 +600,12 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const replyPreviewRecord = asOptionalRecord(openClawMeta?.replyToPreview);
   const replyPreviewText = readStringField(replyPreviewRecord, "text")?.trim() ?? "";
   const replyPreviewSender = readStringField(replyPreviewRecord, "senderLabel")?.trim() ?? "";
-  const metaSender = resolveMessageSender(openClawMeta);
+  const metaSender = resolveAgentOpeningSender(m) ?? resolveMessageSender(openClawMeta);
   const senderLabel = resolveMessageSenderLabel(m, metaSender);
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
   const sourceClients = role === "user" ? readMessageClientSources(m) : [];
+  const suggestedBy =
+    role === "user" ? normalizeSenderIdentity(asOptionalRecord(openClawMeta?.suggestedBy)) : null;
 
   content = stripMessageDisplayMetadata(content, role);
   const senderSession = readMessageSenderSession(m.senderSession);
@@ -592,6 +618,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     senderLabel,
     ...(senderSession ? { senderSession } : {}),
     ...(sender ? { sender } : {}),
+    ...(suggestedBy ? { suggestedBy } : {}),
     ...(sourceClients.length ? { sourceClients } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyPreviewText || replyPreviewSender
@@ -607,7 +634,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   // Retained and live messages are immutable snapshots. Missing timestamps
   // still resolve against the current clock on each call.
   if (original && asFiniteNumber(m.timestamp) !== undefined) {
-    normalizedMessages.set(original, normalized);
+    getMessageDerivations(original).normalized = normalized;
   }
   return normalized;
 }

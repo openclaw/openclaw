@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   chmodSync,
   chownSync,
@@ -33,7 +33,7 @@ import {
   createInstallGitTagPreferenceFixtureScript,
 } from "./install-git-fixtures.js";
 import { writeNpmInstallRetryFixture, writeNpmLifecycleFixture } from "./install-npm-fixtures.js";
-import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
+import { findDarwinReexecBash, runStreamedInstallerHelp } from "./install-reexec-fixtures.js";
 import {
   defineInstallerNpmConfigContract,
   defineInstallerNpmArchiveIdentityContract,
@@ -54,6 +54,7 @@ function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
       encoding: "utf8",
       env: {
         ...process.env,
+        ZDOTDIR: undefined,
         HOME: home,
         ...env,
         BASH_ENV: "",
@@ -102,20 +103,7 @@ describe("install.sh", () => {
       return;
     }
     const tmp = tempDirs.make("openclaw-install-reexec-");
-    const result = spawnSync(bash, ["-s", "--", "--help"], {
-      input: script,
-      encoding: "utf8",
-      timeout: 10_000,
-      env: {
-        ...process.env,
-        HOME: tmp,
-        TMPDIR: tmp,
-        BASH_ENV: "",
-        ENV: "",
-        OPENCLAW_INSTALL_SH_NO_RUN: "0",
-        OPENCLAW_INSTALL_CLI_SH_NO_RUN: "0",
-      },
-    });
+    const result = runStreamedInstallerHelp(bash, script, tmp);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("OpenClaw installer (macOS + Linux)");
     expect(result.stderr).not.toContain("Run this installer with /bin/bash");
@@ -384,6 +372,25 @@ describe("install.sh", () => {
     expect(result.stdout + result.stderr).toContain(message);
   });
 
+  it("stops before pnpm when the selected checkout refuses its source build", () => {
+    const result = runInstallShell(`
+      set -eu
+      source "${SCRIPT_PATH}"
+      repo="$HOME/repo"
+      git init -q "$repo"
+      mkdir -p "$repo/scripts/lib"
+      printf 'process.exitCode = 19;\\n' > "$repo/scripts/lib/tsdown-memory-admission.mts"
+      git -C "$repo" add scripts
+      git -C "$repo" -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm fixture
+      resolve_git_openclaw_ref() { git -C "$repo" rev-parse HEAD; }
+      ensure_node() { :; }
+      ensure_pnpm() { echo "unexpected pnpm setup"; return 93; }
+      install_openclaw_from_git "$repo"
+    `);
+    expect(result.status, result.stderr || result.stdout).toBe(19);
+    expect(result.stdout).not.toContain("unexpected pnpm setup");
+  });
+
   it("writes git install wrappers with the resolved Node runtime", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -405,6 +412,7 @@ NODE
       OS=macos
       check_git() { return 0; }
       ensure_pnpm() { :; }
+      ensure_node() { :; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
       checkout_git_openclaw_ref() {
         [[ "$1" == "$repo" && "$2" == "main" ]] || return 1
@@ -526,6 +534,32 @@ NODE
     expect(result.status, result.stderr || result.stdout).toBe(0);
   });
 
+  it("publishes Git clones before Node is provisioned (#195366)", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      run_quiet_step() { shift; "$@"; }
+      ui_error() { :; }
+      ui_info() { :; }
+      node() { echo "node ran before ensure_node" >&2; return 127; }
+      git() {
+        local target="\${*: -1}"
+        mkdir -p "$target/.git" "$target/src"
+        printf 'complete\\n' > "$target/checkout.marker"
+      }
+      fresh="$HOME/no-node/fresh"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$fresh" --filter=blob:none
+      [[ -f "$fresh/checkout.marker" && -d "$fresh/.git" && -d "$fresh/src" ]]
+      empty="$HOME/no-node/empty"
+      mkdir -p "$empty"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$empty"
+      [[ -f "$empty/checkout.marker" && -d "$empty/.git" && -d "$empty/src" ]]
+      [[ -z "$(find "$HOME/no-node" "$empty" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
+    `);
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+  });
+
   it("keeps the full Git install on the canonical checkout after an alias is retargeted", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -538,7 +572,7 @@ NODE
       target="$(cd "$target" && pwd -P)"
       replacement="$(cd "$replacement" && pwd -P)"
       ln -s "$target" "$alias_path"
-
+      npm() { [[ "$1" == view ]] || return 1; printf '>=24.16.0 <25 || >=26.1.0\\n'; }
       check_git() { return 0; }
       resolve_git_openclaw_ref() { printf 'main\\n'; }
       checkout_git_openclaw_ref() {
@@ -1504,7 +1538,7 @@ EOF
       warn_duplicate_openclaw_global_installs() { :; }; npm_global_bin_dir() { :; }; warn_shell_path_missing_dir() { :; }
       has_openclaw_config() { return 0; }; refresh_gateway_service_if_loaded() { :; }
       run_doctor() { return 9; }; resolve_openclaw_version() { printf 'test-version\n'; }
-      retire_git_wrapper_after_npm_install() { :; }; show_footer_links() { :; }
+      retire_git_wrapper_after_npm_install() { :; }; show_footer_links() { :; }; npm() { [[ "$1" == view ]] || return 1; printf '>=24.16.0 <25 || >=26.1.0\\n'; }
       main
     `);
 
@@ -1743,7 +1777,7 @@ EOF
   );
 
   it("required installer lifecycle: preserves the interactive exec onboarding handoff", () => {
-    expect(script).toMatch(/exec <\/dev\/tty\s+exec "\$claw" onboard/);
+    expect(script).toMatch(/exec <"\$\(controlling_tty_path\)"\s+exec "\$claw" onboard/);
   });
 
   it("keeps the npm owner runnable when a npm-to-git candidate fails", () => {
@@ -2050,8 +2084,8 @@ EOF
       source "${SCRIPT_PATH}"
       OS=${os}
       bootstrap_gum_temp() { :; }
-      print_installer_banner() { :; }
-      print_gum_status() { :; }
+      print_installer_banner() { :; }; print_gum_status() { :; }
+      npm() { [[ "$1" == view ]] || return 1; printf '>=24.16.0 <25 || >=26.1.0\\n'; }
       detect_os_or_die() { :; }
       detect_openclaw_checkout() { :; }
       show_install_plan() { :; }
@@ -2145,59 +2179,124 @@ EOF
     );
   });
 
-  it("mirrors the canonical support policy for Node release labels", () => {
-    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
-      engines?: { node?: string };
-    };
-    expect(pkg.engines?.node).toBe(">=24.22.1 <25 || >=26.12.1");
+  it.each([
+    ["24.21.0", ">=24.22.1 <25 || >=26.12.1", true],
+    ["24.22.1", ">=24.22.1 <25 || >=26.12.1", false],
+    ["24.21.0", ">=24.16.0 <25 || >=26.1.0", false],
+    ["24.21.0", "", false],
+    ["26.12.0", "", false],
+    ["26.12.1", "", false],
+  ])(
+    "selects a package-compatible runtime for Node %s and engines %s",
+    (version, engine, upgrade) => {
+      const result = runInstallShell(`
+      source "${SCRIPT_PATH}"
+      bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }
+      show_install_plan() { :; }; check_existing_openclaw() { return 1; }
+      load_nvm_for_node_detection() { :; }; use_supported_nvm_node() { return 1; }
+      promote_supported_node_binary() { return 1; }; install_homebrew() { :; }
+      node_binary_has_safe_sqlite() { return 0; }
+      node() { printf 'v%s\\n' "$fixture_version"; }
+      npm() {
+        [[ "$*" == 'view openclaw@extended-stable engines.node --fetch-timeout=5000 --fetch-retries=0' ]] || exit 91
+        [[ -n "$fixture_engine" ]] || return 1
+        printf '%s\\n' "$fixture_engine"
+      }
+      install_node() { echo 'runtime upgraded'; fixture_version=26.12.1; }
+      check_git() { return 0; }; fix_npm_permissions() { :; }
+      prepare_git_wrapper_backup_for_npm() { :; }
+      install_openclaw() { check_node; echo 'package install reached'; exit 0; }
+      fixture_version='${version}' fixture_engine='${engine}'
+      INSTALL_METHOD=npm OPENCLAW_VERSION=extended-stable
+      main
+    `);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain("package install reached");
+      expect(result.stdout.includes("runtime upgraded")).toBe(upgrade);
+      const warnings = result.stderr.match(/SECURITY WARNING:/g) ?? [];
+      expect(warnings).toHaveLength(!upgrade && ["24.21.0", "26.12.0"].includes(version) ? 1 : 0);
+      expect(result.stdout).not.toContain("SECURITY WARNING:");
+      if (warnings.length) {
+        expect(result.stderr).toContain("may trust TLS certificates signed with keys compromised");
+        expect(result.stderr).toContain("Node 24.22.1+ on the 24.x line or Node 26.12.1+");
+      }
+    },
+  );
 
-    const tmp = tempDirs.make("openclaw-install-node-floor-");
-    const bin = join(tmp, "bin");
-    mkdirSync(bin, { recursive: true });
-
-    const nodePath = join(bin, "node");
-    writeFileSync(
-      nodePath,
-      ["#!/bin/sh", 'printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"', ""].join("\n"),
-    );
-    chmodSync(nodePath, 0o755);
-
-    const result = runInstallShell(
-      [
-        `cd ${JSON.stringify(process.cwd())}`,
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        "set +e",
-        `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
-        "export PATH",
-        "unset -f node 2>/dev/null || true",
-        "unalias node 2>/dev/null || true",
-        'node() { printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"; }',
-        ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
-          `FAKE_NODE_VERSION=${JSON.stringify(version)}`,
-          "export FAKE_NODE_VERSION",
-          "node_version_is_supported",
-          `printf '${index}=%s\\n' "$?"`,
-        ]),
-        "exit 0",
-      ].join("\n"),
-      {
-        PATH: `${bin}:/usr/bin:/bin`,
-        TERM: "dumb",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
-      const expectedStatus = isSupportedOpenClawNodeVersion(version) ? 0 : 1;
-      expect(result.stdout, version).toContain(`${index}=${expectedStatus}`);
-    }
+  it.each([
+    ["main", ">=24.16.0 <25 || >=26.1.0", false],
+    ["v2026.10.8", ">=24.22.1 <25 || >=26.12.1", true],
+  ])("uses git %s engines before provisioning Node", (ref, engine, upgrade) => {
+    const result = runInstallShell(`
+      source "${SCRIPT_PATH}"
+      bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }
+      show_install_plan() { :; }; check_existing_openclaw() { return 1; }
+      load_nvm_for_node_detection() { :; }; use_supported_nvm_node() { return 1; }
+      promote_supported_node_binary() { return 1; }; install_homebrew() { :; }
+      node_binary_has_safe_sqlite() { return 0; }
+      node() { printf 'v%s\\n' "$fixture_version"; }
+      npm() { return 1; }
+      install_node() { echo 'runtime upgraded'; fixture_version=26.12.1; }
+      check_git() { return 0; }; validate_git_checkout() { :; }
+      clone_git_checkout_transactionally() { mkdir -p "$2/.git"; }
+      git() { return 0; }
+      resolve_git_openclaw_ref() { echo '${ref}'; }
+      checkout_git_openclaw_ref() {
+        printf '%s\\n' '{"engines":{"node":"${engine}"}}' > "$1/package.json"
+      }
+      ensure_pnpm() { check_node; echo 'git build reached'; exit 0; }
+      fixture_version=24.21.0
+      INSTALL_METHOD=git OPENCLAW_VERSION='${ref}' GIT_DIR="$HOME/checkout"
+      main
+    `);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("git build reached");
+    expect(result.stdout.includes("runtime upgraded")).toBe(upgrade);
   });
+
+  it.each(["install.sh", "install-cli.sh"])(
+    "checks canonical Node release labels in %s",
+    (installer) => {
+      const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+        engines?: { node?: string };
+      };
+      expect(pkg.engines?.node).toBe(">=24.16.0 <25 || >=26.1.0");
+      const result = runInstallShell(
+        [
+          `source "scripts/${installer}"`,
+          "set +e",
+          'node() { printf "%s\\n" "$FAKE_NODE_VERSION"; }',
+          ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
+            `FAKE_NODE_VERSION=${JSON.stringify(version)}`,
+            installer === "install.sh"
+              ? "node_version_is_supported"
+              : 'node_release_version_is_supported "$FAKE_NODE_VERSION"',
+            `printf '${index}=%s\\n' "$?"`,
+          ]),
+          "exit 0",
+        ].join("\n"),
+        { TERM: "dumb", OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1" },
+      );
+      expect(result.status).toBe(0);
+      for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
+        expect(result.stdout, version).toContain(
+          `${index}=${isSupportedOpenClawNodeVersion(version) ? 0 : 1}`,
+        );
+      }
+    },
+  );
 
   it.each(
     [
       { version: "24.22.1", defect: "none", expected: 0 },
       { version: "24.22.1", defect: "text", expected: 1 },
+      { version: "24.16.0+vendor.1", defect: "none", expected: 0 },
+      { version: "26.1.0", defect: "none", expected: 0 },
+      { version: "24.16.0", defect: "text", expected: 1 },
       { version: "24.15.0+vendor.1", defect: "none", expected: 1 },
+      { version: "26.0.0+vendor.1", defect: "none", expected: 1 },
       { version: "24.22.1", defect: "blob", expected: 1 },
       { version: "24.22.1", defect: "json", expected: 1 },
     ].flatMap(({ version, defect, expected }) =>
@@ -2246,6 +2345,7 @@ EOF
         `
         source "scripts/${installer}"
         PATH="$FIXTURE_ROOT:$PATH"
+        NODE_PACKAGE_ENGINE=">=24.16.0 <25 || >=26.1.0"
         node_bin() { printf '%s/node' "$FIXTURE_ROOT"; }
         npm_bin() { printf '%s/npm' "$FIXTURE_ROOT"; }
         set +e
@@ -2375,17 +2475,22 @@ EOF
     expect(result.stdout).toContain("fund=false");
   });
 
-  it("warns before redirecting an unwritable npm prefix and persists it before shell guards", () => {
-    const tmp = tempDirs.make("openclaw-install-npm-prefix-");
-    const home = join(tmp, "home");
-    const events = join(tmp, "events.log");
-    mkdirSync(home, { recursive: true });
-    writeFileSync(
-      join(home, ".bashrc"),
-      'case $- in\n  *i*) ;;\n  *) return ;;\nesac\nexport PATH="$HOME/.npm-global/bin:$PATH"\n',
-    );
+  it.each(["success", "mkdir", "config"] as const)(
+    "redirects an unwritable npm prefix only after successful setup: %s",
+    (failure) => {
+      const tmp = tempDirs.make("openclaw-install-npm-prefix-");
+      const home = join(tmp, "home");
+      const events = join(tmp, "events.log");
+      mkdirSync(home, { recursive: true });
+      if (failure === "mkdir") {
+        writeFileSync(join(home, ".npm-global"), "existing user file");
+      }
+      writeFileSync(
+        join(home, ".bashrc"),
+        'case $- in\n  *i*) ;;\n  *) return ;;\nesac\nexport PATH="$HOME/.npm-global/bin:$PATH"\n',
+      );
 
-    const result = runInstallShell(`
+      const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
       SHELL=/bin/bash
@@ -2401,6 +2506,7 @@ EOF
         fi
         if [[ "$1" == "config" && "$2" == "set" && "$3" == "prefix" ]]; then
           printf 'npm-set:%s\\n' "$4" >> "$events"
+          ${failure === "config" ? "return 73" : ""}
           return 0
         fi
         return 1
@@ -2408,121 +2514,122 @@ EOF
       ui_info() { printf 'info:%s\\n' "$*" >> "$events"; }
       ui_warn() { printf 'warn:%s\\n' "$*" >> "$events"; }
       ui_success() { printf 'success:%s\\n' "$*" >> "$events"; }
-      fix_npm_permissions
+      fix_npm_permissions || exit 1
       cat "$events"
       printf 'first=%s\\n' "$(sed -n '1p' "$HOME/.bashrc")"
       HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash -c 'source_rc() { . "$HOME/.bashrc"; }; source_rc; printf "path=%s\\n" "\${PATH%%:*}"'
     `);
 
-    expect(result.status).toBe(0);
-    const lines = result.stdout.trim().split("\n");
-    const warningIndex = lines.findIndex((line) =>
-      line.includes("The installer will switch npm's user prefix"),
-    );
-    const npmSetIndex = lines.findIndex((line) => line.startsWith("npm-set:"));
-    const noSudoWarningIndex = lines.findIndex((line) => line.includes("Avoid sudo npm i -g"));
-    expect(warningIndex).toBeGreaterThanOrEqual(0);
-    expect(npmSetIndex).toBeGreaterThan(warningIndex);
-    expect(noSudoWarningIndex).toBeGreaterThan(npmSetIndex);
-    expect(result.stdout).toContain("npm global prefix is not writable");
-    expect(result.stdout).toContain("npm normally writes that setting to ~/.npmrc");
-    expect(result.stdout).toContain("npm i -g openclaw@latest");
-    expect(result.stdout).toContain("using this user prefix");
-    expect(result.stdout).not.toContain("has been saved");
-    expect(result.stdout).toContain('first=export PATH="$HOME/.npm-global/bin:$PATH"');
-    expect(result.stdout).toContain(`path=${home}/.npm-global/bin`);
-  });
+      if (failure !== "success") {
+        expect(result.status, result.stdout + result.stderr).toBe(1);
+        const recorded = readFileSync(events, "utf8");
+        expect(recorded).not.toContain("success:");
+        expect(recorded).not.toContain("Avoid sudo npm i -g");
+        expect(readFileSync(join(home, ".bashrc"), "utf8")).toMatch(/^case \$-/);
+        if (failure === "mkdir") {
+          expect(recorded).not.toContain("npm-set:");
+          expect(readFileSync(join(home, ".npm-global"), "utf8")).toBe("existing user file");
+        }
+        return;
+      }
+      expect(result.status).toBe(0);
+      const lines = result.stdout.trim().split("\n");
+      const warningIndex = lines.findIndex((line) =>
+        line.includes("The installer will switch npm's user prefix"),
+      );
+      const npmSetIndex = lines.findIndex((line) => line.startsWith("npm-set:"));
+      const noSudoWarningIndex = lines.findIndex((line) => line.includes("Avoid sudo npm i -g"));
+      expect(warningIndex).toBeGreaterThanOrEqual(0);
+      expect(npmSetIndex).toBeGreaterThan(warningIndex);
+      expect(noSudoWarningIndex).toBeGreaterThan(npmSetIndex);
+      expect(result.stdout).toContain("npm global prefix is not writable");
+      expect(result.stdout).toContain("npm normally writes that setting to ~/.npmrc");
+      expect(result.stdout).toContain("npm i -g openclaw@latest");
+      expect(result.stdout).toContain("using this user prefix");
+      expect(result.stdout).not.toContain("has been saved");
+      expect(result.stdout).toContain('first=export PATH="$HOME/.npm-global/bin:$PATH"');
+      expect(result.stdout).toContain(`path=${home}/.npm-global/bin`);
+    },
+  );
 
   it.each([
-    { shell: "/bin/bash", profiles: [".bashrc", ".profile"], absent: [".zshrc", ".zprofile"] },
-    { shell: "/bin/zsh", profiles: [".zshrc", ".zprofile"], absent: [".bashrc", ".profile"] },
+    { shell: "bash", profiles: [".bashrc", ".profile"], absent: [".zshrc", ".zprofile"] },
+    { shell: "zsh", profiles: [".zshrc", ".zprofile"], absent: [".bashrc", ".profile"] },
     {
-      shell: "/usr/bin/fish",
-      profiles: [".config/fish/conf.d/openclaw.fish"],
-      absent: [".bashrc"],
+      shell: "zsh",
+      zdotdir: ".config/zsh profiles 'quoted'",
+      profiles: [".zshrc", ".zprofile"],
+      absent: [".zshrc", ".zprofile", ".bashrc", ".profile"],
     },
-  ])("persists a fresh Git install for $shell", ({ shell, profiles, absent }) => {
-    const tmp = tempDirs.make("openclaw-install-shell-path-");
-    const home = join(tmp, "home"),
-      bin = join(home, ".local", "bin");
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(join(bin, "openclaw"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    const env = { HOME: home, PATH: "/usr/bin:/bin", SHELL: shell };
-    const persist = runInstallShell(
-      `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path; ensure_user_local_bin_on_path`,
-      env,
-    );
-    expect(persist.status).toBe(0);
-    for (const profile of profiles) {
-      expect(readFileSync(join(home, profile), "utf8")).toBe(
-        shell.endsWith("fish")
-          ? 'fish_add_path -- "$HOME/.local/bin"\n'
-          : 'export PATH="$HOME/.local/bin:$PATH"\n',
+    { shell: "fish", profiles: [".config/fish/conf.d/openclaw.fish"], absent: [".bashrc"] },
+  ] as const)(
+    "persists a fresh Git install for $shell (ZDOTDIR=$zdotdir)",
+    ({ shell, profiles, absent, zdotdir }) => {
+      const home = join(tempDirs.make("openclaw-install-shell-path-"), "home");
+      const bin = join(home, ".local", "bin");
+      const profileDir = zdotdir ? join(home, zdotdir) : home;
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, "openclaw"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const env = {
+        HOME: home,
+        ZDOTDIR: zdotdir ? profileDir : undefined,
+        PATH: "/usr/bin:/bin",
+        SHELL: `/bin/${shell}`,
+        BASH_ENV: "",
+        ENV: "",
+      };
+      const persist = runInstallShell(
+        `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path; ensure_user_local_bin_on_path`,
+        env,
       );
-    }
-    for (const profile of absent) {
-      expect(existsSync(join(home, profile))).toBe(false);
-    }
-    if (shell === "/bin/bash") {
-      const interactive = spawnSync(
-        "/bin/bash",
-        ["-ic", "printf 'openclaw-path=%s\\n' \"$(command -v openclaw)\""],
-        {
-          encoding: "utf8",
-          env: { HOME: home, PATH: "/usr/bin:/bin", BASH_ENV: "", ENV: "" },
-        },
-      );
-      const login = spawnSync(
-        "/bin/bash",
-        ["--noprofile", "--norc", "-c", '. "$HOME/.profile"; command -v openclaw'],
-        {
-          encoding: "utf8",
-          env: { HOME: home, PATH: "/usr/bin:/bin", BASH_ENV: "", ENV: "" },
-        },
-      );
-      expect(interactive.status).toBe(0);
-      expect(interactive.stdout.match(/^openclaw-path=.*$/gm)).toEqual([
-        `openclaw-path=${join(bin, "openclaw")}`,
-      ]);
-      expect(login.status).toBe(0);
-      expect(login.stdout.trim()).toBe(join(bin, "openclaw"));
-    } else if (shell === "/bin/zsh") {
-      if (spawnSync("zsh", ["--version"], { encoding: "utf8" }).status === 0) {
-        for (const args of [
-          ["-ic", "command -v openclaw"],
-          ["-lic", "command -v openclaw"],
-        ]) {
-          const fresh = spawnSync("zsh", args, {
-            encoding: "utf8",
-            env: { HOME: home, PATH: "/usr/bin:/bin", ZDOTDIR: home },
-          });
-          expect(fresh.status).toBe(0);
-          expect(fresh.stdout.trim()).toBe(join(bin, "openclaw"));
-        }
+      expect(persist.status, persist.stdout + persist.stderr).toBe(0);
+      for (const profile of profiles) {
+        expect(readFileSync(join(profileDir, profile), "utf8")).toBe(
+          shell === "fish"
+            ? 'fish_add_path -- "$HOME/.local/bin"\n'
+            : 'export PATH="$HOME/.local/bin:$PATH"\n',
+        );
       }
-    } else {
+      for (const profile of absent) {
+        expect(existsSync(join(home, profile))).toBe(false);
+      }
       const warning = runInstallShell(
         `source "${SCRIPT_PATH}"; warn_shell_path_missing_dir "$HOME/.local/bin" "user-local bin dir"`,
         env,
       );
       expect(warning.status).toBe(0);
       expect(warning.stdout).toContain("PATH missing user-local bin dir");
-      expect(warning.stdout).toContain(`set -gx PATH "${bin}" $PATH`);
       expect(warning.stdout).toContain(
-        `If your shell reads ${join(home, ".config/fish/conf.d/openclaw.fish")} and it adds this directory to PATH`,
+        `If your shell reads ${join(profileDir, profiles[0])} and it adds this directory to PATH`,
       );
       expect(warning.stdout).not.toContain("PATH updated in");
-      const fishPath = runInstallShell("command -v fish");
-      if (fishPath.status === 0) {
-        const fresh = spawnSync(fishPath.stdout.trim(), ["-lc", "command -v openclaw"], {
-          encoding: "utf8",
-          env: { HOME: home, PATH: "/usr/bin:/bin" },
-        });
-        expect(fresh.status).toBe(0);
-        expect(fresh.stdout.trim()).toBe(join(bin, "openclaw"));
+      if (shell === "fish") {
+        expect(warning.stdout).toContain(`set -gx PATH "${bin}" $PATH`);
       }
-    }
-  });
+      const executable = runInstallShell(`command -v ${shell}`).stdout.trim();
+      const commands =
+        shell === "bash"
+          ? [
+              ["-ic", "printf 'openclaw-path=%s\\n' \"$(command -v openclaw)\""],
+              ["--noprofile", "--norc", "-c", '. "$HOME/.profile"; command -v openclaw'],
+            ]
+          : shell === "zsh"
+            ? [
+                ["-ic", "command -v openclaw"],
+                ["-lic", "command -v openclaw"],
+              ]
+            : [["-lc", "command -v openclaw"]];
+      for (const args of executable ? commands : []) {
+        const fresh = spawnSync(executable, args, { encoding: "utf8", env });
+        expect(fresh.status, fresh.stdout + fresh.stderr).toBe(0);
+        expect(
+          shell === "bash" && args[0] === "-ic"
+            ? fresh.stdout.match(/^openclaw-path=(.*)$/m)?.[1]
+            : fresh.stdout.trim(),
+        ).toBe(join(bin, "openclaw"));
+      }
+    },
+  );
 
   it("updates existing startup files for dual-shell users", () => {
     const tmp = tempDirs.make("openclaw-install-dual-shell-path-");
@@ -2608,7 +2715,7 @@ EOF
     }
     chmodSync(profile, readable ? 0o400 : 0o000);
     try {
-      const shellScript = `source "${SCRIPT_PATH}"; ${
+      const shellScript = `${readable ? "" : '[[ ! -r "$HOME/.bash_profile" ]] || { echo "Fixture profile remains readable" >&2; exit 90; }; '}source "${SCRIPT_PATH}"; ${
         readable
           ? 'persist_path_line_to_profile "$HOME/.profile" \'export PATH="$HOME/.local/bin:$PATH"\''
           : "ensure_user_local_bin_on_path"
@@ -2618,7 +2725,18 @@ EOF
         PATH: "/usr/bin:/bin",
         ...(!readable ? { SHELL: "/bin/bash" } : {}),
       };
-      let result: ReturnType<typeof spawnSync>;
+      const spawnOptions = {
+        encoding: "utf8" as const,
+        env: { ...process.env, ...env, BASH_ENV: "", ENV: "", OPENCLAW_INSTALL_SH_NO_RUN: "1" },
+      };
+      let dropReadCapabilities = false;
+      if (!readable && process.platform === "linux" && process.getuid?.() !== 0) {
+        const probe = runInstallShell('[[ -r "$HOME/.bash_profile" ]]', env);
+        expect(probe.error).toBeUndefined();
+        expect([0, 1], probe.stderr).toContain(probe.status);
+        dropReadCapabilities = probe.status === 0;
+      }
+      let result: SpawnSyncReturns<string>;
       if (process.getuid?.() === 0) {
         chmodSync(tmp, 0o755);
         chownSync(home, 65534, 65534);
@@ -2629,15 +2747,27 @@ EOF
         result = spawnSync(
           "setpriv",
           ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", shellScript],
-          {
-            encoding: "utf8",
-            env: { ...process.env, ...env, BASH_ENV: "", ENV: "", OPENCLAW_INSTALL_SH_NO_RUN: "1" },
-          },
+          spawnOptions,
+        );
+      } else if (dropReadCapabilities) {
+        // Some VM images grant non-root processes capabilities that bypass chmod.
+        result = spawnSync(
+          "setpriv",
+          [
+            "--inh-caps=-dac_read_search,-dac_override",
+            "--ambient-caps=-dac_read_search,-dac_override",
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            shellScript,
+          ],
+          spawnOptions,
         );
       } else {
         result = runInstallShell(shellScript, env);
       }
-      expect(result.status).toBe(0);
+      expect(result.status, result.stderr).toBe(0);
       if (readable) {
         expect(readFileSync(profile, "utf8")).toBe(
           'export PATH="$HOME/.local/bin:$PATH"\n# readonly profile\n',
@@ -2771,6 +2901,114 @@ EOF
     expect(readFileSync(join(home, ".profile"), "utf8")).toBe("# untouched\n");
     expect(existsSync(join(home, ".bashrc"))).toBe(false);
   });
+
+  it.each([false, true])(
+    "keeps the final shell handoff actionable (PATH ready=%s)",
+    (pathReady) => {
+      const home = tempDirs.make("install-final home-");
+      const binDir = join(home, "npm prefix", "bin");
+      mkdirSync(binDir, { recursive: true });
+      const cliPath = join(binDir, "openclaw");
+      writeFileSync(
+        cliPath,
+        [
+          "#!/bin/sh",
+          'case "$*" in',
+          "  --version) printf '%s\\n' '2026.11.5' ;;",
+          "  doctor*) printf '%s\\n' 'doctor-fixture-complete' ;;",
+          "  'onboard --help') printf '%s\\n' 'onboard-fixture-help' ;;",
+          "  'daemon status --json') printf '%s\\n' '{\"service\":{\"loaded\":false}}' ;;",
+          "  'plugins update'*) exit 0 ;;",
+          "  'dashboard --help') exit 1 ;;",
+          "  *) exit 64 ;;",
+          "esac",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(cliPath, 0o755);
+      const originalPath = pathReady ? `${binDir}:/usr/bin:/bin` : "/usr/bin:/bin";
+      const provisioningMocks = [
+        "bootstrap_gum_temp",
+        "print_installer_banner",
+        "print_gum_status",
+        "show_install_plan",
+        "ensure_node",
+        "check_git",
+        "fix_npm_permissions",
+        "prepare_git_wrapper_backup_for_npm",
+        "install_openclaw",
+        "retire_git_wrapper_after_npm_install",
+        "warn_duplicate_openclaw_global_installs",
+      ]
+        .map((name) => `${name}() { :; }`)
+        .join("\n");
+
+      for (const configPresent of [false, true]) {
+        const result = runInstallShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            'export HOME="$FIXTURE_HOME"',
+            'export PATH="$FIXTURE_BIN:$PATH"',
+            'ORIGINAL_PATH="$FIXTURE_ORIGINAL_PATH"',
+            "INSTALL_METHOD=npm",
+            "NO_ONBOARD=1",
+            "NO_PROMPT=1",
+            "VERIFY_INSTALL=1",
+            provisioningMocks,
+            "detect_os_or_die() { OS=linux; }",
+            "detect_openclaw_checkout() { return 1; }",
+            "check_existing_openclaw() { return 1; }",
+            'npm_global_bin_dir() { printf "%s\\n" "$FIXTURE_BIN"; }',
+            `has_openclaw_config() { return ${configPresent ? 0 : 1}; }`,
+            "refresh_gateway_service_if_loaded() { :; }",
+            "main 2>&1",
+          ].join("\n"),
+          {
+            SHELL: "/bin/bash",
+            NVM_DIR: "",
+            FIXTURE_HOME: home,
+            FIXTURE_BIN: binDir,
+            FIXTURE_ORIGINAL_PATH: originalPath,
+          },
+        );
+        const output = stripVTControlCharacters(`${result.stdout}\n${result.stderr}`);
+        expect(result.status, output).toBe(0);
+        const summary = pathReady
+          ? "OpenClaw installed successfully"
+          : "Installed; one shell setup step remains";
+        expect(output).toContain(summary);
+        if (pathReady) {
+          expect(output).not.toContain("Installed; one shell setup step remains");
+          expect(output).not.toContain("export PATH=");
+        } else {
+          expect(output).not.toContain("OpenClaw installed successfully");
+          expect(output).toContain(binDir);
+          const repair = output.match(/For this shell, run:\n {4}(.+)/)?.[1];
+          expect(repair, output).toBeTruthy();
+          const repaired = runInstallShell(`${repair}; openclaw --version`, {
+            HOME: home,
+            PATH: originalPath,
+          });
+          expect(repaired.status, repaired.stdout + repaired.stderr).toBe(0);
+          expect(repaired.stdout).toContain("2026.11.5");
+          expect(output.lastIndexOf("export PATH=")).toBeGreaterThan(output.indexOf(summary));
+        }
+        if (configPresent) {
+          expect(output).toContain("Doctor complete");
+          expect(output.indexOf(summary)).toBeGreaterThan(output.indexOf("Doctor complete"));
+        } else {
+          const handoff = output.match(/Skipping onboard \(requested\); run (.+) onboard later/);
+          expect(handoff, output).not.toBeNull();
+          const help = runInstallShell(`${handoff![1]} onboard --help`, {
+            HOME: home,
+            PATH: originalPath,
+          });
+          expect(help.status, `${help.stdout}\n${help.stderr}`).toBe(0);
+          expect(help.stdout).toContain("onboard-fixture-help");
+        }
+      }
+    },
+  );
 
   it("uses a quoted absolute openclaw path in follow-up commands when npm bin is not on the original PATH", () => {
     const tmp = tempDirs.make("openclaw-install-command-");
@@ -3106,6 +3344,7 @@ EOF
       expect(result.stdout).not.toMatch(/(^|run: )source |^ {4}source /m);
       const command = result.stdout.match(/For this shell, run:\n {4}(.+)/)?.[1];
       expect(command).toBeTruthy();
+      expect(command).toContain("; hash -r");
       const direct = runInstallShell(`${command}; command -v openclaw; openclaw --version`, {
         HOME: home,
         PATH: "/usr/bin:/bin",
@@ -3195,22 +3434,6 @@ EOF
     expect(result.stdout).toContain("Fish: set -gx PATH ");
     expect(result.stdout).not.toContain("For this shell, run:");
     expect(result.stdout).not.toContain("source ");
-  });
-
-  it("refreshes the shell command cache in the direct PATH remedy", () => {
-    const result = runInstallShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
-      printf 'export PATH="$HOME/.local/bin:$PATH"\\n' > "$HOME/.bashrc"
-      ORIGINAL_PATH="/usr/bin:/bin"
-      SHELL=/bin/bash
-      warn_shell_path_missing_dir "$HOME/.local/bin" "user-local bin dir"
-    `);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("For this shell, run:\n    export PATH=");
-    expect(result.stdout).not.toContain("source ");
-    expect(result.stdout).toContain("; hash -r");
   });
 
   it("resolves requested git install versions to checkout refs", () => {
@@ -3325,6 +3548,36 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     );
     expect(result.stdout).not.toContain("brew:link");
     expect(result.stdout).not.toContain("ensure-called");
+  });
+
+  it("reports a stale Homebrew node without PATH advice", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=macos
+      stale_prefix="$(mktemp -d "$HOME/stale-node.XXXXXX")/node"
+      mkdir -p "$stale_prefix/bin"
+      printf '#!/bin/sh\\necho v26.10.0\\n' > "$stale_prefix/bin/node"
+      chmod +x "$stale_prefix/bin/node"
+      brew() {
+        if [[ "$1" == "--prefix" ]]; then
+          echo "$stale_prefix"
+          return 0
+        fi
+        return 0
+      }
+      node_binary_is_supported() { return 1; }
+      if ensure_macos_default_node_active; then
+        echo "ensure returned success"
+      else
+        echo "ensure returned failure"
+      fi
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("ensure returned failure");
+    expect(result.stdout).toContain("brew update && brew upgrade node");
+    expect(`${result.stdout}${result.stderr}`).toContain("v26.10.0 does not meet");
   });
 
   it("does not print PATH advice when Homebrew node is missing at runtime", () => {
@@ -3458,6 +3711,79 @@ exit 0
         : '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
     );
   });
+
+  // #203460: a terminal stdin under sudo-rs use_pty with redirected output stops apt with SIGTTOU.
+  it.each([
+    { gum: false, verbose: "0" },
+    { gum: true, verbose: "0" },
+    { gum: true, verbose: "1" },
+  ])(
+    "quiet steps never hand terminal stdin to the command (gum=$gum, verbose=$verbose)",
+    ({ gum, verbose }) => {
+      const dir = tempDirs.make("openclaw-install-sh-quiet-stdin-");
+      const gumPath = join(dir, "gum");
+      const commandPath = join(dir, "command");
+      const stdinLog = join(dir, "stdin-source");
+      const stdinPath = join(dir, "stdin");
+      writeFileSync(stdinPath, "terminal input\n");
+      writeFileSync(
+        gumPath,
+        '#!/usr/bin/env bash\nwhile [[ "$#" -gt 0 && "$1" != "--" ]]; do shift; done\nshift\n"$@"\n',
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        commandPath,
+        `#!/usr/bin/env bash
+if [[ /dev/fd/0 -ef /dev/null ]]; then echo "devnull" > "${stdinLog}"; else echo "other" > "${stdinLog}"; fi
+`,
+        { mode: 0o755 },
+      );
+
+      const result = runInstallShell(
+        `
+      set -euo pipefail
+      exec < "$STDIN_FIXTURE_PATH"
+      source "${SCRIPT_PATH}"
+      needs_stdin_isolation() { return 1; }
+      gum_is_tty() { return ${gum ? 0 : 1}; }
+      GUM="${gum ? gumPath : ""}"
+      VERBOSE="${verbose}"
+      run_quiet_step "Configuring NodeSource repository" "${commandPath}"
+    `,
+        { STDIN_FIXTURE_PATH: stdinPath },
+      );
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(stdinLog, "utf8").trim()).toBe("devnull");
+    },
+  );
+
+  it("keeps the interactive Homebrew bootstrap on the terminal", () => {
+    const dir = tempDirs.make("openclaw-install-sh-homebrew-stdin-");
+    const stdinLog = join(dir, "stdin-source");
+    const stdinPath = join(dir, "stdin");
+    writeFileSync(stdinPath, "terminal input\n");
+
+    const result = runInstallShell(
+      `
+      set -euo pipefail
+      exec < "$STDIN_FIXTURE_PATH"
+      source "${SCRIPT_PATH}"
+      OS=macos
+      needs_stdin_isolation() { return 1; }
+      is_macos_admin_user() { return 0; }
+      command() { [[ "$1" == "-v" && "$2" == "brew" ]] && return 1; builtin command "$@"; }
+      run_remote_bash() {
+        if [[ /dev/fd/0 -ef /dev/null ]]; then echo "devnull" > "${stdinLog}"; else echo "other" > "${stdinLog}"; fi
+      }
+      install_homebrew
+    `,
+      { STDIN_FIXTURE_PATH: stdinPath },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(stdinLog, "utf8").trim()).toBe("other");
+  });
 });
 
 describe("install.sh duplicate OpenClaw install detection", () => {
@@ -3487,7 +3813,7 @@ describe("install.sh duplicate OpenClaw install detection", () => {
   });
 
   it.each([
-    { noPrompt: 0, visible: "1", expected: "/dev/tty" },
+    { noPrompt: 0, visible: "1", expected: "/dev/ttys003" },
     { noPrompt: 0, visible: "0", expected: "/dev/null" },
     { noPrompt: 1, visible: "", expected: "/dev/null" },
   ])(
@@ -3499,12 +3825,29 @@ describe("install.sh duplicate OpenClaw install detection", () => {
       NO_PROMPT=${noPrompt}
       ${noPrompt === 0 ? "needs_stdin_isolation() { return 0; }" : ""}
       has_controlling_tty() { return 0; }
+      controlling_tty_path() { echo /dev/ttys003; }
       resolve_subprocess_stdin_path ${visible}
     `);
       expect(result.status).toBe(0);
       expect(result.stdout.trim()).toBe(expected);
     },
   );
+
+  // A detached Node child aborts on macOS when its inherited stdin is the /dev/tty alias (#200244).
+  it.each([
+    { ps: 'echo " null "', expected: "/dev/null" },
+    { ps: 'echo "??"', expected: "/dev/tty" },
+    { ps: "return 1", expected: "/dev/tty" },
+  ])("resolves the terminal device when ps reports $ps", ({ ps, expected }) => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      ps() { ${ps}; }
+      controlling_tty_path
+    `);
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(expected);
+  });
 
   it("captures visible prompt output before resolving subprocess stdin", () => {
     const result = runInstallShell(`

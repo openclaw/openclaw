@@ -24,6 +24,7 @@ import type {
   ReplyExpectation,
 } from "./reply-completion.types.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
+import { isSubagentSessionFromEntry } from "./subagents/spawn/subagent-depth-policy.js";
 
 export type { ReplyCompletion, ReplyExpectation } from "./reply-completion.types.js";
 
@@ -56,10 +57,24 @@ export function createMissingReplyNotice(text = MISSING_REPLY_NOTICE_TEXT): Repl
 
 const EMPTY_REPLY_CONFIG: OpenClawConfig = {};
 
+export function resolveCompletionInputReplyExpectation(
+  sourceTool: string,
+  params: { expectsCompletionMessage: boolean; requireVisibleReply?: boolean },
+): ReplyExpectation {
+  // Available child findings do not create a reply obligation for their parent.
+  const isSubagentCompletion =
+    sourceTool === "subagent_announce" ||
+    sourceTool === "subagent_settle" ||
+    sourceTool === "agent_harness_completion";
+  return params.requireVisibleReply || (params.expectsCompletionMessage && !isSubagentCompletion)
+    ? "required"
+    : "optional";
+}
+
 export function resolveCommandReplyExpectation(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
-  sessionEntry?: Pick<SessionEntry, "chatType">;
+  sessionEntry?: Pick<SessionEntry, "chatType" | "spawnDepth" | "spawnedBy">;
   messageChannel?: string;
   opts: {
     lane?: string;
@@ -68,26 +83,48 @@ export function resolveCommandReplyExpectation(params: {
     replyExpectation?: ReplyExpectation;
   };
 }): ReplyExpectation | undefined {
+  const provenance = params.opts.inputProvenance;
+  if (
+    provenance?.kind === "inter_session" &&
+    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
+  ) {
+    // Completion processing is optional unless the caller assigns a reply obligation.
+    return params.opts.replyExpectation ?? "optional";
+  }
   const inputExpectation = params.opts.replyExpectation;
   if (inputExpectation === "optional" || inputExpectation === "result-required") {
     return inputExpectation;
   }
+  if (params.opts.privateCompletion || params.opts.lane === AGENT_LANE_SUBAGENT) {
+    return "result-required";
+  }
+  // WebChat also names the internal routing sentinel. Human conversations accept
+  // explicit silence, including direct messages to a kept child.
   if (
-    params.opts.privateCompletion ||
-    params.opts.lane === AGENT_LANE_SUBAGENT ||
-    isSubagentSessionKey(params.sessionKey)
+    params.messageChannel === INTERNAL_MESSAGE_CHANNEL &&
+    (!provenance || provenance.kind === "external_user")
   ) {
+    return "required";
+  }
+  if (isSubagentSessionKey(params.sessionKey) && provenance?.kind !== "external_user") {
     return "result-required";
   }
   // The wake prompt offers NO_REPLY, so silence stays valid on internal surfaces too.
-  if (isExecCompletionInputProvenance(params.opts.inputProvenance)) {
+  if (isExecCompletionInputProvenance(provenance)) {
     return "optional";
   }
+  // sessions_send always dispatches on the internal channel, so that channel says nothing
+  // about a peer recipient; the sender reports a peer's silence as no_reply.
+  const peerSend =
+    provenance?.kind === "inter_session" &&
+    provenance.sourceTool === "sessions_send" &&
+    !isSubagentSessionFromEntry(params.sessionKey ?? "", params.sessionEntry);
   if (
-    !params.messageChannel ||
-    params.messageChannel === INTERNAL_MESSAGE_CHANNEL ||
-    isInternalNonDeliveryChannel(params.messageChannel) ||
-    !isDeliverableMessageChannel(params.messageChannel)
+    !peerSend &&
+    (!params.messageChannel ||
+      params.messageChannel === INTERNAL_MESSAGE_CHANNEL ||
+      isInternalNonDeliveryChannel(params.messageChannel) ||
+      !isDeliverableMessageChannel(params.messageChannel))
   ) {
     return "result-required";
   }

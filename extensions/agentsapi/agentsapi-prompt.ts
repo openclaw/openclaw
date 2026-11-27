@@ -7,14 +7,13 @@ import {
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildHarnessVisibleReplyGuidance,
-  buildSkillWorkshopPromptSection,
   buildTemporalContextText,
   buildUiPresentationPrompt,
   embeddedAgentLog,
+  listToolPromptGuidance,
   prepareAgentWorkspaceContext,
   prepareWatchedSessionsHarnessContext,
   resolveMainSessionDelegationMode,
-  SKILL_WORKSHOP_TOOL_NAME,
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentsApiEnvironment } from "./config.js";
@@ -125,9 +124,7 @@ export async function buildAgentsApiInstructions(
           ...workspace.memoryReferenceFiles.map((file) => `- ${file.path}`),
         ].join("\n\n")
       : undefined,
-    toolNames.has(SKILL_WORKSHOP_TOOL_NAME)
-      ? buildSkillWorkshopPromptSection().join("\n")
-      : undefined,
+    listToolPromptGuidance(toolNames).join("\n\n"),
     delegationAvailable
       ? buildDelegationGuidanceSection({
           mode: resolveMainSessionDelegationMode(params),

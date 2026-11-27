@@ -5,11 +5,17 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as updateCheck from "../../infra/update-check.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { readGitRuntimeArtifactIdentity } from "../../infra/update-git-runtime.js";
-import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
+import {
+  updateRunStepsFromResultStep,
+  updateRunWarningMessages,
+} from "../../infra/update-run-step.js";
 import * as pluginRecords from "../../plugins/installed-plugin-index-records.js";
 import * as pluginLifecycle from "../../plugins/plugin-lifecycle-lease.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
 import { createUpdateCliBaseSnapshot } from "./update-cli-config.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
@@ -55,6 +61,7 @@ import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import * as shared from "./shared.js";
 import * as pluginConfig from "./update-command-config.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as plugins from "./update-command-plugins.js";
 import * as postCore from "./update-command-post-core.js";
 import * as sourceRuntime from "./update-command-runtime.js";
@@ -134,8 +141,6 @@ describe("candidate convergence Doctor dispatch authority", () => {
   it.each([false, true])("reports only final candidate warnings (pending=%s)", async (pending) => {
     const migrations = await import("../../infra/deferred-plugin-migrations.js");
     const freshDoctor = await import("./update-command-fresh-doctor.js");
-    const { renderUpdateRunReport, updateRunReportInputFromResult } =
-      await import("../../infra/update-run-report.js");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("candidate-warnings-"));
     vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
     vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({ changed: false });
@@ -172,13 +177,144 @@ describe("candidate convergence Doctor dispatch authority", () => {
     });
     const { resultWithPostUpdate } = await converge({ candidateRuntime: true });
     expect(resultWithPostUpdate.status).toBe("ok");
-    const report = renderUpdateRunReport(updateRunReportInputFromResult(resultWithPostUpdate));
-    expect(report.lines.filter((line) => line.startsWith("Warning: "))).toEqual([
-      `Warning: ${advisory}`,
-      ...(pending ? [`Warning: ${finalWarning}`] : []),
+    const projected = updateRunReportInputFromResult(resultWithPostUpdate);
+    expect(updateRunWarningMessages(projected.steps)).toEqual([
+      advisory,
+      ...(pending ? [finalWarning] : []),
     ]);
-    expect(report.markdown).not.toContain("Let the current update or repair finish.");
+    expect(JSON.stringify(projected)).not.toContain("Let the current update or repair finish.");
   });
+  it("converges plugins for a switched Git release in the updater, without Doctor", async () => {
+    const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+    const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+    const freshDoctor = await import("./update-command-fresh-doctor.js");
+    const prefix = path.join(await fs.realpath(tempDirs.make("git-release-")), "git-install");
+    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+    vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({ changed: false });
+    // An older target's fresh process would require Doctor maintenance the serving Gateway holds.
+    const child = vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess");
+    const doctor = vi.spyOn(freshDoctor, "completePostCorePluginUpdate");
+    const { resultWithPostUpdate } = await converge({
+      root: gitReleaseSlot(prefix),
+      result: {
+        root: gitReleaseSlot(prefix),
+        sourceRuntimePrepared: true,
+        before: { version: VERSION },
+        after: { version: "2026.9.4" },
+      },
+      requestedChannel: "beta",
+      downgradeRisk: true,
+    });
+    expect(resultWithPostUpdate.status).toBe("ok");
+    expect(child).not.toHaveBeenCalled();
+    expect(mocks.convergeCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({ requestedChannel: "beta", root: gitReleaseSlot(prefix) }),
+    );
+    expect(doctor).not.toHaveBeenCalled();
+  });
+  it("leaves plugins alone for an unverified Git release under --no-restart", async () => {
+    const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+    const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+    const prefix = path.join(await fs.realpath(tempDirs.make("git-release-")), "git-install");
+    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+    // The channel write is a state change: the run copies its originals first.
+    const order: string[] = [];
+    const persist = vi
+      .spyOn(pluginConfig, "persistRequestedUpdateChannel")
+      .mockImplementation(async () => {
+        order.push("persist-channel");
+        return snapshot;
+      });
+    const captureOriginal = async () => {
+      order.push("copy");
+    };
+    const { resultWithPostUpdate } = await converge({
+      root: gitReleaseSlot(prefix),
+      result: { root: gitReleaseSlot(prefix) },
+      requestedChannel: "beta",
+      opts: {
+        json: true,
+        yes: true,
+        restart: false,
+        run: { runId: "git-release-channel", env: process.env, captureOriginal },
+      },
+    });
+    expect(resultWithPostUpdate.status).toBe("ok");
+    expect(persist).toHaveBeenCalledWith(expect.objectContaining({ requestedChannel: "beta" }));
+    expect(order).toEqual(["copy", "persist-channel"]);
+    expect(mocks.convergeCandidate).not.toHaveBeenCalled();
+  });
+  it("completes an already-current rerun from the checkout of a converted install", async () => {
+    const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+    const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+    const prefix = path.join(await fs.realpath(tempDirs.make("git-release-")), "git-install");
+    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+    vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
+    vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({ changed: false });
+    const { resultWithPostUpdate } = await converge({
+      root: gitReleaseSlot(prefix),
+      // The CLI ran from the preserved checkout; the runner reports the release link.
+      previousInstallRoot: tempDirs.make("checkout-"),
+      coreAlreadyCurrent: true,
+      result: {
+        status: "skipped",
+        reason: "already-current",
+        root: gitReleaseSlot(prefix),
+        sourceRuntimePrepared: true,
+      },
+    });
+    expect(resultWithPostUpdate.reason).not.toBe("post-core-update-failed");
+    expect(mocks.convergeCandidate).toHaveBeenCalled();
+  });
+  it.each([
+    { requestedChannel: "beta" as const, copies: true },
+    { requestedChannel: null, copies: false },
+  ])(
+    "copies an already-current core's originals before writing a changed channel (channel=$requestedChannel)",
+    async ({ requestedChannel, copies }) => {
+      vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
+      vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({ changed: false });
+      const order: string[] = [];
+      // Convergence writes the requested channel; no plugin changes, so no Doctor runs.
+      mocks.convergeCandidate.mockImplementationOnce(async () => {
+        order.push("converge");
+        return candidateResult({ changed: false });
+      });
+      await withOpenClawTestState({ label: "current-core-channel" }, async (state) => {
+        const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        await converge({
+          coreAlreadyCurrent: true,
+          result: {
+            status: "skipped",
+            reason: "already-current",
+            mode: "npm",
+            before: { version: VERSION },
+            after: { version: VERSION },
+          },
+          requestedChannel,
+          storedChannel: "stable",
+          opts: {
+            json: true,
+            yes: true,
+            run: {
+              runId,
+              env: state.env,
+              captureOriginal: async () => {
+                order.push("capture");
+              },
+            },
+          },
+        });
+      });
+      expect(order).toEqual(copies ? ["capture", "converge"] : ["converge"]);
+    },
+  );
   it("records the failed post-core child even without supplied failure facts", async () => {
     vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockResolvedValueOnce({
       resumed: false,
@@ -424,6 +560,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         });
       vi.spyOn(pluginConfig, "preparePostCorePluginConfig").mockResolvedValue({
         configSnapshot: snapshot,
+        configBaseline: snapshot.sourceConfig,
         configWriteOptions: {},
         configChanged: false,
         restoredAuthoredChannels: [],
@@ -433,26 +570,41 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         .spyOn(plugins, "updatePluginsAfterCoreUpdate")
         .mockImplementation(async () => {
           events.push("local-plugins");
-          return { ...unchangedPluginUpdate(), assessment: { kind: "no-payload-repair" } };
+          return unchangedPluginUpdate();
         });
       const actualResume = await vi.importActual<typeof import("./update-command-resume.js")>(
         "./update-command-resume.js",
       );
       mocks.convergeCandidate.mockImplementation(actualResume.convergePostCoreUpdatePlugins);
-      const result = await converge({
-        coreAlreadyCurrent: retainedDifferentRuntime,
-        result: {
-          status: retainedDifferentRuntime ? "skipped" : "ok",
-          ...(retainedDifferentRuntime ? { reason: "already-current" } : {}),
-          before: { version: VERSION, sha: "old-checkout" },
-          after: {
-            version: retainedDifferentRuntime ? "2026.9.4" : VERSION,
-            sha: "target-checkout",
-          },
+      const result = await withOpenClawTestState(
+        { label: "declined-post-core-handoff" },
+        async (state) => {
+          const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+          return await withUpdateCommandExecutor(runId, async (executor) => {
+            const fence = await executor.enter("/isolated");
+            return await converge({
+              coreAlreadyCurrent: retainedDifferentRuntime,
+              result: {
+                status: retainedDifferentRuntime ? "skipped" : "ok",
+                ...(retainedDifferentRuntime ? { reason: "already-current" } : {}),
+                before: { version: VERSION, sha: "old-checkout" },
+                after: {
+                  version: retainedDifferentRuntime ? "2026.9.4" : VERSION,
+                  sha: "target-checkout",
+                },
+              },
+              downgradeRisk: retainedDifferentRuntime,
+              assertCurrent: fence.assertCurrent,
+              opts: {
+                json: true,
+                yes: true,
+                acceptCapabilities: true,
+                run: { runId, env: state.env, executorFence: fence },
+              },
+            });
+          });
         },
-        downgradeRisk: retainedDifferentRuntime,
-        opts: { json: true, yes: true, acceptCapabilities: true },
-      });
+      );
       await expect(delegate.mock.results[0]?.value).resolves.toMatchObject({ resumed: false });
       if (retainedDifferentRuntime) {
         expect(result.resultWithPostUpdate).toMatchObject({
@@ -463,7 +615,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         expect(events).toEqual(["target-declined-consent"]);
         expectCalls(0, runtime, localPlugins);
       } else {
-        expect(result.resultWithPostUpdate.status).toBe("ok");
+        expect(result.resultWithPostUpdate.status, JSON.stringify(result)).toBe("ok");
         expect(events).toEqual(["target-declined-consent", "source-published", "local-plugins"]);
         expect(result.resultWithPostUpdate.steps).toContainEqual(
           expect.objectContaining({ name: "source runtime publication", exitCode: 0 }),

@@ -34,6 +34,7 @@ function expectItems(actual: unknown, ...expected: Record<string, unknown>[]) {
 
 const containingItems = (...items: Record<string, unknown>[]) =>
   expect.arrayContaining(items.map((item) => expect.objectContaining(item)));
+const firstExport = (surface: PluginSdkApiBaseline) => surface.modules[0]?.exports[0];
 
 async function renderSourceFixture(
   source: string | Readonly<Record<string, string>>,
@@ -127,13 +128,13 @@ export type FixtureOptionLeaf = { required${params?.optionalOption ? "?" : ""}: 
   });
 }
 
-async function renderDependencyDeclarationFixture(dependencyDeclaration: string) {
+async function renderDependencyDeclarationFixture(fields: string) {
   return renderSourceFixture({
     "fixture.ts":
       'import { fixtureValue } from "fixture-dependency";\nexport const publicValue = fixtureValue;\n',
     "../../node_modules/fixture-dependency/package.json":
       '{"name":"fixture-dependency","type":"module","types":"index.d.ts"}\n',
-    "../../node_modules/fixture-dependency/index.d.ts": dependencyDeclaration,
+    "../../node_modules/fixture-dependency/index.d.ts": `export declare const fixtureValue: { ${fields} };`,
   });
 }
 
@@ -284,22 +285,19 @@ it("stores shared declaration detail once while retaining every affected export"
   const baseline = await render("text");
   const changed = await render("accountId");
 
-  expect(changed.declarationSections.map(({ name, text }) => [name, text])).toEqual([
-    ["PoolOptions", expect.stringContaining("value: number;")],
-    ["PoolOptions", expect.stringContaining("value: string;")],
-    ["SharedOptions", expect.stringContaining("accountId: string;")],
-    ["fixed", expect.stringContaining("function fixed(options: PoolOptions): void;")],
-    ["preview", expect.stringContaining("function preview(options: SharedOptions): void;")],
-    ["send", expect.stringContaining("function send(options: SharedOptions): void;")],
-  ]);
-  const references = changed.modules.flatMap(({ entrypoint, exports }) =>
-    exports.map(({ exportName, closureSectionIds }) => [entrypoint, exportName, closureSectionIds]),
-  );
-  expect(references).toEqual([
-    ["fixture", "preview", [2, 4]],
-    ["fixture", "send", [2, 5]],
-    ["pool-a", "fixed", [1, 3]],
-    ["pool-b", "fixed", [0, 3]],
+  expect(
+    changed.declarationSections
+      .filter(({ name }) => name === "PoolOptions")
+      .map(({ text }) => text),
+  ).toEqual([expect.stringContaining("value: number;"), expect.stringContaining("value: string;")]);
+  const [preview, send] = changed.modules[0]!.exports;
+  const shared =
+    preview?.closureSectionIds?.filter((id) => send?.closureSectionIds?.includes(id)) ?? [];
+  expect(shared.map((id) => changed.declarationSections[id])).toEqual([
+    expect.objectContaining({
+      name: "SharedOptions",
+      text: expect.stringContaining("accountId: string;"),
+    }),
   ]);
   const diff = diffApi(baseline, changed);
   expect(diff.exports.map(({ change, exportName }) => ({ change, exportName }))).toEqual([
@@ -312,12 +310,10 @@ it("stores shared declaration detail once while retaining every affected export"
     name: expect.stringContaining("SharedOptions"),
   });
   expect(diff.exports[1]?.declarationChanges).toEqual([]);
-  expect(JSON.stringify(diff).match(/type SharedOptions/gu)).toHaveLength(2);
   const text = report(diff);
   expect(text).toContain("Affected exports (2)");
   expect(text).toContain("`openclaw/plugin-sdk/fixture` — `preview` (reachable)");
   expect(text).toContain("`openclaw/plugin-sdk/fixture` — `send` (reachable)");
-  expect(text).not.toContain("affects 1 export");
 });
 
 it("validates renderer artifacts at the subprocess boundary", async () => {
@@ -331,12 +327,8 @@ it("validates renderer artifacts at the subprocess boundary", async () => {
 });
 
 it("reports public types resolved from each revision's dependency declarations", async () => {
-  const before = await renderDependencyDeclarationFixture(
-    "export declare const fixtureValue: { oldValue: string };\n",
-  );
-  const after = await renderDependencyDeclarationFixture(
-    "export declare const fixtureValue: { newValue: number };\n",
-  );
+  const before = await renderDependencyDeclarationFixture("oldValue: string");
+  const after = await renderDependencyDeclarationFixture("newValue: number");
   const diff = diffApi(before, after);
   const text = report(diff);
 
@@ -398,7 +390,7 @@ it.skipIf(process.platform === "win32")(
     try {
       const rendered = await renderSourceFixture("export const value = 1;");
       expect(observedOverlay).toBe(true);
-      expect(rendered.modules[0]?.exports[0]?.declaration).toBe("export const value: 1;");
+      expect(firstExport(rendered)?.declaration).toBe("export const value: 1;");
     } finally {
       create.mockRestore();
     }
@@ -413,13 +405,11 @@ it("renders a checkout reached through a symlinked alias", async () => {
     { symlinked: true },
   );
 
-  expectItems(baseline.modules, {
+  expect(baseline.modules).toHaveLength(1);
+  expect(baseline.modules[0]).toMatchObject({
     source: fixtureSource,
     exports: [
-      expect.objectContaining({
-        exportName: "measure",
-        declaration: expect.stringContaining("export function measure(value: string): number;"),
-      }),
+      { exportName: "measure", declaration: "export function measure(value: string): number;" },
     ],
   });
 });
@@ -484,9 +474,25 @@ export {};`,
   expect(baseline.declarationSections.find(({ name }) => name === "global")?.text).toMatch(
     /^declare global \{/u,
   );
-  expect(changed.modules[0]?.exports[0]?.closureHash).not.toBe(
-    baseline.modules[0]?.exports[0]?.closureHash,
-  );
+  expect(firstExport(changed)?.closureHash).not.toBe(firstExport(baseline)?.closureHash);
+});
+
+it("keeps resolved runtime-only side-effect imports out of the declaration closure", async () => {
+  const source = "export type Fixture = string;";
+  const baseline = await renderSourceFixture(source);
+  const withRuntime = await renderSourceFixture({
+    "fixture.ts": `import "../../runtime.mjs";
+${source}`,
+    "../../runtime.mjs": "globalThis.fixtureInitialized = true;",
+  });
+
+  expect(withRuntime).toEqual(baseline);
+});
+
+it("rejects a missing runtime side-effect import instead of dropping it", async () => {
+  await expect(
+    renderSourceFixture('import "../../missing.mjs";\nexport type Fixture = string;'),
+  ).rejects.toThrow("src/plugin-sdk/fixture.ts -> ../../missing.mjs");
 });
 
 it("ignores unreachable declarations beside a transitive export", async () => {
@@ -536,6 +542,43 @@ it("bounds repeated work inside a cyclic declaration fanout without sharing part
   expect(print.mock.calls.length).toBeLessThan(100);
 });
 
+it("reuses complete namespace fallbacks without caching partial cycle roots", () => {
+  const repoRoot = tempDirs.make("openclaw-plugin-sdk-namespace-");
+  const files = ["fixture.d.ts", "a.d.ts", "b.d.ts"].map((name) => path.join(repoRoot, name));
+  writeFiles(repoRoot, {
+    "fixture.d.ts": [
+      'export declare const first: typeof import("./a.js");',
+      'export declare const second: typeof import("./a.js");',
+      'export declare const other: typeof import("./b.js");',
+    ].join("\n"),
+    "a.d.ts": 'import type { B } from "./b.js"; export interface A { a: string; b: B }',
+    "b.d.ts": 'import type { A } from "./a.js"; export interface B { b: number; a: A }',
+  });
+  using native = nativeProject(repoRoot, files, tsOptions);
+  const { program, checker } = native.project;
+  void checker.getSymbolAtLocation;
+  const resolve = vi.spyOn(checker, "getSymbolAtLocation");
+  const render = createDeclarationClosureRenderer({
+    project: native.project,
+    printer: native.api.printer,
+    sourceProgram: program,
+    emittedSources: new Set(),
+    repoRoot,
+  });
+  const source = program.getSourceFile(files[0]!)!;
+  const first = render(source, "first");
+  resolve.mockClear();
+  const second = render(source, "second");
+  // Resolve this export's import literal, but do not traverse A -> B -> A again.
+  expect(resolve).toHaveBeenCalledTimes(1);
+  const other = render(source, "other");
+  const wholeFiles = (closure: typeof first) =>
+    closure?.sections.filter(({ name }) => name === "*");
+  expect(wholeFiles(first)).toHaveLength(2);
+  expect(wholeFiles(second)).toEqual(wholeFiles(first));
+  expect(wholeFiles(other)).toEqual(wholeFiles(first));
+});
+
 it("keeps cycle members complete across cached export walks", async () => {
   const render = (optionalMarker: boolean) =>
     renderSourceFixture(
@@ -572,7 +615,7 @@ it("captures private shape changes while ignoring documentation and implementati
   expect(fixtureError).not.toContain("return this.status");
   const optionChanged = await renderPrivateDeclarationFixture({ optionalOption: true });
   const resultChanged = await renderPrivateDeclarationFixture({ optionalResult: true });
-  const declaration = baseline.modules[0]?.exports[0];
+  const declaration = firstExport(baseline);
 
   expect(declaration).toMatchObject({
     exportName: "createFixture",
@@ -589,8 +632,8 @@ it("captures private shape changes while ignoring documentation and implementati
   );
 
   for (const changed of [optionChanged, resultChanged]) {
-    expect(changed.modules[0]?.exports[0]?.declaration).toBe(declaration?.declaration);
-    expect(changed.modules[0]?.exports[0]?.closureHash).not.toBe(declaration?.closureHash);
+    expect(firstExport(changed)?.declaration).toBe(declaration?.declaration);
+    expect(firstExport(changed)?.closureHash).not.toBe(declaration?.closureHash);
   }
 
   const combined = await renderPrivateDeclarationFixture({

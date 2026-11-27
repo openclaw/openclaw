@@ -23,6 +23,36 @@ afterEach(async () => {
   resetCommandQueueStateForTest();
 });
 
+it("restores interrupted work at the configured agent concurrency without consuming interactive slots", async () => {
+  applyConfig({ agents: { defaults: { maxConcurrent: 6 } } }, true);
+  const release = createDeferred();
+  const started: number[] = [];
+  const runs = Array.from({ length: 7 }, (_, index) =>
+    enqueueCommandInLane(CommandLane.RestartRecovery, async () => {
+      started.push(index);
+      await release.promise;
+    }),
+  );
+  try {
+    await vi.waitFor(() => expect(started).toEqual([0, 1, 2, 3, 4, 5]));
+    expect(getCommandLaneSnapshot(CommandLane.RestartRecovery)).toMatchObject({
+      activeCount: 6,
+      queuedCount: 1,
+      maxConcurrent: 6,
+    });
+    await expect(enqueueCommandInLane(CommandLane.Main, async () => "interactive")).resolves.toBe(
+      "interactive",
+    );
+    applyConfig({ agents: { defaults: { maxConcurrent: 2 } } });
+    expect(getCommandLaneSnapshot(CommandLane.RestartRecovery).maxConcurrent).toBe(2);
+    expect(started).toHaveLength(6);
+  } finally {
+    release.resolve();
+    await Promise.all(runs);
+  }
+  expect(started).toEqual([0, 1, 2, 3, 4, 5, 6]);
+});
+
 it("restores the suspended shared nested lane to its default concurrency on startup", async () => {
   setCommandLaneConcurrency(CommandLane.Nested, 0);
   applyConfig({}, true);

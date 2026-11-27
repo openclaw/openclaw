@@ -13,31 +13,115 @@ import type {
   SessionEventProjection,
 } from "./server-broadcast-types.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
-import { prepareSessionAncestor } from "./session-ancestor-references.js";
+import {
+  prepareSessionAncestor,
+  type ConnectionSessionRows,
+} from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
-import { createSessionRowDeltaDiffer } from "./session-row-delta-fields.js";
+import { receivesLegacySessionPins } from "./session-pin-compatibility.js";
+import {
+  createSessionRowDeltaDiffer,
+  prepareSessionRowDeltaFields,
+} from "./session-row-delta-fields.js";
+import { sessionRowId } from "./session-row-identity.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { serializeSessionRow } from "./session-row-serialization.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-type PublicationDelivery = {
-  variants: Array<SessionEventProjection | undefined>;
+type PublicationEnvelope = {
   payload: Record<string, unknown>;
-  serializeSession: () => string;
-  delivered: (client: GatewayClient) => void;
+  variants: Array<
+    | {
+        payload: Record<string, unknown>;
+        serialize?: ReturnType<typeof prepareEnvelopeSerialization>;
+      }
+    | undefined
+  >;
   fieldRefs?: { indices: number[]; omitted: Uint8Array };
 };
+
+type PublicationDelivery = {
+  variants: Array<SessionEventProjection | undefined>;
+  envelope: PublicationEnvelope;
+  plan: ReturnType<ConnectionSessionRows["prepareDelivery"]>;
+  serializeSession: () => Buffer;
+  delivered: (client: GatewayClient) => void;
+};
+
+function deliveredAncestors(plan: PublicationDelivery["plan"]) {
+  return plan.ancestor
+    ? plan.rows
+      ? plan.rows.wire.slice(1)
+      : plan.ancestor.ancestorSessions
+    : undefined;
+}
+
+/** Stable producer fields retain their order around the two history-owned ancestor fields. */
+function prepareEnvelopeSerialization(
+  payload: Record<string, unknown>,
+  separateMessage: boolean,
+  fields: [string, unknown][],
+  hasAncestors: boolean,
+) {
+  const segments: Array<{ prefix: string; field: "ancestorSessions" | "ancestorSessionRefs" }> = [];
+  const entries: [string, unknown][] = [];
+  const flush = () => {
+    const encoded = JSON.stringify(Object.fromEntries(entries)).slice(1, -1);
+    entries.length = 0;
+    return encoded ? `${encoded},` : "";
+  };
+  let prefix = ',"payload":{';
+  for (const field of Object.keys(payload)) {
+    if (field === "session" || (field === "message" && separateMessage)) {
+      continue;
+    }
+    if (hasAncestors && (field === "ancestorSessions" || field === "ancestorSessionRefs")) {
+      segments.push({ prefix: prefix + flush(), field });
+      prefix = "";
+    } else {
+      const entry = (fields[entries.length] ??= [field, undefined]);
+      entry[0] = field;
+      entry[1] = payload[field];
+      entries.push(entry);
+    }
+  }
+  const suffix = prefix + flush();
+  const sharedEnvelope = segments.length === 0 ? Buffer.from(suffix) : undefined;
+  return (
+    plan: PublicationDelivery["plan"],
+    serializeSession: () => Buffer,
+    serializeMessage?: () => Buffer,
+  ): ReturnType<NonNullable<SessionEventProjection["serializePayload"]>> => {
+    let encoded = "";
+    for (const segment of segments) {
+      const value =
+        segment.field === "ancestorSessions"
+          ? deliveredAncestors(plan)
+          : plan.ancestor?.ancestorSessionRefs;
+      const field = JSON.stringify({ [segment.field]: value }).slice(1, -1);
+      encoded += segment.prefix + (field ? `${field},` : "");
+    }
+    encoded += suffix;
+    const envelope = sharedEnvelope ?? Buffer.from(encoded);
+    return serializeMessage
+      ? [envelope, serializeMessage(), serializeSession()]
+      : [envelope, serializeSession()];
+  };
+}
 
 /** Bind prepared rows without exposing their implementation to transport contracts. */
 export function prepareSessionEventProjection(
   projection: SessionRowProjection,
   read?: SessionRowReadView,
   prepared?: {
-    ancestors: ReturnType<SessionRowProjection["ancestorRows"]>;
+    /** Omission resolves lazily; explicit undefined means ancestry could not be certified. */
+    ancestors?: ReturnType<SessionRowProjection["ancestorRows"]>;
     /** The transcript publisher owns the message graph for synchronous fanout. */
     encodeMessage?: true;
+    /** The producer owns a plain envelope with stable fields throughout synchronous fanout. */
+    reuseEnvelope?: true;
     /** Rechecked per recipient after row projection; exact interest always wins. */
     omitMessage?: (client: GatewayClient) => boolean;
     controlUiOnly?: boolean;
@@ -103,9 +187,18 @@ export function prepareSessionEventProjection(
             return messageBytes;
           }
         : undefined;
-    const presentRecipient = prepareSessionRowPublication(projection, Date.now(), rows);
-    const ancestors = prepared ? prepared.ancestors : projection.ancestorRows(record, read);
+    const presentRecipient = prepareSessionRowPublication(
+      projection,
+      Date.now(),
+      rows,
+      receivesLegacySessionPins,
+    );
+    const ancestors =
+      prepared && "ancestors" in prepared
+        ? prepared.ancestors
+        : projection.ancestorRows(record, read);
     const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
+    const reuseEnvelope = prepared?.reuseEnvelope && !eventScope.singleRecipient;
     const ancestorRevision = randomUUID();
     const audiences = new Map<
       string,
@@ -113,10 +206,12 @@ export function prepareSessionEventProjection(
         row: GatewaySessionRow;
         rowFields?: string[];
         rowFieldIndices?: Map<string, number>;
+        envelope?: PublicationEnvelope;
         ancestors: ReturnType<typeof prepareSessionAncestor>[] | undefined;
         hiddenAncestors: Array<{ key: string; histories: Map<object, object> }>;
         ancestorInvalidations: Map<object, object> | undefined;
         deliveries: [WeakMap<object, PublicationDelivery>, WeakMap<object, PublicationDelivery>];
+        sessionEncodings: Map<string, Buffer>;
       }
     >();
     const diff = createSessionRowDeltaDiffer();
@@ -141,7 +236,7 @@ export function prepareSessionEventProjection(
       }
       // Resolve each recipient's live authority before reusing this synchronous publication.
       const recipient = presentRecipient(client, runProjector);
-      const audienceKey = recipient.getAudienceKey();
+      const audienceKey = `scope:${recipient.getAudienceKey()}`;
       let audience = audiences.get(audienceKey);
       if (!audience) {
         const presentation = recipient.getPresentation();
@@ -150,26 +245,47 @@ export function prepareSessionEventProjection(
           return undefined;
         }
         const hiddenAncestors: Array<{ key: string; histories: Map<object, object> }> = [];
+        const ancestorRowIds: number[] | undefined = reuseEnvelope ? [] : undefined;
         const ancestorRows = ancestors?.every((ancestor) => projection.isCurrent(ancestor))
           ? ancestors.flatMap((ancestor) => {
-              if (presentation.sharing.entryFilter?.(ancestor.key, ancestor.entry) === false) {
+              const target = presentation.target({
+                key: ancestor.key,
+                agentId: ancestor.agentId,
+                storePath: ancestor.storeTarget.storePath,
+              });
+              if (!target || !presentation.sharing.canReadTarget(target)) {
                 hiddenAncestors.push({ key: ancestor.key, histories: new Map() });
                 return [];
               }
               const presented = presentation.present(ancestor, enrichment);
+              if (presented) {
+                ancestorRowIds?.push(sessionRowId(presented));
+              }
               return presented ? [prepareSessionAncestor(presented)] : [];
             })
           : undefined;
-        audience = {
+        // Different identities can receive identical immutable rows. Share delivery work
+        // only after current disclosure, including every visible and hidden ancestor.
+        const contentKey = reuseEnvelope
+          ? JSON.stringify([
+              sessionRowId(row),
+              ancestorRows && ancestorRowIds,
+              hiddenAncestors.map((ancestor) => ancestor.key),
+            ])
+          : undefined;
+        audience = (contentKey === undefined ? undefined : audiences.get(contentKey)) ?? {
           row,
           ancestors: ancestorRows,
           hiddenAncestors,
           ancestorInvalidations: ancestorRows ? undefined : new Map(),
           deliveries: [new WeakMap(), new WeakMap()],
+          sessionEncodings: new Map(),
         };
+        if (contentKey !== undefined) {
+          audiences.set(contentKey, audience);
+        }
         audiences.set(audienceKey, audience);
       }
-      const { row } = audience;
       const rowDeltas = hasGatewayClientCap(
         client.connect.caps,
         GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
@@ -184,6 +300,10 @@ export function prepareSessionEventProjection(
       const deliveries = audience.deliveries[rowDeltas ? 1 : 0];
       let delivery = deliveries.get(references.history);
       if (!delivery) {
+        const { row } = audience;
+        if (rowDeltas) {
+          prepareSessionRowDeltaFields(row, record.materialized.publicationIdentity);
+        }
         const plan = references.prepareDelivery(
           row,
           audience.ancestors,
@@ -192,40 +312,65 @@ export function prepareSessionEventProjection(
           // Rosters skip recaps, so a full recap row cannot certify a later reference.
           event !== "sessions.changed" || source.reason !== "activity-summary",
         );
-        const projected: Record<string, unknown> = {
-          ...base,
-          session: plan.rows ? plan.rows.wire[0] : row,
-          cyberAccessProgram: row.cyberAccessProgram ?? null,
-          fastMode: row.fastMode,
-          effectiveFastMode: row.effectiveFastMode,
-          ancestorSessions: plan.ancestor
-            ? plan.rows
-              ? plan.rows.wire.slice(1)
-              : plan.ancestor.ancestorSessions
-            : undefined,
-          ancestorSessionRefs: plan.ancestor?.ancestorSessionRefs,
-          visibility: row.visibility,
-          sharingRole: row.sharingRole,
-          ...(isRecord(base.activitySummary) && row.activitySummary
-            ? {
-                activitySummary: {
-                  ...base.activitySummary,
-                  canEnsure: row.activitySummary.canEnsure,
-                },
-              }
-            : {}),
+        const envelope: PublicationEnvelope = audience.envelope ?? {
+          variants: [],
+          payload: {
+            ...base,
+            // Restore only slots owned by this producer; compact message envelopes never had pin fields.
+            pinned: Object.hasOwn(base, "pinned") ? row.pinned : undefined,
+            pinnedAt:
+              Object.hasOwn(base, "pinnedAt") && row.pinned !== undefined
+                ? (row.pinnedAt ?? null)
+                : undefined,
+            session: plan.rows ? plan.rows.wire[0] : row,
+            cyberAccessProgram: row.cyberAccessProgram ?? null,
+            fastMode: row.fastMode,
+            effectiveFastMode: row.effectiveFastMode,
+            ancestorSessions: deliveredAncestors(plan),
+            ancestorSessionRefs: plan.ancestor?.ancestorSessionRefs,
+            visibility: row.visibility,
+            sharingRole: row.sharingRole,
+            ...(isRecord(base.activitySummary) && row.activitySummary
+              ? {
+                  activitySummary: {
+                    ...base.activitySummary,
+                    canEnsure: row.activitySummary.canEnsure,
+                  },
+                }
+              : {}),
+          },
         };
-        if (Object.hasOwn(projected, "childSessions")) {
-          projected.childSessions = row.childSessions;
+        if (Object.hasOwn(envelope.payload, "childSessions")) {
+          envelope.payload.childSessions = row.childSessions;
         }
-        let sessionJSON = plan.rows?.encoded[0];
+        if (reuseEnvelope) {
+          audience.envelope = envelope;
+        }
+        let sessionBytes: Buffer | undefined;
         delivery = {
           variants: [],
-          payload: projected,
-          serializeSession: () =>
-            (sessionJSON ??= plan.rows
-              ? JSON.stringify(plan.rows.wire[0])
-              : serializeSessionRow(row)),
+          envelope,
+          plan,
+          serializeSession: () => {
+            if (!sessionBytes) {
+              let sessionJSON = plan.rows?.encoded[0];
+              if (sessionJSON === undefined) {
+                const encoded = serializeSessionRow(row);
+                const wire = plan.rows?.wire[0];
+                // Patches already carry their encoding; full wrappers vary only by history.
+                sessionJSON = wire
+                  ? `${JSON.stringify({ key: wire.key, agentId: wire.agentId, version: wire.version }).slice(0, -1)},"full":${encoded}${"retain" in wire ? ',"retain":false' : ""}}`
+                  : encoded;
+              }
+              // Different roster histories can deliver identical bytes in this audience.
+              sessionBytes = audience.sessionEncodings.get(sessionJSON);
+              if (!sessionBytes) {
+                sessionBytes = Buffer.from(`"session":${sessionJSON}}`);
+                audience.sessionEncodings.set(sessionJSON, sessionBytes);
+              }
+            }
+            return sessionBytes;
+          },
           delivered: (viewer) => connection.references(viewer).deliver(plan),
         };
         deliveries.set(references.history, delivery);
@@ -237,56 +382,81 @@ export function prepareSessionEventProjection(
       const variant = Number(fieldRefs) + (omitMessage ? 2 : 0);
       let projected = delivery.variants[variant];
       if (!projected) {
-        let refs = fieldRefs ? delivery.fieldRefs : undefined;
-        if (fieldRefs && !refs) {
-          // Names index the immutable full row; values need no per-audience entry tuples.
-          const fields = (audience.rowFields ??= Object.keys(row)
-            .filter((field) => Reflect.get(row, field) !== undefined)
-            .toSorted());
-          audience.rowFieldIndices ??= new Map(fields.map((field, index) => [field, index]));
-          refs = { indices: [], omitted: new Uint8Array(fields.length) };
-          for (let index = 0; index < fields.length; index++) {
-            const field = fields[index]!;
-            if (
-              field !== "key" &&
-              field !== "agentId" &&
-              Object.hasOwn(delivery.payload, field) &&
-              isDeepStrictEqual(delivery.payload[field], Reflect.get(row, field))
-            ) {
-              refs.indices.push(index);
-              refs.omitted[index] = 1;
+        const { row } = audience;
+        const envelope = delivery.envelope;
+        let template = envelope.variants[variant];
+        if (!template) {
+          let refs = fieldRefs ? envelope.fieldRefs : undefined;
+          if (fieldRefs && !refs) {
+            // Names index the immutable full row; values need no per-audience entry tuples.
+            const fields = (audience.rowFields ??= Object.keys(row)
+              .filter((field) => Reflect.get(row, field) !== undefined)
+              // oxlint-disable-next-line unicorn/no-array-sort -- The filtered array is private to this audience.
+              .sort());
+            if (!audience.rowFieldIndices) {
+              audience.rowFieldIndices = new Map();
+              for (let index = 0; index < fields.length; index++) {
+                audience.rowFieldIndices.set(fields[index]!, index);
+              }
+            }
+            refs = { indices: [], omitted: new Uint8Array(fields.length) };
+            for (let index = 0; index < fields.length; index++) {
+              const field = fields[index]!;
+              if (
+                field !== "key" &&
+                field !== "agentId" &&
+                Object.hasOwn(envelope.payload, field) &&
+                isDeepStrictEqual(envelope.payload[field], Reflect.get(row, field))
+              ) {
+                refs.indices.push(index);
+                refs.omitted[index] = 1;
+              }
+            }
+            envelope.fieldRefs = refs;
+          }
+          let wirePayload = envelope.payload;
+          if (refs || omitMessage) {
+            // fromEntries consumes these scratch tuples synchronously; only the envelope escapes.
+            let count = 0;
+            const keys = Object.keys(envelope.payload);
+            // oxlint-disable-next-line typescript/prefer-for-of -- Keep the measured indexed traversal in this hot path.
+            for (let i = 0; i < keys.length; i++) {
+              const field = keys[i]!;
+              if (
+                (omitMessage && field === "message") ||
+                refs?.omitted[audience.rowFieldIndices!.get(field) ?? -1]
+              ) {
+                continue;
+              }
+              const entry = (envelopeFields[count++] ??= [field, undefined]);
+              entry[0] = field;
+              entry[1] = envelope.payload[field];
+            }
+            envelopeFields.length = count;
+            wirePayload = Object.fromEntries(envelopeFields);
+            if (refs) {
+              wirePayload.sessionFieldRefs = refs.indices;
             }
           }
-          delivery.fieldRefs = refs;
+          template = { payload: wirePayload };
+          envelope.variants[variant] = template;
         }
-        let wirePayload = delivery.payload;
-        if (refs || omitMessage) {
-          // fromEntries consumes these scratch tuples synchronously; only the envelope escapes.
-          let count = 0;
-          const keys = Object.keys(delivery.payload);
-          // oxlint-disable-next-line typescript/prefer-for-of -- Keep the measured indexed traversal in this hot path.
-          for (let i = 0; i < keys.length; i++) {
-            const field = keys[i]!;
-            if (
-              (omitMessage && field === "message") ||
-              refs?.omitted[audience.rowFieldIndices!.get(field) ?? -1]
-            ) {
-              continue;
-            }
-            const entry = (envelopeFields[count++] ??= [field, undefined]);
-            entry[0] = field;
-            entry[1] = delivery.payload[field];
-          }
-          envelopeFields.length = count;
-          wirePayload = Object.fromEntries(envelopeFields);
-          if (refs) {
-            wirePayload.sessionFieldRefs = refs.indices;
-          }
-        }
+        const message = omitMessage ? undefined : serializeMessage;
+        const serializeSession = delivery.serializeSession;
         projected = {
-          payload: wirePayload,
-          serializeSession: delivery.serializeSession,
-          serializeMessage: omitMessage ? undefined : serializeMessage,
+          ...(reuseEnvelope
+            ? {
+                serializePayload: () =>
+                  (template.serialize ??= prepareEnvelopeSerialization(
+                    template.payload,
+                    Boolean(message),
+                    envelopeFields,
+                    Boolean(audience.ancestors?.length),
+                  ))(delivery.plan, serializeSession, message),
+              }
+            : { payload: template.payload }),
+          serializeSession,
+          serializeMessage: message,
           delivered: delivery.delivered,
         };
         delivery.variants[variant] = projected;

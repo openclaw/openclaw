@@ -1,6 +1,10 @@
 // Gateway restart probe and health-detail tests.
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  GatewayProtocolRequestError,
+  retainGatewayResponsePayload,
+} from "../../../packages/gateway-client/src/protocol-request.js";
 import { withLoopbackTestServer } from "../../commands/loopback-server.test-support.js";
 import { GatewayCredentialsRequiredError } from "../../gateway/call-device-auth.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
@@ -16,6 +20,7 @@ import {
   callGateway,
   gatewayResponseError,
   gatewayProtocolMismatchError,
+  gatewayVerifiedUserRequiredError,
   requestReadinessProbe,
   requestStartupProbe,
   resetRestartHealthMocks,
@@ -23,12 +28,88 @@ import {
   sleep,
 } from "./restart-health.test-helpers.js";
 
+// Intentional module-loading boundary: install the helper mocks before loading
+// restart-health so its sleep uses the fixture's advancing monotonic clock.
+const { formatGatewayRestartFailure, renderRestartDiagnostics } =
+  await import("./restart-health.js");
+
 const ownedPortUsage = portUsage([{ pid: 8000, commandLine: "openclaw-gateway" }]);
 const running = { status: "running", pid: 8000 } as const;
 
 describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
+
+  it.each([
+    { ready: true, version: "2026.11.25", build: "candidate", outcome: "healthy" },
+    {
+      ready: false,
+      version: "2026.11.25",
+      build: "candidate",
+      outcome: "connected-no-operator-scope",
+    },
+    { ready: true, version: "2026.11.24", build: "candidate", outcome: "version-mismatch" },
+    { ready: true, version: "2026.11.25", build: "previous", outcome: "build-id-mismatch" },
+  ])(
+    "settles connected scope denial without polling ($ready, $version, $build)",
+    async (scenario) => {
+      const rejection = new GatewayProtocolRequestError({
+        code: "FORBIDDEN",
+        message: "Health access is not granted",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.read",
+          requiredScopes: ["operator.read"],
+        },
+      });
+      retainGatewayResponsePayload(rejection, undefined);
+      callGateway.mockImplementation(async (options) => {
+        await gatewayHealthResponse({
+          server: { version: scenario.version, buildId: scenario.build, bootId: "scope-boot" },
+        })({
+          ...options,
+          onHelloOk: (hello) =>
+            options.onHelloOk?.({ ...hello, auth: { role: "operator", scopes: [] } }),
+        });
+        throw rejection;
+      });
+      inspectPortUsage.mockResolvedValue(ownedPortUsage);
+      requestReadinessProbe.mockResolvedValue({
+        statusCode: scenario.ready ? 200 : 503,
+        body: JSON.stringify({ ready: scenario.ready }),
+      });
+      const result = await waitForRunningGateway({
+        expectedVersion: "2026.11.25",
+        expectedBuildId: "candidate",
+        requireRunningService: true,
+        requireOwnedListener: true,
+        timeoutMs: 30_000,
+        delayMs: 500,
+      });
+      expect(result).toMatchObject({
+        waitOutcome: scenario.outcome,
+        outcome: scenario.outcome === "healthy" ? "ready" : "failed",
+        healthy: scenario.outcome === "healthy",
+        gatewayBootId: "scope-boot",
+        operatorScopeWarning: expect.stringContaining("operator.read"),
+      });
+      expect(result.authenticationError).toBeUndefined();
+      expect(renderRestartDiagnostics(result).join("\n")).toContain(
+        "Reconnect with credentials granted operator.read, then run openclaw gateway status --deep.",
+      );
+      if (!scenario.ready) {
+        expect(
+          formatGatewayRestartFailure({
+            health: result,
+            port: 18789,
+            defaultTimeoutSeconds: 30,
+          }).failMessage,
+        ).toContain("connected");
+      }
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(sleep).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps native inspection and health RPC within one supplied allowance", async () => {
     const service = makeGatewayService(running);
@@ -107,19 +188,46 @@ describe("restart health", () => {
     ).resolves.toEqual({ healthz: 200, readyz: 503, coreReady: false });
   });
 
-  it.each([
+  type RouteScenario = {
+    transport: "response" | "close" | "credentials";
+    ready: boolean;
+    build: string;
+    outcome: string;
+    code?: string;
+    message?: string;
+  };
+
+  it.each<RouteScenario>([
     { transport: "response", ready: true, build: "candidate-build", outcome: "healthy" },
     { transport: "close", ready: true, build: "candidate-build", outcome: "healthy" },
     { transport: "response", ready: false, build: "candidate-build", outcome: "auth-rejected" },
     { transport: "response", ready: true, build: "old-build", outcome: "build-id-mismatch" },
     { transport: "credentials", ready: true, build: "candidate-build", outcome: "healthy" },
+    {
+      transport: "response",
+      ready: false,
+      build: "candidate-build",
+      outcome: "auth-rejected",
+      code: "AUTH_SCOPE_MISMATCH",
+      message: "unauthorized: device token scope mismatch (re-pair or approve scope upgrade)",
+    },
+    {
+      transport: "response",
+      ready: false,
+      build: "candidate-build",
+      outcome: "auth-rejected",
+      code: "DEVICE_AUTH_SIGNATURE_EXPIRED",
+      message: "device signature expired",
+    },
   ])("settles policy rejection through HTTP ($transport, $ready, $build)", async (scenario) => {
     const credentialError = new GatewayCredentialsRequiredError({
       method: "health",
       configPath: "fixture-config.json",
     });
     const reason =
-      scenario.transport === "credentials" ? credentialError.message : "device identity required";
+      scenario.transport === "credentials"
+        ? credentialError.message
+        : (scenario.message ?? "device identity required");
     callGateway.mockRejectedValue(
       scenario.transport === "credentials"
         ? credentialError
@@ -134,7 +242,7 @@ describe("restart health", () => {
                 message: "local fixture",
               },
             })
-          : gatewayResponseError(reason),
+          : gatewayResponseError(reason, scenario.code),
     );
     inspectPortUsage.mockResolvedValue(ownedPortUsage);
     requestStartupProbe.mockResolvedValue({
@@ -153,7 +261,6 @@ describe("restart health", () => {
     const snapshot = await waitForRunningGateway({
       expectedVersion: "2026.10.4",
       expectedBuildId: "candidate-build",
-      requirePluginHealth: false,
       requireChannelHealth: false,
       timeoutMs: 1_800_000,
       delayMs: 30_000,
@@ -193,16 +300,65 @@ describe("restart health", () => {
     const snapshot = await waitForRunningGateway({
       expectedVersion: "2026.10.6",
       expectedBuildId: "candidate-build",
-      requirePluginHealth: false,
       requireChannelHealth: false,
       timeoutMs: 1_800_000,
       delayMs: 30_000,
     });
     expect(snapshot.waitOutcome).toBe(scenario.outcome);
     expect(snapshot.protocolMismatch).toBe(
-      "protocol mismatch: Control UI v5, Gateway v4, connection check min v3",
+      "protocol mismatch: Web app v5, Gateway v4, connection check min v3",
     );
     expect(snapshot.authenticationError).toBeUndefined();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "matching HTTP identity",
+      requireChannelHealth: false,
+      build: "candidate-build",
+      outcome: "healthy",
+    },
+    {
+      label: "HTTP build mismatch",
+      requireChannelHealth: false,
+      build: "old-build",
+      outcome: "build-id-mismatch",
+    },
+    {
+      label: "strict channel check",
+      requireChannelHealth: true,
+      build: "candidate-build",
+      outcome: "auth-rejected",
+    },
+  ])("settles a verified-user rejection without another RPC ($label)", async (scenario) => {
+    const rejection = gatewayVerifiedUserRequiredError();
+    callGateway.mockRejectedValue(rejection);
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    requestStartupProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({
+        ok: true,
+        status: "started",
+        version: "2026.10.8",
+        buildId: scenario.build,
+      }),
+    });
+    requestReadinessProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({ ready: true }),
+    });
+    const snapshot = await waitForRunningGateway({
+      expectedVersion: "2026.10.8",
+      expectedBuildId: "candidate-build",
+      requireChannelHealth: scenario.requireChannelHealth,
+      timeoutMs: 1_800_000,
+      delayMs: 30_000,
+    });
+    expect(snapshot.waitOutcome).toBe(scenario.outcome);
+    expect(snapshot.healthy).toBe(scenario.outcome === "healthy");
+    expect(snapshot.authenticationError).toBe(rejection.message);
+    expect(callGateway).toHaveBeenCalledOnce();
     expect(sleep).not.toHaveBeenCalled();
   });
 
@@ -354,63 +510,69 @@ describe("restart health", () => {
     expect(sleep).not.toHaveBeenCalled();
     if (options.expectedBuildId) {
       expect(snapshot.buildIdMismatch).toEqual(expected.buildIdMismatch);
-      const { renderRestartDiagnostics } = await import("./restart-health.js");
       expect(renderRestartDiagnostics(snapshot)).toContain(
         "Gateway build mismatch: expected new-build, running gateway reported old-build.",
       );
     }
   });
 
-  it("stops waiting once the expected-version gateway reports activated plugin errors", async () => {
-    const pluginError = {
-      id: "telegram",
-      origin: "bundled",
-      activated: true,
-      error: "failed to load plugin dependency: ENOSPC",
-    };
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.24", connId: "new" },
-        health: {
-          ok: true,
-          plugins: {
-            errors: [
-              pluginError,
-              {
-                id: "optional",
-                origin: "workspace",
-                activated: false,
-                error: "disabled plugin ignored",
-              },
-            ],
+  it.each([true, false])(
+    "reports plugin load errors without failing Gateway health (activated=%s)",
+    async (activated) => {
+      const pluginError = {
+        id: "telegram",
+        origin: "bundled",
+        activated,
+        ...(!activated
+          ? { activationReason: "configured-unavailable: pending-state-migration" }
+          : {}),
+        error: "failed to load plugin dependency: ENOSPC",
+      };
+      callGateway.mockImplementation(
+        gatewayHealthResponse({
+          server: { version: "2026.4.24", connId: "new" },
+          health: {
+            ok: true,
+            plugins: {
+              errors: [
+                pluginError,
+                {
+                  id: "optional",
+                  origin: "workspace",
+                  activated: false,
+                  error: "disabled plugin ignored",
+                },
+              ],
+            },
           },
-        },
-      }),
-    );
-    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+        }),
+      );
+      inspectPortUsage.mockResolvedValue(ownedPortUsage);
 
-    const snapshot = await waitForRunningGateway({
-      expectedVersion: "2026.4.24",
-    });
+      const snapshot = await waitForRunningGateway({
+        expectedVersion: "2026.4.24",
+      });
 
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.waitOutcome).toBe("plugin-errors");
-    expect(snapshot.elapsedMs).toBe(0);
-    expect(snapshot.gatewayVersion).toBe("2026.4.24");
-    expect(snapshot.expectedVersion).toBe("2026.4.24");
-    expect(snapshot.activatedPluginErrors).toEqual([pluginError]);
-    expect(snapshot.versionMismatch).toBeUndefined();
-    expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
-      method: "health",
-      scopes: ["operator.read"],
-    });
-    expect(sleep).not.toHaveBeenCalled();
+      expect(snapshot.healthy).toBe(true);
+      expect(snapshot.waitOutcome).toBe("healthy");
+      expect(snapshot.elapsedMs).toBe(0);
+      expect(snapshot.gatewayVersion).toBe("2026.4.24");
+      expect(snapshot.expectedVersion).toBe("2026.4.24");
+      expect(snapshot.activatedPluginErrors).toEqual(activated ? [pluginError] : undefined);
+      expect(snapshot.versionMismatch).toBeUndefined();
+      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
+        method: "health",
+        scopes: ["operator.read"],
+      });
+      expect(sleep).not.toHaveBeenCalled();
 
-    const { renderRestartDiagnostics } = await import("./restart-health.js");
-    expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(
-      "Activated plugin load errors:\n- telegram: failed to load plugin dependency: ENOSPC",
-    );
-  });
+      if (activated) {
+        expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(
+          "Activated plugin load errors:\n- telegram: failed to load plugin dependency: ENOSPC",
+        );
+      }
+    },
+  );
 
   it("stops waiting once the expected-version gateway reports channel probe errors", async () => {
     callGateway.mockImplementation(

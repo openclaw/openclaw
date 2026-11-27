@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { describe, expect, it, vi } from "vitest";
 import { PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
@@ -380,7 +380,7 @@ describe("bootstrapWorker", () => {
     [
       45,
       "OPENCLAW_WORKER_NODE_UNSUPPORTED: v24.14.1\n",
-      "Node 24.22.1+ or 26.12.1+ with WAL-reset-safe SQLite",
+      "Node >=24.16.0 <25, or >=26.1.0 with WAL-reset-safe SQLite",
     ],
   ] as const)(
     "reports provider setup guidance for Node.js failure %s",

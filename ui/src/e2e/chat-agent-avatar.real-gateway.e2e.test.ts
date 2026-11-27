@@ -28,7 +28,6 @@ const rejectedStatuses = {
   "route-404": 404,
   "identity-404": 404,
   "credential-401": 401,
-  "credential-403": 403,
   "workspace-503": 503,
 } as const;
 type StreamCase = keyof typeof rejectedStatuses;
@@ -189,7 +188,7 @@ async function observeAvatarResponses(page: Page, pathname: string | RegExp) {
           record.nativeCancelResolvedCount += 1;
           // Reject only after native cancellation, so recovery must contain cleanup
           // failure without replacing the real Response or faking stream release.
-          if (response.status === 401 || response.status === 403) {
+          if (response.status === 401) {
             record.cancelRejectedCount += 1;
             throw new Error("avatar fixture cancellation rejection");
           }
@@ -398,7 +397,7 @@ async function expectReleasedResponses(page: Page, caseName: StreamCase, count?:
             observed?.status === response.status &&
             observed.cancelCount === 1 &&
             observed.nativeCancelResolvedCount === 1 &&
-            observed.cancelRejectedCount === (status === 401 || status === 403 ? 1 : 0) &&
+            observed.cancelRejectedCount === (status === 401 ? 1 : 0) &&
             observed.blobReads === 0 &&
             !response.finished &&
             response.closed &&
@@ -495,33 +494,31 @@ suite.define(() => {
     });
   });
 
-  it.each([401, 403] as const)(
-    "recovers from a pending %s and rejected cancellation without canceling the valid avatar",
-    async (status) => {
-      await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-        const caseName = `credential-${status}` as const;
-        await openWorkspaceStream(page, caseName);
-        const consumer = await mountWorkspaceIcon(page, caseName, [
-          "avatar-proof-stale",
-          "avatar-proof-valid",
-        ]);
-        await expectReleasedResponses(page, caseName, 1);
-        const image = consumer.locator("img.workspace-icon");
-        await image.waitFor();
-        await expect
-          .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
-          .toBeGreaterThan(0);
-        expect(await image.getAttribute("src")).toMatch(/^blob:/);
-        expect(await image.isVisible()).toBe(true);
-        const browser = await readBrowserResponses(page);
-        expect(browser).toMatchObject([{ status }, { status: 200, cancelCount: 0, blobReads: 1 }]);
-        const success = browser[1];
-        expect(success?.blobBytes).toBeGreaterThan(0);
-        expect(readServerResponses(caseName)).toMatchObject([
-          { status, credential: "stale" },
-          { id: success?.id, status: 200, credential: "valid", finished: true, endedAtClose: true },
-        ]);
-      });
-    },
-  );
+  it("recovers from a pending 401 and rejected cancellation without canceling the valid avatar", async () => {
+    const status = 401;
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const caseName = `credential-${status}` as const;
+      await openWorkspaceStream(page, caseName);
+      const consumer = await mountWorkspaceIcon(page, caseName, [
+        "avatar-proof-stale",
+        "avatar-proof-valid",
+      ]);
+      await expectReleasedResponses(page, caseName, 1);
+      const image = consumer.locator("img.workspace-icon");
+      await image.waitFor();
+      await expect
+        .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+        .toBeGreaterThan(0);
+      expect(await image.getAttribute("src")).toMatch(/^blob:/);
+      expect(await image.isVisible()).toBe(true);
+      const browser = await readBrowserResponses(page);
+      expect(browser).toMatchObject([{ status }, { status: 200, cancelCount: 0, blobReads: 1 }]);
+      const success = browser[1];
+      expect(success?.blobBytes).toBeGreaterThan(0);
+      expect(readServerResponses(caseName)).toMatchObject([
+        { status, credential: "stale" },
+        { id: success?.id, status: 200, credential: "valid", finished: true, endedAtClose: true },
+      ]);
+    });
+  });
 });

@@ -1,8 +1,9 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.app.node.asArrayOrNull
-import ai.openclaw.app.node.asObjectOrNull
-import ai.openclaw.app.node.asStringOrNull
+import ai.openclaw.app.asArrayOrNull
+import ai.openclaw.app.asJsonStringOrNull
+import ai.openclaw.app.asObjectOrNull
+import ai.openclaw.app.asStringOrNull
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -29,6 +30,7 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -201,34 +203,6 @@ private enum class GatewayConnectAuthSource {
   NONE,
 }
 
-/**
- * Structured gateway error details, preserved for reconnect, authorization, and UI decisions.
- */
-data class GatewayErrorDetails(
-  val code: String?,
-  val canRetryWithDeviceToken: Boolean,
-  val recommendedNextStep: String?,
-  val pauseReconnect: Boolean? = null,
-  val reason: String? = null,
-  val requestId: String? = null,
-  val retryable: Boolean = false,
-  val clientMinProtocol: Int? = null,
-  val clientMaxProtocol: Int? = null,
-  val expectedProtocol: Int? = null,
-  val minimumProbeProtocol: Int? = null,
-  val clawhubWarning: String? = null,
-  val missingScope: String? = null,
-  val requiredScopes: List<String> = emptyList(),
-  val retryAfterMs: Int? = null,
-)
-
-data class GatewayMissingScopeErrorDetails(
-  val missingScope: String,
-  val requiredScopes: List<String>,
-)
-
-private val legacyMissingScopePattern = Regex("\\bmissing scope:\\s*([a-z0-9._-]+)", RegexOption.IGNORE_CASE)
-
 private val gatewayApprovalRequestIdPattern = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 /** Keeps copied approval commands single-argument and safe for a gateway host shell. */
@@ -251,6 +225,7 @@ data class GatewayHelloSummary(
   val authSessionCap: String? = null,
   val methods: Set<String>? = null,
   val capabilities: Set<String>? = null,
+  val profileActivityViewerId: String? = null,
 )
 
 internal data class GatewaySessionRouting(
@@ -284,7 +259,7 @@ private data class SelectedConnectAuth(
 )
 
 private class GatewayConnectFailure(
-  val gatewayError: GatewaySession.ErrorShape,
+  val gatewayError: ErrorShape,
 ) : IllegalStateException(gatewayError.message)
 
 internal sealed class GatewayRequestDefinitiveFailure(
@@ -296,7 +271,7 @@ internal class GatewayRequestNotEnqueued(
 ) : GatewayRequestDefinitiveFailure(message)
 
 internal class GatewayRequestRejected(
-  val gatewayError: GatewaySession.ErrorShape,
+  val gatewayError: ErrorShape,
 ) : GatewayRequestDefinitiveFailure("${gatewayError.code}: ${gatewayError.message}")
 
 /** Request frame was sent, but no response proved whether the gateway applied it. */
@@ -358,54 +333,6 @@ class GatewaySession(
     private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
   }
 
-  data class InvokeResult(
-    val ok: Boolean,
-    val payloadJson: String?,
-    val error: ErrorShape?,
-  ) {
-    companion object {
-      fun ok(payloadJson: String?) = InvokeResult(ok = true, payloadJson = payloadJson, error = null)
-
-      fun error(
-        code: String,
-        message: String,
-      ) = InvokeResult(ok = false, payloadJson = null, error = ErrorShape(code = code, message = message))
-    }
-  }
-
-  data class ErrorShape(
-    val code: String,
-    val message: String,
-    val details: GatewayErrorDetails? = null,
-  ) {
-    fun missingScopeDetails(): GatewayMissingScopeErrorDetails? {
-      val details = details ?: return null
-      val missingScope = details.missingScope?.trim().orEmpty()
-      val requiredScopes = details.requiredScopes.map { it.trim() }
-      if (details.code != "MISSING_SCOPE" || missingScope.isEmpty() || requiredScopes.any { it.isEmpty() }) {
-        return null
-      }
-      return requiredScopes.takeIf { it.isNotEmpty() }?.let {
-        GatewayMissingScopeErrorDetails(missingScope = missingScope, requiredScopes = it)
-      }
-    }
-
-    fun missingScope(): String? {
-      missingScopeDetails()?.let { return it.missingScope }
-      if (code != "FORBIDDEN" && code != "INVALID_REQUEST") return null
-      return legacyMissingScopePattern.find(message)?.groupValues?.getOrNull(1)
-    }
-  }
-
-  /**
-   * Structured RPC result used by callers that need error codes without exceptions.
-   */
-  data class RpcResult(
-    val ok: Boolean,
-    val payloadJson: String?,
-    val error: ErrorShape?,
-  )
-
   /** One ready physical WebSocket captured before queued work starts waiting. */
   internal class RequestLease internal constructor(
     val endpointStableId: String,
@@ -420,6 +347,8 @@ class GatewaySession(
     fun isCurrent(): Boolean = isCurrentImpl()
 
     fun supportsMethod(method: String): Boolean = method in advertisedMethods
+
+    fun supportsCapability(capability: String): Boolean = capability in advertisedCapabilities
 
     suspend fun closeTalkSession(
       sessionId: String,
@@ -457,6 +386,23 @@ class GatewaySession(
       timeoutMs: Long = 15_000,
       withEnqueue: (() -> Unit) -> Unit = { it() },
     ): String = requestImpl(method, paramsJson, timeoutMs, withEnqueue)
+
+    /** Voice retains its original input while startup refuses admission on this socket. */
+    suspend fun requestAwaitingStartup(
+      method: String,
+      paramsJson: String?,
+      timeoutMs: Long = 15_000,
+      withEnqueue: (() -> Unit) -> Unit = { it() },
+    ): String {
+      while (true) {
+        try {
+          return request(method, paramsJson, timeoutMs, withEnqueue)
+        } catch (error: GatewayRequestRejected) {
+          val retryDelayMs = error.gatewayError.startupRetryDelayMs(method) ?: throw error
+          delay(retryDelayMs)
+        }
+      }
+    }
   }
 
   private val json =
@@ -1318,32 +1264,41 @@ class GatewaySession(
           val call = downloadClient.newCall(request.build())
           call.timeout().timeout(20, java.util.concurrent.TimeUnit.SECONDS)
           var retryDelayMs: Long? = null
-          call.execute().use { response ->
-            if (response.code == 202 && playbackRendition) {
-              retryDelayMs = retry.nextDelayMs()
-            } else {
-              if (!response.isSuccessful) return@withContext null
-              val body = response.body
-              val mimeType = body.contentType()?.toString()?.lowercase(Locale.ROOT) ?: return@withContext null
-              if (!kind.acceptsMimeType(mimeType)) return@withContext null
-              val maximumBytes = kind.maximumBufferedBytes
-              val declaredLength = body.contentLength()
-              if (declaredLength > maximumBytes) return@withContext null
-              val buffer = Buffer()
-              val source = body.source()
-              var total = 0L
-              while (true) {
-                val read = source.read(buffer, minOf(8192L, maximumBytes + 1L - total))
-                if (read == -1L) break
-                total += read
-                if (total > maximumBytes) return@withContext null
+          val media =
+            call.useCancellableResponse { response ->
+              if (response.code == 202 && playbackRendition) {
+                retryDelayMs = retry.nextDelayMs()
+                null
+              } else {
+                if (!response.isSuccessful) return@useCancellableResponse null
+                val body = response.body
+                val mimeType = body.contentType()?.toString()?.lowercase(Locale.ROOT) ?: return@useCancellableResponse null
+                if (!kind.acceptsMimeType(mimeType)) return@useCancellableResponse null
+                val maximumBytes = kind.maximumBufferedBytes
+                val declaredLength = body.contentLength()
+                if (declaredLength > maximumBytes) return@useCancellableResponse null
+                val buffer = Buffer()
+                val source = body.source()
+                var total = 0L
+                while (true) {
+                  val read = source.read(buffer, minOf(8192L, maximumBytes + 1L - total))
+                  if (read == -1L) break
+                  total += read
+                  if (total > maximumBytes) return@useCancellableResponse null
+                }
+                bufferedMedia(bytes = buffer.readByteArray(), mimeType = mimeType)
               }
-              return@withContext bufferedMedia(bytes = buffer.readByteArray(), mimeType = mimeType)
             }
-          }
-          delay(retryDelayMs ?: return@withContext null)
+          delay(retryDelayMs ?: return@withContext media)
         }
         null
+      }
+
+    private suspend fun <T> Call.useCancellableResponse(block: (Response) -> T): T =
+      suspendCancellableCoroutine { continuation ->
+        // Keep cancellation attached through body reads, not just until response headers arrive.
+        continuation.invokeOnCancellation { cancel() }
+        continuation.resumeWith(runCatching { execute().use(block) })
       }
 
     private fun resolveTicketedMediaRequest(
@@ -1949,6 +1904,7 @@ class GatewaySession(
             authSessionCap = authSessionCap,
             methods = featureSet("methods"),
             capabilities = featureSet("capabilities"),
+            profileActivityViewerId = authObj?.get("profileActivityViewerId").asJsonStringOrNull(),
           ),
       )
     }
@@ -2060,6 +2016,8 @@ class GatewaySession(
       val payloadJson = frame["payload"]?.toString()
       val error =
         response.error?.let { wireError ->
+          // retryAfterMs belongs to the error frame, independently of optional method details.
+          val retryAfterMs = wireError.retryAfterMs?.coerceIn(0, Int.MAX_VALUE.toLong())?.toInt()
           val detailObj = wireError.details.asObjectOrNull()
           val details =
             detailObj?.let {
@@ -2069,9 +2027,10 @@ class GatewaySession(
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
                 pauseReconnect = it["pauseReconnect"].asBooleanOrNull(),
                 reason = it["reason"].asStringOrNull(),
+                method = it["method"].asStringOrNull(),
                 requestId = normalizeGatewayApprovalRequestId(it["requestId"].asStringOrNull()),
                 retryable = it["retryable"].asBooleanOrNull() == true || wireError.retryable == true,
-                retryAfterMs = frame["error"].asObjectOrNull()?.get("retryAfterMs").asIntOrNull(),
+                retryAfterMs = retryAfterMs,
                 clientMinProtocol = it["clientMinProtocol"].asIntOrNull(),
                 clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
                 expectedProtocol = it["expectedProtocol"].asIntOrNull(),
@@ -2081,7 +2040,7 @@ class GatewaySession(
                 requiredScopes = it["requiredScopes"].asStringList(),
               )
             }
-          ErrorShape(wireError.code, wireError.message, details)
+          ErrorShape(wireError.code, wireError.message, details, retryable = wireError.retryable == true, retryAfterMs = retryAfterMs)
         }
       pending.remove(id)?.complete(RpcResult(response.ok, payloadJson, error))
     }
@@ -2500,8 +2459,8 @@ class GatewaySession(
 internal fun gatewayNetworkConnectError(
   timedOut: Boolean = false,
   waitingForCleanup: Boolean = false,
-): GatewaySession.ErrorShape =
-  GatewaySession.ErrorShape(
+): ErrorShape =
+  ErrorShape(
     code = "NETWORK_UNREACHABLE",
     message =
       when {
@@ -2526,7 +2485,7 @@ internal fun gatewayNetworkConnectError(
 
 /** Decides whether auth failures should stop reconnect churn until the user changes credentials. */
 internal fun shouldPauseGatewayReconnectAfterAuthFailure(
-  error: GatewaySession.ErrorShape,
+  error: ErrorShape,
   hasBootstrapToken: Boolean,
   role: String?,
   scopes: List<String>,

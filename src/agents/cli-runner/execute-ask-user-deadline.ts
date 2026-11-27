@@ -8,6 +8,7 @@ export type CliLoopbackCall = {
   current: Loopback.McpLoopbackToolCallStart;
   boundToolCallId?: string;
   outcome?: CliToolTerminalOutcome;
+  browserTab?: unknown;
   ambiguous: boolean;
   ambiguityGroup?: CliLoopbackAmbiguityGroup;
 };

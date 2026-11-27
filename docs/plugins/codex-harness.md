@@ -28,6 +28,11 @@ current owned proxy. Context-only projection refreshes use that same logical
 inference identity when background work retains its predecessor, rather than
 comparing the private relay URL with the logical route fingerprint.
 
+If Codex discards an unused native thread, the next turn starts a replacement
+through the existing thread lifecycle and logs a warning. A binding with recorded
+conversation history is preserved when its native thread cannot be found;
+OpenClaw reports the error instead of silently starting over.
+
 If active work still claims a native thread, OpenClaw rejects configuration
 changes that would release it without trying fallback models. Wait for that work
 to finish or stop it before retrying. The original thread and its configuration
@@ -64,6 +69,10 @@ The shared settlement owner preserves callback order and joins pending
 presentation work before terminal delivery. Projection draining stays under the
 attempt cancellation and settlement deadline.
 
+Growing final-answer text uses the assistant stream. Answer-candidate telemetry
+publishes snapshots when a candidate starts, completes with authoritative text,
+is superseded, or is selected; it does not repeat the full answer for every delta.
+
 After a transient provider retry, final-answer recovery uses the original
 persisted user prompt and the completed tool results. It can produce a summary
 when the native turn finishes without text, without running those tools again.
@@ -97,6 +106,12 @@ MCP progress, streamed patch updates, reasoning section markers, and model metad
 keep native work from appearing stalled. Terminal interaction also informs process
 cleanup. These notifications remain enabled. Older app-servers that do not recognize
 the optional capability ignore it; the normal minimum-version check still applies.
+
+Local app-server process creation and stdio forwarding run in a dedicated worker
+thread. A slow executable launch therefore leaves the Gateway event loop available
+for other requests. The worker preserves the Gateway's parent-process identity,
+so existing orphan registration and descendant cleanup still apply. Each retained
+app-server has one transport worker; shared-client idle retirement closes both.
 
 The native session catalog keeps one resident index per Codex home, shared across
 agents, working-directory filters, searches, and pages. Lists normally filter and page
@@ -137,6 +152,8 @@ matching the paired-node response budget. Healthy siblings still return; backgro
 native hydration can continue warming the next request. Complete catalog `thread/list` pages and metadata-only `thread/read` responses
 up to 64 KiB are parsed and projected inline, avoiding worker startup for small
 catalog refreshes. Larger responses use a worker owned by their app-server client.
+The shared worker pool retires an idle decoder after one minute, extending recurring
+reuse to five minutes; memory pressure and client shutdown can retire it sooner.
 Both paths apply the same projection. The stdout reader waits for the compact result
 before delivering later responses or notifications. It transfers larger responses
 as bytes, admits one worker task at a time, and pauses the transport while that task runs.
@@ -430,6 +447,45 @@ legacy Codex GPT refs. Put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
 
+### Parent-local inference connection recovery
+
+When a managed turn exceeds the local inference relay's 32 MiB request limit,
+OpenClaw preserves the failed turn and retires only its native thread binding.
+Your next message starts a new native thread using bounded history from the
+same OpenClaw conversation; the original transcript and native thread remain
+available. OpenClaw does not automatically replay the failed turn or its tools.
+Native-owned and supervised sessions retain their original binding instead.
+A current message or attachment that exceeds the limit on its own still needs
+to be made smaller.
+Restored historical images also consume their encoded byte size when selecting
+the bounded seed. A context engine's selected attachments must fit its rendered
+allowance before they can be injected into a native thread.
+
+When an ordinary managed turn ends with the exact `Codex parent-local inference
+transport failed` error, OpenClaw settles its recorded output before retiring
+that connection from future acquisitions. Retirement is skipped while sibling
+work or idle Incognito history still owns the process: Incognito history cannot
+be resumed from disk. Existing sibling turns
+continue normally; preserving their ownership takes priority over this optional
+connection refresh.
+The next eligible attempt can resume the saved thread on a fresh connection.
+The relay does not replay tools or add a retry loop; existing retry limits and
+side-effect checks still apply. Unrelated upstream 502s, supervised sessions,
+and client-bound native tool catalogs do not trigger this retirement.
+
+The logs include `codex inference HTTP relay failed` with a bounded stage and
+cause classification, plus `codex inference transport retired after settled failure`
+when retirement occurs. These diagnostics omit private routes, credentials,
+request bodies, and arbitrary exception text.
+
+After installing a repair, verify its live activation receipt before calling it
+active. If activation is pending, an authorized operator can run
+`openclaw plugins reload codex --json`. Then verify a reply and a read-only tool
+call in the affected session. For background-worker incidents, also follow up
+with the same worker through its parent and verify the worker's completed result;
+a successful parent reply alone does not establish worker recovery. Reconcile
+previous tool results and delivery receipts before retrying external work.
+
 With provider/model runtime policy unset or `auto`, the `openai/*` prefix alone
 never selects this harness. OpenAI may select Codex implicitly only for an
 exact official HTTPS Platform Responses or ChatGPT Responses route with no
@@ -441,6 +497,14 @@ runtime by themselves. See
 If Codex owns auth before Platform versus ChatGPT routing is known, OpenClaw
 still requires every candidate route to declare Codex compatibility. Native
 auth ownership alone never bypasses that route check.
+
+For managed local stdio, automatic selection uses the built-in OpenClaw harness
+when no native Codex binary is available. This includes platforms without a
+published binary, such as Linux RISC-V64. An explicitly selected or pinned Codex
+runtime reports an error instead. Install a native Codex build and set
+`plugins.entries.codex.config.appServer.command` or `OPENCLAW_CODEX_APP_SERVER_BIN`
+to use it. Configured commands, WebSocket connections, Unix sockets, and
+worker-hosted app-servers retain their own startup validation.
 
 When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled (code-mode-only stays off by default), so
@@ -568,6 +632,9 @@ session generation. After Stop settles, you can send another message in the same
 chat without reconnecting.
 Stop also retires an already-interrupted child without interrupting its finished
 turn again, so that child cannot keep its parent session blocked.
+Before retiring a canceled native child, Stop also waits for its owned process
+cleanup. An interrupted turn alone does not prove its commands stopped. This
+includes children whose parent has yielded and children interrupted before Stop.
 If its previous native process is already closing, Stop cancels the waiting run
 without waiting for physical exit. A replacement writer still waits for that exit.
 Session-wide Stop preserves the caller's request ownership, protected-run, and
@@ -676,15 +743,24 @@ and connection. Native-parent thread rotation can preserve those assignments;
 resetting the requester or changing the connection does not adopt them. Missing
 assignment metadata is not reconstructed from retired Tasks history.
 
-For Codex V1 follow-ups, OpenClaw retains a successful submission receipt with
-the parent binding until it records the matching native turn as an assignment.
-This allows recovery when the parent yields or the Gateway restarts before observing
-the child turn. A receipt alone does not keep an idle native connection alive.
-Observation follows the existing warm-thread lifetime; an unmatched receipt
-remains available for later recovery. Resetting the parent or replacing its native connection
-invalidates these receipts. Before downgrading OpenClaw, let pending native work
-settle: older versions can read the binding but may discard its recovery receipts
-when updating it.
+In Codex V1, `resume_agent` can find a worker even when `send_input` reports
+“Cannot verify this worker belongs to the current parent.” Changing the
+app-server address or credentials can give the same chat a new native parent
+thread. Check the parent's history and confirm what the worker finished,
+including any file changes or remote writes. If the outcome is unclear, don't
+resend the task. If the earlier work is settled and a different worker is
+acceptable, use `spawn_agent` with `fork_context: false` for the next task.
+Pass only the confirmed results it needs.
+
+For Codex V1 follow-ups, the parent binding keeps a successful submission receipt until OpenClaw
+records the matching turn as an assignment. This allows recovery after a yield or restart.
+When a warm thread closes, observation stops but unmatched receipts remain available.
+A receipt alone won't keep an idle connection open. Resetting the parent or replacing its native connection invalidates these receipts.
+
+If the [Gateway logs](/cli/logs) show `Native assignment durability could not be updated`,
+check the parent's history and any actions it took before repeating work. A delivered result
+still marked pending can reach the parent again after restart, even if the drain reported ready.
+Before downgrading, let pending work finish. Older versions can read the binding but may discard receipts when updating it.
 
 Closing a native child applies to the assignment selected when the close starts.
 OpenClaw waits for Codex to confirm that the child's runtime is absent before
@@ -720,7 +796,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.164.0` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.172.0` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

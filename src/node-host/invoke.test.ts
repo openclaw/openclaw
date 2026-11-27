@@ -15,6 +15,8 @@ import {
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { logWarn } from "../logger.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -531,10 +533,12 @@ describe("node host invoke", () => {
   it.runIf(process.platform !== "win32")(
     "reports current allow-always coverage for prepared shell-wrapped system.run commands",
     async () => {
-      const { result } = await invokeCommand("system.run.prepare", {
-        command: ["/bin/sh", "-lc", "/bin/echo ok"],
-        rawCommand: "/bin/echo ok",
-      });
+      const { result } = await withEnvAsync({ BASH_ENV: undefined, ENV: undefined }, () =>
+        invokeCommand("system.run.prepare", {
+          command: ["/bin/sh", "-lc", "/bin/echo ok"],
+          rawCommand: "/bin/echo ok",
+        }),
+      );
       const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
         allowAlwaysCoverage?: {
           complete?: boolean;
@@ -722,6 +726,38 @@ describe("node host invoke", () => {
       });
     } finally {
       closeOpenClawStateDatabaseForTest();
+    }
+  });
+
+  it("retains a preparation failure stack in local logs without adding it to the response", async () => {
+    const logPath = path.join(tempDirs.make("node-prepare-diagnostic-"), "node.log");
+    const failure = new Error("approval preparation unavailable");
+    failure.stack =
+      "Error: approval preparation unavailable\n    at originalPreparation (synthetic-owner.ts:12:3)";
+    Object.freeze(failure);
+    approvalResolutionFailure.error = failure;
+    const actualLogger = await vi.importActual<typeof import("../logger.js")>("../logger.js");
+    vi.mocked(logWarn).mockImplementationOnce(actualLogger.logWarn);
+    setLoggerOverride({ level: "warn", file: logPath });
+    try {
+      const { result } = await invokeCommand("system.run.prepare", {
+        command: ["printf", "private-command-argument"],
+        env: { PRIVATE_INPUT: "private-environment-value" },
+      });
+      await flushLogger();
+      const diagnostics = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
+      expect(diagnostics).toContain("at originalPreparation (synthetic-owner.ts:12:3)");
+      expect(diagnostics).not.toContain("private-command-argument");
+      expect(diagnostics).not.toContain("private-environment-value");
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "Error: approval preparation unavailable" },
+      });
+      expect(JSON.stringify(result)).not.toContain("originalPreparation");
+      expect(failure.stack).toContain("at originalPreparation (synthetic-owner.ts:12:3)");
+    } finally {
+      resetLogger();
+      vi.mocked(logWarn).mockReset();
     }
   });
 

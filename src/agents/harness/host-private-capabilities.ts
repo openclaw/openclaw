@@ -1,3 +1,4 @@
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type {
   PreparedSessionEntryWorkerRead,
   SessionEntryWorkerRead,
@@ -15,8 +16,10 @@ import type { ReplyIncomingExecutionSelection } from "../../sessions/session-con
 import type { ReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { AsyncContext } from "../../shared/async-context.js";
-import type { ModelFallbackAvailability } from "../agent-scope.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
+import type { ModelFallbackAvailability } from "../model-fallback.types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
@@ -24,6 +27,43 @@ import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 export type ReplyQueueInputAdapter = "human-and-question-permission" | "legacy-question-category";
 
 const replyQueueInputAdapters = new WeakMap<object, ReplyQueueInputAdapter>();
+
+const replyInputChannel = resolveGlobalSingleton(Symbol.for("openclaw.replyInputChannel"), () =>
+  Symbol("replyInputChannel"),
+);
+
+/** Retain human ingress separately from the turn's potentially redirected reply route. */
+export function bindReplyInputChannel(input: object, channel: string | undefined): void {
+  Object.assign(input, { [replyInputChannel]: channel });
+}
+
+export function readReplyInputChannel(input: object): string | undefined {
+  const channel: unknown = Reflect.get(input, replyInputChannel);
+  return typeof channel === "string" ? channel : undefined;
+}
+
+const sharedGatewayOwnerSources = resolveGlobalSingleton(
+  Symbol.for("openclaw.sharedGatewayOwnerSources"),
+  () => new WeakSet<object>(),
+);
+
+/** Only the Gateway authentication owner records a shared UI source. */
+export function bindSharedGatewayOwnerRunAuthority(authority: AdmittedRunOperatorAuthority): void {
+  if (authority.source) {
+    sharedGatewayOwnerSources.add(authority.source);
+  }
+}
+
+/** Attribution alone cannot attest shared-credential authentication. */
+export function isSharedGatewayOwnerRunAuthority(
+  authority: AdmittedRunOperatorAuthority | undefined,
+): boolean {
+  return Boolean(
+    authority?.profileId === GATEWAY_OWNER_PROFILE_ID &&
+    authority.source &&
+    sharedGatewayOwnerSources.has(authority.source),
+  );
+}
 
 /** Keep adapter metadata on the existing host owner without changing its public shape. */
 export function bindReplyQueueInputAdapter<T extends object>(
@@ -53,6 +93,8 @@ export type AgentHarnessTtsProvenanceTransfer = <T extends object>(
 export type PreparedQuestionCallerRead = {
   reads: readonly SessionEntryWorkerRead[];
   prepareCurrent: () => Promise<void>;
+  /** Shipped synchronous dispatcher callbacks only; never invoke from a worker grant. */
+  assertLegacyCurrent?: () => void;
   assertPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => void;
   /** Retain owner-held policy facts; final checks never acquire a durable reader. */
   retainCurrent: () => { assertCurrent: () => void; release: () => void };
@@ -118,6 +160,7 @@ export function bindQuestionDispatchGuard(
   };
   const capability = readQuestionDispatchCapability(authority?.assertCurrent);
   const callerRead = capability?.callerRead;
+  const assertCallerLegacyCurrent = callerRead?.assertLegacyCurrent;
   bindQuestionDispatchCapability(
     assertCurrent,
     {
@@ -126,6 +169,7 @@ export function bindQuestionDispatchGuard(
       callerRead: callerRead && {
         reads: callerRead.reads,
         prepareCurrent: prepareCurrent!,
+        assertLegacyCurrent: assertCallerLegacyCurrent && (() => guard(assertCallerLegacyCurrent)),
         assertPrepared: (reads: Parameters<PreparedQuestionCallerRead["assertPrepared"]>[0]) =>
           guard(() => callerRead.assertPrepared(reads)),
         retainCurrent: () => {
@@ -177,6 +221,9 @@ export type ReplyToolAuthorityCaller =
 
 export type ReplyToolAuthorityCallerBinding = {
   assertCurrent(): void;
+  /** Classify continuation before compatibility, retaining the selected live owner. */
+  continuationKind?: "verified-profile" | "shared-owner" | "owner-guidance";
+  allowPendingUserInputAnswer?: false;
   joinObservation?: ReplyMessageJoinObservation;
   prepare(): Promise<PreparedQuestionCallerRead | undefined>;
 };
@@ -277,6 +324,8 @@ export function captureReplyToolAuthorityCallerBinding(
   selected.assertCurrent();
   return {
     assertCurrent: () => selected.assertCurrent(),
+    continuationKind: selected.continuationKind,
+    allowPendingUserInputAnswer: selected.allowPendingUserInputAnswer,
     joinObservation: selected.joinObservation,
     prepare: async () => {
       selected.assertCurrent();
@@ -316,6 +365,7 @@ function assertQuestionCompatibilityCurrent(
   fallback: () => void,
 ) {
   assertActive();
+  callerRead?.assertLegacyCurrent?.();
   const retained = callerRead?.retainCurrent();
   try {
     if (retained) {
@@ -368,6 +418,7 @@ export async function prepareQuestionInputAuthority(authority: QuestionInputAuth
     ? {
         reads: captured.reads.flatMap((read) => read.reads),
         prepareCurrent,
+        assertLegacyCurrent: assertLegacyReads,
         assertPrepared: (reads) => {
           assertActive();
           let offset = 0;

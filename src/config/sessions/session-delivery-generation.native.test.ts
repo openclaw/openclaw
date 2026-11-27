@@ -1,14 +1,31 @@
 import fs from "node:fs";
-import { expect, it, onTestFinished } from "vitest";
+import { syncBuiltinESMExports } from "node:module";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { writeHostFile } from "../../agents/host-file-write.js";
+import * as databaseIdentity from "../../infra/sqlite-worker-identity.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as nativeEntries from "./session-accessor.sqlite-entry-read.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
+import {
+  prepareChatDeliveryLease,
+  prepareLeaseFacts,
+  prepareChatLeaseBatch,
+} from "./session-delivery-generation.js";
+import * as entryReads from "./session-entry-read-runtime.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "./session-source-authority.js";
+import * as storeCandidates from "./session-store-read-candidates.js";
+import * as workerResources from "./session-transcript-worker-resources.js";
 
 const original = {
   sessionId: "e1234567-1234-1234-1234-123456789abc",
@@ -26,20 +43,283 @@ async function fixture(initialSettings?: typeof settings) {
   };
   const entry = { ...original, ...initialSettings };
   replaceSessionEntrySync(scope, entry);
-  const generation = await prepareSessionGenerationFacts({ ...scope, ...entry });
+  // These cases exercise the live-writer fence; stored references follow the key.
+  const generation = await prepareLeaseFacts({
+    ...scope,
+    ...entry,
+    exact: "lifecycle",
+  });
   onTestFinished(() => generation.release());
   return { database, scope, generation };
 }
 const generationError = (code = "UNAVAILABLE") =>
   expect.objectContaining({ code: `SESSION_DELIVERY_GENERATION_${code}` });
 
-it.each(["runtime", "automation"])(
-  "retains generation facts across metadata but invalidates broad %s changes",
+it.each([false, true])(
+  "isolates batch failures and keeps returned generations live (failed combined read: %s)",
+  async (failCombinedRead) => {
+    const scopes = (["main", "main", "other"] as const).map((agentId, index) => {
+      const scope = {
+        agentId,
+        storePath: openOpenClawAgentDatabase({ agentId }).path,
+        sessionKey: `agent:${agentId}:batch-${index}`,
+      };
+      const entry = { ...original, sessionId: `e1234567-1234-1234-1234-123456789ab${index}` };
+      replaceSessionEntrySync(scope, entry);
+      return Object.assign(scope, entry);
+    });
+    const read = entryReads.withSessionEntriesFromStoresInWorker;
+    let failedCombinedRead = false;
+    vi.spyOn(entryReads, "withSessionEntriesFromStoresInWorker").mockImplementation(
+      (inputs, consume, options) => {
+        if (failCombinedRead && inputs.some((input) => (input.sessionKeys?.length ?? 0) > 1)) {
+          failedCombinedRead = true;
+          return Promise.reject(new Error("Synthetic combined read unavailable"));
+        }
+        return read(inputs, consume, options);
+      },
+    );
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    const results = await prepareChatLeaseBatch(
+      // A key with no row cannot be leased; the others stay live.
+      scopes.map((scope, index) =>
+        chatRef(index === 1 ? { ...scope, sessionKey: `${scope.sessionKey}:missing` } : scope),
+      ),
+    );
+    onTestFinished(() => {
+      for (const result of results) {
+        if (result.ok) {
+          result.value.release();
+        }
+      }
+    });
+    expect(failedCombinedRead).toBe(failCombinedRead);
+    expect(results.map((result) => result.ok)).toEqual([true, false, true]);
+    const [first, stale, other] = results;
+    if (!first?.ok || !stale || stale.ok || !other?.ok) {
+      throw new Error("Expected two healthy generations and one stale generation");
+    }
+    expect(stale.error).toEqual(generationError("REVOKED"));
+    expect(first.value.assertCurrent).not.toThrow();
+    expect(other.value.assertCurrent).not.toThrow();
+    replaceSessionEntrySync(scopes[0]!, {
+      ...original,
+      sessionId: scopes[0]!.sessionId,
+      lifecycleRevision: "successor",
+    });
+    expect(first.value.assertCurrent).toThrow(generationError("REVOKED"));
+    expect(other.value.assertCurrent).not.toThrow();
+  },
+);
+
+it("checks retained delivery and source authority without polling and refuses database retirement", async () => {
+  const { database, scope, generation } = await fixture();
+  const delivery = await prepareChatDeliveryLease(chatRef({ ...scope, ...original }));
+  const source = await generation.assertCurrent.prepareSessionSource!();
+  onTestFinished(async () => {
+    try {
+      delivery.release();
+      await source.release?.();
+    } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+    }
+  });
+  const identity = vi.spyOn(databaseIdentity, "assertDatabasePathIdentity");
+  const existing = vi.spyOn(databaseIdentity, "assertExistingDatabaseIdentity");
+  const candidates = vi.spyOn(storeCandidates, "isSessionStoreReadCandidateCurrent");
+  const filesystemMethods = [
+    "accessSync",
+    "existsSync",
+    "statSync",
+    "lstatSync",
+    "fstatSync",
+    "realpathSync",
+    "openSync",
+    "readFileSync",
+    "readdirSync",
+    "readlinkSync",
+  ] as const;
+  const nativeRealpath = fs.realpathSync.native;
+  const filesystemFunctions = filesystemMethods.map((method) => vi.spyOn(fs, method));
+  Object.assign(fs.realpathSync, { native: nativeRealpath });
+  const nativeRealpathProbe = vi.spyOn(fs.realpathSync, "native");
+  const filesystem = [...filesystemFunctions, nativeRealpathProbe];
+  syncBuiltinESMExports();
+  // Exercise the identity owner's named imports before resetting the measured counters.
+  databaseIdentity.inspectDatabasePathIdentitySync(database.path);
+  expect(nativeRealpathProbe).toHaveBeenCalled();
+  expect(filesystem[filesystemMethods.indexOf("statSync")]).toHaveBeenCalled();
+  const nativeReads = vi.spyOn(nativeEntries, "readSessionEntryGenerationInDatabase");
+  const sql = vi.spyOn(database.db, "prepare");
+  const count = (assertCurrent: () => void) => {
+    for (const probe of [...filesystem, nativeReads, sql]) {
+      probe.mockClear();
+    }
+    for (let check = 0; check < 10; check++) {
+      assertCurrent();
+    }
+    return {
+      filesystem: filesystem.map((probe) => probe.mock.calls.length),
+      nativeReads: nativeReads.mock.calls.length,
+      sql: sql.mock.calls.length,
+    };
+  };
+  const ordinary = count(generation.assertCurrent);
+  expect(ordinary.filesystem).toEqual(Array(filesystem.length).fill(0));
+  expect(count(generation.assertCurrent)).toEqual(ordinary);
+  expect(count(generation.assertNativeTransactionCurrent)).toEqual(ordinary);
+  for (let check = 0; check < 10; check++) {
+    generation.assertCurrent();
+    delivery.assertCurrent();
+    source.assertCurrent();
+  }
+  expect([
+    identity.mock.calls.length,
+    existing.mock.calls.length,
+    candidates.mock.calls.length,
+  ]).toEqual([0, 0, 0]);
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+  await closeOpenClawAgentDatabaseByPathAsync(database.path, "main");
+  expect(generation.assertCurrent).toThrow(generationError());
+  expect(generation.assertNativeTransactionCurrent).toThrow(generationError());
+  expect(delivery.assertCurrent).toThrow(generationError());
+  expect(source.assertCurrent).toThrow();
+});
+
+it("writes under a prepared generation without synchronous probes or SQL", async () => {
+  const { database, scope, generation } = await fixture(settings);
+  const source = composeSessionSourceAssertion([generation.assertCurrent], (assertSources) => {
+    assertSources();
+    expect(generation.readSessionSettings()).toMatchObject(settings);
+  });
+  const warm = await prepareSessionSourceEffect(source);
+  warm.assertCurrent();
+  await warm.release?.();
+  const prepareMutation = source.prepareSessionSourceStorageEffect;
+  expect(prepareMutation).toBeTypeOf("function");
+  const file = `${database.path}.effect.txt`;
+  await fs.promises.writeFile(file, "original");
+  database.db
+    .prepare("UPDATE session_nodes SET updated_at = updated_at WHERE session_key = ?")
+    .run(scope.sessionKey);
+  const delay =
+    <Args extends unknown[], Value>(fn: (...args: Args) => Value) =>
+    (...args: Args) => {
+      const until = performance.now() + 25;
+      while (performance.now() < until) {
+        // A main-thread probe would reproduce its injected storage latency.
+      }
+      return fn(...args);
+    };
+  const assertIdentity = databaseIdentity.assertDatabasePathIdentity;
+  const checkCandidate = storeCandidates.isSessionStoreReadCandidateCurrent;
+  const readGeneration = nativeEntries.readSessionEntryGenerationInDatabase;
+  const identity = vi
+    .spyOn(databaseIdentity, "assertDatabasePathIdentity")
+    .mockImplementation(delay(assertIdentity));
+  const candidates = vi
+    .spyOn(storeCandidates, "isSessionStoreReadCandidateCurrent")
+    .mockImplementation(delay(checkCandidate));
+  const sql = vi.spyOn(database.db, "prepare");
+  const nativeReads = vi
+    .spyOn(nativeEntries, "readSessionEntryGenerationInDatabase")
+    .mockImplementation(delay(readGeneration));
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
+  await writeHostFile(file, "replacement", undefined, prepareMutation);
+  expect(await fs.promises.readFile(file, "utf8")).toBe("replacement");
+  expect({
+    identity: identity.mock.calls.length,
+    candidates: candidates.mock.calls.length,
+    nativeReads: nativeReads.mock.calls.length,
+    sqlPrepare: sql.mock.calls.length,
+  }).toEqual({ identity: 0, candidates: 0, nativeReads: 0, sqlPrepare: 0 });
+});
+
+it.each([
+  { field: "lifecycleRevision", value: "effect-successor", code: "REVOKED" },
+  { field: "permissionMode", value: "read-only", code: "UNAVAILABLE" },
+  { field: "current_session_id", value: "effect-successor", code: "UNAVAILABLE" },
+])(
+  "refuses a committed raw $field change during effect preparation",
+  async ({ field, value, code }) => {
+    const { database, scope, generation } = await fixture(settings);
+    const write = database.db.prepare(
+      "UPDATE session_nodes SET current_session_id = ?, entry_json = ? WHERE session_key = ?",
+    );
+    write.run(
+      field === "current_session_id" ? value : original.sessionId,
+      JSON.stringify(
+        field === "current_session_id"
+          ? { ...original, ...settings }
+          : { ...original, ...settings, [field]: value },
+      ),
+      scope.sessionKey,
+    );
+    await expect(prepareSessionSourceEffect(generation.assertCurrent)).rejects.toThrow(
+      generationError(code),
+    );
+    write.run(original.sessionId, JSON.stringify({ ...original, ...settings }), scope.sessionKey);
+    expect(generation.assertCurrent).toThrow(generationError(code));
+  },
+);
+
+it.each(["revision", "release"] as const)(
+  "refuses %s changes while the effect identity check is awaited",
+  async (change) => {
+    const { database, scope, generation } = await fixture();
+    const write = database.db.prepare(
+      "UPDATE session_nodes SET updated_at = updated_at WHERE session_key = ?",
+    );
+    const prepare = workerResources.prepareSessionStoreCandidatesInWorker;
+    vi.spyOn(workerResources, "prepareSessionStoreCandidatesInWorker").mockImplementation(
+      async (request) => {
+        const result = await prepare(request);
+        if (change === "release") {
+          generation.release();
+        } else {
+          write.run(scope.sessionKey);
+        }
+        return result;
+      },
+    );
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    await expect(prepareSessionSourceEffect(generation.assertCurrent)).rejects.toThrow(
+      generationError(),
+    );
+  },
+);
+
+it.each(["runtime", "automation"] as const)(
+  "retains generation facts across committed %s presentation changes",
   async (scope) => {
-    const { generation } = await fixture();
+    const { generation, database, scope: target } = await fixture();
     sessionChanges.emit({ all: true, scope: "profiles" });
+    // Unkeyed catalog notification (session groups, sharing) after committed writer facts.
+    sessionChanges.emit({ all: true, scope: "sessions" });
     expect(generation.assertCurrent).not.toThrow();
-    sessionChanges.emit({ all: true, scope });
+    runOpenClawAgentWriteTransaction(
+      () => {
+        sessionChanges.emit({ ...target, scope }, database.db);
+      },
+      { agentId: target.agentId, path: target.storePath },
+    );
+    expect(generation.assertCurrent).not.toThrow();
+    runOpenClawAgentWriteTransaction(
+      () => {
+        sessionChanges.emit({ all: true, scope }, database.db);
+      },
+      { agentId: target.agentId, path: target.storePath },
+    );
+    expect(generation.assertCurrent).not.toThrow();
+    sessionChanges.emit({ all: true, scope: "sessions", factsInvalidated: true });
     expect(generation.assertCurrent).toThrow(generationError());
   },
 );
@@ -66,9 +346,11 @@ it.each([
       JSON.stringify(field === "current_session_id" ? metadata : { ...metadata, [field]: value }),
       scope.sessionKey,
     );
+    expect(generation.assertNativeTransactionCurrent).toThrow(generationError(code));
     expect(generation.assertCurrent).toThrow(generationError(code));
 
     write.run(original.sessionId, JSON.stringify(metadata), scope.sessionKey);
+    expect(generation.assertNativeTransactionCurrent).toThrow(generationError(code));
     expect(generation.assertCurrent).toThrow(generationError(code));
   },
 );
@@ -83,10 +365,12 @@ it("retains unchanged generation authority inside a native transaction and after
           scope.sessionKey,
         );
         generation.assertCurrent();
+        generation.assertNativeTransactionCurrent();
         db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
           JSON.stringify({ ...original, lifecycleRevision: "tentative-lifecycle" }),
           scope.sessionKey,
         );
+        expect(generation.assertNativeTransactionCurrent).toThrow(generationError());
         expect(generation.assertCurrent).toThrow(generationError());
         throw rollback;
       },
@@ -94,6 +378,10 @@ it("retains unchanged generation authority inside a native transaction and after
     ),
   ).toThrow(rollback);
   generation.assertCurrent();
+  generation.assertNativeTransactionCurrent();
+  generation.release();
+  expect(generation.assertNativeTransactionCurrent).toThrow(generationError());
+  expect(generation.assertCurrent).toThrow(generationError());
 });
 
 it("refuses reentrant delivery during raw execution and unfinished RETURNING cursors", async () => {

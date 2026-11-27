@@ -2,12 +2,13 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, expect, it, vi } from "vitest";
 import { requestResult } from "../../lib/chat/control-ui-database.runtime.ts";
 import {
-  CHAT_SNAPSHOT_DB_NAME,
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
   SIDEBAR_SNAPSHOT_STORE_NAME,
   openSessionSnapshotDatabase,
 } from "./session-snapshot-database.ts";
+
+const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 
 afterEach(() => {
   vi.restoreAllMocks();

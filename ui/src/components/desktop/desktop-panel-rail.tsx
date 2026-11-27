@@ -85,7 +85,7 @@ export function DesktopOpenWindow(props: { href: string; inline?: boolean }) {
       href={props.href}
       target="_blank"
       rel="noopener"
-      title={t("desktop.openWindow")}
+      title={t("desktop.openWindowTooltip")}
       aria-label={t("desktop.openWindow")}
     >
       <Icon name="externalLink" />
@@ -513,15 +513,21 @@ export function DesktopSizing(
 ) {
   const id = createUniqueId();
   const sizingMenu = createDesktopSizingMenu(() => props);
+  const selectModes = () =>
+    props.canResize || props.mode === "match"
+      ? (["fit", "actual", "match"] as const)
+      : (["fit", "actual"] as const);
   // Retain Match during reconnect so Fit can cancel it before authentication completes.
   return (
     <Show
       when={props.presentation === "menu"}
       fallback={
         <select
-          class="desktop-sizing"
+          class="settings-select desktop-sizing"
+          data-sizing-labels={selectModes()
+            .map((mode) => t(`desktop.${mode}`))
+            .join("\n")}
           aria-label={t("desktop.sizing")}
-          title={t("desktop.matchRequirement")}
           onChange={(event) => {
             const mode = event.currentTarget.value;
             if (mode === "fit" || mode === "actual" || (mode === "match" && props.canResize)) {
@@ -529,17 +535,18 @@ export function DesktopSizing(
             }
           }}
         >
-          <option value="fit" selected={props.mode === "fit"}>
-            {t("desktop.fit")}
-          </option>
-          <option value="actual" selected={props.mode === "actual"}>
-            {t("desktop.actual")}
-          </option>
-          {(props.canResize || props.mode === "match") && (
-            <option value="match" selected={props.mode === "match"} disabled={!props.canResize}>
-              {t("desktop.match")}
-            </option>
-          )}
+          <For each={selectModes()} keyed={(mode) => mode}>
+            {(mode) => (
+              <option
+                value={mode()}
+                selected={props.mode === mode()}
+                disabled={mode() === "match" && !props.canResize}
+                title={mode() === "match" ? t("desktop.matchRequirement") : undefined}
+              >
+                {t(`desktop.${mode()}`)}
+              </option>
+            )}
+          </For>
         </select>
       }
     >

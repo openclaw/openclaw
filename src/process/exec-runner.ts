@@ -20,6 +20,7 @@ import {
   hasChildProcessExited,
   releaseChildProcessOutputAfterExit,
 } from "./child-process.js";
+import type { CommandInputOptions } from "./command-stdin-file.js";
 import {
   appendCapturedOutput,
   appendPreservedOutputLines,
@@ -39,9 +40,11 @@ import {
   type PreserveOutputLine,
 } from "./exec-output.js";
 import {
+  createInterruptedCommandOutcome,
   createSanitizedCommandError,
   isPlainCommandExitFailure,
   isPlainCommandSignalFailure,
+  recordCommandProcessCleanup,
   recordCommandProcessFailure,
   resolveProcessExitCode,
   TIMEOUT_EXIT_CODE,
@@ -55,21 +58,25 @@ import {
   waitForCommandSpawn,
 } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
+import type { ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
 type CommandTerminationReason = SpawnResult["termination"] | "output-limit";
 
-export type CommandOptions = {
+export type CommandOptions = CommandInputOptions & {
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   timeoutMs?: number;
   cwd?: string;
-  input?: string | Uint8Array;
-  /** Borrow a caller-owned descriptor as stdin without buffering or piping its bytes. */
-  stdinFileDescriptor?: number;
   /** Synchronous admission with the spawned PID and argv, before input is released. */
   beforeInput?: (pid: number, argv?: readonly string[]) => void;
+  /** Prepare physical source facts after startup, before the final synchronous input grant. */
+  prepareInput?: (pid: number, argv?: readonly string[]) => Promise<void>;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
+  /** Operation-owned output of resolveCommandEnv. */
+  preparedEnv?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
   noOutputTimeoutMs?: number;
   signal?: AbortSignal;
@@ -154,6 +161,7 @@ async function runCommandWithOutputEncoding(
     timeoutMs,
     cwd,
     input,
+    stdinFile,
     stdinFileDescriptor,
     baseEnv,
     env,
@@ -169,6 +177,7 @@ async function runCommandWithOutputEncoding(
     throw new Error("Process-tree extinction requires process-tree ownership");
   }
   const hasInput = input !== undefined;
+  const guardedInput = options.beforeInput !== undefined || options.prepareInput !== undefined;
   if (stdinFileDescriptor !== undefined) {
     if (!Number.isInteger(stdinFileDescriptor) || stdinFileDescriptor < 0) {
       throw new Error("stdinFileDescriptor must be a nonnegative integer");
@@ -177,8 +186,11 @@ async function runCommandWithOutputEncoding(
       throw new Error("Command accepts either input or stdinFileDescriptor, not both");
     }
   }
-  if (options.beforeInput && !hasInput) {
+  if (guardedInput && !hasInput) {
     throw new Error("Child input admission requires explicit input");
+  }
+  if (stdinFile && hasInput) {
+    throw new Error("Command stdin file cannot be combined with input");
   }
   const resolvedKillGraceMs = resolveTimerTimeoutMs(
     killGraceMs,
@@ -239,6 +251,8 @@ async function runCommandWithOutputEncoding(
   let terminatingOutputError: Error | undefined;
 
   const { child, invocation } = spawnCommandWithInvocation(argv, {
+    executionIntent: options.executionIntent,
+    executionScopeKey: options.executionScopeKey,
     buffer: false,
     cancelSignal: cancelController.signal,
     inheritScopeCancellation: false,
@@ -248,24 +262,27 @@ async function runCommandWithOutputEncoding(
     executionTimeoutMs: resolvedTimeoutMs,
     baseEnv,
     env,
+    preparedEnv: options.preparedEnv,
     forceKillAfterDelay: resolvedKillGraceMs,
     killSignal,
-    ...(hasInput && !options.beforeInput ? { input } : {}),
+    ...(hasInput && !guardedInput ? { input } : {}),
     reject: false,
-    stdio: [
-      // SAFETY: Execa forwards arbitrary numeric descriptors to Node; its stdin type narrows them to fd 0.
-      (options.stdinFileDescriptor as 0 | undefined) ?? (hasInput ? "pipe" : "inherit"),
-      "pipe",
-      "pipe",
-    ],
+    stdinFile,
+    stdin:
+      // SAFETY: Execa passes numeric descriptors through to Node despite its fd-0 type.
+      (stdinFileDescriptor as 0 | undefined) ??
+      (stdinFile ? undefined : hasInput ? "pipe" : "inherit"),
     stripFinalNewline: false,
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
-  const startupReady = child.pid === undefined ? waitForCommandSpawn(child) : undefined;
+  const startupReady =
+    child.pid === undefined || process.platform === "linux" || process.platform === "android"
+      ? waitForCommandSpawn(child, Boolean(killProcessTree))
+      : undefined;
   let waitingForSpawn = startupReady !== undefined;
   const startupCanceled = createDeferredCore<Exclude<CommandTerminationReason, "exit">>();
   const nodeChild = child.nodeChildProcess;
-  let inputReleased = options.beforeInput ? false : undefined;
+  let inputReleased = guardedInput ? false : undefined;
   const failedProcess = (error: unknown, cleanup: SpawnResult["cleanup"] = "uncertain") => {
     const failure = recordCommandProcessFailure(error, {
       pid: nodeChild.pid,
@@ -298,10 +315,7 @@ async function runCommandWithOutputEncoding(
     killSignal,
   });
   const processCleanup = (async () => {
-    await child.then(
-      () => undefined,
-      () => undefined,
-    );
+    await child.catch(() => undefined);
     commandSettled = true;
     await startupReady?.catch(() => {});
     return await terminationController.settle();
@@ -356,17 +370,15 @@ async function runCommandWithOutputEncoding(
     }
     eofGraceTimer?.clear();
     termination = reason;
-    if (waitingForSpawn) {
+    // Keep the caller's file pinned through broker admission, even after cancellation.
+    if (waitingForSpawn && !stdinFile) {
       startupCanceled.resolve(reason);
     }
     if (childExitState) {
       // An escaped pipe holder can survive group termination; bound its final drain.
       releaseOutput ??= releaseChildProcessOutputAfterExit(nodeChild);
     }
-    const abortDeferred = terminationController.terminate();
-    if (!abortDeferred) {
-      cancelController.abort();
-    }
+    terminationController.cancel();
   };
   const armNoOutputTimer = () => {
     if (
@@ -401,45 +413,6 @@ async function runCommandWithOutputEncoding(
     noOutputTimer = undefined;
     signal?.removeEventListener("abort", onAbort);
   };
-  if (startupReady) {
-    let interrupted: Exclude<CommandTerminationReason, "exit"> | undefined;
-    try {
-      interrupted = await Promise.race([
-        startupReady.then(() => undefined),
-        startupCanceled.promise,
-      ]);
-    } catch (error) {
-      clearTimers();
-      throw failedProcess(
-        error,
-        nodeChild instanceof BrokerChild && nodeChild.notStarted ? "normal" : "uncertain",
-      );
-    }
-    if (interrupted) {
-      clearTimers();
-      // The result cannot claim extinction before PID delivery. Keep the same
-      // termination owner through late readiness and final output drainage.
-      void processCleanup.finally(() => releaseOutput?.()).catch(() => {});
-      const stopped = {
-        pid: nodeChild.pid,
-        code:
-          interrupted === "timeout" || interrupted === "no-output-timeout"
-            ? TIMEOUT_EXIT_CODE
-            : null,
-        signal: null,
-        killed: nodeChild.killed,
-        cleanup: "uncertain" as const,
-        termination: interrupted === "output-limit" ? ("signal" as const) : interrupted,
-        noOutputTimedOut: interrupted === "no-output-timeout",
-        outputLimitExceeded: interrupted === "output-limit" || undefined,
-      };
-      return raw
-        ? { ...stopped, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), windowsEncoding }
-        : { ...stopped, stdout: "", stderr: "" };
-    }
-    waitingForSpawn = false;
-  }
-
   const captureOutput = (
     capture: CapturedOutputBuffers,
     buffer: Buffer,
@@ -533,30 +506,124 @@ async function runCommandWithOutputEncoding(
     Object.assign(terminatingOutputError, { outputErrorStream: stream });
     cancel("signal");
   };
-  child.stdout?.once("error", (error) => onOutputError(error, "stdout"));
-  child.stderr?.once("error", (error) => onOutputError(error, "stderr"));
   const outputStreams = [
     { stream: "stdout", capture: stdoutCapture, maxBytes: maxStdoutBytes, mode: stdoutCaptureMode },
     { stream: "stderr", capture: stderrCapture, maxBytes: maxStderrBytes, mode: stderrCaptureMode },
   ] as const;
-  for (const { stream, capture, maxBytes, mode } of outputStreams) {
-    child[stream]?.on("data", (chunk) => {
-      const buffer = observeOutputChunk(chunk, stream);
-      appendPreservedOutputLines({
+  const finalizeOutput = () => {
+    for (const { stream, capture } of outputStreams) {
+      flushPreservedOutputLine({
         capture,
-        chunk: buffer,
         stream,
         preserveOutputLine: options.preserveOutputLine,
         maxPreservedOutputLines,
         maxPendingLineBytes: maxPreservedPendingLineBytes,
       });
-      captureOutput(capture, buffer, maxBytes, stream, mode);
-      armNoOutputTimer();
-    });
+    }
+
+    if (usesCombinedTailCapture) {
+      for (const entry of combinedTailChunks) {
+        const capture = entry.stream === "stdout" ? stdoutCapture : stderrCapture;
+        capture.chunks.push(entry.buffer);
+        capture.bytes += entry.buffer.byteLength;
+      }
+    }
+
+    const stdout = finalizeCapturedOutput(stdoutCapture, stdoutCaptureMode, forceUtf8);
+    const stderr = finalizeCapturedOutput(stderrCapture, stderrCaptureMode, forceUtf8);
+    const captured = {
+      stdoutTruncatedBytes: stdoutCapture.truncatedBytes || undefined,
+      stderrTruncatedBytes: stderrCapture.truncatedBytes || undefined,
+      preservedStdoutLines:
+        stdoutCapture.preservedLines.length > 0 ? stdoutCapture.preservedLines : undefined,
+      preservedStderrLines:
+        stderrCapture.preservedLines.length > 0 ? stderrCapture.preservedLines : undefined,
+    };
+    return raw
+      ? { ...captured, stdout, stderr, windowsEncoding }
+      : {
+          ...captured,
+          stdout: forceUtf8
+            ? stdout.toString("utf8")
+            : decodeWindowsOutputBuffer({ buffer: stdout, windowsEncoding }),
+          stderr: forceUtf8
+            ? stderr.toString("utf8")
+            : decodeWindowsOutputBuffer({ buffer: stderr, windowsEncoding }),
+        };
+  };
+  const subscribeOutput = () => {
+    child.stdout?.once("error", (error) => onOutputError(error, "stdout"));
+    child.stderr?.once("error", (error) => onOutputError(error, "stderr"));
+    for (const { stream, capture, maxBytes, mode } of outputStreams) {
+      child[stream]?.on("data", (chunk) => {
+        const buffer = observeOutputChunk(chunk, stream);
+        appendPreservedOutputLines({
+          capture,
+          chunk: buffer,
+          stream,
+          preserveOutputLine: options.preserveOutputLine,
+          maxPreservedOutputLines,
+          maxPendingLineBytes: maxPreservedPendingLineBytes,
+        });
+        captureOutput(capture, buffer, maxBytes, stream, mode);
+        armNoOutputTimer();
+      });
+    }
+  };
+  if (nodeChild instanceof BrokerChild && nodeChild.pid === undefined) {
+    nodeChild.once("spawn", subscribeOutput);
+  } else {
+    subscribeOutput();
+  }
+
+  const throwOutputError = (cleanup: SpawnResult["cleanup"]) => {
+    if (terminatingOutputError || outputObserverError !== undefined) {
+      throw failedProcess(
+        terminatingOutputError ??
+          toErrorObject(outputObserverError, "Command output observer failed"),
+        cleanup,
+      );
+    }
+  };
+  if (startupReady) {
+    let interrupted: Exclude<CommandTerminationReason, "exit"> | undefined;
+    try {
+      interrupted = await Promise.race([
+        startupReady.then(() => undefined),
+        startupCanceled.promise,
+      ]);
+    } catch (error) {
+      clearTimers();
+      throw failedProcess(
+        error,
+        nodeChild instanceof BrokerChild && nodeChild.notStarted ? "normal" : "uncertain",
+      );
+    }
+    if (interrupted) {
+      clearTimers();
+      // The result cannot claim extinction before admission settles. Keep the same
+      // termination owner through late readiness and final output drainage.
+      void processCleanup.finally(() => releaseOutput?.()).catch(() => {});
+      const stopped = createInterruptedCommandOutcome({
+        reason: interrupted,
+        pid: nodeChild.pid,
+        killed: nodeChild.killed,
+      });
+      throwOutputError("uncertain");
+      return recordCommandProcessCleanup(
+        { ...stopped, ...finalizeOutput() },
+        killProcessTree &&
+          nodeChild.pid !== undefined &&
+          (process.platform === "linux" || process.platform === "android")
+          ? processCleanup
+          : undefined,
+      );
+    }
+    waitingForSpawn = false;
   }
 
   let inputAdmissionError: Error | undefined;
-  if (options.beforeInput) {
+  if (guardedInput) {
     nodeChild.stdin?.once("error", (cause) => {
       // Execa preserves the child's result when it closes input early; other faults still cancel.
       if (hasErrnoCode(cause, "EPIPE")) {
@@ -569,7 +636,15 @@ async function runCommandWithOutputEncoding(
       if (nodeChild.pid === undefined || !nodeChild.stdin) {
         throw new Error("Child input admission has no spawned process");
       }
-      const admitted: unknown = options.beforeInput(nodeChild.pid, nodeChild.spawnargs);
+      if (options.prepareInput) {
+        // Preparation retains caller resources even when the child exits first.
+        await options.prepareInput(nodeChild.pid, nodeChild.spawnargs);
+      }
+      signal?.throwIfAborted();
+      if (termination || hasChildProcessExited(nodeChild)) {
+        throw new Error("Child retired before input admission");
+      }
+      const admitted: unknown = options.beforeInput?.(nodeChild.pid, nodeChild.spawnargs);
       if (admitted !== undefined) {
         if (isPromiseLike(admitted)) {
           void Promise.resolve(admitted).catch(() => undefined);
@@ -602,21 +677,18 @@ async function runCommandWithOutputEncoding(
     throw failedProcess(error);
   });
   const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
-  if (cleanup === "normal" && resolvedSignal) {
+  // An explicit POSIX tree join already confirmed extinction in the exit handler.
+  if (
+    cleanup === "normal" &&
+    resolvedSignal &&
+    !(ownsExitedProcessTree && options.requireProcessTreeExtinction)
+  ) {
     cleanup = "uncertain";
   }
   if (inputAdmissionError) {
     throw failedProcess(inputAdmissionError, cleanup);
   }
-  if (terminatingOutputError) {
-    throw failedProcess(terminatingOutputError, cleanup);
-  }
-  if (outputObserverError !== undefined) {
-    throw failedProcess(
-      toErrorObject(outputObserverError, "Command output observer failed"),
-      cleanup,
-    );
-  }
+  throwOutputError(cleanup);
   // Patched Node can report null/null after a cmd.exe shim exits. Execa turns
   // that into a cause-less failure; preserve the shim fallback only post-spawn.
   const isCauseLessWindowsShimResult =
@@ -669,34 +741,8 @@ async function runCommandWithOutputEncoding(
         : resolvedCode
       : resolvedCode;
 
-  for (const { stream, capture } of outputStreams) {
-    flushPreservedOutputLine({
-      capture,
-      stream,
-      preserveOutputLine: options.preserveOutputLine,
-      maxPreservedOutputLines,
-      maxPendingLineBytes: maxPreservedPendingLineBytes,
-    });
-  }
-
-  if (usesCombinedTailCapture) {
-    for (const entry of combinedTailChunks) {
-      const capture = entry.stream === "stdout" ? stdoutCapture : stderrCapture;
-      capture.chunks.push(entry.buffer);
-      capture.bytes += entry.buffer.byteLength;
-    }
-  }
-
-  const stdout = finalizeCapturedOutput(stdoutCapture, stdoutCaptureMode, forceUtf8);
-  const stderr = finalizeCapturedOutput(stderrCapture, stderrCaptureMode, forceUtf8);
   const settled = {
     pid: nodeChild.pid,
-    stdoutTruncatedBytes: stdoutCapture.truncatedBytes || undefined,
-    stderrTruncatedBytes: stderrCapture.truncatedBytes || undefined,
-    preservedStdoutLines:
-      stdoutCapture.preservedLines.length > 0 ? stdoutCapture.preservedLines : undefined,
-    preservedStderrLines:
-      stderrCapture.preservedLines.length > 0 ? stderrCapture.preservedLines : undefined,
     code: normalizedCode,
     signal: resolvedSignal,
     killed: nodeChild.killed,
@@ -707,15 +753,5 @@ async function runCommandWithOutputEncoding(
     outputLimitExceeded: termination === "output-limit" || undefined,
     ...(outputErrorStream ? { outputErrorStream } : {}),
   };
-  return raw
-    ? { ...settled, stdout, stderr, windowsEncoding }
-    : {
-        ...settled,
-        stdout: forceUtf8
-          ? stdout.toString("utf8")
-          : decodeWindowsOutputBuffer({ buffer: stdout, windowsEncoding }),
-        stderr: forceUtf8
-          ? stderr.toString("utf8")
-          : decodeWindowsOutputBuffer({ buffer: stderr, windowsEncoding }),
-      };
+  return { ...settled, ...finalizeOutput() };
 }

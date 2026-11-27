@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, it, vi, afterEach, describe } from "vitest";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createVerifiedBackup,
   isolateBackupScratch,
@@ -18,6 +19,8 @@ import {
   maintainBackupScratch,
 } from "./backup-scratch.js";
 import * as directoryDurability from "./directory-durability.js";
+import * as fsSafe from "./fs-safe.js";
+import * as privateDirs from "./sqlite-private-directory.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -46,6 +49,67 @@ it("reclaims an interrupted archive's scratch on the next backup run", async () 
       );
     } finally {
       await finishBackupScratch(live);
+    }
+  });
+});
+
+it("publishes a backup when concurrent repair takes custody of its first scratch", async () => {
+  await withBackupFixture({ prefix: "backup-scratch-concurrent-repair-" }, async (state) => {
+    await isolateBackupScratch(state);
+    const scratchRoot = await fs.realpath(state.path("scratch"));
+    const created = createDeferredCore<string>();
+    const resumeCreator = createDeferredCore();
+    const repairing = createDeferredCore();
+    const resumeRepair = createDeferredCore();
+    const createDirectory = privateDirs.createPrivateSqliteTempDirectory;
+    vi.spyOn(privateDirs, "createPrivateSqliteTempDirectory").mockImplementationOnce(
+      async (...args) => {
+        const directory = await createDirectory(...args);
+        created.resolve(directory);
+        await resumeCreator.promise;
+        return directory;
+      },
+    );
+    const archivePath = state.path("backup.tar.gz");
+    const backup = createBackupArchive({ output: archivePath, onlyConfig: true, verify: true });
+    let repair: ReturnType<typeof maintainBackupScratch> | undefined;
+    try {
+      const first = await Promise.race([
+        created.promise,
+        backup.then(() => {
+          throw new Error("Backup finished without allocating scratch");
+        }),
+      ]);
+      const root = fsSafe.root;
+      let paused = false;
+      vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+        if (args[0] === first && !paused) {
+          // Repair opens its real exclusive lifetime transaction before admitting this root.
+          paused = true;
+          repairing.resolve();
+          await resumeRepair.promise;
+        }
+        return root(...args);
+      });
+      repair = maintainBackupScratch({ roots: [scratchRoot], repair: true });
+      await Promise.race([
+        repairing.promise,
+        repair.then(() => {
+          throw new Error("Repair finished without acquiring scratch");
+        }),
+      ]);
+      resumeCreator.resolve();
+      await expect(backup).resolves.toMatchObject({ archivePath });
+      await expect(fs.stat(archivePath)).resolves.toMatchObject({ size: expect.any(Number) });
+      // The successful backup must not remove the first directory from under repair.
+      await expect(fs.readdir(scratchRoot)).resolves.toEqual([path.basename(first)]);
+      resumeRepair.resolve();
+      await expect(repair).resolves.toMatchObject({ reclaimed: [first], warnings: [] });
+      await expect(fs.readdir(scratchRoot)).resolves.toEqual([]);
+    } finally {
+      resumeCreator.resolve();
+      resumeRepair.resolve();
+      await Promise.allSettled([backup, repair]);
     }
   });
 });

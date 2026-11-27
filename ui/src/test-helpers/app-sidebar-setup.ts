@@ -6,6 +6,7 @@ import type { ApplicationGateway } from "../app/context.ts";
 import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle.ts";
+import { preserveDocumentStyle } from "./preserve-document-style.ts";
 import { createStorageMock } from "./storage.ts";
 
 export function setupSidebarTest() {
@@ -15,6 +16,7 @@ export function setupSidebarTest() {
     Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
 
   beforeEach(() => {
+    preserveDocumentStyle();
     layoutGlobals = [
       "matchMedia",
       "ResizeObserver",
@@ -164,12 +166,20 @@ export async function selectSidebarView(
   sidebar: HTMLElement & Pick<AppSidebarElement, "updateComplete">,
   view: "pages" | "sessions" | "online",
 ): Promise<void> {
-  const button = sidebar.querySelector<HTMLButtonElement>(`[data-navigation-view="${view}"]`);
+  // Pages is the rail's "more" menu; Sessions and People are view buttons.
+  const button = sidebar.querySelector<HTMLButtonElement>(
+    view === "pages" ? "[data-rail-more]" : `[data-navigation-view="${view}"]`,
+  );
   if (!button) {
     throw new Error(`Expected sidebar ${view} control`);
   }
   button.click();
   await sidebar.updateComplete;
+  if (view === "pages") {
+    // The page menu body is a lazy chunk mounted on first open.
+    await vi.dynamicImportSettled();
+    await sidebar.updateComplete;
+  }
 }
 
 // General sidebar cases exercise all rows; default-owner regressions mount directly.

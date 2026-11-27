@@ -36,8 +36,6 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const MAX_DURATION_SECONDS = 10;
 
-type RunwayTaskStatus = "PENDING" | "RUNNING" | "THROTTLED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
-
 type RunwayTaskDetailResponse = {
   status?: unknown;
   output?: unknown;
@@ -46,29 +44,29 @@ type RunwayTaskDetailResponse = {
 
 type RunwaySourceAsset = Pick<VideoGenerationSourceAsset, "buffer" | "mimeType" | "url">;
 
-const TEXT_ONLY_MODELS = new Set(["gen4.5", "veo3.1", "veo3.1_fast", "veo3"]);
-const IMAGE_MODELS = new Set([
-  "gen4.5",
-  "gen4_turbo",
-  "gen3a_turbo",
-  "veo3.1",
-  "veo3.1_fast",
-  "veo3",
-]);
+const VEO_MODELS = new Set(["veo3.1", "veo3.1_fast", "veo3"]);
+const VEO_31_DURATION_SECONDS = new Set([4, 6, 8]);
+const TEXT_ONLY_MODELS = new Set(["gen4.5", ...VEO_MODELS]);
+const IMAGE_MODELS = new Set(["gen4.5", "gen4_turbo", "gen3a_turbo", ...VEO_MODELS]);
 const VIDEO_MODELS = new Set(["gen4_aleph"]);
 const RUNWAY_TEXT_ASPECT_RATIOS = ["16:9", "9:16"] as const;
 const RUNWAY_EDIT_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "3:4", "4:3", "21:9"] as const;
 
-function readRunwayTaskStatus(payload: RunwayTaskDetailResponse): RunwayTaskStatus {
+function isRunwayTaskComplete(payload: RunwayTaskDetailResponse): boolean {
   const status = normalizeOptionalString(payload.status);
   switch (status) {
     case "PENDING":
     case "RUNNING":
     case "THROTTLED":
+      return false;
     case "SUCCEEDED":
+      return true;
     case "FAILED":
     case "CANCELLED":
-      return status;
+      throw new Error(
+        readRunwayFailureMessage(payload.failure) ||
+          `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`,
+      );
     case undefined:
       throw new Error("Runway video status response missing task status");
     default:
@@ -117,13 +115,25 @@ function buildCreateBody(
   req: VideoGenerationRequest,
   endpoint: "/v1/text_to_video" | "/v1/image_to_video" | "/v1/video_to_video",
 ): Record<string, unknown> {
+  const model = normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL;
   const normalizedDuration = normalizeVideoGenerationDuration({
     durationSeconds: req.durationSeconds,
   });
-  const duration =
+  let duration =
     normalizedDuration === undefined || !Number.isSafeInteger(req.durationSeconds)
       ? 5
       : Math.max(2, Math.min(MAX_DURATION_SECONDS, normalizedDuration));
+  if (model === "veo3") {
+    if (normalizedDuration !== undefined && normalizedDuration !== 8) {
+      throw new Error("Runway veo3 requires durationSeconds to be 8.");
+    }
+    duration = 8;
+  } else if (VEO_MODELS.has(model)) {
+    if (normalizedDuration !== undefined && !VEO_31_DURATION_SECONDS.has(normalizedDuration)) {
+      throw new Error(`Runway ${model} requires durationSeconds to be 4, 6, or 8.`);
+    }
+    duration = normalizedDuration ?? 4;
+  }
   const hasReferenceInput =
     (req.inputImages?.length ?? 0) > 0 || (req.inputVideos?.length ?? 0) > 0;
   const ratio =
@@ -133,7 +143,6 @@ function buildCreateBody(
   if (!hasReferenceInput && ratio !== "1280:720" && ratio !== "720:1280") {
     throw new Error("Runway text-to-video currently supports only 16:9 or 9:16 output ratios.");
   }
-  const model = normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL;
   if (endpoint !== "/v1/video_to_video") {
     const imageToVideo = endpoint === "/v1/image_to_video";
     const models = imageToVideo ? IMAGE_MODELS : TEXT_ONLY_MODELS;
@@ -316,14 +325,7 @@ export default definePluginEntry({
           pollIntervalMs: POLL_INTERVAL_MS,
           requestFailedMessage: "Runway video status request failed",
           timeoutMessage: `Runway video generation task ${taskId} did not finish in time`,
-          isComplete: (payload) => readRunwayTaskStatus(payload) === "SUCCEEDED",
-          getFailureMessage: (payload) => {
-            const status = readRunwayTaskStatus(payload);
-            return status === "FAILED" || status === "CANCELLED"
-              ? readRunwayFailureMessage(payload.failure) ||
-                  `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`
-              : undefined;
-          },
+          isComplete: isRunwayTaskComplete,
         });
         if (!Array.isArray(completed.output)) {
           throw new Error("Runway video generation completed with malformed output URLs");

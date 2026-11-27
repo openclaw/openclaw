@@ -1,15 +1,100 @@
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onTrustedInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { registerSerializedJsonArray } from "./serialized-json.js";
-import { SessionListViewCache } from "./session-list-view-cache.js";
+import { SessionListViewCache, shareSessionRowFacts } from "./session-list-view-cache.js";
+import { sessionRowsRevision } from "./session-row-identity.js";
 import { serializeSessionRow } from "./session-row-serialization.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const row: GatewaySessionRow = { key: "one", kind: "direct", updatedAt: 1, rowMode: "sidebar" };
+
+it("packs all-row facts without building or encoding their identical recipient lists", () => {
+  const rows = ["one", "two", "three"].map((key) => ({
+    key,
+    kind: "direct" as const,
+    updatedAt: 1,
+    pinned: false,
+    visibility: "shared" as const,
+  }));
+  using join = vi.spyOn(Array.prototype, "join");
+  const push = Array.prototype.push;
+  let indices = 0;
+  let packed: ReturnType<typeof shareSessionRowFacts>;
+  try {
+    // oxlint-disable-next-line no-extend-native -- Vitest spies use push internally; restore this synchronous work counter in finally.
+    Array.prototype.push = function <T>(this: T[], ...items: T[]) {
+      if (items.length === 1 && typeof items[0] === "number") {
+        indices++;
+      }
+      return push.apply(this, items);
+    };
+    packed = shareSessionRowFacts(rows);
+  } finally {
+    // oxlint-disable-next-line no-extend-native -- Restore the original method after the synchronous work counter.
+    Array.prototype.push = push;
+  }
+  const joins = join.mock.calls.length;
+  join.mockRestore();
+  expect(joins).toBe(0);
+  expect(indices).toBe(rows.length);
+  expect(packed.sharedFacts).toEqual([{ pinned: false, visibility: "shared" }]);
+  expect(packed.sessions.map((value) => value.sharedFacts)).toEqual([[0], [0], [0]]);
+});
+
+it("does not reread required row facts when only a sibling identity changes", () => {
+  let reads = 0;
+  const stable: GatewaySessionRow = Object.freeze({
+    get key() {
+      reads++;
+      return "stable";
+    },
+    kind: "direct",
+    updatedAt: 1,
+    label: "Stable",
+    pinned: false,
+  });
+  const sibling = { ...row, label: "Sibling", pinned: false };
+  const first = shareSessionRowFacts([stable, sibling]);
+  reads = 0;
+  const changed = shareSessionRowFacts([stable, { ...sibling, updatedAt: 2 }]);
+  expect(changed.sessions[0]).toBe(first.sessions[0]);
+  expect(reads).toBe(0);
+});
+
+it("keeps leading recipient runs compact alongside sparse recipient groups", () => {
+  const rows = Array.from({ length: 5 }, (_, index) =>
+    Object.freeze({
+      ...row,
+      key: `row-${index}`,
+      pinned: false,
+      ...(index < 3 ? { label: "Leading", visibility: "shared" as const } : {}),
+      ...(index % 2 === 0 ? { origin: { provider: "sparse" } } : {}),
+    }),
+  );
+  using join = vi.spyOn(Array.prototype, "join");
+  const packed = shareSessionRowFacts(rows);
+  const recipientKeys = join.mock.results.map(({ value }) => value);
+  join.mockRestore();
+
+  expect(recipientKeys).toEqual(["0,2,4"]);
+  expect(packed.sharedFacts).toEqual([
+    { pinned: false },
+    { label: "Leading", visibility: "shared" },
+    { origin: { provider: "sparse" } },
+  ]);
+  expect(packed.sessions.map((value) => value.sharedFacts)).toEqual([
+    [0, 1, 2],
+    [0, 1],
+    [0, 1, 2],
+    [0],
+    [0, 2],
+  ]);
+});
+
 let cache: SessionListViewCache;
 let reports: { views: number; refs: number; estimatedBytes: number }[];
 let retirements: string[];
@@ -51,7 +136,9 @@ it("charges shared current encodings once and replaces their cost with identity 
   const view = cache.get("encoded");
   const emptyBytes = view.bytes;
   cache.setRows(view, rows, true);
-  expect(view.bytes - emptyBytes).toBe(16 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`));
+  expect(view.bytes - emptyBytes).toBe(
+    112 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`),
+  );
   const shared = cache.get("shared");
   cache.setRows(shared, [encodedRow], true);
   await flushReports();
@@ -73,13 +160,71 @@ it("coalesces a turn of retention updates into one report with the final counter
   cache.clear();
   cache.setRows(cache.get("final"), [row, row], false);
   await flushReports();
-  expect(reports).toEqual([{ views: 1, refs: 2, estimatedBytes: 1_050 }]);
+  expect(reports).toEqual([{ views: 1, refs: 2, estimatedBytes: 1_146 }]);
   cache.clear();
   await flushReports();
   expect(reports).toEqual([
-    { views: 1, refs: 2, estimatedBytes: 1_050 },
+    { views: 1, refs: 2, estimatedBytes: 1_146 },
     { views: 0, refs: 0, estimatedBytes: 0 },
   ]);
+});
+
+it("invalidates exactly the full-scan membership without visiting unrelated views", async () => {
+  const rows = Array.from({ length: 20 }, (_, index) => ({ ...row, key: `row-${index}` }));
+  const views = Array.from({ length: 200 }, (_, index) => cache.get(`view-${index}`));
+  for (const [index, view] of views.entries()) {
+    cache.setRows(view, [rows[index % 20]!, rows[(index + 1) % 20]!], true);
+  }
+  // Replacement, duplicate row keys, repeat invalidation and LRU eviction must all
+  // agree with the original scan, including old handles used after eviction/clear.
+  const invalidate = (key?: string) => {
+    const current = [...cache.values()];
+    const expected = current.filter((view) => key === undefined || view.rowKeys?.has(key));
+    const unaffected = current.filter((view) => !expected.includes(view));
+    const witnesses = unaffected.map((view) => view.rows);
+    const probes = current.flatMap((view) => (view.rowKeys ? [vi.spyOn(view.rowKeys, "has")] : []));
+    using retire = vi.spyOn(cache, "retireRows");
+    cache.invalidateRows(key);
+    expect(new Set(retire.mock.calls.map(([view]) => view))).toEqual(new Set(expected));
+    expect(unaffected.map((view) => view.rows)).toEqual(witnesses);
+    expect(probes.reduce((sum, probe) => sum + probe.mock.calls.length, 0)).toBe(0);
+    probes.forEach((probe) => probe.mockRestore());
+  };
+  invalidate("row-1");
+  invalidate("row-1");
+  cache.setRows(views[0]!, [rows[3]!, rows[3]!], true);
+  invalidate("row-0");
+  invalidate("row-3");
+  for (let index = 0; index < 512; index++) {
+    cache.setRows(cache.get(`replacement-${index}`), [rows[index % 20]!], false);
+  }
+  cache.setRows(views[0]!, [rows[4]!], true);
+  invalidate("row-4");
+  invalidate();
+  cache.clear();
+  cache.setRows(views[1]!, [rows[5]!], true);
+  cache.setRows(cache.get("fresh"), [rows[5]!], true);
+  invalidate("row-5");
+  await flushReports();
+});
+
+it("charges an encoding prepared after a shared row was admitted until its last view retires", async () => {
+  const lateRow = { ...row, label: "Late encoding" };
+  const other = { ...row, key: "other" };
+  const first = cache.get("first");
+  cache.setRows(first, [lateRow, other], true, 0, () => 30);
+  const encodedBytes = serializeSessionRow(lateRow).length * 2;
+  const singleton = cache.get("singleton");
+  cache.setRows(singleton, [lateRow], true);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes + 60 + encodedBytes);
+
+  cache.retireRows(singleton);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes + 60 + encodedBytes);
+  cache.retireRows(first);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes);
 });
 
 it("evicts least recently used views under byte pressure and releases all accounting", async () => {
@@ -106,4 +251,40 @@ it("evicts least recently used views under byte pressure and releases all accoun
   expect(cache.get("hot").rows).toBe(rows);
   await flushReports();
   expect(retirements).toEqual(["view-evicted", "view-evicted"]);
+  cache.clear();
+  setRows("small", [row]);
+  const growing = cache.get("growing");
+  cache.setRows(growing, rows, true, 18 * 1024 * 1024);
+  cache.setRows(growing, rows.slice(), true, 18 * 1024 * 1024);
+  expect(cache.get("growing").rows).toBeUndefined();
+  expect(cache.get("small").rows).toEqual([row]);
+  await flushReports();
+});
+
+it("keeps readers' latest baselines when older generations fill the byte budget", async () => {
+  const rows: GatewaySessionRow[] = Array.from({ length: 2_048 }, (_, index) => ({
+    ...row,
+    key: `row-${index}`,
+  }));
+  const readers = Array.from({ length: 64 }, (_, index) => ({
+    key: `reader-${index}`,
+    revision: "",
+  }));
+  let misses = 0;
+  for (let generation = 0; generation < 40; generation++) {
+    const current = [...rows.slice(1), { ...rows[0]!, updatedAt: generation }];
+    for (const reader of readers) {
+      const view = cache.get(reader.key);
+      cache.setRows(view, current, true);
+      if (reader.revision && !view.rowHistory?.some((base) => base.revision === reader.revision)) {
+        misses++;
+      }
+      reader.revision = sessionRowsRevision(current);
+    }
+  }
+  await flushReports();
+  expect(misses).toBe(0);
+  expect(retirements).toContain("history-evicted");
+  expect(retirements).not.toContain("view-evicted");
+  expect(reports.at(-1)?.estimatedBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
 });

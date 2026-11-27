@@ -1,7 +1,4 @@
-import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
-import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badge-presentation.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
@@ -61,31 +58,4 @@ export function resolveChatPaneParentSession(
   }
   const parent = sessions.find((row) => areUiSessionKeysEquivalent(row.key, parentKey));
   return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
-}
-
-export function resolveChatPaneWorkspaceIcon(params: {
-  sessionKey: string | undefined;
-  resourceBasePath: string;
-  hello: GatewayHelloOk | null;
-  token: string;
-  password: string;
-}) {
-  if (!params.sessionKey) {
-    return null;
-  }
-  const authTokens = resolveControlUiAuthCandidates({
-    hello: params.hello,
-    settings: { token: params.token },
-    password: params.password,
-  });
-  return {
-    routeUrl: buildControlUiResourcePath(
-      "workspaceIcon",
-      params.resourceBasePath,
-      params.sessionKey,
-    ),
-    authTokens,
-    authReady: Boolean(params.hello || authTokens.length),
-    connectionId: params.hello?.server?.connId,
-  };
 }

@@ -5,6 +5,8 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { commandResult } from "../agents/github-identity.test-support.js";
 import { parseRemoteWorkspaceManifestEnvelope } from "../gateway/worker-environments/workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "../gateway/worker-environments/workspace-hash-memo.test-support.js";
+import { computeWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import * as gitExec from "../infra/git-exec.js";
 import * as exec from "../process/exec.js";
@@ -18,15 +20,11 @@ import {
   manifestFixture,
   writeManifest,
 } from "./node-worker-transfer-client.fixture.test-support.js";
-import {
-  captureManifest,
-  nodeWorkspaceManifestCapture,
-  readWorkspaceManifest,
-  runNodeWorkspaceManifestCapture,
-} from "./node-worker-workspace-commands.js";
+import { captureManifest, readWorkspaceManifest } from "./node-worker-workspace-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useAgedWorkspaceHashClock();
 const command = ["node", "-e", REMOTE_WORKSPACE_MANIFEST_JS];
 afterEach(() => vi.restoreAllMocks());
 
@@ -58,6 +56,8 @@ async function fixture() {
     );
   return {
     home,
+    runtime,
+    identity,
     workspaceDir,
     capture,
     manifest: async (memo = "[]") => {
@@ -102,6 +102,7 @@ describe("resident node manifest capture", () => {
     const { manifestRef: emptyRef } = manifestFixture();
     const memo = new Map<string, string>();
     const native = await captureManifest({
+      mode: "all",
       workspaceDir,
       manifestHome: home,
       baseCommit: null,
@@ -113,11 +114,14 @@ describe("resident node manifest capture", () => {
     expect(memo.size).toBe(1);
     for (const maxHashMemoBytes of [2, 8192, 2]) {
       const captured = parseRemoteWorkspaceManifestEnvelope(
-        await runNodeWorkspaceManifestCapture({
-          argv: [workspaceDir, "", "all", "memo-v1"],
-          home,
-          memo: "[]",
-          maxHashMemoBytes,
+        await computeWorkspaceManifest({
+          type: "workspace.manifest.remote-capture",
+          input: {
+            argv: [workspaceDir, "", "all", "memo-v1"],
+            home,
+            memo: "[]",
+            maxHashMemoBytes,
+          },
         }),
       );
       expect(captured.manifestRef).toBe(native);
@@ -136,23 +140,41 @@ describe("resident node manifest capture", () => {
     }
   });
 
-  it("keeps Git eligibility and prior ignored paths identical without a manifest child", async () => {
+  it("keeps initial Git admission distinct from authored checkpoint results without a manifest child", async () => {
     const { capture, workspaceDir, runStandalone } = await fixture();
     const homeDir = path.dirname(workspaceDir);
     const baseCommit = "a".repeat(40);
-    await fs.writeFile(path.join(workspaceDir, ".gitignore"), "*.ignored\n");
+    await fs.writeFile(path.join(workspaceDir, ".gitignore"), "*.ignored\ndist/\n.artifacts/\n");
     await fs.writeFile(path.join(workspaceDir, "keep.ignored"), "retained");
-    await fs.writeFile(path.join(workspaceDir, "skip.ignored"), "excluded");
+    await fs.writeFile(path.join(workspaceDir, "new.ignored"), "private");
+    await fs.mkdir(path.join(workspaceDir, ".artifacts"));
+    await fs.writeFile(path.join(workspaceDir, ".artifacts", "proof.txt"), "authored");
     await fs.writeFile(path.join(workspaceDir, "new.txt"), "new");
     expect(
       (await exec.runCommandWithTimeout(["git", "init", "-q", workspaceDir], { timeoutMs: 10_000 }))
         .code,
     ).toBe(0);
+    await fs.mkdir(path.join(workspaceDir, "dist"));
+    await fs.writeFile(path.join(workspaceDir, "dist", "output.js"), "generated");
+    const initial = await runStandalone([baseCommit, "eligible"], homeDir);
+    expect(initial.code, initial.stderr).toBe(0);
+    expect(
+      (await readWorkspaceManifest(homeDir, initial.stdout.trim())).manifest.entries.map(
+        (entry) => entry.path,
+      ),
+    ).toEqual([".gitignore", "new.txt"]);
     const { rawManifest } = manifestFixture([fileEntry("keep.ignored", Buffer.from("retained"))], {
       baseCommit,
     });
     const digest = await writeManifest(homeDir, rawManifest);
-    const args = [baseCommit, "eligible", digest];
+    const eligible = await runStandalone([baseCommit, "eligible", digest], homeDir);
+    expect(eligible.code, eligible.stderr).toBe(0);
+    expect(
+      (await readWorkspaceManifest(homeDir, eligible.stdout.trim())).manifest.entries.map(
+        (entry) => entry.path,
+      ),
+    ).toEqual([".gitignore", "keep.ignored", "new.txt"]);
+    const args = [baseCommit, "all", digest];
     const child = await runStandalone(args, homeDir);
     expect(child.code, child.stderr).toBe(0);
     rejectChild();
@@ -160,29 +182,36 @@ describe("resident node manifest capture", () => {
     expect(native.stdout).toBe(child.stdout);
     const { manifest } = await readWorkspaceManifest(homeDir, native.stdout.trim());
     expect(manifest.entries.map((entry) => entry.path)).toEqual([
+      ".artifacts/proof.txt",
       ".gitignore",
       "keep.ignored",
       "new.txt",
     ]);
   });
 
-  it("retains child execution for changed programs and different workspace paths", () => {
-    const argv = [...command, "/workspace", "", "all", "memo-v1"];
-    expect(nodeWorkspaceManifestCapture(argv, "/other")).toBeUndefined();
-    expect(
-      nodeWorkspaceManifestCapture(argv.with(2, `${REMOTE_WORKSPACE_MANIFEST_JS}\n`), "/workspace"),
-    ).toBeUndefined();
+  it("keeps changed programs on the child path and rejects other workspaces", async () => {
+    const { runtime, identity, workspaceDir } = await fixture();
+    const child = rejectChild();
+    const argv = [...command, workspaceDir, "", "all", "memo-v1"];
+    await expect(
+      runtime.exec({ ...identity, argv: argv.with(2, `${REMOTE_WORKSPACE_MANIFEST_JS}\n`) }),
+    ).rejects.toThrow("unexpected child");
+    expect(child).toHaveBeenCalledOnce();
+    await expect(
+      runtime.exec({ ...identity, argv: argv.with(3, path.dirname(workspaceDir)) }),
+    ).rejects.toThrow("outside its workspace");
+    expect(child).toHaveBeenCalledOnce();
   });
 
   it("keeps the workspace environment and joins a cancelled Git read before releasing capture", async () => {
-    const { home, workspaceDir } = await fixture();
+    const { workspaceDir, capture: captureWorkspace } = await fixture();
+    const home = path.dirname(workspaceDir);
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const controller = new AbortController();
     vi.spyOn(gitExec, "executeGitCommandBuffered").mockImplementation(
-      async (cwd, args, options) => {
+      async (cwd, _args, options) => {
         expect(cwd).toBe(workspaceDir);
-        expect(args[0]).toBe("ls-files");
         expect(options).toMatchObject({
           baseEnv: { HOME: home, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
           signal: expect.any(AbortSignal),
@@ -194,12 +223,7 @@ describe("resident node manifest capture", () => {
       },
     );
     let settled = false;
-    const capture = runNodeWorkspaceManifestCapture({
-      argv: [workspaceDir, "a".repeat(40), "eligible"],
-      home,
-      maxHashMemoBytes: 60 * 1024,
-      signal: controller.signal,
-    })
+    const capture = captureWorkspace(["a".repeat(40), "eligible"], controller.signal)
       .catch((error: unknown) => error)
       .finally(() => {
         settled = true;

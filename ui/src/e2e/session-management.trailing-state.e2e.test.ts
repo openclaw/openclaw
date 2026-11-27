@@ -2,14 +2,16 @@ import type { Page } from "playwright";
 import { it, expect } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import {
   actionOpacity,
-  controlUiSessionUrl,
+  actionPointerEvents,
+  controlUiSessionPath,
   createSessionManagementE2eSuite,
+  installMockGateway,
+  sessionsListResponse,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -56,61 +58,6 @@ const touchOptions = {
 };
 
 suite.define(() => {
-  it("vertically centers session actions in a two-line row", () =>
-    suite.withPage(touchOptions, async ({ page }) => {
-      const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-      await page.addInitScript((storageKey) => {
-        localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
-        const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
-        localStorage.setItem(
-          storageKey,
-          JSON.stringify({ ...settings, railShortcuts: ["session:agent:main:two-line"] }),
-        );
-      }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
-      await ui.installSessionRows(
-        page,
-        [
-          sessionRow("agent:main:main", "Main", baseTime),
-          Object.assign(sessionRow("agent:main:two-line", "Two-line session", baseTime - 1), {
-            lastMessagePreview: "Finishing repository setup review",
-          }),
-        ],
-        { mainSessionKey: "agent:main:main", sessionKey: "agent:main:two-line" },
-      );
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:two-line"));
-      const row = page.locator('[data-session-key="agent:main:two-line"]');
-      await ui.visible(row, 10_000);
-      const pin = ui.button(row, "Unpin session", false);
-      const menu = row.locator("[data-sidebar-session-archive]");
-      await expect.poll(() => actionOpacity(pin)).toBe("1");
-
-      const [rowBounds, subtitleBounds, pinBounds, menuBounds] = await Promise.all([
-        ui.bounds(row),
-        ui.bounds(row.locator(".sidebar-recent-session__subtitle")),
-        ui.bounds(pin),
-        ui.bounds(menu),
-      ]);
-
-      const rowCenter = ui.centerY(rowBounds);
-      expect(subtitleBounds.y).toBeGreaterThan(rowCenter);
-      expect(Math.abs(ui.centerY(pinBounds) - rowCenter)).toBeLessThanOrEqual(1);
-      expect(Math.abs(ui.centerY(menuBounds) - rowCenter)).toBeLessThanOrEqual(1);
-
-      await page.evaluate(() => {
-        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
-      });
-      await expect
-        .poll(async () => {
-          const [title, details] = await Promise.all([
-            ui.bounds(row.locator(".sidebar-recent-session__title-row")),
-            ui.bounds(row.locator(".sidebar-recent-session__details")),
-          ]);
-          return title.y + title.height - details.y;
-        })
-        .toBeLessThanOrEqual(0.5);
-    }));
-
   it("keeps action-only text stable and active state visible with actions", () =>
     suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
       await ui.installSessionRows(
@@ -206,7 +153,54 @@ suite.define(() => {
       });
     }));
 
-  it("keeps fork provenance in the title above always-visible touch actions", () =>
+  it("keeps sidebar session controls reachable on touch pointers", async () => {
+    const context = await suite.browser.newContext({
+      ...createControlUiE2eContextOptions(),
+      hasTouch: true,
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            "agent:main:research",
+            "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+          ),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const row = page
+        .locator(".sidebar-recent-sessions__list .sidebar-recent-session")
+        .filter({ hasText: "Research notes" });
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      const menu = row.getByRole("button", {
+        name: "Open session menu: Research notes",
+        exact: true,
+      });
+      await expect.poll(() => actionOpacity(menu)).toBe("1");
+      await expect.poll(() => actionPointerEvents(menu)).toBe("auto");
+      await menu.tap();
+      await page.getByRole("menuitem", { name: "Pin session", exact: true }).tap();
+      await menu.tap();
+      await page.getByRole("menuitem", { name: "Unpin session", exact: true }).waitFor();
+      await page.getByRole("menuitem", { name: "Archive session", exact: true }).tap();
+      await row.waitFor({ state: "hidden" });
+      await ui.closeArchiveUndoToast(page);
+      await gateway.waitForRequest("sessions.patch", {
+        match: { key: "agent:main:research", archived: true },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps fork provenance and navigation clear of touch actions", () =>
     suite.withPage(touchOptions, async ({ page }) => {
       await ui.installSessionRows(
         page,
@@ -228,22 +222,40 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:touch-forked"]');
       await ui.visible(row, 10_000);
       const fork = row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator");
-      const pin = ui.button(row, "Pin session", false);
-      const menu = row.locator("[data-sidebar-session-archive]");
+      const pin = row.locator("[data-sidebar-session-pin]");
+      const archive = row.locator("[data-sidebar-session-archive]");
+      const menu = row.locator("[data-sidebar-session-menu]");
       await expect.poll(() => fork.isVisible()).toBe(true);
+      expect(await pin.isVisible()).toBe(false);
+      expect(await archive.isVisible()).toBe(false);
       await ui.expectCount(row.locator(".session-row-state"), 0);
 
-      const [nameBounds, forkBounds, pinBounds, menuBounds] = await Promise.all([
+      const [nameBounds, forkBounds, menuBounds] = await Promise.all([
         ui.bounds(row.locator(".sidebar-recent-session__name")),
         ui.bounds(fork),
-        ui.bounds(pin),
         ui.bounds(menu),
       ]);
 
       expect(Math.abs(ui.centerY(forkBounds) - ui.centerY(nameBounds))).toBeLessThanOrEqual(2);
-      expect(ui.centerY(nameBounds)).toBeCloseTo(ui.centerY(pinBounds), 1);
-      expect(ui.right(nameBounds)).toBeLessThanOrEqual(pinBounds.x + 1);
-      expect(ui.right(pinBounds)).toBeLessThanOrEqual(menuBounds.x);
+      expect(ui.centerY(nameBounds)).toBeCloseTo(ui.centerY(menuBounds), 1);
+      expect(ui.right(nameBounds)).toBeLessThanOrEqual(menuBounds.x + 1);
+      expect(menuBounds.width).toBeGreaterThanOrEqual(44);
+      expect(menuBounds.height).toBeGreaterThanOrEqual(44);
+      expect(nameBounds.width).toBeGreaterThan(0);
+      await menu.tap();
+      const actions = page.getByRole("menu", {
+        name: "Actions for A deliberately long non-running touch session title that must not overlap controls",
+        exact: true,
+      });
+      await ui.visible(actions);
+      await ui.visible(ui.menuItem(actions, "Pin session"));
+      await ui.visible(ui.menuItem(actions, "Archive session"));
+      await page.keyboard.press("Escape");
+      await actions.waitFor({ state: "hidden" });
+      await row.locator(".sidebar-recent-session__link").tap();
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:touch-forked"));
     }));
 
   it("keeps unread glyph badges visible while PR icons yield to hover actions", () =>
@@ -284,12 +296,12 @@ suite.define(() => {
           ui.bounds(row.locator(".sidebar-session-indicator .session-glyph__badge--unread")),
         ]);
 
-        expect(badgeBounds).toMatchObject({ width: 7, height: 7 });
-        expect(badgeBounds.y).toBeCloseTo(glyphBounds.y - 2, 1);
+        expect(badgeBounds).toMatchObject({ width: 8, height: 8 });
+        expect(badgeBounds.y).toBeCloseTo(glyphBounds.y - 1, 1);
         return ui.right(glyphBounds) - ui.right(badgeBounds);
       };
       // Trailing metadata cannot move unread off the row's own glyph corner.
-      expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(-2, 1);
+      expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(-1, 1);
       expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(
         await badgeInsetFromGlyphRight(plainRow),
         1,
@@ -318,7 +330,7 @@ suite.define(() => {
       await plainRow.hover();
       const plainArchive = plainRow.locator("[data-sidebar-session-archive] svg");
       await ui.visible(plainArchive);
-      expect(ui.centerX(await ui.bounds(pullRequestIcon.locator("svg")))).toBeCloseTo(
+      expect(ui.centerX(await ui.bounds(pullRequestIcon.locator(".session-css-icon")))).toBeCloseTo(
         ui.centerX(await ui.bounds(plainArchive)),
         1,
       );
@@ -326,6 +338,7 @@ suite.define(() => {
       await pullRequestRow.hover();
 
       await pullRequestIcon.waitFor({ state: "hidden" });
+      await pullRequestRow.locator(".session-row-badges").waitFor({ state: "hidden" });
       await ui.visible(unreadBadge);
       expect(await ui.bounds(unreadBadge)).toEqual(badgeBounds);
       await page.mouse.move(0, 0);
@@ -333,6 +346,7 @@ suite.define(() => {
       await ui.visible(unreadBadge);
       await pullRequestRow.locator("[data-sidebar-session-archive]").focus();
       await pullRequestIcon.waitFor({ state: "hidden" });
+      await pullRequestRow.locator(".session-row-badges").waitFor({ state: "hidden" });
       await ui.visible(unreadBadge);
       expect(await ui.bounds(unreadBadge)).toEqual(badgeBounds);
       await codingToggle.focus();
@@ -381,13 +395,13 @@ suite.define(() => {
         .toBe(true);
       await expect.poll(() => state.isVisible()).toBe(true);
       await ui.expectCount(row.locator(".session-glyph__ring"), 0);
-      const prIcon = row.locator("[data-pull-request-state='open'] svg");
+      const prIcon = row.locator("[data-pull-request-state='open'] .session-css-icon");
       expect(
         await prIcon.evaluate((icon) => {
           const { width, height } = icon.getBoundingClientRect();
           return { width, height };
         }),
-      ).toEqual({ width: 12, height: 12 });
+      ).toEqual({ width: 14, height: 14 });
       const stateLayout = await row.evaluate((element) => {
         const layoutLeft = (node: HTMLElement) => {
           let left = 0;

@@ -3,12 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNoisyPngBuffer } from "../../../../test/helpers/image-fixtures.js";
+import {
+  createSolidPngBuffer,
+  createNoisyPngBuffer,
+} from "../../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
+import type { UserMessage } from "../../../llm/types.js";
 import * as mediaLocalRoots from "../../../media/local-roots.js";
 import {
+  type MediaFact,
   attachRuntimePromptMediaFacts,
   readRuntimePromptMediaFacts,
 } from "../../../media/media-facts.js";
@@ -18,14 +23,20 @@ import {
 } from "../../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
+import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import { log } from "../logger.js";
 import { describedImageUnderstanding } from "./image-description.test-support.js";
 import {
+  buildPromptImageFailureNotice,
+  materializeProviderContext,
   detectAndLoadPromptImages,
   detectImageReferences,
   hydratePromptMediaMessages,
 } from "./images.js";
+import { promptImageSessionKey } from "./prompt-image-decisions.js";
+import type { MediaImageLayout } from "./prompt-image-metadata.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 const TINY_PNG_BASE64 =
@@ -417,16 +428,21 @@ describe("detectAndLoadPromptImages", () => {
     }
 
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const localRoots = vi.fn(() => [agentRoot]);
     const result = await loadImages({
       prompt: `Inspect ${imageRef}`,
       workspaceDir: sandboxRoot,
       workspaceOnly: true,
+      localRoots,
       sandbox: { root: sandbox.workspaceDir, bridge },
     });
 
     expect(result.detectedRefs).toHaveLength(1);
     expect(result).toMatchObject({ loadedCount: 0, skippedCount: 1, images: [] });
-    expect(warn.mock.calls).toEqual([["Native image: sandbox validation failed"]]);
+    expect(localRoots).not.toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([
+      ["Native image: sandbox validation failed (reason=outside-workspace, pathClass=absolute)"],
+    ]);
     expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-private-image");
   });
 
@@ -460,17 +476,19 @@ describe("detectAndLoadPromptImages", () => {
       prompt: "describe it",
       media: [{ path: imagePath, contentType: "image/png" }],
       workspaceDir,
+      workspaceOnly: true,
       maxBytes: 1,
     });
 
     expect(result).toMatchObject({
-      loadedCount: 0,
+      loadedCount: 1,
       failedMediaCount: 1,
-      skippedCount: 1,
+      skippedCount: 0,
       images: [],
     });
-    expect(warn.mock.calls).toEqual([["Native image: failed to load"]]);
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-private-attachment");
+    expect(warn.mock.calls).toEqual([
+      ["Native image: dropped 1 image(s) after sanitization (prompt:images)."],
+    ]);
   });
 
   it("drops a header-valid truncated image and keeps a complete one", async () => {
@@ -587,5 +605,283 @@ describe("hydratePromptMediaMessages", () => {
       inlineImage,
       inlineImage,
     ]);
+  });
+});
+
+describe("admitted media references", () => {
+  const image = (data = TINY_PNG_BASE64) => ({
+    type: "image" as const,
+    data,
+    mimeType: "image/png",
+  });
+  const sandboxAt = (root: string) => ({ root, bridge: createHostSandboxFsBridge(root) });
+  async function writeImage(root: string, name = "photo.png") {
+    const target = path.join(root, name);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, Buffer.from(TINY_PNG_BASE64, "base64"));
+    return target;
+  }
+  it("hydrates sandbox-staged paths while retaining the inbound media identity", async () => {
+    const sandboxRoot = tempDirs.make("openclaw-native-image-sbx-uri-");
+    const mediaId = "telegram-photo.png";
+    await writeImage(sandboxRoot, `media/inbound/${mediaId}`);
+
+    const result = await loadImages({
+      prompt: "",
+      media: [
+        {
+          path: `media/inbound/${mediaId}`,
+          url: `media://inbound/${mediaId}`,
+          staged: true,
+          contentType: "image/png",
+        },
+      ],
+      workspaceDir: sandboxRoot,
+      workspaceOnly: true,
+      sandbox: sandboxAt(sandboxRoot),
+    });
+    expect(result.images[0]).toMatchObject(image());
+  });
+  it.each([false, true])(
+    "rejects encoded traversal claim-check facts (sandbox=%s)",
+    async (sandboxed) => {
+      const result = await loadImages({
+        prompt: "legacy ticket is carried structurally",
+        media: [{ url: "media://inbound/%2e%2e%2fsecret.png", contentType: "image/png" }],
+        workspaceDir: "/tmp",
+        sandbox: sandboxed ? sandboxAt("/tmp") : undefined,
+      });
+
+      expect(result).toMatchObject({ loadedCount: 0, skippedCount: 1, images: [] });
+    },
+  );
+  it("hydrates a path-less transcript image from the staged sandbox twin", async () => {
+    const sandboxRoot = tempDirs.make("openclaw-staged-transcript-");
+    const stagedPath =
+      "media/inbound/openclaw-staged-abc/input-photo---11111111-1111-1111-1111-111111111111.png";
+    const mediaUri = "media://inbound/photo---11111111-1111-1111-1111-111111111111.png";
+    const hostPath = path.join(sandboxRoot, "outside-store", "photo.png");
+    await writeImage(sandboxRoot, stagedPath);
+    const result = await loadImages({
+      prompt: `inspect\n[media attached: ${mediaUri}]`,
+      media: [
+        {
+          path: stagedPath,
+          url: mediaUri,
+          contentType: "image/png",
+          staged: true,
+          hydrationSuppressed: true,
+        },
+        { path: hostPath, url: mediaUri, contentType: "image/png" },
+      ],
+      userTurnTranscriptRecorder: {
+        resolveMessage: async () =>
+          ({
+            role: "user",
+            content: "inspect",
+            __openclaw: {
+              media: [{ url: mediaUri, contentType: "image/png", kind: "image" }],
+            },
+          }) as never,
+      },
+      imageOrder: ["offloaded"],
+      workspaceDir: sandboxRoot,
+      workspaceOnly: true,
+      sandbox: sandboxAt(sandboxRoot),
+    });
+
+    expect(result).toMatchObject({ failedMediaCount: 0, images: [{ data: TINY_PNG_BASE64 }] });
+  });
+  it("keeps a recorded inline image when only its managed staged copy is suppressed", async () => {
+    const sandboxRoot = tempDirs.make("openclaw-staged-inline-");
+    const stagedPath =
+      "media/inbound/openclaw-staged-abc/input-photo---22222222-2222-2222-2222-222222222222.png";
+    const mediaUri = "media://inbound/photo---22222222-2222-2222-2222-222222222222.png";
+    await writeImage(sandboxRoot, stagedPath);
+    const load = (media?: Parameters<typeof loadImages>[0]["media"]) =>
+      loadImages({
+        prompt: "inspect",
+        media,
+        existingImages: [image()],
+        imageOrder: ["inline"],
+        userTurnTranscriptRecorder: {
+          resolveMessage: async () =>
+            ({
+              role: "user",
+              content: "inspect",
+              __openclaw: {
+                media: [{ url: mediaUri, contentType: "image/png", kind: "image" }],
+                mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+              },
+            }) as never,
+        },
+        workspaceDir: sandboxRoot,
+        workspaceOnly: true,
+        sandbox: sandboxAt(sandboxRoot),
+      });
+
+    expect(await load()).toMatchObject({ failedMediaCount: 0, images: [image()] });
+    expect(
+      await load([
+        {
+          path: stagedPath,
+          url: mediaUri,
+          contentType: "image/png",
+          staged: true,
+          hydrationSuppressed: true,
+        },
+      ]),
+    ).toMatchObject({ failedMediaCount: 0, images: [image()] });
+  });
+});
+
+describe("persisted image replay", () => {
+  const mediaAt = (...paths: string[]) =>
+    paths.map((file) => ({ path: file, contentType: "image/png" }));
+  let workspaceDir: string;
+  const options = (): Parameters<typeof hydratePromptMediaMessages>[1] => ({
+    workspaceDir,
+    model: { input: ["text", "image"] },
+  });
+  const hydrateReplay = async (message: AgentMessage, workspaceOnly = true) =>
+    (await hydratePromptMediaMessages([message], { ...options(), workspaceOnly }))[0];
+  const contentOf = (message: AgentMessage | undefined) => {
+    if (!message) {
+      throw new Error("Expected a hydrated message");
+    }
+    return "content" in message ? message.content : undefined;
+  };
+  const REPLAY_PNG_BASE64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+  const image = (data = REPLAY_PNG_BASE64) => ({
+    type: "image" as const,
+    data,
+    mimeType: "image/png",
+  });
+  const png = (r = 0, g = 0, b = 0) => createSolidPngBuffer(1, 1, { r, g, b });
+  const tinyPng = Buffer.from(REPLAY_PNG_BASE64, "base64");
+  async function writeImage(dir: string, name: string, data: Uint8Array = tinyPng) {
+    const target = path.join(dir, name);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, data);
+    return target;
+  }
+  const persistedMessage = (content: UserMessage["content"], media: MediaFact[]) =>
+    ({ role: "user", content, __openclaw: { media } }) as unknown as AgentMessage;
+  const layout = (slots: MediaImageLayout["slots"], suppressedFactIndexes: number[] = []) => ({
+    slots,
+    suppressedFactIndexes,
+  });
+  afterEach(() => vi.restoreAllMocks());
+  beforeEach(() => {
+    workspaceDir = tempDirs.make("openclaw-replay-");
+  });
+  it("keeps omitted images omitted and resized inline images included on later requests", async () => {
+    const imagePath = path.join(workspaceDir, "late.png");
+    // A steered inline copy above the model limit is resized again on every request.
+    const inline = image(createSolidPngBuffer(40, 100, { r: 255, g: 0, b: 0 }).toString("base64"));
+    const text = { type: "text" as const, text: "inspect" };
+    const message = persistedMessage([text, inline], [{ kind: "image" }, ...mediaAt(imagePath)]);
+    const sessionOptions = {
+      ...options(),
+      workspaceOnly: true,
+      maxDimensionPx: 50,
+      // Every request of an embedded run passes this callback (attempt-setup).
+      onCurrentTurnImageFailure: () => {},
+      imageSessionKey: promptImageSessionKey({ sessionId: "first", agentId: "main", workspaceDir }),
+    };
+    const first = await hydratePromptMediaMessages([message], sessionOptions);
+    const firstRequest = await materializeProviderContext({
+      ...sessionOptions,
+      context: { messages: convertToLlm(first) },
+    });
+    await writeImage(workspaceDir, "late.png");
+    for (const scope of [
+      { sessionId: "second", agentId: "main" },
+      { sessionId: "first", agentId: "other" },
+    ]) {
+      const independent = await hydratePromptMediaMessages([structuredClone(message)], {
+        ...sessionOptions,
+        imageSessionKey: promptImageSessionKey({ ...scope, workspaceDir }),
+      });
+      expect(contentOf(independent[0])).toContainEqual(image());
+    }
+    const replay = await hydratePromptMediaMessages(
+      [structuredClone(message), { role: "user", content: "next", timestamp: 2 }],
+      sessionOptions,
+    );
+    const secondRequest = await materializeProviderContext({
+      ...sessionOptions,
+      context: { messages: convertToLlm(replay) },
+    });
+    expect(secondRequest.messages[0]).toEqual(firstRequest.messages[0]);
+    expect(secondRequest.messages[0]?.content).toEqual([
+      text,
+      { type: "text", text: buildPromptImageFailureNotice(1) },
+      expect.objectContaining({ type: "image" }),
+    ]);
+  });
+  it("keeps persisted facts and asks the active turn to resend an unreadable image", async () => {
+    const media = mediaAt(path.join(workspaceDir, "missing.png"));
+    const message = {
+      role: "user",
+      content: "here",
+      __openclaw: { media, mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] } },
+    } as unknown as AgentMessage;
+    const onCurrentTurnImageFailure = vi.fn();
+    const result = await hydratePromptMediaMessages([message], {
+      ...options(),
+      workspaceOnly: true,
+      onCurrentTurnImageFailure,
+    });
+    expect(onCurrentTurnImageFailure).toHaveBeenCalledExactlyOnceWith(1);
+    expect(result[0]).toMatchObject({ __openclaw: { media } });
+    expect(result[0]).toHaveProperty("content", [
+      { type: "text", text: "here" },
+      { type: "text", text: buildPromptImageFailureNotice(1) },
+    ]);
+  });
+  it("prefers persisted fact-index layout when runtime order is also present", async () => {
+    const describedPath = await writeImage(workspaceDir, "described.png", png(255));
+    const inlinePath = await writeImage(workspaceDir, "inline.png");
+    const offloadedBuffer = png(0, 0, 255);
+    const offloadedPath = await writeImage(workspaceDir, "offloaded.png", offloadedBuffer);
+    const inlineImage = image();
+    const media = mediaAt(describedPath, inlinePath, offloadedPath);
+    const persisted = buildPersistedUserTurnMessage({
+      text: "compare",
+      media,
+      mediaImageLayout: layout(
+        [
+          { kind: "inline", factIndex: 1 },
+          { kind: "offloaded", factIndex: 2 },
+        ],
+        [0],
+      ),
+    });
+    const message = attachRuntimePromptMediaFacts(
+      {
+        ...persisted,
+        content: [{ type: "text" as const, text: "compare" }, inlineImage],
+      } as AgentMessage,
+      media,
+      ["inline", "offloaded"],
+    );
+
+    const first = await hydrateReplay(message);
+    const firstContent = contentOf(first);
+    expect(firstContent).toEqual([
+      { type: "text", text: "compare" },
+      inlineImage,
+      image(offloadedBuffer.toString("base64")),
+    ]);
+
+    const serialized = JSON.stringify(first);
+    for (const { path: file } of media) {
+      await fs.rm(file);
+    }
+    expect(contentOf(await hydrateReplay(JSON.parse(serialized) as AgentMessage))).toEqual(
+      firstContent,
+    );
   });
 });

@@ -20,6 +20,7 @@ import { handleChatAbortRequestWithLifecycle } from "../../../gateway/server-met
 import { requireLastRespondCall } from "../../../gateway/server-methods/chat.abort-authorization.test-helpers.js";
 import { invokeChatAbortHandler } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import { onAgentEvent } from "../../../infra/agent-events.js";
 import {
   captureExecRequestOwners,
   readExecRequestOwners,
@@ -55,13 +56,17 @@ import {
 import * as nativeSession from "../registry/subagent-control-session.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
-import { prepareSubagentRunsByRunIds } from "../registry/subagent-registry.js";
+import {
+  activateSubagentRegistry,
+  prepareSubagentRunsByRunIds,
+} from "../registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   collectFailure,
   sessionReader,
   visibleResult,
 } from "./subagent-spawn.fixtures.test-support.js";
+import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
 import {
   createBoundSpawnInvocation,
   recordSpawnBoundaryFinal,
@@ -161,6 +166,10 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
     async (mode, { signal }) => {
       const bound = await options.createBoundParent();
       const { runtime } = await options.createBoundGateway(bound);
+      if (mode !== "consumed-active-revoked") {
+        vi.mocked(runtime.lifecycle.waitForAgent).mockRestore();
+        await activateSubagentRegistry(bound.resolveGatewayContext);
+      }
       const readSession = sessionReader(bound.storePath);
       const { original, owners, event } = await retainOriginalRequest(
         bound,
@@ -195,6 +204,37 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
       let restorePreparation: (() => void) | undefined;
       let restoreProcess: (() => void) | undefined;
       let activeStop: ReturnType<typeof killAllControlledSubagentRuns> | undefined;
+      let modelPhase = "not-entered";
+      let nativeStatus = "pending";
+      let nativeResultError = false;
+      const lifecyclePhases: string[] = [];
+      const stopLifecycle = onAgentEvent((entry) => {
+        const phase = entry.data.phase;
+        if (
+          entry.runId === childRunId &&
+          entry.stream === "lifecycle" &&
+          typeof phase === "string" &&
+          ["start", "finishing", "end", "error"].includes(phase)
+        ) {
+          lifecyclePhases.push(phase);
+          if (lifecyclePhases.length > 4) {
+            lifecyclePhases.shift();
+          }
+        }
+      });
+      const reportNativeFailure = (error: unknown): never => {
+        console.error(
+          `Native child custody wait failed: ${JSON.stringify({
+            mode,
+            modelPhase,
+            nativeStatus,
+            nativeResultError,
+            lifecyclePhases,
+            ...readBoundExecutionState(bound, childRunId),
+          })}`,
+        );
+        throw error;
+      };
       if (mode === "consumed-active-revoked") {
         const supervisor = getProcessSupervisor();
         const spawn = supervisor.spawn.bind(supervisor);
@@ -232,6 +272,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
       const model = vi
         .spyOn(loop, "runPreparedEmbeddedLoop")
         .mockImplementationOnce(async (_refresh, input) => {
+          modelPhase = "entered";
           const run = input.runParams;
           const sessionKey = expectDefined(run.sessionKey, "child run session key");
           const requestOwners = expectDefined(
@@ -253,40 +294,49 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           expect(asOptionalRecord(result.details)?.status).toBe("running");
           command = commandSession(result, "real child command");
           expect(readExecRequestOwners(command)).toEqual(requestOwners);
-          if (mode !== "retained-exact") {
-            const service = await exec.execute(
-              "independent-routed-child-service",
-              { command: watchedCommand, background: true, timeoutSeconds: 60 },
-              run.abortSignal,
-            );
-            independent = commandSession(service, "independent service");
-            expect(readExecRequestOwners(independent)).toBeUndefined();
-          }
           commandReady.resolve(command);
+          modelPhase = "held";
           await completeModel.promise;
+          modelPhase = "persisting-final";
           await recordSpawnBoundaryFinal({
             storePath: bound.storePath,
             sessionKey,
             runId: run.runId,
             text: "Completed child result",
           });
+          modelPhase = "returned";
           return visibleResult("Completed child result");
         });
       options.runEmbeddedAgent.mockImplementationOnce((params) => {
         const result = native.runEmbeddedAgent(params);
-        void result.catch(commandReady.reject);
+        void result.then(
+          (completed) => {
+            nativeStatus = "resolved";
+            nativeResultError = completed.meta.error !== undefined;
+          },
+          (error: unknown) => {
+            nativeStatus = "rejected";
+            commandReady.reject(error);
+          },
+        );
         return result;
       });
       const failures: unknown[] = [];
       await collectFailure(failures, async () => {
+        const parentIdentity = parentRequestIdentity(parentRunId, parentSessionKey);
+        const parentExec = await withExecRequestTurn(
+          { identity: parentIdentity, owners },
+          async () =>
+            commandTool({
+              ...parentIdentity,
+              config: bound.cfg,
+              cwd: expectDefined(bound.cfg.agents?.defaults?.workspace, "fixture workspace"),
+              scopeKey: parentSessionKey,
+            }),
+        );
         const invoke = await withExecRequestTurn(
           {
-            identity: {
-              runId: parentRunId,
-              sessionKey: parentSessionKey,
-              sessionId: "parent-session",
-              agentId: "main",
-            },
+            identity: parentIdentity,
             owners,
           },
           async () =>
@@ -302,21 +352,37 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
         );
         childRunId = accepted.runId;
         childSessionKey = accepted.childSessionKey;
-        const runningCommand = await withinTest(commandReady.promise, signal);
+        const runningCommand = await withinTest(commandReady.promise, signal).catch(
+          reportNativeFailure,
+        );
+        if (mode !== "retained-exact") {
+          const service = await parentExec.execute("independent-parent-service", {
+            command: watchedCommand,
+            background: true,
+            timeoutSeconds: 60,
+          });
+          independent = commandSession(service, "independent service");
+          expect(readExecRequestOwners(independent)).toBeUndefined();
+        }
         let receipt: ReturnType<typeof completionReceipt> | undefined;
         if (mode === "consumed-active-revoked") {
           expect(subagentRuns.get(childRunId)?.execution.endedAt).toBeUndefined();
         } else {
           completeModel.resolve();
           inspectTerminal();
-          const completed = await withinTest(terminal.promise, signal);
+          const completed = await withinTest(terminal.promise, signal).catch(reportNativeFailure);
           receipt = structuredClone(completionReceipt(completed));
           expect(completed).toMatchObject({
             execution: { outcome: { status: "ok" } },
             completion: { resultText: "Completed child result" },
           });
+          await withinTest(waitForExecSession(runningCommand), signal);
+          expect(runningCommand.exited).toBe(true);
+          expect(
+            isPidDefinitelyDead(expectDefined(runningCommand.pid, "completed child command pid")),
+          ).toBe(true);
         }
-        expect(runningCommand.exited).toBe(false);
+        expect(runningCommand.exited).toBe(mode !== "consumed-active-revoked");
         bound.admission.close();
         bound.parent.cleanup();
         expect(captureExecRequestCancellation(original).owners).toEqual(owners);
@@ -338,7 +404,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           expect(captureExecRequestCancellation(original).owners).toEqual([]);
           const historical = requireLastRespondCall(await stop(original.ownerConnId, true));
           expect(historical.slice(0, 2)).toEqual([true, { ok: true, aborted: false, runIds: [] }]);
-          expect(runningCommand.exited).toBe(false);
+          expect(runningCommand.exited).toBe(mode !== "consumed-active-revoked");
           const laterIdentity = {
             runId: "later-routed-human",
             sessionKey: parentSessionKey,
@@ -359,7 +425,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           );
           const foreign = requireLastRespondCall(await stop("another-owner", false));
           expect(foreign.slice(0, 2)).toEqual([true, { ok: true, aborted: false, runIds: [] }]);
-          expect(runningCommand.exited).toBe(false);
+          expect(runningCommand.exited).toBe(mode !== "consumed-active-revoked");
         }
         if (mode === "consumed-active-revoked") {
           const source = new AbortController();
@@ -437,11 +503,8 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           expect(subagentRuns.get(childRunId)?.killIntent).toBeDefined();
           releaseCleanup.resolve();
           const stopped = await withinTest(activeStop, signal);
-          expect(stopped).toMatchObject({
-            status: "error",
-            killed: 1,
-            error: expect.stringContaining("Requester revoked after native acceptance"),
-          });
+          // The requester was revoked after this Stop was admitted; it finishes and reports ok.
+          expect(stopped).toMatchObject({ status: "ok", killed: 1 });
         } else if (mode === "consumed-generation-replaced") {
           const prepare = nativeSession.prepareSubagentKillSession;
           let replaced = false;
@@ -472,7 +535,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             /original session generation/,
           );
           expect(replaced).toBe(true);
-          expect(runningCommand.exited).toBe(false);
+          expect(runningCommand.exited).toBe(true);
           expect(owners.every((owner) => !owner.signal.aborted)).toBe(true);
         } else if (mode === "consumed-command-handler") {
           const entry = expectDefined(readSession(original.sessionKey), "original session");
@@ -516,7 +579,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           });
           expect(stopped).toMatchObject({
             handled: true,
-            aborted: true,
+            aborted: false,
             stoppedSubagents: 0,
             failedSubagents: 0,
           });
@@ -524,7 +587,10 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           const stopped = requireLastRespondCall(
             await stop(original.ownerConnId, mode === "retained-exact"),
           );
-          expect(stopped.slice(0, 2)).toEqual([true, { ok: true, aborted: true, runIds: [] }]);
+          expect(stopped.slice(0, 2)).toEqual([
+            true,
+            { ok: true, aborted: mode === "retained-exact", runIds: [] },
+          ]);
         }
         if (mode !== "consumed-generation-replaced") {
           expect(runningCommand).toMatchObject({ exited: true, exitReason: "manual-cancel" });
@@ -557,6 +623,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
       completeModel.resolve();
       releaseCleanup.resolve();
       restorePreparation?.();
+      stopLifecycle();
       stopObserving();
       consumeSelectedSystemEventEntries(original.sessionKey, [event]);
       for (const ownedProcess of [command, independent, laterHuman]) {
@@ -584,4 +651,8 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
       options.throwBoundFailures(failures);
     },
   );
+}
+
+export function parentRequestIdentity(runId: string, sessionKey: string) {
+  return { runId, sessionKey, sessionId: "parent-session", agentId: "main" };
 }

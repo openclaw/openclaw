@@ -166,6 +166,58 @@ const writeMessages = async (...entries: unknown[]) => {
   return file;
 };
 
+it("counts only measured turns; a turn with unknown usage still counts as a message", async () => {
+  const unknown = (timestamp: string, content: unknown[], counters: Record<string, number>) =>
+    assistant(
+      timestamp,
+      { ...counters, cost: { total: 0.01 }, usageReport: { state: "unavailable" } },
+      { provider: "openai", model: "gpt-5.5", content, stopReason: "error" },
+    );
+  const sessionFile = await writeMessages(
+    modelMessage("2026-02-05T12:00:00.000Z", 10),
+    // A request that failed before any output, and one interrupted after partial counters.
+    unknown("2026-02-05T12:01:00.000Z", [], { input: 0, output: 0, totalTokens: 0 }),
+    unknown("2026-02-05T12:02:00.000Z", [textBlock("partial")], { input: 500, totalTokens: 600 }),
+  );
+  const summary = await readSummary({ sessionFile });
+  expect(summary).toMatchObject({
+    totalTokens: 10,
+    missingCostEntries: 0,
+    messageCounts: { assistant: 3, errors: 2 },
+  });
+  expect(summary).not.toHaveProperty("usageReport");
+});
+
+it("tracks input whose cache use the provider did not report", async () => {
+  const call = (timestamp: string, cacheTelemetry?: { state: string }) =>
+    assistant(
+      timestamp,
+      {
+        input: 1_000,
+        output: 10,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 1_010,
+        cost: { total: 0.01 },
+        ...(cacheTelemetry ? { cacheTelemetry } : {}),
+      },
+      { provider: "ollama", model: "llama" },
+    );
+  const sessionFile = path.join(sessionsDir, "cache-telemetry.jsonl");
+  await writeEntries(sessionFile, [
+    { type: "session", version: 1, id: "cache-telemetry" },
+    call("2026-02-05T12:00:00.000Z", { state: "unavailable" }),
+    call("2026-02-05T12:01:00.000Z", { state: "available" }),
+    // Usage recorded before cache telemetry existed counts as measured.
+    call("2026-02-05T12:02:00.000Z"),
+  ]);
+  const expected = { input: 3_000, cacheUnmeasuredInput: 1_000 };
+  expect(await readSummary({ sessionFile })).toMatchObject(expected);
+  // The cached daily totals carry it through the stored quarter summaries.
+  const range = { startMs: Date.UTC(2026, 1, 5), endMs: Date.UTC(2026, 1, 6) - 1 };
+  expect((await readCachedAggregate(range)).totals).toMatchObject(expected);
+});
+
 it("prices and aggregates usage with each row's agent-local registry", async () => {
   const provider = "demo-agent-scope";
   const model = "demo-model";
@@ -335,6 +387,16 @@ it("fills every calendar day across a spring-forward DST transition", async () =
   expect(summary.totals.totalTokens).toBe(0);
 });
 
+it("keeps four-digit UTC dates when filling an early calendar window", async () => {
+  const summary = await readAggregate({
+    startMs: Date.parse("0999-12-30T00:00:00Z"),
+    endMs: Date.parse("1000-01-01T23:59:59.999Z"),
+    dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+  });
+  expect(summary.days).toBe(3);
+  expect(summary.daily.map(({ date }) => date)).toEqual(["0999-12-30", "0999-12-31", "1000-01-01"]);
+});
+
 it("limits transcript stat fanout when listing durable cost inputs", async () => {
   await Promise.all(
     Array.from({ length: 48 }, async (_, index) => {
@@ -391,19 +453,11 @@ it("preserves rollups and aborts when the transcript directory cannot be read", 
 });
 
 it("includes sessions outside the refreshed range in the first aggregate read", async () => {
-  const oldSessionFile = await writeTranscript(
-    "sess-cache-cold-sync-old",
-    assistant("2026-02-05T12:00:00.000Z", billed(100, 100, 200, 0.2)),
-  );
-  await writeTranscript(
-    "sess-cache-cold-sync-current",
-    assistant("2026-02-05T12:00:00.000Z", billed(10, 20, 30, 0.03)),
-  );
-  await fs.utimes(
-    oldSessionFile,
-    new Date("2025-12-05T12:00:00.000Z"),
-    new Date("2025-12-05T12:00:00.000Z"),
-  );
+  const timestamp = "2026-02-05T12:00:00.000Z";
+  const oldSessionFile = await writeTranscript("cache-old", modelMessage(timestamp, 200));
+  await writeTranscript("cache-current", modelMessage(timestamp, 30));
+  const old = new Date("2025-12-05T12:00:00.000Z");
+  await fs.utimes(oldSessionFile, old, old);
 
   await refreshCostUsageCacheForAgent({
     config: defaultConfig,
@@ -419,19 +473,12 @@ it("includes sessions outside the refreshed range in the first aggregate read", 
 });
 
 it("waits for a busy refresh before loading a direct session summary", async () => {
-  const sessionFile = await writeTranscript(
-    "cost-session-busy-refresh",
-    assistant("2026-02-01T10:00:00.000Z", billed(7, 5, 12, 0.012)),
-    root,
-  );
-
-  const lock = prepareSessionCostUsageRefreshLock("main");
-  let released: Promise<void> | undefined;
+  const sessionFile = await writeMessages(modelMessage("2026-02-01T10:00:00.000Z", 12));
+  const lock = await prepareSessionCostUsageRefreshLock("main");
+  expect(await lock.acquire()).toBe(true);
+  const released = delay(40).then(lock.release);
   try {
-    expect(await lock.acquire()).toBe(true);
-    released = delay(40).then(lock.release);
-    const [summary] = await Promise.all([readSummary({ sessionFile }), released]);
-    expect(summary?.totalTokens).toBe(12);
+    expect((await readSummary({ sessionFile }))?.totalTokens).toBe(12);
   } finally {
     await released;
     await lock.release();
@@ -788,25 +835,17 @@ it.each<PricingCase>([
     ]);
 
     const summary = await loadSessionCostSummary(params);
-    const expectedReport = usageUnavailable ? { state: "unavailable" } : undefined;
+    // A turn with unknown usage adds no tokens, cost or missing-cost entry.
     expect(summary).toMatchObject({
       totalTokens: usageUnavailable ? 0 : 1_700,
-      missingCostEntries: expectedCost === undefined ? 1 : 0,
+      missingCostEntries: expectedCost === undefined && !usageUnavailable ? 1 : 0,
     });
-    expect([
-      summary?.usageReport,
-      summary?.dailyBreakdown?.[0]?.usageReport,
-      summary?.modelUsage?.[0]?.totals.usageReport,
-      summary?.dailyModelUsage?.[0]?.usageReport,
-      summary?.utcQuarterHourTokenUsage?.find((bucket) => bucket.quarterIndex === 48)?.usageReport,
-    ]).toEqual(Array(5).fill(expectedReport));
     expect(summary?.totalCost).toBeCloseTo(expectedCost ?? 0, 8);
     for (const field of ["input", "output", "cacheRead", "cacheWrite"] as const) {
       expect(summary?.[`${field}Cost`]).toBeCloseTo(expectedBreakdown?.[field] ?? 0, 8);
     }
 
     const series = await loadSessionUsageTimeSeries(params);
-    expect(series?.usageReport).toEqual(expectedReport);
     expect(series?.points).toMatchObject(
       usageUnavailable ? [] : [{ totalTokens: 1_700, cost: expect.closeTo(expectedCost ?? 0, 8) }],
     );

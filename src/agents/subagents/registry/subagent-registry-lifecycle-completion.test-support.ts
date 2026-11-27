@@ -2,7 +2,7 @@ import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { maybeWakeRequesterAfterAllChildrenSettled as runRequesterSettleWake } from "../announce/subagent-announce.requester-settle-wake.js";
 import type {
-  blockSubagentCompletionDelivery,
+  settleSubagentCompletionInHistory,
   mutateRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
 import type { SubagentCompletionMutationResult } from "../completion/subagent-completion-mutation.types.js";
@@ -10,10 +10,10 @@ import {
   clearSubagentPendingDelivery,
   completeRequesterSettleWakeState,
   transitionRequesterSettleWakeState,
+  recordRequesterDelivery,
 } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
-  SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import {
@@ -66,29 +66,22 @@ function policyReceipt(
         : [],
     ),
     retiredRunIds: [...postimages].flatMap(([id, entry]) => (entry ? [] : [id])),
-    queueIds: [],
   };
 }
 
-function blockedPolicyDraft(
-  entry: SubagentRunRecord,
-  params: Parameters<typeof blockSubagentCompletionDelivery>[0],
-) {
-  entry.delivery ??= { status: "pending" };
-  entry.delivery.lastError = params.reason;
-  entry.delivery.deliveredAt = undefined;
-  entry.delivery.announcedAt = undefined;
-  if (params.suspendedReason) {
-    entry.delivery.status = "suspended";
-    entry.delivery.suspendedReason = params.suspendedReason;
-    entry.delivery.suspendedAt = Date.now();
-    entry.cleanupHandled = false;
-    entry.requesterSettleWake ??= { status: "pending", attemptCount: 0 };
-  } else {
-    entry.delivery.status = "failed";
-    entry.delivery.disposition = params.disposition ?? entry.delivery.disposition;
-    entry.suppressCompletionDelivery = true;
-  }
+function historySettledPolicyDraft(entry: SubagentRunRecord) {
+  const deliveredAt = Date.now();
+  entry.delivery = {
+    ...entry.delivery,
+    status: "delivered",
+    disposition: "delivered",
+    deliveredAt,
+    announcedAt: deliveredAt,
+    lastDropReason: undefined,
+    queueId: undefined,
+  };
+  clearSubagentPendingDelivery(entry);
+  entry.wakeOnDescendantSettle = undefined;
 }
 
 function createRequesterSettleWakeMutationFixture(
@@ -105,6 +98,9 @@ function createRequesterSettleWakeMutationFixture(
     return mutatePolicyBatch(owners, params, (next) => {
       if (operation.kind === "transition") {
         transitionRequesterSettleWakeState(next, operation.state);
+        if (operation.requesterDelivery) {
+          recordRequesterDelivery(next, operation.requesterDelivery);
+        }
         return next;
       }
       return completeRequesterSettleWakeState(next) ? null : next;
@@ -170,12 +166,12 @@ export async function mockRegistryRequesterWakeMutation() {
   };
 }
 
-export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
-  blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
+export function mockHistoryCompletionSettlementOwner(completionDeliveryMocks: {
+  settleSubagentCompletionInHistory: Mock<typeof settleSubagentCompletionInHistory>;
   mutateRequesterCompletionBatch: Mock<typeof mutateRequesterCompletionBatch>;
   ownersByEntry: CompletionPolicyOwners;
 }): void {
-  // Policy fixtures use the real row owner; native worker suites own queue receipts.
+  // Policy fixtures use the real row owner; native worker suites own committed receipts.
   const mutateWake = createRequesterSettleWakeMutationFixture(
     completionDeliveryMocks.ownersByEntry,
   );
@@ -184,44 +180,39 @@ export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
       return mutateWake(params);
     }
     const { outcome } = params.operation;
-    return mutatePolicyBatch(completionDeliveryMocks.ownersByEntry, params, (next, current) => {
+    return mutatePolicyBatch(completionDeliveryMocks.ownersByEntry, params, (next) => {
       if (
         next.pauseReason !== "sessions_yield" &&
         next.expectsCompletionMessage &&
-        ["pending", "in_progress"].includes(next.delivery?.status ?? "pending")
+        ["pending", "in_progress", "failed", "suspended"].includes(
+          next.delivery?.status ?? "pending",
+        )
       ) {
-        if (outcome.delivered) {
-          const deliveredAt = outcome.deliveredAt ?? Date.now();
-          next.delivery = {
-            ...next.delivery,
-            status: "delivered",
-            disposition: "delivered",
-            deliveredAt,
-            announcedAt: deliveredAt,
-          };
-          clearSubagentPendingDelivery(next);
-        } else {
-          blockedPolicyDraft(next, {
-            subagent: current,
-            reason: outcome.error ?? outcome.reason ?? "requester settle wake failed",
-            disposition: outcome.disposition,
-          });
+        // A missed wake already appended the children's status to requester history.
+        historySettledPolicyDraft(next);
+        if (outcome.delivered && outcome.deliveredAt !== undefined) {
+          next.delivery!.deliveredAt = outcome.deliveredAt;
+          next.delivery!.announcedAt = outcome.deliveredAt;
         }
       }
       return completeRequesterSettleWakeState(next) ? null : next;
     });
   });
-  completionDeliveryMocks.blockSubagentCompletionDelivery.mockImplementation(async (params) => {
+  completionDeliveryMocks.settleSubagentCompletionInHistory.mockImplementation(async (params) => {
     const owner = policyOwner(completionDeliveryMocks.ownersByEntry, [params.subagent]);
     return mutateSubagentRuns(
       [params.subagent.runId],
       (rows) => {
         const current = rows.get(params.subagent.runId);
-        if (!current || !isSameSubagentRunOwner(current, params.subagent)) {
+        if (
+          !current ||
+          !isSameSubagentRunOwner(current, params.subagent) ||
+          current.delivery?.status === "delivered"
+        ) {
           return { value: false };
         }
         const next = structuredClone(current);
-        blockedPolicyDraft(next, params);
+        historySettledPolicyDraft(next);
         return { value: true, postimages: new Map([[next.runId, next]]) };
       },
       { runs: owner.runs, context: params.context, assertCurrent: params.assertCurrent },
@@ -236,7 +227,7 @@ export function registerPrivateCompletionSettlementTests({
   completionDeliveryMocks,
 }: LifecycleTestDrivers & {
   completionDeliveryMocks: {
-    blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
+    settleSubagentCompletionInHistory: Mock<typeof settleSubagentCompletionInHistory>;
   };
 }): void {
   it.each([false, true])(
@@ -264,11 +255,9 @@ export function registerPrivateCompletionSettlementTests({
         async (params) => {
           if (params.signal?.aborted) {
             await params.onDeliveryResult?.({ delivered: false, path: "none" });
-            return "retryable";
+            return "undelivered";
           }
-          return params.isCompletionOwnedByRequesterYield?.()
-            ? "intentional_non_delivery"
-            : "delivered";
+          return params.isCompletionOwnedByRequesterYield?.() ? "session_queued" : "delivered";
         },
       );
       const runs = new Map([
@@ -320,27 +309,13 @@ export function registerPrivateCompletionSettlementTests({
           requesterYielded ? true : undefined,
         );
         expect(readLifecycleRun(sibling).execution.endedAt).toBeUndefined();
-        expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
+        expect(completionDeliveryMocks.settleSubagentCompletionInHistory).not.toHaveBeenCalled();
       } finally {
         requesterTurn.restore();
         controller.clearRuntimeState();
       }
     },
   );
-}
-
-type RestartRecoveryReceipt = NonNullable<SubagentRunRecord["execution"]["restartRecovery"]>;
-
-export function makeRestartRecoveryReceipt(
-  overrides: Partial<RestartRecoveryReceipt> = {},
-): RestartRecoveryReceipt {
-  return {
-    sessionId: "session-id",
-    sessionMarker: "session-id:1",
-    idempotencyKey: "recovery-run",
-    phase: "accepted",
-    ...overrides,
-  };
 }
 
 export function makeSubagentCompletion(
@@ -365,19 +340,6 @@ export function makeKilledSubagentCompletion(
   return makeSubagentCompletion(entry, {
     outcome: { status: "error", error: "agent run aborted" },
     reason: SUBAGENT_ENDED_REASON_KILLED,
-    terminalReply: undefined,
-    ...overrides,
-  });
-}
-
-export function makeInterruptedSubagentCompletion(
-  entry: SubagentRunRecord,
-  overrides: Omit<Partial<SubagentCompletionRequest>, "runId"> = {},
-): SubagentCompletionRequest {
-  return makeSubagentCompletion(entry, {
-    outcome: { status: "error", error: "restart interrupted run" },
-    reason: SUBAGENT_ENDED_REASON_ERROR,
-    recoverInterrupted: true,
     terminalReply: undefined,
     ...overrides,
   });
@@ -412,14 +374,14 @@ export function registerNativeCompletionAuthorityTest({
     expect(readLifecycleRun(entry)).toEqual(original);
     expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
   });
-  it.each(["replacement", "recovery authority"] as const)(
+  it.each(["replacement", "host authority"] as const)(
     "does not commit a captured result after %s retires its owner",
     async (transition) => {
       const entry = createRunEntry({ expectsCompletionMessage: false });
       const runs = new Map([[entry.runId, entry]]);
       await using gate = createSubagentTestGate();
       const beforeWrite = vi.fn();
-      let recoveryHostCurrent = true;
+      let hostCurrent = true;
       const controller = createLifecycleController({
         entry,
         runs,
@@ -434,13 +396,13 @@ export function registerNativeCompletionAuthorityTest({
         triggerCleanup: false,
         recoveryCurrent: {
           prepare: async () => true,
-          isHostCurrent: () => recoveryHostCurrent,
+          isHostCurrent: () => hostCurrent,
         },
       });
       const settled = gate.track(Promise.allSettled([pending]));
       await gate.entered;
-      if (transition === "recovery authority") {
-        recoveryHostCurrent = false;
+      if (transition === "host authority") {
+        hostCurrent = false;
       } else {
         await mutateLifecycleRun(entry, (draft) => {
           draft.generation = (draft.generation ?? 0) + 1;

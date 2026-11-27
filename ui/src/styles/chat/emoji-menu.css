@@ -16,8 +16,7 @@
   max-width: min(300px, calc(100vw - 24px));
   max-height: min(280px, var(--oc-overlay-available-height, 42vh));
   border-radius: var(--menu-radius);
-  corner-shape: round;
-  box-shadow: var(--overlay-shadow);
+  box-shadow: var(--menu-shadow);
 }
 
 .emoji-menu .slash-menu__scroll {

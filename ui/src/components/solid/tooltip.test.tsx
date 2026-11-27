@@ -2,6 +2,7 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { escapeOptions } from "./tooltip.test-support.ts";
 import { Tooltip, type TooltipElement } from "./tooltip.tsx";
 
 beforeEach(() => {
@@ -350,25 +351,11 @@ describe("Solid tooltip policy", () => {
         expect(host.hasAttribute("open")).toBe(true);
         const veto = (event: Event) => event.preventDefault();
         host.addEventListener("overlay-hide", veto);
-        action.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: "Escape",
-            bubbles: true,
-            composed: true,
-            cancelable: true,
-          }),
-        );
+        action.dispatchEvent(new KeyboardEvent("keydown", escapeOptions()));
         expect(shadow.activeElement).toBe(action);
         expect(host.hasAttribute("open")).toBe(true);
         host.removeEventListener("overlay-hide", veto);
-        action.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: "Escape",
-            bubbles: true,
-            composed: true,
-            cancelable: true,
-          }),
-        );
+        action.dispatchEvent(new KeyboardEvent("keydown", escapeOptions()));
         expect(shadow.activeElement).toBe(trigger);
         expect(host.hasAttribute("open")).toBe(false);
         trigger.blur();

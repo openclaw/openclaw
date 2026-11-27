@@ -2,6 +2,7 @@ import { createMemo, lazy, Show } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { currentAttachments } from "./chat-attachment-draft.ts";
 import type { ChatAttachmentRead } from "./chat-attachment-reads.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
@@ -13,7 +14,7 @@ const AttachmentPreviewStrip = lazy(() => import("./chat-attachment-preview-stri
 });
 
 // Keep the live region mounted so changes in the number of files are announced.
-export function AttachmentReadStatus(props: { pendingReads: number }) {
+export function AttachmentReadStatus(props: { pendingReads: number; videoStatus?: string }) {
   return (
     <div
       class="chat-attachments-status sr-only"
@@ -21,14 +22,15 @@ export function AttachmentReadStatus(props: { pendingReads: number }) {
       aria-live="polite"
       aria-atomic="true"
     >
-      {props.pendingReads > 0
-        ? t(
-            props.pendingReads === 1
-              ? "chat.composer.preparingAttachmentCount"
-              : "chat.composer.preparingAttachmentsCount",
-            { count: String(props.pendingReads) },
-          )
-        : undefined}
+      {props.videoStatus ??
+        (props.pendingReads > 0
+          ? t(
+              props.pendingReads === 1
+                ? "chat.composer.preparingAttachmentCount"
+                : "chat.composer.preparingAttachmentsCount",
+              { count: String(props.pendingReads) },
+            )
+          : undefined)}
     </div>
   );
 }
@@ -45,7 +47,9 @@ export function AttachmentPreview(
 ) {
   const entries = createMemo(() => {
     void props.readRevision;
-    const attachments = props.attachments ?? [];
+    // Draft props notify membership changes; reconcile with the synchronous owner.
+    void props.attachments;
+    const attachments = currentAttachments(props);
     const reads =
       props.attachmentReads?.project(attachments) ??
       attachments.map((attachment): ChatAttachmentRead => ({ attachment, state: "ready" }));

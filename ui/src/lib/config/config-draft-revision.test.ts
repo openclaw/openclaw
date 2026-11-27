@@ -152,6 +152,13 @@ it("keeps a failed first load retryable after a raw draft is reverted", async ()
   runtimeConfig.setRaw('{"count":9}');
   runtimeConfig.setRaw(runtimeConfig.state.configRawOriginal);
   expect(state).toMatchObject({ configSnapshot: null, configFormDirty: false });
-  await runtimeConfig.ensureLoaded();
+  // A failed read waits out its retry delay before an ensure repeats it.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(Date.now() + 5_000);
+    await runtimeConfig.ensureLoaded();
+  } finally {
+    vi.useRealTimers();
+  }
   expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
 });

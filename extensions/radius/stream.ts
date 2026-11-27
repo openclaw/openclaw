@@ -10,6 +10,7 @@ import {
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
+  applyProviderPayloadHook,
   buildGuardedModelFetch,
   buildAssistantMessage,
   createEmptyTransportUsage,
@@ -63,10 +64,10 @@ async function* readEvents(body: ReadableStream<Uint8Array>, signal?: AbortSigna
         signal?.throwIfAborted();
         return chunk;
       },
-      (pending) => {
-        if (Buffer.byteLength(pending, "utf8") > MAX_SSE_EVENT_BYTES) {
-          throw new Error("Radius SSE event exceeds 16 MiB");
-        }
+      {
+        max: MAX_SSE_EVENT_BYTES,
+        unit: "bytes",
+        message: "Radius SSE event exceeds 16 MiB",
       },
     )) {
       const data = frame
@@ -252,9 +253,7 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
       let response: Response | undefined;
       try {
         if (!options?.apiKey) {
-          throw new Error(
-            "No Radius access token configured. Run openclaw models auth login --provider radius.",
-          );
+          throw new Error("No Radius access token configured.");
         }
         options.signal?.throwIfAborted();
         let payload: unknown = {
@@ -270,10 +269,7 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
             toolChoice: options.toolChoice,
           },
         };
-        const replacement = await options.onPayload?.(payload, model);
-        if (replacement !== undefined) {
-          payload = replacement;
-        }
+        payload = await applyProviderPayloadHook(options, payload, model);
         options.signal?.throwIfAborted();
         const guardedFetch = buildGuardedModelFetch(model, options.timeoutMs, {
           sanitizeSse: false,

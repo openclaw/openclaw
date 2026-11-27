@@ -4,7 +4,7 @@ import type {
   SessionActorStorage,
 } from "../../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import {

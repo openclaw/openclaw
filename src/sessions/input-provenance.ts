@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
@@ -19,11 +20,29 @@ export type InputProvenance = {
   sourcePromptPrefix?: string;
   jobId?: string;
   runId?: string;
+  /** A host tool handoff's committed result for model-history replay. */
+  completedToolCall?: { id: string; result: string };
 };
 
-export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
+/** Native input attribution, not canonical chat visibility or execution authority. */
+export function isHostGeneratedInputProvenance(provenance: InputProvenance | undefined): boolean {
+  // Forwarded inputs retain their sender in the canonical transcript; their native
+  // copy must not invent another message authored by this session's operator.
+  return provenance?.kind === "internal_system" || provenance?.kind === "inter_session";
+}
 
 export const PROGRESS_CARD_REFRESH_SOURCE_TOOL = "progress_card_refresh" as const;
+
+/** A background fork of another session's conversation; `sourceSessionKey` names that session. */
+export const SESSION_FORK_SOURCE_TOOL = "session_fork" as const;
+
+/** The session a background fork reads, or undefined for every other input. */
+export function readSessionForkSource(provenance: InputProvenance | undefined): string | undefined {
+  return provenance?.kind === "internal_system" &&
+    provenance.sourceTool === SESSION_FORK_SOURCE_TOOL
+    ? provenance.sourceSessionKey
+    : undefined;
+}
 
 /** Execution input, never a delivered cron announcement or a user-authored prompt. */
 export const CRON_EXECUTION_SOURCE_TOOL = "cron_execution" as const;
@@ -103,6 +122,14 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
       provenance[key] = normalized;
     }
   }
+  if (provenance.kind === "internal_system" && provenance.sourceTool === "tool_handoff") {
+    const call = asOptionalObjectRecord(record.completedToolCall);
+    const id = normalizeOptionalString(call?.id);
+    const result = normalizeOptionalString(call?.result);
+    if (id && result) {
+      provenance.completedToolCall = { id, result };
+    }
+  }
   return provenance;
 }
 
@@ -120,7 +147,9 @@ export function applyInputProvenanceToUserMessage<T extends AgentMessage>(
   if (!provenance) {
     return message;
   }
-  const hideExecutionInput = isCronExecutionInputProvenance(provenance);
+  const hideExecutionInput =
+    isCronExecutionInputProvenance(provenance) ||
+    (provenance.kind === "internal_system" && provenance.sourceTool === "session_state");
   if (existing && (!hideExecutionInput || Reflect.get(message, "display") === false)) {
     return message;
   }
@@ -142,14 +171,6 @@ export function isSubagentCoordinationInputProvenance(
     provenance?.kind === "inter_session" &&
     normalizeOptionalString(provenance.sourceTool) === "sessions_send" &&
     provenance.sourceRole === "subagent"
-  );
-}
-
-export function isMainSessionRestartRecoveryInputProvenance(value: unknown): boolean {
-  const provenance = normalizeInputProvenance(value);
-  return (
-    provenance?.kind === "internal_system" &&
-    provenance.sourceTool?.toLowerCase() === MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL
   );
 }
 
@@ -180,7 +201,6 @@ const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = n
   "exec_approval_followup",
   "subagent_announce",
   "subagent_settle",
-  "subagent_interrupted_resume",
 ]);
 
 export function shouldPreserveUserFacingSessionStateForInputProvenance(value: unknown): boolean {

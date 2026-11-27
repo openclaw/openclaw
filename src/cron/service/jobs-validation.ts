@@ -1,5 +1,7 @@
-/** Validation helpers for cron schedules, targets, payloads, and delivery. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+/** Validation helpers for cron schedules, targets, payloads, and delivery. */
+import { Value } from "typebox/value";
+import { CyberAccessProgramSchema } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { parseCodeModeScriptSyntax } from "../../agents/code-mode-script-syntax.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
@@ -18,7 +20,17 @@ import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
 
-export function assertExecutionPolicy(job: Pick<CronJob, "activeHours" | "idleOnly" | "delivery">) {
+export function assertExecutionPolicy(
+  job: Pick<CronJob, "activeHours" | "idleOnly" | "delivery" | "cyberAccessProgram" | "payload">,
+) {
+  if (job.cyberAccessProgram !== undefined) {
+    if (!Value.Check(CyberAccessProgramSchema, job.cyberAccessProgram)) {
+      throw new Error("cron cyberAccessProgram must be standard, daybreak_blue, or daybreak_red");
+    }
+    if (job.payload.kind !== "agentTurn") {
+      throw new Error("cron cyberAccessProgram requires an agentTurn payload");
+    }
+  }
   if (job.activeHours !== undefined) {
     assertCronActiveHours(job.activeHours);
   }
@@ -168,7 +180,9 @@ export function assertTriggerSupport(
     job.schedule.kind !== "cron" &&
     job.schedule.kind !== "stream"
   ) {
-    throw new Error("cron triggers require an every, cron, or stream schedule");
+    throw new Error(
+      `cron triggers require an every, cron, or stream schedule; schedule.kind="${job.schedule.kind}" cannot include trigger. Remove trigger for a one-time reminder, or use a recurring every/cron schedule. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds. If you cannot retry, tell the user the reminder was not saved.`,
+    );
   }
   const minIntervalMs = resolveCronTriggerMinIntervalMs();
   if (job.schedule.kind === "every" && job.schedule.everyMs < minIntervalMs) {

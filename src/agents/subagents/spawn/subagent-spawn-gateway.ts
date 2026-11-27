@@ -12,15 +12,18 @@ import {
   bindInProcessSessionRun,
   type PreparedSessionRun,
 } from "../../../gateway/in-process-session-run.js";
+import { runWithOperatorToolGatewayAuthority } from "../../../gateway/operator-tool-gateway-authority.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { isGatewayRpcUnavailableError } from "../../../gateway/transport-error.js";
 import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { monotonicNow } from "../../../shared/monotonic-time.js";
 import { captureRequesterOrigin, requesterCreatorProfileId } from "../../requester-origin.js";
 import {
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
+  withGatewayToolOperatorContinuation,
 } from "../../tools/gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "../../tools/gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "../../tools/gateway-session-spawn-execution-identity.js";
@@ -75,6 +78,29 @@ export function captureSubagentSpawnGatewayContext() {
     // Personal-tool selection changes authority, not who caused this delegation.
     creatorProfileId: requesterCreatorProfileId(gatewayCaller?.requesterOrigin),
   };
+}
+
+/** Keep the derived source on initial registration and delayed child dispatch alike. */
+export function bindSubagentSpawnOperatorAuthority({
+  operatorAuthority,
+  requester,
+}: ReturnType<typeof captureSubagentSpawnGatewayContext>) {
+  return <T>(run: () => T): T =>
+    operatorAuthority?.participationCeiling
+      ? runWithOperatorToolGatewayAuthority(
+          {
+            operatorRunAuthority: operatorAuthority,
+            scopes: operatorAuthority.scopes,
+            signal: operatorAuthority.signal ?? AbortSignal.any([]),
+            assertCurrent: () => operatorAuthority.signal?.throwIfAborted(),
+          },
+          () =>
+            withGatewayToolOperatorContinuation(
+              { operatorAuthority, requesterOrigin: requester?.requesterOrigin },
+              run,
+            ),
+        )
+      : run();
 }
 
 async function dispatchSubagentGateway(
@@ -264,9 +290,13 @@ async function reconcileSubagentAgentDispatch(
     if (!isGatewayRpcUnavailableError(error)) {
       throw error;
     }
-    const deadline = Date.now() + SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS;
+    // The reconcile budget is in-process only (never serialized or reported across
+    // processes), so anchor it to the monotonic clock. A wall-clock step (NTP sync)
+    // between iterations must not stretch the Gateway RPC timeout or the delay, nor
+    // prematurely kill a healthy reconciliation by shrinking remainingMs below zero.
+    const deadline = monotonicNow() + SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS;
     while (true) {
-      const remainingMs = deadline - Date.now();
+      const remainingMs = deadline - monotonicNow();
       if (remainingMs <= 0) {
         throw error;
       }
@@ -289,7 +319,7 @@ async function reconcileSubagentAgentDispatch(
         );
       }
       await delay(
-        Math.min(SUBAGENT_AGENT_RECONCILE_INTERVAL_MS, Math.max(0, deadline - Date.now())),
+        Math.min(SUBAGENT_AGENT_RECONCILE_INTERVAL_MS, Math.max(0, deadline - monotonicNow())),
       );
     }
   }

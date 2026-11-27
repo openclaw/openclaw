@@ -4,12 +4,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { UPDATE_NATIVE_GATE_SOURCE } from "../cli/update-cli/update-command-native-gate.generated.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode, ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { withUserPathBaseDirectory } from "./home-dir.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { isPathInside } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeScriptEntrypointUrl } from "./runtime-process-url.js";
@@ -18,6 +19,7 @@ import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import {
   maintainRetainedUpdateRuntimes,
+  recordRetainedUpdateRuntimeOwner,
   registerRetainedUpdateRuntime,
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
@@ -31,6 +33,7 @@ import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
 import {
   projectRetainedRuntimePath,
+  readRetainedRuntimeFileList,
   RetainedRuntimeFilesSchema,
 } from "./update-retained-runtime-files.js";
 import { retainUpdateRuntimeImports } from "./update-retained-runtime-imports.js";
@@ -45,7 +48,9 @@ type RetainedUpdateRuntimeMetrics = {
   /** Allocated footprint estimate, including directories and aliases; not copied bytes. */
   estimatedBytes: number;
   linked: number;
+  /** Published without a hard link; clones and byte copies are not told apart. */
   copied: number;
+  linkFallback?: { count: number; code: string };
 };
 
 export type RetainUpdateRuntime = (params: {
@@ -73,7 +78,6 @@ async function runWithRetainedUpdateRuntime<T>(
 ): Promise<T> {
   let directory: string | undefined;
   let prepared = false;
-  let unusable = false;
   let closing = false;
   let preparation: ReturnType<RetainUpdateRuntime> | undefined;
   let unregister: (() => void) | undefined;
@@ -81,19 +85,19 @@ async function runWithRetainedUpdateRuntime<T>(
   return await withRuntimeWorkerGeneration(
     async (bind) =>
       await operation((params) => {
+        const signal = resolveCommandProcessSignal(params.signal);
+        const assertCurrent = () => {
+          signal?.throwIfAborted();
+          if (closing) {
+            throw new Error("The updater's retained runtime is closing");
+          }
+          params.assertCurrent();
+        };
         preparation = (async () => {
           const { mutationRoots, installTarget, env, timeoutMs } = params;
           const temporaryRoot = (env ?? process.env).TMPDIR?.trim();
-          const signal = resolveCommandProcessSignal(params.signal);
-          const assertCurrent = () => {
-            signal?.throwIfAborted();
-            if (closing) {
-              throw new Error("The updater's retained runtime is closing");
-            }
-            params.assertCurrent();
-          };
           assertCurrent();
-          if (prepared || unusable) {
+          if (prepared) {
             return undefined;
           }
           const root = await resolveOpenClawPackageRoot({ moduleUrl });
@@ -191,13 +195,15 @@ async function runWithRetainedUpdateRuntime<T>(
           if (!outsideMutation(privateRoot)) {
             throw new Error("Retained updater directory overlaps an installation being replaced");
           }
+          await recordRetainedUpdateRuntimeOwner(privateRoot);
+          assertCurrent();
           const nativeGateSource = resolveRuntimeWorkerUrl(
             runtimeProcessEntrypoints.updateNativeGate,
           );
           const nativeGate = resolveRuntimeScriptEntrypointUrl("updateNativeGate", privateRoot);
           await fs.writeFile(nativeGate, UPDATE_NATIVE_GATE_SOURCE, { mode: 0o600, flag: "wx" });
           assertCurrent();
-          // Native recovery still runs when full rollback retention is unavailable.
+          // Native recovery uses the retained helper after replacement removes the installed one.
           bind((url) => (url.href === nativeGateSource.href ? nativeGate : url));
           const candidateRoot = projectRetainedRuntimePath(privateRoot, sourceRoot);
           const roots: string[] = [];
@@ -238,14 +244,26 @@ async function runWithRetainedUpdateRuntime<T>(
             retainedFiles,
             RetainedRuntimeFilesSchema,
           );
+          // Rollback after activation loads its code from this retained runtime: without it
+          // a failed Doctor or boot cannot restore the previous release and its databases.
+          // Every retention failure therefore stops the update before activation.
           if ("unusableReason" in retained) {
-            unusable = true;
-            log.warn(
-              `${retained.unusableReason}; continuing update without a verified retained rollback runtime`,
-            );
-            return undefined;
+            throw new Error(retained.unusableReason);
           }
-          const { relocations: retainedRelocations, files, ...metrics } = retained;
+          const { relocations: retainedRelocations, fileCount, ...metrics } = retained;
+          if (metrics.linkFallback) {
+            const { count, code } = metrics.linkFallback;
+            const cause =
+              code === "EXDEV"
+                ? ". The updater temporary directory is on a different filesystem or subvolume than the installation"
+                : "";
+            // Retention still succeeded; say why it cost a copy per file instead of a link.
+            log.warn(
+              `Runtime retention could not hard-link ${count} of ${metrics.linked + metrics.copied} files (first error ${code}); each was cloned or copied instead${cause}`,
+            );
+          }
+          const files = await readRetainedRuntimeFileList(privateRoot, { fileCount });
+          assertCurrent();
           const relocations = prepareRuntimeRelocations(
             [
               ...retainedRelocations,
@@ -261,10 +279,28 @@ async function runWithRetainedUpdateRuntime<T>(
           bind(resolve);
           // Workers and the parent must use the same generation after activation
           // replaces dist; preserving URLs also preserves already-loaded singletons.
-          retainUpdateRuntimeImports(relocations.rules, files);
+          // Inventory uses physical paths; imports retain the running updater spelling.
+          const importIdentities = prepareRuntimeRelocations([
+            { sourceRoot, destinationRoot: root },
+          ]);
+          retainUpdateRuntimeImports(
+            relocations.rules,
+            files.map((sourcePath) => ({
+              sourcePath,
+              identityPath: relocateRuntimePath(sourcePath, importIdentities),
+            })),
+          );
           prepared = true;
           return metrics;
-        })();
+        })().catch((error: unknown) => {
+          if (signal?.aborted || closing || hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          throw new Error(
+            `Could not retain the running updater (${formatErrorMessage(error)}). The update stopped before changing the installation; retry it.`,
+            { cause: error },
+          );
+        });
         return preparation;
       }),
     async () => {
@@ -275,7 +311,7 @@ async function runWithRetainedUpdateRuntime<T>(
         if (prepared) {
           reportRetainedUpdateRuntime(
             directory,
-            "worker generation settled; cleanup deferred to the next eligible update or openclaw doctor --fix",
+            "worker generation settled; the next eligible openclaw update or openclaw doctor --fix retries its cleanup",
           );
         } else {
           await removeTemporaryArtifacts(directory, "Updater runtime");

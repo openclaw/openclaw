@@ -43,6 +43,7 @@ const choiceResult = (chosen: string | null, probability: number | null, a = 0.7
   probability,
   probabilities: [a, b].map((estimate, i) => ({ option: ["a", "b"][i], probability: estimate })),
 });
+const abstention = choiceResult(null, null, 0.5, 0.5);
 const tag = (id: string, probability: number, applies?: boolean | null) => ({
   id,
   probability,
@@ -53,6 +54,9 @@ const scaleResult = {
   confidence: 0.66,
   probabilities: [0, 0.01, 0.12, 0.84, 0.03].map((probability, level) => ({ level, probability })),
 };
+const scaleWith = (patch: object) => ({ ...scaleResult, ...patch });
+const badScale = [{ level: 0, probability: 1.1 }, ...scaleResult.probabilities.slice(1)];
+const ok = (q: SageQuestion, result: unknown) => ({ ok: true, result: response(q, result) });
 
 it.each([
   ...["yes", "no", null].map((answer) => [yesno, "doc", { answer, probability: 0.03 }] as const),
@@ -60,7 +64,6 @@ it.each([
   [choice, "doc", choiceResult(null, null, 0.49, 0.51)],
   [choice, "doc", choiceResult("a", null)],
   [scale, "doc", scaleResult],
-  [sort, list, { sorted: ["b", "a"], confidence: null }],
   [tags, "doc", { tags: [tag("b", 0.8, true), tag("a", 0.49, null)] }],
 ] as const)("preserves native estimates and abstention %#", (q, content, result) => {
   const value = response(q, result);
@@ -72,25 +75,13 @@ it.each([
   [yesno, { answer: "yes", probability: 1.1 }],
   [choice, { chosen: "unknown", probability: 0.8, probabilities: [] }],
   [choice, choiceResult(null, 0, 0.5, 0.5)],
-  [
-    choice,
-    {
-      ...choiceResult(null, null, 0.5, 0.5),
-      probabilities: choiceResult(null, null, 0.5, 0.5).probabilities.toReversed(),
-    },
-  ],
-  [scale, { ...scaleResult, expectation: 4.01 }],
-  [scale, { ...scaleResult, confidence: "0.5" }],
-  [scale, { ...scaleResult, probabilities: undefined }],
-  [scale, { ...scaleResult, probabilities: scaleResult.probabilities.slice(1) }],
-  [scale, { ...scaleResult, probabilities: scaleResult.probabilities.toReversed() }],
-  [
-    scale,
-    {
-      ...scaleResult,
-      probabilities: [{ level: 0, probability: 1.1 }, ...scaleResult.probabilities.slice(1)],
-    },
-  ],
+  [choice, { ...abstention, probabilities: abstention.probabilities.toReversed() }],
+  [scale, scaleWith({ expectation: 4.01 })],
+  [scale, scaleWith({ confidence: "0.5" })],
+  [scale, scaleWith({ probabilities: undefined })],
+  [scale, scaleWith({ probabilities: scaleResult.probabilities.slice(1) })],
+  [scale, scaleWith({ probabilities: scaleResult.probabilities.toReversed() })],
+  [scale, scaleWith({ probabilities: badScale })],
   [sort, { sorted: ["a", "a"] }],
   [sort, { sorted: ["a", "other"] }],
   [tags, { tags: [tag("a", 0.5), tag("b", 0.5, false)] }],
@@ -118,20 +109,17 @@ it("rejects wrong IDs, kinds and malformed metadata", () => {
 it("retains serializable grouped partial errors and call-level usage", () => {
   const request: SageBatchRequest = {
     reasoning: "off",
-    requests: [
-      { content: "A", questions: [yesno, choice] },
-      { content: "B", questions: [yesno] },
-    ],
+    requests: [[yesno, choice], [yesno]].map((questions) => ({ content: "doc", questions })),
   };
   const value = {
     results: [
       {
         answers: [
-          { ok: true, result: response(yesno, { answer: null, probability: 0.51 }) },
+          ok(yesno, { answer: null, probability: 0.51 }),
           { ok: false, error: "Service unavailable", result: null },
         ],
       },
-      { answers: [{ ok: true, result: response(yesno, { answer: "no", probability: 0.1 }) }] },
+      { answers: [ok(yesno, { answer: "no", probability: 0.1 })] },
     ],
     meta: { ...meta, request_count: 2, question_count: 3 },
   };
@@ -143,7 +131,7 @@ it("retains serializable grouped partial errors and call-level usage", () => {
   expect(() =>
     parseSageBatchResponse({ ...value, meta: { ...value.meta, question_count: 2 } }, request),
   ).toThrow();
-  value.results[0]!.answers[0] = { ok: true, result: response(choice, {}) };
+  value.results[0]!.answers[0] = ok(choice, {});
   expect(() => parseSageBatchResponse(value, request)).toThrow("correlation");
 });
 it("validates the admitted image signature and native dimension limits", async () => {
@@ -165,8 +153,6 @@ it("validates the admitted image signature and native dimension limits", async (
   }
 });
 it("requires explicit applicability in native image tag results", () => {
-  const v = response(tags, {
-    tags: [tag("a", 0.5, null), tag("b", 0.8, true)],
-  });
+  const v = response(tags, { tags: [tag("a", 0.5, null), tag("b", 0.8, true)] });
   expect(() => parseSageResponse(v, tags, image)).toThrow("tag applies");
 });

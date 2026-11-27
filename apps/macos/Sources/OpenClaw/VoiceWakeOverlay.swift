@@ -32,9 +32,10 @@ final class VoiceWakeOverlayController {
     }
 
     struct Actions: Sendable {
-        let send: @MainActor @Sendable (UUID) -> Void
+        let send: @MainActor @Sendable (UUID, VoiceSessionCoordinator.SendReason) -> Void
         let updateEditedText: @MainActor @Sendable (UUID, String) -> Void
         let didPresent: AppVoiceRuntime.UIAction
+        let willDismiss: @MainActor @Sendable (UUID) -> Void
         let didDismiss: @MainActor @Sendable (UUID, SendOutcome) -> Void
     }
 
@@ -45,9 +46,10 @@ final class VoiceWakeOverlayController {
     static func liveActions(state: AppState) -> Actions {
         let sessions = state.voiceRuntime.sessions
         return Actions(
-            send: { sessions.sendNow(token: $0) },
+            send: { sessions.sendNow(token: $0, reason: $1) },
             updateEditedText: { sessions.updateEditedText(token: $0, text: $1) },
             didPresent: { state.earBoostActive = true },
+            willDismiss: { sessions.overlayWillDismiss(token: $0) },
             didDismiss: { token, outcome in
                 if outcome == .empty { state.blinkOnce() }
                 if outcome == .sent { state.celebrateSend() }
@@ -73,6 +75,8 @@ final class VoiceWakeOverlayController {
         var isVisible: Bool = false
         var forwardEnabled: Bool = false
         var isSending: Bool = false
+        var isSent: Bool = false
+        var sendError: String?
         var attributed: NSAttributedString = .init(string: "")
         var isEditing: Bool = false
         var level: Double = 0 // normalized 0...1 speech level for UI

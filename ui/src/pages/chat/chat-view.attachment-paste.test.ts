@@ -92,7 +92,11 @@ function attachFile(container: Element, file: File, entry: "clipboard" | "file p
   if (entry === "clipboard") {
     const paste = new Event("paste", { bubbles: true, cancelable: true });
     Object.defineProperty(paste, "clipboardData", {
-      value: { items: [{ type: file.type, getAsFile: () => file }], getData: () => "" },
+      value: {
+        files: [file],
+        items: [{ type: file.type, getAsFile: () => file }],
+        getData: () => "",
+      },
     });
     getComposerTextarea(container).dispatchEvent(paste);
   } else if (entry === "file picker") {
@@ -143,6 +147,65 @@ describe("chat attachment paste", () => {
     // Retained enabled render handlers also consume the current policy.
     getComposerTextarea(container).dispatchEvent(createPasteEvent("data:image/png;base64,YWJj"));
     expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
+
+  it.each(["dropped", "inserted", "inserted-then-cleared", "unfocused"] as const)(
+    "recovers a %s native text paste once from the event snapshot",
+    async (mode) => {
+      let draft = "Draft: ";
+      const onDraftChange = vi.fn((next: string) => {
+        draft = next;
+      });
+      const textarea = getComposerTextarea(
+        renderChatView({ draft, getDraft: () => draft, onDraftChange }),
+      );
+      textarea.focus();
+      textarea.setSelectionRange(7, 7);
+      const paste = createPasteEvent("dictated text");
+      textarea.dispatchEvent(paste);
+      if (mode === "inserted" || mode === "inserted-then-cleared") {
+        textarea.setRangeText("dictated text", 7, 7, "end");
+        textarea.dispatchEvent(
+          new InputEvent("input", { bubbles: true, inputType: "insertFromPaste" }),
+        );
+        if (mode === "inserted-then-cleared") {
+          textarea.setRangeText("", 7, textarea.value.length, "end");
+          textarea.dispatchEvent(
+            new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }),
+          );
+        }
+      } else if (mode === "unfocused") {
+        textarea.blur();
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(paste.defaultPrevented).toBe(false);
+      expect(textarea.value).toBe(
+        mode === "unfocused" || mode === "inserted-then-cleared"
+          ? "Draft: "
+          : "Draft: dictated text",
+      );
+      expect(onDraftChange.mock.calls.map(([next]) => next)).toEqual(
+        mode === "unfocused"
+          ? []
+          : mode === "inserted-then-cleared"
+            ? ["Draft: dictated text", "Draft: "]
+            : ["Draft: dictated text"],
+      );
+    },
+  );
+
+  it("keeps a recovered text paste within maxlength", async () => {
+    const textarea = getComposerTextarea(renderChatView({ draft: "Draft: " }));
+    textarea.maxLength = 10;
+    textarea.focus();
+    textarea.setSelectionRange(7, 7);
+    textarea.dispatchEvent(createPasteEvent("dictated text"));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(textarea.value).toBe("Draft: dic");
   });
 
   it("preserves pasted-text presentation and restore behavior across handoff", async () => {
@@ -321,12 +384,14 @@ describe("chat attachment reading", () => {
     attachFile(container, file, "clipboard");
 
     expect(readers).toHaveLength(1);
-    expect(reads.pendingReads).toBe(1);
     const status = container.querySelector(".chat-attachments-status");
     expect(status?.textContent).toContain("Preparing 1 attachment");
-    expect(container.querySelectorAll('.chat-attachment-thumb[aria-busy="true"]')).toHaveLength(1);
+    await waitForFast(() =>
+      expect(container.querySelectorAll('.chat-attachment-thumb[aria-busy="true"]')).toHaveLength(
+        1,
+      ),
+    );
     const pendingTile = container.querySelector(".chat-attachment-thumb");
-    expect(status?.querySelector(".btn__spinner")).toBeNull();
     expect(status?.getAttribute("role")).toBe("status");
     expect(status?.classList.contains("sr-only")).toBe(true);
     expect(getComposerTextarea(container).disabled).toBe(false);
@@ -344,13 +409,6 @@ describe("chat attachment reading", () => {
     expect(onSend).not.toHaveBeenCalled();
 
     const reader = expectDefined(readers[0], "deferred attachment reader");
-    reader.dispatchEvent(
-      new ProgressEvent("progress", { lengthComputable: true, loaded: 1, total: 2 }),
-    );
-    expect(container.querySelector(".chat-attachment-thumb")).toBe(pendingTile);
-    expect(
-      pendingTile?.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
-    ).toBe("scaleX(0.5)");
     finishRead(reader, `data:image/png;base64,${btoa("attachment proof")}`, true);
 
     await waitForFast(() => {

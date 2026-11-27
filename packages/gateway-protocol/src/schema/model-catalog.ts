@@ -53,6 +53,7 @@ const ModelUnavailableReasonSchema = Type.Union([
   Type.Literal("missing-auth"),
   Type.Literal("auth-failed"),
   Type.Literal("cooldown"),
+  Type.Literal("unsupported-runtime"),
 ]);
 
 const ModelServiceTierObservationSchema = closedObject({
@@ -84,6 +85,8 @@ const ModelRuntimeProperties = {
   availableAccessPrograms: Type.Optional(
     closedObject({ cyber: Type.Array(CyberAccessProgramSchema) }),
   ),
+  /** Configured selection or Standard baseline for an Access-capable model and runtime. */
+  cyberAccessProgramDefault: Type.Optional(CyberAccessProgramSchema),
   /** Local selected-request applicability, not preference or upstream fulfillment. */
   supportsFastMode: Type.Optional(Type.Boolean()),
   /** Selected route can safely retry rejected service tiers before output. */
@@ -110,9 +113,6 @@ const ModelRuntimeProperties = {
 export const ModelRuntimeChoiceSchema = closedObject({
   agentRuntime: GatewayAgentRuntimeSchema,
   ...ModelRuntimeProperties,
-  unavailableReason: Type.Optional(
-    Type.Union([ModelUnavailableReasonSchema, Type.Literal("unsupported-runtime")]),
-  ),
 });
 
 /** Lowercase, hyphen-separated family token; equality is the only supported comparison. */
@@ -122,10 +122,24 @@ const ModelFamilyString = Type.String({
   pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
 });
 
+/** Gateway-resolved artwork only: config paths and remote URLs never cross the wire. */
+export const ProviderPresentationSchema = closedObject({
+  providerName: Type.Optional(NonEmptyString),
+  providerIcon: Type.Optional(
+    Type.Union([
+      closedObject({ source: Type.Literal("builtin"), name: NonEmptyString }),
+      closedObject({ source: Type.Literal("asset"), url: NonEmptyString }),
+    ]),
+  ),
+});
+
+export type ProviderPresentation = Static<typeof ProviderPresentationSchema>;
+
 export const ModelChoiceSchema = closedObject({
   id: NonEmptyString,
   name: NonEmptyString,
   provider: NonEmptyString,
+  ...ProviderPresentationSchema.properties,
   alias: Type.Optional(NonEmptyString),
   /**
    * Canonical developer lineage declared by provider or catalog metadata, e.g. `anthropic`
@@ -137,6 +151,13 @@ export const ModelChoiceSchema = closedObject({
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
   runtimeChoices: Type.Optional(Type.Array(ModelRuntimeChoiceSchema, { maxItems: 8 })),
+  /** Global defaults harnesses, evaluated using the requesting agent's credentials. */
+  defaultModelRuntimes: Type.Optional(
+    closedObject({
+      base: ModelRuntimeChoiceSchema,
+      alternatives: Type.Array(ModelRuntimeChoiceSchema, { maxItems: 8 }),
+    }),
+  ),
   /** Hosted-catalog recommendation; picker rows arrive recommended-first within each provider. */
   recommended: Type.Optional(Type.Boolean()),
 });
@@ -156,6 +177,8 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
 
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  /** Includes model-less configured providers in unrestricted, unfiltered configuration views. */
+  providerPresentations: Type.Optional(Type.Record(NonEmptyString, ProviderPresentationSchema)),
   /** Matches the authorized session row's saved model-selection inputs. */
   sessionModelRevision: Type.Optional(NonEmptyString),
   /** The Gateway owns role restrictions and the effective permitted reset target. */
@@ -214,7 +237,28 @@ export const ModelsListResultSchema = closedObject({
       utilityRuntime: Type.Optional(GatewayCompletionRouteSchema),
     }),
   ),
+  /** Requested agent's utility decision; private account inventories remain Gateway-owned. */
+  utilityModel: Type.Optional(
+    Type.Union([
+      closedObject({
+        modelRef: NonEmptyString,
+        source: Type.Union([Type.Literal("config"), Type.Literal("provider-default")]),
+      }),
+      closedObject({
+        modelRef: Type.Null(),
+        source: Type.Union([Type.Literal("disabled"), Type.Literal("none")]),
+      }),
+    ]),
+  ),
   refreshFailed: Type.Optional(Type.Boolean()),
+  refreshFailures: Type.Optional(
+    Type.Array(
+      closedObject({
+        acquisition: Type.Union([Type.Literal("provider"), Type.Literal("native")]),
+        provider: Type.Optional(NonEmptyString),
+      }),
+    ),
+  ),
   pendingProviders: Type.Optional(Type.Array(NonEmptyString)),
   accountSelection: Type.Optional(ChatAccountSelectionSchema),
   providerOutcomes: Type.Optional(Type.Array(ModelCatalogProviderOutcomeSchema)),

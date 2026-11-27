@@ -1,11 +1,15 @@
-import { PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
+import {
+  PROVIDER_DEFERRED_TOOL_NAMES,
+  PROVIDER_MODEL_INPUT,
+  PROVIDER_STATE_SCOPE,
+} from "@openclaw/ai/provider-types";
 import {
   isAnthropicServerToolClearingEnabled,
   isCompactionReplayCheckpoint,
   resolveCompactionReplayEligibility,
   stripCompactionReplayCheckpoint,
 } from "@openclaw/ai/transports";
-import type { ModelCompatConfig } from "../../../config/types.models.js";
+import type { ModelCompatConfig } from "../../../config/zod-schema.model-compat.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
@@ -17,6 +21,7 @@ import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { configuredModelSupportsNativeVideo } from "../../model-input.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
@@ -37,12 +42,14 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { log } from "../logger.js";
+import { createAttemptModelRequestTransformer } from "../model-request-hook.js";
 import type { PromptCacheRequestObservation } from "../prompt-cache-request-observer.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import { applySessionForkRequest } from "../session-fork-request.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -52,10 +59,6 @@ import {
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import { prepareEmbeddedAccessProgramGuard } from "./access-program.js";
-import {
-  shouldWaitForCompletionRequiredAsyncTasks,
-  waitForCompletionRequiredAsyncTasks,
-} from "./attempt-async-tasks.js";
 import {
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
@@ -72,6 +75,7 @@ import {
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
 import { materializeProviderContext } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import { promptImageSessionKey } from "./prompt-image-decisions.js";
 import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -115,47 +119,6 @@ export async function settleEmbeddedAttemptStream(input: {
   shouldFlushForContextEngine: boolean;
 }) {
   const { attempt, activeSession, sessionManager, subscription, state } = input;
-
-  try {
-    if (
-      shouldWaitForCompletionRequiredAsyncTasks({
-        sessionKey: attempt.sessionKey,
-        toolMetas: subscription.toolMetas,
-        yieldDetected: state.yieldAborted,
-        abortSignal: input.runAbortSignal,
-      })
-    ) {
-      const asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
-        getToolMetas: () =>
-          subscription.toolMetas.filter(
-            (entry) => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
-          ),
-        sessionKey: attempt.sessionKey,
-        getDeadlineAtMs: () => {
-          const deadlineAtMs = input.getRunAbortDeadlineAtMs();
-          return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
-        },
-        onDeadlineChanged: input.onRunAbortDeadlineChanged,
-        abortSignal: input.runAbortSignal,
-      });
-      // An aborted run legitimately leaves async tasks unfinished; stamping a
-      // timeout failure here would reclassify the abort as an errored completion.
-      if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
-        state.promptError = new Error(
-          `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
-        );
-        state.promptErrorSource = "prompt";
-      }
-    }
-  } catch (err) {
-    // Cancelled task observation must still reach after-turn settlement. The
-    // lifecycle owner already records timeout versus user abort; another read
-    // here could wait indefinitely behind the same database coordinator.
-    const lifecycle = input.readLifecycleState();
-    if ((!lifecycle.timedOut && !lifecycle.aborted) || !isRunnerAbortError(err)) {
-      throw err;
-    }
-  }
 
   // Snapshot only outside compaction. Compaction rewrites history in place and
   // cannot be allowed to leave the timeout result with a half-written view.
@@ -266,10 +229,11 @@ export async function settleEmbeddedAttemptStream(input: {
     const usageAssistant = hasNonzeroUsage(completedAssistantUsage)
       ? currentAttemptCompletedAssistant
       : transcriptUsageSnapshot?.assistant;
-    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
-      provider: attempt.provider,
-      modelId: attempt.modelId,
-    });
+    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(
+      sessionManager,
+      { provider: attempt.provider, modelId: attempt.modelId },
+      attempt.promptCacheKeepWarm,
+    );
     const promptCache = buildContextEnginePromptCacheInfo({
       retention: input.cache.retention,
       lastCallUsage,
@@ -300,21 +264,23 @@ export async function settleEmbeddedAttemptStream(input: {
         const { timedOutDuringCompaction } = input.readLifecycleState();
         const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
-        await appendAttemptCacheTtlIfNeeded({
-          sessionManager,
-          timedOutDuringCompaction,
-          compactionOccurredThisAttempt,
-          config: attempt.config,
-          provider: attempt.provider,
-          modelId: attempt.modelId,
-          modelApi: attempt.model.api,
-          modelRoute: {
-            baseUrl: attempt.model.baseUrl,
-            supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
-          },
-          isCacheTtlEligibleProvider,
-          toolResultPromptProjectionState: input.toolResultPromptProjectionState,
-        });
+        if (!attempt.inputAlreadyDelivered) {
+          await appendAttemptCacheTtlIfNeeded({
+            sessionManager,
+            timedOutDuringCompaction,
+            compactionOccurredThisAttempt,
+            config: attempt.config,
+            provider: attempt.provider,
+            modelId: attempt.modelId,
+            modelApi: attempt.model.api,
+            modelRoute: {
+              baseUrl: attempt.model.baseUrl,
+              supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
+            },
+            isCacheTtlEligibleProvider,
+            toolResultPromptProjectionState: input.toolResultPromptProjectionState,
+          });
+        }
 
         if (timedOutDuringCompaction) {
           const removedEntries = await normalizeCompactionRecoveryTranscriptTail({
@@ -397,6 +363,8 @@ export async function prepareEmbeddedAttemptTransport(input: {
   sandboxSessionKey: string;
   sandbox?: SandboxContext | null;
   codeModeControlsEnabled: boolean;
+  /** Hidden catalog entries that a direct call hydrates in this run (directory or on-demand). */
+  getDeferredToolEntries?: () => readonly { name: string }[] | undefined;
   providerPromptState: {
     state: ProviderPromptState;
     effectiveContextTokenBudget: number;
@@ -429,12 +397,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     attempt.model.api === "openai-responses"
       ? runtime.accountCatalog.prepareServiceTierObserver({ selectedCredential, credential })
       : undefined;
-  const assertAccessCurrent = await prepareEmbeddedAccessProgramGuard(attempt);
-  const assertRunCurrent = () => {
-    assertAdmittedCurrent?.();
-    input.assertCronRootCurrent?.();
-    assertAccessCurrent?.();
-  };
   // Rebuild each turn from the session's original stream base so prior-turn
   // wrappers do not pin us to stale provider/API transport behavior.
   const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
@@ -444,15 +406,19 @@ export async function prepareEmbeddedAttemptTransport(input: {
     settingsManager: input.settingsManager,
     sessionTransport: session.agent.transport,
   });
-  if (attempt.cyberAccessProgram !== undefined && attempt.provider !== "openai") {
+  if (
+    attempt.cyberAccessProgram !== undefined &&
+    attempt.cyberAccessProgram !== "standard" &&
+    attempt.provider !== "openai"
+  ) {
     throw new Error(
-      "Explicit access programs are unsupported by this provider. Reset Access to the model default or select an OpenAI model.",
+      "Daybreak access is unsupported by this provider. Select Standard or an OpenAI model.",
     );
   }
   const streamExtraParamsOverride = {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
-    ...(attempt.cyberAccessProgram !== undefined
+    ...(attempt.provider === "openai" && attempt.cyberAccessProgram !== undefined
       ? { accessPrograms: { cyber: attempt.cyberAccessProgram } }
       : {}),
     // Memory extraction must see the original history, not a provider summary.
@@ -492,6 +458,15 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const effectiveExtraParams = suppressResponsesCompaction
     ? { ...resolvedExtraParams, responsesServerCompaction: false, responsesCompactEndpoint: false }
     : resolvedExtraParams;
+  const assertAccessCurrent = await prepareEmbeddedAccessProgramGuard(
+    attempt,
+    effectiveExtraParams,
+  );
+  const assertRunCurrent = () => {
+    assertAdmittedCurrent?.();
+    input.assertCronRootCurrent?.();
+    assertAccessCurrent?.();
+  };
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
     cfg: attempt.transportConfig ?? attempt.config,
@@ -526,15 +501,22 @@ export async function prepareEmbeddedAttemptTransport(input: {
     (messages) => messages,
     async ({ context, ...provider }) => {
       assertRunCurrent?.();
+      let localRoots: readonly string[] | undefined;
       const prepared = await materializeProviderContext({
         ...provider,
         context,
+        imageSessionKey: promptImageSessionKey(attempt),
         workspaceDir: input.workspaceDir,
         agentWorkspaceDir: attempt.workspaceDir,
         workspaceOnly: input.workspaceOnly,
+        maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
         localRoots: input.workspaceOnly
           ? undefined
-          : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+          : () =>
+              (localRoots ??= getAgentScopedMediaLocalRoots(
+                attempt.config ?? {},
+                input.sessionAgentId,
+              )),
         onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
         sandbox:
           input.sandbox?.enabled && input.sandbox.fsBridge
@@ -553,13 +535,23 @@ export async function prepareEmbeddedAttemptTransport(input: {
   })
     ? [...attempt.model.input, "video" as const]
     : undefined;
+  let deferredToolEntries: readonly { name: string }[] | undefined;
+  let deferredToolNames: ReadonlySet<string> | undefined;
   // A direct provider transport replaces the session SDK stream, so attach
   // turn-owned thinking provenance to the selected transport as well.
   session.agent.streamFn = (model, context, options) => {
+    const entries = input.getDeferredToolEntries?.();
+    if (entries !== deferredToolEntries) {
+      deferredToolEntries = entries;
+      deferredToolNames = entries && new Set(entries.map((entry) => entry.name));
+    }
     const providerOptions = {
       ...options,
       openclawThinkingExplicit: attempt.thinkingExplicit,
       ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
+      ...(deferredToolNames ? { [PROVIDER_DEFERRED_TOOL_NAMES]: deferredToolNames } : {}),
+      ...(attempt.providerStateScope ? { [PROVIDER_STATE_SCOPE]: attempt.providerStateScope } : {}),
+      ...(attempt.sessionForkRequest?.cachePrewarm ? { cachePrewarm: true as const } : {}),
     };
     // Async payload preparation outlives stream admission; managed fetch rechecks Access at egress.
     return withGuardedFetchBeforeRequest(assertAccessCurrent, () =>
@@ -568,9 +560,20 @@ export async function prepareEmbeddedAttemptTransport(input: {
   };
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
+  const sessionFork = attempt.sessionForkRequest;
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
     streamFn: session.agent.streamFn,
     ...input.providerPromptState,
+    transformPayload: createAttemptModelRequestTransformer(attempt, input.sessionAgentId),
+    ...(sessionFork
+      ? {
+          finalizePayload: (payload: Record<string, unknown>) =>
+            applySessionForkRequest(payload, sessionFork, {
+              api: attempt.model.api,
+              allowedTools: attempt.toolExecutionAllow ?? [],
+            }),
+        }
+      : {}),
   });
   session.agent.streamFn = wrapStreamFnWithProviderReviewContinuation({
     streamFn: session.agent.streamFn,
@@ -595,12 +598,13 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
-    // Provider-hosted search bypasses local execute hooks, so its request must
-    // honor the same execution cap without changing foreground function schemas.
+    // Hosted search executes before client-side gates, so it honors the execution cap. A session
+    // fork lists it like its session, so the fork shares the session's cached tools prefix.
     webSearchEnabled:
       attempt.disableTools !== true &&
       attempt.toolOverrides?.webSearch !== false &&
       (!attempt.toolExecutionAllow ||
+        attempt.sessionForkRequest !== undefined ||
         isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search")),
     runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
@@ -705,6 +709,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       {
         runId: attempt.runId,
         sessionId: attempt.sessionId,
+        authScope: input.agentDir,
         accountRoute: selectedCredential.identityKey,
       },
     );

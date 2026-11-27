@@ -1,6 +1,8 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
+import { applyModelDefaults } from "../../config/defaults.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -92,6 +94,18 @@ beforeEach(() => {
   mocks.loadModelsConfig.mockReset();
 });
 
+afterEach(() => vi.unstubAllEnvs());
+
+it("saves manifest-owned provider aliases under the canonical model key", async () => {
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+  configure({});
+  await modelsAliasesAddCommand("glm", "z.ai/glm-4.7", runtime);
+  expect(writtenConfig().agents?.defaults?.models).toEqual({
+    "zai/glm-4.7": { alias: "glm" },
+  });
+  expect(runtime.logs).toContain("Alias glm -> zai/glm-4.7");
+});
+
 it.each(["json", "plain", "text"] as const)(
   "sorts aliases and preserves raw values only in %s output",
   async (format) => {
@@ -137,6 +151,18 @@ it("removes every case-colliding user alias even when it shadows a built-in", as
     "openai/gpt-5.6-sol": { alias: undefined },
     "anthropic/claude-sonnet-4-6": { alias: "steady" },
   });
+  expect(runtime.logs).not.toContain("No explicit model aliases remain in your config.");
+});
+
+it("reports removal of the last explicit alias even when a built-in alias still applies", async () => {
+  const target = "google/gemini-4-argon";
+  configureModels({ [target]: { alias: "Harbor" } });
+  await modelsAliasesRemoveCommand("Harbor", runtime);
+
+  expect(runtime.logs).toContain("No explicit model aliases remain in your config.");
+  expect(applyModelDefaults(writtenConfig()).agents?.defaults?.models?.[target]?.alias).toBe(
+    "gemini",
+  );
 });
 
 it.each([

@@ -4,7 +4,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import * as approvals from "../../infra/exec-approvals-store.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";

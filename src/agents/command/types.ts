@@ -8,6 +8,7 @@ import type {
 } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { CronCreatorAuthorityCapability } from "../../gateway/cron-creator-authority-grant.types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent as LlmImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -16,26 +17,19 @@ import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import type {
-  UserTurnInput,
-  UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.types.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/session-binding.types.js";
-import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
-import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { RequesterOrigin } from "../requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
-import type {
-  AgentRunTranscriptContext,
-  AgentStreamParams,
-  ClientToolDefinition,
-} from "./shared-types.js";
+import type { AgentRunTranscriptContext } from "./execution-context.types.js";
+import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 export type ImageContent = Pick<LlmImageContent, "type" | "data" | "mimeType">;
 
@@ -53,6 +47,8 @@ export type AgentRunContext = {
   currentThreadTs?: string;
   currentInboundAudio?: boolean;
   senderId?: string | null;
+  /** Server-verified identity used only by personal MCP. */
+  mcpRequesterProfileId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };
@@ -82,6 +78,8 @@ export type AgentCommandOpts = {
   sessionKey?: string;
   thinking?: string;
   thinkingOnce?: string;
+  /** Host-owned: treat the thinking request as a machine preference resolved per model, not a command. */
+  normalizeThinkingLevelOverride?: boolean;
   verbose?: string;
   json?: boolean;
   timeout?: string;
@@ -125,6 +123,8 @@ export type AgentCommandOpts = {
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
+  /** The installer owns initial bootstrap until shared setup has completed. */
+  deferWorkspaceBootstrap?: true;
   /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Consumed in-process subagent-completion capability; never accepted from public RPC params. */
@@ -148,6 +148,8 @@ export type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   /** Private source-owner fence; cancellation alone does not establish current authority. */
   assertSourceCurrent?: import("../../auto-reply/command-owner-authority.js").CommandOwnerAssertion;
+  /** Host-only source check after queue selection, before preflight or execution. */
+  assertTurnAdmissionCurrent?: () => void;
   /** Original operator restriction; host-only and never accepted from public ingress. */
   operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Host-captured requester identity for policy resolution across internal continuations. */
@@ -185,9 +187,6 @@ export type AgentCommandOpts = {
   swarmCollector?: boolean;
   /** Synthetic structured_output input schema for collector children. */
   swarmOutputSchema?: Record<string, unknown>;
-  /** Restrict this reconstructed run to restart-safe tools. */
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   /** Invocation-owned Code Mode activation; limits still come from config. */
   codeModeOverride?: boolean | "auto";
   /** Host-owned: deliver only authored output; runtime error payloads stay out of the chat. */
@@ -206,22 +205,16 @@ export type AgentCommandOpts = {
   cwd?: string;
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Settle memory managers before a temporary one-shot caller retires their state. */
+  cleanupMemoryOnRunEnd?: boolean;
   /** Force long-lived CLI live session teardown when a one-shot local run completes. */
   cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+  /** Record a root session this run creates as a direct chat with its local operator. */
+  operatorDirectRoot?: boolean;
   /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
   allowGatewaySubagentBinding?: boolean;
-  /** Opaque foreground fence transferred by Gateway after atomic session admission. */
-  mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
-  /** Gateway already consumed this automatic recovery run's durable reservation. */
-  mainRestartRecoveryAdmitted?: boolean;
-  /** Exact durable recovery attempt allowed to bind post-admission execution identity. */
-  mainRestartRecoveryAttempt?: number;
-  /** Private recovery correlation; public ingress callers cannot author identity evidence. */
-  executionIdentityAdmission?: ReturnType<
-    (typeof import("../admitted-run-context.js"))["createExecutionIdentityRecoveryAdmission"]
-  >;
   /** Gateway-owned exact operational instance shared with its abort controller. */
   operationalRunInstance?: import("../admitted-run-context.js").OperationalRunInstanceRef;
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
@@ -277,13 +270,10 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   runtimeContextFragments: undefined,
   senderIsOwner: false,
   gitContributorProfileId: undefined,
-  mainRestartRecoveryOwnerLease: undefined,
-  mainRestartRecoveryAdmitted: undefined,
-  mainRestartRecoveryAttempt: undefined,
   pinnedWidgetAuthoring: undefined,
-  executionIdentityAdmission: undefined,
   operationalRunInstance: undefined,
   assertSourceCurrent: undefined,
+  assertTurnAdmissionCurrent: undefined,
   operatorAuthority: undefined,
   requesterOrigin: undefined,
   privateCompletion: undefined,
@@ -297,6 +287,9 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   isTerminalOutcomeObserved: undefined,
   prepareAssistantTranscriptMessage: undefined,
   internalDeliverySuppressErrors: undefined,
+  operatorDirectRoot: undefined,
+  cleanupMemoryOnRunEnd: undefined,
+  normalizeThinkingLevelOverride: undefined,
 } as const satisfies Partial<AgentCommandOpts>;
 
 type AgentCommandGatewayOnlyKey = Exclude<
@@ -309,12 +302,12 @@ export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
   AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride"
 > & {
-  /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
+  /** @deprecated Ignored; the host decides owner from `runContext.senderId`. */
   senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;
 };
 
-/** Gateway-only ingress extends the public Plugin SDK surface with private recovery correlation. */
+/** Gateway-only ingress carries host-issued authority and execution ownership. */
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
   Pick<AgentCommandOpts, AgentCommandGatewayOnlyKey>;

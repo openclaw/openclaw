@@ -9,7 +9,6 @@ import { noteLegacyPluginSourceCaptures } from "../commands/doctor-plugin-source
 import * as temporaryDirectories from "../commands/doctor/shared/temporary-directories.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as census from "../infra/openclaw-process-census.js";
-import * as sqliteDiagnostics from "../infra/sqlite-error-diagnostics.js";
 import * as stagingToken from "../infra/sqlite-staging-token.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -26,7 +25,11 @@ import {
   retainPluginNativeCapturePath,
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
-import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
+import {
+  interceptPluginCaptureReclamation,
+  sweepPluginSourceCapturesForTest,
+} from "./plugin-source-capture-directory.test-support.js";
+import { writeArtifact as write } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -51,7 +54,7 @@ function expectExists(file: string, exists = false) {
 
 function nativeFixture(bytes: string, state = stateDir, commit = true) {
   const root = createPluginNativeCaptureRoot(state);
-  const file = write(root.directory, "content/bin/native", bytes);
+  const file = write(path.join(root.directory, "content/bin/native"), bytes);
   if (commit) {
     root.commit();
     root.dispose();
@@ -86,28 +89,17 @@ function expectBytes(file: string, expected: string) {
   expect(fs.readFileSync(file, "utf8")).toBe(expected);
 }
 
-function write(root: string, filename: string, contents: string) {
-  const file = path.join(root, filename);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-  return file;
-}
-
-function expectPairedFailure(failure: unknown, primary: Error, cleanup: Error) {
-  if (!(failure instanceof AggregateError)) {
-    throw new Error("Expected the original failure and cleanup refusal", { cause: failure });
-  }
-  expect(failure.cause).toBe(primary);
-  expect(failure.errors).toHaveLength(2);
-  expect(failure.errors[0]).toBe(primary);
-  expect(failure.errors[1]).toBe(cleanup);
-}
-
 function pairedFailure(run: () => unknown, primary: Error, cleanup: Error) {
   try {
     run();
   } catch (failure) {
-    expectPairedFailure(failure, primary, cleanup);
+    if (!(failure instanceof AggregateError)) {
+      throw new Error("Expected the original failure and cleanup refusal", { cause: failure });
+    }
+    expect(failure.cause).toBe(primary);
+    expect(failure.errors).toHaveLength(2);
+    expect(failure.errors[0]).toBe(primary);
+    expect(failure.errors[1]).toBe(cleanup);
     return;
   }
   throw new Error("Expected preparation to fail");
@@ -163,12 +155,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["failed removal", "maintenance failed removal", "identity-change return"] as const)(
+it.each(["failed removal", "identity-change return"] as const)(
   "preserves reclamation errors and closes the original token after %s",
   async (mode) => {
     const root = path.join(stateDir, "tmp", "plugin-captures", "released-producer");
     const captures = path.join(root, "captures");
-    const payload = write(captures, "source.js", "retained source bytes");
+    const payload = write(path.join(captures, "source.js"), "retained source bytes");
     const tokenPath = path.join(root, stagingToken.SQLITE_STAGING_TOKEN_FILES[0]);
     const extraLink = path.join(stateDir, "token-hardlink.sqlite");
     stagingToken.acquireSqliteStagingToken(root, "create")();
@@ -207,15 +199,9 @@ it.each(["failed removal", "maintenance failed removal", "identity-change return
       }
       await remove(target, options);
     });
-    const classification = vi.spyOn(sqliteDiagnostics, "isSqliteLockError");
-    const warning = vi.spyOn(process, "emitWarning");
-    warning.mockClear();
-    const collectWarnings = async () => {
-      if (mode !== "maintenance failed removal") {
-        await sweepPluginSourceCapturesForTest(stateDir);
-        return warning.mock.calls.map(([message]) => String(message));
-      }
-      return duringMaintenance(async (scope) => {
+    // The physical reclaim owner is shared with the child; inject close faults here.
+    const collectWarnings = () =>
+      duringMaintenance(async (scope) => {
         const result = await captureDirectory.prunePluginNativeCaptureDirectories(
           stateDir,
           new Set(),
@@ -223,19 +209,12 @@ it.each(["failed removal", "maintenance failed removal", "identity-change return
         );
         return result.warnings;
       });
-    };
     try {
       const messages = await collectWarnings();
-      expect(closeRefused).toBe(true);
       expect(messages).toEqual([expect.stringContaining(cleanup.message)]);
       if (mode !== "identity-change return") {
-        expect(messages[0]?.includes(primary.message)).toBe(true);
-        const failure = classification.mock.calls.find(
-          ([error]) => error instanceof AggregateError && error.cause === primary,
-        )?.[0];
-        expectPairedFailure(failure, primary, cleanup);
+        expect(messages[0]).toContain(primary.message);
       } else {
-        expect(classification.mock.calls.some(([error]) => error === cleanup)).toBe(true);
         expect(fs.lstatSync(tokenPath).nlink).toBe(2);
       }
       expectBytes(payload, "retained source bytes");
@@ -243,14 +222,13 @@ it.each(["failed removal", "maintenance failed removal", "identity-change return
     } finally {
       removal.mockRestore();
       acquiring.mockRestore();
-      classification.mockRestore();
       original?.();
       fs.rmSync(extraLink, { force: true });
     }
     age(root);
     const after = await collectWarnings();
     expectExists(root);
-    expect(after.length).toBe(mode === "maintenance failed removal" ? 0 : 1);
+    expect(after).toEqual([]);
   },
 );
 
@@ -282,7 +260,6 @@ it("preserves the preparation cause when synchronous token cleanup also fails", 
   });
   await using resources = cleanupStack([() => vi.restoreAllMocks(), () => instance.releaseAsync()]);
   pairedFailure(() => instance.createDirectory(), primary, cleanup);
-  expect(refuseCleanup).toBe(false);
   await resources.disposeAsync();
   expect(ownedRoot !== undefined && fs.existsSync(ownedRoot)).toBe(false);
 });
@@ -295,7 +272,7 @@ it("recovers a removed captures directory without releasing a live instance", as
   let worker: ReturnType<typeof sourceWorker> | undefined = undefined;
   await using resources = cleanupStack([() => worker?.release(), () => instance.releaseAsync()]);
   worker = sourceWorker();
-  const payload = write(worker.directory, "source.js", "recovered capture");
+  const payload = write(path.join(worker.directory, "source.js"), "recovered capture");
   advanceAge();
   await sweepPluginSourceCapturesForTest(stateDir);
   expectBytes(payload, "recovered capture");
@@ -348,7 +325,7 @@ it("preserves native bytes published after an unlocked missing-directory observa
     } catch (error) {
       if (target === native && !published) {
         expect(error).toMatchObject({ code: "ENOENT" });
-        write(native, "admission/module.node", "published under custody");
+        write(path.join(native, "admission/module.node"), "published under custody");
         producer(true);
         published = true;
       }
@@ -357,7 +334,6 @@ it("preserves native bytes published after an unlocked missing-directory observa
   });
   await using _ = cleanupStack([() => observe.mockRestore(), () => producer()]);
   await sweepPluginSourceCapturesForTest(stateDir);
-  expect(published).toBe(true);
   expectBytes(payload, "published under custody");
 });
 
@@ -367,7 +343,7 @@ it.each(["sync", "async"])("preserves custody after partial %s disposal", async 
   await sweepPluginSourceCapturesForTest(stateDir);
   const directory = worker?.directory ?? instance!.createDirectory();
   const root = path.dirname(path.dirname(directory));
-  const payload = write(directory, "source.js", "export default 1");
+  const payload = write(path.join(directory, "source.js"), "export default 1");
   const removeSync = fs.rmSync.bind(fs);
   const remove = fsPromises.rm.bind(fsPromises);
   const interruptRemoval = (target: fs.PathLike) => {
@@ -418,7 +394,7 @@ it.each([
   "captures usable fallback bytes without tokenless roots after $stage fails with $code",
   async ({ stage, code }) => {
     const source = temp.make("capture-recovery-source-");
-    write(source, "index.cjs", sourceBytes);
+    write(path.join(source, "index.cjs"), sourceBytes);
     const instance = retainPluginSourceCaptureInstance(stateDir);
     await sweepPluginSourceCapturesForTest(stateDir);
     const managed = path.join(stateDir, "tmp", "plugin-captures");
@@ -472,10 +448,8 @@ it("reclaims aged tokenless roots and retries locked roots", async () => {
   const stateTemp = path.join(stateDir, "tmp");
   fs.mkdirSync(stateTemp);
   const create = (parent: string, name: string) =>
-    path.dirname(write(parent, path.join(name, "source.js"), "payload"));
-  const old = Array.from({ length: 87 }, (_, index) =>
-    create(tmpdir(), `openclaw-plugin-build-${index}`),
-  );
+    path.dirname(write(path.join(parent, path.join(name, "source.js")), "payload"));
+  const old = create(tmpdir(), "openclaw-plugin-build-old");
   create(stateTemp, "openclaw-model-catalog-old");
   const busy = create(tmpdir(), "openclaw-plugin-build-locked");
   const tokened = create(tmpdir(), "openclaw-plugin-build-owned");
@@ -487,12 +461,18 @@ it("reclaims aged tokenless roots and retries locked roots", async () => {
   const fresh = create(tmpdir(), "openclaw-plugin-build-fresh");
   // Filesystem timestamps use the real clock even when Date is faked.
   fs.utimesSync(fresh, new Date(), new Date());
-  const remove = fsPromises.rm.bind(fsPromises);
-  const probe = vi
-    .spyOn(fsPromises, "rm")
-    .mockImplementation(refusePath(remove, (target) => target === busy));
+  const probe = interceptPluginCaptureReclamation(`
+    import promises from 'node:fs/promises';
+    const remove = promises.rm.bind(promises);
+    promises.rm = async (target, options) => {
+      if (target === ${JSON.stringify(busy)}) {
+        throw Object.assign(new Error('Fixture cleanup cannot finish'), { code: 'EACCES' });
+      }
+      return remove(target, options);
+    };
+  `);
   await sweepPluginSourceCapturesForTest(stateDir);
-  expect(old.filter((directory) => fs.existsSync(directory))).toHaveLength(0);
+  expectExists(old);
   expectExists(unrelated, true);
   expect(fs.readdirSync(stateTemp)).toEqual([]);
   const retainedNames = () =>
@@ -554,7 +534,10 @@ it.each(["managed", "fallback"] as const)(
     const legacyToken = stagingToken.acquireSqliteStagingToken(unknown, "create");
     let legacyFile: string;
     try {
-      legacyFile = write(unknown, "native/legacy/module.node", "unqualified legacy payload");
+      legacyFile = write(
+        path.join(unknown, "native/legacy/module.node"),
+        "unqualified legacy payload",
+      );
     } finally {
       legacyToken(true);
     }

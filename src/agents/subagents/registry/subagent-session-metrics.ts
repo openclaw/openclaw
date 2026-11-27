@@ -1,6 +1,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 
 type SubagentSessionStartRecord = Pick<SubagentRunRecord, "sessionStartedAt"> & {
   execution: Pick<SubagentRunRecord["execution"], "startedAt">;
@@ -10,10 +11,7 @@ type SubagentSessionRuntimeRecord = Pick<SubagentRunRecord, "accumulatedRuntimeM
 };
 type SubagentSessionStatusRecord = Pick<SubagentRunRecord, "endedReason" | "pauseReason"> & {
   delivery?: Pick<NonNullable<SubagentRunRecord["delivery"]>, "status" | "disposition">;
-  execution: Pick<
-    SubagentRunRecord["execution"],
-    "status" | "endedAt" | "outcome" | "interruptionReason"
-  >;
+  execution: Pick<SubagentRunRecord["execution"], "status" | "endedAt" | "outcome">;
 };
 
 /** Returns a recorded execution start, never the earlier admission time. */
@@ -59,16 +57,6 @@ export function resolveSubagentSessionStatus(
     return "killed";
   }
   const status = entry.execution.outcome?.status;
-  if (status === "error" && entry.execution.interruptionReason === "gateway-restart") {
-    const delivery = entry.delivery;
-    return delivery &&
-      delivery.disposition !== "intentional_non_delivery" &&
-      (delivery.status === "failed" ||
-        delivery.status === "suspended" ||
-        delivery.status === "discarded")
-      ? "failed"
-      : "interrupted";
-  }
   if (status === "error") {
     return "failed";
   }
@@ -76,6 +64,15 @@ export function resolveSubagentSessionStatus(
     return "timeout";
   }
   return "done";
+}
+
+/** A yielded run waiting for a continuation: a message or its children's results. */
+export function isSubagentRunPausedForContinuation(entry: SubagentSessionStatusRecord): boolean {
+  if (!isSubagentPausedByYield(entry)) {
+    return false;
+  }
+  const status = resolveSubagentSessionStatus(entry);
+  return status !== "killed" && status !== "failed" && status !== "timeout";
 }
 
 /** Formats the authoritative run status while preserving unfinished descendants. */
@@ -86,12 +83,7 @@ export function resolveSubagentDisplayStatus(
   const status = resolveSubagentSessionStatus(entry) ?? "done";
   const pending = Math.max(0, pendingDescendants);
   const waiting = `waiting on ${pending} ${pending === 1 ? "child" : "children"}`;
-  if (
-    entry.pauseReason === "sessions_yield" &&
-    status !== "killed" &&
-    status !== "failed" &&
-    status !== "timeout"
-  ) {
+  if (isSubagentRunPausedForContinuation(entry)) {
     return pending > 0 ? waiting : "waiting for external continuation";
   }
   if (pending > 0) {

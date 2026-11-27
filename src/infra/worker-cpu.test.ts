@@ -11,6 +11,7 @@ import type { WorkerMemorySample } from "./diagnostic-process-types.js";
 import {
   getTrackedWorkerCpuSources,
   getTrackedWorkerLifecycleSnapshot,
+  getTrackedWorkerPoolSnapshot,
   createCpuTrackedWorker,
   markWorkerRetirement,
   trackNativeWorkerForCpu,
@@ -64,8 +65,15 @@ async function sampledMemory() {
   return sampleTrackedWorkerMemory();
 }
 
-async function createWorker(filename: string | URL = idleSource) {
-  const worker = createCpuTrackedWorker(filename, { eval: typeof filename === "string" });
+async function createWorker(
+  filename: string | URL = idleSource,
+  requestClass?: () => string | undefined,
+) {
+  const worker = createCpuTrackedWorker(
+    filename,
+    { eval: typeof filename === "string" },
+    requestClass,
+  );
   workers.push(worker);
   await once(worker, "online");
   return worker;
@@ -211,6 +219,37 @@ describe("worker CPU lifecycle", () => {
     }
   });
 
+  it("retains cumulative reader bytes across worker replacement without per-read messages", async () => {
+    const operation = "sessions.usage.refresh";
+    for (const id of [9011, 9012]) {
+      const worker = registerWorker(id, "./session-transcript.worker.ts");
+      const { port1, port2 } = new MessageChannel();
+      const values = new BigUint64Array(new SharedArrayBuffer(16));
+      receiveWorkerMemoryPort(worker, { status: "memory", port: port1 });
+      const registered = id === 9011 ? once(port1, "message") : undefined;
+      port2.postMessage({ sqliteReaderCounter: { operation, values } });
+      if (registered) {
+        await registered;
+      }
+      Atomics.add(values, 0, 2n);
+      Atomics.add(values, 1, 4096n);
+      if (registered) {
+        expect(sampleTrackedWorkerMemory({ refresh: false }).sqliteReaderMetrics).toContainEqual({
+          operation,
+          count: 2,
+          readBytes: 4096,
+        });
+      }
+      worker.emit("exit");
+      port2.close();
+    }
+    expect(sampleTrackedWorkerMemory({ refresh: false }).sqliteReaderMetrics).toContainEqual({
+      operation,
+      count: 4,
+      readBytes: 8192,
+    });
+  });
+
   it.each([
     ["ERR_WORKER_OUT_OF_MEMORY", "crash"],
     ["ERR_CODE_MODE_GC_THRASH", "gc-thrash"],
@@ -302,7 +341,12 @@ describe("worker CPU lifecycle", () => {
     expect(
       await roundTrip(worker, { type: "reclaim", operationId: 1, plan: {}, coordination: {} }),
     ).toEqual([{ type: "reclaimed", operationId: 1, settled: true, result: {} }]);
-    expect(getWorkerMessageMetrics()).toEqual(expect.arrayContaining([request(), response()]));
+    expect(getWorkerMessageMetrics()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining(request()),
+        expect.objectContaining(response()),
+      ]),
+    );
   });
 
   it.each([
@@ -348,24 +392,47 @@ describe("worker CPU lifecycle", () => {
     },
   );
 
-  it("counts native messages once and measures transferred bytes before detachment", async () => {
+  it("attributes transferred bytes to the active SQLite job through reply delivery", async () => {
     const sent = metricDelta("sqlite_request", "to_worker");
-    const receivedMetric = metricDelta("sqlite_request", "from_worker");
-    const worker = await createWorker(echoSource);
+    const reply = metricDelta("sqlite_reply", "from_worker");
+    const before = getWorkerMessageMetrics();
+    let requestClass: string | undefined = "audit.writer.process";
+    const worker = await createWorker(
+      'const { parentPort } = require("node:worker_threads"); parentPort.on("message", ({ id, input }) => parentPort.postMessage({ id, ok: true, value: input }, [input.buffer]));',
+      () => requestClass,
+    );
+    worker.on("message", () => {
+      requestClass = undefined;
+    });
     const input = new Uint8Array([1, 2, 3]);
     const received = roundTrip(worker, { type: "execute", actor: 1, id: 1, input }, [input.buffer]);
     expect(input.byteLength).toBe(0);
-    expect(await received).toEqual([
-      { type: "execute", actor: 1, id: 1, input: new Uint8Array([1, 2, 3]) },
-    ]);
+    expect(await received).toEqual([{ id: 1, ok: true, value: new Uint8Array([1, 2, 3]) }]);
     expect(() => worker.postMessage({ type: "execute", actor: 1, input() {} }, [])).toThrow();
-    expect(getWorkerMessageMetrics()).toEqual(
-      expect.arrayContaining([sent(3, 0), receivedMetric(3, 0)]),
+    const after = getWorkerMessageMetrics();
+    expect(after).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining(sent(3, 0)),
+        expect.objectContaining(reply(3, 0)),
+      ]),
     );
+    for (const [kind, direction] of [
+      ["sqlite_request", "to_worker"],
+      ["sqlite_reply", "from_worker"],
+    ] as const) {
+      const prior = before.find((row) => row.kind === kind && row.direction === direction);
+      const current = after.find((row) => row.kind === kind && row.direction === direction);
+      expect(current?.payloadBytesByRequestClass?.["audit.writer.process"]).toBe(
+        (prior?.payloadBytesByRequestClass?.["audit.writer.process"] ?? 0) + 3,
+      );
+    }
   });
 
   it.each([
     ["sqlite-store.worker.ts", "sqlite-store.worker.js"],
+    ["memory-worker-entry.ts", "workspace-memory.worker.js"],
+    ["skills-worker-entry.ts", "workspace-skills.worker.js"],
+    ["file-tool-read.worker.mjs", "read-file.worker.js"],
     ["private-session-worker.js", "other"],
   ])(
     "attributes %s and removes direct and owned Worker samples at native exit",
@@ -374,11 +441,23 @@ describe("worker CPU lifecycle", () => {
       const direct = new Worker(idleSource, { eval: true });
       workers.push(direct);
       await once(direct, "online");
-      const owned = await fileWorker(file);
-      const [directHeap, ownedHeap] = await Promise.all([
-        direct.getHeapStatistics(),
-        owned.getHeapStatistics(),
-      ]);
+      const owned = await fileWorker(
+        file,
+        'import("node:worker_threads").then(({ parentPort }) => parentPort.on("message", () => {}));',
+      );
+      const native = await direct.getHeapStatistics();
+      const directHeap = {
+        ...native,
+        used_heap_size: 1024,
+        total_heap_size: 4096,
+        external_memory: 256,
+      };
+      const ownedHeap = {
+        ...native,
+        used_heap_size: 2048,
+        total_heap_size: 8192,
+        external_memory: 512,
+      };
       const directHeapRead = vi.spyOn(direct, "getHeapStatistics").mockResolvedValue(directHeap);
       const ownedHeapRead = vi.spyOn(owned, "getHeapStatistics").mockResolvedValue(ownedHeap);
       expect(getTrackedWorkerLifecycleSnapshot().workerCount).toBe(initial.workerCount + 2);
@@ -403,8 +482,9 @@ describe("worker CPU lifecycle", () => {
         workerArrayBuffersBytes: undefined,
         workerMemoryCoverage: "partial",
       });
-      expect(memory.workerHeapTotalBytes).toBeGreaterThan(memory.workerHeapUsedBytes!);
-      expect(memory.workerExternalBytes).toBeGreaterThan(0);
+      expect(memory.workerHeapUsedBytes).toBe((initial.workerHeapUsedBytes ?? 0) + 3072);
+      expect(memory.workerHeapTotalBytes).toBe((initial.workerHeapTotalBytes ?? 0) + 12288);
+      expect(memory.workerExternalBytes).toBe((initial.workerExternalBytes ?? 0) + 768);
       expect(memory.workerHeaps).toEqual([
         ...initial.workerHeaps,
         expect.objectContaining({ script: "other", ...nativeHeap(directHeap) }),
@@ -418,7 +498,11 @@ describe("worker CPU lifecycle", () => {
       await Promise.all([direct.terminate(), owned.terminate()]);
       expect(getTrackedWorkerLifecycleSnapshot().workerCount).toBe(initial.workerCount);
       const retired = sampleTrackedWorkerMemory();
-      expect(retired).toEqual({ ...initial, workerLifecycle: retired.workerLifecycle });
+      expect(retired).toEqual({
+        ...initial,
+        workerLifecycle: retired.workerLifecycle,
+        workerTaskMetrics: memory.workerTaskMetrics,
+      });
       for (const [name, reason] of [
         ["other", "exit"],
         [script, "idle_timeout"],
@@ -628,4 +712,60 @@ describe("worker CPU lifecycle", () => {
     await pending;
     expect(getTrackedWorkerCpuSources().workers).toEqual(initial.workers);
   });
+});
+
+it("censuses native lifetimes, actual pool policies and only fresh heap samples", async () => {
+  const first = registerWorker(9001, "git-operation.worker.ts");
+  const second = registerWorker(9002, "git-operation.worker.ts");
+  const external = registerWorker(9003, "external.js");
+  const pool = {};
+  const policy = { floor: 1, cap: 2, pointReadCap: 3, idleTimeoutMs: 60_000 };
+  try {
+    attributeWorkerToPool(first, pool, "reader", policy);
+    attributeWorkerToPool(second, pool, "reader", policy);
+    const initial = getTrackedWorkerPoolSnapshot();
+    expect(initial.workerCensus).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "git-operation.worker.js",
+          count: 2,
+          floor: 1,
+          cap: 2,
+          pointReadCap: 3,
+          idlePolicy: "retain-one",
+          heapUsedBytes: null,
+          heapSampledCount: 0,
+        }),
+        expect.objectContaining({
+          kind: "other",
+          count: 1,
+          floor: null,
+          cap: null,
+          idlePolicy: "unknown",
+          heapUsedBytes: null,
+        }),
+      ]),
+    );
+    await sampledMemory();
+    const memory = getTrackedWorkerPoolSnapshot();
+    expect(memory.workerCensus.find((row) => row.kind === "git-operation.worker.js")).toMatchObject(
+      {
+        heapSampledCount: 2,
+        heapUsedBytes: expect.any(Number),
+      },
+    );
+    markWorkerRetirement(first, "closed");
+    expect(getTrackedWorkerPoolSnapshot().workerCount).toBe(3);
+    first.emit("exit");
+    expect(
+      getTrackedWorkerPoolSnapshot().workerCensus.find(
+        (row) => row.kind === "git-operation.worker.js",
+      )?.count,
+    ).toBe(1);
+  } finally {
+    first.emit("exit");
+    second.emit("exit");
+    external.emit("exit");
+  }
+  expect(getTrackedWorkerPoolSnapshot().workerCensus).toEqual([]);
 });

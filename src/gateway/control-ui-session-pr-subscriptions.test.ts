@@ -74,7 +74,7 @@ function expectSessions(keys: string[], refresh?: true, agentId = "main") {
 }
 
 describe("control UI session PR subscriptions", () => {
-  it("reuses current watcher grants across streaming reads and reacquires changed targets", async () => {
+  it("reacquires changed watcher targets and withdraws retired access", async () => {
     const readSource = createTestSessionPrReadSource();
     let revision = 0;
     let visible = true;
@@ -98,19 +98,9 @@ describe("control UI session PR subscriptions", () => {
     });
     const active = start({ prepareRead: async () => readCurrent });
     await active.replace("reader", ["session"]);
-    readCurrent.mockClear();
     broadcastToConnIds.mockClear();
-    for (let index = 0; index < 20; index++) {
-      sessionChanges.emit({ sessionKey: "streaming-child", scope: "transcript" });
-      await nextEventLoopTurn();
-      await active.pollNow();
-    }
-    expect(readCurrent).not.toHaveBeenCalled();
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-
     revision++;
     await active.pollNow();
-    expect(readCurrent).toHaveBeenCalledOnce();
     expectPublication("reader");
 
     visible = false;
@@ -127,8 +117,7 @@ describe("control UI session PR subscriptions", () => {
   it.each([
     { facts: "category", invalidated: undefined, refresh: false },
     { facts: undefined, invalidated: "category", refresh: false },
-    { facts: "category", invalidated: true, refresh: true },
-    { facts: "unchanged", invalidated: true, refresh: true },
+    { facts: "participants", invalidated: true, refresh: true },
   ] as const)(
     "refreshes=$refresh for facts=$facts, invalidated=$invalidated",
     async ({ facts, invalidated, refresh }) => {

@@ -2,9 +2,10 @@ import {
   buildManifestModelProviderConfig,
   readManifestProviderDefaultModelRef,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
-import type {
-  ModelCompatConfig,
-  ModelDefinitionConfig,
+import {
+  resolveDefaultModelMaxTokens,
+  type ModelCompatConfig,
+  type ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asNonArrayRecord,
@@ -33,7 +34,6 @@ const BASETEN_MODEL_COMPAT = new Map(
   }).models.map(({ id, compat }) => [id, compat]),
 );
 const DEFAULT_CONTEXT_WINDOW = 128_000;
-const DEFAULT_MAX_TOKENS = 8_192;
 
 const CHAT_TEMPLATE_THINKING_MODEL_IDS = new Set([
   "zai-org/glm-4.7",
@@ -105,6 +105,10 @@ function projectLiveModel(
   const inputPrice = readPerTokenPrice(pricing.prompt);
   const outputPrice = readPerTokenPrice(pricing.completion);
   const cacheReadPrice = readPerTokenPrice(pricing.input_cache_read);
+  const contextWindow =
+    asPositiveSafeInteger(Number(row.context_length)) ??
+    fallback?.contextWindow ??
+    DEFAULT_CONTEXT_WINDOW;
   // These current DeepSeek rows omit feature flags documented by Baseten's serving API.
   const hasDocumentedSparseFeatures =
     ["deepseek-ai/DeepSeek-V4.1-Flash", "deepseek-ai/DeepSeek-V4-Pro-0813"].includes(id) &&
@@ -141,14 +145,11 @@ function projectLiveModel(
       cacheRead: cacheReadPrice ?? fallback?.cost.cacheRead ?? 0,
       cacheWrite: fallback?.cost.cacheWrite ?? 0,
     },
-    contextWindow:
-      asPositiveSafeInteger(Number(row.context_length)) ??
-      fallback?.contextWindow ??
-      DEFAULT_CONTEXT_WINDOW,
+    contextWindow,
     maxTokens:
       asPositiveSafeInteger(Number(row.max_completion_tokens)) ??
       fallback?.maxTokens ??
-      DEFAULT_MAX_TOKENS,
+      resolveDefaultModelMaxTokens(contextWindow),
     compat,
   };
 }
@@ -193,7 +194,7 @@ export function resolveBasetenDynamicModel(modelId: string) {
     input: ["text"] as Array<"text" | "image">,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    maxTokens: resolveDefaultModelMaxTokens(DEFAULT_CONTEXT_WINDOW),
     compat: buildBasetenModelCompat(id),
   };
 }

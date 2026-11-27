@@ -223,15 +223,13 @@ describe("prepareChatSendUserTurn audio", () => {
         text: "a longer caption",
         attachments: {
           imageOrder: ["inline"],
-          parsedImages: [
-            { type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 },
-          ],
+          parsedImages: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
         },
       });
 
       const input = await prepared.readInput();
       expect(prepared.replyOptionImages).toEqual([
-        { type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 },
+        { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
       ]);
       expect(input.text).toContain("a longer caption\nHeard: approved transcript");
       const omissionSuffix =

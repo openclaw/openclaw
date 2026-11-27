@@ -15,6 +15,7 @@ import {
   type RequestCustodySpawnCaseOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 import {
+  parentRequestIdentity,
   createCustodyStop,
   registerCompletedRequestCustodySpawnCases,
   retainOriginalRequest,
@@ -42,12 +43,7 @@ export function registerRequestCustodySpawnCases(options: RequestCustodySpawnCas
       await collectFailure(failures, async () => {
         const invoke = await withExecRequestTurn(
           {
-            identity: {
-              runId: parentRunId,
-              sessionKey: parentSessionKey,
-              sessionId: "parent-session",
-              agentId: "main",
-            },
+            identity: parentRequestIdentity(parentRunId, parentSessionKey),
             owners,
           },
           async () =>

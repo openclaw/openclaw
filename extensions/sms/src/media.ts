@@ -26,6 +26,8 @@ import { TWILIO_MMS_MAX_BYTES } from "./twilio.js";
 import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
 
 const TWILIO_API_HOSTNAME = "api.twilio.com";
+// Twilio answers the api.twilio.com media URL with a redirect to this CDN host.
+const TWILIO_MMS_CDN_HOSTNAME = "mms.twiliocdn.com";
 const TWILIO_MEDIA_PATH_RE =
   /^\/2010-04-01\/Accounts\/([^/]+)\/Messages\/([^/]+)\/Media\/(ME[0-9a-fA-F]{32})$/u;
 const TWILIO_MEDIA_TOTAL_TIMEOUT_MS = 60_000;
@@ -210,7 +212,7 @@ export async function prepareHostedSmsMedia(params: PrepareHostedSmsMediaParams)
       mediaAccess: resolveOutboundMediaAccess(params),
       validateBeforePersist: (media) => {
         const contentType = media.contentType?.split(";", 1)[0]?.trim().toLowerCase();
-        if (!contentType || !TWILIO_MMS_EXTENSION_BY_TYPE[contentType]) {
+        if (!contentType || !Object.hasOwn(TWILIO_MMS_EXTENSION_BY_TYPE, contentType)) {
           throw new Error(
             `Twilio MMS does not support media type ${contentType || "unknown content type"}.`,
           );
@@ -398,7 +400,8 @@ export async function materializeSmsInboundMedia(params: {
           filePathHint: inboundMediaFileName(media.contentType, index),
           fallbackContentType: media.contentType,
           maxBytes: Math.min(params.account.mediaMaxBytes ?? remainingBytes, remainingBytes),
-          ssrfPolicy: { hostnameAllowlist: [TWILIO_API_HOSTNAME] },
+          // The initial URL is pinned to the API host above; the CDN is allowed only as a redirect hop.
+          ssrfPolicy: { hostnameAllowlist: [TWILIO_API_HOSTNAME, TWILIO_MMS_CDN_HOSTNAME] },
           timeoutMs: TWILIO_MEDIA_TOTAL_TIMEOUT_MS,
           responseHeaderTimeoutMs: TWILIO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
           readIdleTimeoutMs: TWILIO_MEDIA_READ_IDLE_TIMEOUT_MS,
@@ -442,9 +445,10 @@ export async function materializeSmsInboundMedia(params: {
 
 function hostedSmsMediaFileName(id: string, contentType: string | undefined): string | undefined {
   const normalizedContentType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
-  const extension = normalizedContentType
-    ? TWILIO_MMS_EXTENSION_BY_TYPE[normalizedContentType]
-    : undefined;
+  const extension =
+    normalizedContentType && Object.hasOwn(TWILIO_MMS_EXTENSION_BY_TYPE, normalizedContentType)
+      ? TWILIO_MMS_EXTENSION_BY_TYPE[normalizedContentType]
+      : undefined;
   return extension ? `mms-${id.slice(0, 10)}${extension}` : undefined;
 }
 

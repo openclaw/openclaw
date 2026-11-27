@@ -9,25 +9,35 @@ const entries = {
     "pages/new-session/new-session-page-entry.ts",
     "pages/new-session/creation-composer-render.tsx",
   ],
-  claws: ["pages/claws/page.tsx"],
+  templates: ["pages/templates/page.tsx"],
+  // Catalog search and detail are already loaded; avoid warming unrelated New Session code.
+  "templates-next": ["pages/templates/page.tsx"],
   dashboards: ["pages/dashboards/dashboards-page.tsx", "components/board/board-document.tsx"],
   usage: ["pages/usage/usage-page.tsx", "pages/usage/route-loader.ts"],
   cron: ["pages/cron/cron-page-entry.tsx", "pages/cron/cron-page.tsx"],
   sessions: ["pages/sessions/sessions-page.tsx"],
   systems: ["pages/systems/systems-route-view.tsx"],
   activity: ["pages/activity/activity-route.tsx"],
+  "activity-next": ["components/image-lightbox-content.tsx"],
   meetings: ["pages/meetings/meetings-page.tsx"],
   plugins: ["pages/plugins/plugins-page.tsx"],
   apps: ["pages/apps/apps-page.tsx"],
   portals: ["pages/portals/portals-page.tsx"],
   palette: ["components/command-palette.tsx"],
   "model-picker": ["pages/chat/components/chat-model-picker-panel.tsx"],
+  "chat-next": [
+    "pages/chat/components/chat-effort-picker-panel.tsx",
+    "pages/chat/components/chat-composer-plus-menu-content.tsx",
+    "pages/chat/components/chat-header-panel-menu-content.tsx",
+    "pages/chat/components/chat-sidebar-region.runtime.tsx",
+  ],
   appearance: [
     "pages/config/config-page.tsx",
     "components/settings-sidebar-shell.tsx",
     "app/theme-catalog.ts",
   ],
   "advanced-next": ["pages/config/security.tsx"],
+  "roster-next": ["pages/chat/route-entry.ts"],
   shortcuts: ["components/keyboard-shortcuts-dialog.tsx"],
   debug: [
     "pages/debug/debug-overlay.ts",
@@ -37,22 +47,32 @@ const entries = {
   ],
 };
 
+// These menus share dependencies with larger features. Warm their entry only.
+const intentEntries = {
+  "chat-session-menu": "pages/chat/components/chat-header-session-menu-content.tsx",
+  "sidebar-menus": "components/sidebar-menus-render.tsx",
+};
+
 export function collectControlUiNavigationPreloads(
   bundle: NonNullable<IndexHtmlTransformContext["bundle"]>,
 ): Record<string, string[]> {
   const chunks = Object.values(bundle).filter((output) => output.type === "chunk");
+  const findChunk = (source: string) => {
+    const modulePath = `/ui/src/${source}`;
+    // Grouping can leave a tiny facade in front of the implementation. Start at
+    // the actual URL the caller imports.
+    return (
+      chunks.find((candidate) => candidate.facadeModuleId?.endsWith(modulePath)) ??
+      chunks.find((candidate) =>
+        Object.keys(candidate.modules).some((id) => id.endsWith(modulePath)),
+      )
+    );
+  };
   const result: Record<string, string[]> = {};
   for (const [name, sources] of Object.entries(entries)) {
     const assets = new Set<string>();
     for (const source of sources) {
-      const modulePath = `/ui/src/${source}`;
-      // Grouping can leave a tiny import facade in front of the implementation.
-      // Warm the URL navigation imports, including that otherwise empty facade.
-      const chunk =
-        chunks.find((candidate) => candidate.facadeModuleId?.endsWith(modulePath)) ??
-        chunks.find((candidate) =>
-          Object.keys(candidate.modules).some((id) => id.endsWith(modulePath)),
-        );
+      const chunk = findChunk(source);
       if (chunk) {
         collectControlUiStaticAssets(bundle, chunk.fileName, assets);
       }
@@ -63,6 +83,12 @@ export function collectControlUiNavigationPreloads(
       result[name] = [...assets].filter(
         (file) => bundle[file]?.type === "chunk" || file.endsWith(".css"),
       );
+    }
+  }
+  for (const [name, source] of Object.entries(intentEntries)) {
+    const chunk = findChunk(source);
+    if (chunk) {
+      result[name] = [chunk.fileName];
     }
   }
   return result;

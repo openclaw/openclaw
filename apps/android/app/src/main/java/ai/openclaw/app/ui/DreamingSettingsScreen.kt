@@ -2,7 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayDreamDiaryEntry
 import ai.openclaw.app.GatewayDreamingSummary
-import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -21,8 +21,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -31,20 +29,19 @@ import androidx.compose.ui.unit.dp
 /** Settings screen for gateway dreaming state and recent dream diary entries. */
 @Composable
 internal fun DreamingSettingsScreen(
-  viewModel: MainViewModel,
+  state: GatewaySummaryState<GatewayDreamingSummary>,
+  isConnected: Boolean,
+  onRefresh: () -> Unit,
   onBack: () -> Unit,
 ) {
-  val state by viewModel.dreamingState.collectAsState()
-  val isConnected by viewModel.isConnected.collectAsState()
-
-  SettingsRefreshOnConnect(isConnected) { viewModel.refreshDreaming() }
+  SettingsRefreshOnConnect(isConnected, onRefresh)
 
   SettingsDetailFrame(
     subtitle = nativeString("Memory consolidation and dream diary."),
     route = SettingsRoute.Dreaming,
     onBack = onBack,
   ) {
-    SettingsRefreshControls(isConnected, state.refreshing, state.errorText, viewModel::refreshDreaming)
+    SettingsRefreshControls(isConnected, state.refreshing, state.errorText, onRefresh)
     SettingsSummaryContent(state, isConnected, nativeString("Connect the gateway to load dreaming.")) { summary ->
       SettingsMetricPanel(
         rows =
@@ -69,7 +66,7 @@ private fun DreamingPanel(summary: GatewayDreamingSummary) {
         HealthStatus(nativeString("Signal Index"), if (summary.phaseSignalHealthy) nativeString("Healthy") else nativeString("Needs attention"), summary.phaseSignalHealthy),
         HealthStatus(nativeString("Promoted"), nativeString("\${summary.promotedToday} today · \${summary.promotedTotal} total", summary.promotedToday, summary.promotedTotal), true),
       )
-    ClawListPanel(items = healthRows, contentPadding = PaddingValues(0.dp), dividerColor = ClawTheme.colors.border) { row ->
+    ClawListPanel(items = healthRows, dividerColor = ClawTheme.colors.border) { row ->
       ClawStatusRow(title = row.title, value = row.value, healthy = row.healthy)
     }
     DreamDiaryPanel(summary = summary)
@@ -122,7 +119,7 @@ private fun DreamDiaryRow(entry: GatewayDreamDiaryEntry) {
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
-      Text(text = entry.text, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      Text(text = entry.text, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
   }
 }

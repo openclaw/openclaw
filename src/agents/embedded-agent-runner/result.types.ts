@@ -2,6 +2,7 @@
 import type { ProviderRefusalReview } from "@openclaw/llm-core/diagnostics";
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
   CliSessionBinding,
   SessionContextBudgetStatus,
@@ -9,6 +10,7 @@ import type {
 } from "../../config/sessions/types.js";
 import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
+import type { AgentTerminalSnapshot } from "../agent-terminal-snapshot.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { AgentRuntimeCredentialSource } from "../runtime-plan/credential-source.types.js";
@@ -47,6 +49,8 @@ export type EmbeddedAgentMeta = {
    * usage metadata.
    */
   compactionTokensAfter?: number;
+  /** Context size a native runtime reported before its most recent compaction. */
+  compactionTokensBefore?: number;
   /**
    * Prompt/context snapshot from the latest model request. Prefer this for
    * context-window utilization because provider usage totals can include cached
@@ -136,6 +140,8 @@ export type EmbeddedRunTerminalToolFailure = {
 };
 
 export type EmbeddedAgentRunMeta = {
+  /** Optional content-free facts from the selected failed agent attempt. */
+  agentTerminal?: AgentTerminalSnapshot;
   durationMs: number;
   agentMeta?: EmbeddedAgentMeta;
   aborted?: boolean;
@@ -154,6 +160,8 @@ export type EmbeddedAgentRunMeta = {
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  /** Target of a fallback/restoration notice confirmed by the transcript writer for this run. */
+  modelFallbackTranscriptToModel?: string;
   /** Producer-owned terminal cause; the fallback owner decides whether a chain was stopped. */
   modelFallbackStopReason?:
     | "agent_run_terminal_timeout"
@@ -185,6 +193,7 @@ export type EmbeddedAgentRunMeta = {
       | "incomplete_turn"
       | "hook_block";
     message: string;
+    code?: string;
     /** True only when model fallback can retry this terminal error without repeating side effects. */
     fallbackSafe?: boolean;
     /** True when the payload includes a trusted structured terminal tool summary. */
@@ -242,6 +251,9 @@ export type EmbeddedAgentRunMeta = {
 };
 
 export type EmbeddedAgentRunPayload = {
+  presentation?: ReplyPayload["presentation"];
+  interactive?: ReplyPayload["interactive"];
+  btw?: ReplyPayload["btw"];
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];

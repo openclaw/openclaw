@@ -11,10 +11,9 @@ import {
   readInProcessSubagentResume,
 } from "../../gateway/in-process-subagent-resume.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../admitted-run-context.js";
+import { chatRef } from "../../sessions/chat-ref.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   hasContext: true,
@@ -158,13 +157,11 @@ describe("trusted in-process Gateway session creation", () => {
     generation: 1,
     createdAt: 100,
   };
-  const generation = {
+  const generation = chatRef({
     agentId: "main",
     storePath: "/test/agents/main/sessions/sessions.json",
     sessionKey: "agent:main:main",
-    sessionId: "session-one",
-    lifecycleRevision: null,
-  };
+  });
 
   it.each([
     {
@@ -317,10 +314,9 @@ describe("trusted in-process Gateway session creation", () => {
     await expect(
       asCaller(
         {
-          operatorAuthority: createAdmittedRunOperatorAuthority({
+          operatorAuthority: createTestOperatorAuthority({
             profileId: "operator",
             scopes: ["operator.write"],
-            assertCurrent: () => {},
           }),
         },
         () =>
@@ -336,11 +332,6 @@ describe("trusted in-process Gateway session creation", () => {
 });
 
 describe("request-shaped in-process Gateway dispatch", () => {
-  beforeEach(() => {
-    mocks.dispatch.mockResolvedValue({ runId: "run-1" });
-    mocks.callGateway.mockResolvedValue({ runId: "run-1" });
-  });
-
   it("marks only an owner-bound plugin approval request for host admission", async () => {
     const identity = {
       ...runtimeIdentity,
@@ -394,21 +385,20 @@ describe("request-shaped in-process Gateway dispatch", () => {
   it.each([false, true])(
     "allows closed-caller abort cleanup only on the original Gateway (replaced=%s)",
     async (replaced) => {
-      const context = {} as GatewayRequestContext;
-      let currentGateway = context;
+      const gateway = gatewayBinding();
       let currentCaller = true;
       let cancelled = false;
       const controller = new AbortController();
       const params = { turnId: replaced ? "turn-1" : "owned-turn" };
       mocks.dispatch.mockImplementation(async (method, _params, options) => {
         if (method === "conversations.turn.cancel") {
-          expect(options.resolveGatewayContext()).toBe(context);
+          expect(options.resolveGatewayContext()).toBe(gateway.admitted);
           expect(readInProcessAgentRuntimeIdentity(options)).toBeUndefined();
           cancelled = true;
           return { ok: true };
         }
         if (replaced) {
-          currentGateway = {} as GatewayRequestContext;
+          gateway.replace();
         } else {
           currentCaller = false;
           controller.abort();
@@ -420,9 +410,16 @@ describe("request-shaped in-process Gateway dispatch", () => {
         {
           ...(replaced ? mainCaller : foregroundCaller),
           ...(!replaced
-            ? { receiptAuthority: () => currentCaller, approvalSignals: [controller.signal] }
+            ? {
+                receiptAuthority: () => {
+                  if (!currentCaller) {
+                    throw new Error("agent tool caller authority is no longer active");
+                  }
+                },
+                approvalSignals: [controller.signal],
+              }
             : {}),
-          gatewayContextResolver: () => currentGateway,
+          gatewayContextResolver: gateway.resolve,
         },
         () =>
           callRequest("conversations.turn", params, {
@@ -448,11 +445,12 @@ describe("request-shaped in-process Gateway dispatch", () => {
   );
 
   it.each(["dispatch", "resolve", "reject"] as const)(
-    "keeps an operation on its admitted Gateway through %s",
+    "checks Gateway retirement at routing, not after %s",
     async (boundary) => {
       const gateway = gatewayBinding();
       const request = bindAgentToolGatewayRequest({ resolveGatewayContext: gateway.resolve });
-      const settled = createDeferred();
+      const settled = createDeferred<{ ok: true }>();
+      const dispatchError = new Error("inner dispatch failed");
       mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
         expect(options.resolveGatewayContext()).toBe(gateway.admitted);
         return await settled.promise;
@@ -465,12 +463,18 @@ describe("request-shaped in-process Gateway dispatch", () => {
         await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledOnce());
         gateway.replace();
         if (boundary === "resolve") {
-          settled.resolve();
+          settled.resolve({ ok: true });
         } else {
-          settled.reject(new Error("inner dispatch failed"));
+          settled.reject(dispatchError);
         }
       }
-      await expect(pending).rejects.toThrow("Gateway instance unavailable");
+      if (boundary === "dispatch") {
+        await expect(pending).rejects.toThrow("Gateway instance unavailable");
+      } else if (boundary === "resolve") {
+        await expect(pending).resolves.toEqual({ ok: true });
+      } else {
+        await expect(pending).rejects.toBe(dispatchError);
+      }
       expect(mocks.dispatch).toHaveBeenCalledTimes(boundary === "dispatch" ? 0 : 1);
       expectNoTransport();
     },
@@ -553,42 +557,35 @@ describe("request-shaped in-process Gateway dispatch", () => {
     expect(mocks.callGateway).toHaveBeenCalledWith(wireRequest);
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "keeps transport Cron cancellation settlement with signal forwarding %s",
+    async (forwardAbortSignal) => {
+      mocks.hasContext = false;
+      const controller = new AbortController();
+      mocks.callGateway.mockImplementationOnce(async () => {
+        controller.abort(new Error("transport request cancelled"));
+        return { created: false };
+      });
+      const pending = bindAgentToolGatewayRequest({ forwardAbortSignal })({
+        method: "cron.add",
+        params: {},
+        signal: controller.signal,
+      });
+      if (forwardAbortSignal) {
+        await expect(pending).rejects.toThrow("transport request cancelled");
+      } else {
+        await expect(pending).resolves.toEqual({ created: false });
+      }
+    },
+  );
 });
 
 describe("built-in Gateway foreground authority", () => {
-  it.each(["dispatch", "commit"] as const)(
-    "rejects retired caller authority before %s",
-    async (boundary) => {
-      const held = holdCommit();
-      let current = true;
-      const pending = asCaller(
-        { ...foregroundCaller, receiptAuthority: () => current },
-        async () => {
-          if (boundary === "dispatch") {
-            current = false;
-          }
-          return await callRequest("sessions.patch", { key: "target", pinned: true });
-        },
-      );
-      const rejected = expect(pending).rejects.toThrow(/authority.*no longer active/i);
-      if (boundary === "commit") {
-        await held.entered;
-        current = false;
-        held.release();
-      }
-      await rejected;
-      expect(held.commit).not.toHaveBeenCalled();
-      if (boundary === "dispatch") {
-        expect(mocks.dispatch).not.toHaveBeenCalled();
-      }
-      expectNoTransport();
-    },
-  );
-
   it("keeps a preserved write fenced by its original request signal", async () => {
     const controller = new AbortController();
     const held = holdCommit();
-    const pending = bindAgentToolGatewayRequest({ revalidateOnCompletion: false })({
+    const pending = bindAgentToolGatewayRequest({ forwardAbortSignal: false })({
       method: "message.action",
       params: { action: "channel-edit" },
       signal: controller.signal,
@@ -614,30 +611,31 @@ function createCaller(request: Parameters<typeof callAgentToolGatewayRequest>[0]
       current = false;
     },
     invoke: () =>
-      asCaller({ ...foregroundCaller, receiptAuthority: () => current }, () =>
-        callAgentToolGatewayRequest(request),
+      asCaller(
+        {
+          ...foregroundCaller,
+          receiptAuthority: () => {
+            if (!current) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
+        },
+        () => callAgentToolGatewayRequest(request),
       ),
   };
 }
 
 describe("Cron mutation completion through in-process Gateway", () => {
   it.each([
-    ["cron.run", { committed: true }, true],
-    ["cron.add", { created: true, job: { id: "unattested" } }, false],
-    ["cron.remove", new Error("mutation detail"), false],
-    ["cron.remove", new Error("mutation detail"), true],
-    ["cron.get", { privateJob: true }, false],
+    ["cron.run", { committed: true }],
+    ["cron.add", { created: true, job: { id: "unattested" } }],
+    ["cron.remove", new Error("mutation detail")],
+    ["cron.get", { privateJob: true }],
   ] as const)(
-    "settles revoked %s result %o only with a commit receipt: %s",
-    async (method, result, committed) => {
+    "preserves the revoked caller's %s outcome %o without a commit receipt",
+    async (method, result) => {
       const caller = createCaller({ method, params: method === "cron.get" ? { id: "job" } : {} });
-      mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
-        if (committed) {
-          if (!(result instanceof Error)) {
-            options.sessionMutationCommitGuard();
-          }
-          captureCronMutationCommit(method)?.();
-        }
+      mocks.dispatch.mockImplementationOnce(async () => {
         caller.revoke();
         if (result instanceof Error) {
           throw result;
@@ -645,9 +643,7 @@ describe("Cron mutation completion through in-process Gateway", () => {
         return result;
       });
       const pending = caller.invoke();
-      if (!committed) {
-        await expect(pending).rejects.toThrow(/authority.*no longer active/i);
-      } else if (result instanceof Error) {
+      if (result instanceof Error) {
         await expect(pending).rejects.toBe(result);
       } else {
         await expect(pending).resolves.toEqual(result);
@@ -706,13 +702,15 @@ describe("Cron mutation completion through in-process Gateway", () => {
     });
     await callRequest("cron.add");
     expect(previousCommit).toBeTypeOf("function");
-    const caller = createCaller({ method: "cron.add", params: {} });
+    const controller = new AbortController();
     mocks.dispatch.mockImplementationOnce(async () => {
       expect(captureCronMutationCommit("cron.remove")).toBeUndefined();
       previousCommit?.();
-      caller.revoke();
+      controller.abort(new Error("successor cancelled"));
       return { id: "successor" };
     });
-    await expect(caller.invoke()).rejects.toThrow(/authority.*no longer active/i);
+    await expect(callRequest("cron.add", {}, { signal: controller.signal })).rejects.toThrow(
+      "successor cancelled",
+    );
   });
 });

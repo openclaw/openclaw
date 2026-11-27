@@ -2,6 +2,8 @@
 import { expect, it } from "vitest";
 import {
   SIDEBAR_NAV_ROUTES,
+  sidebarSectionForRoute,
+  sidebarViewForPage,
   formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
@@ -17,12 +19,13 @@ import {
   normalizeBasePath,
   pathForWorkboardBoard,
   workboardBoardIdFromPath,
+  pluginTabKey,
+  pluginTabRefFromSearch,
 } from "./app-route-paths.ts";
 import { routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
-import { settingsSearchTextMatches } from "./lib/settings-navigation.ts";
-import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/route.tsx";
+import { settingsSearchTextMatches, settingsSearchTitleRank } from "./lib/settings-navigation.ts";
 
 function expectBase(base: string, ...paths: string[]) {
   for (const path of paths) {
@@ -39,9 +42,19 @@ it.each([
   ["MCP", "cp", false],
   ["外観設定", "設定", true],
   ["Cámara", "Ca\u0301mara", true],
+  ["ΕΛΕΓΧΟΣ", "χοσ", true],
+  ["Σύνοψη", "ς", true],
 ] as const)("matches setting text %s against %s: %s", (text, query, matches) => {
   expect(settingsSearchTextMatches(text, query)).toBe(matches);
 });
+
+it.each(["ελεγχοΣ", "ελεγχοσ", "ελεγχος"])(
+  "keeps exact and prefix settings ranks for %s",
+  (query) => {
+    expect(settingsSearchTitleRank(["ΕΛΕΓΧΟΣ"], query)).toBe(0);
+    expect(settingsSearchTitleRank(["ΕΛΕΓΧΟΣ API"], query)).toBe(1);
+  },
+);
 
 it.each([
   [{ context: "About", brandName: "Northstar", attentionCount: 2 }, "(2) About — Northstar"],
@@ -57,7 +70,7 @@ it("keeps every navigation title and subtitle backed by an English translation",
   const routes: RouteId[] = [
     "chat",
     "custodian",
-    "claws",
+    "templates",
     ...SIDEBAR_NAV_ROUTES,
     "workboard",
     "skills",
@@ -170,9 +183,45 @@ it("reads a namespaced tab reference from the generic URL", () => {
   expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
 });
 
+it("gives Automations, Customize and Activity a sidebar section of their own", () => {
+  expect(
+    (
+      [
+        "cron",
+        "plugins",
+        "skills",
+        "skill-workshop",
+        "templates",
+        "activity",
+        "usage",
+        "plugin-settings",
+      ] as const
+    ).map(sidebarSectionForRoute),
+  ).toEqual([
+    "automations",
+    "customize",
+    "customize",
+    "customize",
+    "customize",
+    "online",
+    undefined,
+    undefined,
+  ]);
+});
+
 it("recognizes plugin hub routes", () => {
-  const routes = ["plugins", "skills", "skill-workshop", "skill-settings", "sessions"] as const;
-  expect(routes.map(isPluginsHubRoute)).toEqual([true, true, true, false, false]);
+  const routes = [
+    "plugins",
+    "skills",
+    "skill-workshop",
+    "templates",
+    "skill-settings",
+    "sessions",
+  ] as const;
+  expect(routes.map(isPluginsHubRoute)).toEqual([true, true, true, true, false, false]);
+  expect(SIDEBAR_NAV_ROUTES).not.toContain("templates");
+  expect(SIDEBAR_NAV_ROUTES).not.toContain("apps");
+  expect(SIDEBAR_NAV_ROUTES).not.toContain("activity");
 });
 
 function expectRoutedPath(path: string, route: RouteId, base = "") {
@@ -180,3 +229,18 @@ function expectRoutedPath(path: string, route: RouteId, base = "") {
   expect(dynamicRouteFromPath(path, base)?.[0]).toBe(route);
   expect(inferBasePathFromPathname(path)).toBe(base);
 }
+
+it("lets each page decide its sidebar: its section, Sessions, or none", () => {
+  expect(sidebarViewForPage("cron")).toBe("automations");
+  expect(sidebarViewForPage("activity")).toBe("online");
+  expect(sidebarViewForPage("chat")).toBe("sessions");
+  expect(sidebarViewForPage("new-session")).toBe("sessions");
+  expect(sidebarViewForPage("terminal")).toBe("sessions");
+  expect(sidebarViewForPage("systems")).toBe("sessions");
+  expect(sidebarViewForPage("sessions")).toBe("sessions");
+  expect(sidebarViewForPage("worktrees")).toBe("sessions");
+  expect(sidebarViewForPage("usage")).toBeUndefined();
+  expect(sidebarViewForPage("plugin", "knowledge/overview")).toBeUndefined();
+  // Remote access belongs to the Users section.
+  expect(sidebarViewForPage("plugin", "openclaw-id-access/access")).toBe("online");
+});

@@ -11,9 +11,11 @@ import { normalizeCommandBody } from "../../auto-reply/commands-registry.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import { resolveSessionResetCommand } from "../../auto-reply/reply/session-reset-command.js";
+import { getRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
   upsertSessionEntryCore,
@@ -23,6 +25,7 @@ import { recordAcceptedSessionParticipantInput } from "../../sessions/session-pa
 import {
   isSessionPersonalBootstrapTurn,
   prepareChannelParticipantObservation,
+  readSessionInputProfileId,
 } from "../../sessions/session-participant-input.js";
 import { waitForSessionParticipantRecording } from "../../sessions/session-participant-recording.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
@@ -30,6 +33,11 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
+import { queuedChatInputAdmission } from "../queued-chat-input-admission.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
+import { prepareSessionPrincipalRunAuthority } from "../session-sharing-authorization-async.js";
 import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
 import { createClientInfo, createAttachments } from "./chat-send-user-turn.test-support.js";
@@ -69,6 +77,72 @@ function requesterProfile(text: string) {
 }
 
 describe("prepareChatSendUserTurn", () => {
+  it.each(["/new", "/stop", "/btw hello", "/model other/model", "/queue collect"])(
+    "keeps participating %s input literal and removes the requesting approval device",
+    (text) => {
+      const prepared = prepareTurn({
+        inputText: text,
+        request: {
+          inboundMessage: text,
+          participating: true,
+        },
+        attachments: { parsedMessage: text },
+        client: {
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: createClientInfo(),
+            device: {
+              id: "guest-device",
+              publicKey: "key",
+              signature: "sig",
+              signedAt: 1,
+              nonce: "n",
+            },
+            scopes: ["operator.write"],
+          },
+        },
+      });
+      const ctx = finalizeInboundContext(prepared.ctx);
+      expect(ctx.agentText).toBe(text);
+      expect(ctx.CommandInterpretationSuppressed).toBe(true);
+      expect(ctx.CommandAuthorized).toBe(false);
+      expect(ctx.CommandTurn).toMatchObject({ kind: "normal", authorized: false });
+      expect(ctx).not.toHaveProperty("ApprovalReviewerDeviceId");
+      expect(prepared.isInternalTextSlashCommandTurn).toBe(false);
+    },
+  );
+  it.each([
+    { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.UI },
+    { id: GATEWAY_CLIENT_IDS.WEBCHAT_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT },
+    { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: GATEWAY_CLIENT_MODES.UI },
+    { id: GATEWAY_CLIENT_IDS.IOS_APP, mode: GATEWAY_CLIENT_MODES.UI },
+    { id: GATEWAY_CLIENT_IDS.ANDROID_APP, mode: GATEWAY_CLIENT_MODES.UI },
+  ])("preserves slash prose and leading commands from $id", ({ id, mode }) => {
+    const prose = "Send /model to choose another model.\n/status is another example.";
+    const command = " \t/model openai/gpt-4o-mini";
+    for (const { text, kind, source, authorized } of [
+      { text: prose, kind: "normal", source: "message", authorized: false },
+      { text: command, kind: "text-slash", source: "text", authorized: true },
+    ]) {
+      const prepared = prepareTurn({
+        inputText: text,
+        request: { inboundMessage: text, clientInfo: createClientInfo({ id, mode }) },
+        attachments: { parsedMessage: text },
+      });
+      const ctx = finalizeInboundContext(prepared.ctx);
+      expect(ctx.commandText).toBe(text);
+      expect(ctx.agentText).toBe(text);
+      expect(ctx.CommandTurn).toMatchObject({
+        kind,
+        source,
+        authorized,
+        body: authorized ? "/model openai/gpt-4o-mini" : prose,
+      });
+      expect(prepared.isInternalTextSlashCommandTurn).toBe(authorized);
+    }
+  });
+
   it.each([
     { profileId: "profile-ada", synthetic: false, verified: true },
     { profileId: "profile-ada", synthetic: true, verified: true },
@@ -102,6 +176,69 @@ describe("prepareChatSendUserTurn", () => {
     }
     expect(prepared.ctx).not.toHaveProperty("SenderId");
   });
+
+  it("binds a queued human input to its exact current principal admission", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {};
+      setRuntimeConfigSnapshot(cfg);
+      const profile = ensureGatewayOwnerProfile("Queued Ada");
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:queued-requester",
+        sessionId: "queued-requester-session",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      };
+      await upsertSessionEntryCore(target, {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: profile.id },
+      });
+      const context = createGatewayRequestContext(makeContextParams());
+      context.getRuntimeConfig = () => cfg;
+      const admitted = await prepareSessionPrincipalRunAuthority({
+        ...target,
+        profileId: profile.id,
+        context,
+      });
+      try {
+        const client = createSyntheticPluginRuntimeClient({
+          operatorRoleActor: { kind: "operator", profileId: profile.id },
+          operatorRunAuthority: admitted.authority,
+          scopes: [...admitted.authority.scopes],
+        });
+        const prepared = queuedChatInputAdmission.run(
+          {
+            target: {
+              ...target,
+              inputId: "queued-requester-input",
+              runId: "run-1",
+              message: buildPersistedUserTurnMessage({ text: "hello", timestamp: 1 }),
+              requestHash: "request:queued-requester",
+            },
+            requestFingerprint: "queued-requester",
+            requesterProfile: {
+              id: profile.id,
+              displayName: profile.displayName,
+              isCurrent: () => true,
+            },
+          },
+          () => {
+            const wrongRun = prepareTurn({ client, session: { ...target, clientRunId: "other" } });
+            expect(getRequesterProfile(wrongRun.ctx)).toBeUndefined();
+            expect(readSessionInputProfileId(wrongRun.ctx)).toBeUndefined();
+            return prepareTurn({ client, session: target });
+          },
+        );
+        const ctx = finalizeInboundContext({ ...prepared.ctx });
+        expect(requesterProfile(buildInboundUserContextPrefix(ctx))).toEqual({
+          id: profile.id,
+          display_name: "Queued Ada",
+        });
+        expect(readSessionInputProfileId(ctx)).toBe(profile.id);
+      } finally {
+        admitted.release();
+      }
+    }));
 
   it.each(["profile", "synthetic", "profileless", "profileless-ui", "system"] as const)(
     "records only accepted authenticated external input after retargeting: %s",
@@ -485,9 +622,7 @@ describe("prepareChatSendUserTurn", () => {
             imageOrder: [inline ? "inline" : "offloaded"],
             ...(inline
               ? {
-                  parsedImages: [
-                    { type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 },
-                  ],
+                  parsedImages: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
                 }
               : { offloadedRefs: [imageRef(id, persistedPath, { label: fileName, sizeBytes })] }),
             ...(prestaged ? { mediaPathOffloads: [staged] } : {}),

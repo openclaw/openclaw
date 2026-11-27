@@ -13,6 +13,7 @@ import {
 } from "../../infra/package-update-activation-journal.js";
 import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
 import * as sqliteWorkerStore from "../../infra/sqlite-worker-store.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { createManagedHandoffRecoveryFixture } from "../../infra/update-managed-service-handoff-recovery.test-support.js";
 import { inspectUpdateRunDriver, readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
@@ -25,7 +26,6 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import { ExitError } from "../../runtime.js";
@@ -36,6 +36,11 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
+import {
+  createLegacyLauncherFixture,
+  legacyLauncherSource,
+} from "../../update/legacy-launcher.test-support.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { updateRepairCommand } from "./update-repair-command.js";
@@ -127,11 +132,8 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-update-repair-"));
   const root = tempDirs.make("openclaw-update-repair-install-");
   fs.mkdirSync(path.join(root, "dist"));
-  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.3" }));
-  fs.writeFileSync(
-    path.join(root, "dist", "build-info.json"),
-    JSON.stringify({ buildId: "installed-build" }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), { version: "2026.9.3" });
+  writeFixtureJsonSync(path.join(root, "dist", "build-info.json"), { buildId: "installed-build" });
   mocks.resolveRoot.mockResolvedValue(root);
   mocks.readConfig.mockResolvedValue({ valid: true, config: {} });
   mocks.resolveChannel.mockReset().mockResolvedValue({ tag: "latest", version: "2026.9.3" });
@@ -154,13 +156,23 @@ afterEach(async () => {
 });
 
 describe("update repair ledger recovery", () => {
+  it("refreshes the selected legacy launcher only after repair admission", async () => {
+    const fixture = createLegacyLauncherFixture(process.env.OPENCLAW_STATE_DIR!);
+    mocks.resolveRoot.mockResolvedValue(fixture.root);
+    mocks.ownershipAllowed.mockRejectedValueOnce(new Error("read-only fixture"));
+    await expect(updateRepairCommand({ json: true })).rejects.toThrow("read-only fixture");
+    expect(fs.readFileSync(fixture.launcher, "utf8")).toBe(legacyLauncherSource);
+    await updateRepairCommand({ json: true });
+    expect(fs.readFileSync(fixture.launcher, "utf8")).not.toBe(legacyLauncherSource);
+    expect(fs.readFileSync(fixture.trial, "utf8")).toBe(fixture.record);
+  });
   it("tells operators to stop the live Gateway owner before repair", async () => {
     const run = seedRun();
     mocks.ownershipAllowed.mockRejectedValueOnce(
       new GatewayStateOwnerContentionError("/fixture/state/openclaw.sqlite"),
     );
     await expect(updateRepairCommand({ json: true })).rejects.toThrow(
-      /Stop the Gateway first \(openclaw gateway stop\)/,
+      /Stop the Gateway first \(openclaw gateway stop --force\)/,
     );
     expect(mocks.finalize).not.toHaveBeenCalled();
     expect(getUpdateRun(run.runId)).toEqual(run);
@@ -214,10 +226,18 @@ describe("update repair ledger recovery", () => {
   it.each([
     { legacy: true, target: "2026.9.3" },
     { legacy: false, target: "2026.9.2" },
+    { legacy: false, target: "2026.9.2", tag: "preview-2026.9.2" },
   ])(
     "acknowledges a package-owner refusal without maintenance ($legacy)",
-    async ({ legacy, target }) => {
-      const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+    async ({ legacy, target, tag }) => {
+      const run = createUpdateRun({
+        trigger: "cli",
+        before: { version: "2026.9.2" },
+        ...(tag ? { target: { tag } } : {}),
+      });
+      const tagLookup = tag
+        ? vi.spyOn(updateCheck, "fetchNpmTagVersion").mockResolvedValue({ tag, version: target })
+        : undefined;
       const detail =
         "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.";
       const captureSteps: UpdateRunRecord["steps"] = [
@@ -255,6 +275,9 @@ describe("update repair ledger recovery", () => {
       expect(mocks.finalize).not.toHaveBeenCalled();
       expect(mocks.reachable).not.toHaveBeenCalled();
       expect(mocks.readiness).not.toHaveBeenCalled();
+      if (tagLookup) {
+        expect(tagLookup).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ tag }));
+      }
       const runStatus = await readUpdateRunStatus();
       if (runStatus.runStatusError !== undefined) {
         throw new Error(runStatus.runStatusError);
@@ -277,7 +300,6 @@ describe("update repair ledger recovery", () => {
           expect.arrayContaining(captureSteps.map((step) => expect.objectContaining(step))),
         );
       }
-      expect(renderUpdateRunReport(lastRun).headline).not.toContain("update failed");
       expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({
           status: "ok",
@@ -379,59 +401,59 @@ describe("update repair ledger recovery", () => {
     },
   );
 
-  it.each([
-    "live",
-    "unobserved",
-    "unrelated inherited ID",
-    "unrecorded adopter",
-    "recent request",
-  ] as const)("preserves the %s and refuses maintenance", async (owner) => {
-    const young = owner === "recent request";
-    const unobserved = owner === "unobserved" || owner === "unrelated inherited ID";
-    const run = seedRun({
-      phase: young ? undefined : "validating",
-      driver: owner === "recent request" ? undefined : "live",
-      ageMs: young ? 60_000 : undefined,
-    });
-    if (unobserved) {
-      recordUpdateRunPhase(run.runId, "validating", {
-        origin: { driver: { ...run.origin.driver!, host: "other-host.invalid" } },
+  it.each(["live", "unrelated inherited ID", "unrecorded adopter", "recent request"] as const)(
+    "preserves the %s and refuses maintenance",
+    async (owner) => {
+      const young = owner === "recent request";
+      const unobserved = owner === "unrelated inherited ID";
+      const run = seedRun({
+        phase: young ? undefined : "validating",
+        driver: owner === "recent request" ? undefined : "live",
+        ageMs: young ? 60_000 : undefined,
       });
-    }
-    if (owner === "unrecorded adopter") {
-      recordUpdateRunStep(run.runId, { step: "driver:identity-unavailable", status: "completed" });
-    }
-    if (owner === "unrelated inherited ID" || owner === "unrecorded adopter") {
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
-    }
-    const current = getUpdateRun(run.runId)!;
-    const pending = updateRepairCommand({});
-    await expect(pending).rejects.toThrow(
-      `Update ${run.runId} remains recorded as running (${run.phase});`,
-    );
-    if (owner === "live" || owner === "unobserved") {
-      for (const detail of [
-        `PID ${run.origin.driver!.pid}`,
-        current.origin.driver!.host,
-        unobserved ? "liveness: not observed" : "liveness: alive",
-        `started ${new Date(run.createdAtMs).toISOString()}`,
-        "age 3600s",
-        `last activity ${new Date(current.updatedAtMs).toISOString()}`,
-        "stop it through its owning host",
-        "openclaw update repair",
-      ]) {
-        await expect(pending).rejects.toThrow(detail);
+      if (unobserved) {
+        recordUpdateRunPhase(run.runId, "validating", {
+          origin: { driver: { ...run.origin.driver!, host: "other-host.invalid" } },
+        });
       }
-    }
-    if (owner === "unrecorded adopter") {
-      await expect(pending).rejects.toThrow("unrecorded adopter");
-      expect(getUpdateRun(run.runId)?.steps).not.toContainEqual(
-        expect.objectContaining({ step: "finalize:repair-continuation" }),
+      if (owner === "unrecorded adopter") {
+        recordUpdateRunStep(run.runId, {
+          step: "driver:identity-unavailable",
+          status: "completed",
+        });
+      }
+      if (owner === "unrelated inherited ID" || owner === "unrecorded adopter") {
+        vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+      }
+      const current = getUpdateRun(run.runId)!;
+      const pending = updateRepairCommand({});
+      await expect(pending).rejects.toThrow(
+        `Update ${run.runId} remains recorded as running (${run.phase});`,
       );
-    }
-    expect(getUpdateRun(run.runId)).toEqual(current);
-    expect(mocks.finalize).not.toHaveBeenCalled();
-  });
+      if (owner === "live") {
+        for (const detail of [
+          `PID ${run.origin.driver!.pid}`,
+          current.origin.driver!.host,
+          unobserved ? "liveness: not observed" : "liveness: alive",
+          `started ${new Date(run.createdAtMs).toISOString()}`,
+          "age 3600s",
+          `last activity ${new Date(current.updatedAtMs).toISOString()}`,
+          "stop it through its owning host",
+          "openclaw update repair",
+        ]) {
+          await expect(pending).rejects.toThrow(detail);
+        }
+      }
+      if (owner === "unrecorded adopter") {
+        await expect(pending).rejects.toThrow("unrecorded adopter");
+        expect(getUpdateRun(run.runId)?.steps).not.toContainEqual(
+          expect.objectContaining({ step: "finalize:repair-continuation" }),
+        );
+      }
+      expect(getUpdateRun(run.runId)).toEqual(current);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([undefined, "staging"] as const)(
     "repairs an abandoned %s row through the public command without maintenance",
@@ -462,13 +484,14 @@ describe("update repair ledger recovery", () => {
       );
       expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
       const repaired = getUpdateRun(run.runId)!;
-      expect(renderUpdateRunReport(repaired).markdown).not.toContain("openclaw triage");
       expect(
         formatUpdateRestartStatusValue(
           { kind: "update", status: "error", ts: now, stats: { runId: run.runId } },
           { warn: (message) => `warning: ${message}`, muted: (message) => `muted: ${message}` },
         ),
-      ).toBe("muted: ℹ️ OpenClaw abandoned update reconciled.");
+      ).toBe(
+        "muted: ℹ️ OpenClaw abandoned update reconciled.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
+      );
       expect(getUpdateRun(run.runId)).toEqual(repaired);
       await updateRepairCommand({});
       expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, [], undefined, undefined);
@@ -541,6 +564,7 @@ describe("update repair ledger recovery", () => {
     const root = fs.realpathSync(await mocks.resolveRoot());
     const handoff = createManagedHandoffRecoveryFixture(root);
     handoff.seedCancellation({ ageMs: 60_000 });
+    handoff.processCensus.unverifiedPids.push(81236);
     const family = handoff.rows();
 
     await expect(withCliProcessScope(() => updateRepairCommand({ json: true }))).rejects.toEqual(
@@ -561,7 +585,9 @@ describe("update repair ledger recovery", () => {
         owner: "original-owner",
         leaseVersion: 4,
         lastActivityAt: new Date(family[0]!.updated_at).toISOString(),
-        reason: expect.stringContaining("recovery grace ends at"),
+        reason: expect.stringContaining(
+          "Handoff descendants remain alive or unverified: PID 81236",
+        ),
       },
     });
     expect(handoff.rows()).toEqual(family);

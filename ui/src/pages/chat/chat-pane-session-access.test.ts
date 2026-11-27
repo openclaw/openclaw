@@ -2,6 +2,7 @@
 
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
@@ -15,7 +16,12 @@ import {
 } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
-import { createPaneHeaderWorkspaceFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
+import {
+  createPaneHeaderWorkspaceFixture,
+  createTestChatPane,
+  runPaneHeaderAction,
+} from "./chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import {
   openNativeMenu,
@@ -115,24 +121,21 @@ describe("chat pane session access", () => {
       sessionKey: "agent:main:dashboard:incognito-current",
       required: "operator.admin",
     },
-  ])(
-    "refuses creation from $sessionKey without $required",
-    async ({ scope, sessionKey, required }) => {
-      const sessions = {
-        create: vi.fn(async () => "agent:main:new"),
-      } as unknown as SessionCapability;
-      const client = {} as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions });
-      state.sessionKey = sessionKey;
-      pane.context.gateway.snapshot.hello = hello(scope, ["sessions.create"]);
+  ])("refuses creation from $sessionKey without $required", async ({ scope, sessionKey }) => {
+    const sessions = {
+      create: vi.fn(async () => "agent:main:new"),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.sessionKey = sessionKey;
+    pane.context.gateway.snapshot.hello = hello(scope, ["sessions.create"]);
 
-      await expect(pane.createSession()).resolves.toBe(false);
+    await expect(pane.createSession()).resolves.toBe(false);
 
-      expect(sessions.create).not.toHaveBeenCalled();
-      expect(state.lastError).toContain(required);
-      expect(state.chatError).toBe(state.lastError);
-    },
-  );
+    expect(sessions.create).not.toHaveBeenCalled();
+    expect(state.lastError).toBe("You don’t have permission to do this.");
+    expect(state.chatError).toBe(state.lastError);
+  });
 
   it("refuses header rename when sessions.patch is unavailable or lacks write scope", () => {
     for (const snapshot of [hello("operator.write", ["sessions.create"]), hello("operator.read")]) {
@@ -198,7 +201,7 @@ describe("chat pane session access", () => {
         selfUser: { id: "alice", name: "Alice" },
       };
       pane.applyGatewaySnapshot(connected);
-      const open = () => modal.track(pane.handleHeaderSessionAction({ kind: "new-group" }, row));
+      const open = () => modal.track(runPaneHeaderAction(pane, { kind: "new-group" }, row));
       try {
         const completion = open();
         const input = await waitForInputDialog();
@@ -280,14 +283,14 @@ describe("chat pane session access", () => {
         throw new Error("Assignment rejected");
       });
       try {
-        void modal.track(pane.handleHeaderSessionAction({ kind: "new-group" }, row));
+        void modal.track(runPaneHeaderAction(pane, { kind: "new-group" }, row));
         await submitInputDialog("Keep this group");
         await vi.waitFor(() =>
           expect(document.body.querySelector("openclaw-modal-dialog [role=alert]")).not.toBeNull(),
         );
         expect((await waitForInputDialog()).value).toBe("Keep this group");
         expect(document.body.textContent).toContain(
-          outcome === "failed" ? "Assignment rejected" : "Gateway connection replaced",
+          outcome === "failed" ? "Assignment rejected" : "The connection changed",
         );
       } finally {
         await modal.cleanup();
@@ -379,3 +382,24 @@ describe("chat pane session access", () => {
     );
   });
 });
+
+it.each(["FORBIDDEN", "UNAVAILABLE"])(
+  "classifies %s server failures from header rename and restore",
+  async (code) => {
+    const { pane, state, patch } = createPatchPane();
+    pane.context.gateway.snapshot.hello = hello();
+    const failure = new GatewayRequestError({ code, message: "Mutation rejected" });
+    patch.mockRejectedValue(failure);
+    const row = sessionRow({ sessionId: "session-a", sharingRole: "owner" });
+    state.sessionsResult = sessionsResult([row], 0);
+    pane.beginHeaderRename(row);
+    pane.headerPresentation.renameValue = "A new title";
+    pane.commitHeaderRename();
+    await vi.waitFor(() => expect(state.lastError).toBe("Mutation rejected"));
+    expect(state.lastErrorDetail).toBe(code === "FORBIDDEN" ? EXPECTED_CHAT_REFUSAL : failure);
+    state.lastError = null;
+    await pane.restoreArchivedSession(state.sessionKey, "session-a");
+    expect(state.lastError).toBe("Mutation rejected");
+    expect(state.lastErrorDetail).toBe(code === "FORBIDDEN" ? EXPECTED_CHAT_REFUSAL : failure);
+  },
+);

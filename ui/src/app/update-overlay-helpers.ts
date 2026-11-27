@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
 import {
   isAcknowledgedAbandonedUpdateRun,
@@ -175,7 +176,7 @@ function lastLogLine(tail: string | null | undefined): string | null {
     .map((line) => line.trim())
     .filter(Boolean);
   const last = lines.at(-1);
-  return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
+  return last ? truncateUtf16Safe(last, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
 }
 
 export type UpdateRunResponse = {
@@ -306,7 +307,7 @@ export async function projectUpdateRunFailure(
   ) {
     return null;
   }
-  const { renderUpdateRunReport } = await import("../../../src/infra/update-run-report.js");
+  const { renderUpdateRunSummary } = await import("../../../src/infra/update-run-notice.js");
   const step = run.steps.findLast((entry) => entry.status === "failed");
   return {
     id: run.runId,
@@ -314,7 +315,7 @@ export async function projectUpdateRunFailure(
     outcome: "failed",
     banner: {
       tone: run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON ? "warn" : "danger",
-      text: renderUpdateRunReport(run).markdown,
+      text: renderUpdateRunSummary(run),
     },
     attempt: {
       timestampMs: run.finishedAtMs ?? run.updatedAtMs,
@@ -355,7 +356,9 @@ export function resolveUpdateStatusBanner(params: {
     // which step owned it.
     text: cause
       ? `${t("updates.failedAtStep", { step: cause.step, cause: cause.detail })} ${guidance}`
-      : t("updates.status", { status, reason, guidance }),
+      : status === "error"
+        ? t("updates.error", { error: `${reason}. ${guidance}` })
+        : t("updates.status", { status, reason, guidance }),
   };
 }
 

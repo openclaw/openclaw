@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import {
   getCliProcessTestTimeout,
   runCliProcessChild,
@@ -69,7 +70,7 @@ it("refuses missing deferral metadata with the 2026.9.2 row only in WAL", async 
   });
   const packagePath = path.join(runtimeRoot, "package.json");
   const manifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-  fs.writeFileSync(packagePath, JSON.stringify({ ...manifest, version: "2026.9.3" }));
+  writeFixtureJsonSync(packagePath, { ...manifest, version: "2026.9.3" });
   using writer = new DatabaseSync(shared);
   const row = writer.prepare("SELECT * FROM update_runs").get();
   if (!row) {
@@ -127,13 +128,10 @@ it(
     const sourcePath = path.join(stateDir, "exec-approvals.json");
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     fs.mkdirSync(workspaceDir);
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },
-        plugins: { enabled: false },
-      }),
-    );
+    writeFixtureJsonSync(configPath, {
+      agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },
+      plugins: { enabled: false },
+    });
     const legacy = JSON.stringify({ version: 1, defaults: { security: "full" }, agents: {} });
     fs.writeFileSync(sourcePath, legacy);
     const seeded = openOpenClawStateDatabase({ env });

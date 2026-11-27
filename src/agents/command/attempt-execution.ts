@@ -17,6 +17,7 @@ import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-sess
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { resolveUserPath } from "../../utils.js";
+import { readRunOperatorAuthority } from "../admitted-run-context.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import {
@@ -24,7 +25,6 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../cli-execution-auth.js";
 import { isClaudeCliProvider } from "../cli-output-records.js";
-import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
@@ -52,6 +52,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
+import { resolveTurnCyberAccessProgram } from "../model-catalog-access-programs.js";
 import { isCliProvider } from "../model-selection.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -79,7 +80,6 @@ import type { AgentAttemptParams } from "./attempt-execution.types.js";
 import { buildCommonCommandRunParams } from "./attempt-run-params.js";
 import { assertSandboxedDelegatedChildNotCli } from "./attempt-sandbox-cli-admission.js";
 import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
-import { readSessionRunSettings } from "./session-run-settings.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -313,6 +313,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliExecutionProvider) {
+    const { runCliAgent } = await import("../cli-runner.js");
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
     return withAdmittedCliCandidate(
       {
@@ -344,11 +345,20 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         readMode: "writable",
         getSessionEntry: () => params.sessionEntry,
         classifyResult: params.classifyResult,
+        onCompactionAccounting: params.onCompactionAccounting,
       },
-      async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
-        if ((params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram) !== undefined) {
+      async (turn) => {
+        const { sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult } = turn;
+        const accessProgram = resolveTurnCyberAccessProgram({
+          program: params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram,
+          provider: params.providerOverride,
+          model: params.modelOverride,
+          noticeScope: `log:${params.sessionKey ?? params.sessionId}`,
+          notify: (notice) => log.info(notice),
+        });
+        if (accessProgram !== undefined && accessProgram !== "standard") {
           throw new Error(
-            "Explicit access programs are unsupported by this CLI runtime. Reset Access to the model default or use the OpenClaw or native Codex runtime.",
+            "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",
           );
         }
         params.sessionEntry = sessionEntry;
@@ -497,6 +507,15 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             cliSessionId: cliSessionBinding?.sessionId,
             cliSessionBinding,
             forkCliSessionOnResume: cliSessionBinding?.forkNextResume === true,
+            // A preserved binding stays as-is; otherwise a lost first turn keeps its native session.
+            persistStoppedFirstCliSession: params.preserveCliSessionBinding
+              ? undefined
+              : (binding) =>
+                  turn.persistStoppedFirstSession({
+                    binding,
+                    expectedSession: sessionEntry,
+                    sessionStore: params.sessionStore,
+                  }),
             ...(forkStoreParams
               ? buildCliSessionForkRunParams(
                   {
@@ -629,7 +648,12 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    ...readSessionRunSettings(params.sessionEntry),
+    /** Session-scoped settings every embedded turn of the session runs with. */
+    permissionMode: params.sessionEntry?.permissionMode,
+    sessionRoot:
+      readRunOperatorAuthority(params)?.participationCeiling?.source?.root ??
+      params.sessionEntry?.sessionRoot,
+    blindPrompt: params.sessionEntry?.blindPrompt,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
     agentHarnessId: isRawModelRun ? undefined : resolveSessionPinnedHarnessId(params.sessionEntry),
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
@@ -653,6 +677,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     execSession: params.sessionEntry,
+    sessionPromptDelivery: params.sessionEntry?.delivery,
     execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
     execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
     // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
@@ -671,8 +696,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     disableMessageTool: params.opts.disableMessageTool,
     swarmCollector: params.opts.swarmCollector,
     swarmOutputSchema: params.opts.swarmOutputSchema,
-    forceRestartSafeTools: params.opts.forceRestartSafeTools,
-    forceCodeModeTools: params.opts.forceCodeModeTools,
     codeModeOverride: params.opts.codeModeOverride,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,

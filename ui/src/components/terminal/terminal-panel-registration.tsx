@@ -34,14 +34,6 @@ function ownerFor(host: Host) {
   ] as const) {
     Object.defineProperty(host, key, { configurable: true, get: () => owner[key] });
   }
-  const bridgePrototype = Object.getPrototypeOf(host);
-  Object.defineProperty(host, "updateComplete", {
-    configurable: true,
-    get: () =>
-      Promise.resolve(Reflect.get(bridgePrototype, "updateComplete", host)).then(
-        () => owner.updateComplete,
-      ),
-  });
   return owner;
 }
 const styles = `${dockStyles}\n${tabStyles}\n${terminalStyles}`;
@@ -76,6 +68,7 @@ export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanel
       routeTarget: { default: null, attribute: false },
     },
     propertyChanged: (host, key) => owners.get(host)?.inputsChanged(key),
+    updateComplete: (host) => owners.get(host)?.updateComplete,
     methods: {
       activateTerminalHost: (host) => ownerFor(host).activateTerminalHost(),
       toggle: (host) => ownerFor(host).toggle(),
@@ -85,7 +78,7 @@ export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanel
       restoreTerminalPanelOpenState: (host) => ownerFor(host).restoreTerminalPanelOpenState(),
       resetTerminalSessionPicker: (host) => ownerFor(host).resetTerminalSessionPicker(),
       findTerminalPanelViewport: (host) => ownerFor(host).findTerminalPanelViewport(),
-      selectHostedTab: (host, id) => ownerFor(host).selectHostedTab(id),
+      selectHostedTab: (host, id, event) => ownerFor(host).selectHostedTab(id, event),
       closeHostedTab: (host, id) => ownerFor(host).closeHostedTab(id),
       handleToggleRequest: (host, event) => ownerFor(host).handleToggleRequest(event),
     },

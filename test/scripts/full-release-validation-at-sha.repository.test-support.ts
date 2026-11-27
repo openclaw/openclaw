@@ -27,7 +27,6 @@ export function runGit(cwd: string, args: string[]): string {
 
 type DispatchRepositoryOptions = {
   candidateOwned?: boolean;
-  releaseRef?: string;
   workflowSource?: string;
   targetSource?: Record<string, string>;
   targetAlreadyRemote?: boolean;
@@ -42,7 +41,7 @@ const dispatchRepositoryTemplates = new Map<string, ReturnType<typeof createDisp
 function createDispatchRepository(root: string, options: DispatchRepositoryOptions = {}) {
   const origin = join(root, "origin.git");
   const checkout = join(root, "checkout");
-  const releaseRef = options.releaseRef ?? "release/2026.8.1";
+  const releaseRef = "release/2026.8.1";
   const write = (path: string, content: string | Buffer) => {
     const destination = join(checkout, path);
     mkdirSync(dirname(destination), { recursive: true });
@@ -62,6 +61,7 @@ function createDispatchRepository(root: string, options: DispatchRepositoryOptio
   runGit(checkout, ["config", "user.name", "OpenClaw Release Test"]);
   // Historical diagnostics use root-only sources; candidate qualification includes AI.
   write("package.json", '{"version":"2026.7.9"}\n');
+  write("config/test-mock-exports-baseline.txt", "# No grandfathered factories.\n");
   write("CHANGELOG.md", "## 2026.8.1\n\nRelease notes for the selected candidate.\n");
   write(workflowPath, LEGACY_WORKFLOW_SOURCE);
   write(
@@ -98,13 +98,14 @@ console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { run
       ".github/workflows/openclaw-release-prepare.yml",
       "scripts/lib/release-qualification-coverage.json",
       "scripts/lib/upgrade-survivor-scenarios.json",
+      "scripts/lib/release-validation-waivers.json",
     ]) {
       write(path, readFileSync(path));
     }
   }
   const workflowSha = commit("test: trusted workflow contract");
   const trustedWorkflowTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
-  runGit(checkout, ["remote", "add", "origin", origin]);
+  runGit(checkout, ["remote", "add", "origin", "../origin.git"]);
   runGit(checkout, ["push", "-u", "origin", "main"]);
   runGit(checkout, ["tag", trustedWorkflowTag, workflowSha]);
   runGit(checkout, ["push", "origin", `refs/tags/${trustedWorkflowTag}`]);
@@ -151,7 +152,6 @@ This audited record covers the complete ${oldWorkflowSha}..${recordTarget} histo
 
 export function prepareDispatchRepository(root: string, options: DispatchRepositoryOptions) {
   const key = JSON.stringify([
-    options.releaseRef ?? "release/2026.8.1",
     options.workflowSource ?? CURRENT_WORKFLOW_SOURCE,
     options.targetSource ?? {},
     options.targetAlreadyRemote !== false,
@@ -172,10 +172,9 @@ export function prepareDispatchRepository(root: string, options: DispatchReposit
   }
   const origin = join(root, "origin.git");
   const checkout = join(root, "checkout");
-  // Each case can change refs, config and objects without touching the prepared history.
+  // The sibling-relative origin follows the copy; Git state is never shared.
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
   cpSync(template.origin, origin, copyOptions);
   cpSync(template.checkout, checkout, copyOptions);
-  runGit(checkout, ["remote", "set-url", "origin", origin]);
   return { ...template, origin, checkout };
 }

@@ -1,5 +1,5 @@
 /** Automatic live tool-result caps derived from the effective model context. */
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result-text-budget.js";
 
@@ -11,7 +11,7 @@ const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
 const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
 const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
 
-export function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): number {
+function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): number {
   if (!Number.isFinite(contextWindowTokens)) {
     return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
   }
@@ -25,7 +25,7 @@ export function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): 
   return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
 
-export function calculateMaxToolResultCharsWithCap(
+function calculateMaxToolResultCharsWithCap(
   contextWindowTokens: number,
   hardCapChars: number,
 ): number {
@@ -80,7 +80,7 @@ export function toolResultFitsBudget(text: string, budget?: ToolResultBudget): b
 // The catalog's value APIs retain the complete result before transcript projection.
 const fullToolResultDelivery = resolveGlobalSingleton(
   Symbol.for("openclaw.fullToolResultDelivery"),
-  () => new AsyncLocalStorage<boolean>(),
+  () => new AsyncContext<boolean>(Symbol("fullToolResultDelivery")),
 );
 
 export function runWithToolResultDelivery<T>(

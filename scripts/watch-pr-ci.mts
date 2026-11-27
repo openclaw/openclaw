@@ -12,6 +12,7 @@ import {
   type RollupPayload,
   type RollupPage,
 } from "./lib/watch-pr-ci-rollup.mts";
+import { createCiRunReader } from "./lib/watch-pr-ci-run.mts";
 import { createPrMetadataReader } from "./pr-lib/github.mjs";
 
 const USAGE =
@@ -39,6 +40,7 @@ const RunListItemSchema = z.object({
     z.array(z.object({ number: z.number().int().positive(), head: z.object({ sha: z.string() }) })),
   ),
   conclusion: optionalNullable(z.string()),
+  status: optionalString,
 });
 const RunListSchema = z
   .object({ workflow_runs: validArray(RunListItemSchema) })
@@ -90,7 +92,7 @@ const AttemptJobsPageSchema = z.object({
 type RunListItem = z.infer<typeof RunListItemSchema>;
 type RunStatus = z.infer<typeof RunStatusSchema>;
 type JobIdentity = { runId: number; checkId: number };
-type PrRunReplacement = { workflowId: number; checkSuites: ReadonlyMap<number, number> };
+type PrRunReplacement = ReadonlyMap<number, { workflowId: number; checkSuiteId: number }>;
 const MAX_EVIDENCE_READS_PER_POLL = 32;
 const GH_READ_OPTIONS = {
   stdio: ["ignore", "pipe", "pipe"],
@@ -241,11 +243,11 @@ export function classifyRollup(
     }
     // A shared head can belong to different PR bases. Only event-bound run/suite
     // evidence permits replacing an older graph before new job names appear.
-    const replacedSuite = replacement?.checkSuites.get(identity.runId);
+    const replaced = replacement?.get(identity.runId);
     if (
-      replacedSuite !== undefined &&
-      identity.workflowId === replacement?.workflowId &&
-      check.checkSuite?.databaseId === replacedSuite &&
+      replaced !== undefined &&
+      identity.workflowId === replaced.workflowId &&
+      check.checkSuite?.databaseId === replaced.checkSuiteId &&
       check.checkSuite?.workflowRun?.event === "pull_request"
     ) {
       supersededCount += 1;
@@ -361,9 +363,10 @@ function readPr(
 ) {
   // Repository resolution and metadata share one read budget, including diagnostics.
   const readDeadline = Date.now() + ghReadOptions(deadline).timeout;
-  return RollupPageSchema.parse(
-    readMetadata(pr, ["state", "mergeable", "headRefOid"], () => ghReadOptions(readDeadline)),
+  const metadata = readMetadata(pr, ["state", "mergeable", "headRefOid", "url"], () =>
+    ghReadOptions(readDeadline),
   );
+  return { ...RollupPageSchema.parse(metadata), url: metadata.url };
 }
 const buildFindRunArgs = (repo: string, sha: string) =>
   workflowRunsApiArgs(repo, sha, "pull_request", 20);
@@ -385,18 +388,13 @@ function findRun(repo: string, sha: string, after?: number, pr?: number) {
   }
   return { run, runs: new Map(runs.map((item) => [item.id, item])) };
 }
-const readRun = (repo: string, runId: number, deadline?: number, includeJobs = false) =>
+const readRun = (repo: string, runId: number, deadline?: number) =>
   RunStatusSchema.parse(
-    execGhJson(
-      `run view ${runId} --repo ${repo} --json status,conclusion${includeJobs ? ",jobs" : ""}`.split(
-        " ",
-      ),
-      {
-        ...ghReadOptions(deadline),
-        // Revalidate changing run status instead of reusing a cached snapshot.
-        env: { ...process.env, OCTOPOOL_FRESH: "1" },
-      },
-    ),
+    execGhJson(`run view ${runId} --repo ${repo} --json status,conclusion`.split(" "), {
+      ...ghReadOptions(deadline),
+      // Revalidate changing run status instead of reusing a cached snapshot.
+      env: { ...process.env, OCTOPOOL_FRESH: "1" },
+    }),
   );
 
 function formatRunJobs(run: RunStatus) {
@@ -591,12 +589,23 @@ function readPrRollup(
     candidate.pull_requests?.length === 1 &&
     candidate.pull_requests[0]?.number === args.pr &&
     candidate.pull_requests[0]?.head.sha === args.headSha;
-  const checkSuites = new Map<number, number>();
+  const replacement = new Map<number, { workflowId: number; checkSuiteId: number }>();
   const pendingEvidence = new Set<RollupCheck>();
-  const replacement =
-    boundToPr(run) && run.workflow_id !== undefined && run.check_suite_id !== undefined
-      ? { workflowId: run.workflow_id, checkSuites }
-      : undefined;
+  const ciBound =
+    boundToPr(run) && run.workflow_id !== undefined && run.check_suite_id !== undefined;
+  // Successful non-CI run evidence is refreshed each poll: reruns reuse run IDs.
+  const workflowRuns = new Map<number, RunListItem>();
+  const readWorkflowRun = (id: number, cache = workflowRuns) => {
+    let evidence = cache.get(id);
+    if (!evidence && reads.remaining > 0) {
+      reads.remaining -= 1;
+      evidence = RunListItemSchema.parse(
+        execGhJson(["api", `repos/${args.repo}/actions/runs/${id}`], ghReadOptions(deadline)),
+      );
+      cache.set(id, evidence);
+    }
+    return evidence;
+  };
   let nextPage = initial;
   while (true) {
     const pr = nextPage ?? readRollup(deadline).page;
@@ -609,17 +618,67 @@ function readPrRollup(
     if (pr.statusCheckRollup?.state === "SUCCESS") {
       return { pr, result: classifyRollup(pr.statusCheckRollup, reconciled) };
     }
-    const knownRuns = runs.size;
+    replacement.clear();
+    const knownRuns = runs.size + workflowRuns.size;
     // Pending evidence belongs only to these exact observations, never a later
     // check state or a different workflow/event sharing its run ID.
     pendingEvidence.clear();
     for (const check of pr.statusCheckRollup?.contexts?.nodes ?? []) {
       const identity = checkRunIdentity(check);
       if (
-        !replacement ||
+        identity &&
+        identity.workflowId !== run.workflow_id &&
+        identity.event === "pull_request" &&
+        check.conclusion === "CANCELLED" &&
+        check.checkSuite?.databaseId !== undefined
+      ) {
+        // Matrix placeholders have no same-name successor. Require a complete,
+        // successful newer run of this workflow, bound to the same PR and head.
+        let successor: { runId: number; suiteId: number } | undefined;
+        for (const node of pr.statusCheckRollup?.contexts?.nodes ?? []) {
+          const next = checkRunIdentity(node);
+          const suiteId = node.checkSuite?.databaseId;
+          if (
+            next?.workflowId === identity.workflowId &&
+            next.event === identity.event &&
+            next.runId > (successor?.runId ?? identity.runId) &&
+            suiteId !== undefined
+          ) {
+            successor = { runId: next.runId, suiteId };
+          }
+        }
+        if (successor) {
+          const nextId = successor.runId;
+          const next = readWorkflowRun(nextId);
+          // Old-run identity is stable across reruns. Retain it across polls so
+          // backlogs larger than one metadata budget can make bounded progress.
+          const previous = readWorkflowRun(identity.runId, runs);
+          if (!next || !previous) {
+            pendingEvidence.add(check);
+          } else if (
+            next.id === nextId &&
+            next.workflow_id === identity.workflowId &&
+            next.check_suite_id === successor.suiteId &&
+            next.status === "completed" &&
+            next.conclusion === "success" &&
+            boundToPr(next) &&
+            previous.id === identity.runId &&
+            previous.workflow_id === identity.workflowId &&
+            previous.check_suite_id === check.checkSuite.databaseId &&
+            boundToPr(previous)
+          ) {
+            replacement.set(previous.id, {
+              workflowId: identity.workflowId,
+              checkSuiteId: previous.check_suite_id,
+            });
+          }
+        }
+      }
+      if (
+        !ciBound ||
         !identity ||
         identity.runId >= run.id ||
-        identity.workflowId !== replacement.workflowId ||
+        identity.workflowId !== run.workflow_id ||
         identity.event !== "pull_request" ||
         check.checkSuite?.databaseId === undefined
       ) {
@@ -644,16 +703,19 @@ function readPrRollup(
       }
       if (
         previous.id === identity.runId &&
-        previous.workflow_id === replacement.workflowId &&
+        previous.workflow_id === run.workflow_id &&
         previous.check_suite_id !== undefined &&
         boundToPr(previous)
       ) {
-        checkSuites.set(previous.id, previous.check_suite_id);
+        replacement.set(previous.id, {
+          workflowId: previous.workflow_id,
+          checkSuiteId: previous.check_suite_id,
+        });
       }
     }
     // Metadata reads can span a push or new checks. Reobserve before deciding;
     // any newly referenced IDs are resolved within the same watcher deadline.
-    if (runs.size === knownRuns) {
+    if (runs.size + workflowRuns.size === knownRuns) {
       if (pendingEvidence.size > 0) {
         console.log(`STATUS evidence=PENDING deferred-checks=${pendingEvidence.size}`);
       }
@@ -731,6 +793,7 @@ function precheck(pr: RollupPage, sha: string, midWait = false) {
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const readMetadata = createPrMetadataReader(args.repo);
+  const readCiRun = createCiRunReader(args.repo, args.headSha, ghReadOptions);
   const readRollup = createPrRollupReader(
     args.pr,
     args.repo,
@@ -799,15 +862,12 @@ async function main(argv = process.argv.slice(2)) {
     poll: () => {
       try {
         if (args.completion === "ci-run") {
-          const blocked = precheck(
-            readPr(args.pr, readMetadata, watchDeadline),
-            args.headSha,
-            true,
-          );
+          const currentPr = readPr(args.pr, readMetadata, watchDeadline);
+          const blocked = precheck(currentPr, args.headSha, true);
           if (blocked !== null) {
             return blocked;
           }
-          const run = readRun(args.repo, runId, watchDeadline, true);
+          const run = RunStatusSchema.parse(readCiRun(runId, currentPr.url, watchDeadline));
           const result = classifyAttachedCiRun(run);
           const runStatus = run.status ?? "undefined";
           const runConclusion = run.conclusion ?? "pending";

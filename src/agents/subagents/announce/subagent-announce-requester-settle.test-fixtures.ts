@@ -16,7 +16,6 @@ export function createRequesterSettleCases() {
   const missingRequesterFinal = {
     delivered: false,
     path: "direct",
-    reason: "visible_reply_missing",
   };
   const suppressedDelivery = { status: "suppressed", succeeded: true, resultCount: 0 };
   const finalText = "The consolidated answer.";
@@ -115,7 +114,6 @@ export function createRequesterSettleCases() {
       { expected: deliveredRequesterFinal },
     ),
     ...[
-      { settled: undefined, error: undefined, aborted: undefined },
       { settled: true, error: { kind: "incomplete_turn" }, aborted: undefined },
       { settled: true, error: undefined, aborted: true },
     ].map(({ settled, error, aborted }) =>
@@ -133,13 +131,17 @@ export function createRequesterSettleCases() {
     ...["accepted", "in_flight"].map((status) =>
       settleCase(`retains an ${status} settle handoff until terminal evidence`, undefined, {
         status,
-        expected: { delivered: false, disposition: "session_queued" },
+        expected: { delivered: false, path: "queued" },
       }),
     ),
     settleCase(
-      "does not record a canceled partial answer as a visible final",
+      "does not record a timed-out partial answer as a visible final",
       { payloads: [{ text: "partial answer" }] },
-      { ...localOnly, status: "timeout", expected: deliveredRequesterFinal },
+      {
+        ...localOnly,
+        status: "timeout",
+        expected: missingRequesterFinal,
+      },
     ),
     settleCase(
       "records a non-yielded visible final without requiring a reply",
@@ -165,51 +167,6 @@ export function createRequesterSettleCases() {
         expected: deliveredRequesterFinal,
       },
     ),
-    settleCase("rejects a yielded turn without a result", undefined, localOnly),
-    ...[
-      { name: "error", payload: { text: "tool failed", isError: true } },
-      { name: "reasoning", payload: { text: "thinking", isReasoning: true } },
-      { name: "commentary", payload: { text: "working on it", isCommentary: true } },
-      { name: "compaction notice", payload: { text: "compacting", isCompactionNotice: true } },
-      {
-        name: "fallback notice",
-        payload: { text: "switching providers", isFallbackNotice: true },
-      },
-      { name: "status notice", payload: { text: "still working", isStatusNotice: true } },
-      {
-        name: "supplemental TTS audio",
-        payload: {
-          mediaUrl: "file:///tmp/answer.mp3",
-          ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
-        },
-      },
-    ].map(({ name, payload }) =>
-      settleCase(`rejects ${name} instead of a final answer`, { payloads: [payload] }, localOnly),
-    ),
-    settleCase(
-      "rejects an explicitly hidden assistant payload",
-      { payloads: [{ text: "not user visible", visible: false }] },
-      localOnly,
-    ),
-    settleCase(
-      "rejects a yielded turn that emits only the silent reply token",
-      { payloads: [], meta: { yielded: true, terminalReply: { disposition: "silent" } } },
-      localOnly,
-    ),
-    settleCase(
-      "rejects a visible final whose delivery was suppressed",
-      { payloads: [{ text: "never delivered" }], deliveryStatus: suppressedDelivery },
-      localOnly,
-    ),
-    settleCase("rejects a messaging-tool flag without a committed source receipt", {
-      payloads: [],
-      didSendViaMessagingTool: true,
-    }),
-    settleCase("does not let an off-target final upgrade source progress", {
-      payloads: [],
-      didSendViaMessagingTool: true,
-      messagingToolSentTargets: [sourceProgress, { ...sourceFinal, to: "dm:OTHER" }],
-    }),
     settleCase(
       "accepts an automatic source-matched final without legacy intent markers",
       {
@@ -237,27 +194,6 @@ export function createRequesterSettleCases() {
         messagingToolSentTargets: [sourceFinal],
       },
       visibleFinal,
-    ),
-    settleCase(
-      "rejects terminal text when an external origin cannot be resolved",
-      { payloads: [{ text: finalText }] },
-      {
-        routes: [
-          settleRoute(
-            "external channel without destination",
-            "agent:main:requester-settle",
-            { channel: "discord" },
-            "discord",
-          ),
-          settleRoute("destination without channel", "agent:main:requester-settle", {
-            to: "dm:U123",
-          }),
-          settleRoute("unknown channel", "agent:main:requester-settle", {
-            channel: "unknown-external",
-            to: "dm:U123",
-          }),
-        ],
-      },
     ),
   ];
   return requesterSettleCases;

@@ -28,6 +28,7 @@ import {
   prepareSubagentKillSession,
   type SubagentKillSession,
 } from "./subagent-control-session.js";
+import { isSubagentDeliveryClosed } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -480,9 +481,7 @@ async function confirmProvisionalSubagentKill(
         // completion, unless it already knows: it stopped or reset itself, or its own turn still
         // held the row when the kill landed (a transferred row no longer names that turn).
         suppressCompletionDelivery:
-          current.suppressCompletionDelivery === true ||
-          current.killReconciliation?.suppressTaskDelivery === true ||
-          current.requesterTurnRunId !== undefined
+          isSubagentDeliveryClosed(current) || current.requesterTurnRunId !== undefined
             ? true
             : undefined,
         suppressAnnounceReason: undefined,

@@ -1,4 +1,7 @@
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import {
+  prepareCommandOwnerAuthority,
+  type PreparedCommandOwnerAuthority,
+} from "../../auto-reply/command-owner-facts.js";
 import {
   assertSessionWriterDeliveryAuthorized,
   prepareSessionWriterDeliveryAuthority,
@@ -10,8 +13,9 @@ import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
-import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { preparePluginNoticeOwnerCheck } from "./delivery-completion.js";
 import { projectQueuedDeliveryOptions } from "./delivery-queue-projection.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
 import { preparedOutboundPayloads } from "./prepared-batch.js";
@@ -27,13 +31,19 @@ export async function buildRecoveryDeliverParams(
     entry.deliveryCompletion?.kind === "conversation" ? entry.deliveryCompletion : undefined;
   const pendingFinal =
     entry.deliveryCompletion?.kind === "pending-final" ? entry.deliveryCompletion : undefined;
-  let owner: Awaited<ReturnType<typeof prepareCommandOwnerAuthority>> | undefined;
+  const pluginNotice =
+    entry.deliveryCompletion?.kind === "plugin-notice" ? entry.deliveryCompletion : undefined;
+  // The initial owner check precedes awaited recovery preparation; recheck the plugin at I/O.
+  const assertPluginOwner = pluginNotice
+    ? await preparePluginNoticeOwnerCheck(pluginNotice.pluginId)
+    : undefined;
   const rejection = (error: unknown) =>
     new PlatformMessageNotDispatchedError(
       "Original channel owner authorization could not be checked",
       { cause: error, retryable: !(error instanceof GatewayOperatorAccessDeniedError) },
     );
   if (pendingFinal?.commandOwnerReference !== undefined) {
+    let owner: PreparedCommandOwnerAuthority;
     const reference = parseCommandOwnerReference(pendingFinal.commandOwnerReference);
     if (!reference) {
       throw rejection(new GatewayOperatorAccessDeniedError());
@@ -52,6 +62,16 @@ export async function buildRecoveryDeliverParams(
     if (!owner.source) {
       throw rejection(new GatewayOperatorAccessDeniedError());
     }
+    // Recovered work admits the original owner's policy once. Later callbacks
+    // retain only data-owner and transport lifecycle fences for this batch.
+    try {
+      if (!owner.isCurrent(cfg)) {
+        // A stale capture is not proof that the durable reference was retired.
+        throw new Error("Original channel owner capture changed during delivery");
+      }
+    } catch (error) {
+      throw rejection(error);
+    }
   }
   const writer = await prepareSessionWriterDeliveryAuthority(
     pendingFinal?.sessionWriterDeliveryAuthority,
@@ -59,15 +79,15 @@ export async function buildRecoveryDeliverParams(
     resolveDeliveryQueueStateEnv(stateDir, stateContext),
   );
   const assertCurrent = () => {
-    try {
-      if (pendingFinal?.commandOwnerReference !== undefined && !owner?.isCurrent(cfg)) {
-        // A stale capture is not proof that the durable reference was retired.
-        throw new Error("Original channel owner capture changed during delivery");
-      }
-    } catch (error) {
-      throw rejection(error);
-    }
     assertSessionWriterDeliveryAuthorized(writer.authority);
+    try {
+      assertPluginOwner?.();
+    } catch (error) {
+      throw new PlatformMessageNotDispatchedError("Posting plugin is no longer active", {
+        cause: error,
+        retryable: false,
+      });
+    }
   };
   return {
     release: writer.release,
@@ -96,8 +116,8 @@ export async function buildRecoveryDeliverParams(
           },
         }
       : {}),
-    // Recovery retains completion settlement and reconstructs its original authority at I/O.
-    ...(pendingFinal
+    // Recovery retains completion settlement and fences its data/transport owners at I/O.
+    ...(pendingFinal || pluginNotice
       ? {
           onDirectAdapterHandoff: async () => assertCurrent(),
           assertDirectAdapterHandoff: assertCurrent,
@@ -111,5 +131,5 @@ export async function buildRecoveryDeliverParams(
     skipQueue: true, // Prevent re-enqueueing during recovery.
     deferredDeliveryAdmissionPassed: true,
     deferCommitHooks: true,
-  } satisfies DeliverOutboundPayloadsParams & { release: () => void };
+  } satisfies InternalDeliverOutboundPayloadsParams & { release: () => void };
 }

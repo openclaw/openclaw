@@ -90,15 +90,17 @@ export function createApplyPatchTool(
     root?: string;
     sandbox?: SandboxApplyPatchConfig;
     workspaceOnly?: boolean;
+    strictWorkspaceRoot?: boolean;
     containmentSource?: ApplyPatchContainmentSource;
     abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+    prepareHostFileMutation?: ApplyPatchFileOptions["prepareHostFileMutation"];
   } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const root = options.root ?? cwd;
   const sandbox = options.sandbox;
-  const workspaceOnly = options.workspaceOnly !== false;
+  const workspaceOnly = options.workspaceOnly ?? Boolean(sandbox);
 
   return {
     name: "apply_patch",
@@ -126,13 +128,16 @@ export function createApplyPatchTool(
           root,
           sandbox,
           workspaceOnly,
+          strictWorkspaceRoot: options.strictWorkspaceRoot,
           memoryWriteProvenance: options.memoryWriteProvenance,
+          prepareHostFileMutation: options.prepareHostFileMutation,
           signal: executionSignal,
         });
       } catch (error) {
         throw withApplyPatchContainmentHint(
           error,
           workspaceOnly ? options.containmentSource : undefined,
+          !sandbox,
         );
       }
 
@@ -170,6 +175,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
       await preflightUpdateHunks(hunks, fileOps, patchOptions.signal);
       return await commitPatchHunks(hunks, fileOps, patchOptions);
     },
+    options.signal,
   );
 }
 
@@ -783,7 +789,7 @@ async function resolvePatchPath(
           filePath,
           cwd: options.cwd,
           root: options.root ?? options.cwd,
-          allowLinkedWorktrees: true,
+          allowLinkedWorktrees: !options.strictWorkspaceRoot,
           allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })

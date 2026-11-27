@@ -1,20 +1,25 @@
 import { AsyncResource } from "node:async_hooks";
-import { ChildProcess, fork } from "node:child_process";
+import { type ChildProcess, fork } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import { constants, getPriority } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as processUrls from "./runtime-process-url.js";
 import { readSqliteDatabaseIntegrityVerification } from "./sqlite-database-admission.js";
+import { installSqliteFtsTokenizerMismatch } from "./sqlite-index-corruption.test-support.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { SqliteIntegrityWorkerInterruptedError } from "./sqlite-integrity-worker-error.js";
 import {
   assertSqliteIntegrityInWorker,
+  runSqliteIntegrityCheckInWorkerSync,
   withSqliteIntegrityWorkerScope,
 } from "./sqlite-integrity-worker.js";
 import { sqliteIntegrityCheckSteps, type SqliteIntegrityCheckTiming } from "./sqlite-integrity.js";
@@ -90,13 +95,93 @@ function expectForksClosed() {
 }
 
 function expectElapsed(value: unknown) {
-  expect(value).toEqual(expect.any(Number));
   expect(Number.isFinite(value)).toBe(true);
   expect(value).toBeGreaterThanOrEqual(0);
 }
 
+function createIntegrityChild(): ChildProcess {
+  // Native ChildProcess accessors require a spawned handle on some runtimes.
+  return Object.assign(new EventEmitter(), {
+    stderr: new PassThrough(),
+    exitCode: null,
+    signalCode: null,
+    connected: false,
+    killed: false,
+    send: vi.fn(() => true),
+    kill: vi.fn(() => true),
+  }) as unknown as ChildProcess;
+}
+
 describe("SQLite integrity child", () => {
   afterEach(() => vi.restoreAllMocks());
+  it("runs background verification at low process priority", async () => {
+    const { source } = fixture("background", "CREATE TABLE records(value INTEGER)");
+    using database = openNodeSqliteDatabase(source);
+    database.exec("BEGIN EXCLUSIVE");
+    const priorities: number[] = [];
+    vi.mocked(fork).mockImplementationOnce((...args) => {
+      const child = nativeFork(...args);
+      child.on("message", (message) => {
+        if ((message as { phase?: string }).phase === "opening") {
+          priorities.push(getPriority(expectDefined(child.pid, "integrity child PID")));
+          database.exec("COMMIT");
+        }
+      });
+      return child;
+    });
+    await assertSqliteIntegrityInWorker(
+      source,
+      5_000,
+      new AbortController().signal,
+      undefined,
+      undefined,
+      undefined,
+      { priority: "background" },
+    );
+    expect(priorities).toEqual([constants.priority.PRIORITY_LOW]);
+  });
+
+  it.each(["payload", "schema_meta"])(
+    "preserves schema-only migration scope with damage in %s",
+    (damagedTable) => {
+      let fragmentationOffset = 0;
+      const { source } = fixture(
+        "schema-scope",
+        `CREATE TABLE schema_meta(value INTEGER); INSERT INTO schema_meta VALUES (1);
+         CREATE TABLE payload(value INTEGER); INSERT INTO payload VALUES (1);`,
+        (database) => {
+          const root = Number(
+            database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = ?").get(damagedTable)
+              ?.rootpage,
+          );
+          const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
+          fragmentationOffset = (root - 1) * pageSize + 7;
+        },
+      );
+      const bytes = fs.readFileSync(source);
+      bytes[fragmentationOffset] = 1;
+      fs.writeFileSync(source, bytes);
+      using database = openNodeSqliteDatabase(source);
+      const check = {
+        database,
+        databaseLabel: source,
+        check: "quick" as const,
+        schemaOnly: true as const,
+        tables: ["schema_meta"],
+      };
+      const run = () => runSqliteIntegrityCheckInWorkerSync(check);
+      if (damagedTable === "schema_meta") {
+        expect(run).toThrow(/Fragmentation of 0 bytes reported as 1/);
+      } else {
+        expect(run).not.toThrow();
+      }
+      expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
+      expect(() => runSqliteIntegrityCheckInWorkerSync({ ...check, check: "full" })).toThrow(
+        /Fragmentation of 0 bytes reported as 1/,
+      );
+    },
+  );
+
   it("does not publish a quick worker result as full integrity verification", async () => {
     const source = path.join(tempDirs.make("openclaw-integrity-receipt-"), "source.sqlite");
     using database = openNodeSqliteDatabase(source);
@@ -123,11 +208,37 @@ describe("SQLite integrity child", () => {
     );
   });
 
+  it("does not publish full integrity verification when a worker tolerates stale FTS", async () => {
+    const ddl = "CREATE VIRTUAL TABLE search USING fts5(text);";
+    const { source } = fixture(
+      "stale-fts",
+      ddl + "INSERT INTO search(text) VALUES ('ab'||char(65534)||'cd');",
+    );
+    installSqliteFtsTokenizerMismatch(source, "search");
+    using database = openNodeSqliteDatabase(source);
+    const check = "full" as const;
+    await expect(
+      assertSqliteIntegrityInWorker(source, 5_000, new AbortController().signal),
+    ).rejects.toThrow(/malformed inverted index/u);
+    runSqliteIntegrityCheckInWorkerSync({
+      database,
+      databaseLabel: source,
+      check,
+      ftsSchemas: [ddl],
+    });
+    expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
+    await runSqliteIntegrityOperationInWorker(
+      sqliteIntegrityCheckSteps(database, source, undefined, { check, ftsSchemas: [ddl] }),
+      { busyTimeoutMs: 5_000, signal: new AbortController().signal, beforeResume: () => {} },
+    );
+    expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
+  });
+
   it("reports bounded progress while native integrity is blocked and stops after cancellation", async () => {
     const { source } = fixture("progress");
     progress.mockClear();
-    const worker = new ChildProcess();
-    worker.send = vi.fn(() => true);
+    const worker = createIntegrityChild();
+    const send = vi.spyOn(worker, "send");
     worker.kill = vi.fn(() => {
       queueMicrotask(() => worker.emit("close", null, "SIGKILL"));
       return true;
@@ -137,7 +248,7 @@ describe("SQLite integrity child", () => {
     vi.useFakeTimers();
     try {
       const check = inScope(() => inspect(source, controller.signal));
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
       worker.emit("message", { type: "phase", phase: "checking" });
       await vi.advanceTimersByTimeAsync(30_000);
       expect(progress).toHaveBeenCalledTimes(3);
@@ -172,6 +283,7 @@ describe("SQLite integrity child", () => {
     fs.writeFileSync(source, bytes);
     const timing: SqliteIntegrityCheckTiming = {};
     vi.mocked(fork).mockClear();
+    const stat = vi.spyOn(fs, "statSync");
     const check = inScope(() => inspect(source, undefined, timing));
     await expect(check).rejects.toMatchObject({
       name: "SqliteIntegrityError",
@@ -180,11 +292,12 @@ describe("SQLite integrity child", () => {
       ),
     });
     expectForksClosed();
+    expect(stat.mock.calls.filter(([pathname]) => pathname === source)).toHaveLength(0);
   });
 
   it("reports a SIGTERM close without an integrity verdict as an interruption", async () => {
     const { source } = fixture("signal");
-    const worker = new ChildProcess();
+    const worker = createIntegrityChild();
     worker.send = vi.fn(() => {
       queueMicrotask(() => worker.emit("close", null, "SIGTERM"));
       return true;
@@ -485,9 +598,7 @@ describe("SQLite integrity child", () => {
       void check.then(markSettled, markSettled);
       try {
         await ready.promise;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         expect(settled).toBe(false);
         expect(timing).not.toHaveProperty("workerLifetimeElapsedMs");
       } finally {

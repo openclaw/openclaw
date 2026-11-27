@@ -776,53 +776,6 @@ function testFileScenarioResultToSuiteScenario(
   };
 }
 
-async function writeUnifiedQaSuiteArtifacts(params: {
-  alternateModel: string;
-  channel?: string;
-  channelDriver?: QaTransportDriver;
-  concurrency: number;
-  evidence: QaEvidenceSummaryJson;
-  fastMode: boolean;
-  finishedAt: Date;
-  outputDir: string;
-  primaryModel: string;
-  providerMode: ReturnType<typeof normalizeQaProviderMode>;
-  runtimePair: QaSuiteRunParams["runtimePair"];
-  scenarioIds: readonly string[];
-  scenarios: readonly QaSuiteScenarioResult[];
-  startedAt: Date;
-}) {
-  const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
-  const reportPath = path.join(params.outputDir, "qa-suite-report.md");
-  const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
-  const report = renderQaMarkdownReport({
-    title: "OpenClaw QA Scenario Suite",
-    finishedAt: params.finishedAt,
-    scenarios: [...params.scenarios],
-    startedAt: params.startedAt,
-  });
-  const summary = buildQaSuiteSummaryJson({
-    ...params,
-    scenarios: [...params.scenarios],
-  });
-  await publishQaSuiteArtifactFiles({
-    outputDir: params.outputDir,
-    files: [
-      { filePath: evidencePath, content: `${JSON.stringify(params.evidence, null, 2)}\n` },
-      { filePath: reportPath, content: report },
-      { filePath: summaryPath, content: `${JSON.stringify(summary, null, 2)}\n` },
-    ],
-  });
-  return {
-    evidencePath,
-    outputDir: params.outputDir,
-    report,
-    reportPath,
-    scenarios: [...params.scenarios],
-    summaryPath,
-  } satisfies QaUnifiedSuiteResult;
-}
-
 async function runUnifiedQaSuite(params: {
   plan: Extract<QaSuiteExecutionPlan, { kind: "unified" }>;
   runParams: QaSuiteRunParams | undefined;
@@ -1413,7 +1366,7 @@ async function runUnifiedQaSuite(params: {
     }
     return [result];
   });
-  const unifiedResult = await writeUnifiedQaSuiteArtifacts({
+  const artifactParams = {
     alternateModel,
     channel: channel?.id,
     channelDriver: channel?.driver,
@@ -1428,7 +1381,36 @@ async function runUnifiedQaSuite(params: {
     scenarioIds: params.plan.scenarios.map((scenario) => scenario.id),
     scenarios,
     startedAt,
+  };
+  const evidencePath = path.join(artifactParams.outputDir, QA_EVIDENCE_FILENAME);
+  const reportPath = path.join(artifactParams.outputDir, "qa-suite-report.md");
+  const summaryPath = path.join(artifactParams.outputDir, "qa-suite-summary.json");
+  const report = renderQaMarkdownReport({
+    title: "OpenClaw QA Scenario Suite",
+    finishedAt: artifactParams.finishedAt,
+    scenarios: [...artifactParams.scenarios],
+    startedAt: artifactParams.startedAt,
   });
+  const summary = buildQaSuiteSummaryJson({
+    ...artifactParams,
+    scenarios: [...artifactParams.scenarios],
+  });
+  await publishQaSuiteArtifactFiles({
+    outputDir: artifactParams.outputDir,
+    files: [
+      { filePath: evidencePath, content: `${JSON.stringify(artifactParams.evidence, null, 2)}\n` },
+      { filePath: reportPath, content: report },
+      { filePath: summaryPath, content: `${JSON.stringify(summary, null, 2)}\n` },
+    ],
+  });
+  const unifiedResult = {
+    evidencePath,
+    outputDir: artifactParams.outputDir,
+    report,
+    reportPath,
+    scenarios: [...artifactParams.scenarios],
+    summaryPath,
+  } satisfies QaUnifiedSuiteResult;
   const resultsByIndex = new Map<number, QaSuiteScenarioResult[]>();
   for (const { scenarioIndex, result } of progressEntries(
     partitionResults.flatMap((partition) => partition.scenarioResults),

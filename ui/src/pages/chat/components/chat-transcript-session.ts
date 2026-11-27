@@ -7,10 +7,9 @@ import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
-import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
-import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
+import { measureTranscriptRow, readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type {
   ComposerActivityLayout,
   TranscriptLayoutOwner,
@@ -33,13 +32,21 @@ export type TranscriptCallbacks = {
   getComposerFloat?: () => HTMLElement | null;
   getComposerActivityLayout?: () => ComposerActivityLayout | null;
   onViewportResize?: () => void;
+  /** Explicit keys report direction; undefined reconciles geometry or neutral contact. */
   onReaderScroll?: (towardEnd?: boolean) => void;
+  /** Plain End uses the pane's manual Latest action and its follow policy. */
+  onRequestEnd?: () => void;
+  onNativeScroll?: (event: Event) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
   canFollowEnd?: () => boolean;
+  /** A queued send/latest command supersedes reader anchoring before its first frame. */
+  hasPendingScrollCommand?: () => boolean;
 };
 
 export const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
-export const CHAT_TRANSCRIPT_OVERSCAN = 2;
+// Keep one measured neighbor on either side; farther rows are prepared
+// separately by TranscriptInitialRange.
+export const CHAT_TRANSCRIPT_OVERSCAN = 1;
 // Initial virtual rows can correct their estimates for several frames. Observe
 // the range for ~200ms before accepting a saved offset that remains unreachable.
 export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
@@ -48,25 +55,34 @@ export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
 export const CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES = 60;
 
 export type TranscriptHeader = {
-  props: ChatHistoryBoundaryProps;
+  content: JSX.Element;
   /** Fixed pixel height; becomes the virtualizer's scrollMargin so row offsets stay exact. */
   height: number;
 };
 
+export type TranscriptSearchProjection = { query: string; empty: boolean } | null;
+
+export type TranscriptProjectionSource = {
+  messages: readonly unknown[];
+  search: TranscriptSearchProjection;
+};
+
 export type ChatTranscriptSession = {
-  readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending">;
+  readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending" | "configureRows" | "ready">;
   readonly entryAnimations: ChatMessageEntryAnimations;
   readonly messageElements: TranscriptMessageElements;
   readonly contentElement: HTMLDivElement | null;
   readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;
+  readonly canFollowEnd: boolean;
+  /** Retain the visible message through a structural change inside its existing row. */
+  preserveReaderPosition(): void;
   readonly scrollElementRef: (element?: Element) => void;
   render<T>(
     rows: readonly TranscriptRow<T>[],
     renderRow: (row: TranscriptRow<T>) => TranscriptContent,
     announcement: TranscriptAnnouncement | null,
     announce: boolean,
-    overlay?: JSX.Element,
     header?: TranscriptHeader | null,
     presented?: PresentationValue,
     applicationContext?: ApplicationContext,
@@ -74,11 +90,11 @@ export type ChatTranscriptSession = {
   syncMessageRows(
     messageRowKeysById: ReadonlyMap<string, string>,
     messageRowsByKey: ReadonlyMap<string, string>,
+    source?: TranscriptProjectionSource,
   ): void;
   /** Returns the sampled loaded message at or preceding the viewport midpoint. */
   activeMessageId(messageIds: readonly string[]): string | null;
   revealMessage(messageId: string): boolean;
-  setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;
   handleFocusOut(event: FocusEvent): void;
 };
@@ -89,7 +105,6 @@ export type TranscriptRenderSnapshot<T> = {
   renderRow: (row: TranscriptRow<T>) => TranscriptContent;
   announcement: TranscriptAnnouncement | null;
   announce: boolean;
-  overlay: JSX.Element;
   header: TranscriptHeader | null;
   messageRows: ReadonlyMap<string, string>;
   renderKeyRows: ReadonlyMap<string, string>;
@@ -104,7 +119,19 @@ export function createTranscriptPresentation(
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
   rowElements: () => Iterable<HTMLElement>,
   beforeMeasure: () => void,
+  measureRow = measureTranscriptRow,
 ) {
+  const redraw = {};
+  let pendingChange: (() => void) | undefined;
+  const flushChange = () => {
+    const commit = pendingChange;
+    if (commit) {
+      pendingChange = undefined;
+      cancelLayout(redraw);
+      commit();
+    }
+  };
+  let resizeOffsetSynced = false;
   const readConnectedRows = (): (() => boolean) | null => {
     const apply = readConnectedTranscriptRows(scrollElement(), virtualizer, rowElements());
     return apply
@@ -116,6 +143,39 @@ export function createTranscriptPresentation(
   };
 
   const presentation = {
+    commitChange(commit: () => void, defer: boolean) {
+      pendingChange = commit;
+      if (defer) {
+        scheduleLayout(redraw, () => flushChange);
+      } else {
+        flushChange();
+      }
+    },
+    flushChange,
+    cancelChange() {
+      pendingChange = undefined;
+      cancelLayout(redraw);
+    },
+    measureElement(element: HTMLElement, entry: ResizeObserverEntry | undefined) {
+      if (entry && !resizeOffsetSynced) {
+        // Observer entries share one native reader position. Keep the virtualizer's
+        // accumulated correction between entries, including clamped scroll writes.
+        resizeOffsetSynced = true;
+        queueMicrotask(() => {
+          resizeOffsetSynced = false;
+        });
+        beforeMeasure();
+      } else if (!entry && !virtualizer.targetWindow?.ResizeObserver) {
+        beforeMeasure();
+      }
+      return measureRow(element, entry, virtualizer);
+    },
+    measureInitialRows(messages: TranscriptMessageElements) {
+      const applyRows = readConnectedRows();
+      // Bubble reads share the row pass's layout; publish only the accepted range.
+      const applyRail = messages.prepareInitialLayout();
+      return [applyRows?.() ?? false, applyRail] as const;
+    },
     measureRows: () => readConnectedRows()?.() ?? false,
     measureRowsWithoutScrollAdjustment() {
       const adjustScroll = virtualizer.shouldAdjustScrollPositionOnItemSizeChange;
@@ -132,7 +192,10 @@ export function createTranscriptPresentation(
         element === scrollElement() ? (readConnectedRows() ?? undefined) : undefined,
       );
     },
-    disconnect: () => cancelLayout(presentation),
+    disconnect() {
+      cancelLayout(presentation);
+      presentation.cancelChange();
+    },
   };
   return presentation;
 }

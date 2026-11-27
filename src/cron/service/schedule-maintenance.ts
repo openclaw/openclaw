@@ -53,6 +53,8 @@ export async function recomputeUnownedCronSchedules(
     throw new Error("Cron schedule maintenance did not publish its committed rows");
   }
   await runPostPersistCronNotifications(state, outcome.notifications);
-  wakeCronRunQueues(state);
+  if (outcome.changed) {
+    wakeCronRunQueues(state);
+  }
   return outcome;
 }

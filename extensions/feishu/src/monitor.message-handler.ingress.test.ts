@@ -18,13 +18,12 @@ import {
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import { normalizeFeishuCommandProbeBody } from "./bot-content.js";
-import { parseFeishuMessageEvent } from "./bot.js";
 import { createFeishuTestEvent } from "./bot.test-support.js";
 import * as dedup from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { createFeishuDurableIngress, type FeishuIngressLifecycle } from "./feishu-ingress.js";
+import { normalizeFeishuCommandProbeBody, parseFeishuMessageEvent } from "./message-content.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
 
@@ -142,7 +141,6 @@ function createHarness(params: {
     entries,
     handler,
     handleMessage,
-    hasProcessedMessage,
     flush: async () => {
       if (!onFlush) {
         throw new Error("debouncer flush callback missing");
@@ -330,17 +328,11 @@ it("admits controls during an active turn while ordinary messages retain FIFO or
 
 describe("Feishu durable ingress debounce lifecycle", () => {
   it("releases a claim acquired after ingress abandonment instead of enqueueing it", async () => {
-    const transport = createLifecycle();
-    const logicalClaim = createClaim("delayed-admission");
+    const { transport, logicalClaim, event, harness } = createTurn("delayed", { noClaim: true });
     const pending =
       createDeferred<Awaited<ReturnType<typeof dedup.claimUnprocessedFeishuMessage>>>();
-    const harness = createHarness({
-      lifecycles: new Map([["evt-delayed", transport.lifecycle]]),
-      claims: [],
-      adoptTurn: true,
-    });
     harness.claim.mockReturnValueOnce(pending.promise);
-    const handling = harness.handler(createTextEvent("evt-delayed", "om-delayed", "hello"));
+    const handling = harness.handler(event);
     transport.controller.abort();
     await transport.lifecycle.onAbandoned();
     pending.resolve({ kind: "claimed", handle: logicalClaim });

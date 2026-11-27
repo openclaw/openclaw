@@ -1,75 +1,30 @@
 import { finishGoalContinuationSettlement } from "../../../auto-reply/reply/goal-continuation-return.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.shared.js";
+import { isSubagentDeliveryClosed } from "../registry/subagent-delivery-state.js";
 import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
 import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
-import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { finalizeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
-export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
-
-export const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
-const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
-
-export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
-  return (
-    entry.execution.status !== "running" &&
-    entry.pauseReason !== "sessions_yield" &&
-    hasSubagentRunEnded(entry)
-  );
-}
-
 export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
-  // Earlier delivery cannot discharge reconciliation of restart-interrupted work.
-  return (
-    entry.delivery?.status !== "delivered" ||
-    (entry.execution.interruptionReason === "gateway-restart" &&
-      (entry.delivery.deliveredAt ?? 0) < (entry.execution.endedAt ?? Infinity))
-  );
-}
-
-/**
- * Only a known missing result, or an effect-free run whose transcript write was
- * rejected, may mint another public continuation; private retries reconcile.
- */
-export function resolveRequesterSettleRetryState(params: {
-  state: RequesterSettleWakeBatchState;
-  delivery: SubagentAnnounceDeliveryResult;
-  attemptCount: number;
-  parentOnly: boolean;
-  now: number;
-}): RequesterSettleWakeBatchState | undefined {
-  const { state, delivery, attemptCount, parentOnly } = params;
-  const retryDelay = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptCount - 1];
-  if (
-    delivery.disposition !== "retryable" ||
-    (!parentOnly &&
-      delivery.reason !== "visible_reply_missing" &&
-      delivery.reason !== "requester_transcript_conflict") ||
-    delivery.reason === "requester_abandoned" ||
-    attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS ||
-    retryDelay === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    ...state,
-    status: "pending",
-    attemptCount,
-    nextAttemptAt: params.now + retryDelay,
-    lastError: delivery.error ?? delivery.reason ?? "undelivered",
-  };
+  return entry.delivery?.status !== "delivered";
 }
 
 type RequesterSettleWakeBatchCallbacks = {
+  recordRequesterDelivery?: (
+    batch: readonly SubagentRunRecord[],
+    fact: NonNullable<NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"]>,
+    onPublished: (entries: readonly SubagentRunRecord[]) => void,
+  ) => Promise<void>;
   transitionBatch: (
     batch: readonly SubagentRunRecord[],
-    state: RequesterSettleWakeBatchState,
+    state: RequesterSettleWakeState,
     onPublished?: (entries: readonly SubagentRunRecord[]) => void,
+    requesterDelivery?: NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"],
   ) => void | Promise<void>;
   completeBatch: (
     batch: readonly SubagentRunRecord[],
@@ -88,7 +43,7 @@ export function createRequesterSettleBatchCompletion(params: {
 }) {
   return async (
     batch: readonly SubagentRunRecord[],
-    state: RequesterSettleWakeBatchState,
+    state: RequesterSettleWakeState,
     delivery?: SubagentAnnounceDeliveryResult,
     requesterSessionId?: string,
   ): Promise<void> => {
@@ -136,7 +91,7 @@ export function waitForRequesterDescendants(
 
 export function readSharedBatchState(
   batch: readonly SubagentRunRecord[],
-): RequesterSettleWakeBatchState {
+): RequesterSettleWakeState {
   const states = batch
     .map((entry) => entry.requesterSettleWake)
     .filter((state): state is RequesterSettleWakeState => Boolean(state));
@@ -145,12 +100,12 @@ export function readSharedBatchState(
     status: source?.status ?? "pending",
     attemptCount: Math.max(0, ...states.map((state) => state.attemptCount ?? 0)),
     ...(source?.privateInput ? { privateInput: source.privateInput } : {}),
-    ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),
     ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
     ...(source?.progressOperationId ? { progressOperationId: source.progressOperationId } : {}),
     ...(source?.pauseNotice ? { pauseNotice: source.pauseNotice } : {}),
     ...(source?.batchRunIds ? { batchRunIds: [...source.batchRunIds] } : {}),
+    ...(source?.requesterRunId ? { requesterRunId: source.requesterRunId } : {}),
     ...(states.some((state) => state.requesterYieldBatch === true)
       ? { requesterYieldBatch: true }
       : {}),
@@ -175,10 +130,8 @@ export function isRequesterSettleDeliveryClosed(params: {
     (entry) => currentRuns.find((current) => isSameSubagentRunOwner(current, entry)) ?? entry,
   );
   return (
-    requesterRun?.killReconciliation?.suppressTaskDelivery === true ||
-    requesterRun?.suppressCompletionDelivery === true ||
-    currentRequester?.killReconciliation?.suppressTaskDelivery === true ||
-    currentRequester?.suppressCompletionDelivery === true ||
+    isSubagentDeliveryClosed(requesterRun) ||
+    isSubagentDeliveryClosed(currentRequester) ||
     // A yielded cohort reports the members it still holds; requester-wide cancellation
     // already removed its own. An ordinary wave owes nothing once every member retired.
     (!params.requesterYieldBatch && currentBatch.every(isSubagentObligationRetired))
@@ -213,9 +166,7 @@ export function captureRequesterRunOwner(requesterRun: SubagentRunRecord | null 
 export function resolveRequesterSettlePolicy(
   completionRows: readonly SubagentRunRecord[],
   requesterYielded: boolean,
-  state: RequesterSettleWakeBatchState,
-  requester: { sessionId: string; lifecycleRevision?: string },
-  completionRowsMatchRequester: boolean,
+  state: RequesterSettleWakeState,
 ) {
   // One private result makes the aggregate private; public siblings keep their own route.
   const privateRows = completionRows.filter((entry) => entry.completionTarget === "parent");
@@ -223,19 +174,7 @@ export function resolveRequesterSettlePolicy(
   const yieldedFinalDeliverable =
     hasPrivateRows && requesterYielded && state.yieldedFinalDeliverable === true;
   const parentOnly = hasPrivateRows && !yieldedFinalDeliverable;
-  // Retained public history keeps its existing admission; it cannot mint a new
-  // own-session alternative from a later reread of the requester key.
-  const bindRequester =
-    hasPrivateRows || (completionRows.length > 0 && completionRowsMatchRequester);
-  const requesterBinding = {
-    ...(parentOnly ? { completionTarget: "parent" as const } : {}),
-    ...(bindRequester
-      ? {
-          completionRequesterSessionId: requester.sessionId,
-          completionRequesterLifecycleRevision: requester.lifecycleRevision,
-        }
-      : {}),
-  };
+  const requesterBinding = parentOnly ? { completionTarget: "parent" as const } : {};
   const admissionMarker = yieldedFinalDeliverable ? { yieldedFinalDeliverable: true as const } : {};
   // A prior wake may already have consumed every result in this yielded cohort.
   const requireVisibleReply =

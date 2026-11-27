@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -117,11 +118,12 @@ describe("diffs tool", () => {
   });
 
   it.each([
-    ["image", "pdf"],
-    ["file", "png"],
-  ] as const)("renders and expires %s output as %s", async (mode, format) => {
+    ["image", "pdf", 2],
+    ["file", "png", 1.7],
+    ["image", "png", 1.7],
+  ] as const)("renders and expires %s output as %s", async (mode, format, renderedScale) => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    const tool = createTool({ context: toolContext }, createScreenshotter(format));
+    const tool = createTool({ context: toolContext }, createScreenshotter(format, renderedScale));
     const result = await executeDiff(tool, { mode, fileFormat: format, ttlSeconds: "1" });
     const { filePath: output, artifactId, expiresAt } = result.details;
     const filePath = String(output);
@@ -129,6 +131,7 @@ describe("diffs tool", () => {
     expect(result.text).toContain("use an available file-sending tool");
     expect(result.text).not.toMatch(/`message`|\bmessage tool\b/);
     expect(result.details.fileFormat).toBe(format);
+    expect(result.details.fileScale).toBe(renderedScale);
     expect(filePath.endsWith(`preview.${format}`)).toBe(true);
     expect(filePath).toContain(fixture.rootDir);
     expect(Date.parse(String(expiresAt))).toBeGreaterThan(Date.now());
@@ -193,6 +196,27 @@ describe("diffs tool", () => {
     });
   });
 
+  it("preserves trailing patch whitespace in the viewer payload", async () => {
+    const result = await createTool().execute("patch-whitespace", {
+      patch: "--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-old\n+new  \n",
+      mode: "view",
+    });
+    const details = requireRecord(result.details, "diffs tool result details");
+    const [id = "", token = ""] = String(details.viewerPath).split("/").slice(-2);
+    const viewer = await fixture.store.readAuthorizedViewer(id, token);
+    assert(viewer, "viewer artifact missing");
+    const encoded = Buffer.from(viewer.html)
+      .toString("utf8")
+      .match(
+        /<script type="application\/json" data-openclaw-diff-payload>([\s\S]*?)<\/script>/,
+      )?.[1];
+    assert(encoded, "viewer payload missing");
+    const payload = requireRecord(JSON.parse(encoded), "viewer payload");
+    const fileDiff = requireRecord(payload.fileDiff, "file diff");
+    expect(fileDiff.additionLines).toEqual(["new  \n"]);
+    expect(fileDiff.deletionLines).toEqual(["old\n"]);
+  });
+
   it("prefers explicit tool params over configured defaults", async () => {
     const tool = createTool(
       {
@@ -239,13 +263,14 @@ describe("diffs tool", () => {
 
 function createScreenshotter(
   format: DiffRenderOptions["image"]["format"] = "png",
+  renderedScale?: number,
 ): DiffScreenshotter {
   const screenshotHtml = vi.fn<DiffScreenshotter["screenshotHtml"]>(async (params) => {
     const { outputPath, image } = params;
     expect(image.format).toBe(format);
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.writeFile(outputPath, Buffer.from(format === "pdf" ? "%PDF-1.7" : "png"));
-    return outputPath;
+    return renderedScale ?? image.scale;
   });
   return { screenshotHtml };
 }

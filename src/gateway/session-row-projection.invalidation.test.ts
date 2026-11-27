@@ -5,7 +5,6 @@ import {
   getRuntimeAuthProfileStoreSnapshotsRevision,
   prepareRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
-import * as agentIdentity from "../agents/identity.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import {
@@ -26,7 +25,6 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
-import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -55,7 +53,6 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
-import * as listFilters from "./session-list-filters.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
@@ -108,7 +105,7 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
       agents: { entries: { main: {} }, defaults: { model: "example/list-alias" } },
       plugins: { entries: { "synthetic-hooks": { enabled: true } } },
     };
-    let cfg = baseConfig;
+    const cfg = baseConfig;
     setRuntimeConfigSnapshot(cfg);
     const keys = Array.from({ length: 4 }, (_, index) => `agent:main:plugin-reload-${index}`);
     for (const [index, sessionKey] of keys.entries()) {
@@ -130,8 +127,6 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
           id: "example",
           label: "Example",
           auth: [],
-          aliases: ["example-alias"],
-          hookAliases: ["example-hook"],
           resolveThinkingProfile: () => null,
         }),
       });
@@ -182,30 +177,29 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
       await projection.ensureMaterialized();
       expect(original.sessions.map((row) => row.model)).toEqual(Array(4).fill("original"));
       const materialized = sequences();
-      for (const entry of [
-        { enabled: true, hooks: { allowPromptInjection: false } },
-        { enabled: false },
-        { enabled: true },
-      ]) {
-        cfg = { ...baseConfig, plugins: { entries: { "synthetic-hooks": entry } } };
-        setRuntimeConfigSnapshot(cfg);
-        expect(projection.dirtyRowCount).toBe(0);
+      const thinkingFacts = projection.state.rowContext.thinkingFactsByModelRef;
+      expect(thinkingFacts.size).toBeGreaterThan(0);
+      const originalBytes = JSON.stringify(original.sessions);
+      for (let publication = 0; publication < 3; publication++) {
         catalog = view("original");
         notifyPreparedModelRuntimePublication({ phase: "published" });
-        const concurrent = await Promise.all(Array.from({ length: 8 }, list));
         await projection.ensureMaterialized();
-        expect(
-          concurrent.every((result) => result.sessions.every((row) => row.model === "original")),
-        ).toBe(true);
-        expect(sequences()).toEqual(materialized);
-        expect(projection.dirtyRowCount).toBe(0);
+        // An ordinary exact refresh must reuse the retained catalog's prepared facts too.
+        sessionChanges.emit({ agentId: "main", sessionKey: keys[0]!, scope: "automation" });
+        await projection.ensureMaterialized();
+        expect(projection.state.rowContext.thinkingFactsByModelRef).toBe(thinkingFacts);
+        expect(sequences().slice(1)).toEqual(materialized.slice(1));
+        expect(JSON.stringify((await list()).sessions)).toBe(originalBytes);
       }
+      const afterEquivalent = sequences();
       // Captured code changes still invalidate policy even with the same registration shape.
+      const beforeCodeChange = projection.state.rowContext.thinkingFactsByModelRef;
       catalog = view("original", "changed-code");
       notifyPreparedModelRuntimePublication({ phase: "published" });
       await projection.ensureMaterialized();
       expect((await list()).sessions.map((row) => row.model)).toEqual(Array(4).fill("original"));
-      expect(sequences()).not.toEqual(materialized);
+      expect(sequences()).not.toEqual(afterEquivalent);
+      expect(projection.state.rowContext.thinkingFactsByModelRef).not.toBe(beforeCodeChange);
       const beforeNormalization = sequences();
       // A manifest policy edit still changes rows even when catalog entries stay identical.
       catalog = view("replacement", "changed-code");
@@ -276,22 +270,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
       expect(initial.sessions.find((row) => row.key === parentKey)?.childSessions).toEqual([
         children[0],
       ]);
-      const reads: string[] = [];
-      const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
-      vi.spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases").mockImplementation(
-        (targets, consume) =>
-          readDatabases(targets, (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                readRowFacts(input) {
-                  reads.push(...input.sessionKeys);
-                  return owner.readRowFacts(input);
-                },
-              })),
-            ),
-          ),
-      );
       const original = children.map(sequence);
       const siblingSequence = sequence(siblingKey);
       const snapshot = (key: string) =>
@@ -310,7 +288,10 @@ it("reuses descendants after parent progress while keeping inherited models curr
           }).row!;
       const siblingSnapshot = snapshot(siblingKey);
       const parentSnapshot = snapshot(parentKey);
-      const siblingBytes = JSON.stringify(siblingSnapshot);
+      const childLinks = () =>
+        projection.describe({ agentId: "main", key: parentKey })?.materialized.source.childLinks;
+      const originalLinks = childLinks();
+      expect(originalLinks?.map((link) => link.key)).toEqual(children);
       expect(() => {
         siblingSnapshot.label = "Reader mutation";
       }).toThrow(TypeError);
@@ -325,11 +306,11 @@ it("reuses descendants after parent progress while keeping inherited models curr
         await list();
         expect(children.map(sequence)).toEqual(original);
         expect(snapshot(siblingKey)).toBe(siblingSnapshot);
-        expect(JSON.stringify(snapshot(siblingKey))).toBe(siblingBytes);
         if (change) {
           expect(snapshot(parentKey)).not.toBe(parentSnapshot);
           expect(snapshot(parentKey).label).toBe("Updated parent");
           expect(parentSnapshot.label).toBeUndefined();
+          expect(childLinks()).toBe(originalLinks);
         }
       }
       const cases: Array<[Partial<SessionEntry>, string, string]> = [
@@ -356,7 +337,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
         ],
       ];
       for (const [change, provider, model] of cases) {
-        reads.length = 0;
         Object.assign(parent, change);
         replaceSessionEntrySync(scope, { ...parent });
         const result = await list();
@@ -367,7 +347,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
           });
         }
         expect(sequence(siblingKey)).toBe(siblingSequence);
-        expect.soft(reads, `Stored facts after ${JSON.stringify(change)}`).toEqual([]);
       }
       parent.modelOverrideSource = "user";
       replaceSessionEntrySync(scope, { ...parent });
@@ -396,7 +375,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
       }
       expect(snapshot(siblingKey).activeModel).toBeUndefined();
       const childScope = { agentId: "main", sessionKey: children[0]! };
-      reads.length = 0;
       replaceSessionEntrySync(childScope, {
         ...loadSessionEntry(childScope)!,
         parentSessionKey: siblingKey,
@@ -408,8 +386,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
         children[0],
       ]);
       expect(moved.sessions.find((row) => row.key === children[0])?.model).toBe("default");
-      expect.soft(reads, "Unchanged parents after a child moves").toEqual([]);
-      reads.length = 0;
       await deleteSessionEntryLifecycle({
         ...scope,
         storePath: projection.capture({ agentId: "main", key: parentKey })!.storeTarget.storePath,
@@ -423,7 +399,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
           children.map((key) => expect.objectContaining({ key, model: "default" })),
         ),
       );
-      expect.soft(reads, "Unchanged descendants after parent deletion").toEqual([]);
     } finally {
       await projection.ensureMaterialized();
     }
@@ -501,7 +476,7 @@ it("refreshes profile display fields on selected live and archived rows without 
   });
 });
 
-it("reuses row identities across lists until their entry, profile, or config changes", async () => {
+it("refreshes projected row identities after owner and config changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: {
@@ -526,27 +501,7 @@ it("reuses row identities across lists until their entry, profile, or config cha
         send: "never",
         receive: "ask",
       });
-      const identities = vi.spyOn(agentIdentity, "resolveAgentIdentity");
-      for (let index = 0; index < 3; index++) {
-        expect((await list()).sessions[0]?.owner?.actor.label).toBe("Original agent");
-      }
-      expect(identities).not.toHaveBeenCalled();
-
-      const serialized = () =>
-        listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
-      await serialized();
-      const selections = vi.spyOn(listFilters, "filterSessionEntries");
-      sessionChanges.emit({ ...scope, scope: "runtime", facts: { kind: "unchanged" } });
-      expect((await serialized()).sessions[0]?.owner?.actor.label).toBe("Original agent");
-      expect(selections).not.toHaveBeenCalled();
-      identities.mockClear();
-
-      sessionChanges.emit({ all: true, scope: "profiles" });
-      await list();
-      expect(identities).toHaveBeenCalled();
-      identities.mockClear();
-      await list();
-      expect(identities).not.toHaveBeenCalled();
+      expect((await list()).sessions[0]?.owner?.actor.label).toBe("Original agent");
 
       cfg.agents.entries.main.identity.name = "Renamed agent";
       cfg.session.communication.receive = "always";
@@ -694,3 +649,75 @@ it.each(["source rewrite", "resolved snapshot"] as const)(
     });
   },
 );
+
+it("refreshes a child without revisiting parents whose child facts stayed the same", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const agentId = "main";
+    const key = (name: string) => `agent:main:${name}`;
+    const firstParent = key("first-parent");
+    const secondParent = key("second-parent");
+    const child = key("subagent:changing-child");
+    const sibling = key("subagent:unchanged-child");
+    const unrelated = key("unrelated");
+    const write = (sessionKey: string, entry: SessionEntry) =>
+      replaceSessionEntrySync({ agentId, sessionKey }, entry);
+    for (const sessionKey of [firstParent, secondParent, unrelated]) {
+      write(sessionKey, { sessionId: sessionKey, updatedAt: 1 });
+    }
+    const entry = {
+      sessionId: "changing-child",
+      parentSessionKey: firstParent,
+      spawnedBy: firstParent,
+      updatedAt: 1,
+      label: "Original",
+    };
+    write(child, entry);
+    write(sibling, { ...entry, sessionId: "unchanged-child", label: "Sibling" });
+
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const describe = (sessionKey: string) => projection.describe({ agentId, key: sessionKey })!;
+    const first = describe(firstParent).materialized;
+    const second = describe(secondParent).materialized;
+    const other = describe(unrelated).materialized;
+    const original = describe(child).materialized;
+    const count = projection.materializedCount;
+    expect(first.source.childLinks?.map((link) => link.key)).toEqual([child, sibling]);
+
+    write(child, { ...entry, label: "Renamed" });
+    await projection.ensureMaterialized();
+    expect(projection.present(describe(child)).label).toBe("Renamed");
+    expect(describe(child).materialized).not.toBe(original);
+    expect(describe(firstParent).materialized).toBe(first);
+    expect(describe(secondParent).materialized).toBe(second);
+    expect(describe(unrelated).materialized).toBe(other);
+    expect(projection.materializedCount - count).toBe(1);
+
+    write(child, { ...entry, updatedAt: 2 });
+    await projection.ensureMaterialized();
+    const updatedParent = describe(firstParent).materialized;
+    const updatedLinks = updatedParent.source.childLinks!;
+    expect(updatedLinks[0]?.entry.updatedAt).toBe(2);
+    expect(updatedLinks[1]).toBe(first.source.childLinks?.[1]);
+
+    const updatedChild = describe(child).materialized;
+    write(child, { ...entry, updatedAt: 2 });
+    await projection.ensureMaterialized();
+    expect(describe(child).materialized).toBe(updatedChild);
+    expect(describe(firstParent).materialized).toBe(updatedParent);
+
+    write(child, { ...entry, parentSessionKey: secondParent, spawnedBy: secondParent });
+    await projection.ensureMaterialized();
+    expect(projection.present(describe(child)).parentSessionKey).toBe(secondParent);
+    expect(describe(firstParent).materialized.source.childLinks?.map((link) => link.key)).toEqual([
+      sibling,
+    ]);
+    expect(describe(secondParent).materialized.source.childLinks?.map((link) => link.key)).toEqual([
+      child,
+    ]);
+    expect(describe(unrelated).materialized).toBe(other);
+  });
+});

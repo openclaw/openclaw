@@ -2,13 +2,16 @@ import { err as failure, ok, type Result } from "@openclaw/normalization-core/re
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { isGatewayAccessDeniedError } from "../gateway-errors.ts";
 import { configMutationFailure } from "./config-mutation-error.ts";
 import {
   beginConfigRead,
+  currentConfigConnectionEpoch,
   currentConfigRead,
   isCurrentConfigConnection,
   isCurrentRequest,
   type ConfigRead,
+  type ConfigReadResult,
   type LoadConfigOptions,
   type RuntimeConfigState,
 } from "./config-state-model.ts";
@@ -22,17 +25,58 @@ export type ConfigSnapshotLoadOptions = LoadConfigOptions & {
   };
 };
 
+// Observers re-ensure config on every publication, and every read publishes.
+// A failed foreground read therefore waits before an ensure may repeat it on
+// the same connection. A typed denial stays terminal for that connection;
+// explicit refreshes and reconnects still read at once.
+const CONFIG_READ_RETRY_DELAY_MS = 5_000;
+const failedReads = new WeakMap<
+  RuntimeConfigState,
+  { connectionEpoch: number; at: number; denied: boolean }
+>();
+
+function canStartConfigRead(state: RuntimeConfigState): boolean {
+  const client = state.client;
+  return Boolean(client && state.connected && hasOperatorReadAccess(client.auth));
+}
+
+/** Whether an ensure-style caller may start a read now, rather than spin on one that cannot help. */
+export function canEnsureConfigRead(state: RuntimeConfigState): boolean {
+  if (!canStartConfigRead(state)) {
+    return false;
+  }
+  const failed = failedReads.get(state);
+  return (
+    !failed ||
+    failed.connectionEpoch !== currentConfigConnectionEpoch(state) ||
+    (!failed.denied && Date.now() - failed.at >= CONFIG_READ_RETRY_DELAY_MS)
+  );
+}
+
 function startConfigLoad(
   state: RuntimeConfigState,
   options: ConfigSnapshotLoadOptions,
   isCurrentLoad: () => boolean = () => true,
 ): ConfigRead | null {
   const client = state.client;
-  if (!client || !state.connected || !hasOperatorReadAccess(client.auth)) {
+  if (!client || !canStartConfigRead(state)) {
     return null;
   }
   const read = beginConfigRead(state, client);
-  void readConfig(state, read, options, isCurrentLoad).then(read.completion.resolve);
+  void readConfig(state, read, options, isCurrentLoad).then((result) => {
+    if (!options.background && currentConfigRead(state) === read) {
+      if (result.ok) {
+        failedReads.delete(state);
+      } else {
+        failedReads.set(state, {
+          connectionEpoch: read.connectionEpoch,
+          at: Date.now(),
+          denied: result.denied === true,
+        });
+      }
+    }
+    read.completion.resolve(result);
+  });
   return read;
 }
 
@@ -77,7 +121,7 @@ async function readConfig(
   { client, connectionEpoch, version }: ConfigRead,
   options: ConfigSnapshotLoadOptions,
   isCurrentLoad: () => boolean,
-): Promise<Result<void, string>> {
+): Promise<ConfigReadResult> {
   const isCurrent = () =>
     isCurrentLoad() && isCurrentRequest(state, version, client, connectionEpoch);
   if (!options.background) {
@@ -88,6 +132,7 @@ async function readConfig(
     !options.snapshotOwner.hasUnacknowledgedDraftWrite() &&
     state.configAutoSaveStatus !== "conflict" &&
     state.configAutoSaveStatus !== "rejected" &&
+    state.configAutoSaveStatus !== "deferred" &&
     (!options.background || state.configAutoSaveStatus !== "error")
   ) {
     state.lastError = null;
@@ -120,6 +165,7 @@ async function readConfig(
     if (
       !options.background &&
       !state.configFormDirty &&
+      state.configAutoSaveStatus !== "deferred" &&
       !options.snapshotOwner.hasUnacknowledgedDraftWrite()
     ) {
       if (
@@ -144,7 +190,10 @@ async function readConfig(
     ) {
       state.configAutoSaveStatus = "error";
     }
-    return failure(outcome.message);
+    return {
+      ...failure(outcome.message),
+      ...(isGatewayAccessDeniedError(error) ? { denied: true } : {}),
+    };
   } finally {
     if (isCurrentRequest(state, version, client, connectionEpoch)) {
       state.configLoading = false;

@@ -91,6 +91,22 @@ function pendingProbe(stalled = true) {
 }
 
 describe("Control UI document shell", () => {
+  it("explains how to recover when module scripts cannot run", () => {
+    const win = createIsolatedWindow();
+    const parsed = new win.DOMParser().parseFromString(html, "text/html");
+    win.document.body.innerHTML = parsed.body.innerHTML;
+    for (const script of parsed.querySelectorAll("script[nomodule]")) {
+      win.eval(script.textContent ?? "");
+    }
+    expect(win.document.body.textContent).toContain("This browser is not supported");
+    expect(win.document.body.textContent).toContain("update your system WebView");
+    expect(win.document.querySelector("openclaw-app")).toBeNull();
+    expect(win.getComputedStyle(win.document.querySelector("main")!).color).toBe(
+      "rgb(244, 244, 245)",
+    );
+    win.frameElement?.remove();
+  });
+
   it.each([
     ["/new", "", "new"],
     ["/new/?agent=main", "", "new"],
@@ -194,7 +210,7 @@ describe("Control UI mount fallback", () => {
       [win.document.documentElement, win.document.body].map(
         (element) => win.getComputedStyle(element).backgroundColor,
       ),
-    ).toEqual(["rgb(247, 242, 236)", "rgb(247, 242, 236)"]);
+    ).toEqual(["rgb(232, 226, 220)", "rgb(232, 226, 220)"]);
   });
 
   it("keeps the fallback visible until the app completes its first render", async () => {
@@ -277,7 +293,7 @@ describe("Control UI mount fallback", () => {
     }
   });
 
-  it("does not begin recovery while the unsupported browser screen is loading", async () => {
+  it("keeps browser guidance recovery manual and preserves fallback artwork", async () => {
     const fetch = vi.fn().mockResolvedValue({ ok: true });
     const win = boot(fetch);
 
@@ -286,9 +302,16 @@ describe("Control UI mount fallback", () => {
 
     expect(fetch).not.toHaveBeenCalled();
     expect(win.document.getElementById("openclaw-mount-fallback")?.hidden).toBe(true);
+    win.dispatchEvent(new win.Event("openclaw-control-ui-unsupported-browser-failed"));
+
+    expect(fallbackElement(win).hidden).toBe(false);
+    expect(win.document.body.textContent).toContain("Browser guidance didn’t load");
+    for (const use of win.document.querySelectorAll("svg use")) {
+      expect(win.document.querySelector(use.getAttribute("href")!)).not.toBeNull();
+    }
   });
 
-  it.each(["Keep waiting", "first render", "unsupported browser"])(
+  it.each(["first render", "unsupported browser"])(
     "retires a pending recovery probe on %s",
     async (action) => {
       const { win, fetch } = pendingProbe();
@@ -297,17 +320,13 @@ describe("Control UI mount fallback", () => {
       expect(fetch).toHaveBeenCalledOnce();
       expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
 
-      if (action === "Keep waiting") {
-        win.document.getElementById("openclaw-mount-wait")?.click();
-      } else {
-        win.dispatchEvent(
-          new win.Event(
-            action === "first render"
-              ? "openclaw-control-ui-rendered"
-              : "openclaw-control-ui-unsupported-browser",
-          ),
-        );
-      }
+      win.dispatchEvent(
+        new win.Event(
+          action === "first render"
+            ? "openclaw-control-ui-rendered"
+            : "openclaw-control-ui-unsupported-browser",
+        ),
+      );
       expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
       await vi.advanceTimersByTimeAsync(10);
       expect(fetch).toHaveBeenCalledOnce();
@@ -333,7 +352,7 @@ describe("Control UI mount fallback", () => {
     } else {
       const summary = win.document.getElementById("openclaw-mount-fallback-summary");
       expect(summary).toBeInstanceOf(win.HTMLParagraphElement);
-      expect(summary?.textContent).toContain("will keep retrying");
+      expect(summary?.textContent).toContain("Trying again automatically");
     }
     rendered(win);
     if (stalled) {

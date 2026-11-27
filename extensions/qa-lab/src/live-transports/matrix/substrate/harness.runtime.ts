@@ -13,23 +13,10 @@ import {
   waitForReachableMatrixBaseUrl,
   withMatrixQaHarnessTimeout,
   writeMatrixQaHarnessFiles,
-  type MatrixQaHarnessFiles,
 } from "./harness.runtime-internals.js";
-import { startMatrixQaRecordingProxy, type MatrixQaRecordingProxy } from "./recording-proxy.js";
+import { startMatrixQaRecordingProxy } from "./recording-proxy.js";
 
-type MatrixQaHarness = MatrixQaHarnessFiles & {
-  baseUrl: string;
-  recording: MatrixQaRecordingProxy;
-  restartService(): Promise<void>;
-  stopCommand: string;
-  stop(): Promise<void>;
-  upstreamBaseUrl: string;
-};
-
-export async function startMatrixQaHarness(params: {
-  outputDir: string;
-  repoRoot?: string;
-}): Promise<MatrixQaHarness> {
+export async function startMatrixQaHarness(params: { outputDir: string; repoRoot?: string }) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const files = await writeMatrixQaHarnessFiles({
     outputDir: path.resolve(params.outputDir),

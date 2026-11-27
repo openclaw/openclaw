@@ -1,7 +1,9 @@
 import type { ScheduledToolTargets } from "../cron/execution-context-registry.js";
-import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { listFinishedSessions, listRunningSessions } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
+import { awaitExecsForYield, listYieldAwaitableExecs } from "./bash-tools.exec-notify.js";
 import { bindRequesterYieldCronAuthority } from "./cron-creator-authority-context.js";
 import type {
   SessionsYieldClaimResult,
@@ -9,20 +11,18 @@ import type {
   SessionsYieldRuntimeClaim,
 } from "./tools/sessions-yield-tool.js";
 
-const AUTOMATION_YIELD_UNSUPPORTED_ERROR =
-  "Automation turns cannot use sessions_yield because no requester continuation is available. Finish this turn so the scheduler can handle child output under the job's delivery policy.";
-
 const SWARM_COLLECTOR_YIELD_UNSUPPORTED_ERROR =
   "Collector runs cannot use sessions_yield because their results are collected explicitly instead of announced. Finish this turn so the collected result is recorded for whoever waits on this run.";
 
-// Apply after inherited policy snapshots: cron's missing continuation is not a child restriction.
-export function filterRequesterYieldTools<T extends { name: string }>(
-  tools: T[],
-  requesterSessionKey: string | undefined,
-): T[] {
-  return isCronSessionKey(requesterSessionKey)
-    ? tools.filter((tool) => tool.name !== "sessions_yield")
-    : tools;
+/** Automation turns end on yield; the scheduler, not a requester continuation, owns child output. */
+export function isSchedulerOwnedRequesterYield(params: {
+  requesterSessionKey?: string;
+  scheduledToolTargets?: Pick<ScheduledToolTargets, "placement">;
+}): boolean {
+  return (
+    isCronSessionKey(params.requesterSessionKey) ||
+    params.scheduledToolTargets?.placement !== undefined
+  );
 }
 
 type YieldCompletionClaim = (
@@ -35,26 +35,41 @@ export function createRequesterYieldCallback(params: {
   requesterTurnRunId?: string;
   processScopeKey?: string;
   swarmCollector?: boolean;
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority;
   scheduledToolTargets?: Pick<ScheduledToolTargets, "placement">;
   claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
 }): YieldCompletionClaim | undefined {
-  // Requester settlement never resumes a scheduled occurrence, whatever its
-  // placement. A `session:` run keeps the tool definition, so its session's tool
-  // catalog (and native CLI session reuse) stays stable, but the call is refused
-  // like an isolated run's. Reject before checking claims or writing yield intent.
-  if (
-    isCronSessionKey(params.requesterSessionKey) ||
-    params.scheduledToolTargets?.placement !== undefined
-  ) {
-    return () => ({ error: AUTOMATION_YIELD_UNSUPPORTED_ERROR });
-  }
+  const participationCeiling = params.pluginExecutionAuthority?.participationCeiling;
   // A collector result is read by an explicit wait, never delivered by a requester
   // continuation, so a collector yield can only park the run its waiter is blocked
   // on. Reject before any claim source runs so no durable yield intent is recorded.
   if (params.swarmCollector === true) {
     return () => ({ error: SWARM_COLLECTOR_YIELD_UNSUPPORTED_ERROR });
   }
+  // The scheduler owns child output and delivery for every automation placement.
+  // End the model turn without arming an interactive requester continuation.
+  if (!participationCeiling && isSchedulerOwnedRequesterYield(params)) {
+    // The cron run executor resumes a yield on this run chat's wake-armed commands in place.
+    const resumesInPlace = isCronRunSessionKey(params.requesterSessionKey);
+    return () => {
+      const execs =
+        resumesInPlace && params.requesterSessionKey
+          ? listYieldAwaitableExecs({
+              agentId: params.requesterAgentId,
+              sessionKey: params.requesterSessionKey,
+            })
+          : [];
+      if (execs.length === 0) {
+        return { schedulerOwned: true };
+      }
+      awaitExecsForYield(execs);
+      return { resumesInPlace: true };
+    };
+  }
   const requesterSessionKey = params.requesterSessionKey?.trim() || undefined;
+  const requesterChat = requesterSessionKey
+    ? { agentId: params.requesterAgentId, sessionKey: requesterSessionKey }
+    : undefined;
   const hasRegistryClaim = Boolean(requesterSessionKey && params.requesterTurnRunId);
   if (!params.claimYieldCompletion && !requesterSessionKey) {
     return undefined;
@@ -68,8 +83,13 @@ export function createRequesterYieldCallback(params: {
   return async (intent) => {
     // Runtime claims are observational. Check them before durable registry state
     // so a runtime failure cannot record a yield that never reaches onYield.
-    const runtimeClaim = (await params.claimYieldCompletion?.()) ?? false;
-    const runtimeClaimed = runtimeClaim === true;
+    const runtimeClaim = participationCeiling
+      ? false
+      : ((await params.claimYieldCompletion?.()) ?? false);
+    // The chat's wake-armed commands resume it on exit, bounded by their deadlines.
+    const runtimeClaimed =
+      runtimeClaim === true ||
+      (!participationCeiling && listYieldAwaitableExecs(requesterChat).length > 0);
     let registryClaimed = false;
     if (hasRegistryClaim) {
       const { markRequesterTurnYielded } =
@@ -82,6 +102,11 @@ export function createRequesterYieldCallback(params: {
         });
       registryClaimed =
         (await (withCronAuthority ? withCronAuthority(markYielded) : markYielded())) > 0;
+    }
+    // A participant only hands off this turn's accepted children. Session-wide
+    // runtime wakes, prior turns' children, and message waits have separate owners.
+    if (participationCeiling) {
+      return registryClaimed;
     }
     const completionClaimed = runtimeClaimed || registryClaimed;
     if (requesterSessionKey && params.requesterTurnRunId) {
@@ -107,7 +132,7 @@ export function createRequesterYieldCallback(params: {
       if (claim === "pending-work") {
         return {
           error:
-            "Background exec is still running or has an uncollected result in this subagent session. Use process to poll and collect it before yielding; background exec completion cannot resume this subagent, and run-scoped proxy credentials expire when the turn ends.",
+            "Background exec is still running or has an uncollected result in this subagent session, and its exit cannot resume this run. Use process to poll and collect it before yielding.",
         };
       }
       if (claim !== "nothing-pending") {
@@ -115,7 +140,16 @@ export function createRequesterYieldCallback(params: {
       }
     }
     if (completionClaimed) {
-      return true;
+      // Recheck at commit: a command that exited meanwhile already reported its exit.
+      const execs = listYieldAwaitableExecs(requesterChat);
+      if (execs.length > 0) {
+        awaitExecsForYield(execs);
+        // The armed exit wake is this turn's continuation; report it so the runner sees it.
+        return { execWakeArmed: true };
+      }
+      if (runtimeClaim === true || registryClaimed) {
+        return true;
+      }
     }
     // This turn owns no claim, but an earlier turn of the same session may still
     // await its children: their completion resumes the session on its own, so

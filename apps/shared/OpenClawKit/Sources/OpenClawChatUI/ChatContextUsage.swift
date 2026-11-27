@@ -93,6 +93,8 @@ extension OpenClawChatViewModel {
     }
 }
 
+/// One reply's usage as structured numbers for the footer's context table
+/// (web chat-composer-context-panel.tsx:163-264, chat-context-breakdown.tsx).
 struct ChatMessageUsagePresentation: Equatable {
     enum Pressure: Equatable {
         case normal
@@ -100,81 +102,107 @@ struct ChatMessageUsagePresentation: Equatable {
         case danger
     }
 
-    let text: String
-    let accessibilityValue: String
-    let pressure: Pressure
+    enum Component: Hashable {
+        case cacheRead
+        case cacheWrite
+        case input
+        case output
+    }
+
+    struct Row: Equatable {
+        let component: Component
+        let tokens: Int
+    }
+
+    struct Segment: Equatable {
+        /// Nil when only the prompt size is known, not its parts.
+        let component: Component?
+        /// Share of the bar, which spans the context window.
+        let fraction: Double
+    }
+
+    struct Context: Equatable {
+        let promptTokens: Double
+        let windowTokens: Int
+        let percent: Int
+        let segments: [Segment]
+    }
+
+    /// Non-zero counters in display order.
+    let rows: [Row]
+    let cost: Double?
+    let context: Context?
+
+    var pressure: Pressure {
+        guard let percent = self.context?.percent else { return .normal }
+        if percent >= 90 { return .danger }
+        if percent >= 75 { return .warning }
+        return .normal
+    }
 
     static func make(
         message: OpenClawChatMessage,
         contextWindowTokens: Int?) -> ChatMessageUsagePresentation?
     {
-        guard message.role.lowercased() == "assistant", let usage = message.usage else { return nil }
+        guard message.presentationOwnsFooter, !message.stoppedForToolUse,
+              message.role.lowercased() == "assistant", let usage = message.usage else { return nil }
 
-        var visualParts: [String] = []
-        var accessibilityParts: [String] = []
         let input = ChatContextUsageCalculator.positive(usage.input)
         let output = ChatContextUsageCalculator.positive(usage.output)
         let cacheRead = ChatContextUsageCalculator.positive(usage.cacheRead)
         let cacheWrite = ChatContextUsageCalculator.positive(usage.cacheWrite)
-
-        let tokenParts: [(Int?, String, String)] = [
-            (input, "↑", String(localized: "Input tokens: %@")),
-            (output, "↓", String(localized: "Output tokens: %@")),
-            (cacheRead, "R", String(localized: "Cache read tokens: %@")),
-            (cacheWrite, "W", String(localized: "Cache write tokens: %@")),
+        let counters: [(Component, Int?)] = [
+            (.cacheRead, cacheRead),
+            (.cacheWrite, cacheWrite),
+            (.input, input),
+            (.output, output),
         ]
-        for (count, symbol, format) in tokenParts {
-            guard let count else { continue }
-            visualParts.append("\(symbol)\(ChatCompactTokenCountFormatter.string(Double(count)))")
-            accessibilityParts.append(String(format: format, count.formatted()))
-        }
-        if let cost = usage.cost?.total, cost > 0 {
-            let formattedCost = String(format: "$%.4f", locale: Locale(identifier: "en_US_POSIX"), cost)
-            visualParts.append(formattedCost)
-            accessibilityParts.append(String(
-                format: String(localized: "Cost: %@"),
-                formattedCost))
-        }
+        let rows = counters.compactMap { component, tokens in tokens.map { Row(component: component, tokens: $0) } }
+        let cost = usage.cost?.total.flatMap { $0 > 0 ? $0 : nil }
 
         // Context pressure mirrors the Control UI prompt size. Output is response data;
         // input plus cache reads/writes is the context the model received for this run.
         // Whole-turn counters sum several calls, so the latest call's marker wins when present.
-        let promptTokens = usage.contextUsage.map { Double($0.promptTokens) }
-            ?? Double(input ?? 0) + Double(cacheRead ?? 0) + Double(cacheWrite ?? 0)
-        let contextPercent: Int?
+        let parts: [(Component, Double)] = [
+            (.cacheRead, Double(cacheRead ?? 0)),
+            (.cacheWrite, Double(cacheWrite ?? 0)),
+            (.input, Double(input ?? 0)),
+        ]
+        let partsTotal = parts.reduce(0) { $0 + $1.1 }
+        let promptTokens = usage.contextUsage.map { Double($0.promptTokens) } ?? partsTotal
+        var context: Context?
         if let contextWindowTokens, contextWindowTokens > 0, promptTokens > 0 {
-            let roundedPercent = (promptTokens / Double(contextWindowTokens) * 100).rounded()
-            contextPercent = Int(min(100, roundedPercent))
-        } else {
-            contextPercent = nil
-        }
-        let pressure = self.pressure(for: contextPercent)
-        if let contextPercent {
-            let warningPrefix = pressure == .normal ? "" : "⚠︎ "
-            visualParts.append("\(warningPrefix)\(contextPercent)% \(String(localized: "ctx"))")
-            let format = switch pressure {
-            case .normal:
-                String(localized: "%@ percent of context used")
-            case .warning:
-                String(localized: "Warning: %@ percent of context used")
-            case .danger:
-                String(localized: "Critical: %@ percent of context used")
-            }
-            accessibilityParts.append(String(format: format, contextPercent.formatted()))
+            let percent = Int(min(100, (promptTokens / Double(contextWindowTokens) * 100).rounded()))
+            // Parts never draw past the prompt they make up, nor the prompt past the bar.
+            let denominator = max(Double(contextWindowTokens), promptTokens)
+            let segments = partsTotal > 0
+                ? parts.filter { $0.1 > 0 }.map {
+                    Segment(component: $0.0, fraction: $0.1 * min(1, promptTokens / partsTotal) / denominator)
+                }
+                : [Segment(component: nil, fraction: promptTokens / denominator)]
+            context = Context(
+                promptTokens: promptTokens,
+                windowTokens: contextWindowTokens,
+                percent: percent,
+                segments: segments)
         }
 
-        guard !visualParts.isEmpty else { return nil }
-        return ChatMessageUsagePresentation(
-            text: visualParts.joined(separator: " "),
-            accessibilityValue: accessibilityParts.joined(separator: ", "),
-            pressure: pressure)
+        guard !rows.isEmpty || cost != nil || context != nil else { return nil }
+        return ChatMessageUsagePresentation(rows: rows, cost: cost, context: context)
     }
 
-    private static func pressure(for percent: Int?) -> Pressure {
-        guard let percent else { return .normal }
-        if percent >= 90 { return .danger }
-        if percent >= 75 { return .warning }
-        return .normal
+    static func tokens(_ value: Double) -> String {
+        ChatCompactTokenCountFormatter.string(value)
+    }
+
+    /// Web `formatContextCost` (chat-composer-context-panel.tsx:87-89 over lib/format.ts:268-272):
+    /// four decimals below a cent, three below a dollar, else two; a trailing third-decimal zero drops.
+    static func cost(_ value: Double) -> String {
+        let value = value.isFinite ? value : 0
+        let digits = value == 0 ? 2 : value < 0.01 ? 4 : value < 1 ? 3 : 2
+        let formatted = value.formatted(
+            .currency(code: "USD").locale(Locale(identifier: "en_US")).precision(.fractionLength(digits)))
+        return digits == 3 && formatted.hasSuffix("0") ? String(formatted.dropLast()) : formatted
     }
 }
 

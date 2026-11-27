@@ -19,7 +19,7 @@ import {
 } from "../../gateway/cron-creator-authority-grant.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals-core.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { isCronSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import {
@@ -27,10 +27,8 @@ import {
   bindCronRequesterGrant,
 } from "../cron-creator-authority-context.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
-import { withToolEffectBoundary } from "../tool-effect-receipt.js";
-import { bindAgentToolReplaySafety } from "../tool-replay-safety.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
-import { AUTOMATIONS_TOOL_NAME, CRON_SCOPED_READ_ACTIONS } from "./automations-tool-name.js";
+import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import {
   type AnyAgentTool,
   jsonResult,
@@ -51,6 +49,12 @@ import {
   stripExistingContext,
 } from "./cron-tool-context.js";
 import {
+  createCronCreationPlans,
+  cronMutationResult,
+  executePlannedCronMutation,
+} from "./cron-tool-creation-plan.js";
+import {
+  applyCronToolDefaults,
   assertInheritedCronToolCaptureReady,
   capCronJobToolsAllowOnCreate,
   cronCreateRequiresCreatorAuthority,
@@ -140,24 +144,26 @@ function isOlderGatewayRejectingParam(error: unknown, method: string, param: str
 
 export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const config = opts?.config ?? getRuntimeConfigSnapshot() ?? undefined;
-  const readOnly = opts?.readOnly === true;
   const assertStreamConfigCurrent = captureCronStreamPolicyConfigCurrentness(opts);
   const managementAuthority = bindCronManagementGrant(opts?.runId, config);
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
   const allowCommandJobs = config?.tools?.gatewayPolicy?.automations?.allowCommandJobs !== false;
   const automation = createCronAutomationActions(opts);
+  const creationPlans = createCronCreationPlans(opts?.requireCreationPlan);
   const { activeRun, nextCheckEnabled, assertCurrent: assertCurrentRun } = automation;
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
-  const selfRemoveOnly = Boolean(readCronSelfRemoveOnlyJobId(opts));
+  // Conversation continuations keep their catalog; the execution guard still scopes each call.
+  const selfRemoveOnly =
+    Boolean(readCronSelfRemoveOnlyJobId(opts)) &&
+    (!opts?.agentSessionKey?.trim() || isCronSessionKey(opts.agentSessionKey));
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
-    displaySummary: readOnly ? "Inspect recorded automation state." : CRON_TOOL_DISPLAY_SUMMARY,
+    displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: buildCronToolDescription({
       triggersEnabled,
       callerScoped: !isCronModelManagementAllowed(config),
-      readOnly,
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
@@ -166,7 +172,6 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
     }),
     outputSchema: CronToolOutputSchema,
     parameters: createCronToolSchema({
-      readOnly,
       allowCommandJobs,
       agentSessionKey: opts?.agentSessionKey,
       triggersEnabled,
@@ -181,26 +186,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       assertCurrentRun?.();
       let streamExecPolicy: CronStreamExecPolicy | undefined;
       let streamExecutionApproval: CronStreamExecApprovalReceipt | undefined;
-      const mutationResult = (result: unknown) =>
-        jsonResult(
-          streamExecutionApproval && isRecord(result)
-            ? {
-                ...result,
-                streamExecutionApproval: {
-                  ...streamExecutionApproval,
-                  message:
-                    "A human operator approved this watcher and its automatic restarts. The approver's identity is not supplied.",
-                },
-              }
-            : result,
-        );
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
-      if (readOnly && !CRON_SCOPED_READ_ACTIONS.includes(action)) {
-        throw new Error(
-          "The automation tool is read-only during recovery; only caller-scoped inspections are available. It cannot create, change, remove, run, or wake work. This restriction does not establish the outcome of an earlier action.",
-        );
-      }
       if (
         managementAuthority?.managementOnly &&
         !CRON_MANAGEMENT_METHODS.some((method) => method === `cron.${action}`)
@@ -210,6 +197,9 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         );
       }
       assertCronSelfRemoveScope(opts, action, params);
+      if (action === "plan") {
+        return jsonResult(creationPlans.declare(params.slots, params.names));
+      }
       const parsedGatewayOpts = readGatewayCallOptions(params);
       const gatewayOpts: GatewayCallOptions = {
         ...parsedGatewayOpts,
@@ -276,6 +266,9 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         );
       };
 
+      const slot = action === "add" ? creationPlans.bindAdd(params) : undefined;
+      const mutationResult = (result: unknown) =>
+        cronMutationResult(result, slot?.result, streamExecutionApproval);
       const executeAction = async (onEffectsStart?: () => void) => {
         const prepareStreamExecAuthority = async (
           creatorTools: readonly CronCreatorToolAllowlistEntry[] | undefined,
@@ -308,9 +301,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
           }
           const target = await callGateway("cron.get", gatewayOpts, { id });
           operationSignal?.throwIfAborted();
-          if (getGatewayToolCallerIdentity()?.receiptAuthority?.() === false) {
-            throw new Error("The requesting turn is no longer active.");
-          }
+          getGatewayToolCallerIdentity()?.receiptAuthority?.();
           if (!isRecord(target) || typeof target.configRevision !== "string") {
             throw new Error(
               "Automation target has no current revision. Inspect it again before retrying.",
@@ -415,6 +406,14 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 await callGateway(`cron.${action}`, gatewayOpts, {
                   id,
                   ...(runId ? { runId } : {}),
+                  ...(action === "runs"
+                    ? {
+                        limit: readPositiveIntegerParam(params, "limit", {
+                          max: CRON_TOOL_LIST_MAX_LIMIT,
+                        }),
+                        offset: readNonNegativeIntegerParam(params, "offset"),
+                      }
+                    : {}),
                 }),
               );
             }
@@ -447,6 +446,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               ) {
                 delete job.enabled;
               }
+              applyCronToolDefaults(job, runtimeConfig.cron?.defaultTools, params.toolsAllowMode);
               const requiresCreatorAuthority = cronCreateRequiresCreatorAuthority(
                 job,
                 opts?.creatorToolAllowlist,
@@ -513,14 +513,13 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                   const inferred = await resolveCronCreationDelivery({
                     cfg: runtimeConfig,
                     agentId: callerAgentId,
+                    job: { agentId: job.agentId, delivery },
+                    requesterOrigin: getGatewayToolCallerIdentity()?.requesterOrigin,
                     currentDeliveryContext: opts.currentDeliveryContext,
                     agentSessionKey: opts.agentSessionKey,
                   });
                   if (inferred) {
-                    job.delivery = {
-                      ...inferred,
-                      ...delivery,
-                    } satisfies CronDelivery;
+                    job.delivery = { ...inferred, ...delivery } satisfies CronDelivery;
                   }
                 }
               }
@@ -571,6 +570,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 throw new Error("displayName must be a non-empty string or null");
               }
               const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
+              applyCronToolDefaults(patch, runtimeConfig.cron?.defaultTools, params.toolsAllowMode);
               if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
                 throw new Error("job required");
               }
@@ -710,18 +710,16 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               ? readCronStreamApprovalEnded(error.details)
               : undefined;
           if (ended && ended.action === action) {
-            return jsonResult(ended);
+            return cronMutationResult(ended, slot?.result);
           }
           throw error;
         });
       };
-      return await (action === "add" || action === "update"
-        ? withToolEffectBoundary(executeAction)
-        : executeAction());
+      if (action !== "add" && action !== "update") {
+        return await executeAction();
+      }
+      return await executePlannedCronMutation(executeAction, slot?.release);
     },
   };
-  if (readOnly) {
-    bindAgentToolReplaySafety(tool, "bounded-read");
-  }
   return setToolTerminalPresentation(tool, formatCronTerminalPresentation);
 }

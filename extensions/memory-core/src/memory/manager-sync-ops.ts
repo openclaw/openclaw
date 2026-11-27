@@ -34,6 +34,8 @@ const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
   protected readonly automaticRebuildNotice: { sequence: number; warning: string };
+  /** Start of the oldest sync whose cache rows were not yet retirable. */
+  private cacheRetireSince?: number;
   protected constructor(notice?: { sequence: number; warning: string }) {
     super();
     this.automaticRebuildNotice = notice ?? { sequence: 0, warning: "" };
@@ -177,6 +179,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
     let hasTargetArchiveFiles = hasTargetSessionRequest;
     let recoveringSessionFullRetry = false;
     let syncingSources = false;
+    // Cache rows from this sync, and from earlier skipped ones, become retirable only
+    // after a sync publishes its memory files cleanly.
+    const cacheWrittenSince = this.cacheRetireSince ?? Date.now();
+    let memoryPublished = false;
     try {
       if (await this.resumeReindex(params)) {
         needsFullReindex = true;
@@ -226,7 +232,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         : null;
       const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
       hasTargetArchiveFiles = targetArchiveFiles !== null;
-      if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
+      if (
+        (params?.reason === "cli" || params?.reason === "cli-search") &&
+        !params.force &&
+        !hasTargetArchiveFiles
+      ) {
         await this.markSessionStartupCatchupDirtyFiles();
       }
       const syncProviderKey = this.syncProviderGeneration
@@ -306,6 +316,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         indexIdentity.status === "mismatched" &&
         indexIdentity.owner === "openclaw" &&
         !hasTargetArchiveFiles;
+      // A scope mismatch cannot serve the previous corpus. Rebuild it through
+      // the same shadow publication owner used for runtime format upgrades.
+      const needsConfiguredScopeReindex =
+        indexIdentity.status === "mismatched" &&
+        indexIdentity.owner === "configuration" &&
+        indexIdentity.code === "scope" &&
+        !hasTargetArchiveFiles;
       const canRunRetryFullReindex =
         indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
       const retryFullReindexRequested = this.memoryFullRetryDirty || this.sessionsFullRetryDirty;
@@ -315,7 +332,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         (!params?.force || params.reason === "embedding-bootstrap-recovery") &&
         // A semantic failure must still allow the distinct keyword-only publication.
         !(this.fullReindexRetryBackoff.failedWithEmbeddings && !syncProvider) &&
-        Date.now() < this.fullReindexRetryBackoff.retryAt;
+        performance.now() < this.fullReindexRetryBackoff.retryAt;
       const deferAutomaticFullReindex = retryFullReindexBackedOff && !needsExplicitIdentityReindex;
       if (deferAutomaticFullReindex && !hasTargetArchiveFiles) {
         // Automatic identity repair honors the failure cooldown. An explicit
@@ -327,7 +344,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         (params?.force && !hasTargetArchiveFiles) ||
         needsExplicitIdentityReindex ||
         (!deferAutomaticFullReindex &&
-          (needsInitialIndex || needsMissingIdentityReindex || needsRuntimeVersionReindex)) ||
+          (needsInitialIndex ||
+            needsMissingIdentityReindex ||
+            needsRuntimeVersionReindex ||
+            needsConfiguredScopeReindex)) ||
         (!hasTargetArchiveFiles &&
           !deferAutomaticFullReindex &&
           ((this.memoryFullRetryDirty && canRunRetryFullReindex) ||
@@ -382,6 +402,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
         progress: progress ?? undefined,
       });
+      memoryPublished = shouldSyncMemory;
       if (recoveringSessionFullRetry && !this.memoryFullRetryDirty) {
         this.clearFullReindexRetryBackoff();
       }
@@ -422,6 +443,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
       // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
       // Full rebuilds finalize their cache with the shadow; preflight failures have no shadow work.
       if (!needsFullReindex) {
+        // Deferred or failed memory work stays dirty; its rows stay for the retry.
+        if (memoryPublished && !this.dirty && !this.memoryFullRetryDirty) {
+          this.cacheRetireSince = undefined;
+          await this.retirePublishedEmbeddingCacheRows({ writtenSince: cacheWrittenSince });
+        } else {
+          this.cacheRetireSince = cacheWrittenSince;
+        }
         await this.pruneEmbeddingCacheIfNeeded();
       }
     }

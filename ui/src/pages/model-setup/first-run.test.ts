@@ -1,10 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { routeIdFromPath } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
+import {
+  clearFirstRunActivationReceipt,
+  persistFirstRunActivationReceipt,
+  readFirstRunActivationReceipt as readReceipt,
+} from "./first-run-activation-receipt.ts";
 import { isDefaultChatLanding, startModelSetupFirstRunRedirectAfterLocation } from "./first-run.ts";
+
+const receiptKey = "openclaw.modelSetup.pendingActivation.v1";
+const deviceKey = "openclaw-device-identity-v1";
+const privateKey = "high-entropy-device-private-key-never-in-receipts";
+const candidate = { kind: "openai-api-key", modelRef: "openai/expected" };
+const setDeviceKey = (key: string) =>
+  localStorage.setItem(deviceKey, JSON.stringify({ version: 1, privateKey: key }));
 
 const defaultLanding = { pathname: "/chat/main", search: "", hash: "" };
 
@@ -18,77 +28,79 @@ function startRedirect(context: ApplicationContext, onInitialDecision?: () => vo
   });
 }
 
-function createConnectedContext(
-  options: {
-    selectedId?: string | null;
-    modelConfigured?: boolean;
-    admin?: boolean;
-    stopped?: boolean;
-  } = {},
-) {
+function createConnectedContext({
+  selectedId = "main",
+  modelConfigured = false,
+  admin = true,
+  stopped = false,
+  token = "gateway-auth-token",
+  deviceToken,
+}: {
+  selectedId?: string | null;
+  modelConfigured?: boolean;
+  admin?: boolean;
+  stopped?: boolean;
+  token?: string;
+  deviceToken?: string;
+} = {}) {
   const request = vi.fn();
   const replace = vi.fn();
   const subscribe = vi.fn(() => () => undefined);
-  const snapshot = {
-    phase: options.stopped ? "stopped" : "connected",
-    client: options.stopped ? null : { request },
-    hello: options.stopped
-      ? null
-      : {
-          auth: {
-            role: "operator",
-            scopes: [options.admin === false ? "operator.read" : "operator.admin"],
-          },
-          features: { methods: ["openclaw.setup.detect"] },
-          snapshot: {
-            sessionDefaults: {
-              defaultAgentId: "main",
-              modelConfigured: options.modelConfigured ?? false,
-            },
-          },
-        },
-  };
   const context = {
     gateway: {
-      snapshot,
+      snapshot: {
+        phase: stopped ? "stopped" : "connected",
+        client: stopped ? null : { request },
+        hello: stopped
+          ? null
+          : {
+              auth: {
+                role: "operator",
+                scopes: [admin ? "operator.admin" : "operator.read"],
+                deviceToken,
+              },
+              features: { methods: ["openclaw.setup.detect"] },
+              snapshot: { sessionDefaults: { defaultAgentId: "main", modelConfigured } },
+            },
+      },
       connection: {
-        gatewayUrl: "wss://gateway.example",
-        token: "gateway-auth-token",
+        gatewayUrl: "wss://gateway.example/control?profile=work",
+        token,
         password: "",
         bootstrapToken: "",
       },
       subscribe,
     },
-    agentSelection: {
-      state: { selectedId: options.selectedId === undefined ? "main" : options.selectedId },
-    },
+    agentSelection: { state: { selectedId } },
     replace,
   } as unknown as ApplicationContext;
   return { context, replace, request, subscribe };
 }
 
+beforeEach(() => {
+  vi.stubGlobal("localStorage", createStorageMock());
+  setDeviceKey(privateKey);
+});
+afterEach(() => vi.unstubAllGlobals());
+
 describe("model setup first-run redirect", () => {
-  beforeEach(() => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    localStorage.setItem(
-      "openclaw-device-identity-v1",
-      JSON.stringify({ version: 1, privateKey: "durable-device-private-key-for-testing" }),
-    );
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it("recognizes default chat landings without accepting session deep links", () => {
     const cases = [
       ["/", "", "", "", true],
       ["/chat", "", "", "", true],
+      ["/openclaw/", "", "", "/openclaw", true],
+      ["/index.html", "?draft=hello", "#anchor", "", true],
+      ["/ui/index.html", "", "", "/ui", true],
+      ["/ui/INDEX.HTML", "", "", "/ui", true],
+      ["/ui/unknown/index.html", "", "", "/ui", false],
+      ["/ui/other.html", "", "", "/ui", false],
+      ["/index.html", "?session=agent%3Amain%3Amain", "", "", false],
+      ["/ui/index.html", "", "#session=agent%3Amain%3Amain", "/ui", false],
+      ["/beam/unfinished-share-5", "", "", "", false],
+      ["/settings/unknown/page", "", "", "", false],
       ["/chat", "?session=agent%3Amain%3Amain", "", "", false],
       ["/chat", "", "#session=agent%3Amain%3Amain", "", false],
-      ["/chat/main", "", "", "", true],
       ["/chat/main/", "", "", "", true],
-      ["/openclaw/chat/main", "", "", "/openclaw", true],
       ["/openclaw/chat/main/", "", "", "/openclaw", true],
       ["/chat/research", "", "", "", false],
       ["/chat/main/existing-session", "", "", "", false],
@@ -96,11 +108,25 @@ describe("model setup first-run redirect", () => {
       ["/settings/appearance", "", "", "", false],
     ] as const;
     for (const [pathname, search, hash, basePath, expected] of cases) {
-      expect(isDefaultChatLanding({ pathname, search, hash }, basePath, routeIdFromPath)).toBe(
-        expected,
-      );
+      expect(isDefaultChatLanding({ pathname, search, hash }, basePath)).toBe(expected);
     }
   });
+
+  it.each(["", "/ui", "/portable/control"])(
+    "starts first-run setup from the index document at %s",
+    async (basePath) => {
+      const location = { pathname: `${basePath}/index.html`, search: "", hash: "" };
+      const { context, replace } = createConnectedContext();
+      const dispose = await startModelSetupFirstRunRedirectAfterLocation({
+        context,
+        enabled: isDefaultChatLanding(location, basePath),
+        history: { location: () => location, replace: vi.fn() },
+        initialLocationReady: Promise.resolve(location),
+      });
+      expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+      dispose();
+    },
+  );
 
   it("installs a released session deep link without registering the first-run gate", async () => {
     const releasedLocation = {
@@ -117,7 +143,7 @@ describe("model setup first-run redirect", () => {
 
     await startModelSetupFirstRunRedirectAfterLocation({
       context,
-      enabled: isDefaultChatLanding(releasedLocation, "", routeIdFromPath),
+      enabled: isDefaultChatLanding(releasedLocation, ""),
       history: { location: () => currentLocation, replace: replaceLocation },
       initialLocationReady: Promise.resolve(canonicalLocation),
     });
@@ -148,10 +174,7 @@ describe("model setup first-run redirect", () => {
 
   it("restores unfinished onboarding after its activation already configured the model", async () => {
     const { context, replace } = createConnectedContext({ modelConfigured: true });
-    persistFirstRunActivationReceipt(context, {
-      kind: "openai-api-key",
-      modelRef: "openai/expected",
-    });
+    persistFirstRunActivationReceipt(context, candidate);
 
     const decision = createDeferred();
     const dispose = await startRedirect(context, decision.resolve);
@@ -160,4 +183,61 @@ describe("model setup first-run redirect", () => {
     expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
     dispose();
   });
+});
+
+function tamperReceipt(patch: object) {
+  const receipt = JSON.parse(localStorage.getItem(receiptKey)!);
+  localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, ...patch }));
+}
+it.each<[string, (context: ApplicationContext) => void]>([
+  ["Gateway token", (ctx) => Object.assign(ctx.gateway.connection, { token: "replacement" })],
+  ["Gateway URL", (ctx) => Object.assign(ctx.gateway.connection, { gatewayUrl: "wss://other" })],
+  ["selected agent", (ctx) => Object.assign(ctx.agentSelection.state, { selectedId: "research" })],
+  ["browser device identity", () => setDeviceKey("replacement")],
+  ["role", () => tamperReceipt({ modelTarget: "utility" })],
+  ["wizard", () => tamperReceipt({ wizard: { sessionId: "replacement", authChoice: "other" } })],
+])("rejects a receipt after its %s changes", (_name, replace) => {
+  const { context } = createConnectedContext();
+  persistFirstRunActivationReceipt(context, {
+    kind: "provider-auth",
+    modelRef: "openai/expected",
+    wizard: { sessionId: "original", authChoice: "custom-api-key", authKind: "secret" },
+  });
+  replace(context);
+  expect([readReceipt(context), localStorage.getItem(receiptKey)]).toEqual([null, null]);
+});
+
+it("binds paired-device authentication when no explicit Gateway credential exists", () => {
+  const { context } = createConnectedContext({ token: "", deviceToken: "paired-device-token" });
+  persistFirstRunActivationReceipt(context, candidate);
+
+  const persisted = localStorage.getItem(receiptKey) ?? "";
+  expect(persisted).not.toContain("paired-device-token");
+  expect(persisted).not.toContain(privateKey);
+  expect(readReceipt(context)?.modelRef).toBe("openai/expected");
+  context.gateway.snapshot.hello!.auth!.deviceToken = "replacement-device-token";
+
+  expect([readReceipt(context), localStorage.getItem(receiptKey)]).toEqual([null, null]);
+});
+
+it("fails closed without durable storage, a persisted device key, or authenticated credentials", () => {
+  const { context } = createConnectedContext({ token: "" });
+
+  expect(persistFirstRunActivationReceipt(context, candidate)).toBeNull();
+
+  context.gateway.connection.token = "gateway-auth-token";
+  localStorage.removeItem(deviceKey);
+  expect(persistFirstRunActivationReceipt(context, candidate)).toBeNull();
+
+  const unavailable = () => {
+    throw new Error("Browser storage disabled");
+  };
+  vi.stubGlobal("localStorage", {
+    getItem: unavailable,
+    setItem: unavailable,
+    removeItem: unavailable,
+  });
+  expect(persistFirstRunActivationReceipt(context, candidate)).toBeNull();
+  expect(readReceipt(context)).toBeNull();
+  expect(() => clearFirstRunActivationReceipt()).not.toThrow();
 });

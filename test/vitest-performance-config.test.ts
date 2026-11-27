@@ -85,7 +85,11 @@ describe("filesystem module cache ownership", () => {
     transitionLock("1.0.0");
     return { root, generation, transitionLock, ...files };
   };
-  const runCacheApi = (root: string, source: string) =>
+  const runCacheApi = (
+    root: string,
+    source: string,
+    cacheConfig = loadVitestPerformanceConfig({}, "linux", root),
+  ) =>
     runNode(
       root,
       root,
@@ -95,7 +99,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createVitest } from ${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("vitest/node")).href)};
 const root = ${JSON.stringify(root)};
-const cacheConfig = ${JSON.stringify(loadVitestPerformanceConfig({}, "linux", root))};
+const cacheConfig = ${JSON.stringify(cacheConfig)};
 const create = (options = {}, overrides = {}) => createVitest("test", {
   root, config: false, watch: false, ...cacheConfig, ...options,
 }, overrides);
@@ -106,6 +110,75 @@ const withContext = async (options, overrides, run) => {
 ${source}
 `),
     );
+
+  it.each([
+    { name: "explicit zero", env: { OPENCLAW_VITEST_FS_MODULE_CACHE: "0" }, platform: "linux" },
+    {
+      name: "explicit false",
+      env: { OPENCLAW_VITEST_FS_MODULE_CACHE: " FALSE " },
+      platform: "darwin",
+    },
+    { name: "Windows default", env: {}, platform: "win32" },
+    { name: "Windows runner", env: { RUNNER_OS: "Windows" }, platform: "linux" },
+  ] as const)("does not create filesystem transforms for $name", ({ env, platform }) => {
+    const { root, write } = prepareCacheFixture("disabled");
+    write("subject.js", "export const value = 42;");
+    runCacheApi(
+      root,
+      `
+await withContext({}, {}, async ctx => {
+  const { value } = await ctx.getRootProject().import("./subject.js");
+  assert.equal(value, 42);
+  assert.equal(ctx.config.fsModuleCache, false);
+});
+assert.equal(fs.existsSync(path.join(root, "node_modules", ".vitest-cache")), false);
+assert.equal(fs.existsSync(path.join(root, ".cache", "vitest")), false);
+`,
+      loadVitestPerformanceConfig(env, platform, root),
+    );
+  });
+
+  it("honors benchmark CLI opt-outs when the config enables both caches", () => {
+    const { root, write, read } = prepareCacheFixture("cli-disabled");
+    write("fixture.test.js", 'test("runs without caches", () => expect(42).toBe(42));');
+    write(
+      "vitest.config.mjs",
+      `export default ${JSON.stringify({
+        root,
+        test: {
+          globals: true,
+          include: ["fixture.test.js"],
+          maxWorkers: 1,
+          cache: true,
+          fsModuleCache: true,
+          fsModuleCachePath: path.join(root, "transforms"),
+        },
+      })};`,
+    );
+    runNode(
+      root,
+      root,
+      vitestArgs(root, [
+        "--no-cache",
+        "--no-fsModuleCache",
+        "--reporter=json",
+        "--outputFile",
+        path.join(root, "result.json"),
+      ]),
+    );
+    expect(JSON.parse(read("result.json"))).toMatchObject({
+      success: true,
+      numTotalTests: 1,
+      numPassedTests: 1,
+    });
+    for (const directory of [
+      "node_modules/.vite/vitest",
+      "node_modules/.vitest-cache",
+      "transforms",
+    ]) {
+      expect(fs.existsSync(path.join(root, directory)), directory).toBe(false);
+    }
+  });
 
   it("preserves each project's optimized dependency identity when reusing shared transforms", () => {
     const { root } = prepareCacheFixture("optimizer-identity");
@@ -149,6 +222,83 @@ assert.equal(transforms.length, 2, "both projects must reuse their own persisted
 `,
     );
   });
+
+  it.each(["bundle", "runner"] as const)(
+    "invalidates declaring configs without discarding unrelated project transforms (%s)",
+    (configLoader) => {
+      const { root } = prepareCacheFixture(`declaring-${configLoader}`);
+      const cacheOwner = new URL("./vitest/vitest.performance-config.ts", import.meta.url).href;
+      runCacheApi(
+        root,
+        `
+const owner = ${JSON.stringify(cacheOwner)};
+const shared = path.join(root, "shared.mjs");
+fs.writeFileSync(path.join(root, "subject.js"), 'export const value = "__OPTION__";');
+fs.writeFileSync(shared, \`
+import fs from 'node:fs';
+import path from 'node:path';
+import { createVitestProjectCachePlugin } from \${JSON.stringify(owner)};
+const suffix = '-shared-first';
+export function project(name, option, declaringConfigFile) {
+  return {
+    extends: false,
+    root: \${JSON.stringify(root)},
+    cacheDir: path.join(\${JSON.stringify(root)}, 'optimizer-' + name),
+    plugins: [createVitestProjectCachePlugin(declaringConfigFile), {
+      name: 'fixture-same-name-plugin-options',
+      transform(code, id) {
+        if (!id.endsWith('/subject.js')) return;
+        fs.appendFileSync(path.join(\${JSON.stringify(root)}, name + '-transforms.txt'), 'transform\\\\n');
+        return { code: code.replace('__OPTION__', option + suffix), map: null };
+      },
+    }],
+    test: { name, ...\${JSON.stringify(cacheConfig)} },
+  };
+}
+\`);
+for (const [name, option] of [['unit', 'unit'], ['e2e', 'first']]) {
+  fs.writeFileSync(path.join(root, name + '.config.mjs'), \`
+import { fileURLToPath } from 'node:url';
+import { project } from './shared.mjs';
+const option = \${JSON.stringify(option)};
+export default {root: \${JSON.stringify(root)}, test: {
+  ...\${JSON.stringify(cacheConfig)},
+  projects: [project(\${JSON.stringify(name)}, option, fileURLToPath(import.meta.url))],
+}};
+\`);
+}
+fs.writeFileSync(path.join(root, 'wrapper.config.mjs'), "export { default } from './e2e.config.mjs';");
+const counts = () => ['unit', 'e2e'].map(name => {
+  const file = path.join(root, name + '-transforms.txt');
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\\n').length : 0;
+});
+const check = async (config, name, expected) => {
+  await withContext({config: path.join(root, config + '.config.mjs'), configLoader: ${JSON.stringify(configLoader)}}, {}, async ctx => {
+    const {value} = await ctx.getProjectByName(name).import('./subject.js');
+    assert.equal(value, expected, name + ' must use current declaring-file plugin options');
+  });
+};
+await check('unit', 'unit', 'unit-shared-first');
+await check('e2e', 'e2e', 'first-shared-first');
+await check('wrapper', 'e2e', 'first-shared-first');
+const firstWrapperCounts = counts();
+await check('wrapper', 'e2e', 'first-shared-first');
+assert.deepEqual(counts(), firstWrapperCounts, 'unchanged wrapper must reuse transforms');
+const e2e = path.join(root, 'e2e.config.mjs');
+fs.writeFileSync(e2e, fs.readFileSync(e2e, 'utf8').replace('"first"', '"second"'));
+await check('unit', 'unit', 'unit-shared-first');
+await check('wrapper', 'e2e', 'second-shared-first');
+await check('e2e', 'e2e', 'second-shared-first');
+assert.deepEqual(counts(), [1, 4], 'E2E-only changes must retain unrelated unit transforms');
+fs.writeFileSync(shared, fs.readFileSync(shared, 'utf8').replace('-shared-first', '-shared-second'));
+await check('unit', 'unit', 'unit-shared-second');
+await check('wrapper', 'e2e', 'second-shared-second');
+await check('e2e', 'e2e', 'second-shared-second');
+assert.deepEqual(counts(), [2, 6], 'shared plugin changes must invalidate both projects');
+`,
+      );
+    },
+  );
 
   it("preserves another checkout's cache when shared dependencies change", () => {
     const root = tempDirs.make("oc-vitest-cache-ownership-");

@@ -7,8 +7,9 @@ import type { SessionEntryReadScope } from "../config/sessions/session-accessor.
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
-import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import { captureSessionStoreTargetInventory } from "../config/sessions/session-store-target-routing.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
+import { prepareSessionStoreCandidatesInWorker } from "../config/sessions/session-transcript-worker-resources.js";
 import type { ExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -34,6 +35,7 @@ import {
 import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import { prepareIncognitoGatewaySessionStoreTarget } from "./session-utils-store-incognito.js";
 import {
+  createGatewaySessionStore,
   gatewaySessionStoreReadOptions,
   readGatewaySessionStore,
   type GatewaySessionStoreRead,
@@ -82,7 +84,11 @@ function prepareGatewaySessionStoreLookup(
     // Retired/manual agents require an existing discovered store; lookup never creates one.
     return {
       reads: [],
-      resolve: () => ({ storePath: fallback.storePath, store: {}, match: undefined }),
+      resolve: () => ({
+        storePath: fallback.storePath,
+        store: createGatewaySessionStore([]),
+        match: undefined,
+      }),
     };
   }
   const reads = candidates.map((target, index): GatewaySessionStoreRead => ({
@@ -342,7 +348,7 @@ export async function withGatewaySessionStoreTarget<T>(
   if (identities.some((selected) => isIncognitoSessionKey(selected.canonicalKey))) {
     throw new Error("Related incognito rows require their captured actor");
   }
-  const inventory = prepareSessionStoreTargetInventory(
+  const capturedInventory = captureSessionStoreTargetInventory(
     params.cfg,
     [
       ...identities.map((selected) => selected.agentId),
@@ -352,6 +358,19 @@ export async function withGatewaySessionStoreTarget<T>(
     ],
     params.env,
   );
+  const preparedInventory = await prepareSessionStoreCandidatesInWorker({
+    inventory: true,
+    captureIdentity: false,
+    ...capturedInventory,
+  });
+  if (!preparedInventory.inventory) {
+    throw new Error("Session discovery worker did not return its prepared inventory");
+  }
+  const inventory = {
+    ...preparedInventory.inventory,
+    config: capturedInventory.config,
+    env: capturedInventory.env,
+  };
   const inventoryRead = prepareSessionStoreTargetInventoryRead(inventory);
   return inventoryRead.withRead(async (sources, assertDiscoveryCurrent) => {
     const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
@@ -437,9 +456,7 @@ export async function withGatewaySessionStoreTarget<T>(
               };
               for (const [index, read] of reads.entries()) {
                 const owner = prepared[index]!;
-                read.result = Object.fromEntries(
-                  owner.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-                );
+                read.result = createGatewaySessionStore(owner.result.entries);
                 read.readSource = { agentId: owner.database.agentId, path: owner.database.path };
                 read.capturedReadSource =
                   captureGatewaySessionReadSource(read.readSource, owner.result.databaseIdentity) ??

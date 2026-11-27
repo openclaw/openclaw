@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SessionPermissionNarrowingPatchFields } from "../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
@@ -22,15 +23,18 @@ import { isForbiddenBrowserProxyMutation } from "./node-browser-proxy-policy.js"
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
+  CRON_SCOPE,
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
   SESSION_WRITE_SCOPE,
+  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
   type OperatorScope,
 } from "./operator-scopes.js";
+import { isParticipantPublicationMethod } from "./session-method-policy.js";
 
 export {
   ADMIN_SCOPE,
@@ -52,6 +56,25 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   PAIRING_SCOPE,
   TALK_SECRETS_SCOPE,
 ];
+
+/** These handlers enforce the authenticated runtime's account and conversation boundary. */
+export function resolveAgentRuntimeCronScope(method: string): typeof CRON_SCOPE | undefined {
+  switch (method) {
+    case "cron.add":
+    case "cron.update":
+    case "cron.remove":
+    case "cron.run":
+    case "cron.get":
+    case "cron.list":
+    case "cron.runs":
+    case "cron.history":
+    case "cron.scratch.get":
+    case "cron.scratch.set":
+      return CRON_SCOPE;
+    default:
+      return undefined;
+  }
+}
 
 function resolveScopedMethod(method: string): OperatorScope | undefined {
   // Node/dynamic sentinels are not operator scopes.
@@ -128,6 +151,8 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   const record = asOptionalRecord(params);
   if (method === "sessions.github.action") {
     return [
+      record?.action === "create_issue" ||
+      record?.action === "create_comment" ||
       record?.action === "inspect_pr" ||
       record?.action === "prepare_pr" ||
       record?.action === "refresh_base" ||
@@ -245,6 +270,35 @@ export function projectOperatorScopesForMethod(params: {
   });
 }
 
+/**
+ * Narrows a least-privilege request to a stored grant only when the method's
+ * session-scoped alternative authorizes it. Any other gap keeps the request,
+ * so the Gateway's scope-upgrade flow still applies.
+ */
+export function fitOperatorScopesToGrant(params: {
+  method: string;
+  requestParams: unknown;
+  scopes: OperatorScope[];
+  grantedScopes: readonly string[];
+}): OperatorScope[] {
+  const { method, requestParams, scopes, grantedScopes } = params;
+  if (
+    roleScopesAllow({ role: "operator", requestedScopes: scopes, allowedScopes: grantedScopes })
+  ) {
+    return scopes;
+  }
+  const fitted = projectOperatorScopesForMethod({
+    method,
+    requestParams,
+    requestedScopes: scopes,
+    allowedScopes: grantedScopes,
+  }).filter(isOperatorScope);
+  return fitted.length > 0 &&
+    authorizeOperatorScopesForMethod(method, fitted, requestParams).allowed
+    ? fitted
+    : scopes;
+}
+
 export function authorizeOperatorScopesForMethod(
   method: string,
   scopes: readonly string[],
@@ -309,13 +363,44 @@ export function authorizeOperatorScopesForRequiredScope(
   if (
     ((requiredScope === READ_SCOPE && sessionScope === "operator.sessions.read") ||
       ((requiredScope === WRITE_SCOPE ||
-        (requiredScope === QUESTIONS_SCOPE && method?.startsWith("question."))) &&
+        requiredScope === TALK_SCOPE ||
+        (requiredScope === QUESTIONS_SCOPE && method?.startsWith("question.")) ||
+        // The handler binds a non-admin restore to the caller's own session worktree.
+        (requiredScope === ADMIN_SCOPE && method === "worktrees.restore")) &&
         sessionScope === "operator.sessions.write")) &&
     operatorScopeSatisfied(sessionScope, scopes)
   ) {
     return { allowed: true, sessionScope };
   }
   return { allowed: false, missingScope: requiredScope };
+}
+
+/** Pending target-bound requirement, never an operator scope or an implicit creation grant. */
+export function requiresSessionParticipation(
+  method: string,
+  scopes: readonly string[],
+  params: unknown,
+): boolean {
+  if (!operatorScopeSatisfied("operator.sessions.read", scopes)) {
+    return false;
+  }
+  if (
+    isParticipantPublicationMethod(method, params) ||
+    ["chat.send", "chat.abort", "session.typing", "session.suggestions.add"].includes(method)
+  ) {
+    return true;
+  }
+  const patch = asOptionalRecord(params);
+  return (
+    method === "sessions.patch" &&
+    Boolean(
+      patch &&
+      ["read-only", "guarded", "workspace"].includes(String(patch.permissionMode)) &&
+      Object.keys(patch).every((key) =>
+        SessionPermissionNarrowingPatchFields.some((field) => field === key),
+      ),
+    )
+  );
 }
 
 export function isGatewayMethodClassified(method: string): boolean {

@@ -21,7 +21,7 @@ export async function routeAvatarFixtures(page: Page, fixtures: readonly AvatarF
 }
 
 export async function openSidebarSortMenu(page: Page) {
-  const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
+  const filterAndSort = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
   await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
   const menu = await openSidebarMenu(page);
   await waitForControlUiProofSurface(menu.locator(".sidebar-session-filter-panel"), [

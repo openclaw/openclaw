@@ -11,6 +11,8 @@ import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 
+export { createAgentHarnessCompletionScope as createAgentHarnessCompletionScopeForTest } from "../agents/agent-harness-completion-scope.js";
+
 /** Builds a bundled-plugin Gateway runtime backed by the real session projection and handlers. */
 export async function createTestPluginGatewayRuntime(params: {
   pluginId: string;
@@ -85,7 +87,7 @@ type AgentHarnessHostTestAttempt = Omit<
 
 type PluginHarnessTestOperatorSource = Pick<
   AdmittedRunOperatorAuthority,
-  "profileId" | "scopes" | "assertCurrent" | "modelPolicy" | "onModelPolicyChanged"
+  "profileId" | "scopes" | "modelPolicy"
 >;
 
 async function admitPluginHarnessRunForTest(params: {
@@ -98,10 +100,15 @@ async function admitPluginHarnessRunForTest(params: {
     createOperationalRunInstanceRef,
     prepareAgentRunAdmission,
   } = await import("../agents/admitted-run-context.js");
+  const { decideTurnGrant } = await import("../gateway/operator-admission.js");
   const admission = prepareAgentRunAdmission({
     cfg: params.attempt.config ?? {},
     operatorAuthority: params.operatorSource
-      ? createAdmittedRunOperatorAuthority(params.operatorSource)
+      ? createAdmittedRunOperatorAuthority({
+          ...params.operatorSource,
+          canonicalIdentity: null,
+          grant: decideTurnGrant(params.operatorSource.scopes),
+        })
       : undefined,
     facts: {
       runId: params.attempt.runId,
@@ -142,6 +149,68 @@ export async function createAgentHarnessHostCapabilitiesForTest(params: {
       host.close();
       admission.close();
     },
+  };
+}
+
+/**
+ * Loads plugins for `config` through the real loader and runs callbacks inside one plugin's
+ * instance scope, the way the host runs that plugin's tools, hooks, commands and services.
+ * Call `dispose` before loading again.
+ */
+export async function loadPluginInstanceForTest(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+  workspaceDir?: string;
+}) {
+  const [{ loadOpenClawPlugins }, { getPluginInstance }, { disposePluginRegistryInstances }] =
+    await Promise.all([
+      import("../plugins/loader.js"),
+      import("../plugins/plugin-instance-scope.js"),
+      import("../plugins/runtime.js"),
+    ]);
+  const registry = loadOpenClawPlugins({
+    config: params.config,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    cache: false,
+    activate: false,
+  });
+  const record = registry.plugins.find((plugin) => plugin.id === params.pluginId);
+  const instance = record ? getPluginInstance(record) : undefined;
+  if (!record || !instance) {
+    throw new Error(
+      `Plugin ${params.pluginId} did not load (${record?.status ?? "missing"}${record?.error ? `: ${record.error}` : ""}).`,
+    );
+  }
+  return {
+    registry,
+    run: <T>(run: () => T): T => instance.runInRegistry(registry, run),
+    dispose: async () => {
+      await disposePluginRegistryInstances(registry);
+    },
+  };
+}
+
+/**
+ * Loads one plugin through the real loader and makes its registry the active one, so its
+ * registered tools, prompt guidance and hooks serve the test. The returned restore reinstates
+ * the previous registry and disposes the plugin; pass it to `onTestFinished`.
+ */
+export async function activatePluginForTest(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+}): Promise<() => Promise<void>> {
+  const { getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await import("../plugins/runtime.js");
+  const plugin = await loadPluginInstanceForTest(params);
+  const previous = getActivePluginRegistry();
+  setActivePluginRegistry(plugin.registry);
+  return async () => {
+    if (previous) {
+      setActivePluginRegistry(previous);
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
+    await plugin.dispose();
   };
 }
 
@@ -245,8 +314,7 @@ export {
   type PluginRecord,
 } from "../plugins/registry.js";
 export {
-  providerContractLoadError,
-  pluginRegistrationContractRegistry,
+  getPluginRegistrationContracts,
   resolveProviderContractProvidersForPluginIds,
   resolveWebFetchProviderContractEntriesForPluginId,
   resolveWebSearchProviderContractEntriesForPluginId,
@@ -261,7 +329,6 @@ export { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-tr
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
-export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -338,6 +405,7 @@ export {
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+export { registerSkillsChangeListener } from "../skills/runtime/refresh-state.js";
 type AdmittedHostCapabilityTestFixtureFactory =
   typeof import("../agents/harness/host-capability.test-support.js").createAdmittedHostCapabilityTestFixture;
 
@@ -374,3 +442,4 @@ export {
 } from "./test-helpers/plugin-runtime-mock.js";
 
 export { createHookRunner } from "../plugins/hooks.js";
+export { explainToolAvailability } from "../agents/tool-availability-explanation.js";

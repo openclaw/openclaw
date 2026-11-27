@@ -1,7 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../config/types.js";
-import { resolveConfiguredLiveProviderModels } from "../media-generation/live-test-helpers.js";
-export { resolveLiveAuthStore as resolveLiveVideoAuthStore } from "../media-generation/live-test-helpers.js";
 
 export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   alibaba: "alibaba/wan2.6-t2v",
@@ -41,10 +38,6 @@ export function resolveLiveVideoResolution(
     return "720P";
   }
   return providerId === "pixverse" ? "540P" : "480P";
-}
-
-export function resolveConfiguredLiveVideoModels(cfg: OpenClawConfig): Map<string, string> {
-  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.video);
 }
 
 export function canRunBufferBackedVideoToVideoLiveLane(params: LiveVideoModel): boolean {

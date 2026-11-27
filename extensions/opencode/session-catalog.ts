@@ -383,7 +383,7 @@ export async function listLocalOpenCodeSessionPage(
   if (!Array.isArray(parsed) || parsed.length > MAX_CLI_LIST_SESSIONS) {
     throw new Error("OpenCode returned an invalid session list");
   }
-  const needle = params.searchTerm?.toLocaleLowerCase();
+  const needle = params.searchTerm?.toLocaleLowerCase().normalize("NFC");
   const sessions = parsed
     .flatMap((entry) => {
       const session = parseOpenCodeSession(entry);
@@ -394,7 +394,7 @@ export async function listLocalOpenCodeSessionPage(
         return true;
       }
       return [session.threadId, session.name, session.cwd].some((field) =>
-        field?.toLocaleLowerCase().includes(needle),
+        field?.toLocaleLowerCase().normalize("NFC").includes(needle),
       );
     });
   const page = sessions.slice(offset, offset + params.limit);

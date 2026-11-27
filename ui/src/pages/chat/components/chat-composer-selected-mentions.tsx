@@ -1,4 +1,5 @@
 import { createMemo, For, onSettled, Show, type Accessor } from "solid-js";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
@@ -76,14 +77,12 @@ function mentionOverflow(
   };
 }
 
-type SelectedHumanMentionsProps = {
+export function SelectedHumanMentions(props: {
   text: string;
   mentions: readonly HumanMention[] | undefined;
   onRemove: () => void;
   avatarUrls?: ReadonlyMap<string, string>;
-};
-
-export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
+}) {
   const personElements = new Map<string, HTMLElement>();
   let more!: HTMLSpanElement;
   const people = createMemo(
@@ -115,7 +114,7 @@ export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
   return (
     <Show when={people().length > 0}>
       <div class="chat-reply-preview composer-context-strip" role="status">
-        <span class="composer-context-strip__label">
+        <span class="composer-context-strip__label" title={t("chat.mentions.invite")}>
           <span class="composer-context-strip__icon" aria-hidden="true">
             <ComposerContent>
               <Icon name="bell" />
@@ -124,6 +123,7 @@ export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
           <span class="composer-context-strip__label-text">{t("chat.mentions.selectedLabel")}</span>
         </span>
         <span class="sr-only">
+          {t("chat.mentions.invite")}{" "}
           {people()
             .map((person) => person.name)
             .join(", ")}
@@ -168,16 +168,14 @@ export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
             hidden
           />
         </span>
-        <button
-          type="button"
+        <IconButton
+          size={28}
           class="chat-reply-preview__dismiss composer-context-strip__dismiss"
-          aria-label={t("chat.mentions.remove")}
+          icon="x"
+          label={t("chat.mentions.remove")}
+          tooltip={false}
           onClick={() => props.onRemove()}
-        >
-          <ComposerContent>
-            <Icon name="x" />
-          </ComposerContent>
-        </button>
+        />
       </div>
     </Show>
   );

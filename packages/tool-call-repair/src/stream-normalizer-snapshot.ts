@@ -1,3 +1,4 @@
+import { asNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isOffsetInProtectedRanges,
@@ -7,11 +8,14 @@ import {
 import { skipLineIndentation, skipWhitespace, utf8ByteLengthWithinLimit } from "./grammar.js";
 import { scanPlainTextToolCall, type PlainTextToolCallScan } from "./payload.js";
 import type { PlainTextToolCallMessageProjection } from "./promote.js";
-import { createProtectionScanState, resolveProtectionFastPath } from "./protection-fast-path.js";
+import {
+  advanceProtectionScanState,
+  createProtectionScanState,
+  resolveProtectionFastPath,
+  type ProtectionScanState,
+} from "./protection-fast-path.js";
 import { consumeRemovedLineEnd, MAX_PAYLOAD_BYTES } from "./stream-normalizer-suppression.js";
 
-// Delimiters can change Markdown ownership; call prefixes also need a grammar check below.
-const SCRUB_REUSE_SUFFIX_RE = /[\t\r`~[{<]/u;
 // Bounded per stream: event snapshots and scrubbed snapshots are separate anchor families.
 const MAX_SCRUB_REUSES = 2;
 
@@ -96,16 +100,10 @@ function findUtf8OverCapOffset(text: string, start: number): number | null {
 }
 
 export function findCandidateCallSequences(
-  candidate: StandalonePlainTextToolCallCandidate,
+  view: ReturnType<typeof createCandidateScanView>,
   matcher: PlainTextToolCallNameMatcher,
-  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
 ): ScannedCallSequence[] {
-  const {
-    text,
-    boundaries: structuralBoundaries,
-    structuralLineBreaks,
-  } = createCandidateScanView(candidate);
-  const protectedRanges = resolveProtectedRanges?.(text) ?? [];
+  const { text, boundaries: structuralBoundaries, structuralLineBreaks } = view;
   const sequences: ScannedCallSequence[] = [];
   const structuralBoundarySet = new Set(structuralBoundaries);
   let structuralBoundaryIndex = 0;
@@ -122,19 +120,15 @@ export function findCandidateCallSequences(
     }
     const sequenceStart = index;
     let callStart = skipLineIndentation(text, index);
-    if (isOffsetInProtectedRanges(callStart, protectedRanges)) {
-      index += 1;
-      continue;
-    }
     let sequenceEnd = callStart;
     let hasOverCap = false;
     let activeStart: number | undefined;
     let callCount = 0;
-    const first = scanPlainTextToolCall(text, callStart, {
-      matcher,
-      maxPayloadBytes: MAX_PAYLOAD_BYTES,
-      structuralLineBreaks,
-    });
+    const first = view.scan(callStart, matcher);
+    if (!first) {
+      index += 1;
+      continue;
+    }
     let call = scannedCall(first);
     if (!call && first.kind === "prefix" && scanHasNamedCandidate(first)) {
       activeStart = callStart;
@@ -183,14 +177,10 @@ export function findCandidateCallSequences(
       if (nextStart >= text.length) {
         break;
       }
-      if (isOffsetInProtectedRanges(nextStart, protectedRanges)) {
+      const nextScan = view.scan(nextStart, matcher);
+      if (!nextScan) {
         break;
       }
-      const nextScan = scanPlainTextToolCall(text, nextStart, {
-        matcher,
-        maxPayloadBytes: MAX_PAYLOAD_BYTES,
-        structuralLineBreaks,
-      });
       const next = scannedCall(nextScan);
       if (!next) {
         if (nextScan.kind === "prefix" && scanHasNamedCandidate(nextScan)) {
@@ -221,13 +211,11 @@ export function findCandidateCallSequences(
 
 /** Finds an unfinished marker at a candidate boundary; its suffix stays private. */
 export function findTrailingCallPrefix(
-  candidate: StandalonePlainTextToolCallCandidate,
+  view: ReturnType<typeof createCandidateScanView>,
   matcher: PlainTextToolCallNameMatcher,
-  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
   start = 0,
 ): { named: boolean; start: number } | undefined {
-  const { text, boundaries, structuralLineBreaks } = createCandidateScanView(candidate);
-  const protectedRanges = resolveProtectedRanges?.(text) ?? [];
+  const { text, boundaries } = view;
   const boundarySet = new Set(boundaries);
   let tail: { named: boolean; start: number } | undefined;
   let index = start;
@@ -242,15 +230,11 @@ export function findTrailingCallPrefix(
       continue;
     }
     const callStart = skipLineIndentation(text, index);
-    if (isOffsetInProtectedRanges(callStart, protectedRanges)) {
+    const scan = view.scan(callStart, matcher);
+    if (!scan) {
       index += 1;
       continue;
     }
-    const scan = scanPlainTextToolCall(text, callStart, {
-      matcher,
-      maxPayloadBytes: MAX_PAYLOAD_BYTES,
-      structuralLineBreaks,
-    });
     if (scan.kind === "prefix" && !scannedCall(scan)) {
       tail = { named: scanHasNamedCandidate(scan), start: index };
     }
@@ -259,14 +243,37 @@ export function findTrailingCallPrefix(
   return tail;
 }
 
-export function createCandidateScanView(candidate: StandalonePlainTextToolCallCandidate) {
+export function createCandidateScanView(
+  candidate: StandalonePlainTextToolCallCandidate,
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
+) {
   const boundaries = candidate.parts.slice(1).map((part) => part.start);
+  const structuralLineBreaks =
+    boundaries.length > 0 ? { lineBreakOffsets: new Set(boundaries) } : undefined;
+  let protectedRanges: ReturnType<PlainTextToolCallProtectedRangeResolver> | undefined;
   return {
     boundaries,
     text: candidate.text,
-    ...(boundaries.length > 0
-      ? { structuralLineBreaks: { lineBreakOffsets: new Set(boundaries) } }
-      : {}),
+    structuralLineBreaks,
+    // Grammar rejects ordinary prose first; all scans of this view share one ownership result.
+    scan: (offset: number, matcher: PlainTextToolCallNameMatcher) => {
+      if (protectedRanges && isOffsetInProtectedRanges(offset, protectedRanges)) {
+        return undefined;
+      }
+      const scan = scanPlainTextToolCall(candidate.text, offset, {
+        matcher,
+        maxPayloadBytes: MAX_PAYLOAD_BYTES,
+        structuralLineBreaks,
+      });
+      // Invalid payloads can skip later lines too; protected text must retain line traversal.
+      if (!protectedRanges && (scan.next > offset + 1 || scan.kind === "prefix")) {
+        protectedRanges = resolveProtectedRanges?.(candidate.text) ?? [];
+        if (isOffsetInProtectedRanges(offset, protectedRanges)) {
+          return undefined;
+        }
+      }
+      return scan;
+    },
   };
 }
 
@@ -357,9 +364,8 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
     return undefined;
   }
   const sequences = findCandidateCallSequences(
-    candidate,
+    createCandidateScanView(candidate, params.resolveProtectedRanges),
     params.matcher,
-    params.resolveProtectedRanges,
   );
   const visibleOutsideCalls = Boolean(createRangeRemover(sequences)(candidate.text).trim());
   const ranges = sequences.filter(
@@ -396,6 +402,13 @@ export function findPotentialCallStart(
       continue;
     }
     const start = skipLineIndentation(text, index);
+    const first = text[start];
+    // Brackets, XML and Harmony channels are the only openings. An empty tail
+    // still needs the scanner: indentation may precede a split marker.
+    if (first !== undefined && !"[<caf".includes(first)) {
+      index = start + 1;
+      continue;
+    }
     if (isProtected?.(start)) {
       index += 1;
       continue;
@@ -412,6 +425,18 @@ export function findPotentialCallStart(
   return null;
 }
 
+export function orderByContentIndex(
+  events: readonly unknown[],
+  message: Record<string, unknown>,
+): unknown[] {
+  const contentLength = Array.isArray(message.content) ? message.content.length : 0;
+  const order = (event: unknown) => {
+    const index = asNonNegativeInteger(asOptionalObjectRecord(event)?.contentIndex);
+    return index !== undefined && index < contentLength ? index : contentLength;
+  };
+  return events.toSorted((left, right) => order(left) - order(right));
+}
+
 export function nextAtLineStart(previous: boolean, text: string): boolean {
   if (!text) {
     return previous;
@@ -425,10 +450,11 @@ export function createForcedScrubSnapshot(options: {
   resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
   protectedRangesFenceCompatible?: boolean;
 }) {
-  // Reuse completed removal ranges while appended text preserves grammar and code ownership.
-  // Ambiguous Markdown and unfinished removal boundaries keep the canonical full scrub.
+  // Settled prefix ranges cannot change ownership. Only newly appended candidates need a
+  // verdict; carry fence state so literal examples do not reparse the growing snapshot.
   const scrubReuses: {
     parts: StandalonePlainTextToolCallCandidate["parts"];
+    protectionScan: ProtectionScanState | undefined;
     ranges: ScannedCallSequence[];
     text: string;
   }[] = [];
@@ -521,10 +547,28 @@ export function createForcedScrubSnapshot(options: {
           continue;
         }
         const suffix = text.slice(reuse.text.length);
+        let protectedAt = reuse.protectionScan
+          ? resolveProtectionFastPath(reuse.protectionScan, suffix)
+          : undefined;
+        if (!protectedAt && reuse.protectionScan) {
+          // An unfinished final line must not discard proven fences on earlier lines.
+          // Candidates in that tail still fall through to canonical scrubbing.
+          const tailStart = suffix.lastIndexOf("\n") + 1;
+          const completed = resolveProtectionFastPath(
+            reuse.protectionScan,
+            suffix.slice(0, tailStart),
+          );
+          if (completed) {
+            protectedAt = (offset) => offset < tailStart && completed(offset);
+          }
+        }
         if (
-          SCRUB_REUSE_SUFFIX_RE.test(suffix) ||
-          findPotentialCallStart(suffix, nextAtLineStart(true, reuse.text), options.matcher) !==
-            null
+          findPotentialCallStart(
+            suffix,
+            nextAtLineStart(true, reuse.text),
+            options.matcher,
+            protectedAt,
+          ) !== null
         ) {
           continue;
         }
@@ -532,6 +576,9 @@ export function createForcedScrubSnapshot(options: {
           continue;
         }
         const ranges = reuse.ranges;
+        if (reuse.protectionScan) {
+          advanceProtectionScanState(reuse.protectionScan, suffix);
+        }
         scrubReuses.splice(index, 1);
         scrubReuses.unshift({ ...reuse, parts: candidate.parts, ranges, text });
         return {
@@ -552,8 +599,15 @@ export function createForcedScrubSnapshot(options: {
       if (existing !== -1) {
         scrubReuses.splice(existing, 1);
       }
+      const protectionScan = options.resolveProtectedRanges
+        ? createProtectionScanState()
+        : undefined;
+      if (protectionScan) {
+        advanceProtectionScanState(protectionScan, candidate.text);
+      }
       scrubReuses.unshift({
         parts: candidate.parts,
+        protectionScan,
         ranges: projection.ranges,
         text: candidate.text,
       });

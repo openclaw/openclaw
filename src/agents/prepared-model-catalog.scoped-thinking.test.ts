@@ -51,6 +51,7 @@ vi.mock("./prepared-model-runtime.js", async (importOriginal) => ({
   prepareModelRuntimeSnapshot: (input: PreparedModelRuntimeInput) => preparedSnapshotMock(input),
   acquireReadOnlyPreparedModelRuntime: async (input: PreparedModelRuntimeInput) => ({
     snapshot: await acquireSnapshotMock(input),
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: releaseSnapshotMock,
   }),
 }));
@@ -257,30 +258,30 @@ it.each([
   },
 );
 
-it.each(["ready", "retired", "failure"] as const)(
+it.each(["ready", "retired", "failure", "timeout", "cancelled"] as const)(
   "preserves admitted native observations: %s",
   async (outcome) => {
-    const config = {};
     const native: ModelCatalogEntry = nativeEntry();
     let current = true;
-    const failure = new Error("native observation unavailable");
+    const failure = new Error(outcome === "failure" ? "unavailable" : "read timed out");
+    failure.name = outcome === "cancelled" ? "AbortError" : failure.name;
     const loadNativeModelCatalog = vi.fn(async () => {
       if (outcome === "retired") {
         current = false;
         throw new PreparedModelRuntimePublicationSupersededError("retired during observation");
       }
-      if (outcome === "failure") {
+      if (outcome !== "ready") {
         throw failure;
       }
       return catalog([native]);
     });
     const admitted = {
-      ...owner(config, outcome === "retired" ? [native] : [{ ...entry, reasoning: false }]),
+      ...owner({}, outcome === "ready" ? [{ ...entry, reasoning: false }] : [native]),
       isCurrent: () => current,
       loadNativeModelCatalog,
     };
     const result = readAdmitted(admitted, { agentRuntime: "native-one" });
-    if (outcome === "failure") {
+    if (outcome === "failure" || outcome === "cancelled") {
       await expect(result).rejects.toBe(failure);
     } else {
       await expect(result).resolves.toEqual([native]);
@@ -289,6 +290,19 @@ it.each(["ready", "retired", "failure"] as const)(
     expect(preparedSnapshotMock).not.toHaveBeenCalled();
   },
 );
+
+it("keeps the published owner's latest accepted catalog after a lookup timeout", async () => {
+  const accepted = nativeEntry({ reasoning: false });
+  const loadNativeModelCatalog = vi.fn(async () => {
+    throw new Error("read timed out");
+  });
+  publishedSnapshotMock.mockReturnValue({
+    ...owner({}, [nativeEntry()]),
+    loadNativeModelCatalog,
+    readFullModelCatalog: () => catalog([accepted]),
+  });
+  await expect(readThinking({}, { agentRuntime: "native-one" })).resolves.toEqual([accepted]);
+});
 
 it.each([
   { configured: [], before: [entry] },
@@ -338,3 +352,86 @@ it("rejects published capabilities from a different route", async () => {
   ).toEqual([]);
   expectUnused(manifestCatalogMock, scopedCatalogMock);
 });
+
+it.each([
+  { runtime: "native-one", acquired: true },
+  { runtime: "openclaw", acquired: false },
+])(
+  "prewarms the default native catalog with the first turn's selection (runtime=$runtime)",
+  async ({ runtime, acquired }) => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: `${entry.provider}/${entry.id}`,
+          models: { [`${entry.provider}/${entry.id}`]: { agentRuntime: { id: runtime } } },
+        },
+      },
+    };
+    const loadNativeModelCatalog = vi.fn(async () => catalog([nativeEntry()]));
+    publishedSnapshotMock.mockReturnValue({ ...owner(config, [entry]), loadNativeModelCatalog });
+    const { prewarmDefaultNativeModelCatalog } = await import("./prepared-model-catalog.js");
+    await prewarmDefaultNativeModelCatalog(config);
+    expect(loadNativeModelCatalog.mock.calls).toEqual(
+      acquired ? [[{ provider: entry.provider, modelId: entry.id, runtime }]] : [],
+    );
+  },
+);
+
+it.each<{
+  name: string;
+  config: OpenClawConfig;
+  authModes: PreparedModelRuntimeSnapshot["authModes"];
+  acquired: boolean;
+}>([
+  // No configured primary: credentials or runtime policy alone never plan a model.
+  { name: "no credentials", config: {}, authModes: {}, acquired: false },
+  { name: "unrelated credentials", config: {}, authModes: { acme: "api_key" }, acquired: false },
+  { name: "API-key default", config: {}, authModes: { openai: "api_key" }, acquired: false },
+  {
+    name: "native sign-in default",
+    config: {},
+    authModes: { openai: { source: "native", mode: "oauth" } },
+    acquired: false,
+  },
+  {
+    name: "explicit runtime without a primary",
+    config: {
+      agents: { defaults: { models: { "openai/*": { agentRuntime: { id: "codex" } } } } },
+    },
+    authModes: {},
+    acquired: false,
+  },
+])(
+  "does not mistake the fallback model for configured demand: $name",
+  async ({ config, authModes, acquired }) => {
+    const native: ModelCatalogEntry = {
+      provider: "openai",
+      id: "gpt-6-astra",
+      name: "Default model",
+      nativeRuntime: "codex",
+    };
+    const loadNativeModelCatalog = vi.fn(async () => catalog([native]));
+    publishedSnapshotMock.mockReturnValue({
+      ...owner(config, [
+        { ...native, api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+      ]),
+      authModes,
+      loadNativeModelCatalog,
+    });
+    const { prewarmDefaultNativeModelCatalog, loadProviderScopedThinkingCatalog } =
+      await import("./prepared-model-catalog.js");
+    await prewarmDefaultNativeModelCatalog(config);
+    expect(loadNativeModelCatalog).toHaveBeenCalledTimes(acquired ? 1 : 0);
+
+    // Skipping speculative startup must not disable discovery on the first native turn.
+    expect(
+      await loadProviderScopedThinkingCatalog({
+        config,
+        provider: "openai",
+        model: "gpt-6-astra",
+        agentRuntime: "codex",
+      }),
+    ).toEqual([native]);
+    expect(loadNativeModelCatalog).toHaveBeenCalledTimes(acquired ? 2 : 1);
+  },
+);

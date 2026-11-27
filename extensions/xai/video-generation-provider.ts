@@ -4,6 +4,7 @@ import {
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   executeProviderOperationWithRetry,
@@ -33,7 +34,7 @@ import {
   XAI_VIDEO_DEFAULT_TIMEOUT_MS,
   createXaiVideoGenerationProviderMetadata,
   isXaiVideo15Model,
-} from "./capability-provider-metadata.js";
+} from "./capability-provider-metadata-factory.js";
 
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
@@ -199,7 +200,7 @@ function prepareCreateRequest(req: VideoGenerationRequest) {
 
 export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
   return {
-    ...createXaiVideoGenerationProviderMetadata(),
+    ...createXaiVideoGenerationProviderMetadata({ isProviderApiKeyConfiguredAsync }),
     async generateVideo(req) {
       // Validate provider/model mode constraints before auth or HTTP setup so
       // unsupported 1.5 requests cannot be submitted and billed accidentally.

@@ -5,10 +5,16 @@ import {
   readToolErrorFlag,
 } from "../chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import {
+  findTranscriptToolPreamble,
+  type TranscriptPreambleSource,
+} from "../config/sessions/transcript-tool-preamble.js";
 import type { AgentHistoryActivity } from "../infra/agent-activity-events.js";
 import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../logging/diagnostic-payload.js";
+import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import type { InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
+import { SerializedJsonArray } from "./serialized-json.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
 const DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES = 6 * 1024 * 1024; // keep history responses comfortably under client WS limits
@@ -18,7 +24,7 @@ export const getMaxChatHistoryMessagesBytes = () => DEFAULT_MAX_CHAT_HISTORY_MES
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 const CHAT_HISTORY_UNAVAILABLE_SENTINEL =
-  "[chat.history unavailable: transcript too large to display; the full history is preserved on disk]";
+  "[chat.history unavailable: chat history too large to display; the full history is preserved on disk]";
 let chatHistoryOmittedEmitCount = 0;
 
 export function createChatHistoryActivityProjection(
@@ -51,6 +57,7 @@ export function createChatHistoryActivityProjection(
 
 export function createChatHistoryByteCounter(
   activity?: ReadonlyMap<unknown, AgentHistoryActivity>,
+  measureJsonBytes = jsonUtf8Bytes,
 ) {
   const sizes = new Map<unknown, number>();
   const messageBytes = (message: unknown): number => {
@@ -59,7 +66,7 @@ export function createChatHistoryByteCounter(
       return cached;
     }
     const descriptor = activity?.get(message);
-    const bytes = jsonUtf8Bytes(message) + (descriptor ? jsonUtf8Bytes(descriptor) + 1 : 0);
+    const bytes = measureJsonBytes(message) + (descriptor ? measureJsonBytes(descriptor) + 1 : 0);
     sizes.set(message, bytes);
     return bytes;
   };
@@ -126,6 +133,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
     typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
   const turnBoundary = metadata.turnBoundary === true;
   const transcriptPosition = readTranscriptDisplayPosition(metadata.transcriptPosition);
+  const transport = asOptionalRecord(metadata.transport);
   return {
     role,
     timestamp,
@@ -140,6 +148,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       ...(turnBoundary ? { turnBoundary: true } : {}),
       ...(transcriptPosition ? { transcriptPosition } : {}),
+      ...(transport ? { transport } : {}),
       truncated: true,
       reason: "oversized",
     },
@@ -154,7 +163,7 @@ export function replaceOversizedChatHistoryMessages(params: {
   const { messages, maxSingleMessageBytes } = params;
   const byteCounter = params.byteCounter ?? createChatHistoryByteCounter();
   let replacedCount = 0;
-  const next = messages.map((message) => {
+  const next = mapChatDisplayMessages(messages, (message) => {
     if (byteCounter.messageBytes(message) <= maxSingleMessageBytes) {
       return message;
     }
@@ -164,24 +173,23 @@ export function replaceOversizedChatHistoryMessages(params: {
       ? placeholder
       : buildChatHistoryUnavailableSentinel();
   });
-  return { messages: replacedCount > 0 ? next : messages, replacedCount };
+  return { messages: next, replacedCount };
 }
 
 export function reportOmittedChatHistory(params: {
   omittedCount: number;
-  normalizedBytes: number;
   maxHistoryBytes: number;
   logDebug: (message: string) => void;
 }): number {
-  const { omittedCount, normalizedBytes, maxHistoryBytes, logDebug } = params;
+  const { omittedCount, maxHistoryBytes, logDebug } = params;
   if (omittedCount === 0) {
     return 0;
   }
   chatHistoryOmittedEmitCount += omittedCount;
+  // Sizing discarded input here would undo bounded page selection.
   logLargePayload({
     surface: "gateway.chat.history",
     action: "truncated",
-    bytes: normalizedBytes,
     limitBytes: maxHistoryBytes,
     count: omittedCount,
     reason: "chat_history_budget",
@@ -192,30 +200,58 @@ export function reportOmittedChatHistory(params: {
   return omittedCount;
 }
 
+function evictedPreamble(
+  snapshot: InFlightRunSnapshot,
+  retained: number,
+  page: unknown[] | SerializedJsonArray,
+  source?: TranscriptPreambleSource,
+) {
+  const match = findTranscriptToolPreamble(
+    snapshot,
+    (snapshot.events?.length ?? 0) - retained,
+    () => (page instanceof SerializedJsonArray ? page.materialize() : page),
+    source,
+  );
+  return (
+    match && {
+      wire: { textFromMessage: match.messageIndex, text: snapshot.text.slice(match.end) },
+      source: match.source,
+    }
+  );
+}
+
 export function boundInFlightRunSnapshotForChatHistory(params: {
   snapshot: InFlightRunSnapshot | undefined;
-  messages: unknown[];
+  messages: unknown[] | SerializedJsonArray;
   getMessagesBytes?: () => number;
   maxBytes: number;
+  preambleSource?: TranscriptPreambleSource;
+  onPreambleBudgetMiss?: (minimumSnapshotBytes: number, source: TranscriptPreambleSource) => void;
 }): InFlightRunSnapshot | undefined {
   if (!params.snapshot) {
     return undefined;
   }
   const messagesBytes = params.getMessagesBytes?.() ?? jsonUtf8Bytes(params.messages);
-  const snapshotBytes = jsonUtf8Bytes(params.snapshot);
-  if (messagesBytes + snapshotBytes <= params.maxBytes) {
-    return params.snapshot;
+  // A smaller page may lose its input anchor. Keep the first page's proof only if the
+  // fresh run still marks the same call beside the same delivered native row.
+  const retried = params.preambleSource
+    ? evictedPreamble(params.snapshot, 0, params.messages, params.preambleSource)
+    : undefined;
+  const full = retried ? { ...params.snapshot, ...retried.wire } : params.snapshot;
+  if (messagesBytes + jsonUtf8Bytes(full) <= params.maxBytes) {
+    return full;
   }
   // Recovery priority is run adoption, authoritative timing, active progress,
   // plan replay, and opportunistic text. Explicit empty projections
   // authoritatively clear stale client state when a richer snapshot cannot fit.
-  let bounded: InFlightRunSnapshot = {
+  const minimum: InFlightRunSnapshot = {
     runId: params.snapshot.runId,
     text: "",
     ...(params.snapshot.sessionAbortable ? { sessionAbortable: true } : {}),
     ...(params.snapshot.events ? { events: [] } : {}),
     ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
   };
+  let bounded = minimum;
   const retainIfWithinBudget = (candidate: InFlightRunSnapshot): boolean => {
     if (!(messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes)) {
       return false;
@@ -249,7 +285,23 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   }
 
   if (params.snapshot.text) {
-    retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
+    const preamble =
+      retried ?? evictedPreamble(params.snapshot, bounded.events?.length ?? 0, params.messages);
+    if (!preamble) {
+      retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
+    } else if (!retainIfWithinBudget({ ...bounded, ...preamble.wire })) {
+      // The next raw delta needs this receipt even when the answer itself cannot fit.
+      const { text, textFromMessage } = preamble.wire;
+      const receipt = { ...minimum, textFromMessage };
+      if (
+        !retainIfWithinBudget({ ...receipt, text }) &&
+        !retainIfWithinBudget({ ...bounded, textFromMessage }) &&
+        !retainIfWithinBudget(receipt) &&
+        preamble.source
+      ) {
+        params.onPreambleBudgetMiss?.(jsonUtf8Bytes(receipt), preamble.source);
+      }
+    }
   }
   return bounded;
 }

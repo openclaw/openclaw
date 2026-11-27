@@ -1,5 +1,7 @@
-import { createMemo, For, onSettled, Show } from "solid-js";
+import { createMemo, For, lazy, onSettled, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
+import { pathForRoute } from "../app-route-paths.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
@@ -8,20 +10,25 @@ import type {
   SidebarSessionListHost,
   PersonHeaders,
 } from "./app-sidebar-session-render-types.ts";
-import {
-  renderPendingSessionCreateRow,
-  renderSessionTree as SessionTree,
-} from "./app-sidebar-session-row-render.tsx";
+import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import {
   rowDemandsVisibility,
   RowVisibilityReason,
-  SIDEBAR_SESSION_PAGE_SIZE,
-  SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
+  type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
+import {
+  createSidebarRenameScope,
+  SidebarRenameScope,
+  orderWhileRenaming,
+} from "./sidebar-rename-order.ts";
 import { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
+import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
+
+// Most sections fit their first page, so Show more/Collapse load on first need.
+const SessionPagination = lazy(() => import("./app-sidebar-session-pagination.tsx"));
 export function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
@@ -30,18 +37,16 @@ export function renderSessionSection(params: {
   const host = createMemo(() => params.host),
     section = createMemo(() => params.section),
     personHeaders = createMemo(() => params.personHeaders);
+  const renameScope = createSidebarRenameScope();
+  const displayRows = createMemo((previous: readonly SidebarRecentSession[] | undefined) =>
+    orderWhileRenaming(section().rows, previous, renameScope.editing),
+  );
   const sessionWindow = createSidebarSessionWindow(
-    () => section().rows,
+    displayRows,
     host,
     () => !(section().renderHeader && host().collapsedSessionSections.has(section().id)),
   );
-  const totalRowCount = createMemo(() => section().totalRowCount);
   const group = createMemo(() => section().category);
-  // Created rows lead their section, so a create for this group takes that slot now.
-  const pendingCreate = createMemo(() => {
-    const pending = host().pendingSessionCreate();
-    return pending?.category && pending.category === group() ? pending : undefined;
-  });
   const personOwner = createMemo(() => section().personOwner);
   const personIdentity = createMemo(() => personOwner()?.identity);
   const presence = createMemo(() => {
@@ -192,13 +197,9 @@ export function renderSessionSection(params: {
   const labelText = createMemo(() =>
     renderHoverMarquee(label(), "sidebar-recent-sessions__label-text"),
   );
-  const showCount = createMemo(() => collapsed() && totalRowCount() > 0);
   const headerStatus = createMemo(() =>
-    showCount() || collapsedRunningDot() || collapsedAttentionDot() ? (
+    collapsedRunningDot() || collapsedAttentionDot() ? (
       <>
-        {showCount() ? (
-          <span class="sidebar-session-group-count">{totalRowCount()}</span>
-        ) : undefined}
         {collapsedRunningDot() ? (
           <span
             class="session-run-spinner sidebar-session-group-running"
@@ -233,9 +234,12 @@ export function renderSessionSection(params: {
           `sidebar-recent-sessions__group--section-drop-${host().sessionOrganizer.sidebarSectionDropTarget?.position}`,
         {
           "sidebar-recent-sessions__group--headless": !section().renderHeader,
-          // Only a single selected owner's Person section renders without a header.
+          // A headerless Person catch-all shares the selected owner's title column,
+          // even when older rows lack identity metadata for a named Person section.
           "sidebar-recent-sessions__group--inline-owner":
-            !section().renderHeader && section().id.startsWith("person:"),
+            !section().renderHeader &&
+            (section().id.startsWith("person:") ||
+              (section().id === "ungrouped" && host().sessionsGrouping === "person")),
           "sidebar-recent-sessions__group--collapsed": collapsed(),
           "sidebar-recent-sessions__group--dragging":
             host().sessionOrganizer.draggingSidebarSection === section().id,
@@ -275,11 +279,7 @@ export function renderSessionSection(params: {
                 }
               : undefined
           }
-          draggable={!derivedSection()}
-          disabledReason={(() => {
-            const access = groupWriteAccess();
-            return access.allowed || pinned() ? undefined : access.reason;
-          })()}
+          draggable={!derivedSection() && groupWriteAccess().allowed}
           onStartDrag={(sectionId) => host().sessionOrganizer.startSidebarSectionDrag(sectionId)}
           onFinishDrag={() => host().sessionOrganizer.finishSidebarSectionDrag()}
           onContextMenu={(() => {
@@ -350,6 +350,7 @@ export function renderSessionSection(params: {
                   target={{ group: group() ?? "" }}
                   class="sidebar-session-group-actions sidebar-new-session"
                   label={t("sessionsView.newSessionInGroup", { group: label() })}
+                  tooltip={t("chat.runControls.newSession")}
                   disabledReason={(() => {
                     const access = newSessionAccess();
                     return access.allowed ? undefined : access.reason;
@@ -388,92 +389,66 @@ export function renderSessionSection(params: {
                   </button>
                 )}
               </Show>
+              {/* Opens the Sessions page beside this list, which stays open. Sections derived
+                  from a person keep their actions in the shared toolbar. */}
+              <Show when={!derivedSection()}>
+                <a
+                  class="sidebar-session-group-actions sidebar-session-group-open"
+                  href={pathForRoute("sessions", host().basePath)}
+                  title={t("sessionsView.openSessionsPage")}
+                  aria-label={t("sessionsView.openSessionsPage")}
+                  onClick={(event) =>
+                    handleNavigationClick(event, () => host().onNavigate?.("sessions"))
+                  }
+                >
+                  <Icon name="sessionPanelExpand" />
+                </a>
+              </Show>
             </>
           }
         />
       ) : undefined}
       {collapsed() ? undefined : (
         <>
-          {section().rows.length > 0 || pendingCreate() ? (
+          {section().rows.length > 0 ? (
             <div class="sidebar-recent-sessions__list" role="list" aria-label={label()}>
-              {renderPendingSessionCreateRow(pendingCreate, true)}
               <div
                 ref={sessionWindow.bind}
                 class="sidebar-session-window"
                 role="presentation"
-                style={{ position: "relative", height: sessionWindow.height() }}
+                style={{ "padding-block-end": sessionWindow.trailingSpace() }}
               >
-                <For each={sessionWindow.rows()} keyed={(session) => session.key}>
-                  {(session) => (
-                    <SessionTree
-                      host={host()}
-                      session={session()}
-                      pinReorder={pinned()}
-                      window={sessionWindow}
-                      listPosition={{
-                        index: section().rows.indexOf(session()),
-                        count: section().rows.length,
-                      }}
-                    />
-                  )}
-                </For>
+                <SidebarRenameScope value={renameScope}>
+                  <For each={sessionWindow.rows()} keyed={(session) => session.key}>
+                    {(session) => (
+                      <SessionTree
+                        host={host()}
+                        session={session()}
+                        pinReorder={pinned()}
+                        window={sessionWindow}
+                        listPosition={{
+                          index: displayRows().indexOf(session()),
+                          count: section().rows.length,
+                        }}
+                      />
+                    )}
+                  </For>
+                </SidebarRenameScope>
               </div>
             </div>
           ) : undefined}
-          <SessionPagination host={host()} section={section()} />
+          <Show
+            when={
+              section().visibleRowCount < section().totalRowCount ||
+              section().visibleRowCount > section().collapsedVisibleRowCount
+            }
+          >
+            <SidebarViewBoundary fallback={false}>
+              <SessionPagination host={host()} section={section()} />
+            </SidebarViewBoundary>
+          </Show>
         </>
       )}
     </div>
-  );
-}
-
-/** Section paging only reveals rows the roster already holds. Fetching the next
- *  roster page is a list-level action because it feeds every section at once --
- *  bolting it to one section left the others unable to recover missing rows. */
-function SessionPagination(params: {
-  host: SidebarSessionListHost;
-  section: RenderableSessionSection;
-}) {
-  const host = createMemo(() => params.host),
-    section = createMemo(() => params.section);
-  const canShowMore = createMemo(() => section().visibleRowCount < section().totalRowCount);
-  const canShowLess = createMemo(
-    () =>
-      section().visibleRowCount > SIDEBAR_SESSION_SEE_LESS_THRESHOLD &&
-      section().visibleRowCount > section().collapsedVisibleRowCount,
-  );
-  return (
-    <Show when={canShowMore() || canShowLess()}>
-      <div class="sidebar-session-pagination">
-        {canShowMore() ? (
-          <button
-            type="button"
-            class="sidebar-session-pagination__button"
-            aria-label={t("chat.selectors.loadMoreSessions")}
-            onClick={() => {
-              host().setVisibleSessionLimit(
-                section().id,
-                section().visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
-              );
-            }}
-          >
-            {t("chat.selectors.loadMoreSessions")}
-          </button>
-        ) : undefined}
-        {canShowLess() ? (
-          <button
-            type="button"
-            class="sidebar-session-pagination__button"
-            aria-label={t("usage.details.collapse")}
-            onClick={() => {
-              host().clearSessionSelection();
-              host().setVisibleSessionLimit(section().id, SIDEBAR_SESSION_PAGE_SIZE);
-            }}
-          >
-            {t("usage.details.collapse")}
-          </button>
-        ) : undefined}
-      </div>
-    </Show>
   );
 }

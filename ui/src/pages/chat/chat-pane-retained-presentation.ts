@@ -394,7 +394,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     void this.progressCards
       .dismiss(target, card)
-      .catch(() => showToast({ message: t("sessionProgressCard.clearFailed") }));
+      .catch(() => showToast({ severity: "error", message: t("sessionProgressCard.clearFailed") }));
   };
 
   protected hideProgressCard(rendered: RetainedProgressCard, card: ProgressCard): void {
@@ -484,7 +484,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.composerPrefillAttentionTarget = null;
   }
 
-  protected showComposerPrefillAttention(input: HTMLElement): void {
+  protected showComposerPrefillAttention(input?: HTMLElement | null): void {
+    if (!input) {
+      return;
+    }
     this.clearComposerPrefillAttention();
     // Force a fresh animation frame when the same mounted composer is prompted again.
     void input.offsetWidth;
@@ -563,6 +566,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       this.retireHeaderSessionMutations();
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;
+      this.forgetMobilePresentation();
       this.syncSessionCompanionPresentation(false);
       this.activeSessionResources.sync(null);
       if (this.state) {
@@ -576,6 +580,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return;
     }
     if (presented) {
+      this.resumeTranscriptReads();
       this.consumeSessionHandoff(this.sessionKey);
       this.activateComposerPresentation();
       this.syncActiveBindings();
@@ -587,14 +592,17 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       }
       const deferredHydrationActive = this.resumeDeferredSessionHydration();
       if (state && !deferredHydrationActive) {
-        this.markSessionRead(selectedChatSessionRow(state));
+        const row = selectedChatSessionRow(state);
+        this.markSessionRead(row);
         if (
           state.connected &&
           this.resolveChatReadTarget() &&
-          (state.chatRunId || selectedChatSessionRow(state)?.hasActiveRun)
+          (state.chatRunId ||
+            row?.hasActiveRun ||
+            (row?.lastRunId && row.lastRunId !== getAcceptedChatHistorySession(state)?.lastRunId))
         ) {
-          // Keep the retained transcript visible while reconciling the live run's
-          // authoritative start time and activity after a foreground return.
+          // A roster update can settle a hidden run without delivering its final message.
+          // Keep the retained transcript visible while catching up with that run.
           void loadChatHistory(state, { deferBranches: true });
         }
         if (
@@ -616,7 +624,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     this.swarm.hydrator?.dispose();
     this.swarm.hydrator = null;
-    this.clearHistoryObserver();
+    this.retireTranscriptReads(true);
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.syncActiveBindings();
     this.clearComposerPrefillAttention();

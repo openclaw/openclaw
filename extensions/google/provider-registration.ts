@@ -1,26 +1,39 @@
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./onboard.js";
-import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
+import { loadGoogleLiveCatalog } from "./provider-catalog-runtime.js";
 import googleProviderDiscovery from "./provider-discovery.js";
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
 import {
-  isGoogleNativeVideoModelId,
+  isGoogleGeminiTextModelId,
   isModernGoogleModel,
   resolveGoogleGeminiForwardCompatModel,
+  resolveGoogleModelApi,
 } from "./provider-models.js";
 import {
   isOfficialGoogleAiStudioBaseUrl,
   isGoogleVertexBaseUrl,
   normalizeGoogleProviderConfig,
+  resolveGoogleFastModeSupport,
   resolveGoogleGenerativeAiTransport,
 } from "./provider-policy.js";
-import {
-  createGoogleGenerativeAiTransportStreamFn,
-  createGoogleVertexTransportStreamFn,
-} from "./transport-stream.js";
+
+const loadGenerativeAiStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleGenerativeAiTransportStreamFn(),
+);
+const loadVertexStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleVertexTransportStreamFn(),
+);
+const loadInteractionsStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleInteractionsTransportStreamFn(),
+);
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -31,18 +44,18 @@ export function buildGoogleProvider(): ProviderPlugin {
       createProviderApiKeyAuthMethod({
         providerId: "google",
         methodId: "api-key",
-        label: "Google AI Studio API key",
+        label: "Gemini API key",
         hint: "Supported API-key access from aistudio.google.com/apikey",
         optionKey: "geminiApiKey",
         flagName: "--gemini-api-key",
         envVar: "GEMINI_API_KEY",
-        promptMessage: "Enter Google AI Studio API key",
+        promptMessage: "Enter Gemini API key",
         defaultModel: GOOGLE_GEMINI_DEFAULT_MODEL,
         expectedProviders: ["google"],
         applyConfig: (cfg) => applyGoogleGeminiModelDefault(cfg).next,
         wizard: {
           choiceId: "gemini-api-key",
-          choiceLabel: "Google AI Studio API key",
+          choiceLabel: "Gemini API key",
           groupId: "google",
           groupLabel: "Google",
           groupHint: "Supported API-key setup",
@@ -66,15 +79,28 @@ export function buildGoogleProvider(): ProviderPlugin {
         return await runLiveProviderCatalog({
           providerId: "google",
           profileId: auth.profileId,
-          run: async () => ({
-            providers: {
-              google: await buildGoogleLiveCatalogProvider({
-                discoveryMode: "strict",
-                apiKey: auth.apiKey,
-                discoveryApiKey: auth.discoveryApiKey,
-              }),
-            },
-          }),
+          run: async () => {
+            const { provider, listedModelIds } = await loadGoogleLiveCatalog({
+              discoveryMode: "strict",
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            });
+            return {
+              providers: { google: provider },
+              ...(listedModelIds
+                ? {
+                    outcomes: [
+                      {
+                        provider: "google",
+                        ...(auth.profileId ? { profileId: auth.profileId } : {}),
+                        status: "ready" as const,
+                        listedModelIds,
+                      },
+                    ],
+                  }
+                : {}),
+            };
+          },
         });
       },
     },
@@ -83,11 +109,18 @@ export function buildGoogleProvider(): ProviderPlugin {
       const input = (ctx.model.input as string[]).filter((type) => type !== "video");
       const supportsVideo =
         ctx.provider === "google" &&
-        ctx.model.api === "google-generative-ai" &&
+        (ctx.model.api === "google-generative-ai" || ctx.model.api === "google-interactions") &&
         isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
-        isGoogleNativeVideoModelId(ctx.modelId);
+        isGoogleGeminiTextModelId(ctx.modelId);
       return {
         ...ctx.model,
+        api: resolveGoogleModelApi({
+          provider: ctx.provider,
+          modelId: ctx.modelId,
+          api: ctx.model.api,
+          baseUrl: ctx.model.baseUrl,
+          providerConfig: resolveMergedModelProviderConfig(ctx.config, ctx.provider),
+        }),
         input: supportsVideo ? [...input, "video"] : input,
       } as typeof ctx.model;
     },
@@ -102,14 +135,18 @@ export function buildGoogleProvider(): ProviderPlugin {
         (model.api === "google-generative-ai" &&
           (model.provider === "google-vertex" || isGoogleVertexBaseUrl(model.baseUrl)))
       ) {
-        return createGoogleVertexTransportStreamFn();
+        return async (...args) => (await loadVertexStream())(...args);
       }
       if (model.api === "google-generative-ai") {
-        return createGoogleGenerativeAiTransportStreamFn();
+        return async (...args) => (await loadGenerativeAiStream())(...args);
+      }
+      if (model.api === "google-interactions") {
+        return async (...args) => (await loadInteractionsStream())(...args);
       }
       return undefined;
     },
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
+    resolveFastModeSupport: resolveGoogleFastModeSupport,
     // Gemini 2.5+ delivers reasoning via native thinkingParts (thinkingConfig.includeThoughts).
     // Tagged mode simultaneously injects <think>/<final> which the model opens before a tool
     // call, never closes, leaving the post-tool turn empty (payloads=0). The CLI backend keeps

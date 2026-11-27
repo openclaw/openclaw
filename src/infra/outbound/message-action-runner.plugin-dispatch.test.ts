@@ -292,10 +292,8 @@ describe("runMessageAction plugin dispatch", () => {
         sendResult,
       });
       const result = await runBroadcast("gatewaychat");
-      if (result.kind !== "broadcast") {
-        throw new Error("expected broadcast result");
-      }
-      expect(result.payload.results).toEqual([
+      expect(result.kind).toBe("broadcast");
+      expect(result).toHaveProperty("payload.results", [
         {
           channel: "gatewaychat",
           to: "user-123",
@@ -483,7 +481,12 @@ describe("runMessageAction plugin dispatch", () => {
     );
   });
 
-  it.each([true, false])("validates presentation JSON (valid=%s)", async (valid) => {
+  it.each([
+    { valid: true, authored: "a" },
+    { valid: false, authored: "a" },
+    // Marking is not inferred from the value, so an authored mark round-trips.
+    { valid: true, authored: "::a" },
+  ])("validates and marks presentation JSON once (%j)", async ({ valid, authored }) => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({ ok: true, presentation: params.presentation ?? null }),
     );
@@ -499,7 +502,10 @@ describe("runMessageAction plugin dispatch", () => {
       },
     };
     setTestPlugin(componentsPlugin, "componentchat");
-    const presentation = { blocks: [{ type: "buttons", buttons: [{ label: "A", value: "a" }] }] };
+    const buttons = (value: string) => ({
+      blocks: [{ type: "buttons", buttons: [{ label: "A", value }] }],
+    });
+    const presentation = buttons(authored);
     const pending = runMessageAction({
       cfg: {},
       action: "send",
@@ -513,7 +519,10 @@ describe("runMessageAction plugin dispatch", () => {
     });
     if (valid) {
       const result = await pending;
-      expect(result.payload).toEqual(expect.objectContaining({ ok: true, presentation }));
+      // Message-action callbacks reach the channel marked once as the conversation agent's.
+      expect(result.payload).toEqual(
+        expect.objectContaining({ ok: true, presentation: buttons(`::${authored}`) }),
+      );
     } else {
       await expect(pending).rejects.toThrow(/--presentation must be valid JSON/);
       expect(handleAction).not.toHaveBeenCalled();

@@ -16,14 +16,6 @@ type ResponsesApi = Extract<
   "openai-responses" | "openai-chatgpt-responses" | "azure-openai-responses"
 >;
 
-export type CapturedStreamEvent = {
-  type?: string;
-  contentIndex?: number;
-  delta?: string;
-  content?: string;
-  partial?: unknown;
-};
-
 export function makeCompletionsModel(
   overrides: Partial<Model<"openai-completions">> = {},
 ): Model<"openai-completions"> {

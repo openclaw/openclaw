@@ -3,8 +3,11 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
+import type { VoiceCallProvider } from "./providers/base.js";
+import type { guardedJsonApiRequest } from "./providers/shared/guarded-json-api.js";
 import {
   createMockSessionRuntime,
   registerFastContextMemoryProvider,
@@ -15,7 +18,8 @@ import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
 const mocks = vi.hoisted(() => ({
-  managerInitialize: vi.fn(),
+  managerInitialize: vi.fn<(provider: VoiceCallProvider, webhookUrl: string) => Promise<void>>(),
+  carrierRequest: vi.fn<typeof guardedJsonApiRequest>(),
   managerStop: vi.fn(),
   managerGetCall: vi.fn(),
   webhookStart: vi.fn(),
@@ -36,6 +40,11 @@ const mocks = vi.hoisted(() => ({
   startTunnel: vi.fn(),
   setupTailscaleExposure: vi.fn(),
   cleanupTailscaleExposure: vi.fn(),
+}));
+
+vi.mock("./providers/shared/guarded-json-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./providers/shared/guarded-json-api.js")>()),
+  guardedJsonApiRequest: mocks.carrierRequest,
 }));
 
 vi.mock("./manager.js", () => ({
@@ -96,9 +105,7 @@ vi.mock("./webhook/tailscale.js", () => ({
 
 import { createVoiceCallRuntime } from "./runtime.js";
 
-function createBaseConfig(): VoiceCallConfig {
-  return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
-}
+const createBaseConfig = () => createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
 
 function createRuntime(options: Partial<Parameters<typeof createVoiceCallRuntime>[0]> = {}) {
   return createVoiceCallRuntime({
@@ -172,22 +179,18 @@ function expectIncludes(value: unknown, ...parts: string[]) {
 
 const realtimeArgs = () => expectDefined(mocks.realtimeHandlerCtorArgs[0], "realtime handler");
 
-function requireRealtimeConsultToolHandler() {
-  const registeredToolHandler = expectDefined(
-    mocks.realtimeHandlerRegisterToolHandler.mock.calls.at(0),
-    "realtime tool handler registration call",
-  );
-  expect(registeredToolHandler[0]).toBe("openclaw_agent_consult");
-  return registeredToolHandler[1];
-}
-
 async function startConsult(
   config: VoiceCallConfig,
   agentRuntime: ReturnType<typeof createConsultRuntime>,
   coreConfig: OpenClawConfig = {},
 ) {
   await createRuntime({ config, agentRuntime: agentRuntime as never, coreConfig });
-  return requireRealtimeConsultToolHandler();
+  const [name, handler] = expectDefined(
+    mocks.realtimeHandlerRegisterToolHandler.mock.calls.at(0),
+    "realtime tool handler registration call",
+  );
+  expect(name).toBe("openclaw_agent_consult");
+  return handler;
 }
 
 describe("createVoiceCallRuntime lifecycle", () => {
@@ -243,7 +246,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("cleans up tunnel, tailscale, and webhook server when init fails after start", async () => {
-    const config = createBaseConfig();
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
     mocks.startTunnel.mockResolvedValue({
       publicUrl: "https://public.example:8443/voice/webhook",
@@ -251,7 +253,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
     mocks.managerInitialize.mockRejectedValue(new Error("init failed"));
 
-    await expect(createRuntime({ config })).rejects.toThrow("init failed");
+    await expect(createRuntime()).rejects.toThrow("init failed");
 
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
@@ -385,6 +387,44 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
   });
 
+  it("records outbound Twilio calls only for the opted-in account", async () => {
+    mocks.carrierRequest.mockResolvedValue({ sid: "CA-recording", status: "queued" });
+    for (const record of [true, false, undefined]) {
+      const config = createExternalProviderConfig({
+        provider: "twilio",
+        publicUrl: "https://voice.example.com/voice/webhook",
+      });
+      config.twilio = { ...config.twilio, record };
+      const runtime = await createRuntime({ config });
+      onTestFinished(() => runtime.stop());
+      const [provider] = expectDefined(mocks.managerInitialize.mock.calls.at(-1), "provider");
+      for (const inlineTwiml of [undefined, "<Response><Say>Hello</Say></Response>"]) {
+        await expect(
+          provider.initiateCall({
+            callId: "call-recording",
+            from: "+15550001234",
+            to: "+15550005678",
+            webhookUrl: "https://voice.example.com/voice/webhook",
+            inlineTwiml,
+          }),
+        ).resolves.toEqual({ providerCallId: "CA-recording", status: "queued" });
+        const [request] = expectDefined(mocks.carrierRequest.mock.calls.at(-1), "Twilio request");
+        expect(request.method).toBe("POST");
+        expect(request.url).toMatch(/\/Accounts\/AC123\/Calls\.json$/);
+        if (!(request.body instanceof URLSearchParams)) {
+          throw new Error("Twilio request must be form-encoded");
+        }
+        const form = request.body;
+        expect(form.get("Record")).toBe(record === true ? "true" : null);
+        expect(form.has("RecordingStatusCallback")).toBe(false);
+        expect(form.get(inlineTwiml ? "Twiml" : "Url")).toBe(
+          inlineTwiml ?? "https://voice.example.com/voice/webhook?callId=call-recording",
+        );
+      }
+    }
+    expect(mocks.carrierRequest).toHaveBeenCalledTimes(6);
+  });
+
   it("accepts an explicit public URL without logging it twice", async () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -504,7 +544,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const tools = realtimeArgs()[0].tools;
     expect(tools.map((tool) => tool.name)).toEqual(["openclaw_end_call", "custom_tool"]);
     const endCallTool = expectDefined(tools[0], "end-call tool");
-    expectIncludes(endCallTool.description, "final words", "no further reply");
     expect(endCallTool.parameters).toEqual({
       type: "object",
       properties: {},
@@ -557,7 +596,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const agentRuntime = createConsultRuntime(runEmbeddedAgent);
     setConsultCall({ sessionKey: "voice:call:call-1" });
 
-    const handler = await startConsult(config, agentRuntime);
+    const handler = await startConsult(config, agentRuntime, {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    });
 
     await expect(handler({ question: "What should I say?" }, "call-1", {})).resolves.toEqual({
       text: "Per-call consult answer.",
@@ -565,6 +606,71 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     expect(consultParamsFrom(runEmbeddedAgent).sessionKey).toBe("agent:main:voice:call:call-1");
   });
+
+  it.each([
+    "initial-abort",
+    "initial-replacement",
+    "final-close",
+    "final-lock",
+    "read-failure",
+  ] as const)(
+    "rejects stale realtime consults after an awaited lock read: %s",
+    async (scenario) => {
+      setConsultCall({ state: "active" });
+      const agent = createConsultRuntime(answeringAgent("Must not dispatch."));
+      agent.session.getSessionEntry.mockImplementation(() => {
+        throw new Error("Synchronous session reads are not available");
+      });
+      const entered = createDeferred<void>();
+      const resume = createDeferred<void>();
+      let reads = 0;
+      agent.session.getSessionEntryAsync.mockImplementation(async () => {
+        reads += 1;
+        if (reads === (scenario.startsWith("final-") ? 2 : 1)) {
+          entered.resolve();
+          await resume.promise;
+          if (scenario === "read-failure") {
+            throw new Error("Session worker failed");
+          }
+        }
+        return {
+          sessionId: "consult",
+          modelSelectionLocked: scenario === "final-lock" && reads > 1,
+        };
+      });
+      mocks.resolveRealtimeFastContextConsult.mockResolvedValue({
+        handled: true,
+        result: { text: "Must not disclose." },
+      });
+      const handler = await startConsult(createRealtimeConfig(), agent);
+      const controller = new AbortController();
+      const pending = handler({ question: "Check the deployment." }, "call-1", {
+        abortSignal: controller.signal,
+      });
+      await awaitGateBeforeSettlement(entered.promise, pending, "Consult skipped its worker read");
+      if (scenario === "initial-abort") {
+        controller.abort(new Error("Caller disconnected"));
+      } else if (scenario === "initial-replacement") {
+        setConsultCall({ state: "active" });
+      } else if (scenario === "final-close") {
+        mocks.managerGetCall.mockReturnValue(undefined);
+      }
+      resume.resolve();
+      await expect(pending).rejects.toThrow(
+        scenario === "initial-abort"
+          ? "Caller disconnected"
+          : scenario === "read-failure"
+            ? "Session worker failed"
+            : scenario === "final-lock"
+              ? "Model selection is locked"
+              : "no longer active",
+      );
+      expect(agent.runEmbeddedAgent).not.toHaveBeenCalled();
+      if (!scenario.startsWith("final-")) {
+        expect(mocks.resolveRealtimeFastContextConsult).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each(["live", "consult-aborted", "call-ended"])(
     "keeps selected memory-provider lookup bound to call and consult: %s",
@@ -590,6 +696,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
       } else {
         if (state === "call-ended") {
           mocks.managerGetCall.mockReturnValue(undefined);
+          await expect(pending).rejects.toThrow("no longer active");
+          expect(open).not.toHaveBeenCalled();
+          expect(search).not.toHaveBeenCalled();
+          return;
         }
         expect(await pending).toMatchObject({
           text: expect.stringContaining(

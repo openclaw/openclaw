@@ -1,6 +1,8 @@
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   SessionCatalogHost,
+  SessionCatalogProfileRelation,
+  SessionsCatalogReadResult,
   SessionCatalogSession,
   SessionSharingRole,
   MessageReactionSummary,
@@ -34,7 +36,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
-import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
+import type { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import { projectChatFields } from "./chat-field-projection.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
@@ -43,6 +45,7 @@ import {
 import {
   getAcceptedChatHistorySession,
   getChatHistoryLoadState,
+  isChatHistoryLoading,
   isChatHistoryRetrying,
 } from "./chat-history-state.ts";
 import { createMobileSheetScrollFades } from "./chat-mobile-scroll-fades.ts";
@@ -54,6 +57,7 @@ import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import type {
   ChatTypingActorState,
   ChatTypingActorView,
@@ -66,13 +70,18 @@ import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { ComposerActivityLayout } from "./components/chat-transcript-layout-owner.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
-import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
+import {
+  canAutoFollowChat,
+  handleChatScrollTakeover,
+  hasPendingManualChatScroll,
+} from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
 
 export type ChatPaneInputChanges = {
+  catalogProfileRelation?: boolean;
   sessionKey?: boolean;
   inputRegion?: boolean;
   draft?: boolean;
@@ -93,7 +102,6 @@ export abstract class ChatPaneStateOwner {
   awaitDomCommit = (): Promise<boolean> => this.updateComplete;
   isConnected = false;
   headerElement: HTMLElement | null = null;
-  historySentinel: HTMLElement | null = null;
   transcriptAnnouncement: HTMLElement | null = null;
   composerShell: HTMLElement | null = null;
   composerFloat: HTMLElement | null = null;
@@ -106,12 +114,7 @@ export abstract class ChatPaneStateOwner {
     this.transcript.syncViewportGeometry();
   };
   private registerPaneElement(
-    key:
-      | "headerElement"
-      | "historySentinel"
-      | "transcriptAnnouncement"
-      | "composerShell"
-      | "composerFloat",
+    key: "headerElement" | "transcriptAnnouncement" | "composerShell" | "composerFloat",
   ) {
     return (element: HTMLElement) => {
       this[key] = element;
@@ -129,7 +132,6 @@ export abstract class ChatPaneStateOwner {
     };
   }
   protected readonly registerHeaderElement = this.registerPaneElement("headerElement");
-  protected readonly registerHistorySentinel = this.registerPaneElement("historySentinel");
   protected readonly registerTranscriptAnnouncement =
     this.registerPaneElement("transcriptAnnouncement");
   protected readonly registerComposerShell = this.registerPaneElement("composerShell");
@@ -221,6 +223,7 @@ export abstract class ChatPaneStateOwner {
   // Empty means unresolved route data: boot on the page state's default session
   // without canonicalizing until the container supplies a real key.
   sessionKey = "";
+  catalogProfileRelation: SessionCatalogProfileRelation | undefined = undefined;
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
   routeLoadingSkeleton = false;
   routeResolutionPending = false;
@@ -281,8 +284,7 @@ export abstract class ChatPaneStateOwner {
   protected presentedChanged(_presented: boolean): void {}
   /** True while the authoritative transcript for this pane is still being fetched. */
   get transcriptLoading(): boolean {
-    const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
-    return phase === "pending-connection" || phase === "in-flight";
+    return Boolean(this.state && isChatHistoryLoading(getChatHistoryLoadState(this.state)));
   }
   /** Scoped transient recovery is presented once in the shell connection indicator. */
   get historyRecovering(): boolean {
@@ -317,10 +319,10 @@ export abstract class ChatPaneStateOwner {
         : null,
     );
   };
-  protected get headerOutcomeOwner(): string {
+  get headerOutcomeOwner(): string {
     return `${this.connectionGeneration}:${this.headerPresentationGeneration}`;
   }
-  protected ownsHeaderOutcome(owner: string): boolean {
+  ownsHeaderOutcome(owner: string): boolean {
     return this.presented && owner === this.headerOutcomeOwner;
   }
   protected get selected(): boolean {
@@ -356,6 +358,8 @@ export abstract class ChatPaneStateOwner {
   }
   draft?: string = undefined;
   focusComposer = false;
+  /** The active pane for the route's session adopts the document's boot composer. */
+  ownsRouteComposer = false;
   dashboardExpanded = false;
   routeFace?: BoardFace = undefined;
   onFaceChange?: (paneId: string, sessionKey: string, face: BoardFace) => void = undefined;
@@ -412,14 +416,35 @@ export abstract class ChatPaneStateOwner {
   get runActivity() {
     return this.chatState.projectRunActivity(this.state);
   }
-  readonly composerCapabilities = new ChatComposerCapabilityHost();
+  composerCapabilities: ChatComposerCapabilityHost | undefined = undefined;
+
+  ensureComposerCapabilities(create: () => ChatComposerCapabilityHost) {
+    return (this.composerCapabilities ??= create());
+  }
+
+  protected composerCapabilityMenu(
+    state: ChatPageHost,
+    selectedSession: GatewaySessionRow | undefined,
+    currentAgentId: string,
+  ) {
+    return {
+      initialize: (create: () => ChatComposerCapabilityHost) =>
+        this.ensureComposerCapabilities(create),
+      read: () =>
+        this.composerCapabilities?.props(this.context, state, selectedSession, currentAgentId),
+    };
+  }
   readonly transcript = createChatTranscript(() => this.paneId, {
     geometryEventTarget: this.element,
     getComposerFloat: () => (this.usesMobileHost ? this.composerFloat : null),
     getComposerActivityLayout: () => (this.usesMobileHost ? this.composerActivityLayout : null),
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
+    hasPendingScrollCommand: () =>
+      this.state !== undefined && hasPendingManualChatScroll(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
+    onRequestEnd: () => this.state?.scrollToBottom({ smooth: true }),
+    onNativeScroll: (event) => this.handleTranscriptScroll(event),
   });
   protected get progressCards() {
     return sessionProgressCardsForGateway(this.context.gateway);
@@ -477,8 +502,8 @@ export abstract class ChatPaneStateOwner {
     return {
       subagentSessions: sessions,
       subagentSessionsHydrated: Boolean(target && this.swarm.hydrator?.hydrated),
+      subagentSessionsUnavailable: Boolean(target && this.swarm.hydrator?.childrenUnavailable),
       subagentSessionsPending: Boolean(target && this.swarm.hydrator?.pendingChildRead),
-      subagentSessionsRead: Boolean(target && this.swarm.hydrator?.childrenRead),
       // Carry the admitted owner forward; route aliases do not identify child ancestry.
       subagentParentKey: target
         ? scopedSessionArtifactKey(target.sessionKey, target.agentId)
@@ -489,10 +514,18 @@ export abstract class ChatPaneStateOwner {
   protected isCurrentSessionArchived(state: ChatPageHost): boolean {
     return (
       state.selectedChatSessionArchived ||
+      this.isCurrentSessionArchivePending(state) ||
       state.sessionsResult?.sessions.some(
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true
     );
+  }
+
+  /** Inside the Undo window the session presents as archived, but its draft is kept
+   * until the archive commits, so Undo returns the conversation untouched. */
+  protected isCurrentSessionArchivePending(state: ChatPageHost): boolean {
+    const key = selectedChatSessionRow(state)?.key ?? state.sessionKey;
+    return this.context.sessions.archiveVisibility(key) === "pending";
   }
   /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
    * the wide side-by-side layout instead of flashing the stacked one. */
@@ -501,13 +534,13 @@ export abstract class ChatPaneStateOwner {
   protected connectedClient: GatewayBrowserClient | null = null;
   protected boardProviderLease: (BoardProviderLease & { cacheKey: string }) | undefined;
   protected boardProviderLifecycleConnected = false;
-  protected connectionGeneration = 0;
+  connectionGeneration = 0;
   // Owns the abort signal handed to header-scoped destructive confirm dialogs.
   // Retiring it alongside every connectionGeneration bump lets a dialog open
   // across a reconnect or pane teardown dismiss itself, matching
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
-  protected headerSessionDraftAbortController = new AbortController();
+  headerSessionDraftAbortController = new AbortController();
 
   readonly headerPresentation: {
     renameValue: string;
@@ -550,6 +583,7 @@ export abstract class ChatPaneStateOwner {
   readonly collaboration: {
     sharingStates: Map<string, ChatSessionSharingState>;
     suggestions: SessionSuggestion[];
+    liveResolutions: Map<string, boolean>;
     role: SessionSharingRole | undefined;
     busyIds: Set<string>;
     addOperation: symbol | undefined;
@@ -560,6 +594,7 @@ export abstract class ChatPaneStateOwner {
   } = {
     sharingStates: new Map(),
     suggestions: [],
+    liveResolutions: new Map(),
     role: undefined,
     busyIds: new Set(),
     addOperation: undefined,
@@ -595,7 +630,7 @@ export abstract class ChatPaneStateOwner {
     requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>(),
   };
   protected readonly sessionDiscussionProbes = new Set<string>();
-  protected readonly sessionDiscussionPanels = new Map<
+  readonly sessionDiscussionPanels = new Map<
     string,
     {
       generation: number;
@@ -603,7 +638,6 @@ export abstract class ChatPaneStateOwner {
       config: SessionDiscussionPanelConfig;
     }
   >();
-  protected presentationUserId: string | null = null;
   protected readonly retrySessionPlacementStartup = () => {
     const sessionKey = this.state?.sessionKey;
     if (sessionKey) {
@@ -633,16 +667,20 @@ export abstract class ChatPaneStateOwner {
   readonly publication: { binding: GitHubPublicationBinding | null } = { binding: null };
   readonly workspaceConflicts = { dismissedRefs: new Map<string, string>() };
   readonly history = projectChatFields<{
+    catalogPreviewImage: SessionsCatalogReadResult["previewImage"];
     catalogMessages: unknown[];
     catalogLoading: boolean;
     loadingOlder: boolean;
+    olderError: string | null;
     catalogCursor: string | undefined;
     catalogSession: SessionCatalogSession | null;
     catalogHost: SessionCatalogHost | null;
   }>({
+    catalogPreviewImage: undefined,
     catalogMessages: [],
     catalogLoading: false,
     loadingOlder: false,
+    olderError: null,
     catalogCursor: undefined,
     catalogSession: null,
     catalogHost: null,
@@ -650,9 +688,7 @@ export abstract class ChatPaneStateOwner {
   protected catalogLoadGeneration = 0;
   protected catalogRequestedSessionKey: string | null = null;
   protected olderLoadGeneration = 0;
-  protected historyObserver: IntersectionObserver | null = null;
-  protected historyObserverSentinel: HTMLElement | null = null;
-  protected historyObserverArmed = false;
+  protected historyReaderIntent = false;
   protected historyAutoLoadBlocked = false;
   protected historyIntentTimer: number | null = null;
   protected transcriptScrollTop: number | null = null;
@@ -701,7 +737,7 @@ export abstract class ChatPaneStateOwner {
   protected abstract reconcileWaitingApprovalSnapshot(
     approvalQueue?: ApplicationContext["overlays"]["snapshot"]["approvalQueue"],
   ): boolean;
-  protected abstract publishHeaderError(error: unknown, owner?: string): void;
+  protected abstract publishHeaderError(error: unknown, owner?: string, expected?: boolean): void;
   protected abstract probeSessionDiscussion(sessionKey: string): Promise<void>;
   protected abstract initialProgressCardTarget():
     | ReturnType<typeof resolveUiConversationIdentity>
@@ -718,5 +754,6 @@ export abstract class ChatPaneStateOwner {
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;
+  protected abstract handleTranscriptScroll(event: Event): void;
   protected abstract syncQueuedEditRetention(): void;
 }

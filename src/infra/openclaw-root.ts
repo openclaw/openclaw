@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPluginCache } from "../plugins/plugin-cache.js";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
+import { resolvePackageReleaseSlotForRootSync } from "./package-release-slot-path.js";
 import { runtimeProcessExternalPackageEntrypoints } from "./runtime-process-manifest.js";
 
 type PackageRootOptions = { cwd?: string; argv1?: string; moduleUrl?: string };
@@ -42,7 +43,9 @@ export function resolveOpenClawInstallationRootSync(
       // A missing or unrelated stable link cannot identify this installation.
     }
   }
-  return runningRoot;
+  // A start through the bin launcher reaches the release by its real path. The
+  // release link names this root only while it still selects this release.
+  return resolvePackageReleaseSlotForRootSync(runningRoot) ?? runningRoot;
 }
 
 function parsePackageName(raw: string): string | null {
@@ -50,17 +53,23 @@ function parsePackageName(raw: string): string | null {
   return typeof parsed.name === "string" ? parsed.name : null;
 }
 
-async function readPackageName(dir: string): Promise<string | null> {
+async function readPackageName(dir: string, signal?: AbortSignal): Promise<string | null> {
+  signal?.throwIfAborted();
   const packageNameCache = getPluginCache().sdk.packageNames;
   const packageJsonPath = path.join(path.resolve(dir), "package.json");
   if (packageNameCache.has(packageJsonPath)) {
     return packageNameCache.get(packageJsonPath) ?? null;
   }
   try {
-    const name = parsePackageName(await openClawRootFs.readFile(packageJsonPath, "utf-8"));
+    const name = parsePackageName(
+      await openClawRootFs.readFile(packageJsonPath, { encoding: "utf-8", signal }),
+    );
+    signal?.throwIfAborted();
     packageNameCache.set(packageJsonPath, name);
     return name;
   } catch {
+    // Cancelled discovery is not a cached package miss.
+    signal?.throwIfAborted();
     packageNameCache.set(packageJsonPath, null);
     return null;
   }
@@ -82,9 +91,9 @@ function readPackageNameSync(dir: string): string | null {
   }
 }
 
-async function findPackageRoot(startDir: string): Promise<string | null> {
+async function findPackageRoot(startDir: string, signal?: AbortSignal): Promise<string | null> {
   for (const current of iterAncestorDirs(startDir)) {
-    const name = await readPackageName(current);
+    const name = await readPackageName(current, signal);
     if (name === "openclaw") {
       return current;
     }
@@ -173,13 +182,16 @@ function preparePackageRootSearch(opts: PackageRootOptions, preserveInventory: b
   };
 }
 
-export async function resolveOpenClawPackageRoot(opts: PackageRootOptions): Promise<string | null> {
+export async function resolveOpenClawPackageRoot(
+  opts: PackageRootOptions & { signal?: AbortSignal },
+): Promise<string | null> {
+  opts.signal?.throwIfAborted();
   const search = preparePackageRootSearch(opts, true);
   if (search.first !== undefined) {
     return search.first;
   }
   for (const candidate of search.candidates) {
-    const found = await findPackageRoot(candidate);
+    const found = await findPackageRoot(candidate, opts.signal);
     if (found) {
       return search.complete(found);
     }

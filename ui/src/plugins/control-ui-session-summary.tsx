@@ -28,6 +28,7 @@ import { normalizeMessage } from "../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../lib/chat/sender-label.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { projectProgressCard } from "../lib/reactive/domain-keyed.ts";
+import { formatDateTimeMs, formatTimeMs } from "../lib/reactive/format.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
@@ -67,7 +68,8 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
   // The stable progress card keeps metadata from the last accepted history read.
   const [metadata, setMetadata] = createStore<{
     sessionInfo: ChatHistoryResult["sessionInfo"];
-  }>({ sessionInfo: undefined }, { shallow: true });
+    known: boolean;
+  }>({ sessionInfo: undefined, known: false }, { shallow: true });
   let alive = true;
   let snapshot: ChatHistoryResult | null = null;
   let cursor: string | undefined;
@@ -102,6 +104,13 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
           startedAt={metadata.sessionInfo?.startedAt}
           endedAt={metadata.sessionInfo?.endedAt}
           hasActiveRun={metadata.sessionInfo?.hasActiveRun === true}
+          runtime={{
+            hasActiveSubagentRun: metadata.sessionInfo?.hasActiveSubagentRun,
+            // Retained history must not retain a stale activity claim while its replacement waits.
+            known: latest(() => metadata.known) && Boolean(metadata.sessionInfo),
+            connected: true,
+            lastRunError: metadata.sessionInfo?.lastRunError,
+          }}
         />
       }
     >
@@ -112,6 +121,9 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
     if (!current()) {
       return Promise.resolve();
     }
+    setMetadata((draft) => {
+      draft.known = false;
+    });
     const pending = readHistory();
     void setRead(pending);
     // The coordinator serializes admitted reads; the boundary presents their errors.
@@ -165,6 +177,7 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
     cursor = snapshot.deltaCursor;
     setMetadata((draft) => {
       draft.sessionInfo = snapshot?.sessionInfo;
+      draft.known = true;
     });
     onSettled(hydrateIdentities);
     return snapshot;
@@ -176,6 +189,9 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
         return;
       }
       const changed = readSessionChangedEvent(event.payload);
+      if (event.event === "sessions.changed" && changed?.reason === "activity-summary") {
+        return;
+      }
       if (
         changed &&
         current() &&
@@ -308,8 +324,11 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
                     <strong class="plugin-session-summary__role">{message().label}</strong>
                     <Show when={message().time}>
                       {(time) => (
-                        <time datetime={time().toISOString()} title={time().toLocaleString()}>
-                          {time().toLocaleTimeString(undefined, {
+                        <time
+                          datetime={time().toISOString()}
+                          title={formatDateTimeMs(time().getTime())}
+                        >
+                          {formatTimeMs(time().getTime(), {
                             hour: "numeric",
                             minute: "2-digit",
                           })}

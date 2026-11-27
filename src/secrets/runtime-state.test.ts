@@ -46,6 +46,7 @@ import {
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig as Config } from "../config/types.openclaw.js";
 import type { SecretRef as Ref } from "../config/types.secrets.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -213,6 +214,27 @@ function expectRollback(
   );
 }
 
+function writeSource(
+  runtimeSourceConfig: Config,
+  secretsSourceConfig = runtimeSourceConfig,
+  expectedRuntimeConfigRevision = getRuntimeConfigSnapshotMetadata()!.revision,
+) {
+  return setSecretsRuntimeSourceSnapshotIfCurrent({
+    expectedSecretsRevision: getRevision(),
+    expectedRuntimeConfigRevision,
+    runtimeSourceConfig,
+    secretsSourceConfig,
+  });
+}
+
+function restoreSource(source: Config, expectedLineageRevision = getRevision()) {
+  return restoreSecretsRuntimeSourceSnapshotIfLineageCurrent({
+    expectedLineageRevision,
+    runtimeSourceConfig: source,
+    secretsSourceConfig: source,
+  });
+}
+
 describe("secrets runtime state", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -227,6 +249,23 @@ describe("secrets runtime state", () => {
     runtimeSnapshotsTesting.resetPersistedMutationLineage();
     envSnapshot.restore();
     vi.restoreAllMocks();
+  });
+
+  it("publishes immutable resolved config while snapshot editors retain mutable copies", () => {
+    const config = providerConfig(19_001, "fixture-key");
+    activateSnapshot(preparedSnapshot({ config }));
+    const published = getRuntimeConfigSnapshot()!;
+    expect(getActiveSecretsRuntimeConfigSnapshot()!.config).toBe(published);
+    expect(isDeeplyFrozenPlainData(published)).toBe(true);
+    const editable = getSnapshot()!;
+    editable.config.gateway!.port = 19_002;
+    config.models!.providers!.openai!.models.length = 1;
+    expect(published.gateway!.port).toBe(19_001);
+    expect(published.models!.providers!.openai!.models).toEqual([]);
+    activateSnapshot(editable);
+    expect(getRuntimeConfigSnapshot()!.gateway!.port).toBe(19_002);
+    expect(isDeeplyFrozenPlainData(getRuntimeConfigSnapshot())).toBe(true);
+    expect(published.gateway!.port).toBe(19_001);
   });
 
   it.each(["activation", "explicit-source", "source-write", "restore"])(
@@ -246,23 +285,10 @@ describe("secrets runtime state", () => {
         publication === "explicit-source" ? { runtimeSourceConfig: source } : {},
       );
       if (publication === "source-write" || publication === "restore") {
-        expect(
-          setSecretsRuntimeSourceSnapshotIfCurrent({
-            expectedSecretsRevision: getRevision(),
-            expectedRuntimeConfigRevision: getRuntimeConfigSnapshotMetadata()!.revision,
-            runtimeSourceConfig: { ...source, gateway: { port: 19_003 } },
-            secretsSourceConfig: source,
-          }),
-        ).toBe(true);
+        expect(writeSource({ ...source, gateway: { port: 19_003 } }, source)).toBe(true);
       }
       if (publication === "restore") {
-        expect(
-          restoreSecretsRuntimeSourceSnapshotIfLineageCurrent({
-            expectedLineageRevision: getRevision(),
-            runtimeSourceConfig: source,
-            secretsSourceConfig: source,
-          }),
-        ).toBe(true);
+        expect(restoreSource(source)).toBe(true);
       }
       const publishedSource = getRuntimeConfigSourceSnapshot()!;
       const input = captureRuntimeConfig(publishedSource);
@@ -355,14 +381,7 @@ describe("secrets runtime state", () => {
     const staleMetadata = getRuntimeConfigSnapshotMetadata()!;
     setRuntimeConfigSnapshot(concurrentConfig, concurrentConfig);
 
-    expect(
-      setSecretsRuntimeSourceSnapshotIfCurrent({
-        expectedSecretsRevision: getRevision(),
-        expectedRuntimeConfigRevision: staleMetadata.revision,
-        runtimeSourceConfig: initialConfig,
-        secretsSourceConfig: initialConfig,
-      }),
-    ).toBe(false);
+    expect(writeSource(initialConfig, initialConfig, staleMetadata.revision)).toBe(false);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(concurrentConfig);
     expect(getSnapshot()?.sourceConfig).toEqual(initialConfig);
   });
@@ -383,14 +402,7 @@ describe("secrets runtime state", () => {
       runtimeSourceConfig: initialSource,
     });
     const runtimeMetadata = getRuntimeConfigSnapshotMetadata()!;
-    expect(
-      setSecretsRuntimeSourceSnapshotIfCurrent({
-        expectedSecretsRevision: getRevision(),
-        expectedRuntimeConfigRevision: runtimeMetadata.revision,
-        runtimeSourceConfig: nextSource,
-        secretsSourceConfig: nextSource,
-      }),
-    ).toBe(true);
+    expect(writeSource(nextSource, nextSource, runtimeMetadata.revision)).toBe(true);
     expect(getConfigResolutionFacts(getActiveSecretsRuntimeConfigSnapshot()?.config)?.size).toBe(0);
     const committedRevision = getRevision();
     const active = getSnapshot()!;
@@ -402,13 +414,7 @@ describe("secrets runtime state", () => {
       preserveActivationLineage: true,
     });
 
-    expect(
-      restoreSecretsRuntimeSourceSnapshotIfLineageCurrent({
-        expectedLineageRevision: committedRevision,
-        runtimeSourceConfig: initialSource,
-        secretsSourceConfig: initialSource,
-      }),
-    ).toBe(true);
+    expect(restoreSource(initialSource, committedRevision)).toBe(true);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(initialSource);
     expect(
       getConfigResolutionFacts(getActiveSecretsRuntimeConfigSnapshot()?.config)?.has(
@@ -499,23 +505,23 @@ describe("secrets runtime state", () => {
     expectRollback(previous, candidate);
     expect(getAuthStore(agentDir)).toMatchObject({
       profiles: {
-        "provider-a:default": { key: "a-old" },
-        "provider-b:default": { key: "b-external" },
-        "provider-q:login": { key: "q-external" },
+        [a]: { key: "a-old" },
+        [b]: { key: "b-external" },
+        [q]: { key: "q-external" },
       },
-      order: { provider: ["provider-q:login", "provider-b:default"] },
-      lastGood: { provider: "provider-q:login" },
-      usageStats: { "provider-b:default": { lastUsed: 4, cooldownUntil: 40_000 } },
+      order: { provider: [q, b] },
+      lastGood: { provider: q },
+      usageStats: { [b]: { lastUsed: 4, cooldownUntil: 40_000 } },
     });
-    expect(getAuthStore(agentDir)?.profiles["provider-x:candidate"]).toBeUndefined();
+    expect(getAuthStore(agentDir)?.profiles[x]).toBeUndefined();
   });
 
   it.each([
-    ["triple rotation", "a-old", "a-candidate", "a-external", true, "a-external"],
-    ["external logout", "a-old", "a-candidate", null, false, null],
+    ["triple rotation", "a-external", true],
+    ["external logout", null, false],
   ])(
     "resolves per-profile ownership for %s while preserving post-activation profile B",
-    (label, baselineAKey, candidateAKey, currentAKey, currentAExternal, expectedAKey) => {
+    (label, currentAKey, currentAExternal) => {
       const agentDir = `/tmp/openclaw-auth-post-activation-${label}`;
       const snapshot = (aKey: string | null, bKey: string, port: number, aExternal = false) =>
         authSnapshot(agentDir, port, {
@@ -526,18 +532,18 @@ describe("secrets runtime state", () => {
           },
           runtimeExternalProfileIds: aExternal ? ["provider-a:default"] : undefined,
         });
-      const previous = activateBaseline(snapshot(baselineAKey, "b-old", 19_001));
-      const candidate = snapshot(candidateAKey, "b-old", 19_002);
+      const previous = activateBaseline(snapshot("a-old", "b-old", 19_001));
+      const candidate = snapshot("a-candidate", "b-old", 19_002);
       expectActivation(candidate);
       publishAuthStore(agentDir, snapshot(currentAKey, "b-external", 19_002, currentAExternal));
       noteCredentialMutation(agentDir, "provider-b:default");
 
       expectRollback(previous, candidate);
       const restored = getAuthStore(agentDir)?.profiles;
-      if (expectedAKey === null) {
+      if (currentAKey === null) {
         expect(restored?.["provider-a:default"]).toBeUndefined();
       } else {
-        expect(restored?.["provider-a:default"]).toMatchObject({ key: expectedAKey });
+        expect(restored?.["provider-a:default"]).toMatchObject({ key: currentAKey });
       }
       expect(restored?.["provider-b:default"]).toMatchObject({ key: "b-external" });
       if (currentAExternal) {

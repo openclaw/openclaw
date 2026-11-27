@@ -20,6 +20,9 @@ export function isSessionRepository(
 export function isSessionFastMode(
   value: unknown,
 ): value is import("../../../../packages/gateway-protocol/src/schema/sessions-create.js").SessionsCreateParams["fastMode"];
+export function isSessionCyberAccessProgram(
+  value: unknown,
+): value is import("../../../../packages/gateway-protocol/src/schema/sessions-create.js").SessionsCreateParams["cyberAccessProgram"];
 export function isSessionTitleSource(
   value: unknown,
 ): value is import("../../../../packages/gateway-protocol/src/schema/sessions-create.js").SessionsCreateParams["titleSource"];
@@ -32,3 +35,9 @@ export function isSessionToolOverrides(
 export function isTalkVoiceChangeEvent(
   value: unknown,
 ): value is import("../../../../packages/gateway-protocol/src/schema/talk-voice.js").TalkVoiceChangeEvent;
+export function isSessionFileReadMetadata(
+  value: unknown,
+): value is Pick<
+  import("../../../../packages/gateway-protocol/src/schema/sessions.js").SessionsFilesGetResult,
+  "root" | "source"
+>;

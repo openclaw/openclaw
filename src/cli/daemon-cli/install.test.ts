@@ -6,10 +6,22 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../../infra/update-npm-prefix.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { nodeProbeOutput } from "./install.test-helpers.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import type { DaemonInstallOptions } from "./types.js";
+
+const { runGlobalPackageUpdateSteps } = vi.hoisted(() => ({
+  runGlobalPackageUpdateSteps: vi.fn(),
+}));
+// mock-isolation: records any durable-copy replacement instead of running npm on the test host.
+vi.mock("../../infra/package-update-steps.js", () => ({ runGlobalPackageUpdateSteps }));
+// mock-isolation: no npm prefix probe may spawn on the test host.
+vi.mock("../../infra/update-global.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-global.js")>()),
+  resolveGlobalInstallTarget: async () => ({ manager: "npm", command: "npm" }),
+}));
 
 const {
   actionState,
@@ -27,6 +39,7 @@ const {
   resolveNodeStartupTlsEnvironmentMock,
   runDaemonInstall,
   runExecMock,
+  runtimeLogs,
   service,
   setupInstallTests,
 } = await import("./install.test-support.js");
@@ -76,6 +89,19 @@ function performServiceInstall() {
 describe("runDaemonInstall", () => {
   setupInstallTests();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("returns without a readiness wait and names gateway start as the readiness step", async () => {
+    installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {
+      await (params as { onVerified: () => Promise<void> }).onVerified();
+    });
+
+    await runDaemonInstall({});
+
+    expect(actionState.failed).toEqual([]);
+    expect(runtimeLogs.at(-1)).toContain(
+      "Runtime readiness has not been checked; startup may still be in progress. Run openclaw gateway start to wait until it is ready.",
+    );
+  });
 
   it("runs pin admission before planning and preserves the service on refusal", async () => {
     pinMigrationMock.mockRejectedValueOnce(
@@ -204,7 +230,7 @@ describe("runDaemonInstall", () => {
           const probe = nodeProbeOutput("26.12.1");
           runExecMock.mockResolvedValue({
             ...probe,
-            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.3" }),
+            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.4" }),
           });
         }
         performServiceInstall();
@@ -425,6 +451,72 @@ describe("runDaemonInstall", () => {
     }
     expect(actionState.warnings).toContain(
       "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.",
+    );
+  });
+
+  it("rejects an unsupported --runtime bun before replacing the durable copy a service runs", async () => {
+    // A service already runs the durable 1.0.0 copy; this CLI is npx openclaw@1.2.3.
+    const root = tempDirs.make("openclaw-npx-bun-");
+    const npxPackage = path.join(root, ".npm", "_npx", "abc", "node_modules", "openclaw");
+    fs.mkdirSync(npxPackage, { recursive: true });
+    fs.writeFileSync(
+      path.join(npxPackage, "package.json"),
+      '{"name":"openclaw","version":"1.2.3"}',
+    );
+    fs.writeFileSync(path.join(npxPackage, "openclaw.mjs"), "");
+    fs.mkdirSync(path.join(npxPackage, "dist"));
+    fs.writeFileSync(path.join(npxPackage, "dist", "index.js"), "");
+    const durablePackage = path.join(
+      resolveNpmGlobalPrefixLayoutFromPrefix(path.join(root, ".openclaw", "npm")).globalRoot,
+      "openclaw",
+    );
+    fs.mkdirSync(durablePackage, { recursive: true });
+    const durableManifest = path.join(durablePackage, "package.json");
+    fs.writeFileSync(durableManifest, '{"name":"openclaw","version":"1.0.0"}');
+    fs.writeFileSync(path.join(durablePackage, "openclaw.mjs"), "");
+    // The install guard requires the account's canonical state dir.
+    process.env.HOME = root;
+    delete process.env.OPENCLAW_STATE_DIR;
+    process.env.PATH = path.join(root, "no-bun");
+    vi.spyOn(process, "argv", "get").mockReturnValue([
+      process.execPath,
+      path.join(npxPackage, "openclaw.mjs"),
+      "gateway",
+      "install",
+    ]);
+    // The real planner selects the runtime; any Bun it probes (even a Bun test host) is 1.3.0.
+    const probe = JSON.parse(nodeProbeOutput("26.12.1").stdout);
+    runExecMock.mockResolvedValue({ stdout: JSON.stringify({ ...probe, bunVersion: "1.3.0" }) });
+    const { buildGatewayInstallPlan } = await vi.importActual<
+      typeof import("../../commands/daemon-install-helpers.js")
+    >("../../commands/daemon-install-helpers.js");
+    buildGatewayInstallPlanMock.mockImplementation(
+      buildGatewayInstallPlan as unknown as typeof buildGatewayInstallPlanMock,
+    );
+
+    await expect(runDaemonInstall({ json: true, force: true, runtime: "bun" })).rejects.toThrow(
+      "No supported Bun runtime was selected",
+    );
+    expectNoCalls(runGlobalPackageUpdateSteps, installDaemonServiceAndEmitMock, service.install);
+    expect(fs.readFileSync(durableManifest, "utf8")).toContain('"1.0.0"');
+  });
+
+  it("moves a loaded service off a temporary npx copy onto a durable one", async () => {
+    const npxPackage = path.join(path.sep, "home", "test", ".npm", "_npx", "abc", "node_modules");
+    loadedService({
+      programArguments: [
+        "/usr/bin/node",
+        path.join(npxPackage, "openclaw", "openclaw.mjs"),
+        "gateway",
+        "--port",
+        "18789",
+      ],
+    });
+
+    await expectReinstall();
+
+    expect(actionState.warnings).toContain(
+      "Gateway service runs from a temporary npx or pnpm dlx copy that can be deleted; refreshing the install.",
     );
   });
 

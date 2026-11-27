@@ -97,12 +97,3 @@ export function rejectSnapshot(pathname: string, message: string, normalize = fa
       return prepare(source, options);
     });
 }
-
-export function trackSettlement(run: Promise<unknown>) {
-  let settled = false;
-  const markSettled = () => {
-    settled = true;
-  };
-  void run.then(markSettled, markSettled);
-  return () => settled;
-}

@@ -131,6 +131,7 @@ function readPluginSdkEntrypointBudgetEnv(
   return Object.freeze({ ...fallback, ...overrides });
 }
 
+// Dallin Romney approved accounting for the existing surface below on 2026-11-24 at 06:12 UTC.
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1 each: legacy AgentHarness remains projected through the core and plugin-entry
   // compatibility barrels while external harnesses migrate to AgentHarnessV2.
@@ -176,7 +177,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // provider-auth.updateAuthProfileStoreWithLock. resolveAuthStorePathForDisplay
   // stays compatible; its resolveAuthStorePathForDisplayAsync replacement is core-internal.
   // +1: released snapshot publication remains during its approved async replacement.
-  "agent-runtime": 15,
+  // +1: retain deprecated DEFAULT_PROVIDER while plugins adopt explicit model selection (#203271).
+  "agent-runtime": 16,
   "memory-host-core": 2,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
@@ -187,7 +189,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1: owner-approved synchronous watched-session compatibility during async migration.
   // +1: owner-approved synchronous agent-end compatibility during async migration.
   // +1: synchronous model-auth selection during the auth worker migration.
-  "agent-harness-runtime": 13,
+  // +2: retained Workshop guidance exports migrate to listToolPromptGuidance (#187661).
+  "agent-harness-runtime": 15,
   // +4: deprecated media projection type, builder, and turn aliases.
   "channel-inbound": 21,
   "inbound-envelope": 3,
@@ -234,7 +237,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
       // +1: approved shared OpenAI Decisions codec used by OpenAI and ClawRouter.
       // +1: approved lightweight nullable request-header projection for provider transports.
-      158,
+      // +1: approved shared automation tool-default selection before policy and approval.
+      // +2: reconcile the accepted public entrypoint inventory after the cron budget update.
+      // +1: settled execution lifecycle classifiers for plugin subscribers (#192413).
+      // +1: shared Decisions HTTP execution subpath (#195641), captured in the feature cut.
+      // +1: read-only host resource-profile subpath (#202478).
+      // Beam connectors read host-admitted request facts and live guards through a versioned public subpath.
+      165,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -295,7 +304,47 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: shared Decisions support/evaluation functions and the canonical capability schema.
       // +2: openRecord and ToolArgumentValidationError on the existing tool-plugin facade.
       // +1: resolveManagedResourceStateDir keeps plugin-managed model caches and binaries on the operator root during redirected agent exec.
-      3816,
+      // +2: shared SystemOne question encoder and response decoder on the Decisions facade.
+      // +4: capability-aware auth context and transport model types in core/plugin-entry.
+      // +2: the shared automation tool-default resolver and its exact-selection mode type.
+      // +19: reconcile the accepted public export inventory after the cron budget update.
+      // +6: repository authority types on plugin-entry (#188656).
+      // +2: explicit OpenAI Decision execution function and context type (#188228).
+      // +1: lossless Decision V1 compatibility predicate (#188251).
+      // +1: callable-tool prompt guidance for harnesses (#187661).
+      // +1: accepted diagnostic trace-context normalizer (#189133).
+      // +1: accepted WorkerResourceReceipt type on plugin-entry (#189019).
+      // +3: accepted WorkerRetention policy, operation, and observation types (#189346).
+      // +1: accepted pluginCommandResultContinuesAgent for native command continuation.
+      // +2: settled execution lifecycle classifiers on agent-lifecycle (#192413).
+      // +2: channel display-mention and mention-adapter types (#192473).
+      // +1: shared plugin-owned Control UI message translation.
+      // +1: GatewayIngressPrincipalRecovery on gateway-ingress (#193098).
+      // +2: appendReplyMediaFailures and ReplyMediaFailure receipts on reply-payload (#186751).
+      // +21 net: accepted feature-cut exports omitted from earlier budget updates.
+      // Harness policy/base prompt/progress: +3 (#197350, #191344, #197523).
+      // Transcript replay groups: +3 (#194362); UI recovery storage: +1 (#177231).
+      // Binding inspection: +1 (#192623); service V3 types in core and plugin-entry: +8 (#176886).
+      // Decisions HTTP replaces the unshipped OpenAI executor: +3 net (#195641).
+      // Gateway person principal and access-refresh classifier: +2 (#196276, #176886).
+      // +6: expose the existing model-request hook (#193550) and metric (#198455) types through plugin-entry.
+      // +2: owner-approved stored-session Control UI path resolver and parser on session-discussion (#203044).
+      // +2: owner-approved SessionCatalogProfileRelation and SessionCatalogSourceProfileRelation
+      // (#203063). Also approved: sessionCatalogPaging.encodeScopedCursor and
+      // sessionCatalogPaging.decodeScopedCursor; object members add no counted callables.
+      // +3: resource-profile type, getter, and subscription (#202478).
+      // +5: Control UI composer handle, task, step, proposal, and outcome types (#201695).
+      // +2: Gateway publication reader type and preparer (#201073); +1: reader identity loader (#201075).
+      // +1: agent harness runtime update-required error (#201130).
+      // +1: native command argument-menu model catalog loader (#201254).
+      // +3: interactive agent control text and stamping helpers (#201764).
+      // +4: provider auth failure class, reason, recovery, and OAuth failure converter (#203394).
+      // +1: shipped reply session-init conflict classifier (#201363).
+      // Beam connectors read host-admitted request facts and live guards through a versioned public subpath.
+      // +7: session-catalog adds three route types, the resolve result, and three service export types.
+      // +1: sendToResolvedSession submits to the destination observed by an authenticated handler.
+      // +1: createAudioInputBudgetReader admits live audio without delaying the first packet.
+      3930,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -341,7 +390,28 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: the same shared Decisions support predicate and evaluator.
       // +1: the same openRecord helper; ToolArgumentValidationError is construct-only.
       // +1: resolveManagedResourceStateDir keeps plugin-managed model caches and binaries on the operator root during redirected agent exec.
-      2212,
+      // +2: the same shared SystemOne codec functions.
+      // +1: the same shared automation tool-default resolver.
+      // +12: reconcile the accepted callable export inventory after the cron budget update.
+      // +3: Decision execution, V1 compatibility, and callable-tool prompt guidance.
+      // +1: the same diagnostic trace-context normalizer (#189133).
+      // +1: the same plugin-command continuation classifier.
+      // +2: the same settled execution lifecycle classifiers (#192413).
+      // +1: the same Control UI message translator.
+      // +1: the same appendReplyMediaFailures receipt formatter (#186751).
+      // +7 net: the callable subset of the same source-audited feature-cut exports.
+      // Harness +2, transcript replay +1, binding inspection +1, Decisions +1 net, Gateway +2.
+      // +2: the same stored-session Control UI path resolver and parser (#203044).
+      // +2: resource-profile getter and subscription (#202478).
+      // +1: Gateway publication reader preparer (#201073); +1: reader identity loader (#201075).
+      // +1: native command argument-menu model catalog loader (#201254).
+      // +3: interactive agent control text and stamping helpers (#201764).
+      // +1: OAuth failure converter; ProviderAuthFailure is construct-only (#203394).
+      // +1: shipped reply session-init conflict classifier (#201363).
+      // Beam connectors read host-admitted request facts and live guards through a versioned public subpath.
+      // +1: sendToResolvedSession owns the strict target and correlates native admission.
+      // +1: createAudioInputBudgetReader admits live audio without delaying the first packet.
+      2258,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -362,7 +432,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +10: approved missing deprecations for retained synchronous transcript lookup,
       // proxy initialization, approval preparation, and command authorization.
       // +1: released snapshot publication remains during its approved async replacement.
-      219,
+      // +2: retained Workshop guidance exports migrate to listToolPromptGuidance (#187661).
+      // +1: deprecated agent-runtime DEFAULT_PROVIDER remains available during migration (#203271).
+      222,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

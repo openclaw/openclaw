@@ -4,7 +4,6 @@ import { createAssistantMessageEventStream, type Message } from "openclaw/plugin
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { claimResponsesCompactRequest } from "../../../../packages/ai/src/transports/openai-responses-compact-request.js";
-import { summarizeOpenAITransportError } from "../../../../packages/ai/src/transports/openai-responses-debug.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
@@ -49,10 +48,10 @@ const { createFixture, mocks } = await vi.hoisted(
 
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
-import { createChatGPTV2CompactionBoundary } from "./chatgpt-v2-compaction.js";
 import type { EmbeddedContextAccountingEvent } from "./internal-params.js";
 import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
+import { createRequestBoundaryCompaction } from "./request-boundary-compaction.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -313,6 +312,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         await vi.importActual<typeof import("./attempt-stream.js")>("./attempt-stream.js");
       const guards = installEmbeddedAttemptStreamGuards(fixture.input, {
         onRejectedProviderReplayRepaired: vi.fn(),
+        isToolBoundarySafe: () => false,
         onIdleTimeout: vi.fn(),
         diagnosticOwner: createDiagnosticEmbeddedRunOwner({
           runId: "async-fragment",
@@ -637,12 +637,10 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
 
     const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
     expect(streamInput.recoverStalledModelCall()).toBe(true);
-    expect(
-      summarizeOpenAITransportError(
-        new Error("stream aborted"),
-        fixture.input.runAbortController.signal,
-      ),
-    ).toContain("abortReason=session_watchdog");
+    expect(fixture.input.runAbortController.signal.aborted).toBe(true);
+    expect(fixture.input.runAbortController.signal.reason).toMatchObject({
+      code: "OPENCLAW_SESSION_WATCHDOG",
+    });
     expect(fixture.state.terminal).toMatchObject({ kind: "timeout", source: "idle" });
   });
 
@@ -703,14 +701,16 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       onIdleTimeout,
     );
     const onFallback = vi.fn();
-    const boundary = createChatGPTV2CompactionBoundary({
+    const boundary = createRequestBoundaryCompaction({
+      variant: "native-checkpoint",
       session,
       contextTokenBudget: 8_000,
       reserveTokens: 2_000,
+      isToolBoundarySafe: () => true,
       timeoutMs: 1_000,
       assertActive: () => fixture.input.runAbortController.signal.throwIfAborted(),
       withTranscriptWrite: (write) => withSessionManagerWrite(manager, write),
-      onFallback,
+      onPrecheck: onFallback,
     });
     vi.useFakeTimers();
     try {
@@ -728,7 +728,10 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       );
       await started.promise;
       await vi.advanceTimersByTimeAsync(25);
-      expect(await failure).toBeInstanceOf(MidTurnPrecheckSignal);
+      const signal = await failure;
+      expect(signal).toBeInstanceOf(MidTurnPrecheckSignal);
+      // The request still fits the 32k window: the fallback only schedules maintenance.
+      expect((signal as MidTurnPrecheckSignal).request.pressure).toBe("maintenance");
       expect(requestSignal?.aborted).toBe(true);
       expect(fixture.input.runAbortController.signal.aborted).toBe(false);
       expect(fixture.runAbort).not.toHaveBeenCalled();

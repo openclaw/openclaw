@@ -1,8 +1,17 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect } from "vitest";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -34,6 +43,12 @@ export function createMergeOutcomeFixtureHarness() {
   let fixtureTemplate: ReturnType<typeof createFixtureTemplate> | undefined;
   const scripts = join(process.cwd(), "scripts");
   const wrapper = readFileSync(join(scripts, "pr"), "utf8");
+  // Generated entrypoints need the wrapper's interpreter guard before sourcing helpers.
+  const shellPreambleEnd = wrapper.indexOf("\nset -euo pipefail\n");
+  if (shellPreambleEnd < 0) {
+    throw new Error("PR fixture requires the wrapper's strict-mode preamble boundary");
+  }
+  const shellPreamble = wrapper.slice(0, shellPreambleEnd);
   const workflowGitOwner = wrapper.slice(
     wrapper.indexOf("pr_batch_wrapper_git() {"),
     wrapper.indexOf("\nEOF_WRAPPER_GIT\n}") + "\nEOF_WRAPPER_GIT\n}".length,
@@ -43,13 +58,16 @@ export function createMergeOutcomeFixtureHarness() {
     wrapper.indexOf("\n# Keep dependency sourcing independent"),
   );
   const nodeExecutable = requireNodeTool("node");
-  const nodeArgs = resolveVitestNodeArgs();
+  const nodeArgs = resolveNodeCompilerArgs();
   const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
   const lockRef = "refs/openclaw/pr-operation-locks/123";
   const describePosix = process.platform === "win32" ? describe.skip : describe;
   const unknownProjection = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
   const gitEnv = {
     PATH: process.env.PATH,
+    // Keep native Git guard policy while isolating Git's global/system configuration.
+    HOME: process.env.HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_ALLOW_PROTOCOL: "file",
@@ -63,10 +81,14 @@ export function createMergeOutcomeFixtureHarness() {
   const supportsNoLazyFetch =
     spawnSync("git", ["--no-lazy-fetch", "--version"], { env: gitEnv }).status === 0;
 
-  function reuseCompletedSetup<Args extends unknown[], Setup extends { f: { root: string } }>(
-    create: (...args: Args) => Setup,
-  ): (...args: Args) => Setup {
-    const completed = new Map<string, { setup: Setup; snapshot: string }>();
+  function reuseCompletedSetup<
+    Args extends unknown[],
+    Setup extends { f: { root: string; checkpointExecutionEnvironment: () => () => void } },
+  >(create: (...args: Args) => Setup): (...args: Args) => Setup {
+    const completed = new Map<
+      string,
+      { setup: Setup; snapshot: string; restoreEnvironment: () => void }
+    >();
     return (...args) => {
       const key = JSON.stringify(args);
       const cached = completed.get(key);
@@ -74,6 +96,7 @@ export function createMergeOutcomeFixtureHarness() {
         // Keep absolute Git worktree links and retained evidence paths intact.
         rmSync(cached.setup.f.root, { recursive: true, force: true });
         copyTreeCloseOnExec(cached.snapshot, cached.setup.f.root);
+        cached.restoreEnvironment();
         restoredRoots.add(cached.setup.f.root);
         return cached.setup;
       }
@@ -81,7 +104,11 @@ export function createMergeOutcomeFixtureHarness() {
       const snapshot = templateDirs.make("pr-recovery-setup-");
       // Builders settle every command and recover failed dispatch locks before returning.
       copyTreeCloseOnExec(setup.f.root, snapshot);
-      completed.set(key, { setup, snapshot });
+      completed.set(key, {
+        setup,
+        snapshot,
+        restoreEnvironment: setup.f.checkpointExecutionEnvironment(),
+      });
       return setup;
     };
   }
@@ -308,12 +335,18 @@ export function createMergeOutcomeFixtureHarness() {
         head?: string;
         preparedHead?: string;
         artifact?: string;
-        artifactContents?: string;
         bodyPath?: string;
         receiptField?: "LOCAL_PREP_HEAD_SHA" | "PREP_HEAD_SHA";
       },
       review: true,
       ready: true,
+      retentionSourceRepository: null as Record<string, unknown> | null,
+      retentionForkAutoDelete: true,
+      retentionAutoDelete: false,
+      retentionProtected: false,
+      retentionBypass: false,
+      retentionRuleset: false,
+      retentionUnknownBypass: false,
       cleanup: "",
       cleanupHead: "",
       operator: "fixture-operator",
@@ -322,7 +355,9 @@ export function createMergeOutcomeFixtureHarness() {
     const clockPath = join(root, "clock");
     writeFileSync(clockPath, "0\n");
     const save = (state: typeof initial) => {
-      writeFileSync(statePath, JSON.stringify(state));
+      const temporary = `${statePath}.${randomUUID()}.tmp`;
+      writeFileSync(temporary, JSON.stringify(state));
+      renameSync(temporary, statePath);
       if (!state.review || !state.ready) {
         const file = join(worktree, ".local/review.json");
         const review = JSON.parse(readFileSync(file, "utf8"));
@@ -342,17 +377,24 @@ export function createMergeOutcomeFixtureHarness() {
 const file=process.env.FIXTURE_STATE;
 const s=JSON.parse(fs.readFileSync(file,"utf8"));
 const git=(args,input)=>execFileSync("git",["-c","commit.gpgsign=false","-c","core.hooksPath=/dev/null",...args],{cwd:process.env.FIXTURE_REPO,env:process.env,input,encoding:"utf8"}).trim();
-const save=()=>fs.writeFileSync(file,JSON.stringify(s));
+// A dispatch crash can interrupt the final save after its explicit checkpoint.
+const save=()=>{
+  const temporary=file+"."+require("node:crypto").randomUUID()+".tmp";
+  fs.writeFileSync(temporary,JSON.stringify(s));
+  fs.renameSync(temporary,file);
+};
 const out=(value)=>{
   const body=typeof value==="string"?value:JSON.stringify(value);
   const writerQuery=args.includes("--include")&&args.includes("graphql")&&args.some(arg=>/^query=\\s*query\\b/.test(arg));
   console.log(writerQuery&&typeof value!=="string"?"HTTP/2.0 200 OK\\n\\n"+body:body);
 };
-const fail=(text)=>{save();console.error(text);process.exit(1)};
+const fail=(text)=>{console.error(text);process.exit(1)};
 if(route==="watch") {
   if(args[1]!==s.pr.headRefOid) fail("stale CI head");
   process.exit(s.ciExit);
 }
+// Persist buffered responses once; dispatch crashes keep their explicit checkpoint.
+try {
 if(route==="sleep") {
   s.settlementSleeps.push(Number(args[0]));
   s.settlementCallOffsets.push(s.calls.length);
@@ -360,10 +402,10 @@ if(route==="sleep") {
     Object.assign(s.pr,s.projectionSettlement.pr);
     s.projectionSettlement=null;
   }
-  save();process.exit(0);
+  process.exit(0);
 }
 s.nodeArgs=process.execArgv;
-s.calls.push([route,...args]);save();
+s.calls.push([route,...args]);
 let inputPayload;
 if(args[0]==="api"&&args.includes("--input")) {
   const inputPath=args[args.indexOf("--input")+1];
@@ -389,7 +431,6 @@ const postComment=(body)=>{
   }
   const url=s.pr.url+"#issuecomment-1";
   if(s.comment!=="rejected") s.comments.push({body,html_url:url});
-  save();
   if(s.comment!=="success") fail("comment response lost");
   return url;
 };
@@ -421,7 +462,8 @@ const restCheckRuns=()=>{
   const check={id:1,head_sha:s.pr.headRefOid,name:s.restContexts[0],status:"completed",conclusion:s.gates==="pass"?"success":"failure",
     started_at:"2026-09-20T00:00:00Z",check_suite:{id:10},app:{id:s.restCheckApp,slug:s.restCheckApp===15368?"github-actions":"custom-ci"}};
   if(s.restUnseenSuite==="partial-pending") return [check,{...check,id:2,name:"detect-changes",check_suite:{id:2}}];
-  if(!s.restDuplicate) return [...s.restContexts.filter(name=>name!==s.priorCi.missingCheck).map((name,index)=>({...check,id:index+1,name,check_suite:{id:10+index},
+  if(!s.restDuplicate) {
+    const checks=[...s.restContexts.filter(name=>name!==s.priorCi.missingCheck).map((name,index)=>({...check,id:index+1,name,check_suite:{id:s.priorCi.artifactBuild&&name==="openclaw/ci-gate"?30:10+index},
     ...(s.priorCi.enabled?{status:name===s.requiredCheckName&&s.gates==="pending"?"in_progress":"completed",
       conclusion:name===s.restFailedContext?"failure":name!==s.requiredCheckName?"success":s.gates==="pending"?null:s.gates==="pass"?"success":"failure"}:
       {conclusion:name===s.restFailedContext?"failure":check.conclusion})})),
@@ -429,6 +471,14 @@ const restCheckRuns=()=>{
         const latest={...check,app:{id:s.priorCi.nativeResultApp,slug:s.priorCi.nativeResultApp===15368?"github-actions":"custom-ci"},id:200+index,name:value.name,check_suite:{id:20+index},status:value.state==="pending"?"in_progress":"completed",conclusion:value.state==="pending"?null:value.state,started_at:"2026-09-20T00:01:00Z"};
         return value.previousFailure?[{...latest,id:300+index,check_suite:{id:25+index},conclusion:"failure",started_at:"2026-09-20T00:00:00Z"},latest]:[latest];
       })];
+    return s.priorCi.currentGateChecks.length ? [
+      ...checks.filter(value=>value.name!==s.requiredCheckName),
+      ...s.priorCi.currentGateChecks.map(value=>({...check,id:value.id,name:value.name??s.requiredCheckName,
+        status:value.status??"completed",conclusion:value.conclusion,check_suite:{id:value.suiteId},
+        started_at:value.startedAt??check.started_at,
+        app:{id:value.publisherId??s.restCheckApp,slug:(value.publisherId??s.restCheckApp)===15368?"github-actions":"custom-ci"}}))
+    ]:checks;
+  }
   return [{...check,conclusion:"failure"},{...check,id:2,check_suite:{id:20},
     started_at:s.restDuplicate==="missing-time"?null:s.restDuplicate==="same-time"?check.started_at:"2026-09-20T00:01:00Z"}];
 };
@@ -465,7 +515,7 @@ const advanceClock=(seconds)=>{
 };
 const advanceMain=(parent=main())=>{
   const previous=main();
-  const next=git(["--git-dir="+process.env.FIXTURE_REMOTE,"commit-tree",git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse",parent+"^{tree}"]),"-p",parent],"Remote advance\\n");
+  const next=git(["--git-dir="+process.env.FIXTURE_REMOTE,"commit-tree",git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse",parent+"^{tree}"]),"-p",parent],"Remote advance "+(s.mainAdvances.length+1)+"\\n");
   git(["--git-dir="+process.env.FIXTURE_REMOTE,"update-ref","refs/heads/main",next,previous]);
   s.mainAdvances.push(next);
 };
@@ -479,7 +529,7 @@ const applyRestObservation=(next=s.restObservation)=>{
   if(next.priorCi) Object.assign(s.priorCi,next.priorCi);
   if(next.restUnseenSuite) s.restUnseenSuite=next.restUnseenSuite;
   if(next.advanceSeconds) advanceClock(next.advanceSeconds);
-  s.restObservationAppliedAt=s.restMainReads;s.restObservation=deferred;save();
+  s.restObservationAppliedAt=s.restMainReads;s.restObservation=deferred;
 };
 ${priorCiSecurityFixtureSource}
 if(securityResponse()) {
@@ -487,12 +537,12 @@ if(securityResponse()) {
     s.priorCi.reviewCount=2;
     s.policyTightenedAt=s.calls.length-1;
     s.tightenPolicyAfterSecurity=false;
-    save();
   }
 }
 else if(args[0]==="browse") out(s.repo.url);
 else if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
 else if(args[0]==="api"&&args.includes("rate_limit")) out({resources:{graphql:{remaining:0,limit:5000,reset:1900000000},core:{remaining:4999,limit:5000,reset:1900000000}}});
+else if(args[0]==="api"&&args.includes("repos/fork/repo")) out({...s.retentionSourceRepository,delete_branch_on_merge:s.retentionForkAutoDelete});
 else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(arg))) {
   if(!args.includes("Cache-Control: max-age=0")) fail("missing live repository header");
   if(!args.includes("--hostname")) fail("missing repository hostname");
@@ -504,21 +554,36 @@ else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(a
       if(intent.phase==="intent"&&intent.accepted===false) {
         if(s.restDispatchChange==="identity") s.pr.headRefOid=git(["rev-parse",s.pr.headRefOid+"^"]);
         if(s.restDispatchChange==="policy") s.restContexts=["Reconfigured CI"];
-        s.restDispatchChange="";save();
+        s.restDispatchChange="";
       }
     }
   }
-  out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(s.repoAuthority):s.repoAuthority);
+  out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify({...s.repoAuthority,delete_branch_on_merge:s.retentionAutoDelete}):{...s.repoAuthority,delete_branch_on_merge:s.retentionAutoDelete});
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/rulesets/41")) {
   if(!args.includes("--include")||!args.includes("Cache-Control: max-age=0")) fail("ruleset authority must use the live writer");
-  s.priorCi.rulesetReads++;save();
+  s.priorCi.rulesetReads++;
   out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({id:41,source:"fixture/repo",source_type:"Repository",target:"branch",enforcement:"active",
-    current_user_can_bypass:s.priorCi.revokeRulesetAfterRead&&s.priorCi.rulesetReads>1?"never":s.priorCi.rulesetBypass,
+    current_user_can_bypass:s.priorCi.revokeRulesetAfterRead&&s.priorCi.rulesetReads>s.priorCi.revokeRulesetAfterReads?"never":s.priorCi.rulesetBypass,
     rules:[{type:"required_status_checks",parameters:{required_status_checks:[{context:"openclaw/ci-gate",integration_id:s.restRequiredApp}]}}]}));
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("orgs/fixture/memberships/"))) {
+  s.priorCi.membershipReads++;
+  if(s.priorCi.revokeMembershipAfterReads&&s.priorCi.membershipReads>s.priorCi.revokeMembershipAfterReads) {
+    out('HTTP/2.0 404 Not Found\\n\\n{"message":"Not Found"}');fail("gh: Not Found (HTTP 404)");
+  }
   out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({state:"active",role:s.priorCi.membership,user:{login:s.operator}}));
+}
+else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/502"))) {
+  const fault=s.priorCi.artifactFault;
+  const run={id:502,workflow_id:52,run_attempt:fault==="primary attempt"?3:2,check_suite_id:30,head_sha:fault==="primary head"?s.base:s.pr.headRefOid,
+    repository:{full_name:s.repo.nameWithOwner},path:".github/workflows/ci.yml",event:"pull_request",head_branch:s.pr.headRefName,
+    head_repository:s.priorCi.sourceRepository,status:"completed",conclusion:fault==="primary failed"?"failure":"success",
+    pull_requests:[{number:fault==="primary PR"?124:123,head:{sha:s.pr.headRefOid},base:{repo:{id:s.repoAuthority.id}}}]};
+  const jobs=["openclaw/ci-gate","security-fast"].map((name,index)=>({id:701+index,name,run_id:502,head_sha:s.pr.headRefOid,
+    status:"completed",conclusion:fault==="primary security"&&index===1?"failure":"success",
+    check_run_url:"https://api.github.com/repos/fixture/repo/check-runs/1"}));
+  out(args.some(arg=>arg.includes("/jobs?"))?[{total_count:jobs.length,jobs}]:run);
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/501"))) {
   const jobs=s.priorCi.jobs??[{name:"openclaw/ci-gate",status:"completed",conclusion:"success",head_sha:s.priorCi.runHead,run_id:501}];
@@ -532,7 +597,7 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actio
     if(s.priorCi.jobPageFault==="inconsistent-total") pages.at(-1).total_count++;
     out(args.includes("--paginate")&&args.includes("--slurp")?pages:pages[0]);
   }
-  else out({id:501,run_attempt:args.includes("repos/fixture/repo/actions/runs/501")?s.priorCi.latestAttempt:2,check_suite_id:10,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:s.priorCi.runRepository??s.priorCi.sourceRepository,status:"completed",conclusion:s.priorCi.runConclusion,pull_requests:s.priorCi.event==="pull_request"&&!s.priorCi.omitPullRequests?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
+  else out({id:501,workflow_id:51,created_at:"2026-09-20T00:00:00Z",run_attempt:args.includes("repos/fixture/repo/actions/runs/501")?s.priorCi.latestAttempt:2,check_suite_id:10,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:s.priorCi.runRepository??s.priorCi.sourceRepository,status:"completed",conclusion:s.priorCi.runConclusion,pull_requests:s.priorCi.event==="pull_request"&&!s.priorCi.omitPullRequests?[{number:123,head:{sha:s.pr.headRefOid},base:{repo:{id:s.repoAuthority.id}}}]:[]});
   if(s.restObservation?.afterHistoricalRead&&s.restMainReads>0) applyRestObservation();
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/check-runs/601"))) {
@@ -542,10 +607,18 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/check
 }
 else if(args.includes("graphql")&&args.some(arg=>arg.includes("reviewThreads("))) {
   const start=Number(args.find(arg=>arg.startsWith("cursor="))?.slice(7)??0);
-  const nodes=[...Array.from({length:s.priorCi.nativeOptionalCount},(_,index)=>({__typename:"CheckRun",name:"optional-"+index,isRequired:false})),
+  const artifactCheck=(id,name,conclusion)=>({__typename:"CheckRun",databaseId:id,name,status:"COMPLETED",conclusion,
+    isRequired:s.priorCi.artifactFault==="required",checkSuite:{databaseId:s.priorCi.artifactFault==="suite"?11:10,
+      app:{databaseId:15368},workflowRun:{databaseId:501,event:"pull_request",runAttempt:2,createdAt:"2026-09-20T00:00:00Z",workflow:{databaseId:51}}}});
+  const artifactNodes=s.priorCi.artifactBuild?[artifactCheck(601,"build-artifacts","FAILURE"),artifactCheck(602,"admission","SKIPPED")]:[];
+  if(s.priorCi.artifactFault==="new run") artifactNodes.push({...artifactCheck(603,"admission","SKIPPED"),
+    checkSuite:{databaseId:12,app:{databaseId:15368},workflowRun:{databaseId:503,event:"pull_request",runAttempt:1,createdAt:"2026-09-20T00:01:00Z",workflow:{databaseId:51}}}});
+  if(s.priorCi.artifactBuild) artifactNodes.push(...["admission","build-artifacts"].map((name,index)=>({...artifactCheck(590+index,name,"SKIPPED"),
+    checkSuite:{databaseId:9,app:{databaseId:15368},workflowRun:{databaseId:500,event:"pull_request",runAttempt:1,createdAt:"2026-09-19T00:00:00Z",workflow:{databaseId:51}}}})));
+  const nodes=[...artifactNodes,...Array.from({length:s.priorCi.nativeOptionalCount},(_,index)=>({__typename:"CheckRun",name:"optional-"+index,isRequired:false})),
     ...nativeChecks().flatMap(check=>{
-      const node=check.kind==="status"?{__typename:"StatusContext",context:check.name,isRequired:check.required}:
-        {__typename:"CheckRun",name:check.name,isRequired:check.required,checkSuite:{app:{databaseId:s.restCheckApp}}};
+      const node=check.kind==="status"?{__typename:"StatusContext",context:check.name,state:check.state.toUpperCase(),isRequired:check.required}:
+        {__typename:"CheckRun",name:check.name,status:"COMPLETED",conclusion:check.state.toUpperCase(),isRequired:check.required,checkSuite:{app:{databaseId:s.restCheckApp}}};
       return check.previousFailure?[node,node]:[node];
     })];
   const page=nodes.slice(start,start+100);
@@ -570,8 +643,8 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
     state:s.pr.state==="OPEN"?"open":"closed",merged:s.pr.state==="MERGED",merged_at:s.pr.state==="MERGED"?"2026-09-20T00:00:00Z":null,
     merge_commit_sha:s.pr.mergeCommit?.oid??null,draft:s.pr.isDraft,stack:s.stack,
     auto_merge:s.pr.autoMergeRequest?{merge_method:s.pr.autoMergeRequest.mergeMethod.toLowerCase()}:null,
-    head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.priorCi.enabled?{...s.repoAuthority,...s.priorCi.sourceRepository}:s.repoAuthority},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
-    user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",
+    head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.retentionSourceRepository??(s.priorCi.enabled?{...s.repoAuthority,...s.priorCi.sourceRepository}:s.repoAuthority)},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
+    user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",changed_files:securityFiles().length,
     mergeable:pendingDispatchProjection?null:s.pr.mergeable==="UNKNOWN"?null:s.pr.mergeable==="MERGEABLE",
     mergeable_state:pendingDispatchProjection?"unknown":s.pooledMergeBlocked&&!args.includes("--include")?"blocked":s.pr.mergeStateStatus.toLowerCase()};
   if(s.restMergeCommit==="missing") delete record.merge_commit_sha;
@@ -600,11 +673,23 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main"))
     if(s.restMainFault==="wrong-type") reference.object.type="tag";
     if(s.restMainFault==="missing-object") delete reference.object;
     if(s.restMainFault==="invalid-sha") reference.object.sha="not-a-commit";
-    if(s.restMainFault==="unavailable-sha-once") {reference.object.sha="f".repeat(40);s.restMainFault="";save();}
+    if(s.restMainFault==="unavailable-sha-once") {reference.object.sha="f".repeat(40);s.restMainFault="";}
   }
   out(reference);
   if(s.restObservation?.afterRestMainReads===s.restMainReads) applyRestObservation();
   if(s.pr.state==="MERGED"&&s.restAdvanceMain) {s.restAdvanceMain=false;advanceMain();}
+}
+else if(args[0]==="api"&&args.some(arg=>["repos/fixture/repo/branches/topic","repos/fork/repo/branches/topic"].includes(arg))) {
+  out({name:"topic",commit:{sha:git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse","topic"])},protected:s.retentionProtected});
+}
+else if(args[0]==="api"&&args.includes("repos/fixture/repo/rules/branches/topic?per_page=100")) out([s.retentionRuleset?[{type:"deletion",ruleset_source_type:"Repository",ruleset_source:"fixture/repo",ruleset_id:42}]:[]]);
+else if(args[0]==="api"&&args.includes("repos/fixture/repo/rulesets/42")&&s.retentionRuleset) {
+  out({id:42,source:"fixture/repo",source_type:"Repository",target:"branch",enforcement:"active",
+    current_user_can_bypass:s.retentionUnknownBypass?undefined:s.retentionBypass?"always":"never",
+    bypass_actors:s.retentionBypass?[{actor_type:"RepositoryRole",actor_id:5}]:[],rules:[{type:"deletion"}]});
+}
+else if(args[0]==="api"&&args.includes("repos/fixture/repo/branches/topic/protection")) {
+  out({allow_deletions:{enabled:false},enforce_admins:{enabled:!s.retentionBypass}});
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/branches/main/protection")) {
   if(s.restPolicy==="classic") out('HTTP/2.0 200 OK\\n\\n{}');
@@ -636,7 +721,7 @@ else if(args[0]==="api"&&args.some(arg=>arg.includes("/check-runs?"))) {
   let checks=restCheckRuns().filter(check=>context===null||check.name===context);
   if(context===null) {
     checks.push(...restCheckSuites().filter(suite=>suite.id>=30).flatMap(suiteChecks));
-    s.restBulkRead=true;save();
+    s.restBulkRead=true;
     if(s.restBulkFault==="duplicate") checks.push(checks.at(-1));
     if(s.restBulkFault==="head") checks.at(-1).head_sha="f".repeat(40);
     if(s.restBulkFault==="app") checks.at(-1).app={id:999};
@@ -657,7 +742,7 @@ else if(args[0]==="api"&&args.some(arg=>arg.includes("/check-suites?"))) {
     suites=suites.map(currentSuite);
     if(s.restBulkFault==="removed-suite") suites.pop();
     if(s.restBulkFault==="duplicate-suite") suites[suites.length-1]=suites[0];
-    s.restBulkRead=false;save();
+    s.restBulkRead=false;
   }
   out(args.includes("--slurp")?paginated(suites,"check_suites"):{total_count:suites.length,check_suites:suites});
 }
@@ -665,7 +750,7 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actio
   const checks=restCheckRuns();
   if(s.restUnseenSuite==="new-gate") checks.push(...restCheckSuites().filter(suite=>suite.id>=30).flatMap(suiteChecks));
   const runs=checks.map((check,index)=>({id:100+index,head_sha:s.pr.headRefOid,check_suite_id:check.check_suite.id,
-    workflow_id:index===1&&s.restDuplicate==="other-workflow"?43:42,event:index===1&&s.restDuplicate==="other-event"?"push":"pull_request"}));
+    workflow_id:index===1&&s.restDuplicate==="other-workflow"?43:42,event:s.priorCi.currentGateChecks.find(value=>value.id===check.id)?.event??(s.restChecks==="manual-only"||(index===0&&s.restDuplicate==="manual-event")?"workflow_dispatch":index===1&&s.restDuplicate==="other-event"?"push":"pull_request")}));
   if(s.restDuplicate==="missing-mapping") runs.pop();
   if(s.restDuplicate==="ambiguous-mapping") runs.push({...runs[1],id:103,workflow_id:44});
   out([{total_count:runs.length,workflow_runs:runs}]);
@@ -676,8 +761,7 @@ else if(args[0]==="pr"&&args[1]==="checks") {
   if(s.duringChecks?.preparedHead) git(["update-ref","refs/heads/pr-123-prep",s.duringChecks.preparedHead]);
   if(s.duringChecks?.artifact) {
     const path=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/"+s.duringChecks.artifact;
-    if(typeof s.duringChecks.artifactContents==="string") fs.writeFileSync(path,s.duringChecks.artifactContents);
-    else fs.appendFileSync(path,"\\n# changed during checks\\n");
+    fs.appendFileSync(path,"\\n# changed during checks\\n");
   }
   if(s.duringChecks?.receiptField) { const receipt=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/prep.env"; fs.writeFileSync(receipt,fs.readFileSync(receipt,"utf8").replace(new RegExp("^"+s.duringChecks.receiptField+"=.*$","m"),s.duringChecks.receiptField+"="+main())); }
   out([{name:s.requiredCheckName,bucket:s.gates,state:s.gates==="pass"?"SUCCESS":s.gates==="pending"?"PENDING":"FAILURE"},...(s.priorCi.otherCheck?[{name:s.priorCi.otherCheck,bucket:"fail",state:"FAILURE"}]:[])]);}
@@ -693,7 +777,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
   const record=JSON.parse(git(["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"]));
   if(record.asyncMerge?.uuid!==asyncUuid||!record.accepted) fail("UUID not retained before polling");
   if(!args.includes("Cache-Control: max-age=0")) fail("cached async result");
-  s.asyncPolls++;save();
+  s.asyncPolls++;
   if(s.asyncMergeStatus==="expired") {out('HTTP/2.0 404 Not Found\\n\\n{"message":"Not Found"}');fail("gh: Not Found (HTTP 404)");}
   const result=s.asyncMergeStatus==="pending"?asyncPending():{status:s.asyncMergeStatus,
     details:{message:"Fixture async result",...(s.asyncMergeStatus==="merged"?{sha:s.pr.mergeCommit?.oid}: {})}};
@@ -703,7 +787,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
 } else if((args[0]==="pr"&&args[1]==="merge")||restMerge||graphqlMerge) {
   if(s.mode==="octopool-refusal") {
     if(process.env.OCTOPOOL_DIAGNOSTICS!=="1"||!args.includes("--subject")) fail("missing protected merge publication inputs");
-    save();process.stderr.write(s.refusalCapture);process.exit(1);
+    process.stderr.write(s.refusalCapture);process.exit(1);
   }
   s.mutations++;
   if(s.quotaAt==="mutation") {s.quotaAt="observe";quota();}
@@ -712,13 +796,13 @@ else if(args[0]==="pr"&&args[1]==="view") {
     s.restMergePayload=JSON.parse(inputPayload);
     if(s.restMergePayload.sha!==s.pr.headRefOid||s.restMergePayload.merge_method!=="squash") fail("unpinned REST merge request");
     s.mergeBody=s.restMergePayload.commit_message;
-    if(s.restMergeRefusal) {save();process.stdout.write(s.restMergeRefusal);process.exit(1);}
+    if(s.restMergeRefusal) {process.stdout.write(s.restMergeRefusal);process.exit(1);}
     if(asyncMerge) {
       if(s.restMergePayload.merge_action!=="direct_merge"||s.restMergePayload.bypass_rules!==false) fail("invalid async merge options");
       if(s.asyncMergeStatus) {
         const result=asyncPending();
         if(s.asyncMergeFault==="uuid") delete result.details.uuid;
-        save();out("HTTP/2.0 "+(s.asyncMergeFault==="conflict"?"409 Conflict":"202 Accepted")+"\\n\\n"+JSON.stringify(result));
+        out("HTTP/2.0 "+(s.asyncMergeFault==="conflict"?"409 Conflict":"202 Accepted")+"\\n\\n"+JSON.stringify(result));
         if(s.asyncMergeFault==="conflict") fail("gh: Conflict (HTTP 409)");
         process.exit(0);
       }
@@ -737,7 +821,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
   if(args.includes("--body-file")) s.mergeBody=fs.readFileSync(args[args.indexOf("--body-file")+1],"utf8");
   if(args.includes("--disable-auto")) fail("unexpected cancellation");
   if(s.mode==="pending"||s.mode==="pending-error") {
-    s.pr.autoMergeRequest={mergeMethod:"SQUASH"};s.pr.isInMergeQueue=s.pr.isMergeQueueEnabled;save();
+    s.pr.autoMergeRequest={mergeMethod:"SQUASH"};s.pr.isInMergeQueue=s.pr.isMergeQueueEnabled;
     if(s.mode==="pending-error") fail("502 after enablement");
   } else {
     if(s.mode!=="unapplied") {
@@ -765,7 +849,6 @@ else if(args[0]==="pr"&&args[1]==="view") {
       git(["push","-q","origin",landed+":refs/heads/main"]);
       s.landed=landed;
       if(s.mode!=="applied-open"||s.mutations>1) {s.pr.state="MERGED";s.pr.mergeCommit={oid:landed};}
-      save();
     }
     if(s.crash==="dispatch") {save();process.kill(Number(process.env.FIXTURE_LEADER),"SIGKILL");process.exit(1);}
     if(s.mutations===1&&["applied-open","applied-merged","unapplied"].includes(s.mode)) fail("non-200 OK status code: 502 Bad Gateway");
@@ -785,13 +868,12 @@ else if(args[0]==="pr"&&args[1]==="view") {
     git(["push","-q","origin",landed+":refs/heads/main"]);
     s.pr.state="MERGED";s.pr.mergeCommit={oid:landed};
   }
-  save();
   if(s.cancellation==="lost") fail("cancellation response lost");
   out({data:{disablePullRequestAutoMerge:{pullRequest:{id:s.pr.id}}}});
 } else if(args.includes("graphql")&&args.some(arg=>arg.includes("addComment("))) {
   out({data:{addComment:{commentEdge:{node:{url:postComment(args.find(arg=>arg.startsWith("body="))?.slice(5))}}}}});
 } else if(args.includes("graphql")) {
-  s.reads++;save();
+  s.reads++;
   if(s.unavailable) fail("metadata unavailable");
   if(s.invalid) {out({data:{repository:{}}});process.exit(0);}
   if(args.some(x=>x.includes("viewerMergeBodyText"))) {out({data:{repository:{pullRequest:{...s.pr,viewerMergeBodyText:s.pooledMergeBlocked&&!args.includes("--include")?"Pooled viewer body":s.previewBody,...(args.some(x=>x.includes("viewerMergeHeadlineText"))?{viewerMergeHeadlineText:s.previewHeadline}:{})}}}});}
@@ -812,7 +894,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
     if(step?.main) git(["push","-q","--force","origin",step.main+":refs/heads/main"]);
     if(step?.advanceMain) advanceMain();
     if(step?.unavailable) fail("metadata unavailable");
-    if(step?.invalid) {save();out({data:{repository:{}}});process.exit(0);}
+    if(step?.invalid) {out({data:{repository:{}}});process.exit(0);}
     const {headRefName,...pr}=s.pr;if(s.drift&&s.reads%2===0) pr.baseRefName="changed";
     if(s.pr.state==="OPEN"&&s.graphqlMergeProjection) Object.assign(pr,s.graphqlMergeProjection);
     if(s.pooledMergeBlocked&&!args.includes("--include")) pr.mergeStateStatus="BLOCKED";
@@ -833,7 +915,6 @@ else if(args[0]==="pr"&&args[1]==="view") {
     if(!args.includes("Cache-Control: max-age=0")) fail("missing live comment header");
     s.issueCommentReads++;
     if(s.issueCommentReads===s.issueCommentsErrorAt) fail("comment API unavailable");
-    save();
     out([s.comments]);
   }
 } else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/commits?"))) {
@@ -844,14 +925,14 @@ else if(args[0]==="pr"&&args[1]==="view") {
   if(s.audit) fail("audit unavailable");
   out({parents:[{sha:s.auditParent||git(["rev-parse",s.pr.mergeCommit.oid+"^1"])}]});
 } else fail("unexpected gh "+args.join(" "));
-save();
+} finally { save(); }
 `,
     );
     const gh = template.program("gh.cjs", ghPrograms.cli);
     const ghPreload = template.program("gh-preload.cjs", ghPrograms.preload);
     const shell = template.program(
       "invoke.sh",
-      `#!/usr/bin/env bash
+      `${shellPreamble}
 set -euo pipefail
 script_parent_dir="$FIXTURE_SCRIPTS"
 ${workflowGitOwner}
@@ -919,7 +1000,7 @@ pr_git() {
   fi
   if [ "$1" = --no-lazy-fetch ] &&
     [ "$(command jq -r .priorCi.unsupportedNoLazy "$FIXTURE_STATE")" = true ]; then return 129; fi
-  if [ "$1" = fetch ] && [ "\${2:-}" = --no-tags ] && [ "\${3:-}" = --no-write-fetch-head ] &&
+  if [[ " $* " == *" fetch "*" --no-write-fetch-head \${MERGE_REPO_URL:-unset} "* ]] &&
     [ "$(command jq -r .priorCi.revokeAdminOnMainFetch "$FIXTURE_STATE")" = true ]; then
     command git "$@" || return
     command node -e 'const fs=require("node:fs");const path=process.env.FIXTURE_STATE;const state=JSON.parse(fs.readFileSync(path,"utf8"));state.priorCi.membership="member";state.priorCi.revokeAdminOnMainFetch=false;state.priorCi.adminRevokedDuringMainFetch=true;fs.writeFileSync(path,JSON.stringify(state));'
@@ -944,6 +1025,10 @@ pr_git() {
   command git "$@"
 }
 export FIXTURE_LEADER="$$"
+case "\${FIXTURE_MAINTENANCE:-}" in
+  gc) gc_pr_worktrees false 123; exit $? ;;
+  finalized) gc_finalized_task true 123 "$FIXTURE_REPO/.worktrees/pr-123" "$FIXTURE_HEAD" fixture "" 0; exit $? ;;
+esac
 acquire_pr_operation_lock 123
 begin_pr_operation_validation_phase
 if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
@@ -957,7 +1042,12 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
   if [ "\${14:-false}" = true ]; then
     PR_WORKFLOW_RECOVERY_OUTCOME="$2"
     PR_WORKFLOW_RECOVERY_HEAD="$3"
-    binding=$(pr_batch_wrapper_git workflow-recovery-select "$canonical_repo_root" 123 "$2" "$3")
+    PR_WORKFLOW_RECOVERY_ACTION=merge
+    [ "$7" != true ] || PR_WORKFLOW_RECOVERY_ACTION=cancel-auto
+    PR_WORKFLOW_ADMISSION=0
+    selection_mode=workflow-recovery-select
+    if [ -z "$2" ]; then PR_WORKFLOW_ADMISSION=1; selection_mode=workflow-admission-select; fi
+    binding=$(pr_batch_wrapper_git "$selection_mode" "$canonical_repo_root" 123 "$2" "$3" refs/remotes/origin/main "" "$PR_WORKFLOW_RECOVERY_ACTION")
     IFS=$'\\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
     PR_WORKFLOW_BOOTSTRAP=0
     PR_WORKFLOW_TRUST_ANCHOR=refs/remotes/origin/main
@@ -965,17 +1055,29 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
     script_parent_dir="$FIXTURE_WORKFLOW_DIRECTORY/scripts"
     hold_pr_workflow_selection "$PR_WORKFLOW_SOURCE_REVISION" "$FIXTURE_WORKFLOW_DIRECTORY"
     [ -z "\${FIXTURE_WORKFLOW_AFTER_HOLD:-}" ] || source "$FIXTURE_WORKFLOW_AFTER_HOLD"
-    pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" 123 "$$" "$PPID" "$2" "$3" >/dev/null
+    pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" 123 "$$" "$PPID" "$2" "$3" "$PR_WORKFLOW_ADMISSION" "" "$PR_WORKFLOW_RECOVERY_ACTION" >/dev/null
     admit_pr_workflow_binding 123
     script_parent_dir="$original_scripts"
   fi
 fi
-if [ "\${9:-}" = verify ]; then
+if [ "\${FIXTURE_MAINTENANCE:-}" = stale ]; then
+  enter_worktree 123
+elif [ -n "\${FIXTURE_DISPATCH_BODY:-}" ]; then
+  MERGE_REPO=$(jq -c .repo "$FIXTURE_STATE")
+  MERGE_REPO_HOST=github.com
+  MERGE_OUTCOME_REF=refs/openclaw/pr-merge-outcomes/123
+  MERGE_OUTCOME_OID=$(git rev-parse "$MERGE_OUTCOME_REF")
+  MERGE_OUTCOME_RECORD=$(git show "$MERGE_OUTCOME_OID:outcome.json")
+  observation=$(merge_read observe 123)
+  MERGE_OBSERVATION=$(merge_outcome_normalize "$observation" 123)
+  body=$(snapshot_merge_body "$FIXTURE_DISPATCH_BODY")
+  merge_outcome_dispatch_async 123 "$(jq -r .pr.headRefOid "$FIXTURE_STATE")" "$body"
+elif [ "\${9:-}" = verify ]; then
   merge_verify 123 '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
 elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}" "\${12:-}" "\${13:-}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}" "\${12:-}" "\${13:-}" "\${FIXTURE_RETAIN_RESOURCES:-false}"
 fi
 `,
       true,
@@ -990,7 +1092,7 @@ fi
     );
     template.program("bin/gh", '#!/bin/sh\nexec node "$FIXTURE_GH" direct "$@"\n', true);
     const tracePath = join(root, "git.trace.jsonl");
-    const env = {
+    let env = {
       ...gitEnv,
       PATH: `${bin}:${gitEnv.PATH}`,
       TMPDIR: root,
@@ -1007,7 +1109,11 @@ fi
       FIXTURE_GH_BIN: join(bin, "gh"),
       FIXTURE_NODE: nodeExecutable,
       FIXTURE_BASE: base,
+      FIXTURE_HEAD: head,
+      FIXTURE_MAINTENANCE: "",
+      FIXTURE_RETAIN_RESOURCES: "false",
       FIXTURE_WORKFLOW_BINDING: "false",
+      FIXTURE_DISPATCH_BODY: "",
       OPENCLAW_PR_MERGE_METHOD: "squash",
       OPENCLAW_PR_STRICT_DRIFT: "",
       // Only partial-clone cases consume trace evidence to reject implicit hydration.
@@ -1161,6 +1267,46 @@ fi
       state,
       save,
       run,
+      checkpointExecutionEnvironment: () => {
+        // Cached files and their execution controls form one completed setup.
+        // Restoring only files leaves hooks pointing into a removed test root.
+        const checkpoint = { ...env };
+        return () => {
+          env = { ...checkpoint };
+        };
+      },
+      retain: (...args: Parameters<typeof run>) => {
+        env.FIXTURE_RETAIN_RESOURCES = "true";
+        try {
+          return run(...args);
+        } finally {
+          env.FIXTURE_RETAIN_RESOURCES = "false";
+        }
+      },
+      maintenance: (kind: "gc" | "finalized" | "stale") => {
+        env.FIXTURE_MAINTENANCE = kind;
+        try {
+          return run();
+        } finally {
+          env.FIXTURE_MAINTENANCE = "";
+        }
+      },
+      dispatchAsync: (bodyPath: string) => {
+        env.FIXTURE_DISPATCH_BODY = bodyPath;
+        try {
+          return run();
+        } finally {
+          env.FIXTURE_DISPATCH_BODY = "";
+        }
+      },
+      rest: (args: string[], input = "") => {
+        const result = spawnSync(
+          nodeExecutable,
+          [...nodeArgs, join(scripts, "pr-lib/merge-rest.mjs"), ...args],
+          { cwd: repo, env, input, encoding: "utf8" },
+        );
+        return { ...result, output: result.stdout + result.stderr };
+      },
       bindWorkflow: () => {
         env.FIXTURE_WORKFLOW_BINDING = "true";
       },

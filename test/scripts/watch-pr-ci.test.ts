@@ -39,13 +39,14 @@ function readCalls(file: string) {
 }
 function ghProgram(callsPath: string, body: string) {
   return `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 const callsPath = ${JSON.stringify(callsPath)};
 const calls = fs.readFileSync(callsPath, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
 fs.appendFileSync(callsPath, JSON.stringify(args) + "\\n");
 let value;
 ${body}
+if (args.includes("--include")) process.stdout.write("HTTP/2 200 OK\\r\\n\\r\\n");
 console.log(JSON.stringify(value));
 `;
 }
@@ -477,8 +478,12 @@ describe("watch-pr-ci", () => {
 case "$1 $2" in
   "browse "*) printf 'https://github.com/openclaw/openclaw\\n' ;;
   "api --hostname")
+    if [ "$4" = "repos/openclaw/openclaw/actions/runs/201" ]; then
+      printf 'HTTP/2 200 OK\\r\\n\\r\\n{"id":201,"head_sha":"${sha}","run_attempt":1,"status":"completed","conclusion":"success"}\\n'
+      exit 0
+    fi
     if [ "$4" != "repos/openclaw/openclaw/pulls/42" ]; then exit 2; fi
-    printf '{"state":"open","mergeable":true,"head":{"sha":"${sha}"}}\\n'
+    printf '{"state":"open","html_url":"https://github.com/openclaw/openclaw/pull/42","mergeable":true,"head":{"sha":"${sha}"}}\\n'
     ;;
   "api --method")
     case " $* " in
@@ -529,14 +534,15 @@ if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
-  value = { state: "open", mergeable: true, head: { sha: ${JSON.stringify(sha)} } };
+  value = { state: "open", html_url: "https://github.com/openclaw/openclaw/pull/42", mergeable: true, head: { sha: ${JSON.stringify(sha)} } };
 } else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) {
   value = { workflow_runs: [{ id: 201 }] };
 } else if (args[0] === "run" && args[1] === "view") {
   value = { status: "queued", conclusion: null };
-  if (args[args.indexOf("--json") + 1].includes("jobs")) {
-    value = ${JSON.stringify({ status: "queued", conclusion: null, jobs })};
-  }
+} else if (args.includes("repos/openclaw/openclaw/actions/runs/201")) {
+  value = { id: 201, head_sha: "${sha}", run_attempt: 1, status: "queued", conclusion: null };
+} else if (args.some(arg => arg.includes("/attempts/1/jobs?"))) {
+  value = ${JSON.stringify({ total_count: jobs?.length, jobs })};
 } else {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
@@ -649,7 +655,7 @@ if (args[0] === "browse") {
     console.error("HTTP 429 Too Many Requests");
     process.exit(1);
   }
-  value = { state: "open", merged_at: null, mergeable: true, head: { sha: "${sha}" },
+  value = { state: "open", html_url: "https://" + ${JSON.stringify(host)} + "/" + ${JSON.stringify(repo)} + "/pull/42", merged_at: null, mergeable: true, head: { sha: "${sha}" },
     ...(${phase === "attach"} || reads > 0 ? ${JSON.stringify(patch)} : {}) };
 } else if (${slowQuota} && args.includes("rate_limit")) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 650);
@@ -659,6 +665,9 @@ if (args[0] === "browse") {
   value = { workflow_runs: [{ id: 201 }] };
 } else if (args[0] === "run" && args[1] === "view") {
   value = { status: "completed", conclusion: "success" };
+} else if (args.includes("repos/" + ${JSON.stringify(repo)} + "/actions/runs/201")) {
+  if (args[args.indexOf("--hostname") + 1] !== ${JSON.stringify(host)}) throw new Error("wrong run API host");
+  value = { id: 201, head_sha: "${sha}", run_attempt: 1, status: "completed", conclusion: "success" };
 } else {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
@@ -1083,9 +1092,9 @@ if (args[0] === "browse") {
         const error = status === 407 ? "407 Proxy Authentication Required" : "502 Bad Gateway";
         const result = await runWatcher(
           `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
-const marker = path.join(__dirname, "attached");
+import fs from "node:fs";
+import path from "node:path";
+const marker = path.join(import.meta.dirname, "attached");
 const phase = fs.existsSync(marker) ? "watch" : "attach";
 if (phase === ${JSON.stringify(phase)}) {
   console.error(${JSON.stringify(error)});
@@ -1135,9 +1144,12 @@ console.log(JSON.stringify(value));
 
     type OwnershipScenario = {
       label: string;
+      securityWorkflow?: boolean;
+      hiddenContexts?: number;
       status?: string;
       conclusion?: string | null;
       runPatch?: Record<string, unknown>;
+      successorAfterFirstRead?: Record<string, unknown>;
       previousPatch?: Record<string, unknown>;
       lastPreviousPatch?: Record<string, unknown>;
       olderRunOutsidePage?: boolean;
@@ -1190,6 +1202,81 @@ console.log(JSON.stringify(value));
     it.each<OwnershipScenario>([
       timeout("running replacement", { status: "in_progress", conclusion: null }),
       green("successful replacement"),
+      green("cancelled CodeQL matrix placeholder", {
+        securityWorkflow: true,
+        oldConclusion: "CANCELLED",
+        newCheckName: "Security High (core-auth-secrets)",
+        expectedRun: 301,
+      }),
+      ownership("current CodeQL matrix failure", {
+        securityWorkflow: true,
+        oldConclusion: "CANCELLED",
+        newCheckName: "Security High (core-auth-secrets)",
+        newCheckConclusion: "FAILURE",
+        expectedRun: 301,
+        output: "Security High (core-auth-secrets)",
+      }),
+      ownership("unbound CodeQL replacement", {
+        securityWorkflow: true,
+        oldConclusion: "CANCELLED",
+        newCheckName: "Security High (core-auth-secrets)",
+        runPatch: { pull_requests: [] },
+        expectedRun: 301,
+        output: "Security High (${{ matrix.category }})",
+      }),
+      ...[
+        ownership("running CodeQL replacement", { status: "in_progress", conclusion: null }),
+        ownership("failed CodeQL replacement", { conclusion: "failure" }),
+        ownership("wrong CodeQL workflow", { runPatch: { workflow_id: 30 } }),
+        ownership("wrong CodeQL head", { runPatch: { head_sha: "b".repeat(40) } }),
+        ownership("wrong CodeQL event", { runPatch: { event: "workflow_dispatch" } }),
+        ownership("wrong CodeQL suite", { runPatch: { check_suite_id: 999 } }),
+        ownership("unbound previous CodeQL run", { previousPatch: { pull_requests: [] } }),
+        ownership("incomplete CodeQL rollup", {
+          hiddenContexts: 1,
+          exitCode: 16,
+          output: "TIMEOUT",
+        }),
+        ownership("unresolved CodeQL check", {
+          newCheckConclusion: "UNKNOWN",
+          exitCode: 16,
+          output: "TIMEOUT",
+        }),
+      ].map((entry) =>
+        Object.assign(entry, {
+          securityWorkflow: true,
+          oldConclusion: "CANCELLED" as const,
+          newCheckName: "Security High (core-auth-secrets)",
+          expectedRun: 301,
+          output: entry.output ?? "Security High (${{ matrix.category }})",
+        }),
+      ),
+      ...[32, 33].map((oldRunCount) =>
+        green("CodeQL metadata progress across polls " + oldRunCount, {
+          securityWorkflow: true,
+          oldRunCount,
+          oldConclusion: "CANCELLED",
+          newCheckName: "Security High (core-auth-secrets)",
+          expectedRun: 301,
+        }),
+      ),
+      ...[
+        ownership("CodeQL successor fails between polls", {
+          successorAfterFirstRead: { conclusion: "failure" },
+        }),
+        ownership("CodeQL deferred foreign association", {
+          lastPreviousPatch: { pull_requests: [association(43)] },
+        }),
+      ].map((entry) =>
+        Object.assign(entry, {
+          securityWorkflow: true,
+          oldRunCount: 32,
+          oldConclusion: "CANCELLED" as const,
+          newCheckName: "Security High (core-auth-secrets)",
+          expectedRun: 301,
+          output: "FAILING checks=",
+        }),
+      ),
       timeout("ci-run slow final run", { completion: "ci-run", slowFinalRun: true }),
       timeout("ci-run slow watch PR read", { completion: "ci-run", slowWatchPr: true }),
       ...[33].map((oldRunCount) => ({
@@ -1372,9 +1459,12 @@ console.log(JSON.stringify(value));
     ])(
       "preserves replacement ownership for $label",
       async ({
+        securityWorkflow = false,
+        hiddenContexts = 0,
         status = "completed",
         conclusion = "success",
         runPatch,
+        successorAfterFirstRead,
         previousPatch,
         lastPreviousPatch,
         olderRunOutsidePage = false,
@@ -1398,7 +1488,7 @@ console.log(JSON.stringify(value));
         output = "FAILING checks=old matrix shard",
       }) => {
         const identity = {
-          workflow_id: 10,
+          workflow_id: securityWorkflow ? 20 : 10,
           event: "pull_request",
           head_sha: sha,
           pull_requests: [association()],
@@ -1450,15 +1540,36 @@ console.log(JSON.stringify(value));
               ]
             : []),
         ];
+        if (securityWorkflow) {
+          nodes[0]!.name = "Security High (${{ matrix.category }})";
+          for (const check of nodes) {
+            check.checkSuite!.workflowRun!.workflow!.databaseId = 20;
+          }
+        }
         const pr = {
           state: "OPEN",
           mergeable: true,
           headRefOid: sha,
           statusCheckRollup: contextPage(nodes, rollupState),
         };
-        const listedRuns = olderRunOutsidePage
-          ? [run, ...Array.from({ length: 19 }, (_, index) => ({ ...run, id: 200 - index }))]
-          : [run, previous];
+        pr.statusCheckRollup.contexts.totalCount += hiddenContexts;
+        const listedRuns =
+          olderRunOutsidePage && !securityWorkflow
+            ? [run, ...Array.from({ length: 19 }, (_, index) => ({ ...run, id: 200 - index }))]
+            : securityWorkflow
+              ? [
+                  {
+                    ...run,
+                    id: 301,
+                    workflow_id: 10,
+                    check_suite_id: 30_000,
+                    pull_requests: [association()],
+                    status: "completed",
+                    conclusion: "success",
+                  },
+                  run,
+                ]
+              : [run, previous];
         for (let index = 1; index < oldRunCount; index += 1) {
           nodes.push(
             ownedCheck(
@@ -1481,6 +1592,11 @@ console.log(JSON.stringify(value));
           });
           pr.statusCheckRollup.contexts.totalCount += 1;
         }
+        if (securityWorkflow) {
+          for (const check of nodes) {
+            check.checkSuite!.workflowRun!.workflow!.databaseId = 20;
+          }
+        }
         const result = await replayGh(
           `
 const metadataRead = calls.some((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100");
@@ -1494,12 +1610,18 @@ if (args[0] === "browse") {
 }
 else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
   if (${slowWatchPr} && calls.some((call) => call.includes("repos/openclaw/openclaw/pulls/42"))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
-  value = { state: pr.state.toLowerCase(), mergeable: pr.mergeable, head: { sha: pr.headRefOid } };
+  value = { state: pr.state.toLowerCase(), html_url: "https://github.com/openclaw/openclaw/pull/42", mergeable: pr.mergeable, head: { sha: pr.headRefOid } };
 }
 else if (args[0] === "run" && args[1] === "view") {
   if (${slowFinalRun} && calls.some((call) => call[0] === "run" && call[1] === "view")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
   value = runs.find((run) => String(run.id) === args[2]);
 }
+else if (${completion === "ci-run"} && args.some(arg => /[/]actions[/]runs[/][0-9]+$/.test(arg)) && args.includes("--include")) {
+  if (${slowFinalRun}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  const runId = Number(args.find(arg => /[/]actions[/]runs[/][0-9]+$/.test(arg)).split("/").at(-1));
+  value = { ...runs.find(run => run.id === runId), run_attempt: 1 };
+}
+else if (${completion === "ci-run"} && args.some(arg => arg.includes("/attempts/1/jobs?"))) value = { total_count: 0, jobs: [] };
 else if (${completion !== "ci-run"} && args[0] === "api" && args[1] === "graphql") {
   if (args.some((arg) => arg.includes("checkRunCountsByState"))) pr.statusCheckRollup.contexts = {};
   value = { data: { repository: { pullRequest: pr } } };
@@ -1507,7 +1629,8 @@ else if (${completion !== "ci-run"} && args[0] === "api" && args[1] === "graphql
 else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { total_count: ${olderRunOutsidePage ? 21 : 2}, workflow_runs: runs };
 else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/runs/")) {
   if (${slowMetadata}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
-  value = previousRuns[100 - Number(args[1].split("/").at(-1))];
+  value = previousRuns[100 - Number(args[1].split("/").at(-1))] ?? runs.find((run) => run.id === Number(args[1].split("/").at(-1)));
+  if (args[1].endsWith("/201") && calls.some((call) => call[1] === args[1])) value = { ...value, ...${JSON.stringify(successorAfterFirstRead ?? {})} };
 }
 else if (args[1]?.includes("/actions/runs?event=pull_request_target")) value = { workflow_runs: [{ ...runs[0], event: "pull_request_target", pull_requests: [] }] };
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
@@ -1525,11 +1648,24 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
         expect(result.stdout).toContain(output);
         expect(
           result.calls.filter((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100"),
-        ).toHaveLength(olderRunOutsidePage && expectedMetadataReads > 0 ? 1 : 0);
+        ).toHaveLength(
+          (securityWorkflow && !hiddenContexts) ||
+            (olderRunOutsidePage && expectedMetadataReads > 0)
+            ? 1
+            : 0,
+        );
         const metadataReads = result.calls.filter((call) =>
           call[1]?.startsWith("repos/openclaw/openclaw/actions/runs/"),
         );
-        expect(metadataReads).toHaveLength(olderRunOutsidePage ? expectedMetadataReads : 0);
+        expect(metadataReads).toHaveLength(
+          securityWorkflow
+            ? hiddenContexts
+              ? 0
+              : oldRunCount + (oldRunCount > 31 ? 2 : 1)
+            : olderRunOutsidePage
+              ? expectedMetadataReads
+              : 0,
+        );
         let readsThisPoll = 0;
         for (const call of result.calls) {
           if (call[0] === "run" && call[1] === "view") {

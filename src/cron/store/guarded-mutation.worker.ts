@@ -4,7 +4,6 @@ import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js
 import { requestSessionEntryCurrentAdmission } from "../../config/sessions/session-entry-current-admission.worker.js";
 import { operatorApprovalPublication } from "../../gateway/operator-approval-store.publication.js";
 import { consumeOperatorApprovalAllowOnceInDatabase } from "../../gateway/operator-approval-store.transitions.worker.js";
-import { assertNoPendingLegacyExecApprovals } from "../../infra/exec-approvals-migration-gate.js";
 import { snapshotFromExecApprovalsDatabase } from "../../infra/exec-approvals-sqlite.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
@@ -13,7 +12,7 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { CronAgentDeletionBlockedError } from "../agent-availability.js";
-import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { captureCronJobConfigRevision, resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import { cronStreamExecApprovalBinding } from "../stream-exec-authority.js";
@@ -239,18 +238,18 @@ export function mutateCronJobsInWorker(
                   },
                   unchangedDeclaration,
                   ...(streamSecurity.checkExecPolicy && !unchangedDeclaration
-                    ? { execApprovals: snapshotFromExecApprovalsDatabase(db).file }
+                    ? {
+                        execApprovals: snapshotFromExecApprovalsDatabase(
+                          db,
+                          getSqliteWorkerStateContext().environment,
+                        ).file,
+                      }
                     : {}),
                 }
               : undefined;
           if (streamSecurity) {
             if (!streamFacts) {
               throw new Error("Stream mutation has no planned job");
-            }
-            if (streamSecurity.checkExecPolicy && !unchangedDeclaration) {
-              assertNoPendingLegacyExecApprovals({
-                env: getSqliteWorkerStateContext().environment,
-              });
             }
             requestSessionEntryCurrentAdmission(streamSecurity.sessionEntryCurrentSource, {
               stage: "transaction",
@@ -316,6 +315,11 @@ export function mutateCronJobsInWorker(
           return {
             outcome: {
               store,
+              configRevisions: new Map(
+                input.includeConfigRevisions
+                  ? store.jobs.map((job) => [job.id, captureCronJobConfigRevision(job)])
+                  : [],
+              ),
               ...(approval?.result ? { consumedStreamApproval: approval.result } : {}),
               names: inventory.names,
               changed: changes.changedIds.size > 0,

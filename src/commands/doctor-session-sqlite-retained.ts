@@ -125,24 +125,27 @@ export function retireDeferredPluginSessionImport(
   }
   runOpenClawStateWriteTransaction(
     ({ db }) =>
-      withDeferredPluginMigrationsCurrent({ env: params.env, expectedPending }, () => {
-        params.assertCurrent?.();
-        if (
-          !isDeepStrictEqual(
-            readDeferredPluginSessionImportReceipt({ ...params, database: db }),
-            receipt,
-          )
-        ) {
-          throw new Error("Deferred session import receipt changed before retirement.");
-        }
-        if (hasRemainingSources()) {
-          return;
-        }
-        // Diagnostic callbacks and cached verification cannot authorize retirement.
-        const { cfg, env, target, sqlitePath } = params;
-        readDeferredPluginSessionImport({ cfg, env, target, sqlitePath, database: db });
-        markLegacyMigrationSourceRemovedInDatabase(db, receipt.sourceKey);
-      }),
+      withDeferredPluginMigrationsCurrent(
+        { env: params.env, expectedPending, phase: "session source retirement" },
+        () => {
+          params.assertCurrent?.();
+          if (
+            !isDeepStrictEqual(
+              readDeferredPluginSessionImportReceipt({ ...params, database: db }),
+              receipt,
+            )
+          ) {
+            throw new Error("Deferred session import receipt changed before retirement.");
+          }
+          if (hasRemainingSources()) {
+            return;
+          }
+          // Diagnostic callbacks and cached verification cannot authorize retirement.
+          const { cfg, env, target, sqlitePath } = params;
+          readDeferredPluginSessionImport({ cfg, env, target, sqlitePath, database: db });
+          markLegacyMigrationSourceRemovedInDatabase(db, receipt.sourceKey);
+        },
+      ),
     { env: params.env },
     { operationLabel: "state.retire-plugin-session-source" },
   );

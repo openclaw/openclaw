@@ -4,7 +4,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { failSessionActorMemoryPublication } from "../../config/sessions/session-actor-memory-publication.test-support.js";
-import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";

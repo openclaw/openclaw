@@ -1,18 +1,15 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { resolveStructuredDraftInitialValue } from "../../components/config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "../../components/config-form-structured-draft.tsx";
+import {
+  flattenConfigLeafFields,
+  type ConfigLeafField,
+} from "../../components/config-form.leaf-fields.ts";
 import { ConfigMapField } from "../../components/config-form.node.collection-map.tsx";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
-import {
-  isSecretRefObject,
-  type ConfigNodeRenderParams,
-} from "../../components/config-form.node.shared.ts";
+import type { ConfigNodeRenderParams } from "../../components/config-form.node.shared.ts";
 import { ConfigNode, renderNode } from "../../components/config-form.node.tsx";
-import {
-  matchesNodeSearch,
-  resolveConfigFieldMeta,
-  resolveConfigMapSearch,
-} from "../../components/config-form.search.ts";
+import { matchesNodeSearch, resolveConfigMapSearch } from "../../components/config-form.search.ts";
 import {
   configFieldId,
   hintForPath,
@@ -20,24 +17,26 @@ import {
   schemaType,
 } from "../../components/config-form.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsEmpty,
+  SettingsLoadingSkeleton,
+  SettingsRow,
+} from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
-import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./custom-elements.ts";
-import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";
+import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./settings-editor.css";
+import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
 import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
 
 registerPluginManagementEnglish();
-export type PluginSettingsField = ConfigNodeRenderParams & {
-  label: string;
-  help?: string;
-  property: string;
+export type PluginSettingsField = ConfigLeafField & {
   /** Inspected host grants supply effective state without becoming configured defaults. */
   effectiveValue?: unknown;
 };
@@ -51,42 +50,16 @@ export function pluginSettingsNodeOptions(model: PluginSettingsEditorModel) {
     commitOnBlur: true,
     maskSensitive: true,
     rawAvailable: false,
+    secretFields: model.configSecretFields,
     onPatch: model.onConfigPatch,
     onRemove: model.onConfigRemove,
   };
 }
 
-export function flattenPluginSettingsFields(
-  params: ConfigNodeRenderParams,
-  rootProperty: string,
-  ancestors: string[] = [],
-): PluginSettingsField[] {
-  const { label, help } = resolveConfigFieldMeta(params.path, params.schema, params.hints);
-  const labels = [...ancestors, label];
-  const initial = resolveStructuredDraftInitialValue(params);
-  // SecretRef metadata stays atomic; source/provider/id are not child settings.
-  if (
-    schemaType(params.schema) === "object" &&
-    params.schema.properties &&
-    Object.keys(params.schema.properties).length > 0 &&
-    params.schema.additionalProperties === false &&
-    !params.schema.anyOf &&
-    !params.schema.oneOf &&
-    !params.schema.enum &&
-    !isSecretRefObject(params.value) &&
-    !params.unsupported.has(pathKey(params.path)) &&
-    initial === undefined
-  ) {
-    return resolveConfigObjectFields(params).fields.flatMap((field) =>
-      flattenPluginSettingsFields(field, rootProperty, labels),
-    );
-  }
-  return [{ ...params, property: rootProperty, label: labels.join(": "), help }];
-}
-
 export type PluginSettingsEditorProps = {
   model?: PluginSettingsEditorModel;
-  permissions?: { fields: PluginSettingsField[]; loading?: boolean };
+  onConnectProvider?: () => void;
+  permissions?: { fields: PluginSettingsField[]; loading?: boolean; known?: boolean };
   onAskSetting?: (field: PluginSettingsField) => void;
   resolveCredential?: (field: PluginSettingsField) => PluginCredentialEditorProps | undefined;
 };
@@ -137,7 +110,7 @@ function PluginSettingsRow(props: FieldProps) {
           id={configFieldId(props.field.path, "actions")}
           placement="bottom-start"
           label={t("pluginsPage.editor.actions", { name: props.field.label })}
-          triggerClass="btn btn--icon btn--ghost"
+          triggerClass="oc-icon-button oc-icon-button--28"
           trigger={<Icon name="moreHorizontal" />}
           items={[
             {
@@ -243,6 +216,7 @@ function EditorSection(props: {
 type GroupsProps = Pick<PluginSettingsEditorProps, "onAskSetting" | "resolveCredential"> & {
   params: ConfigNodeRenderParams;
   permissions: PluginSettingsEditorProps["permissions"];
+  permissionsKnown: boolean;
   query: string;
 };
 function PluginSettingsGroups(props: GroupsProps) {
@@ -261,10 +235,10 @@ function PluginSettingsGroups(props: GroupsProps) {
       (a, b) => (a.order ?? 0) - (b.order ?? 0),
     ),
   );
-  const query = () => props.query.trim().toLocaleLowerCase();
+  const query = () => props.query.trim().toLocaleLowerCase().normalize("NFC");
   const fields = createMemo(() =>
     object()
-      .fields.flatMap((field) => flattenPluginSettingsFields(field, String(field.path.at(-1))))
+      .fields.flatMap((field) => flattenConfigLeafFields(field, String(field.path.at(-1))))
       .filter(
         (field) =>
           !query() ||
@@ -277,6 +251,7 @@ function PluginSettingsGroups(props: GroupsProps) {
           ]
             .join(" ")
             .toLocaleLowerCase()
+            .normalize("NFC")
             .includes(query()),
       ),
   );
@@ -367,10 +342,10 @@ function PluginSettingsGroups(props: GroupsProps) {
             />
           </EditorSection>
         ) : null}
-        {!fields().length && !additional() && !props.permissions ? (
-          <p class="plugin-editor__empty">
-            {t(query() ? "pluginsPage.editor.noMatches" : "pluginsPage.editor.empty")}
-          </p>
+        {!fields().length && !additional() && !props.permissions && props.permissionsKnown ? (
+          <SettingsEmpty
+            message={t(query() ? "pluginsPage.editor.noMatches" : "pluginsPage.editor.empty")}
+          />
         ) : null}
       </div>
     </div>
@@ -396,11 +371,12 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
   const permissionFields = createMemo(
     () =>
       props.permissions?.fields.filter((field) => {
-        const search = query().trim().toLocaleLowerCase();
+        const search = query().trim().toLocaleLowerCase().normalize("NFC");
         return (
           !search ||
           `${t("pluginsPage.editor.permissions")} ${field.label} ${field.help ?? ""}`
             .toLocaleLowerCase()
+            .normalize("NFC")
             .includes(search) ||
           matchesNodeSearch({ ...field, criteria: { text: search, tags: [] } })
         );
@@ -430,6 +406,25 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
               onBack: props.model.onBack,
             })}
           </header>
+          <Show when={props.onConnectProvider}>
+            {(onConnect) => (
+              <EditorSection title={t("pluginsPage.auth.accounts")}>
+                <SettingsRow
+                  title={t("routeTitles.modelProviders")}
+                  control={
+                    <button
+                      type="button"
+                      class="btn oc-action oc-action-secondary"
+                      onClick={() => onConnect()()}
+                    >
+                      {t("pluginsPage.auth.connect")}
+                    </button>
+                  }
+                  carapace
+                />
+              </EditorSection>
+            )}
+          </Show>
           <label class="plugin-editor__search">
             <Icon name="search" />
             <input
@@ -443,21 +438,25 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
           </label>
           <PluginSettingsReadStatus
             model={props.model}
-            loading={props.model.configSchemaLoading || !props.model.configValue}
+            loading={
+              props.model.configSchemaLoading ||
+              (!props.model.configValue && props.model.configBusy)
+            }
             rows={2}
             renderError={(error, retry) => (
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 {error}
                 <button class="btn btn--sm" onClick={() => retry()}>
                   {t("common.retry")}
                 </button>
-              </div>
+              </InlineAlert>
             )}
           />
           {!props.model.configSchemaLoading && props.model.configValue && params() ? (
             <PluginSettingsDraft
               params={params()!}
               permissions={permissions()}
+              permissionsKnown={props.permissions?.known !== false}
               query={query()}
               onAskSetting={props.onAskSetting}
               resolveCredential={props.resolveCredential}

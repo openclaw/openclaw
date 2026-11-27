@@ -1,19 +1,21 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
+import {
+  classifyToolPairingFacts,
+  selectResetKeptMessageFacts,
+  type ToolCallLike,
+  type ToolPairingMessageFact,
+} from "./tool-pairing-facts.js";
+
+export { createToolCallOccurrenceQueue } from "./tool-pairing-facts.js";
 
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 export const SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY = "openclawSyntheticMissingToolResult";
 export const LEGACY_MISSING_TOOL_RESULT_TEXT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
-
-type ToolCallLike = {
-  id: string;
-  name?: string;
-};
 
 type ToolCallOccurrence = {
   contentIndex: number;
@@ -35,13 +37,6 @@ type ToolResultIdAliases = {
   call_id?: unknown;
 };
 
-type ToolResultRecord = {
-  result: ToolResultMessage;
-  sourceResult: ToolResultMessage;
-  index: number;
-  id?: string;
-};
-
 type ToolUsePairingFrame = {
   startIndex: number;
   endIndex: number;
@@ -50,47 +45,6 @@ type ToolUsePairingFrame = {
   occurrences: ToolCallOccurrence[];
   failed: boolean;
 };
-
-/** Tracks repeated provider ids by occurrence instead of collapsing them into a set. */
-export function createToolCallOccurrenceQueue<T>(): {
-  add: (id: string, occurrence: T) => void;
-  claim: (id: string) => T | undefined;
-  clear: () => void;
-  readonly size: number;
-} {
-  const pendingById = new Map<string, T[]>();
-  let pendingCount = 0;
-  return {
-    add(id, occurrence) {
-      const pending = pendingById.get(id);
-      if (pending) {
-        pending.push(occurrence);
-      } else {
-        pendingById.set(id, [occurrence]);
-      }
-      pendingCount += 1;
-    },
-    claim(id) {
-      const pending = pendingById.get(id);
-      const occurrence = pending?.shift();
-      if (!occurrence) {
-        return undefined;
-      }
-      pendingCount -= 1;
-      if (pending?.length === 0) {
-        pendingById.delete(id);
-      }
-      return occurrence;
-    },
-    clear() {
-      pendingById.clear();
-      pendingCount = 0;
-    },
-    get size() {
-      return pendingCount;
-    },
-  };
-}
 
 function readToolCall(block: unknown): ToolCallLike | undefined {
   const record = asOptionalObjectRecord(block);
@@ -111,18 +65,6 @@ export function extractToolCallsFromAssistant(
   return Array.isArray(message.content)
     ? message.content.flatMap((block) => readToolCall(block) ?? [])
     : [];
-}
-
-export function extractToolResultIds(message: ToolResultMessage): string[] {
-  const record: ToolResultIdAliases = message;
-  return normalizeUniqueTrimmedStringList([
-    record.toolCallId,
-    record.toolUseId,
-    record.tool_call_id,
-    record.tool_use_id,
-    record.callId,
-    record.call_id,
-  ]);
 }
 
 export function extractToolResultId(message: ToolResultMessage): string | null {
@@ -190,23 +132,63 @@ function normalizeToolResultName(
   return toolName && toolName !== rawToolName ? { ...message, toolName } : message;
 }
 
-export function normalizeLegacyToolResultId(
-  message: ToolResultMessage,
-  toolCalls: ToolCallLike[],
-): ToolResultMessage {
-  if (extractToolResultId(message) || toolCalls.length !== 1) {
-    return message;
+/** Adjacent, ordered results need no repair; reject extras that could replace earlier results. */
+export function isToolUseResultPairingCanonical(messages: readonly AgentMessage[]): boolean {
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object" || message.role === "toolResult") {
+      return false;
+    }
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      const call = readToolCall(block);
+      if (!call) {
+        continue;
+      }
+      const result = messages[++index];
+      if (
+        message.stopReason === "error" ||
+        message.stopReason === "aborted" ||
+        result?.role !== "toolResult" ||
+        extractToolResultId(result) !== call.id ||
+        normalizeToolResultName(result, call.name) !== result
+      ) {
+        return false;
+      }
+    }
   }
-  const toolCall = toolCalls[0];
-  if (!toolCall) {
-    return message;
+  return true;
+}
+
+/** Collect ownership facts while a source row is decoded; never retain its content or details. */
+export function collectToolPairingMessageFact(
+  message: AgentMessage,
+): ToolPairingMessageFact | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
   }
-  const resultName = normalizeOptionalString(message.toolName);
-  const callName = normalizeOptionalString(toolCall.name);
-  if (resultName && callName && resultName !== callName) {
-    return message;
+  if (message.role === "toolResult") {
+    return {
+      role: "toolResult",
+      id: extractToolResultId(message),
+      name: message.toolName,
+      synthetic: isSyntheticMissingToolResult(message),
+    };
   }
-  return { ...message, toolCallId: toolCall.id, isError: true };
+  if (message.role === "assistant" && Array.isArray(message.content)) {
+    const stopReason = message.stopReason;
+    return {
+      role: "assistant",
+      calls: message.content.flatMap((block, contentIndex) => {
+        const call = readToolCall(block);
+        return call ? [{ ...call, contentIndex }] : [];
+      }),
+      failed: stopReason === "error" || stopReason === "aborted",
+    };
+  }
+  return { role: "other" };
 }
 
 /** Classifies call/result ownership without reordering or synthesizing transcript messages. */
@@ -214,131 +196,54 @@ export function classifyToolUseResultPairing(
   messages: readonly AgentMessage[],
   options?: { preserveUnframedToolResults?: boolean },
 ): ToolUsePairingFrame[] {
-  const frameStartIndexes = messages.flatMap((message, index) =>
-    message?.role === "assistant" && extractToolCallsFromAssistant(message).length > 0
-      ? [index]
-      : [],
-  );
-  const preserveUnframed = options?.preserveUnframedToolResults === true;
-  const frameRecords: Array<ToolUsePairingFrame & { unclaimedResults: ToolResultRecord[] }> =
-    frameStartIndexes.map((startIndex, frameIndex) => {
-      const assistant = messages[startIndex] as Extract<AgentMessage, { role: "assistant" }>;
-      const toolCalls: ToolCallLike[] = [];
-      const occurrences: ToolCallOccurrence[] = [];
-      const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
-      const syntheticById = createToolCallOccurrenceQueue<ToolCallOccurrence>();
-      for (const [contentIndex, block] of assistant.content.entries()) {
-        const toolCall = readToolCall(block);
-        if (!toolCall) {
-          continue;
-        }
-        toolCalls.push(toolCall);
-        const occurrence = { ...toolCall, contentIndex };
-        occurrences.push(occurrence);
-        pending.add(toolCall.id, occurrence);
-      }
-      const endIndex = frameStartIndexes[frameIndex + 1] ?? messages.length;
-      const remainder: AgentMessage[] = [];
-      const unclaimedResults: ToolResultRecord[] = [];
-      for (let index = startIndex + 1; index < endIndex; index += 1) {
+  const frames = classifyToolPairingFacts(messages.map(collectToolPairingMessageFact), options);
+  const readResult = (index: number, id: string | null) => {
+    const source = messages[index];
+    if (source?.role !== "toolResult") {
+      throw new Error("Tool pairing result does not reference a tool result");
+    }
+    return {
+      source,
+      normalized: id && id !== extractToolResultId(source) ? { ...source, toolCallId: id } : source,
+    };
+  };
+  return frames.map((frame) => {
+    const assistant = messages[frame.startIndex];
+    if (assistant?.role !== "assistant") {
+      throw new Error("Tool pairing frame does not reference an assistant");
+    }
+    return {
+      startIndex: frame.startIndex,
+      endIndex: frame.endIndex,
+      assistant,
+      failed: frame.failed,
+      remainder: frame.remainder.flatMap(({ index, id }) => {
         const message = messages[index];
-        if (!message || typeof message !== "object") {
-          continue;
+        return message ? [id !== undefined ? readResult(index, id).normalized : message] : [];
+      }),
+      occurrences: frame.occurrences.map(({ result, ...occurrence }) => {
+        if (!result) {
+          return occurrence;
         }
-        if (message.role !== "toolResult") {
-          remainder.push(message);
-          continue;
-        }
-        const normalized = normalizeLegacyToolResultId(message, toolCalls);
-        const id = extractToolResultId(normalized);
-        const occurrence = id ? pending.claim(id) : undefined;
-        if (occurrence) {
-          occurrence.result = normalizeToolResultName(normalized, occurrence.name);
-          occurrence.sourceResult = message;
-          occurrence.sourceResultIndex = index;
-          if (isSyntheticMissingToolResult(occurrence.result)) {
-            syntheticById.add(occurrence.id, occurrence);
-          }
-          continue;
-        }
-        if (!id || !occurrences.some((candidate) => candidate.id === id)) {
-          unclaimedResults.push({
-            result: normalized,
-            sourceResult: message,
-            index,
-            id: id ?? undefined,
-          });
-          if (preserveUnframed) {
-            remainder.push(normalized);
-          }
-          continue;
-        }
-        const replaceable = isSyntheticMissingToolResult(normalized)
-          ? undefined
-          : syntheticById.claim(id);
-        if (replaceable) {
-          replaceable.result = normalizeToolResultName(normalized, replaceable.name);
-          replaceable.sourceResult = message;
-          replaceable.sourceResultIndex = index;
-        }
-      }
-      const stopReason = (assistant as { stopReason?: string }).stopReason;
-      return {
-        startIndex,
-        endIndex,
-        assistant,
-        remainder,
-        unclaimedResults,
-        occurrences,
-        failed: stopReason === "error" || stopReason === "aborted",
-      };
-    });
-
-  // Displaced results cross a frame only when one unresolved occurrence can own them.
-  const unresolvedById = new Map<string, ToolCallOccurrence[]>();
-  for (const frame of frameRecords) {
-    for (const occurrence of frame.occurrences) {
-      if (!occurrence.result || isSyntheticMissingToolResult(occurrence.result)) {
-        const unresolved = unresolvedById.get(occurrence.id);
-        if (unresolved) {
-          unresolved.push(occurrence);
-        } else {
-          unresolvedById.set(occurrence.id, [occurrence]);
-        }
-      }
-    }
-    for (const record of frame.unclaimedResults) {
-      const candidates = record.id
-        ? (unresolvedById.get(record.id) ?? []).filter(
-            (candidate) =>
-              !candidate.result ||
-              (isSyntheticMissingToolResult(candidate.result) &&
-                !isSyntheticMissingToolResult(record.result)),
-          )
-        : [];
-      if (candidates.length !== 1) {
-        continue;
-      }
-      const candidate = candidates[0];
-      if (!candidate) {
-        continue;
-      }
-      candidate.result = normalizeToolResultName(record.result, candidate.name);
-      candidate.sourceResult = record.sourceResult;
-      candidate.sourceResultIndex = record.index;
-      if (preserveUnframed) {
-        frame.remainder = frame.remainder.filter((message) => message !== record.result);
-      }
-    }
-  }
-
-  return frameRecords;
+        const { source, normalized } = readResult(result.index, result.id);
+        return {
+          ...occurrence,
+          result: normalizeToolResultName(normalized, occurrence.name),
+          sourceResult: source,
+          sourceResultIndex: result.index,
+        };
+      }),
+    };
+  });
 }
 
 /** Select actual completed occurrences, never unmatched calls or synthesized missing results. */
-export function collectCompletedToolCallBlocks(messages: readonly AgentMessage[]): Set<object> {
+export function collectCompletedToolCallBlocks(
+  messages: readonly AgentMessage[],
+  frames = classifyToolUseResultPairing(messages),
+): Set<object> {
   const completed = new Set<object>();
-  for (const frame of classifyToolUseResultPairing(messages)) {
+  for (const frame of frames) {
     for (const occurrence of frame.occurrences) {
       if (occurrence.sourceResult && !isSyntheticMissingToolResult(occurrence.sourceResult)) {
         const block = frame.assistant.content[occurrence.contentIndex];
@@ -353,20 +258,18 @@ export function collectCompletedToolCallBlocks(messages: readonly AgentMessage[]
 
 /** Select reset-tail model context without changing persisted entry bytes or order. */
 export function selectResetKeptEntries(entries: readonly SessionTreeEntry[]): SessionTreeEntry[] {
-  const messages = entries.flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-  const frames = classifyToolUseResultPairing(messages);
-  const pairedResults = new Set(
-    frames.flatMap((frame) =>
-      frame.occurrences.flatMap((occurrence) =>
-        occurrence.sourceResult ? [occurrence.sourceResult] : [],
-      ),
+  return selectResetKeptMessageFacts(
+    entries.flatMap((entry) =>
+      entry.type === "message"
+        ? [
+            {
+              entry,
+              role: entry.message.role,
+              pairing: collectToolPairingMessageFact(entry.message),
+              identity: entry.message,
+            },
+          ]
+        : [],
     ),
-  );
-  return entries.filter(
-    (entry) =>
-      entry.type === "message" &&
-      (entry.message.role === "user" ||
-        entry.message.role === "assistant" ||
-        (entry.message.role === "toolResult" && pairedResults.has(entry.message))),
-  );
+  ).map(({ entry }) => entry);
 }

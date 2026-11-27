@@ -1,7 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { CyberAccessProgram } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
+import { DEFAULT_PROVIDER } from "../../defaults.js";
 import { resolveFastModeState } from "../../fast-mode.js";
 import {
   type ModelRef,
@@ -35,7 +37,7 @@ function resolveRequesterModel(params: RequesterPreferencesContext) {
     routeResolution: entry.modelOverrideRouteResolution,
   });
   const selectedModel = resolvePersistedSelectedModelRef({
-    defaultProvider: defaultModel.provider,
+    defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
     runtimeProvider: entry.modelProvider,
     runtimeModel: entry.model,
     overrideProvider: normalizedOverride.providerOverride,
@@ -49,6 +51,10 @@ export function resolveRequesterPreferences(params: RequesterPreferencesContext)
   const entry = params.requesterEntry;
   const { defaultModel, selectedModel } = resolveRequesterModel(params);
   const model = selectedModel ?? defaultModel;
+  if (!model) {
+    // No requester model leaves no thinking preference to inherit.
+    return { model: undefined, thinkingLevel: undefined, thinkingExplicit: false };
+  }
   const thinkingParams = {
     cfg: params.cfg,
     agentId: params.requesterAgentId,
@@ -65,6 +71,35 @@ export function resolveRequesterPreferences(params: RequesterPreferencesContext)
   };
 }
 
+/**
+ * Explicit child Access wins. Otherwise a same-agent child on the requester's
+ * model keeps the requester's saved session Access; a different agent or model
+ * starts at its own default because programs are advertised per account and model.
+ * The child's runtime still checks the program before every model request.
+ */
+export function resolveSubagentCyberAccessProgram(
+  params: RequesterPreferencesContext & {
+    requested?: CyberAccessProgram;
+    targetAgentId: string;
+    requesterModel?: ModelRef;
+    childModel: string;
+  },
+): CyberAccessProgram | undefined {
+  if (params.requested !== undefined) {
+    return params.requested;
+  }
+  const inherited = params.requesterEntry?.cyberAccessProgram;
+  if (inherited === undefined || params.targetAgentId !== params.requesterAgentId) {
+    return undefined;
+  }
+  let model = params.requesterModel;
+  if (!model) {
+    const { defaultModel, selectedModel } = resolveRequesterModel(params);
+    model = selectedModel ?? defaultModel;
+  }
+  return model && params.childModel === `${model.provider}/${model.model}` ? inherited : undefined;
+}
+
 export function resolveRequesterFastMode(
   params: RequesterPreferencesContext & { requesterModel?: ModelRef; childModel: string },
 ): FastMode | undefined {
@@ -74,7 +109,7 @@ export function resolveRequesterFastMode(
     const { defaultModel, selectedModel } = resolveRequesterModel(params);
     model = selectedModel ?? defaultModel;
   }
-  if (params.childModel !== `${model.provider}/${model.model}`) {
+  if (!model || params.childModel !== `${model.provider}/${model.model}`) {
     return undefined;
   }
   return resolveFastModeState({

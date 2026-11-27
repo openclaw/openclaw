@@ -70,9 +70,14 @@ export function createGatewayConnectionState(params: {
   };
   // RPCs survive ordinary disconnects, so connection-owned projections still
   // validate the live transport before publishing into a retired connection.
-  const isConnectionActive = (connId: string) => {
+  const isConnectionActive = (connId: string, expectedClient?: GatewayClient) => {
     const client = clients.getByConnectionId(connId);
-    return Boolean(client && !client.invalidated && !client.connectionSignal?.aborted);
+    return Boolean(
+      client &&
+      (!expectedClient || client === expectedClient) &&
+      !client.invalidated &&
+      !client.connectionSignal?.aborted,
+    );
   };
   const sessionEventSubscribers = createSessionEventSubscriberRegistry(
     isConnectionActive,
@@ -84,10 +89,14 @@ export function createGatewayConnectionState(params: {
   );
   // Lifecycle owns viewer declarations; agent-finished pushes fail open until it attaches them.
   let sessionViewers: SessionViewerPresenceDeclarations | undefined;
-  const eventWebPush = createEventWebPushDelivery(loadRuntimeConfig, {
-    isViewedOnDevice: (deviceId, sessionKey) =>
-      sessionViewers?.isViewedOnDevice(deviceId, sessionKey) === true,
-  });
+  const eventWebPush = createEventWebPushDelivery(
+    loadRuntimeConfig,
+    {
+      isViewedOnDevice: (deviceId, sessionKey) =>
+        sessionViewers?.isViewedOnDevice(deviceId, sessionKey) === true,
+    },
+    () => sessionRowProjection,
+  );
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>
@@ -109,12 +118,13 @@ export function createGatewayConnectionState(params: {
         const policyConfig = projection?.getPolicyConfig() ?? cfg;
         const prepared = projection
           ? {
-              sharing: prepareProjectedSessionSharing({
-                cfg: policyConfig,
-                client,
-                isMember: (target, identity) =>
-                  projection.hasMembership(target.storePath, target.storeKey, identity),
-              }),
+              sharing: () =>
+                prepareProjectedSessionSharing({
+                  cfg: policyConfig,
+                  client,
+                  isMember: (target, identity) =>
+                    projection.hasMembership(target.storePath, target.storeKey, identity),
+                }),
               target: (key: string, owner?: string) => {
                 const scope = resolveSessionEventAgentScope(cfg, key, owner);
                 return scope?.[1] ? projection.sharingTarget({ key, agentId: scope[1] }) : null;

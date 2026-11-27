@@ -77,6 +77,18 @@ const MCP_FILE_HASHES = new Map<string, ReadonlyMap<string, string>>([
       patchNotice: "41aada055258ec8754581f6cee1e3ed505499be8373969e6267031ebabc00594",
     }),
   ],
+  [
+    "1.12.0",
+    mcpFileHashes({
+      cli: "e8b0290a8fe9a1edc31d595ccc870df926bfaaafe19fb14cd4d8d47bf6194979",
+      main: "fc7e2ca9f850a71a015d42f771a4c96f7ee81e21fbcdbd5e1559ccdbac800a96",
+      snapshot: "21be06826da0dafaadf712b1dc689f6f07c63042a0b6ee30c4afca9a0d616963",
+      notices: "79e0eeaebdc9a605a3a2a51ecfe8da1e0f68df37416e405ba96dd4376a488e64",
+      page: "313ce4bfaaea85ab3c57a0bb8f4ad23c093ad33f25407170b2bef6f1654b30b8",
+      thirdParty: "e1752f75684b672362dc3ae77a399407c509b76471fca08f967fc44fe2cb267b",
+      patchNotice: "c490fb032360cf26141c4a8d72c6ab4587613051619aa88c346662eaaa6daee5",
+    }),
+  ],
 ]);
 const REQUIRED_MCP_FILES = [
   "build/src/third_party/devtools-formatter-worker.js",
@@ -93,7 +105,7 @@ export function isSupportedPatchedMcpVersion(version: unknown): version is strin
 export function collectPatchedMcpArtifactErrors({
   // The node-bootstrap producer checks the current runtime; frozen package
   // consumers pass their independently checked exact dependency pin.
-  declaredVersion = "1.11.0",
+  declaredVersion = "1.12.0",
   manifest,
   files,
   sha256,

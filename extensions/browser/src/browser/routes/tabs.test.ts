@@ -9,7 +9,7 @@ import type { createBrowserRouteResponse } from "./test-helpers.js";
 const navigation = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
   assertBrowserNavigationResultAllowed: vi.fn(
-    async (_opts?: { url: string; ssrfPolicy?: unknown }) => {},
+    async (_opts?: { url: string; ssrfPolicy?: unknown; signal?: AbortSignal }) => {},
   ),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
@@ -381,6 +381,56 @@ describe("browser tab routes", () => {
     },
   );
 
+  it("checks tab URLs concurrently and preserves tab order and response metadata", async () => {
+    const tabs = Array.from({ length: 7 }, (_, index) =>
+      publicTab({ targetId: `T${index + 1}`, url: `https://host-${index + 1}.example` }),
+    );
+    const release: Array<() => void> = [];
+    let active = 0;
+    let peak = 0;
+    navigation.assertBrowserNavigationResultAllowed.mockImplementation(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => {
+        release.push(resolve);
+      });
+      active -= 1;
+    });
+    const pending = list({ profileCtx: withTabs(tabs), ssrfPolicy: {} });
+    for (let remaining = tabs.length; remaining > 0; remaining -= 1) {
+      for (let tick = 0; tick < 50; tick += 1) {
+        await Promise.resolve();
+      }
+      release.pop()?.();
+    }
+    const response = await pending;
+    expect(response.body).toEqual({ running: true, tabs, canAutoResizeViewport: false });
+    expect(peak).toBe(3);
+  });
+
+  it("starts no further tab URL checks after listing cancellation", async () => {
+    const abort = new AbortController();
+    const tabs = Array.from({ length: 7 }, (_, index) =>
+      publicTab({ targetId: `T${index + 1}`, url: `https://host-${index + 1}.example` }),
+    );
+    let started = 0;
+    navigation.assertBrowserNavigationResultAllowed.mockImplementation(async (opts) => {
+      opts?.signal?.throwIfAborted();
+      started += 1;
+      if (started === 3) {
+        abort.abort(new Error("cancelled"));
+      }
+      opts?.signal?.throwIfAborted();
+    });
+    const response = await list({
+      profileCtx: withTabs(tabs),
+      ssrfPolicy: {},
+      signal: abort.signal,
+    });
+    expect(response.statusCode).toBe(500);
+    expect(started).toBe(3);
+  });
+
   describe.each([
     { route: "focus by label", call: focus, body: { targetId: "docs" } },
     { route: "focus by tab id", call: focus, body: { targetId: "t2" } },
@@ -406,6 +456,24 @@ describe("browser tab routes", () => {
       });
       expect(navigation.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
     });
+  });
+
+  it.each([
+    { route: "close by target id", targetId: "T2", query: {} },
+    { route: "close by raw target id", targetId: "T2", query: { targetIdMode: "raw" } },
+    { route: "close by index", body: { action: "close", index: 1 } },
+  ])("$route ends a blocked tab without URL policy checks", async ({ targetId, query, body }) => {
+    navigation.assertBrowserNavigationResultAllowed.mockRejectedValue(
+      Object.assign(new Error("blocked"), { name: "SsrFBlockedError" }),
+    );
+    const profileCtx = withTabs([publicTab(), internalTab()]);
+    const params = { profileCtx, ssrfPolicy: { allowPrivateNetwork: false } };
+    const response = body
+      ? await act({ ...params, body })
+      : await close({ ...params, targetId, query });
+    expectResponse(response, 200, { ok: true, targetId: "T2" });
+    expect(profileCtx.closeTab).toHaveBeenCalledWith("T2", expect.anything());
+    expect(navigation.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
 
   it.each([

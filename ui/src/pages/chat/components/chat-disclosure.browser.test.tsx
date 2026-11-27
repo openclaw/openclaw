@@ -1,9 +1,12 @@
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { flush } from "solid-js";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid as mountView } from "../../../test-helpers/mount-solid.ts";
-import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
 import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
@@ -49,25 +52,22 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
       const groups = [
         group("activity", {
           role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "search",
-              name: "web_search",
-              arguments: { query: "disclosures" },
-            },
-          ],
-          activity: [
-            {
-              itemId: "search",
-              toolCallId: "search",
-              kind: "tool",
-              phase: "end",
-              name: "web_search",
-              title: "Search",
-              status: "completed",
-            },
-          ],
+          // Two operations keep the activity grouped rather than a standalone row.
+          content: ["search", "search-keyboard"].map((id) => ({
+            type: "toolCall",
+            id,
+            name: "web_search",
+            arguments: { query: id },
+          })),
+          activity: ["search", "search-keyboard"].map((id) => ({
+            itemId: id,
+            toolCallId: id,
+            kind: "tool",
+            phase: "end",
+            name: "web_search",
+            title: "Search",
+            status: "completed",
+          })),
         }),
       ];
       const output = group("output", {
@@ -92,7 +92,7 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
           <>
             {kind === "work" ? (
               <WorkGroupSummary
-                item={{ key: "work", durationMs: null, groups }}
+                item={{ key: "work", durationMs: null }}
                 options={{ expanded: props.expanded, onToggle: toggle }}
               />
             ) : kind === "activity" ? (
@@ -125,6 +125,9 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
       const label = (button.querySelector<HTMLElement>(
         ".chat-activity-group__label, .chat-tool-msg-summary__label, .chat-tool-msg-summary__names",
       ) ?? button.querySelector<HTMLElement>("span"))!;
+      if (kind === "work") {
+        expect(label.textContent).toBe("Worked");
+      }
       expect(button.getAttribute("aria-expanded")).toBe("false");
       // Real pointer events exercise browser word selection before the second click.
       await userEvent.dblClick(label);
@@ -140,6 +143,94 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
       expect(button.matches(":focus-visible")).toBe(true);
     },
   );
+
+  it("hides the entire arriving activity group until its presentation settles", async () => {
+    vi.useFakeTimers();
+    container = document.body.appendChild(document.createElement("div"));
+    const groups = [
+      group("arrival", {
+        role: "assistant",
+        runId: "arrival-run",
+        content: [{ type: "toolCall", id: "arrival-call", name: "exec", arguments: {} }],
+      }),
+    ];
+    const view = mountView(
+      () => (
+        <ContentPresentation value={() => true}>
+          <ActivityGroup
+            groups={groups}
+            options={{
+              showToolCalls: true,
+              showReasoning: false,
+              runActive: true,
+              activityRunId: "arrival-run",
+            }}
+            presentation="standalone"
+          />
+        </ContentPresentation>
+      ),
+      { container },
+    );
+    try {
+      await settleToolBridges(container);
+      const activity = container.querySelector<HTMLElement>(".chat-activity-group")!;
+      expect(activity.hidden).toBe(true);
+      expect(activity.getBoundingClientRect().height).toBe(0);
+      vi.advanceTimersByTime(200);
+      flush();
+      expect(activity.hidden).toBe(false);
+      expect(activity.getBoundingClientRect().height).toBeGreaterThan(0);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("dims live operation text until hover or keyboard focus without a tooltip", async () => {
+    container = document.body.appendChild(document.createElement("div"));
+    const view = mountView(
+      () => (
+        <ContentPresentation value={() => true}>
+          <button class="chat-inline-disclosure chat-activity-group__summary">
+            <ChatActivityHeadline
+              activity={{
+                key: "search",
+                name: "tool_search",
+                title: "Find available tools",
+                status: "completed",
+              }}
+              summary="5 other operations"
+            />
+          </button>
+        </ContentPresentation>
+      ),
+      { container },
+    );
+    try {
+      const button = container.querySelector<HTMLButtonElement>("button")!;
+      const label = container.querySelector<HTMLElement>(".chat-activity-group__label")!;
+      const icon = container.querySelector<HTMLElement>(".chat-activity-group__icon")!;
+      // Isolate the state assertions from the production color transition.
+      button.style.transition = "none";
+      await userEvent.hover(document.body, { position: { x: 0, y: 0 } });
+      const resting = getComputedStyle(label).color;
+      expect(resting).toBe(getComputedStyle(button).color);
+      expect(icon.getAttribute("aria-label")).toBe("tool_search");
+      expect(button.querySelector("[title]")).toBeNull();
+      await userEvent.hover(icon);
+      const hovered = getComputedStyle(label).color;
+      expect(hovered).not.toBe(resting);
+      expect(hovered).toBe(getComputedStyle(button).color);
+      await userEvent.hover(document.body, { position: { x: 0, y: 0 } });
+      expect(getComputedStyle(label).color).toBe(resting);
+      await userEvent.tab();
+      expect(document.activeElement).toBe(button);
+      expect(button.matches(":focus-visible")).toBe(true);
+      expect(getComputedStyle(label).color).toBe(hovered);
+    } finally {
+      view.unmount();
+    }
+  });
 
   it("keeps message prose and expanded output selectable", async () => {
     container = document.body.appendChild(document.createElement("div"));

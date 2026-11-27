@@ -34,7 +34,7 @@ installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 installInstanceBindingConfigIo();
 
-it("reports plugin reload status and serves metadata throughout an admitted call drain", async (ctx) => {
+it("stays ready and serves metadata throughout an admitted call drain", async (ctx) => {
   const { signal } = ctx;
   const fixture = await prepareInstanceBindingFixture(tempDirs.make("openclaw-drain-readers-"));
   const entered = createDeferredCore();
@@ -97,6 +97,12 @@ it("reports plugin reload status and serves metadata throughout an admitted call
       expect(response.ok).toBe(true);
       return response.payload?.pluginReload;
     };
+    const expectReady = async () => {
+      const response = await fetch(`http://127.0.0.1:${claim.port}/readyz`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ ready: true });
+    };
+    await expectReady();
     expect(await readReloadStatus()).toBeUndefined();
     const before = await reads();
     const registry = getActivePluginRegistry();
@@ -166,9 +172,10 @@ it("reports plugin reload status and serves metadata throughout an admitted call
       phase: "reloading",
       pluginIds: ["instance-binding-probe"],
       deadlineAtMs: expect.any(Number),
-      reason: expect.stringContaining("new agent runs wait"),
+      reason: expect.stringContaining("New agent runs wait"),
     });
     expect(instance.acceptingCalls).toBe(false);
+    await expectReady();
     const during = await withinTest(reads(), signal);
     expect(reloadSettled).toBe(false);
     expect(getActivePluginRegistry()).toBe(registry);
@@ -181,6 +188,7 @@ it("reports plugin reload status and serves metadata throughout an admitted call
     expect(getActivePluginRegistry()).toBe(registry);
     expect(instance.acceptingCalls).toBe(true);
     expect(await readReloadStatus()).toBeUndefined();
+    await expectReady();
     const after = await reads();
     expect(after).toEqual(before);
     release.resolve();

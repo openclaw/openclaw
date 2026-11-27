@@ -1,13 +1,15 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import fs, { existsSync, realpathSync } from "node:fs";
 import { mkdir, writeFile, readFile, rm, rename, symlink } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { Check } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import { GitHistory } from "./git-history.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { Receipt, GitStatus } from "./mutation-contract.js";
+import { PublicationFiles } from "./publication-files.js";
 import { KnowledgeStorage } from "./storage.js";
 import {
   afterTest,
@@ -64,10 +66,24 @@ it("default repository, exact grouped content, clean index, actor, and one commi
       checkedWriter = true;
     }
   });
-  const saved = await service.save(input, f.access, "operator");
+  let checkedAuthority = false;
+  const saved = await service.save(
+    input,
+    {
+      ...f.access,
+      assertCurrent() {
+        if (checkedWriter) {
+          f.store.withDatabase((db) => db.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE; ROLLBACK"));
+          checkedAuthority = true;
+        }
+      },
+    },
+    "operator",
+  );
   expect(Check(Receipt, saved)).toBeTruthy();
   expect(saved.git!.state, JSON.stringify(saved)).toBe("committed");
   expect(checkedWriter).toBe(true);
+  expect(checkedAuthority).toBe(true);
   expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
   const sourceId = (await f.read(saved.id))!.metadata.evidence![0]!.source;
   expect(sourceId).toMatch(/^[a-f0-9]{64}$/);
@@ -137,6 +153,32 @@ it("existing repo staging, unrelated dirty files, and same-path staged bytes sur
   expect(git(f.root, "show", `:private/${first.path}`)).toMatch(/Manually staged/);
   expect(await readFile(path.join(f.root, "unrelated.txt"), "utf8")).toBe("unstaged content");
   expect(git(f.root, "ls-tree", "-r", "--name-only", "HEAD")).toBe(`private/${first.path}`);
+});
+
+it("materializes checkpoint content once while updating both the commit and working index", async () => {
+  const f = await fixture();
+  const changes = ["one", "two", "three"].map((name) => ({
+    path: `private/${name}.md`,
+    raw: `Synthetic checkpoint ${name}\n`,
+  }));
+  const writes = vi.spyOn(fs, "writeFileSync");
+  syncBuiltinESMExports();
+  afterTest(() => {
+    writes.mockRestore();
+    syncBuiltinESMExports();
+  });
+  new GitHistory(f.root).checkpoint({
+    token: "a".repeat(64),
+    changes,
+    actor: "synthetic test",
+    at: "2026-01-01T00:00:00Z",
+  });
+  for (const { path: file, raw } of changes) {
+    expect(writes.mock.calls.filter(([, content]) => content === raw)).toHaveLength(1);
+    expect(git(f.root, "show", `HEAD:${file}`)).toBe(raw.trimEnd());
+    expect(git(f.root, "show", `:${file}`)).toBe(raw.trimEnd());
+  }
+  expect(git(f.root, "diff", "--cached", "--name-only")).toBe("");
 });
 
 for (const stage of ["before-git-ref", "after-git-ref"]) {
@@ -213,7 +255,16 @@ it("external edits are one observed batch; rename and deletion keep per-file his
     const p = path.join(f.root, "private", r.path);
     await writeFile(p, (await readFile(p, "utf8")).replace("First bytes.", "External bytes."));
   }
+  const snapshot = PublicationFiles.prototype.snapshot.bind(new PublicationFiles(f.root));
+  const snapshots = vi
+    .spyOn(PublicationFiles.prototype, "snapshot")
+    .mockImplementation((...args) => {
+      f.store.withDatabase((db) => db.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE; ROLLBACK"));
+      return snapshot(...args);
+    });
+  afterTest(() => snapshots.mockRestore());
   await f.read(a.id);
+  expect(snapshots).toHaveBeenCalled();
   expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("3");
   expect(
     git(f.root, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n").length,

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createReport, createSkill } from "../pages/skills/view.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -45,6 +46,106 @@ async function readTopTranscriptAnchor(thread: import("playwright").Locator) {
 }
 
 suite.define(() => {
+  it("follows a profile link from a reply without restarting the dashboard", async () => {
+    const { page } = await newChatPage(suite, { viewport: { height: 820, width: 1280 } });
+    await installMockGateway(page, {
+      historyMessages: [
+        timedText(
+          "assistant",
+          "Open [GitHub accounts](/settings/profile#settings-profile-github-connections).",
+        ),
+      ],
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const link = page.getByRole("link", { name: "GitHub accounts", exact: true });
+    await link.waitFor();
+    const documentStart = await page.evaluate(() => performance.timeOrigin);
+    const chat = page.url();
+    await link.click();
+    await page.waitForURL(
+      (url) =>
+        url.pathname === "/settings/profile" && url.hash === "#settings-profile-github-connections",
+    );
+    await page.locator("openclaw-profile-page").waitFor();
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStart);
+    await page.goBack();
+    await link.waitFor();
+    expect(page.url()).toBe(chat);
+    await link.focus();
+    await page.keyboard.press("Enter");
+    await page.locator("openclaw-profile-page").waitFor();
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStart);
+    expect(await page.evaluate(() => document.activeElement?.closest(".chat-thread") == null)).toBe(
+      true,
+    );
+  });
+
+  it("opens the conversation named by a released session link in a reply", async () => {
+    const origin = "agent:main:session-a";
+    const destination = "agent:main:session-b";
+    const { page } = await chatFixture(suite, {
+      sessionKey: origin,
+      sessions: [
+        sessionRow(origin, "Original conversation", 2),
+        sessionRow(destination, "Research", 1),
+      ],
+      sessionTranscripts: {
+        [origin]: {
+          messages: [
+            timedText(
+              "assistant",
+              `[Research conversation](/chat?session=${encodeURIComponent(destination)})`,
+            ),
+          ],
+        },
+        [destination]: { messages: [timedText("assistant", "Notes from research.")] },
+      },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, origin));
+    await page.getByRole("link", { name: "Research conversation", exact: true }).click();
+    await page
+      .locator(".chat-pane-cache__pane--active .chat-thread")
+      .getByText("Notes from research.", { exact: true })
+      .waitFor({ timeout: 10_000 });
+    expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(destination));
+  });
+
+  it("lets startup resolve an unqualified session link from a skill card", async () => {
+    const destination = "agent:main:workspace";
+    const content = "[Open conversation](/chat?session=workspace&view=compact#notes)";
+    const skill = createSkill({
+      skillCard: {
+        present: true,
+        path: "/tmp/repo-skill/skill-card.md",
+        sizeBytes: content.length,
+      },
+    });
+    const { page } = await chatFixture(suite, {
+      sessionKey: "agent:main:main",
+      sessions: [sessionRow(destination, "Workspace", 1)],
+      sessionTranscripts: {
+        [destination]: { messages: [timedText("assistant", "Workspace conversation.")] },
+      },
+      methodResponses: {
+        "skills.status": createReport([skill]),
+        "skills.skillCard": { skillKey: skill.skillKey, content },
+      },
+    });
+    await page.goto(`${suite.server.baseUrl}skills/installed/${skill.skillKey}`);
+    const link = page.getByRole("link", { name: "Open conversation", exact: true });
+    await link.waitFor();
+    const documentStart = await page.evaluate(() => performance.timeOrigin);
+    await link.click();
+    await page.waitForURL((url) => url.pathname.startsWith("/chat"));
+    expect(await page.evaluate(() => performance.timeOrigin)).not.toBe(documentStart);
+    await page.getByText("Workspace conversation.", { exact: true }).waitFor();
+    expect(new URL(page.url())).toMatchObject({
+      pathname: controlUiSessionPath(destination),
+      search: "?view=compact",
+      hash: "#notes",
+    });
+  });
+
   it("coalesces persisted same-session split panes during cold startup", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -166,11 +267,34 @@ suite.define(() => {
     expect(await distanceFromBottom(thread)).toBeLessThanOrEqual(8);
 
     const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+    const retainedPane = page.locator(
+      ".chat-pane-cache__pane:not(.chat-pane-cache__pane--visible)",
+    );
+    const retainedElement = await retainedPane.elementHandle();
+    expect(await retainedPane.locator("*").count()).toBeGreaterThan(0);
+    await expect
+      .poll(() =>
+        retainedPane
+          .locator("*")
+          .evaluateAll((nodes) => nodes.filter((node) => node.checkVisibility()).length),
+      )
+      .toBe(0);
+    // A hidden resize must preserve the mounted transcript and its reader anchor.
+    await page.setViewportSize({ height: 720, width: 1100 });
+    await waitForChatScrollIdle(page);
+    await page.setViewportSize({ height: 720, width: 1280 });
+    await waitForChatScrollIdle(page);
     const finishReadingReturn = await watchNavigationFollowIntent(page, sessionA);
     await sessionLink(sessionA).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
     await waitForChatScrollIdle(page);
     expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
+    expect(
+      await page
+        .locator(".chat-pane-cache__pane--active")
+        .evaluate((node, retained) => node === retained, retainedElement),
+    ).toBe(true);
+    await retainedElement?.dispose();
 
     const restoredDistance = await distanceFromBottom(thread);
     const restoredAnchor = await readTopTranscriptAnchor(thread);
@@ -508,12 +632,15 @@ suite.define(() => {
       await expectTextContains(popover, "~190k / 200k · ~95%");
     } else {
       await expect.poll(() => popover.isVisible()).toBe(true);
-      for (const text of ["46k / 200k · 23%", "757.3k", "42.3k", "Cost", "$0.023"]) {
+      for (const text of ["46k / 200k · 23%", "Cost", "$0.023"]) {
         await expectTextContains(popover, text);
       }
-      const costBreakdown = await popover
-        .locator(".context-usage__stats > div[title]")
-        .getAttribute("title");
+      // The run's token counts live in its row label tooltip; the cost cell explains its parts.
+      const run = popover.locator('[data-chat-usage-row="run"]');
+      expect(await run.locator('[role="rowheader"]').getAttribute("title")).toBe(
+        "In 757.3k · Out 42.3k",
+      );
+      const costBreakdown = await run.locator('[role="cell"][title]').getAttribute("title");
       for (const amount of ["$0.0035", "$0.018", "$0.0015", "$0.0005"]) {
         expect(costBreakdown).toContain(amount);
       }
@@ -541,7 +668,7 @@ suite.define(() => {
       .poll(() => composer.evaluate((element) => element === document.activeElement))
       .toBe(true);
 
-    await page.getByRole("button", { name: "Command palette" }).click();
+    await page.getByRole("button", { name: "Search", exact: true }).click();
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
     await expect
@@ -575,8 +702,8 @@ suite.define(() => {
     await composer.fill("");
 
     // The background hydrate must not take the shared sessions loading
-    // flag, which would disable New conversation for the whole request.
-    const newThread = page.getByRole("link", { name: "New conversation" }).first();
+    // flag, which would disable New session for the whole request.
+    const newThread = page.getByRole("link", { name: "New session" }).first();
     expect(await newThread.isEnabled()).toBe(true);
 
     await gateway.resolveDeferred("sessions.list");
@@ -586,7 +713,7 @@ suite.define(() => {
   it("keeps every sidebar session stable while selecting sessions and supports sort modes", async () => {
     const { page } = await newChatPage(suite);
     const createdSessionKeys = Array.from(
-      { length: 11 },
+      { length: 16 },
       (_, index) => `agent:main:session-${String.fromCharCode(97 + index)}`,
     );
     const pinnedSessionKey = "agent:main:session-pinned";
@@ -603,8 +730,10 @@ suite.define(() => {
     ]);
     await page.addInitScript(
       ({ storageKey, entry }) => {
+        localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
         const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
         localStorage.setItem(storageKey, JSON.stringify({ ...settings, railShortcuts: [entry] }));
+        localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
       },
       {
         storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
@@ -620,14 +749,16 @@ suite.define(() => {
     await page
       .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
       .waitFor({ timeout: 10_000 });
-    // Pinned rows sit above, and do not occupy, the ten-row Sessions page.
+    // Pinned rows sit above, and do not occupy, the fifteen-row Sessions page.
     const pinnedLink = page.locator(
       `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${pinnedSessionKey}"] a.sidebar-recent-session__link`,
     );
     await pinnedLink.waitFor();
-    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 11));
-    await page.getByRole("button", { name: "Show more" }).click();
+    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 16));
+    const more = page.getByRole("button", { name: "Show more", exact: true });
+    await more.click();
     await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
+    expect(await more.count()).toBe(0);
 
     await page
       .locator(
@@ -651,7 +782,7 @@ suite.define(() => {
     expect(activeWeight).toBe(inactiveWeight);
     expect(inactiveWeight).toBe("500");
 
-    const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
+    const filterAndSort = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
     await filterAndSort.click();
     await chooseSidebarMenuOption(page, "Sort by", "Last updated");
     await closeSidebarMenu(page);
@@ -688,6 +819,7 @@ suite.define(() => {
     );
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
+      sessions,
       methodResponses: {
         "sessions.list": {
           cases: [

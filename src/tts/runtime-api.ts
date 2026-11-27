@@ -5,18 +5,18 @@ import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { parseTtsDirectives } from "./directives.js";
 import { summarizeText } from "./tts-core.js";
 import {
+  resolveTtsSynthesisTarget,
+  shouldDeliverTtsAsVoice,
+  supportsNativeVoiceNoteTts,
+  supportsTranscodedVoiceNoteTts,
+} from "./tts-delivery.js";
+import {
   getResolvedSpeechProviderConfig,
   resolveTtsProvider,
   resolveTtsProviderAsync,
 } from "./tts-provider-resolution.js";
 import { resolveModelOverridePolicy, type ResolvedTtsConfig } from "./tts-settings.js";
 import { formatTtsProviderError, sanitizeTtsErrorForLog } from "./tts-synthesis-support.js";
-import {
-  resolveTtsSynthesisTarget,
-  shouldDeliverTtsAsVoice,
-  supportsNativeVoiceNoteTts,
-  supportsTranscodedVoiceNoteTts,
-} from "./tts-synthesis.js";
 
 export { setSpeechRuntimeAvailabilityGuard } from "./runtime-availability.js";
 export {
@@ -50,16 +50,13 @@ export {
   isTtsProviderConfiguredAsync,
   resolveTtsProviderOrder,
 } from "./tts-provider-resolution.js";
-export {
-  prepareTtsRequest,
-  resolveExplicitTtsOverrides,
-  resolveExplicitTtsOverridesAsync,
-} from "./tts-request.js";
+export { resolveExplicitTtsOverrides, resolveExplicitTtsOverridesAsync } from "./tts-request.js";
 export { streamSpeech, textToSpeechStream } from "./tts-streaming.js";
 export { synthesizeSpeech } from "./tts-synthesis.js";
 export { textToSpeechTelephony } from "./tts-telephony.js";
-export type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "./provider-types.js";
 export type {
+  TtsDirectiveOverrides,
+  TtsDirectiveParseResult,
   TtsStreamResult,
   TtsSynthesisResult,
   TtsSynthesisStreamResult,

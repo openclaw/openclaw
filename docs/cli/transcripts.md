@@ -16,6 +16,8 @@ Inspector and export command for durable meeting transcripts.
 [Slack huddles](/plugins/slack-huddles), and [Zoom](/plugins/zoom-meetings)
 browser participants capture notes automatically;
 the `transcripts` agent tool also supports provider capture and manual import.
+Automatic meeting capture continues after the joining CLI disconnects. It stops
+when OpenClaw leaves the meeting or its owning plugin stops or reloads.
 
 Stored transcript state lives in the shared SQLite database at
 `$OPENCLAW_STATE_DIR/state/openclaw.sqlite`. `show` and `path` explicitly
@@ -34,6 +36,10 @@ back during capture, summarization, or listing. Default state directory is
 `~/.openclaw`; override with `OPENCLAW_STATE_DIR`. The date directory comes
 from the session start time; the session directory is a filesystem-safe slug
 derived from the session id.
+
+When `show` or `path` cannot find a session or its summary, the CLI prints the
+specific reason on stderr and exits with status `1`. JSON inspection of an
+existing session without a summary remains available.
 
 ## Read transcripts in the Control UI
 
@@ -159,7 +165,11 @@ write permissions.
 `list` returns newest meetings first, with a selector, start time, title or
 provider name, utterance count, and participants. `limit` defaults to 20 and
 accepts integers from 1 to 50. The text is bounded; structured results are in
-`details.sessions`.
+`details.sessions`. Each call examines at most 200 stored meetings, including
+meetings the caller cannot access. When `details.nextOffset` is present, call
+`list` again with that value as `offset` to continue, even if this page returned
+no accessible meetings. New captures or deletions between calls can shift offsets;
+start again without `offset` to refresh the list.
 
 ```json validate=false
 { "action": "show", "selector": "2026-05-22/notes-room-one" }
@@ -256,6 +266,12 @@ Oversized rows or invalid cursors fail visibly.
 Summary participants and model/heuristic provenance are shown when available;
 older summaries need not contain them.
 
+Meeting notes, the Meetings transcript tab, and the full Markdown transcript
+order speech by its start time. Equal start times keep their append order.
+A turn without a usable time and explicit zone keeps its place between the surrounding
+groups of timed turns. Paginated API reads and JSONL exports follow append order.
+Clients can use their existing cursor to pick up late transcriptions.
+
 For compatibility with clients released before archive pagination, `transcripts.get`
 without `limit`, `cursor`, or `query` retains the most recent 2,000 utterances in
 chronological order, with each sanitized text clipped to 4,000 UTF-16 units.
@@ -336,7 +352,13 @@ so bounded readers see the notes before long transcripts.
 Gateway shutdown, restart, and capture-disable drainage save final heuristic notes
 without starting new model inference. You can regenerate model notes from the saved
 transcript with the tool's `summarize` action after the Gateway is available again.
-Participants come from speaker labels in first-appearance order, not model guesses.
+Notes use the first recorded name for each speaker ID. If two speakers have the
+same name, the second appears as `Sam (2)`, for example. When names overlap or
+change during a meeting, the model selects relevant remarks for each section.
+The notes quote those remarks with their recorded speakers. If someone assigns
+work to another person, the quote preserves who said it and whom they named.
+Recorders that supply only labels keep label-based attribution. JSONL exports preserve the original
+speaker ID and name on each utterance.
 Summary JSON records `source` as `model` or `heuristic` and, for model notes, the
 model reference used.
 

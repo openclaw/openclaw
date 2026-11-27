@@ -125,6 +125,55 @@ it("verifies replacement OAuth only within its exact active setup scope without 
   );
 });
 
+it.each([undefined, "runtime-only"] as const)(
+  "initializes a runtime external OAuth overlay with persistence=%s without a canonical row",
+  async (persistence) => {
+    await withRequestFixture(
+      async ({ agentDir, authStore, controller, authState, installed, refresh }) => {
+        expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toBeUndefined();
+        expect(authStore.runtimeExternalProfileIds).toContain(profileId);
+        const capture = vi.spyOn(authorizationOwner, "captureAuthProfileAuthorization");
+        await controller.initializeAuthProfile();
+        expect(installed()).toBe("synthetic-access-before");
+        expect(authState.lastProfileId).toBe(profileId);
+        expect(getProviderRequestAuth(authState.models.effective)).toBeUndefined();
+        expect(capture).not.toHaveBeenCalled();
+        expect(refresh).not.toHaveBeenCalled();
+        expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toBeUndefined();
+      },
+      { externalProfile: { profileId, persistence } },
+    );
+  },
+);
+
+it.each(["persisted-external", "unrelated-overlay"] as const)(
+  "retains canonical authorization for a stored selection with %s",
+  async (ownership) => {
+    await withRequestFixture(
+      async ({ state, agentDir, authStore, controller, authState, installed }) => {
+        expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toBeDefined();
+        expect(authStore.runtimeExternalProfileIds ?? []).not.toContain(profileId);
+        const capture = vi.spyOn(authorizationOwner, "captureAuthProfileAuthorization");
+        await controller.initializeAuthProfile();
+        expect(installed()).toBe("synthetic-access-before");
+        expect(capture).toHaveBeenCalledOnce();
+        expect(getProviderRequestAuth(authState.models.effective)).toBeDefined();
+        await state.writeAuthProfiles({ version: 1, profiles: {} });
+        await expect(controller.initializeAuthProfile()).rejects.toMatchObject({
+          code: "MCP_AUTHORIZATION_RETIRED",
+        });
+        expect(capture).toHaveBeenCalledTimes(2);
+      },
+      {
+        externalProfile:
+          ownership === "persisted-external"
+            ? { profileId, persistence: "persisted" }
+            : { profileId: `${provider}:unrelated` },
+      },
+    );
+  },
+);
+
 it.each([
   "exhausted",
   "canceled",

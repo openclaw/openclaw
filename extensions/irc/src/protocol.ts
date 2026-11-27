@@ -2,12 +2,7 @@ import { hasIrcControlChars, stripIrcControlChars } from "./control-chars.js";
 
 const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
 
-export function parseIrcLine(line: string): {
-  prefix?: string;
-  command: string;
-  params: string[];
-  trailing?: string;
-} | null {
+export function parseIrcLine(line: string) {
   const raw = line.replace(/[\r\n]+/g, "").trim();
   if (!raw) {
     return null;
@@ -60,11 +55,7 @@ export function parseIrcLine(line: string): {
   };
 }
 
-export function parseIrcPrefix(prefix?: string): {
-  nick?: string;
-  user?: string;
-  host?: string;
-} {
+export function parseIrcPrefix(prefix?: string) {
   if (!prefix) {
     return {};
   }

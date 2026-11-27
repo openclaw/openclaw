@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { normalizeProviderModelRef } from "../../agents/embedded-agent-runner/model.registry-resolution.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
+import {
+  bindReplyInputChannel,
+  createAgentQuestionAnswerAuthority,
+  prepareReplyToolAuthorityCallerRead,
+  withAgentQuestionAnswerAuthority,
+} from "../../agents/harness/host-private-capabilities.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
@@ -12,6 +20,7 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import * as registryState from "../../sessions/session-controller.state.js";
 import { createCommandTurnContext } from "../command-turn-context.js";
+import { bindRequesterProfile, transferRequesterProfile } from "../requester-profile.js";
 import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -51,41 +60,179 @@ function steer(run: FollowupRun, key: string, overrides: Partial<ReplyParams>) {
   );
 }
 
-function operator(run: FollowupRun, profileId: string, assertCurrent = () => {}) {
-  return createAdmittedRunOperatorAuthority({
+function operator(run: FollowupRun, profileId: string) {
+  return createTestOperatorAuthority({
     profileId,
     scopes: ["operator.read", "operator.write"],
     gatewayAccessGrant: null,
     modelPolicy: prepareOperatorModelPolicy({ cfg: run.run.config, policy: {} }),
-    assertCurrent,
   });
 }
 
 describe("ordinary steering into automatic model fallback", () => {
+  it.each(["linked text", "linked image", "linked operator image", "same surface"] as const)(
+    "keeps question authority separate from ordinary steering: %s",
+    async (scenario) => {
+      const linked = scenario !== "same surface";
+      const key = `agent:main:steering-question-${scenario.replaceAll(" ", "-")}`;
+      const run = createQueueTestRun({ prompt: "Continue", messageId: "owner-answer" });
+      Object.assign(run.run, {
+        agentId: "main",
+        sessionKey: key,
+        conversationId: "owner-chat",
+        senderIsOwner: true,
+        traceAuthorized: true,
+        gitContributorProfileId: "alice",
+      });
+      run.run.config = { messages: { queue: { allowCollaborativeSteering: false } } };
+      const taskSuggestionDeliveryMode = scenario === "linked text" ? "gateway" : undefined;
+      run.run.taskSuggestionDeliveryMode = taskSuggestionDeliveryMode;
+      run.operatorAuthority = operator(run, "alice");
+      const ownerContext = {
+        Provider: "telegram",
+        SessionKey: key,
+        ChatId: "owner-chat",
+        SenderId: run.run.senderId,
+      };
+      bindRequesterProfile(ownerContext, {
+        id: "alice",
+        displayName: null,
+        isCurrent: () => true,
+      });
+      transferRequesterProfile(ownerContext, run);
+      bindReplyInputChannel(run.run, ownerContext.Provider);
+      const operation = createReplyOperation({
+        sessionKey: key,
+        sessionId: run.run.sessionId,
+        resetTriggered: false,
+      });
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyRunToolAuthority(run, undefined));
+      const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
+      const assertActive = () => operation.abortSignal.throwIfAborted();
+      const authority = createAgentQuestionAnswerAuthority({
+        sessionKey: key,
+        fingerprint,
+        project: (caller) => operation.projectToolAuthorityFingerprint(caller),
+        prepareCaller: (caller) =>
+          prepareReplyToolAuthorityCallerRead(
+            operation.projectToolAuthorityFingerprintAsync,
+            caller,
+            fingerprint,
+            run.run,
+            assertActive,
+          ),
+        assertActive,
+      });
+      const answer = vi.fn(async () => ({ status: "answered" }));
+      const question = withAgentQuestionAnswerAuthority(authority, () =>
+        registerPendingAgentQuestion({
+          questionId: `${key}-question`,
+          sessionKey: key,
+          questions: [{ id: "answer", header: "Answer", question: "Continue?", options: [] }],
+          gatewayCall: { version: 2, call: answer },
+          answer: Promise.resolve({ status: "pending" }),
+        }),
+      );
+      question.attachRegistration(Promise.resolve());
+      const nativeSteer = vi.fn(async () => {});
+      operation.attachBackend({
+        kind: "embedded",
+        taskSuggestionDeliveryMode,
+        terminalReplyExpectation: "required",
+        supportsTranscriptCommitWait: true,
+        supportsQueueMessageImages: true,
+        cancel() {},
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage: (text, options, assertCurrent, kind) =>
+            steerActiveSessionWithOptionalDeliveryWait(
+              { steer: nativeSteer, subscribe: () => () => {} },
+              text,
+              // This fixed session commits synchronously; transcript waiting has separate coverage.
+              { ...options, waitForTranscriptCommit: undefined, onQueueSettled: undefined },
+              key,
+              () => {
+                assertCurrent();
+                return true;
+              },
+              { kind, assertCurrent },
+            ),
+        },
+      });
+      operation.setPhase("running");
+      try {
+        const incoming: FollowupRun = { ...run, run: { ...run.run } };
+        const context = linked
+          ? {
+              ...ownerContext,
+              Provider: "whatsapp",
+              ChatId: "linked-chat",
+              SenderId: "linked-alice",
+            }
+          : ownerContext;
+        if (linked) {
+          incoming.operatorAuthority =
+            scenario === "linked operator image" ? run.operatorAuthority : undefined;
+          incoming.run.messageProvider = "whatsapp";
+          incoming.run.conversationId = context.ChatId;
+          incoming.run.senderId = context.SenderId;
+          incoming.run.senderIsOwner = false;
+          incoming.run.traceAuthorized = false;
+          incoming.toolsAllow = ["read"];
+          // Crossing surfaces retains the incumbent tools in either direction.
+          incoming.run.taskSuggestionDeliveryMode =
+            scenario === "linked operator image" ? "gateway" : undefined;
+          bindRequesterProfile(context, { id: "alice", displayName: null, isCurrent: () => true });
+        }
+        if (scenario.endsWith("image")) {
+          incoming.images = [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }];
+        }
+        await steer(incoming, key, {
+          steeringIntent: { kind: "continue-existing" },
+          sessionCtx: context,
+        });
+        expect(question.isCancellationRequested()).toBe(false);
+        expect(nativeSteer).toHaveBeenCalledTimes(linked ? 1 : 0);
+        expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
+        expect(answer).toHaveBeenCalledTimes(linked ? 0 : 1);
+        if (linked) {
+          await steer({ ...run, messageId: "later-owner-answer", run: { ...run.run } }, key, {
+            sessionCtx: ownerContext,
+          });
+          expect(answer).toHaveBeenCalledOnce();
+          expect(nativeSteer).toHaveBeenCalledOnce();
+        }
+        expect(answer).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "question.resolve",
+            params: expect.objectContaining({ answers: { answers: { answer: ["Continue"] } } }),
+          }),
+        );
+      } finally {
+        question.dispose();
+        clearSessionQueues([key]);
+        operation.complete();
+      }
+    },
+  );
+
   it.each([
-    { preparation: "fingerprint-1", revoked: false, aborted: false, replaceBackend: false },
-    { preparation: "fingerprint-2", revoked: false, aborted: false, replaceBackend: false },
-    { preparation: "fingerprint-1", revoked: true, aborted: false, replaceBackend: false },
-    { preparation: "fingerprint-2", revoked: true, aborted: false, replaceBackend: false },
-    { preparation: "fingerprint-1", revoked: false, aborted: true, replaceBackend: false },
-    { preparation: "fingerprint-1", revoked: false, aborted: false, replaceBackend: true },
-    { preparation: "backend-ready", revoked: false, aborted: false, replaceBackend: false },
-    { preparation: "backend-ready", revoked: true, aborted: false, replaceBackend: false },
+    { preparation: "fingerprint-1", aborted: false, replaceBackend: false },
+    { preparation: "fingerprint-2", aborted: false, replaceBackend: false },
+    { preparation: "fingerprint-1", aborted: true, replaceBackend: false },
+    { preparation: "fingerprint-1", aborted: false, replaceBackend: true },
+    { preparation: "backend-ready", aborted: false, replaceBackend: false },
   ])(
-    "preserves input at $preparation (caller revoked: $revoked, target aborted: $aborted, backend replaced: $replaceBackend)",
-    async ({ preparation, revoked, aborted, replaceBackend }) => {
-      const key = `agent:main:completed-steering-${preparation}-${revoked}-${aborted}-${replaceBackend}`;
+    "preserves input at $preparation (target aborted: $aborted, backend replaced: $replaceBackend)",
+    async ({ preparation, aborted, replaceBackend }) => {
+      const key = `agent:main:completed-steering-${preparation}-${aborted}-${replaceBackend}`;
       const holdBackend = preparation === "backend-ready";
       const read = holdBackend ? undefined : preparation === "fingerprint-1" ? 1 : 2;
       const run = createQueueTestRun({ prompt: "preserve this incoming turn", messageId: key });
       run.run.agentId = "main";
       run.run.sessionKey = key;
-      let callerCurrent = true;
-      run.operatorAuthority = operator(run, "incoming-user", () => {
-        if (!callerCurrent) {
-          throw new Error("incoming caller revoked");
-        }
-      });
+      run.operatorAuthority = operator(run, "incoming-user");
       run.run.clientCaps = ["ui-commands"];
       const operation = createReplyOperation({
         sessionKey: key,
@@ -168,27 +315,20 @@ describe("ordinary steering into automatic model fallback", () => {
         } else {
           operation.complete();
         }
-        callerCurrent = !revoked;
         resume.resolve();
-        if (revoked) {
-          await expect(incoming).rejects.toThrow("incoming caller revoked");
+        await expect(incoming).resolves.toBeUndefined();
+        expect(replacementInjected).not.toHaveBeenCalled();
+        expect(resultState.admission).toEqual({
+          status: "accepted",
+          mode: "followup",
+          reason: "steering-unavailable",
+        });
+        if (aborted || replaceBackend) {
           expect(consumeFollowup).not.toHaveBeenCalled();
-          expect(resultState.admission).toBeUndefined();
-        } else {
-          await expect(incoming).resolves.toBeUndefined();
-          expect(replacementInjected).not.toHaveBeenCalled();
-          expect(resultState.admission).toEqual({
-            status: "accepted",
-            mode: "followup",
-            reason: "steering-unavailable",
-          });
-          if (aborted || replaceBackend) {
-            expect(consumeFollowup).not.toHaveBeenCalled();
-            operation.complete();
-          }
-          expect(await delivered.promise).toBe(run);
-          expect(consumeFollowup).toHaveBeenCalledExactlyOnceWith(run);
+          operation.complete();
         }
+        expect(await delivered.promise).toBe(run);
+        expect(consumeFollowup).toHaveBeenCalledExactlyOnceWith(run);
         expect(injected).not.toHaveBeenCalled();
         expect(getFollowupQueueDepth(key)).toBe(0);
         expect(typing.cleanup).toHaveBeenCalledOnce();
@@ -247,7 +387,8 @@ describe("ordinary steering into automatic model fallback", () => {
     run.run.sessionKey = key;
     run.run.sessionId = `fallback-${scenario}`;
     const modelConfig = {
-      primary: "openai/gpt-test",
+      // A strict pin differs from the primary; a remembered default still permits fallback.
+      primary: scenario.endsWith("pinned-selection") ? "openai/other-primary" : "openai/gpt-test",
       fallbacks: scenario === "policy-fallback" ? undefined : ["test-alias/test-model"],
     };
     run.run.config = {
@@ -487,7 +628,11 @@ describe("ordinary steering into automatic model fallback", () => {
       await incoming;
       expect(resultState.admission).toEqual(
         crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering !== true
-          ? { status: "skipped", reason: "collaborative-steering-disabled" }
+          ? {
+              status: "accepted",
+              mode: "followup",
+              reason: "collaborative-steering-disabled",
+            }
           : {
               status: "accepted",
               mode: shouldSteer ? "steer" : "followup",
@@ -498,7 +643,7 @@ describe("ordinary steering into automatic model fallback", () => {
       );
       expect(delivered).toEqual(shouldSteer ? [run.prompt] : []);
       if (crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering !== true) {
-        expect(getFollowupQueueDepth(key)).toBe(0);
+        expect(getFollowupQueueDepth(key)).toBe(1);
       }
       expect(operation.requesterPrincipalKey).toBe(requesterPrincipalKey);
       expect(operation.toolAuthorityFingerprint).toBe(toolAuthorityFingerprint);

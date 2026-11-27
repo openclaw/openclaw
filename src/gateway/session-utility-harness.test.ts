@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { FailoverError } from "../agents/failover-error.js";
 import * as execution from "../agents/simple-completion-execution.js";
 import * as runtime from "../agents/simple-completion-runtime.js";
@@ -17,7 +18,6 @@ import {
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import {
   createHarness,
-  flushObserver,
   resetSessionObserverEventSequence,
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
@@ -87,6 +87,7 @@ describe("utility completion with an unavailable implicit harness", () => {
     setRuntimeConfigSnapshot(config);
     runtimeMocks.acquire.mockReset().mockResolvedValue({
       snapshot: runtimeSnapshot(),
+      run: <T>(run: () => T): T => run(),
       [Symbol.asyncDispose]: async () => {},
     });
     runtimeMocks.runEmbeddedAttempt.mockReset();
@@ -116,9 +117,9 @@ describe("utility completion with an unavailable implicit harness", () => {
     }
   });
 
-  it.each([false, true])(
+  it.for([false, true])(
     "publishes the observer digest without inheriting session harness state: fallback=%s",
-    async (fallback) => {
+    async (fallback, { signal }) => {
       const transport = transportReply('{"headline":"Checking the fix","health":"on-track"}');
       if (fallback) {
         useFallbacks();
@@ -138,10 +139,11 @@ describe("utility completion with an unavailable implicit harness", () => {
         })),
       });
       dispose = () => observer.observer.disposeAsync();
+      const published = createDeferred();
+      observer.broadcastToConnIds.mockImplementationOnce(() => published.resolve());
       await startAndAddToolNotes(observer.observer);
       await vi.advanceTimersByTimeAsync(12_000);
-      await vi.dynamicImportSettled();
-      await flushObserver();
+      await withinTest(published.promise, signal);
 
       expect(observer.broadcastToConnIds).toHaveBeenCalledWith(
         "session.observer",
@@ -191,6 +193,7 @@ describe("utility completion with an unavailable implicit harness", () => {
     const snapshot = runtimeSnapshot(registry);
     runtimeMocks.acquire.mockResolvedValue({
       snapshot,
+      run: <T>(run: () => T): T => run(),
       [Symbol.asyncDispose]: release,
     });
     const builtInTransport = vi

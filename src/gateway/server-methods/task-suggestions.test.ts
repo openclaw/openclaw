@@ -554,10 +554,7 @@ it.each([false, true])(
       const accepted = await accept(
         taskId,
         { mode: "session" },
-        {
-          client: operatorClient(),
-          context: {},
-        },
+        { client: operatorClient(), context: {} },
       );
       expectFailure(
         accepted,

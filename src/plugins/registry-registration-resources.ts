@@ -1,5 +1,6 @@
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import { pluginInvocationContext } from "./plugin-instance-scope.js";
 import {
   hasRetainedPluginRuntimeCloseError,
   PluginRuntimeCloseRetainedError,
@@ -193,42 +194,45 @@ export class PluginRegistrationResourceSource {
   }
 
   #dispose(pluginId: string, entry: RegistrationResources): Promise<Error[]> {
-    return (entry.disposal ??= Promise.resolve().then(async () => {
-      const signalCleanup = async () => {
-        entry.work.beginClose();
-        await this.#waitForRegistrations();
-      };
-      await (entry.runCleanup ? entry.runCleanup(signalCleanup) : signalCleanup());
-      const failures: Error[] = [];
-      try {
-        await entry.work.runWhenIdle(async () => {
-          const disposers = entry.disposers.splice(0);
-          for (const { id, dispose } of disposers) {
-            try {
-              await dispose();
-            } catch (cause) {
-              failures.push(
-                new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
-              );
-            }
-          }
-        });
+    // Physical cleanup owns its authority independently of the releasing caller.
+    return (entry.disposal ??= pluginInvocationContext.exit(() =>
+      Promise.resolve().then(async () => {
+        const signalCleanup = async () => {
+          entry.work.beginClose();
+          await this.#waitForRegistrations();
+        };
+        await (entry.runCleanup ? entry.runCleanup(signalCleanup) : signalCleanup());
+        const failures: Error[] = [];
         try {
-          // Instance cleanup can use the same captured tracker as raw disposal.
-          await entry.work.runWhenIdle(() => entry.retire?.());
-        } catch (cause) {
-          failures.push(new Error(`Plugin inspection retirement failed: ${pluginId}`, { cause }));
+          await entry.work.runWhenIdle(async () => {
+            const disposers = entry.disposers.splice(0);
+            for (const { id, dispose } of disposers) {
+              try {
+                await dispose();
+              } catch (cause) {
+                failures.push(
+                  new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
+                );
+              }
+            }
+          });
+          try {
+            // Instance cleanup can use the same captured tracker as raw disposal.
+            await entry.work.runWhenIdle(() => entry.retire?.());
+          } catch (cause) {
+            failures.push(new Error(`Plugin inspection retirement failed: ${pluginId}`, { cause }));
+          }
+          return failures;
+        } finally {
+          // Rollback owns its final drain. Successful instances remain owned by the
+          // last physical claim, so their captured cleanup scope must stay usable.
+          if (entry.rolledBack) {
+            await entry.work.drain();
+          } else {
+            await entry.work.runWhenIdle(() => undefined);
+          }
         }
-        return failures;
-      } finally {
-        // Rollback owns its final drain. Successful instances remain owned by the
-        // last physical claim, so their captured cleanup scope must stay usable.
-        if (entry.rolledBack) {
-          await entry.work.drain();
-        } else {
-          await entry.work.runWhenIdle(() => undefined);
-        }
-      }
-    }));
+      }),
+    ));
   }
 }

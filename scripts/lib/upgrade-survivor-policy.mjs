@@ -8,8 +8,6 @@ export const UPGRADE_SURVIVOR_ASSERTION_SCENARIOS = Object.freeze([
   ...catalog.assertionOnlyScenarios,
 ]);
 
-// Oldest release line supported by the operator-state upgrade regression gate.
-export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE = catalog.oldestSupportedBaseline;
 export const MINIMUM_UPGRADE_SURVIVOR_BASELINE = "2026.6.1";
 export const CUSTOM_PLUGIN_SIBLINGS_BASELINE = "openclaw@2026.9.4";
 
@@ -42,7 +40,7 @@ export function usesCronOwnerAtBaseline(baselineVersion) {
 
 const scenarioMinimumBaselines = new Map([
   ["custom-plugin-siblings", CUSTOM_PLUGIN_SIBLINGS_BASELINE],
-  ["legacy-operator-state", `openclaw@${OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE}`],
+  ["legacy-operator-state", "openclaw@2026.6.34"],
   ["mobile-pairing-reconnect", "openclaw@2026.7.1"],
   ["watchos-direct-node", "openclaw@2026.8.1"],
 ]);
@@ -50,6 +48,8 @@ const scenarioMinimumBaselines = new Map([
 // These black-box scenarios are implemented entirely by the current trusted
 // release harness and treat the selected tree only as the package under test.
 const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
+  "git-release",
+  "release-update",
   "mobile-pairing-reconnect",
   "abandoned-update",
   "projects-doctor",
@@ -72,7 +72,10 @@ export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
     scenario !== "abandoned-update" &&
+    scenario !== "git-release" &&
+    scenario !== "release-update" &&
     scenario !== "backup-schedule" &&
+    scenario !== "session-share" &&
     scenario !== "missing-configured-plugin-migration" &&
     scenario !== "missing-load-path" &&
     scenario !== "projects-doctor" &&
@@ -238,11 +241,17 @@ function comparePublishedReleaseVersion(a, b) {
 }
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
+  if (scenario === "git-release") {
+    return baselineSpec === "openclaw@2026.11.5";
+  }
   if (isPackageRecoveryScenario(scenario)) {
     return packageRecoveryBaselines(scenario).includes(baselineSpec);
   }
   if (scenario === "backup-schedule") {
     return baselineSpec === "openclaw@2026.9.7";
+  }
+  if (scenario === "session-share") {
+    return baselineSpec === "openclaw@2026.10.7";
   }
   if (scenario === "missing-load-path") {
     const release = parseReleaseVersion((baselineSpec ?? "").replace(/^openclaw@/u, ""));

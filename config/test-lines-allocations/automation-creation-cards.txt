@@ -1,0 +1,3 @@
+# Additional cross-layer regression coverage: direct, nested and live scheduler receipts,
+# installer collision/rollback, durable replay, and independently authorized, stable UI rows.
+995

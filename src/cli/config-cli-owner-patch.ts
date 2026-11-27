@@ -1,34 +1,89 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import type { ReadConfigFileSnapshotWithPluginMetadataResult } from "../config/io.types.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import { collectBaseArrayPaths, formatConfigPatchPath } from "../config/patch-replace-paths.js";
+import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { resolveIdentityPathViaExistingAncestorSync as identity } from "../infra/path-existence.js";
 import { isPlainObject } from "../infra/plain-object.js";
+import { shortenHomePath } from "../utils.js";
+import type { OwnerRequest } from "./local-state-owner.js";
 
 // Matches the config.patch request schema.
 const MAX_REPLACE_PATHS = 256;
+const CONFIG_APPLY_CONFIRM_TIMEOUT_MS = 2_000;
+const CONFIG_APPLY_CONFIRM_INTERVAL_MS = 250;
+
+async function confirmSavedConfig(requestOwner: OwnerRequest, error: unknown): Promise<boolean> {
+  const { isGatewayClientRequestError } = await import("../gateway/call.js");
+  const reply = error instanceof Error ? error.cause : undefined;
+  // The existing failed-apply reply identifies this case. Other saved-write
+  // replies can carry a required restart or an intentionally deferred apply.
+  if (
+    !isGatewayClientRequestError(reply) ||
+    reply.gatewayCode !== "UNAVAILABLE" ||
+    !reply.message.startsWith(
+      "config.patch persisted but was not applied to the active Gateway (failed);",
+    ) ||
+    !isPlainObject(reply.details) ||
+    !isPlainObject(reply.details.persistedConfig)
+  ) {
+    return false;
+  }
+  const { hash } = reply.details.persistedConfig;
+  if (typeof hash !== "string" || !hash) {
+    return false;
+  }
+  const signal = AbortSignal.timeout(CONFIG_APPLY_CONFIRM_TIMEOUT_MS);
+  try {
+    while (!signal.aborted) {
+      const revision = await requestOwner<{
+        hash?: unknown;
+        configRevisionHash?: unknown;
+        appliedConfigHash?: unknown;
+      }>("config.get", {}, { signal });
+      if (
+        !signal.aborted &&
+        revision.hash === hash &&
+        typeof revision.configRevisionHash === "string" &&
+        revision.configRevisionHash &&
+        revision.configRevisionHash === revision.appliedConfigHash
+      ) {
+        return true;
+      }
+      await delay(CONFIG_APPLY_CONFIRM_INTERVAL_MS, undefined, { signal });
+    }
+  } catch {
+    // Keep the original write error when confirmation fails or times out.
+  }
+  return false;
+}
 
 // Arrays the patch replaces, or removes with a deleted or replaced subtree, are explicit intent.
-function collectReplacePaths(patch: unknown, base: unknown, parentPath?: string): string[] {
+// The bases are the authored config and, when routed, the Gateway's runtime view: its array
+// guard also counts arrays that exist there only as defaults (a provider's `models: []`).
+function collectReplacePaths(patch: unknown, bases: unknown[], parentPath?: string): string[] {
   if (!isPlainObject(patch)) {
     return [];
   }
   return Object.entries(patch).flatMap(([key, value]) => {
     const path = formatConfigPatchPath(parentPath, key);
-    const baseValue = isPlainObject(base) ? base[key] : undefined;
+    const baseValues = bases.map((base) => (isPlainObject(base) ? base[key] : undefined));
     if (isPlainObject(value)) {
-      return collectReplacePaths(value, baseValue, path);
+      return collectReplacePaths(value, baseValues, path);
     }
     // Any non-object value (null, scalar or array) also removes the base arrays below it.
-    const removed = collectBaseArrayPaths(baseValue, path);
-    return Array.isArray(value) && !removed.includes(path) ? [path].concat(removed) : removed;
+    const removed = baseValues.flatMap((baseValue) => collectBaseArrayPaths(baseValue, path));
+    return Array.from(new Set(Array.isArray(value) ? [path].concat(removed) : removed));
   });
 }
 
-function createOwnerMergePatch(previous: OpenClawConfig, next: OpenClawConfig) {
+function createOwnerMergePatch(previous: OpenClawConfig, next: OpenClawConfig, gateway?: unknown) {
   const patch = createMergePatch(previous, next);
-  const replacePaths = collectReplacePaths(patch, previous);
+  const replacePaths = collectReplacePaths(patch, [previous, gateway]);
   const apply = (base: OpenClawConfig): OpenClawConfig => {
     const merged = applyMergePatch(base, patch, {
       mergeObjectArraysById: true,
@@ -94,11 +149,15 @@ export async function prepareConfigOwnerChange(
  * delete exactly, as the local writer would; a change the Gateway's merge cannot reproduce
  * (for example an authored null) is refused instead of being approximated.
  */
-export function buildConfigOwnerPatch(
+function buildConfigOwnerPatch(
   change: { previous: OpenClawConfig; next: OpenClawConfig },
-  baseHash: unknown,
+  owner: { hash?: unknown; config?: unknown },
 ) {
-  const { patch, replacePaths, apply } = createOwnerMergePatch(change.previous, change.next);
+  const { patch, replacePaths, apply } = createOwnerMergePatch(
+    change.previous,
+    change.next,
+    owner.config,
+  );
   if (
     replacePaths.length > MAX_REPLACE_PATHS ||
     !isDeepStrictEqual(apply(change.previous), change.next)
@@ -111,7 +170,57 @@ export function buildConfigOwnerPatch(
   // such as `response`, and an updated CLI routes to whichever Gateway is still running.
   return {
     raw: JSON.stringify(patch),
-    ...(typeof baseHash === "string" ? { baseHash } : {}),
+    ...(typeof owner.hash === "string" ? { baseHash: owner.hash } : {}),
     ...(replacePaths.length > 0 ? { replacePaths } : {}),
+  };
+}
+
+/**
+ * Bind a routed config change to the file the running Gateway writes. The change is prepared
+ * from this command's own read; the returned commit sends it as one config.patch against the
+ * owner's revision and returns the restart hint, if any, plus the owner's billing-route warnings.
+ */
+export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.ProcessEnv) {
+  const current = await requestOwner<{ hash?: unknown; path?: unknown; config?: unknown }>(
+    "config.get",
+    {},
+  );
+  const selected = resolveConfigPath(env);
+  if (typeof current.path !== "string" || identity(current.path) !== identity(selected)) {
+    throw new Error(
+      `The running Gateway owns this state directory but uses config file ${typeof current.path === "string" ? shortenHomePath(current.path) : "<unknown>"}, not ${shortenHomePath(selected)}. Nothing was sent and no settings were saved. Rerun with the Gateway's config path, or stop the Gateway through its service owner and rerun this exact command.`,
+    );
+  }
+  // Owner-routed writes inspect installed plugin state without write custody.
+  if (!getDatabaseEngineSelection()) {
+    const { readConfigSnapshotForEngineSelection } =
+      await import("../commands/config-preflight-snapshot.js");
+    await readConfigSnapshotForEngineSelection();
+  }
+  return async (change: { previous: OpenClawConfig; next: OpenClawConfig }) => {
+    const result = await requestOwner<{
+      restart?: unknown;
+      restartPending?: unknown;
+      billingRouteWarnings?: unknown;
+      warnings?: unknown;
+    }>("config.patch", buildConfigOwnerPatch(change, current)).catch(async (error: unknown) => {
+      if (!(await confirmSavedConfig(requestOwner, error))) {
+        throw error;
+      }
+      return null;
+    });
+    if (result === null) {
+      return { hint: "The Gateway applied the change.", warnings: [] };
+    }
+    return {
+      hint:
+        result.restart || result.restartPending
+          ? "The Gateway is restarting to apply it."
+          : undefined,
+      // Older Gateways omit the field; the owner computed it against its own credentials.
+      warnings: [result.billingRouteWarnings, result.warnings].flatMap((warnings) =>
+        Array.isArray(warnings) ? warnings.filter((warning) => typeof warning === "string") : [],
+      ),
+    };
   };
 }

@@ -2,10 +2,11 @@
 // Compare the same --calls/--samples with --prompt-chars 16 and 262144 on both revisions.
 // Add --unowned-history to cover callers without transcript-owner sealing.
 // Combine --unowned-history --projected-history for already-sanitized mutable worker model context.
+// Add --frozen-history for sealed projections without the transcript-owner marker.
 // Add --no-result to measure hooks that observe inputs without returning modifications.
+// Use --messages 200 --calls 1000 for the 0/1/3-hook prompt-envelope workload.
 // Counts, unprofiled CPU, and sampled allocations are separate passes; use built Gateway stress too.
 import assert from "node:assert/strict";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
@@ -14,14 +15,18 @@ import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-j
 import type { PluginHookBeforePromptBuildEvent } from "../../src/plugins/hook-before-agent-start.types.js";
 import { createHookRunner } from "../../src/plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { freezeJsonSnapshot } from "../../src/shared/immutable-data.js";
 import { projectModelContextMessages } from "../../src/shared/model-context-message.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
     calls: { type: "string", default: "40" },
+    messages: { type: "string" },
     "prompt-chars": { type: "string", default: "16" },
     "unowned-history": { type: "boolean", default: false },
     "projected-history": { type: "boolean", default: false },
+    "frozen-history": { type: "boolean", default: false },
     "no-result": { type: "boolean", default: false },
     samples: { type: "string", default: "5" },
     "start-at": { type: "string", default: "0" },
@@ -31,7 +36,8 @@ const { values } = parseArgs({
 });
 const promptChars = Number(values["prompt-chars"]);
 assert.ok(Number.isSafeInteger(promptChars) && promptChars >= 0);
-const expectSharedHistory = values["expect-shared-history"] && !values["unowned-history"];
+const expectSharedHistory =
+  values["expect-shared-history"] && (!values["unowned-history"] || values["frozen-history"]);
 assert.ok(!values["projected-history"] || values["unowned-history"]);
 const calls = Number(values.calls);
 const samples = Number(values.samples);
@@ -101,7 +107,9 @@ function fixture(size: number) {
   );
 }
 
-const cells = [64, 200, 1_000].flatMap((size) => {
+const sizes = values.messages ? [Number(values.messages)] : [64, 200, 1_000];
+assert.ok(sizes.every((size) => Number.isSafeInteger(size) && size > 0));
+const cells = sizes.flatMap((size) => {
   const fixtureMessages = fixture(size);
   const source = values["projected-history"]
     ? projectModelContextMessages(fixtureMessages)
@@ -113,7 +121,11 @@ const cells = [64, 200, 1_000].flatMap((size) => {
       "content" in message &&
       Array.isArray(message.content),
     );
-  const messages = (values["unowned-history"] ? structuredClone(source) : source).map((message) => {
+  const detached = values["unowned-history"] ? structuredClone(source) : source;
+  if (values["frozen-history"]) {
+    freezeJsonSnapshot(detached);
+  }
+  const messages = detached.map((message) => {
     assert.ok(isFixtureMessage(message));
     return message;
   });
@@ -121,10 +133,13 @@ const cells = [64, 200, 1_000].flatMap((size) => {
     if (!values["projected-history"]) {
       assert.equal(isOwnedTranscriptPayload(message), !values["unowned-history"]);
     }
-    assert.equal(Object.isFrozen(message.content), !values["unowned-history"]);
+    assert.equal(
+      Object.isFrozen(message.content),
+      values["frozen-history"] || !values["unowned-history"],
+    );
     assert.ok(!isOwnedTranscriptPayload(message.content));
   }
-  return [0, 1, 2].map((handlers) => {
+  return [0, 1, 3].map((handlers) => {
     const registry = createEmptyPluginRegistry();
     let handlerCalls = 0;
     let verifyHistory = false;
@@ -252,6 +267,7 @@ if (values["preflight-only"]) {
       expectedSharedHistory: expectSharedHistory,
       unownedHistory: values["unowned-history"],
       projectedHistory: values["projected-history"],
+      frozenHistory: values["frozen-history"],
       counts,
     }),
   );
@@ -289,9 +305,6 @@ for (let sample = 0; sample < samples; sample++) {
   }
 }
 
-function allocatedBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocatedBytes(child), 0);
-}
 const inspector = new Session();
 inspector.connect();
 try {
@@ -304,7 +317,7 @@ try {
       });
       await cell.run(calls);
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
-      const sampledBytes = allocatedBytes(profile.head);
+      const sampledBytes = sumSampledHeapBytes(profile.head);
       rows.push({
         mode: "allocation",
         sample,
@@ -331,6 +344,7 @@ console.log(
     expectedSharedHistory: expectSharedHistory,
     unownedHistory: values["unowned-history"],
     projectedHistory: values["projected-history"],
+    frozenHistory: values["frozen-history"],
     counts,
     fixtures: cells.map(({ messages, handlers, fixtureBytes }) => ({
       messages,

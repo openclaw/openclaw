@@ -6,6 +6,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { buildSandboxHostDocument, decodeSandboxHostCsp } from "../../agents/sandbox-host.js";
 import { createDashboardTool } from "../../agents/tools/dashboard-tool.js";
 import * as inProcessGateway from "../../agents/tools/in-process-gateway.js";
 import type { InProcessGatewayCaller } from "../../agents/tools/in-process-gateway.js";
@@ -20,8 +21,11 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { verifyBoardViewTicket } from "../board-view-ticket.js";
+import { setOpenClawIdClawOriginResolver } from "../openclaw-id/claw-origin.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { makeClient } from "../server-broadcast.test-helpers.js";
+import * as sessionObserverModel from "../session-observer-model.js";
 import {
   createBoardHarness as createHarness,
   createMcpAppDependencies,
@@ -158,6 +162,16 @@ describe("board gateway methods", () => {
       content: html("work"),
     });
     expect(work.mock.calls[0]).toMatchObject([true, { sessionKey: "agent:work:global" }]);
+    const workBoard = responseBoard(
+      await invoke("board.get", { sessionKey: "global", agentId: "work" }),
+    );
+    const ownerWidget = findWidget(workBoard, "owner");
+    expect(ownerWidget.frameUrl).toContain("/agent%3Awork%3Aglobal/owner/index.html?");
+    expect(verifyBoardViewTicket(ownerWidget.viewTicket!)).toMatchObject({
+      sessionKey: "global",
+      agentId: "work",
+      name: "owner",
+    });
     const main = await invoke("board.get", { sessionKey: "global", agentId: "main" });
     expect(main.mock.calls[0]).toMatchObject([
       true,
@@ -193,7 +207,10 @@ describe("board gateway methods", () => {
     await grant(status);
     const { widget: rejected } = await put("rejected", html("no"), { tools: ["status.reject"] });
     await grant(rejected, "rejected");
+    const scopeKey = vi.spyOn(sessionObserverModel, "sessionObserverScopeKey");
+    onTestFinished(() => scopeKey.mockRestore());
     const first = await withoutBoardReads(get);
+    expect(scopeKey).toHaveBeenCalledTimes(1);
     expect(ensureSandboxHostPort).toHaveBeenCalledOnce();
     for (const name of ["plain", "status"]) {
       const widget = findWidget(first, name);
@@ -210,6 +227,34 @@ describe("board gateway methods", () => {
     }
     for (const name of ["app", "rejected"]) {
       expect(findWidget(first, name)).not.toHaveProperty("frameUrl");
+    }
+    client.browserOrigin = { openclawIdTunnel: true };
+    const unlinked = await get();
+    for (const name of ["plain", "status"]) {
+      const widget = findWidget(unlinked, name);
+      expect(widget.sandboxUrl).toBe(findWidget(first, name).sandboxUrl);
+      expect(widget).not.toHaveProperty("sandboxShellHtml");
+    }
+    setOpenClawIdClawOriginResolver(() => "https://studio-k7x2q.crabd.xyz");
+    onTestFinished(() => setOpenClawIdClawOriginResolver(undefined));
+    const linked = await get();
+    for (const name of ["plain", "status"]) {
+      const widget = findWidget(linked, name);
+      const url = new URL(widget.sandboxUrl!);
+      expect(url.origin).toBe("https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz");
+      expect(url.searchParams.get("cspv")).toBe("1");
+      expect(url.searchParams.get("claw")).toBe("studio-k7x2q");
+      const csp = decodeSandboxHostCsp(url.searchParams.get("csp"));
+      expect(csp?.connectDomains).toEqual(
+        name === "status" ? ["https://status.example"] : undefined,
+      );
+      expect(widget.sandboxShellHtml).toBe(buildSandboxHostDocument(csp).html);
+    }
+    client.browserOrigin = { openclawIdTunnel: false };
+    const directLinked = await get();
+    for (const name of ["plain", "status"]) {
+      expect(findWidget(directLinked, name).sandboxUrl).toBe(findWidget(first, name).sandboxUrl);
+      expect(findWidget(directLinked, name)).not.toHaveProperty("sandboxShellHtml");
     }
     client.remoteControlUiIngress = createRemoteControlUiIngressTestContext();
     const second = await get();

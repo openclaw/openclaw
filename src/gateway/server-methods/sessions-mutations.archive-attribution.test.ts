@@ -13,10 +13,21 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { readSessionColdTranscript } from "../../config/sessions/session-cold-storage-state.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "../../config/sessions/session-cold-storage.js";
+import { setTranscriptActivity } from "../../config/sessions/session-cold-storage.test-support.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
@@ -44,11 +55,13 @@ const replyOperation = (key: string, sessionId = key) =>
     }),
     resetTriggered: false,
   });
-const organizationExpectation = {
+const organizationTarget = (key: string, expectedSessionId = key) => ({
+  key,
+  expectedSessionId,
   expectedSidebarRoot: false,
   expectedCategory: null,
   expectedArchived: false,
-};
+});
 const expectUnarchived = (key: string, operation: ReturnType<typeof replyOperation>) =>
   expect([readSession(key)?.archivedAt, operation.abortSignal.aborted]).toEqual([undefined, false]);
 const expectChanged = (responses: Parameters<RespondFn>[]) => {
@@ -112,13 +125,13 @@ it("drains an archive behind an unrelated writer, then commits after that writer
   const resume = createDeferredCore();
   const drained = createDeferredCore();
   let writer: Promise<void> | undefined;
-  const prepareOwner = archivePreparation.prepareSessionPatchArchive;
+  const prepareOwner = archivePreparation.prepareSessionPatchArchives;
   const drainOwner = lifecycleDrain.prepareSessionLifecycleDrain;
   const prepare = vi
-    .spyOn(archivePreparation, "prepareSessionPatchArchive")
+    .spyOn(archivePreparation, "prepareSessionPatchArchives")
     .mockImplementationOnce(async (params) => {
       writer = runOpenClawAgentWriteAdmission(
-        { agentId: "main", path: params.target.initialTarget.readSource!.path },
+        { agentId: "main", path: params.targets[0]!.initialTarget.readSource!.path },
         async () => {
           entered.resolve();
           await resume.promise;
@@ -164,10 +177,8 @@ it.each([
   const key = "agent:main:dashboard:archive-cas";
   const entry = { sessionId: "archive-cas", updatedAt: 1, lifecycleRevision: "unchanged" };
   const patch = {
-    key,
-    expectedSessionId: entry.sessionId,
+    ...organizationTarget(key, entry.sessionId),
     expectedLifecycleRevision: entry.lifecycleRevision,
-    ...organizationExpectation,
     archived: true,
   };
   const operation = replyOperation(key, entry.sessionId);
@@ -211,9 +222,7 @@ it.each([{ sidebarRoot: true }, { category: "Independent" }, { archivedAt: 42 }]
     await seedSession(key, { label: "Original", ...change });
     const before = readSession(key);
     const responses = await invokePatchSession({
-      key,
-      expectedSessionId: key,
-      ...organizationExpectation,
+      ...organizationTarget(key),
       label: "Must not overwrite",
     });
     expectChanged(responses);
@@ -283,6 +292,54 @@ it("preserves a grandchild through hidden runs when its persistent ancestor beco
   }
 });
 
+it("keeps an inactive transcript eligible for cold storage after a guarded batch archive", async () => {
+  const config = {
+    session: {
+      maintenance: { mode: "warn" as const, coldStorage: { enabled: true, afterDays: 7 } },
+    },
+  };
+  setRuntimeConfigSnapshot(config);
+  const options = { agentId: "main" };
+  const scope = (sessionId: string) => ({
+    ...options,
+    sessionId,
+    sessionKey: `agent:main:dashboard:${sessionId}`,
+  });
+  const inactive = scope("inactive");
+  const recent = scope("recent");
+  const targets = [inactive, recent];
+  for (const target of targets) {
+    await seedSession(target.sessionKey, { sessionId: target.sessionId });
+    await appendTranscriptMessage(target, {
+      eventId: "message",
+      message: { role: "user", content: target.sessionId, timestamp: Date.now() },
+    });
+  }
+  await waitForSessionTranscriptIndexReconcile(options);
+  const original = await loadTranscriptEvents(inactive);
+  expect(original).toContainEqual(expect.objectContaining({ id: "message" }));
+  const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  await replaceSessionEntry(inactive, { sessionId: inactive.sessionId, updatedAt: twoWeeksAgo });
+  setTranscriptActivity(options, inactive.sessionId, twoWeeksAgo);
+
+  const responses = await invokePatchSession(
+    {
+      targets: targets.map((target) => organizationTarget(target.sessionKey, target.sessionId)),
+      patch: { archived: true },
+    },
+    client(),
+    "sessions.patchMany",
+  );
+  expect(responses[0]?.[1]).toMatchObject({ outcomes: [{ ok: true }, { ok: true }] });
+  await runSessionColdStorageMaintenance({ config });
+  const { db } = openOpenClawAgentDatabase(options);
+  expect(readSessionColdTranscript(db, inactive.sessionId)).toBeDefined();
+  expect(readSessionColdTranscript(db, recent.sessionId)).toBeUndefined();
+  await restoreSessionColdTranscript(inactive);
+  expect(readSessionColdTranscript(db, inactive.sessionId)).toBeUndefined();
+  expect(await loadTranscriptEvents(inactive)).toEqual(original);
+});
+
 it("returns per-target batch outcomes without acquiring independently archived rows", async () => {
   const keys = ["agent:main:dashboard:cas-independent", "agent:main:dashboard:cas-selected"];
   for (const [index, key] of keys.entries()) {
@@ -290,11 +347,7 @@ it("returns per-target batch outcomes without acquiring independently archived r
   }
   const responses = await invokePatchSession(
     {
-      targets: keys.map((key) => ({
-        key,
-        expectedSessionId: key,
-        ...organizationExpectation,
-      })),
+      targets: keys.map((key) => organizationTarget(key)),
       patch: { archived: true },
     },
     client(),
@@ -354,9 +407,6 @@ it.each([
     const sessionId = identified ? "session-archive-attribution" : "session-solo-archive";
     const retained = identified
       ? {
-          mainRestartRecovery: { cycleId: "interrupted-cycle", revision: 1, chargedAttempts: 0 },
-          restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "previous-boot" }],
-          restartRecoveryTerminalRunIds: ["delivered-run"],
           pendingFinalDelivery: {
             kind: "replayable" as const,
             text: "Retained final",

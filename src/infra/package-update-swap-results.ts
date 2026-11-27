@@ -17,6 +17,7 @@ export function createPackageSwapResults(
   startedAt: number,
 ) {
   const warnings: string[] = [];
+  const diagnostics: string[] = [];
   const integrityFailures: NonNullable<UpdateStepResult["failureFacts"]> = [];
   const step = (
     exitCode: number,
@@ -33,6 +34,7 @@ export function createPackageSwapResults(
     stdoutTail,
     stderrTail,
     ...(warnings.length > 0 ? { warnings: [...warnings] } : {}),
+    ...(diagnostics.length > 0 ? { diagnostics: [...diagnostics] } : {}),
     ...(exitCode !== 0
       ? {
           failureFacts: integrityFailures.length
@@ -64,12 +66,19 @@ export function createPackageSwapResults(
       if (!params.stage.native) {
         return;
       }
+      // A published launcher that cannot start the new package leaves no CLI. Fail so the
+      // transaction restores the previous launchers instead of reporting success.
       for (const { destination } of launchers) {
         try {
-          await verifyRuntimeLauncher(destination, "openclaw.mjs");
+          if ((await verifyRuntimeLauncher(destination, "openclaw.mjs")) === "unknown-format") {
+            warnings.push(
+              `Published launcher ${destination} could not be verified: Cannot resolve the launcher's executable target. Reinstall the current ${params.packageName} version with ${params.installTarget.manager} to recreate the launcher.`,
+            );
+          }
         } catch (error) {
-          warnings.push(
-            `Published launcher ${destination} could not be verified: ${formatErrorMessage(error)}. Reinstall the current ${params.packageName} version with ${params.installTarget.manager} to recreate the launcher.`,
+          throw new Error(
+            `Published launcher ${destination} cannot start ${params.packageName}: ${formatErrorMessage(error)}`,
+            { cause: error },
           );
         }
       }
@@ -154,6 +163,19 @@ export function createPackageSwapResults(
       packageRollbackVerified: boolean,
       baselineError?: Error,
     ): StagedPackageSwapResult {
+      if (baselineError?.cause instanceof PackageIntegrityMismatchError) {
+        const cause = baselineError.cause;
+        diagnostics.push(cause.message);
+        integrityFailures.push(
+          ...cause.differences.map((message) =>
+            createUpdateFailureFact({
+              check: "package-swap",
+              code: "baseline-scan-failed",
+              message,
+            }),
+          ),
+        );
+      }
       return {
         status: "failed",
         activePackageRoot,
@@ -168,7 +190,7 @@ export function createPackageSwapResults(
               : error instanceof Error
                 ? error.name
                 : "swap-failed",
-          baselineError,
+          baselineError ?? (error instanceof Error ? error : undefined),
         ),
         postVerifyStep: null,
         packageRollbackVerified,

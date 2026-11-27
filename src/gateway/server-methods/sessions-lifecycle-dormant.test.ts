@@ -33,7 +33,7 @@ it.each([false, true])(
       ...parentTarget,
       defaultSessionId: "paused-child-requester-session",
     });
-    const startedAt = await seedYieldedSession(fixture.stateDir, childKey, childId, childRunId);
+    await seedYieldedSession(fixture.stateDir, childKey, childId, childRunId);
     await registry.registerSubagentRun({
       runId: childRunId,
       childSessionKey: childKey,
@@ -53,6 +53,10 @@ it.each([false, true])(
       hasPendingWork: () => false,
     });
     expect(claimed).toEqual({ messageWaitRegistered: true });
+    const startedAt = expectDefined(
+      subagentRuns.get(childRunId)?.execution.startedAt,
+      "registered child attempt",
+    );
     emitAgentEvent({
       ...runTarget,
       stream: "lifecycle",

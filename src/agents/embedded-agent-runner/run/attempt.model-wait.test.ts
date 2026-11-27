@@ -14,12 +14,7 @@ import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixt
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
 const runId = "model-wait-test";
-const model = makeProviderModelFixture({
-  id: "local-model",
-  provider: "ollama",
-  api: "ollama",
-  baseUrl: "http://127.0.0.1:11434",
-});
+const model = makeProviderModelFixture({ id: "m", provider: "ollama", api: "ollama", baseUrl: "" });
 const starting = { phase: "starting_model" };
 const waiting = (reason: "response" | "slot") => ({ phase: "waiting_for_model", reason });
 let unsubscribe: (() => void) | undefined;
@@ -42,7 +37,7 @@ function harness() {
   const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(source, {
     runId,
     provider: "ollama",
-    model: "local-model",
+    model: model.id,
     trace: createDiagnosticTraceContext(),
     nextCallId: () => `call-${++callId}`,
     onAgentEvent: ({ data }) => void delivered.push(data),
@@ -84,6 +79,20 @@ it("clears wait on the first stream event and admits another wait on a later cal
   expect(h.delivered).toEqual(h.statuses);
 });
 
+it("signals argument preparation once per call without publishing any argument", async () => {
+  const h = harness();
+  const { stream, observed } = await h.start();
+  const partial = makeAssistantMessageFixture();
+  stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+  stream.push({ type: "toolcall_delta", contentIndex: 0, delta: "private value", partial });
+  stream.end(partial);
+  for await (const _ of observed) {
+    /* drain the provider stream */
+  }
+  expect(h.statuses).toEqual([{ phase: "preparing_tool" }]);
+  expect(h.delivered).toEqual(h.statuses);
+});
+
 it.each(["abort", "failure", "completion"] as const)("clears %s waits", async (termination) => {
   const h = harness();
   const abort = new AbortController();
@@ -94,10 +103,7 @@ it.each(["abort", "failure", "completion"] as const)("clears %s waits", async (t
     expect(h.statuses.at(-1)).toEqual(starting);
   }
   call.stream.end(
-    makeAssistantMessageFixture({
-      stopReason: termination === "completion" ? "stop" : "error",
-      ...(termination === "completion" ? {} : { errorMessage: "synthetic failure" }),
-    }),
+    makeAssistantMessageFixture({ stopReason: termination === "completion" ? "stop" : "error" }),
   );
   await call.observed.result();
   expect(getAgentRunContext(runId)?.localModelWait).toBeUndefined();

@@ -1,4 +1,5 @@
 import { isOwnedTranscriptPayload } from "../config/sessions/transcript-json.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { projectModelContextMessages } from "../shared/model-context-message.js";
 import type { PluginHookName } from "./types.js";
 
@@ -114,7 +115,7 @@ export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): 
   }
 }
 
-/** Copy dispatch envelopes while retaining only payloads sealed by the transcript owner. */
+/** Copy dispatch envelopes while retaining only proven immutable payloads. */
 export function clonePromptHookEvent<T extends { messages: unknown[] }>(
   hookName: PluginHookName,
   event: T,
@@ -162,9 +163,24 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
             original && typeof original === "object" && isOwnedTranscriptPayload(original)
               ? original
               : undefined;
-          const entries: [string, unknown][] = Object.entries(message);
-          const envelope = Object.fromEntries(entries);
-          for (const [key, value] of entries) {
+          const envelope: Record<string, unknown> = {};
+          for (const key of Object.getOwnPropertyNames(message)) {
+            // Earlier getters can change which later fields are enumerable own properties.
+            if (!Object.prototype.propertyIsEnumerable.call(message, key)) {
+              continue;
+            }
+            const value: unknown = Reflect.get(message, key);
+            if (key === "__proto__") {
+              // Preserve a literal data field without invoking the prototype setter.
+              Object.defineProperty(envelope, key, {
+                value,
+                enumerable: true,
+                configurable: true,
+                writable: true,
+              });
+            } else {
+              envelope[key] = value;
+            }
             // Projection may replace metadata; only unchanged fields inherit ownership.
             isolate(
               envelope,
@@ -173,7 +189,8 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
               value !== null &&
                 typeof value === "object" &&
                 ((ownedMessage !== undefined && Reflect.get(ownedMessage, key) === value) ||
-                  isOwnedTranscriptPayload(value)),
+                  isOwnedTranscriptPayload(value) ||
+                  isDeeplyFrozenPlainData(value)),
             );
           }
           messages[index] = envelope;

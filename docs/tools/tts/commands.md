@@ -24,6 +24,9 @@ Here you go.
 When `tts.auto` is `"tagged"`, **directives are required** to trigger
 audio. Streaming block delivery strips directives from visible text before the
 channel sees them, even when split across adjacent blocks.
+Literal examples inside Markdown inline code or fenced code remain visible and
+do not become speech directives, including when an inline opening delimiter
+crosses streamed block boundaries.
 
 A reply can consist entirely of a nonempty `[[tts:text]]...[[/tts:text]]`
 block. No visible text prefix is required, including when the model also

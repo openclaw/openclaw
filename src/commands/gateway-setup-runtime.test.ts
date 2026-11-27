@@ -57,10 +57,10 @@ it.each([
 ] as const)(
   "suggests $suggested for $flow with Node at $nodePath",
   async ({ flow, nodePath, suggested }) => {
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.4" });
     vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue(nodePath);
     vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue(
-      runtimeFixture("1.4.3", "3.53.4"),
+      runtimeFixture("1.4.4", "3.53.4"),
     );
     const select = vi.fn(async (runtime: GatewayDaemonRuntime) => runtime);
     const selection = await resolveGatewaySetupRuntime({

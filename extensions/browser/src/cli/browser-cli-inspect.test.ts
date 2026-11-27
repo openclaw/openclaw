@@ -19,26 +19,22 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) =>
   captureRuntimeConfigAsyncReader: () => async () => configMocks.getRuntimeConfig(),
 }));
 
-const sharedMocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn(
-    async (
-      _opts: unknown,
-      params: Parameters<typeof browserCliSharedModule.callBrowserRequest>[1],
-    ): Promise<SnapshotResult> => {
-      const base = { ok: true as const, targetId: "t1", url: "https://example.com" };
-      return params.query?.format === "aria"
-        ? { ...base, format: "aria", nodes: [] }
-        : { ...base, format: "ai", snapshot: "ok" };
-    },
-  ),
-}));
+const request = vi.fn(
+  async (
+    _opts: unknown,
+    params: Parameters<typeof browserCliSharedModule.callBrowserRequest>[1],
+  ): Promise<SnapshotResult> => {
+    const base = { ok: true as const, targetId: "t1", url: "https://example.com" };
+    return params.query?.format === "aria"
+      ? { ...base, format: "aria", nodes: [] }
+      : { ...base, format: "ai", snapshot: "ok" };
+  },
+);
 let registerBrowserInspectCommands: typeof import("./browser-cli-inspect.js").registerBrowserInspectCommands;
 
 function installInspectSpies() {
   vi.restoreAllMocks();
-  vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(
-    sharedMocks.callBrowserRequest,
-  );
+  vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(request);
   installRuntime();
 }
 
@@ -55,7 +51,7 @@ describe("browser cli snapshot defaults", () => {
       from: "user",
     });
 
-    return sharedMocks.callBrowserRequest.mock.calls.at(-1)?.[1];
+    return request.mock.calls.at(-1)?.[1];
   };
 
   const runSnapshot = (args: string[]) => runBrowserInspect(["snapshot", ...args]);
@@ -74,57 +70,61 @@ describe("browser cli snapshot defaults", () => {
     configMocks.getRuntimeConfig.mockReturnValue({ browser: {} });
   });
 
-  it.each(["plain", "file"] as const)(
-    "preserves the returned ARIA ref in %s output",
-    async (output) => {
-      const ref = "ax42";
-      const result: SnapshotResult = {
-        ok: true,
-        format: "aria",
-        targetId: "t1",
-        url: "https://example.com",
-        nodes: [{ ref, role: "textbox", name: "Entry", value: "Ready", depth: 2 }],
-      };
-      sharedMocks.callBrowserRequest.mockResolvedValueOnce(result);
-      const outputPath =
-        output === "file"
-          ? path.join(tempDirs.make("openclaw-aria-output-"), "snapshot.json")
-          : undefined;
-      await runBrowserInspect([
-        "snapshot",
-        "--format",
-        "aria",
-        ...(outputPath ? ["--out", outputPath] : []),
-      ]);
+  it.each(["plain", "file"] as const)("preserves ARIA refs in %s output", async (output) => {
+    const result: SnapshotResult = {
+      ok: true,
+      format: "aria",
+      targetId: "t1",
+      url: "https://example.com",
+      nodes: [{ ref: "ax42", role: "textbox", name: "Entry", value: "Ready", depth: 2 }],
+    };
+    request.mockResolvedValueOnce(result);
+    const outputPath =
+      output === "file"
+        ? path.join(tempDirs.make("openclaw-aria-output-"), "snapshot.json")
+        : undefined;
+    await runBrowserInspect([
+      "snapshot",
+      "--format",
+      "aria",
+      ...(outputPath ? ["--out", outputPath] : []),
+    ]);
 
-      if (outputPath) {
-        expect(JSON.parse(await fs.readFile(outputPath, "utf8"))).toEqual(result);
-        expect(runtime.log).toHaveBeenCalledExactlyOnceWith(outputPath);
-      } else {
-        expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-          `    - textbox "Entry" = "Ready" [ref=${ref}]`,
-        );
-      }
-      expect(runtime.writeJson).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-    },
-  );
+    if (outputPath) {
+      expect(JSON.parse(await fs.readFile(outputPath, "utf8"))).toEqual(result);
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(outputPath);
+    } else {
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+        '    - textbox "Entry" = "Ready" [ref=ax42]',
+      );
+    }
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 
   it.each(["screenshot", "snapshot"])(
-    "keeps the gateway and %s owner on the explicit 90000 ms timeout",
+    "passes the explicit timeout to gateway and %s",
     async (command) => {
-      const request = await runBrowserInspect(
-        ["--timeout", "60000", command, "--timeout", "90000"],
+      const params = await runBrowserInspect(
+        [
+          "--timeout",
+          "60000",
+          command,
+          "--timeout",
+          "90000",
+          ...(command === "screenshot" ? [" tab-1 ", "--type", "jpeg"] : []),
+        ],
         true,
       );
 
-      expect(sharedMocks.callBrowserRequest).toHaveBeenLastCalledWith(
+      expect(request).toHaveBeenLastCalledWith(
         expect.objectContaining({ timeout: "90000" }),
         expect.objectContaining({ path: `/${command}` }),
       );
-      expect(command === "snapshot" ? request?.query : request?.body).toMatchObject({
+      expect(command === "snapshot" ? params?.query : params?.body).toMatchObject({
         timeoutMs: 90000,
+        ...(command === "screenshot" ? { targetId: "tab-1", type: "jpeg", fullPage: false } : {}),
       });
     },
   );
@@ -139,30 +139,19 @@ describe("browser cli snapshot defaults", () => {
     expect(await runSnapshot([...args])).toMatchObject({ path: "/snapshot", query });
   });
 
-  it.each([false, true])(
-    "lets the CLI render invalid inspect options (json: %s)",
-    async (withJson) => {
-      for (const [args, message] of [
-        [["snapshot", "--limit", "1e3"], "Invalid --limit: must be an integer >= 1"],
-        [["snapshot", "--depth", "-1"], "Invalid --depth: must be an integer >= 0"],
-        [["snapshot", "--format", "full"], "Invalid --format: expected aria or ai"],
-        [["snapshot", "--mode", "full"], "Invalid --mode: expected efficient"],
-        [["screenshot", "--type", "gif"], "Invalid --type: expected png or jpeg"],
-      ] as const) {
-        await expect(runBrowserInspect([...args], withJson)).rejects.toThrow(message);
-      }
-      expect(sharedMocks.callBrowserRequest).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-    },
-  );
-
-  it("sends screenshot request with trimmed target id and jpeg type", async () => {
-    const params = await runBrowserInspect(["screenshot", " tab-1 ", "--type", "jpeg"], true);
-    expect(params).toMatchObject({
-      path: "/screenshot",
-      body: { targetId: "tab-1", type: "jpeg", fullPage: false },
-    });
+  it.each([false, true])("leaves invalid options to the CLI (json: %s)", async (withJson) => {
+    for (const [args, message] of [
+      [["snapshot", "--limit", "1e3"], "Invalid --limit: must be an integer >= 1"],
+      [["snapshot", "--depth", "-1"], "Invalid --depth: must be an integer >= 0"],
+      [["snapshot", "--format", "full"], "Invalid --format: expected aria or ai"],
+      [["snapshot", "--mode", "full"], "Invalid --mode: expected efficient"],
+      [["screenshot", "--type", "gif"], "Invalid --type: expected png or jpeg"],
+    ] as const) {
+      await expect(runBrowserInspect([...args], withJson)).rejects.toThrow(message);
+    }
+    expect(request).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("keeps an existing AI snapshot when publication fails", async () => {
@@ -214,7 +203,7 @@ describe("browser cli snapshot defaults", () => {
     it.each(["ai", "aria"] as const)(
       "fails instead of printing an empty %s snapshot",
       async (format) => {
-        sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked(format));
+        request.mockResolvedValueOnce(blocked(format));
 
         await expect(runSnapshot(["--format", format])).rejects.toThrow("__exit__:1");
 
@@ -233,7 +222,7 @@ describe("browser cli snapshot defaults", () => {
         const outputPath = path.join(tempDirs.make("openclaw-dialog-out-"), "snapshot.txt");
         fsSync.writeFileSync(outputPath, "previous snapshot\n");
         const priorBytes = fsSync.readFileSync(outputPath);
-        sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked("ai"));
+        request.mockResolvedValueOnce(blocked("ai"));
 
         await expect(
           runBrowserInspect(["snapshot", "--out", outputPath], withJson),
@@ -246,7 +235,7 @@ describe("browser cli snapshot defaults", () => {
     );
 
     it("keeps a non-default browser profile in the dismiss command", async () => {
-      sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked("ai"));
+      request.mockResolvedValueOnce(blocked("ai"));
 
       await expect(runBrowserInspect(["--browser-profile", "work", "snapshot"])).rejects.toThrow(
         "__exit__:1",
@@ -258,7 +247,7 @@ describe("browser cli snapshot defaults", () => {
     });
 
     it("keeps returning the dialog details in --json mode", async () => {
-      sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked("ai"));
+      request.mockResolvedValueOnce(blocked("ai"));
 
       await runBrowserInspect(["snapshot"], true);
 
@@ -270,7 +259,7 @@ describe("browser cli snapshot defaults", () => {
     });
 
     it("still prints a genuinely blank page and exits 0", async () => {
-      sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+      request.mockResolvedValueOnce({
         ok: true,
         format: "ai",
         targetId: "t1",

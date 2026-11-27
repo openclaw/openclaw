@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
-import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import * as configSnapshot from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -16,31 +15,11 @@ import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 
 // mock-isolation: Keep completion admission deferred while the real process and egress owners settle.
-vi.mock("../auto-reply/dispatch.js", () => ({
-  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
-    typeof dispatchInboundMessageWithRoutedChannelDispatcher
-  >(async ({ replyOptions }) => {
-    const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "completion lifecycle");
-    const signal = expectDefined(lifecycle.abortSignal, "completion cancellation");
-    lifecycle.onDeferred?.();
-    const onAbort = async () => {
-      try {
-        await lifecycle.onAbandoned?.();
-      } finally {
-        await lifecycle.onSettled?.();
-      }
-    };
-    signal.addEventListener("abort", () => void onAbort(), { once: true });
-    if (signal.aborted) {
-      await onAbort();
-    }
-    return {
-      deferredToActiveRun: "followup",
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    };
-  }),
-}));
+vi.mock("../auto-reply/dispatch.js", async () => {
+  const { createDeferredExecDispatchMock } =
+    await import("../agents/bash-tools.exec-runtime.test-support.js");
+  return createDeferredExecDispatchMock("completion");
+});
 
 let state: testState.OpenClawTestState;
 let proxy: proxyServer.SecretEgressProxyHandle;

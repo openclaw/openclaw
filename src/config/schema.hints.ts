@@ -40,6 +40,7 @@ const GROUP_HINTS = [
   ["worktreeRoot", "Worktree Root", 105],
   ["worktreeAcceleration", "Worktree Acceleration", 106],
   ["worktreeMaxCount", "Maximum Managed Worktrees", 107],
+  ["repositoryBranchPrefix", "Repository Branch Prefix", 108],
   ["hooks", "Hooks", 110],
   ["ui", "UI", 120],
   ["browser", "Browser", 130],
@@ -96,6 +97,7 @@ const SECTION_DOCS_URLS = {
   database: "https://docs.openclaw.ai/reference/database-engines",
   storage: "https://docs.openclaw.ai/concepts/storage-locations",
   desktop: "https://docs.openclaw.ai/gateway/configuration",
+  repositoryBranchPrefix: "https://docs.openclaw.ai/gateway/config-runtime#repositorybranchprefix",
   worktreeRoot: "https://docs.openclaw.ai/concepts/managed-worktrees",
   worktreeAcceleration: "https://docs.openclaw.ai/concepts/managed-worktrees",
   worktreeMaxCount: "https://docs.openclaw.ai/concepts/managed-worktrees",
@@ -109,7 +111,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "plugins.entries.*.hooks.timeouts.*": "Automatic (plugin or hook default)",
   "gateway.cliAgents.enabled": "Default (enabled)",
   "nodeHost.autoUpdate.enabled": "Default (enabled)",
-  "tools.loopDetection.enabled": "Default (post-compaction protection only)",
+  "tools.loopDetection.enabled": "Default (on)",
   "gateway.publicOrigin": "https://gateway.example.com",
   "gateway.remote.url": "ws://host:18789",
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
@@ -148,6 +150,12 @@ export function buildBaseHints(): ConfigUiHints {
       }
     }
   }
+  for (const path of Object.keys(INHERITED_DEFAULT_PLACEHOLDERS)) {
+    if (hints[path]) {
+      hints[path] = { ...hints[path], inheritedDefault: true };
+    }
+  }
+
   for (const path of ["agents.defaults.models.*", "agents.entries.*.models.*"]) {
     const runtimePath = `${path}.agentRuntime`;
     const codeModePath = `${path}.codeMode`;

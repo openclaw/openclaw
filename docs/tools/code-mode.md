@@ -9,7 +9,7 @@ read_when:
   - You are looking for the Code Mode page that matches your task
 ---
 
-Code mode is an experimental OpenClaw agent-runtime feature. When
+Code Mode is an OpenClaw agent-runtime feature. When
 enabled, the model no longer sees every enabled tool schema. Instead, it sees
 `exec`, `wait`, and any direct-only tool whose structured result cannot cross
 the JSON-only guest bridge. The model writes a small JavaScript
@@ -21,8 +21,9 @@ plain JavaScript without type annotations.
 When `tools.codeMode` is absent, OpenClaw uses the `"auto"` tier and engages
 Code Mode only for models marked as preferred Code Mode performers. An authored
 object without `enabled` remains off, as do `false` and `{ enabled: false }`.
-Agent and model overrides take precedence. Use **Settings → Agents & Tools →
-Labs → Code Mode** to choose the global setting.
+Agent and model overrides take precedence. Use **Settings → Agents →
+Agent defaults → Tools → Code Mode** to choose Auto or Off globally. This
+does not force Code Mode on for models outside the evaluated Auto tier.
 </Note>
 
 This page documents OpenClaw Code Mode, not Codex Code Mode. The two features
@@ -35,8 +36,8 @@ separate implementations:
   in Codex's in-process V8 Code Mode runtime.
 - OpenClaw Code Mode runs in the generic OpenClaw agent runtime and is
   enabled through global, agent, or model activation settings. Its `exec`
-  tool takes a JSON `{ title, code }` payload, executed by the selected Node or
-  QuickJS executor.
+  tool takes a JSON `{ code }` payload with an optional `title`, executed by
+  the selected Node or QuickJS executor.
 
 Both are JavaScript execution surfaces, not shell-command surfaces. Treat them
 as independent, differently-implemented features that happen to expose
@@ -64,11 +65,22 @@ job. Open the page that matches your task.
 | [Code Mode executors](/tools/code-mode/executors)         | You want to choose Node or QuickJS and understand their security boundaries.       |
 | [Code Mode configuration](/tools/code-mode/configuration) | You need the configuration fields, the preferred-model list, and activation order. |
 
+The optional [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
+can prioritize frequently and recently used tools within the same index budget.
+It is off by default, keeps core coding tools pinned, reserves room for newcomers,
+and freezes its ranking for the prompt series. It does not change callable tools
+or apply to Codex-native Code Mode.
+
 ## What it does
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
-  such as `computer` or the native-vision `view_image` loader whose image result
-  cannot survive the guest bridge.
+  such as the native-vision `view_image` loader whose image result cannot survive
+  the guest bridge.
+- On-demand tools such as `computer` stay out of that list until the model looks
+  one up with `describe()` or calls it; it then loads as a top-level tool and
+  stays direct for the prompt series. Guest code that calls one gets an error
+  saying to call it directly as a top-level tool. See
+  [On-demand tools](/tools/tool-search#on-demand-tools).
 - `exec` evaluates model-generated JavaScript in the selected executor's worker
   thread.
 - Every catalog-eligible enabled non-MCP tool (OpenClaw core, plugin, client) is
@@ -79,7 +91,12 @@ job. Open the page that matches your task.
   trusted tool provides an output schema. It omits descriptions, full schemas,
   MCP entries, and overflow entries. Callable `catalog.search(...)` results are
   the fallback. Input hints retain integer and numeric bounds as comments, such
-  as `offset?: number /* integer, >= 1 */`. Other validation details remain in
+  as `offset?: number /* integer, >= 1 */`. A hint that overflows its budget
+  preserves required arguments first, shortening their types only when needed.
+  Nested optional fields are elided. If every top-level optional field fits in
+  the remaining space with shallow types, those names are included too. `...`
+  marks omitted fields or type details; the input hint stays within 300 characters.
+  Other validation details remain in
   the full schema available through `describe()`. These hints do not change
   tool validation or output contracts. Core file and shell tool signatures stay
   first in the bounded index, followed by tools with declared output hints, so

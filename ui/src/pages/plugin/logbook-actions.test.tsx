@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal, Show } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -8,69 +7,62 @@ import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { LogbookStatusPayload } from "./logbook-types.ts";
 import { Logbook } from "./logbook-view.tsx";
+import { logbookStatus, logbookTimeline } from "./logbook.test-support.ts";
 const neverRetired = new Promise<void>(() => {});
 
 afterEach(cleanupSolid);
 
-const initialStatus: LogbookStatusPayload = {
-  captureEnabled: true,
-  capturePaused: false,
-  captureIntervalSeconds: 30,
-  analysisIntervalMinutes: 15,
-  retentionDays: 30,
-  pendingFrames: 0,
-  analysisRunning: false,
-  visionModelSource: "missing",
-  today: "2026-01-01",
-  todayCards: 0,
-  timeZone: "UTC",
-};
+const initialStatus = logbookStatus("2026-01-01", { todayCards: 0 });
 
-function clientFor(action: (method: string) => Promise<unknown>): GatewayBrowserClient {
+function clientFor(
+  action: (method: string) => Promise<unknown>,
+  status = initialStatus,
+): GatewayBrowserClient {
   // SAFETY: This view fixture exercises only the browser client request boundary.
   return {
-    request: vi.fn(async (method: string, params: { day?: string }) => {
-      if (method === "logbook.status") {
-        return initialStatus;
-      }
-      if (method === "logbook.timeline") {
-        return {
-          day: params.day,
-          cards: [],
-          stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
-        };
-      }
-      return action(method);
+    request: vi.fn(async (method: string, params: { day: string }) => {
+      return method === "logbook.status"
+        ? status
+        : method === "logbook.timeline"
+          ? logbookTimeline(params.day)
+          : action(method);
     }),
   } as unknown as GatewayBrowserClient;
 }
 
-it.each([false, true])(
-  "shows a capture guess and reconciles a rejected=%s write",
-  async (reject) => {
+it.each([
+  { paused: false, reject: false },
+  { paused: false, reject: true },
+  { paused: true, reject: false },
+  { paused: true, reject: true },
+])(
+  "reports pending capture before acknowledgement (paused=$paused, reject=$reject)",
+  async ({ paused, reject }) => {
+    const status = { ...initialStatus, capturePaused: paused };
     const pending = Promise.withResolvers<LogbookStatusPayload>();
-    onTestFinished(() => pending.resolve(initialStatus));
-    const client = clientFor(() => pending.promise);
+    onTestFinished(() => pending.resolve(status));
+    const client = clientFor(() => pending.promise, status);
     const view = mountSolid(() => (
       <Logbook initialClient={client} getRetired={() => neverRetired} />
     ));
-    const queries = getQueriesForElement(view.container);
-    await waitForSolid(() =>
-      expect(queries.queryByRole("button", { name: "Pause" })).not.toBeNull(),
-    );
-    const button = queries.getByRole("button", { name: "Pause" });
+    const before = paused ? "Resume capture" : "Pause capture";
+    const after = paused ? "Pause capture" : "Resume capture";
+    await waitForSolid(() => expect(view.queryByRole("button", { name: before })).not.toBeNull());
+    const button = view.getByRole("button", { name: before });
     button.click();
-    await waitForSolid(() => expect(button.textContent).toBe("Resume"));
-    expect(queries.getByRole("button", { name: "Resume" })).toBe(button);
+    await waitForSolid(() => expect(button.textContent).toBe(after));
+    const chip = () => view.container.querySelector(".logbook__chip")?.textContent?.trim();
+    expect.soft(chip()).toBe(paused ? "Resuming capture…" : "Pausing capture…");
     if (reject) {
-      pending.reject(new Error("Capture could not be paused."));
+      pending.reject(new Error("Capture change rejected."));
     } else {
-      pending.resolve({ ...initialStatus, capturePaused: true });
+      pending.resolve({ ...status, capturePaused: !paused });
     }
     await waitForSolid(() => expect((button as HTMLButtonElement).disabled).toBe(false));
-    expect(button.textContent).toBe(reject ? "Pause" : "Resume");
+    expect(view.getByRole("button", { name: reject ? before : after })).toBe(button);
+    expect(chip()).toBe((reject ? paused : !paused) ? "Capture paused" : "Capturing every 30s");
     if (reject) {
-      expect(queries.getByRole("alert").textContent).toContain("Capture could not be paused.");
+      expect(view.getByRole("alert").textContent).toContain("Capture change rejected.");
     }
   },
 );
@@ -95,17 +87,16 @@ it.each(["standup", "ask", "analyze"] as const)(
         </Show>
       );
     });
-    const queries = getQueriesForElement(view.container);
     await waitForSolid(() =>
-      expect(queries.queryByRole("button", { name: "Pause" })).not.toBeNull(),
+      expect(view.queryByRole("button", { name: "Pause capture" })).not.toBeNull(),
     );
     if (kind === "ask") {
-      const input = queries.getByRole("textbox") as HTMLInputElement;
+      const input = view.getByRole("textbox") as HTMLInputElement;
       input.value = "What changed today?";
       input.dispatchEvent(new Event("input", { bubbles: true }));
       flush();
     }
-    const button = queries.getByRole("button", {
+    const button = view.getByRole("button", {
       name: kind === "standup" ? "Generate" : kind === "ask" ? "Ask" : "Analyze now",
     });
     button.click();

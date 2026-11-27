@@ -5,6 +5,7 @@ import type { HumanMention } from "../chat/chat-types.ts";
 import { readHumanMentions } from "../chat/human-mentions.ts";
 import { formatUiError } from "../format-error.ts";
 import {
+  isSessionCyberAccessProgram,
   isSessionDeviceFolder,
   isSessionFastMode,
   isSessionPermissionMode,
@@ -103,8 +104,8 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "visibility",
   "permissionMode",
   "fastMode",
+  "cyberAccessProgram",
   "toolOverrides",
-  "displayNameGenerated",
   ...PLACEMENT_CREATE_STRING_FIELDS,
 ]);
 
@@ -152,11 +153,11 @@ export function parseSessionPlacementCreateParams(
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
     (record.fastMode !== undefined && !isSessionFastMode(record.fastMode)) ||
+    (record.cyberAccessProgram !== undefined &&
+      !isSessionCyberAccessProgram(record.cyberAccessProgram)) ||
     (record.permissionMode !== undefined && !isSessionPermissionMode(record.permissionMode)) ||
     (record.toolOverrides !== undefined && !isSessionToolOverrides(record.toolOverrides)) ||
     (record.titleSource !== undefined && !isSessionTitleSource(record.titleSource)) ||
-    (record.displayNameGenerated !== undefined &&
-      typeof record.displayNameGenerated !== "boolean") ||
     (record.projectId !== undefined && record.cwd !== undefined) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),

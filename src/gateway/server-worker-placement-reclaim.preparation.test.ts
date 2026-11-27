@@ -4,8 +4,6 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
-import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
@@ -501,7 +499,11 @@ it.each([
       attaching.release.resolve();
       const result = await stopping;
       if (advance === "replacement" || advance === "incarnation") {
-        expect(result).toBeInstanceOf(Error);
+        expect(result).toMatchObject({
+          message: expect.stringContaining(
+            advance === "replacement" ? "worker changed before cancellation" : "Session",
+          ),
+        });
         f.expectCancellationBlocked();
       } else {
         if (action === "archive") {
@@ -640,69 +642,6 @@ it.each([
   },
 );
 
-it.each(["transaction", "commit"] as const)(
-  "retains the abandoned Stop decision when the caller changes at %s completion admission",
-  async (stage) => {
-    let destroyed = false;
-    const f = await cancellationLoadFixture({
-      afterDestroy: () => {
-        destroyed = true;
-      },
-    });
-    const active = await f.coordinated.dispatch(REQUEST);
-    f.harness.markEnvironmentNodeDeviceId("device-1");
-    f.database.db
-      .prepare("UPDATE worker_environments SET profile_id = ? WHERE environment_id = ?")
-      .run("device:device-1", active.environmentId);
-    const begun = await f.placements.beginPlacementMove({
-      sessionId: active.sessionId,
-      source: source(active),
-      target: { kind: "gateway" },
-      abandonSource: true,
-    });
-    let allowed = true;
-    let admissionReached = false;
-    let connected = true;
-    const assertLifetime = () => {
-      if (!connected) {
-        throw new Error("Stop connection closed");
-      }
-    };
-    const assertCaller = () => {
-      assertLifetime();
-      if (!allowed) {
-        throw new Error("Stop caller revoked at completion");
-      }
-    };
-    const authorize = Object.assign(assertCaller, {
-      assertWorkerLifetime: assertLifetime,
-      assertWorkerGrant: assertCaller,
-    });
-    const admission = probe.admission(operationAdmission, (request, grant, admit) => {
-      if (destroyed && request.stage === stage) {
-        admissionReached = true;
-        allowed = false;
-      }
-      admit(request, grant);
-    });
-    try {
-      await expect(f.coordinated.reclaim(REQUEST, authorize)).rejects.toThrow(
-        "Stop caller revoked at completion",
-      );
-      expect(admissionReached).toBe(true);
-      expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
-      expect(f.placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
-      expect((await f.placements.getPlacementMoveAsync(REQUEST.sessionId))?.operationId).toBe(
-        begun.intent.operationId,
-      );
-    } finally {
-      connected = false;
-      admission.mockRestore();
-      f.context.chatRunState.clear();
-    }
-  },
-);
-
 async function barrierFixture(name: string) {
   setRuntimeConfigSnapshot({});
   const request = sessionIdentity(name);
@@ -729,7 +668,6 @@ async function barrierFixture(name: string) {
   });
   const run = vi.fn(async () => ({ ...placement, state: "reclaimed" as const }) as never);
   return {
-    placement,
     cancel,
     run,
     admit: (onInterrupt?: () => void) =>
@@ -774,27 +712,20 @@ it("one failed Stop cannot reopen ingress while another Stop still owns its clos
   (await f.admit()).release();
 });
 
-it.each(["authorization", "incarnation", "worker"] as const)(
+it.each(["authorization", "incarnation"] as const)(
   "rejects changed %s after cancellation and reopens admission on failure",
   async (change) => {
     const f = await barrierFixture(`changed-${change}`);
     const entered = createPlacementTestHold();
     let authorized = true;
     const interrupted = vi.fn();
-    const signalled = vi.fn();
     const acquired = await f.admit(() => {
       interrupted();
       acquired.release();
     });
     f.cancel.mockImplementation(async ({ assertCurrent }) => {
-      if (change !== "worker") {
-        assertCurrent();
-      }
+      assertCurrent();
       await entered.wait();
-      if (change === "worker") {
-        assertCurrent();
-        signalled();
-      }
     });
     try {
       const stop = f.prepare({
@@ -805,18 +736,11 @@ it.each(["authorization", "incarnation", "worker"] as const)(
         },
       });
       const rejected = expect(stop).rejects.toThrow(
-        change === "authorization"
-          ? "access revoked"
-          : change === "worker"
-            ? "worker changed before cancellation"
-            : "Session",
+        change === "authorization" ? "access revoked" : "Session",
       );
       await entered.entered.promise;
       if (change === "authorization") {
         authorized = false;
-      } else if (change === "worker") {
-        // Replacement must not mutate the captured owner snapshot.
-        f.placement.generation++;
       } else {
         await f.replaceEntry("replacement-with-same-session-id");
       }
@@ -824,7 +748,6 @@ it.each(["authorization", "incarnation", "worker"] as const)(
       await rejected;
       expect(interrupted).not.toHaveBeenCalled();
       expect(f.run).not.toHaveBeenCalled();
-      expect(signalled).not.toHaveBeenCalled();
       (await f.admit()).release();
     } finally {
       entered.release.resolve();

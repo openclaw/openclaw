@@ -1,28 +1,144 @@
 import type { Selectable, Updateable } from "kysely";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
+import type { WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
 
-export type LocalWorkspaceProjection = Selectable<DB["local_workspace_projections"]>;
+export type LocalWorkspacePreparedEntry = {
+  entry: WorkerWorkspaceManifestEntry;
+  identity?: string;
+  objectId?: string;
+};
+
+export type LocalWorkspaceCapture = {
+  root: string;
+  sourceDev: bigint;
+  snapshotDev: bigint;
+  capturedAtMs: number;
+};
+
+export type LocalWorkspaceBaselineDocument = {
+  rawManifest: string;
+  manifestRef: string;
+  buildCacheInputs: string[];
+  /** Producer-created layout added to an immutable template before initial publication. */
+  preparedDirectories?: string[];
+  /** Btrfs template clone: file identities persist on this new device. */
+  clonedDevice?: bigint;
+};
+
+export type LocalWorkspaceManifestAction =
+  | {
+      kind: "scan" | "probe";
+      target: "canonical" | "projection";
+      canonicalRoot: string;
+      capture?: LocalWorkspaceCapture;
+      prehash?: true;
+      preparedEntries?: LocalWorkspacePreparedEntry[];
+    }
+  | { kind: "archive"; canonicalRoot: string; archiveRoot: string; snapshotCommit: string }
+  | { kind: "materialize" }
+  | { kind: "convert" }
+  | { kind: "repair"; canonicalRoot: string }
+  | {
+      kind: "prepare";
+      manifest: LocalWorkspaceManifestMutation;
+      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
+    }
+  | (LocalWorkspaceBaselineDocument & {
+      kind: "replace";
+      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
+    });
+
+export type LocalWorkspaceManifestCheckpoint = Omit<
+  LocalWorkspaceManifestScan,
+  "observation" | "preparations" | "preparedEntries" | "existingObjects"
+>;
+
+export type LocalWorkspaceManifestInput = {
+  id: string;
+  revision: number;
+  action: LocalWorkspaceManifestAction;
+  knownTreeRoot?: string;
+};
+
+export type LocalWorkspaceRejectedResult = { ref: string; reason: string; manifestRef?: string };
+export type LocalWorkspaceProjection = Selectable<DB["local_workspace_projections"]> & {
+  rejectedResult?: LocalWorkspaceRejectedResult;
+};
 export type LocalWorkspaceManifestMutation = {
   records: LocalWorkspaceManifestRecord[];
   removed: string[];
   previousRoot: string | null;
   resultingRoot: string;
   replace?: boolean;
+  treeRoot?: string;
+  previousTreeRoot?: string | null;
+  /** Acceptance reuses fingerprints from the revision-checked durable checkpoint. */
+  fingerprintsFromCheckpoint?: true;
+  fingerprints?: { target: "canonical" | "projection"; blob: string; oppositeBlob?: string };
 };
 export type LocalWorkspaceMutation =
-  | { kind: "create"; row: Omit<LocalWorkspaceProjection, "revision"> }
+  | { kind: "create"; row: Omit<LocalWorkspaceProjection, "revision" | "rejectedResult"> }
   | {
       kind: "update";
       revision: number;
       patch: Updateable<DB["local_workspace_projections"]>;
       manifest?: LocalWorkspaceManifestMutation;
+      rejectedResult?: LocalWorkspaceRejectedResult;
     }
   | { kind: "delete"; revision: number };
 
-/** The read worker retains the full mutation; the host publishes only this header. */
+/** Manifest computation prepares the full mutation; the host publishes only this header. */
 export type LocalWorkspacePreparedUpdate = {
   revision: number;
   patch: Updateable<DB["local_workspace_projections"]>;
+  rejectedResult?: LocalWorkspaceRejectedResult;
   mutation: Uint8Array;
+  preparations?: Uint8Array[];
 };
+
+export type LocalWorkspaceManifestScan = {
+  existingObjects?: Array<[string, string]>;
+  preparedEntries?: LocalWorkspacePreparedEntry[];
+  version: 1;
+  kind: "scan";
+  previousRoot: string | null;
+  resultingRoot: string;
+  treeRoot?: string;
+  previousTreeRoot?: string | null;
+  fingerprints?: LocalWorkspaceManifestMutation["fingerprints"];
+  preparations?: Uint8Array[];
+  records: LocalWorkspaceManifestRecord[];
+  observation?: LocalWorkspacePreparedUpdate;
+  removed: string[];
+  replace?: true;
+  baseManifestRaw: string;
+  baseManifestRef: string;
+  currentManifestRaw: string;
+  currentManifestRef: string;
+  buildCacheInputs: string[];
+};
+
+/** A refused result retains its source receipt without remaining eligible for automatic apply. */
+export type LocalWorkspaceCheckpointReceipt =
+  | LocalWorkspaceManifestCheckpoint
+  | {
+      kind: "rejected";
+      ref: string;
+      reason: string;
+      manifestRef?: string;
+      checkpoint: string | null;
+    };
+
+export type LocalWorkspaceManifestValue =
+  | LocalWorkspaceManifestScan
+  | { kind: "rescan"; entryCount?: number }
+  | { kind: "materialize"; rawManifest: string; manifestRef: string }
+  | {
+      kind: "archive";
+      overlay?: {
+        base: { rawManifest: string; manifestRef: string };
+        accepted: { rawManifest: string; manifestRef: string };
+      };
+    }
+  | { kind: "replace"; update: LocalWorkspacePreparedUpdate };

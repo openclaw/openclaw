@@ -1,12 +1,12 @@
 import rawFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import {
   formatCliImageTurnContext,
   hashCliImageTurnEntryId,
 } from "../agents/cli-image-turn-correlation.js";
-import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
@@ -15,6 +15,7 @@ import {
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { ChatHistoryPageParams } from "../config/sessions/session-history-types.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { confirmPersistedSteerTargetRunId } from "../sessions/user-turn-transcript-updates.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
@@ -22,13 +23,9 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
+import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
-import {
-  claudeUser,
-  cliMeta,
-  LEGACY_EXEC_COMPLETION_PROMPT,
-  withClaudeProjectsDir,
-} from "./cli-session-history.test-support.js";
+import { claudeUser, cliMeta, withClaudeProjectsDir } from "./cli-session-history.test-support.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
 import { archiveSessionTranscriptPaths } from "./session-transcript-files.fs.js";
@@ -114,7 +111,7 @@ function historyParams(
     storePath: scope.storePath,
     sessionAgentId: scope.agentId,
     canonicalKey: scope.sessionKey,
-    cliHistoryHomeDir: homeDir,
+    cliHistoryProjectsDir: path.join(homeDir, ".claude", "projects"),
     max,
     maxHistoryBytes: 64 * 1024,
     effectiveMaxChars: 4096,
@@ -204,6 +201,65 @@ it("pages past native interrupts without consuming an identical canonical human 
           "latest",
         ]);
       });
+    });
+  });
+});
+
+it("rebuilds the CLI history index only for a change to its own transcript", async () => {
+  await withPagingHistory("cli-rewrite-cost", async (fixture) => {
+    const { scope, entry, readers } = fixture;
+    await fs.writeFile(fixture.filePath, native("older", "Older reply", 1));
+    const saved = await appendTranscriptMessage(scope, {
+      eventId: "steer",
+      message: { role: "user", content: "New input", timestamp: 1000 },
+    });
+    await waitForSessionTranscriptProjection(scope);
+    const anchor = expectDefined(saved.anchor, "accepted user turn");
+    const params = historyParams(fixture, fixture.homeDir);
+    const readIds = (maxBytes?: number) =>
+      withCliReader(params, readers, async (cli) => {
+        const page = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
+          maxMessages: 10,
+          maxBytes,
+        });
+        return page.messages.map(readChatHistoryMessageId);
+      });
+    using builds = vi.spyOn(CliSessionHistoryIndex.prototype, "finish");
+    await fixture.owner.run(fixture.target.database, async () => {
+      const before = readers.readHistoryRevision();
+      expect(await readIds()).toEqual(["older", "steer"]);
+      expect(builds).toHaveBeenCalledTimes(1);
+
+      const other = { ...scope, sessionId: "other", sessionKey: "agent:main:other" };
+      await replaceSessionEntry(other, { sessionId: other.sessionId, updatedAt: entry.updatedAt });
+      await appendTranscriptMessage(other, { message: { role: "assistant", content: "Other" } });
+      await waitForSessionTranscriptProjection(other);
+      expect(await readIds(1)).toEqual(["steer"]);
+      expect(builds).toHaveBeenCalledTimes(1);
+
+      await confirmPersistedSteerTargetRunId(
+        { ...anchor, logicalTurnId: "steer", role: "user" },
+        "active-run",
+        {
+          importedFrom: "claude-cli",
+          cliSessionId: fixture.nativeId,
+          externalId: "accepted-input",
+        },
+      );
+      const after = readers.readHistoryRevision();
+      expect(after.database).toBe(before.database);
+      expect(after).toMatchObject({
+        generation: before.generation,
+        indexedSeq: before.indexedSeq,
+        leafEventId: before.leafEventId,
+      });
+      expect(after.updatedAt).toBeGreaterThan(
+        expectDefined(before.updatedAt, "initial transcript revision"),
+      );
+      expect(await readIds()).toEqual(["older", "steer"]);
+      expect(builds).toHaveBeenCalledTimes(2);
+      expect(await readIds(1)).toEqual(["steer"]);
+      expect(builds).toHaveBeenCalledTimes(2);
     });
   });
 });
@@ -384,82 +440,6 @@ it("observes newly available reset archives and refuses changed archive bodies u
         { content: "Replacement body", __openclaw: { id: "replacement" } },
         { __openclaw: { id: "native-only" } },
       ]);
-    });
-  });
-});
-
-it.each([
-  "resume",
-  "legacy hint",
-  "legacy context",
-  "legacy resume",
-  "legacy hint CRLF",
-  "legacy context CRLF",
-])("matches original native text and cleans unmatched imports with %s", async (decoration) => {
-  const kind = decoration.replace(" CRLF", "");
-  await withPagingHistory("cli-generated-prefixes", async (fixture) => {
-    const { scope, entry, readers } = fixture;
-    const note = buildCliSessionDriftNote(["prompt-tools"]);
-    const hint =
-      'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\n';
-    const context =
-      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner","display_name":"Owner"}}\n```\n\n';
-    const prefix = (
-      kind === "resume"
-        ? `${note}\n\n`
-        : kind === "legacy hint"
-          ? hint
-          : kind === "legacy context"
-            ? context + hint
-            : `${note}\n\n${context}${hint}`
-    ).replaceAll("\n", decoration.endsWith("CRLF") ? "\r\n" : "\n");
-    const literal = `${prefix}hello`;
-    const plain =
-      kind === "legacy context"
-        ? context.replace("}}", '},"requester_profile_hint":"current"}') + "hello"
-        : "hello";
-    const events = "System: [2026-10-04 13:15:44 GMT+8] Model switched.\n\n";
-    await fixture.setEvents([
-      local("plain", null, plain, 1_000, "user"),
-      local("literal", "plain", literal, 2_000, "user"),
-      local("question", "literal", "real question", 3_000, "user"),
-    ]);
-    const nativeUser = (uuid: string, content: string, timestamp: number) =>
-      native(uuid, content, timestamp, "user");
-    await fs.writeFile(
-      fixture.filePath,
-      [
-        nativeUser("native-literal", literal, 1_001),
-        nativeUser(
-          "native-plain",
-          kind === "legacy context" ? `${prefix}${events}hello` : "hello",
-          2_001,
-        ),
-        nativeUser("native-question", `${prefix}${events}real question`, 3_001),
-        nativeUser("native-unmatched", `${prefix}${events}only in the native file`, 4_000),
-        nativeUser("native-exec", `${events}${LEGACY_EXEC_COMPLETION_PROMPT}`, 5_000),
-      ].join("\n"),
-    );
-    await fixture.owner.run(fixture.target.database, async () => {
-      await withCliReader(
-        historyParams({ scope, entry }, fixture.homeDir),
-        readers,
-        async (cli) => {
-          const page = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
-            maxMessages: 10,
-          });
-          expect(page.messages).toMatchObject([
-            { content: plain, __openclaw: { id: "plain", externalId: "native-plain" } },
-            { content: literal, __openclaw: { id: "literal", externalId: "native-literal" } },
-            { content: "real question", __openclaw: { id: "question" } },
-            {
-              content: "only in the native file",
-              __openclaw: { externalId: "native-unmatched" },
-            },
-            { display: false, provenance: { kind: "internal_system", sourceTool: "exec" } },
-          ]);
-        },
-      );
     });
   });
 });

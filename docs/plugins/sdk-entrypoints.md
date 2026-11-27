@@ -16,6 +16,12 @@ All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
 including these entry helpers. Pin and test the OpenClaw host versions your
 plugin supports.
 
+`openclaw/plugin-sdk/plugin-entry` also exports the named
+`PluginHookBeforeModelRequestEvent` and `PluginHookBeforeModelRequestResult`
+contracts for [model request hooks](/plugins/hooks/prompt-and-session#final-model-request-policy),
+plus `PluginMetricFamilyDeclaration`, `PluginMetricLabels`, `PluginMetrics`, and
+`PluginMetricFamily` for [plugin metrics](/gateway/prometheus#plugin-metric-families).
+
 Gateway adapters use the existing `core` or `gateway-runtime`
 `GatewayRequestHandlerOptions.context.githubPublicationService` contract for
 GitHub publication. Prepare its required capabilities with
@@ -74,6 +80,65 @@ the typed public Plugin SDK. Bundled backend authors should follow the
 - [Building channel plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
 - [Building provider plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
 - [Decision models](/plugins/sdk-overview/capabilities#decision-models-contract-version-1) - `openclaw/plugin-sdk/decisions` and the typed decision provider contract
+
+## Offline worker runtime artifacts
+
+Image-preparation tools can import `openclaw/runtime-artifacts` to export the
+canonical node runtime and worker archives from a built OpenClaw installation:
+
+```ts
+import {
+  prepareWorkerRuntimeArtifacts,
+  qualifyWorkerRuntimePlugins,
+  resolveNodeBootstrapPlugins,
+  workerBundleArchiveRelativePath,
+} from "openclaw/runtime-artifacts";
+
+const selection = await qualifyWorkerRuntimePlugins({ packageRoot, config });
+const artifacts = await prepareWorkerRuntimeArtifacts({
+  packageRoot,
+  runningBuildId,
+  plugins: resolveNodeBootstrapPlugins(selection),
+  outputDirectory,
+});
+const workerPath = workerBundleArchiveRelativePath(artifacts.workerBundle.tarballSha256);
+```
+
+Qualification inspects only this installation's bundled plugins, prefers their
+built entrypoints, and releases its inspection registry without publishing it
+to a Gateway. Configured external plugin paths are not loaded, and inspection
+cannot mutate the configuration.
+
+The output directory must not exist, its parent must exist, and it must be
+outside the installed package. The result records the build, selected plugins,
+platform, architecture, archive paths, sizes, and SHA-256 digests. Both archive
+producers settle before failure cleanup removes the owned output. A successful
+export belongs to the caller; keep it until transfer finishes. This API always
+exports a preassembled dependency bundle, not an npm-install archive.
+
+The Crabbox plugin's lazy `cli-runtime-api` artifact exposes
+`createCrabboxOfflineRuntimeSetup`. Pass the transferred archives' absolute local
+paths with their expected sizes, digests, build and manifest identity, plus
+`workerPath` as the worker archive's `packageRelativePath`. Execute the returned
+command as the intended runtime user on a matching prepared platform. It checks
+the local archives before installing them and returns no forwarded credentials.
+It does not allocate a machine, enroll a node, create a logical lease, or grant
+execution authority. Node and archive extraction tools must already be present.
+
+For a retained cache, `createCrabboxRuntimeCacheVerification` takes the same
+artifact identity without local archive paths and returns a credential-free
+command. It rejects missing or corrupt caches without installing, pruning
+archives, binding runtime Node, or creating enrollment state. It checks the
+package/build/manifest identity, CLI version, and retained worker archive digest;
+it does not hash every installed runtime file or grant live execution authority.
+
+After a successful bundle install or verification command, pass its stdout and expected
+identity to `readCrabboxRuntimeInstallation`. It accepts exactly one
+`openclaw.runtime-installed:` result line of at most 16 KiB and rejects mismatched
+artifacts. This stdout protocol marker is not an environment variable.
+`parseCrabboxRuntimeInstallation` validates an already decoded result against
+that identity. The receipt records `installed` or `existing-verified`; it is
+evidence of the completed check, not permission to skip future verification.
 
 ## Code Mode executor runtime
 
@@ -161,6 +226,12 @@ Use `openclaw/plugin-sdk/agent-workspace-runtime` to declare, register, and acqu
 configured remote workspace during registration so callers cannot fall back to
 local files before its service starts. Register its bridge when ready and release
 it when the service stops. Callers keep their existing document authorization.
+
+`AgentHarnessHostCapabilities.prepareLocalExecScratch({ cwd })` prepares the admitted local workspace's
+`.openclaw/tmp/` and returns `TMPDIR`, `TMP`, and `TEMP` for its child shells.
+The host closes this operation with its admitted run. Native harnesses apply these values to the session's shell environment, without
+changing a shared server's process environment. Do not project local paths into
+remote or sandbox processes; those execution owners select their own paths.
 
 The bridge's optional `createFileExclusive` operation publishes a complete file
 only if its path does not exist, returning `"created"` or `"exists"`. It must use
@@ -280,9 +351,9 @@ path projection, context order, instruction carriers, and session/turn lifetimes
 Optional `projectPath` projects file paths after budgeting without changing their
 contents or personal-user provenance. It describes existing execution placement;
 it does not transfer or mount files.
-Full-context preparation preserves Codex's existing selection timing: projecting
-the root instruction path away from `workspaceDir` produces an empty root snapshot.
-Callers preparing source-workspace instructions should omit `projectPath`.
+Root instruction selection uses source paths before projection, preserving the
+bounded snapshot when a sandbox remaps the workspace. The selected document is
+excluded from project context without granting the agent source-file access.
 
 `buildAgentWorkspaceInstructionSnapshot(contextFiles, workspaceDir)` selects and
 renders that root instruction document from already-bounded context, including
@@ -294,6 +365,15 @@ current client does not implement per-turn developer instructions, persona and
 personal-overlay refresh, turn-scoped project or memory guidance, native forks,
 or Gateway-to-hosted-workspace path projection. Those remain MVP integration gaps;
 shared preparation does not enable those operations.
+
+## Subagent progress references
+
+`formatSubagentProgressReference(id)` from
+`openclaw/plugin-sdk/agent-harness-runtime` returns a display-only four-character
+UUID suffix, or `undefined` when no UUID is available. Keep human labels and
+the original identity: short references can collide and must never be used
+for routing, authorization, deduplication, or lifecycle keys. Native harnesses
+should pass their actual worker/thread ID, not infer a session ID from a path.
 
 ## Tool failure diagnostics
 
@@ -340,6 +420,15 @@ synchronous and opaque transaction callback forms remain deprecated through
 2026-12-31, with removal in the first January 2027 stable release. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
 and [transcript migration](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
 
+To post a notice into a session's chat without sending it to the model, call
+`appendAssistantMirrorMessageByIdentity` with `text` and
+`deliveryMirror: { kind: "plugin-notice", pluginId, type, data }`. Every client
+shows the text. `data` is JSON that a client can use to render a richer row for a
+notice type it knows. The row is never replayed to the model. For a notice from
+background work that must skip a reset session or also reach the session's
+channel, use `api.runtime.system.postSessionNotice`; see
+[background session notices](/plugins/sdk-runtime#background-session-notices).
+
 For ordinary session preparation, await `getSessionEntryAsync`,
 `readSessionUpdatedAtAsync`, `getConversationSessionAsync`, or
 `readAmbientTranscriptWatermarkAsync` from `session-store-runtime`. Native command
@@ -348,6 +437,73 @@ preparation uses `resolveStoredModelOverrideAsync` and
 available from `native-command-registry`. Their synchronous compatibility APIs
 remain deprecated through 2026-12-31. See
 [session and command preparation](/plugins/sdk-migration#session-and-command-preparation).
+
+For descriptive metadata, use `listSessionEntriesAsync`. For bounded disclosure
+after awaited preparation, use
+`runtime.agent.session.withSessionEntriesAsync` (also exported by
+`session-store-runtime`) with `stores: [{ agentId, storePath, sessionKeys }]`.
+It retains all selected physical sources until its synchronous callback returns.
+An optional `involvingProfileId` matches exact canonical owners or direct profile
+participants, including merge aliases; it does not interpret names, logins or
+display prefixes. A separate optional `profileRelation` accepts a numeric GitHub
+account target and an `owned` or `involving` relationship. `involving` additionally
+matches recorded mentions. Both selectors intersect when supplied together. After preparing the selected stores, the shared-state worker reads a
+fresh canonical profile snapshot, without reusing an earlier inspection snapshot
+or resident catalog. Local identity changes invalidate that prepared selection.
+Final native reads observe the selected session rows after the last await. Profile
+and session reads are separate snapshots, not atomic serialization across databases.
+Revalidate current configuration, selected groups, exact session IDs and any other
+caller-owned policy inside the callback, then serialize without awaiting. Returning
+a Promise is rejected. Returned metadata is not retained authority.
+
+When awaiting further preparation after `readSessionTranscriptCatalogPage`, its
+optional second argument captures an actor-currentness assertion. Call it at final
+serialization along with the caller's session/source checks. It does not grant
+access to the transcript or extend the session reader's lifetime.
+
+## Skill authoring
+
+`skill-authoring-runtime` is a private official-plugin runtime for plugins that
+keep learned skills in the per-agent folder their manifest names in
+`agentSkillsDir`. Skill loading already reads that folder; this subpath writes it.
+
+The host resolves the skills root from the calling plugin's own manifest. Calls take
+the target agent (`{ config, agentId }`) and a skill name, never a folder or path, so
+a plugin cannot name another plugin's skills. A plugin without `agentSkillsDir` gets
+`SkillAuthoringError` with code `no_skills_root`.
+
+- `resolveSkillsRoot({ config, agentId })` returns the calling plugin's folder for
+  one agent, for listing its skills.
+- `readSkillFile({ config, agentId, skillName, filePath })` and `listSkillFiles`
+  read with byte limits and refuse links.
+- `normalizeSkillFilePath(path)` accepts `SKILL.md` or a relative path below
+  `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.
+- `parseSkillFrontmatter` parses strictly; `splitSkillFrontmatter` returns the
+  frontmatter record and body and never throws.
+- `validateSkillFile({ skillName, filePath, content, maxSkillBytes })` checks
+  the support path, the `SKILL.md` frontmatter (`name` must match the folder,
+  `description` must be 1 to 1,024 bytes), the size limits, and the skill security
+  scan. It returns the description.
+- `writeSkillFile` and `removeSkillFile` validate, then change one file of one
+  skill. A skill name that is not one plain folder name, or a skill folder that a
+  link moves outside the root, is refused.
+- `commitSkillChange({ config, agentId, skillName, apply })` runs `apply`,
+  refreshes skill discovery, and dispatches one `skill_changed` hook with
+  `source: "plugin"`, the calling plugin's `pluginId`, and the before and after
+  artifacts. A failed `apply` dispatches nothing. Serialize overlapping changes to
+  one skill in the plugin.
+
+These calls must run inside a plugin call (a tool, hook, command, service, or
+`api.lifecycle.runInBackgroundContext` work). They carry the calling plugin's live
+authority from the host and check it after each awaited step and immediately before
+each file change and the `skill_changed` dispatch. When the plugin is disabled,
+replaced, or unloaded, they throw `PluginInstanceUnavailableError` and commit
+nothing.
+
+Refusals throw `SkillAuthoringError`. Its message says what to change, and its
+`code` (`invalid_path`, `path_escape`, `too_large`, `invalid_frontmatter`,
+`unsafe_content`, or `no_skills_root`) lets the plugin add its own guidance.
+Versioning, drafts, and naming rules stay with the plugin.
 
 ## Stateful CLI commands
 
@@ -382,10 +538,33 @@ database writer and file publication boundaries too. Versioned owner-bound RPC
 names let CLI callers require updated plugin handlers without assuming that an
 updated Gateway also upgraded an independently installed plugin.
 
+## Prepared Decision HTTP runtime
+
+`openclaw/plugin-sdk/decisions-http-runtime` is the one HTTP executor for
+provider-owned JSON Decision protocols. Import it lazily.
+`evaluateDecisionHttp(context, route)` projects the host-prepared V2 context;
+`executeDecisionHttp(execution)` takes the same facts explicitly for other
+contracts. The provider supplies only its route: base URL, relative endpoint
+path, serialized body (omit it for a GET), and a decoder for the bounded JSON
+payload. Optional route fields cover real provider differences: `authHeaders`
+replaces the default `Authorization: Bearer` header, `statusReason` maps a
+documented provider status, and `maxResponseBytes` changes the 1 MiB read bound.
+
+The executor owns the deadline and timeout signal, one admission check when the
+request starts, guarded fetch with the trusted env-proxy mode, no redirects,
+status classification (401/403 authentication, 429 rate-limited with
+Retry-After, 400/413/422 unsupported input, otherwise transport), the bounded
+read, credential-reflection rejection, and release. Cancellation and thrown
+admission errors pass through. A decoder that throws returns an invalid
+response. It makes one request, never discovers credentials, and never retries.
+A provider with a queue wait or retry calls it again, which checks admission
+again. The provider owns request eligibility, native semantics, retention
+controls, and validation of decoded results.
+
 ## OpenAI-compatible Decisions runtime
 
 `openclaw/plugin-sdk/decisions-openai-runtime` supplies the shared native
-Decisions codec and HTTP executor used by OpenAI and ClawRouter. Import it
+Decisions codec used by OpenAI, Celeris, Nace, and ClawRouter. Import it
 only from a lazy decision runtime, not a plugin's eager entrypoint.
 
 `evaluateOpenAICompatibleDecision(batch, context, route)` accepts a host-prepared
@@ -408,6 +587,14 @@ The lightweight `decisions` subpath exports
 the canonical capability schema rather than a competing normalizer. Static
 capability declarations do not confer account entitlement.
 
+## Resource profile
+
+`openclaw/plugin-sdk/resource-profile` exports `getResourceProfile`,
+`onResourceProfileChange`, and the `ResourceProfile` type. It reads the existing
+Gateway decision without selecting another profile or exposing a setter.
+See [Resource profile](/plugins/sdk-runtime#resource-profile) for lifecycle and
+subscription semantics.
+
 ## Runtime request headers
 
 `openclaw/plugin-sdk/provider-request-headers` exports the `ModelRequestHeaders`
@@ -415,3 +602,36 @@ type and `omitNullRequestHeaders`. Runtime headers can contain `null` deletion
 markers; preserve them through header merges and OpenAI SDK calls. Use the helper
 after the final merge when a direct HTTP client needs a string-only header map.
 This entrypoint loads no provider policy, transport host, or credential runtime.
+
+### Node workspace process environment
+
+A node-host workspace lease may expose `processEnvironment`. Call `prepare` after
+generic environment sanitization and `assertCurrent` synchronously immediately
+before a process effect. The lease and invocation own its lifetime; saved copies
+do not survive release or cancellation. Use `redactOutput` at diagnostic egress.
+This capability is host-local and is never a wire environment override.
+
+`process-runtime` exports `AGENT_GIT_CONFIG_PARAMETERS` for the host-owned agent Git
+maintenance defaults. Native execution adapters append these parameters after
+resolving their own inherited Git configuration and environment filtering.
+
+`process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
+streams. It preserves incomplete lines and leaves CR handling to the consumer.
+`stripGatewayAllocatorEnv` removes `MALLOC_CONF` and jemalloc `LD_PRELOAD`
+entries in place from a caller-owned child environment. Copy inherited values
+first; never pass `process.env`. Other preload libraries remain available.
+Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
+the runtime's existing dispatch and delivery authority.
+
+Session Share keeps the legacy list/read contracts unchanged. Optional node
+catalog commands are `openclaw.sessions.catalog.list.v1` and
+`openclaw.sessions.catalog.read.v1`, explicitly allowed on the receiver and
+advertised/approved on the source. Node list accepts `profileRelation` and
+`includeOriginalPath`; read accepts `profileRelation`. The only source target is
+`{ type: "github-account", id: "123" }`, with relationship `owned` or `involving`.
+The outbound Gateway pair is `session-share.catalog.list/read`, advertised in
+`features.methods`. Its list accepts `profileRelation`, but never `includeOriginalPath`;
+Gateway sources cannot supply original links. Receivers use the advertised catalog
+pair for every list/read, and the legacy pair only when the catalog pair is absent.
+These selectors narrow publication, not reader authority.
+See [Session Share](/plugins/session-share) for numbered setup and disclosure.

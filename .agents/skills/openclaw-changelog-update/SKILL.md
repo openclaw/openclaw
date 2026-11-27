@@ -22,7 +22,7 @@ ordering, grouping, and attribution discipline.
 Rebuild the target `CHANGELOG/<version>.md` release section from a complete, generated
 history manifest, not stale draft notes. Produce grouped user-facing release
 notes sorted by user interest while preserving every relevant issue/PR ref and
-every human `Thanks @...` attribution.
+every verified human `Thanks @...` attribution.
 
 `CHANGELOG.md` is the generated release index. The shared owner
 `scripts/lib/release-changelog.mjs` resolves release sections and contribution
@@ -56,14 +56,27 @@ of this skill; initial generation must never overwrite them.
   If npm already selects the candidate or a newer version, generation refuses
   to guess historical selector state; supply the previously captured tag. When
   that tag is not an ancestor (for example a stable closeout forward-port), the
-  verifier uses its reachable merge base and subtracts the captured shipped
-  tag's cumulative PR record through `--shipped-ref` semantics. The manifest and
+  verifier inventories the full target history absent from that shipped tag and
+  subtracts its recorded PRs through `--shipped-ref` semantics. The manifest and
   record retain both boundaries; replay with the captured tag to resolve the
   same range, never select an older GitHub beta instead.
-- Stable base tag: last reachable shipped stable release tag. It must be an ancestor of
-  the target; a newer but divergent tag is not a valid history boundary. Use
-  an explicit shipped/main-closeout SHA only when it is also reachable from the
-  target.
+- Stable base tag: the previous **published regular stable release**, even when
+  its branch diverges from the target. Omit the base (or use npm-stable) to capture
+  public npm's current openclaw@latest before publication. As with beta, a selector
+  already at or beyond the candidate requires the previously captured explicit
+  tag; local tag ordering is not proof of publication. Extended-stable requires
+  an explicit previous published tag on its maintenance line (the selected
+  regular-stable cut for that line's first release), never the current regular
+  latest. A main-closeout SHA is not a shipped boundary: the
+  [v2026.11.4 → v2026.11.5 incident](https://github.com/openclaw/openclaw/pull/200958)
+  showed that it can omit unreleased beta development that landed before
+  closeout. Explicit ancestral SHAs remain
+  readable for historical replay with a diagnostic, not recommended for new notes.
+- Divergent histories: keep the selected tag as base in the manifest and public
+  contribution provenance; mergeBase is separate traversal information. Inventory
+  every commit in base..target, including merged side branches, canonicalize PRs,
+  handle reverts, then subtract proven shipped contributions. Never replace the
+  selected release with its merge base or the nearest reachable older release.
 - Target ref: the exact product-complete history being documented. Its
   contribution-record target must be an ancestor of the final release target;
   it need not name a not-yet-created changelog commit. Include any later fixes
@@ -72,7 +85,9 @@ of this skill; initial generation must never overwrite them.
 - Canonical main ref: current `origin/main`, fetched before verification. Release
   notes cite the original merged main PR when the same work is carried by a
   backport. A release-branch PR is used only while no forward-port exists on
-  current main.
+  current main. The manifest and generated record freeze the canonical main SHA;
+  replay with that exact --main-ref to keep historical alias resolution stable.
+  Candidate validation reads that pin, never a moving main branch.
 
 ## Workflow
 
@@ -101,6 +116,17 @@ of this skill; initial generation must never overwrite them.
      --write-ledger
    ```
 
+   For a read-only historical audit, add `--source-ref <tag-or-sha>` to select
+   the immutable initial notes through the shared release-changelog resolver.
+   It resolves the supplied ref once and records the exact commit, entry and
+   record paths in `changelogSource` in the manifest and JSON result. The default
+   remains working-tree notes; `--target` alone does not select notes. A selected
+   docs mirror still fails the initial-format guard. `--source-ref` cannot be
+   combined with `--write-ledger`, and manifest/snapshot outputs cannot alias
+   source artifact paths. This produces an accounting proposal, not approval of
+   final counts, editorial content or credits; never initialize or copy notes
+   to manufacture a historical source.
+
    For beta generation, use `--version YYYY.M.PATCH-beta.N` and omit `--base`
    on the first inventory run. Start an exact-version section with Highlights,
    Changes and Fixes using the shared writer; generate the delta manifest, then
@@ -110,14 +136,45 @@ of this skill; initial generation must never overwrite them.
 
    Add repeatable `--release-provenance '<40sha> -> #PR[, #PR]'` inputs when
    release commits cannot carry provenance metadata. These use the same exact
-   marker grammar and current-main validation as commit-body markers.
+   marker grammar and source validation as commit-body markers. A merged
+   release-branch original is valid only while no corresponding current-main
+   forward-port exists; its GitHub merge commit pins the original source.
 
    The verifier automatically reuses public GitHub GraphQL responses from an
    exact base/target SHA snapshot under the worktree's git metadata. Iterative
    rewrites at the same target avoid repeated network discovery. Use
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
    <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
-   audit. GitHub release bodies are always read live.
+   audit. Within one audit, consecutive passes reuse a complete lookup of the
+   same issue and PR references. Missing references are queried again. GitHub
+   release bodies are always read live.
+   Historical issue recovery ([incident and contract: PR #199961](https://github.com/openclaw/openclaw/pull/199961)):
+   unavailable historical issues may be recovered only with explicit
+   `--historical-issue-snapshot <path>` and
+   `--historical-issue-snapshot-sha256 <sha256>` inputs. Supply the original,
+   immutable canonical snapshot and its independently retained digest, never a
+   retargeted snapshot. This evidence reader is separate from exact-range live
+   caching; output paths must not alias its input. The repository must match,
+   and the original historical range must be contained in the current range.
+   Cumulative releases may use the uniquely matching committed historical
+   contribution record; its original audited base and target remain unchanged.
+   Recovery requires exact issue-specific GitHub `NOT_FOUND`, a historical human
+   reporter with complete, unique reciprocal closing-PR evidence, and a committed
+   contribution row preserving that issue and reporter. The row's exact audited
+   range must cover the included PR's merge or one unambiguous release adaptation
+   with the exact merge-title suffix and either `Source commit: <full-sha>` plus
+   same-repository `Source PR: https://github.com/openclaw/openclaw/pull/<number>`
+   markers, or one standard `(cherry picked from commit <full-sha>)` trailer.
+   Conflicting origin markers are rejected.
+   The PR must still resolve with the same author, merge SHA, and merge time;
+   its live closing-issue edge may have disappeared with issue visibility.
+   Partial historical connections, conflicting identities/relationships,
+   unrelated missing references, and authentication/rate/transport errors fail
+   closed. Current matching issue data wins without historical replacement.
+   Recovered issues appear in the manifest and verification result as
+   `recoveredIssues` with historical identity, snapshot digest/range, ledger
+   target, canonical PR/merge, and covered release commit. Their retained reporter
+   credit stays bound to that PR, never presented as newly verified authorship.
    Explicit `CI #`, `CI run #`, `Actions run #`, and `workflow run #` references
    in active source are classified separately only when issue/PR resolution
    fails and a live same-repository Actions lookup confirms the exact run ID.
@@ -141,15 +198,25 @@ of this skill; initial generation must never overwrite them.
      seed-only PRs, then states the unique row total. A PR present in both
      inventories counts as in-range; never describe the seed-inclusive total
      as work merged in the current release range
-   - add repeatable `--shipped-ref <prior-shipped-tag>` when the reachable main
-     closeout differs from the shipped tag or later forward-port commits
-     re-associate PRs that were already released. Each tag is a cumulative
-     shipped boundary: the verifier unions explicit PR rows from complete
-     contribution records in numbered release sections, excludes only overlapping PRs,
-     and ignores `Unreleased`. Never infer this boundary from the base SHA,
-     target prose, or target record. The manifest and generated provenance retain
-     each tag plus the exact excluded PR inventory and count for deterministic
-     candidate validation
+   - the selected release tag is automatically a shipped subtraction boundary.
+     Add repeatable --shipped-ref tags only for additional published boundaries.
+     The shared baseline owner unions explicit historical PR rows through the
+     selected release, ignoring Unreleased and future sections. Stable boundaries
+     do not treat beta draft sections as shipped. Existing canonical main PR
+     identities are retained; recorded release carriers can map to target-history
+     originals through exact cherry-pick/forward-port provenance or a unique
+     normalized-subject match with the same author and an overlapping changed
+     path. Contextual issue references and title-only similarity never establish
+     shipped membership. The manifest and record retain the selected tag and the
+     exact excluded PR inventory/count for deterministic candidate validation.
+   - missing legacy contribution metadata produces explicit diagnostics and retains
+     uncertain contributions, rather than inventing completeness, scraping prose,
+     silently dropping work, or rejecting otherwise valid divergent histories.
+     Review those diagnostics before publication: conservative retention can leave
+     duplicates. Old historical `merged PRs` totals may be stale: report that
+     explicitly and use their recorded rows, never the declared total. Selected-release
+     and canonical historical provenance, duplicate rows, forged counts and
+     exclusions without shipped evidence remain integrity checks.
    - source PR discovery bounds GitHub commit associations to the selected target
      history, or the frozen main history for canonical carriers. A contextual
      source reference becomes a contribution only when its merged commit is
@@ -203,7 +270,17 @@ of this skill; initial generation must never overwrite them.
    - `### Complete contribution record`: generated PR-first record after the
      grouped prose; it is the exhaustive accounting surface, not a second
      release summary
-6. Preserve attribution:
+6. Preserve verified attribution:
+   - PR authorship comes from the canonical GitHub PR, never the release commit
+     author, committer, or backport operator. Resolve coauthors from that PR's
+     original merge commit; release-carrier trailers and contextual mentions
+     do not establish credit on another PR
+   - rebuild generated thanks from PR, original coauthor, and linked-reporter
+     evidence. Seeds retain membership and references, not unverified old
+     thanks. Regeneration replaces stale generated credit in records and grouped
+     prose; verification rejects both missing and unsupported credit
+   - when a vanished PR meets the existing exact-SHA recovery contract, retain
+     its recorded thanks as historical credit without inventing a PR author
    - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
    - every human-authored merged PR represented by a user-facing entry needs
      its PR ref and `Thanks @author`, even when the PR had no linked issue
@@ -252,10 +329,9 @@ of this skill; initial generation must never overwrite them.
      that establishes a user-visible outcome
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
-   - initial release generation keeps its existing credit policy: never thank
-     bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`.
-     The separately approved post-docs GitHub body uses its complete verified
-     human roster, including `@steipete` when credited
+   - credit verified human authors, including maintainers such as `@steipete`.
+     Never thank bots, known automation accounts such as `@steipete-oai`,
+     `@claude`, `@codex`, `@openclaw`, or `@clawsweeper`
    - do not use GitHub's release contributor count as the source of truth; the
      changelog must carry the complete human credit set itself
 7. Sorting preference:
@@ -292,9 +368,11 @@ of this skill; initial generation must never overwrite them.
   as shipped, when a source PR is absent from the contribution record, when
   direct commits are rendered as a public record dump, when non-editorial
   PRs appear in grouped prose, or when an eligible PR author or known
-  co-author is missing from that PR's `Thanks @...` credit. It also fails
+  co-author is missing from that PR's `Thanks @...` credit, or unsupported
+  credit appears in its record or represented editorial bullet. It also fails
   before history collection when `--base` is not an ancestor of `--target`
-  (except beta release tags normalized to merge-base plus shipped-record subtraction),
+  unless the base is a captured shipped release tag with its recorded subtraction
+  inventory (both stable and beta support divergent tags),
   when `### Highlights` violates the selected stable (5-8) or beta (0-8)
   top-level bullet budget, or when the existing prose/record names a PR outside the source
   range. Only an explicit `--seed-ref` may add historical PR inventory; an
@@ -404,9 +482,10 @@ workflow for their verification.
 
 Extended-stable has one release commit and one canonical GitHub Release body.
 After version prep and approved backports, regenerate `CHANGELOG/YYYY.M.P.md`
-with the regular manifest and original-main-PR provenance rules. Land it by PR, then
-validate the final branch tip before tagging. The release closeout renders that
-tag-owned section into the shared draft before the parent pipeline publishes
+with the regular manifest and original-main-PR provenance rules. Commit it directly
+to the canonical release branch, then validate the final branch tip before tagging.
+Do not open a staging/backport PR for release preparation. The release closeout
+renders that tag-owned section into the shared draft before the parent pipeline publishes
 the non-Latest release page. Re-audit after a product
 backport; a tooling-only repair needs no changelog entry. Never rewrite a
 published tag or changelog.

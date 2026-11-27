@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
@@ -6,7 +6,9 @@ import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { createMediaQueryList } from "../../test-helpers/media-query.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
 import type { ChatDetailPanel } from "../chat/components/chat-sidebar-view-types.ts";
+import { ComposerDictationOwner } from "../chat/composer-dictation.ts";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
+import * as draftBody from "./draft-body.solid.tsx";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "./new-session-page-entry.ts";
@@ -68,6 +70,58 @@ afterEach(async () => {
 });
 
 describe("new session draft route ownership", () => {
+  it.each(["pointerdown", "keydown"] as const)(
+    "preloads submission on first composer %s after model configuration intent",
+    async (firstIntent) => {
+      const preload = vi.spyOn(draftBody, "preloadNewSessionSubmission");
+      const page = await mount(routeData("research"));
+      const dispatch = (target: Element, type: "pointerdown" | "keydown") =>
+        target.dispatchEvent(
+          type === "keydown"
+            ? new KeyboardEvent(type, { key: "ArrowDown", bubbles: true, composed: true })
+            : new Event(type, { bubbles: true, composed: true }),
+        );
+      for (const selector of [
+        ".chat-controls__model-trigger .chat-controls__inline-select-label",
+        ".chat-controls__effort-trigger .chat-controls__inline-select-label",
+      ]) {
+        const control = page.querySelector<HTMLElement>(selector)!;
+        expect(control).not.toBeNull();
+        dispatch(control, "pointerdown");
+        dispatch(control, "keydown");
+        expect(preload).not.toHaveBeenCalled();
+      }
+      const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message")!;
+      expect(textarea).not.toBeNull();
+      dispatch(textarea, firstIntent);
+      expect(preload).toHaveBeenCalledOnce();
+      dispatch(textarea, "pointerdown");
+      dispatch(textarea, "keydown");
+      expect(preload).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("releases submission intent listeners on detach and reinstalls them on reconnect", async () => {
+    const preload = vi.spyOn(draftBody, "preloadNewSessionSubmission");
+    const page = await mount(routeData("research"));
+    page.remove();
+    await settle(page);
+    page.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
+    page.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, composed: true }),
+    );
+    expect(preload).not.toHaveBeenCalled();
+
+    document.body.append(page);
+    await settle(page);
+    const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message")!;
+    expect(textarea).not.toBeNull();
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, composed: true }),
+    );
+    expect(preload).toHaveBeenCalledOnce();
+  });
+
   it("prepares composer options once per published typing revision without replacing the input", async () => {
     const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
     const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
@@ -188,7 +242,7 @@ describe("new session draft route ownership", () => {
       vi.stubGlobal("fetch", fetchMock);
       const paste = new Event("paste", { bubbles: true, cancelable: true });
       Object.defineProperty(paste, "clipboardData", {
-        value: { items: [], getData: () => original },
+        value: { items: [], files: [], getData: () => original },
       });
       page.querySelector("textarea")?.dispatchEvent(paste);
       expect(paste.defaultPrevented).toBe(true);
@@ -389,4 +443,35 @@ describe("new session draft route ownership", () => {
 
     expect(message(page)).toBe("");
   });
+});
+
+it("retains an earlier recording's error while the next microphone connects", async () => {
+  const errorMessage = "Transcription provider unavailable";
+  const observed = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
+  await mount(routeData("research"));
+  const owner = observed.mock.contexts[0];
+  assert.instanceOf(owner, NewSessionPageOwner);
+  const capture = new ComposerDictationOwner({
+    client: null,
+    connected: false,
+    enabled: false,
+    realtimeTalkActive: false,
+    onCommit: () => {},
+    onError: () => {},
+  });
+  const connecting = vi.spyOn(capture, "connecting", "get").mockReturnValue(true);
+  vi.spyOn(owner.dictation, "dictation", "get").mockReturnValue(capture);
+  owner.dictationError = "Prior error";
+  owner.dictation.dispatchEvent(new Event("change"));
+  expect(owner.dictationError).toBeNull();
+  // The older recording reports a result after the newer capture was admitted.
+  owner.dictationError = errorMessage;
+  owner.dictation.dispatchEvent(new Event("change"));
+  expect(owner.dictationError).toBe(errorMessage);
+  connecting.mockReturnValue(false);
+  owner.dictation.dispatchEvent(new Event("change"));
+  connecting.mockReturnValue(true);
+  owner.dictation.dispatchEvent(new Event("change"));
+  expect(owner.dictationError).toBeNull();
+  capture.dispose();
 });

@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { codexBuildSymbol } from "../build-state.js";
 import { observeCodexCatalogClient } from "../session-catalog-events.js";
@@ -15,7 +16,6 @@ import {
 } from "./attempt-timeouts.js";
 import {
   applyCodexAppServerAuthProfile,
-  bridgeCodexAppServerStartOptions,
   resolveCodexAppServerPreparedAuthProfileSnapshot,
 } from "./auth-bridge.js";
 import {
@@ -74,16 +74,16 @@ import {
   createCodexAppServerStartupLifetime,
   getCurrentSharedClientEntry,
   getOrCreateSharedClientEntry,
-  closeSharedClientEntryIfUnclaimed,
   getSharedCodexAppServerClientState,
   ownCodexStartup,
+  trackIsolatedCodexAppServerClient,
   rekeySharedClientEntry,
   retireSharedCodexAppServerClientIfCurrent,
   type CodexAppServerStartupLifetime,
   type SharedCodexAppServerClientEntry,
   type SharedCodexAppServerClientStartup,
 } from "./shared-client-lifecycle.js";
-import { shouldTrackDesktopGeneration } from "./shared-client-start-policy.js";
+import * as codexStartup from "./shared-client-start-policy.js";
 import {
   resolveCodexAppServerSpawnIdentity,
   type CodexAppServerClientProcessIdentity,
@@ -91,15 +91,10 @@ import {
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 
 export {
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   retireSharedCodexAppServerClientIfCurrent,
   retainSharedCodexAppServerClientByInstanceId,
 } from "./shared-client-lifecycle.js";
-// Keep disposal preloaded and build-scoped: shutdown must close the old clients
-// even if another module copy has loaded replacement code.
-const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = codexBuildSymbol(
-  "openclaw.codexAppServerClientDisposer",
-);
-
 type CodexAppServerClientStartupOptions = Omit<
   Awaited<ReturnType<typeof resolveCodexAppServerClientStartContext>>,
   "usesNativeAuth" | "authProfileId"
@@ -212,7 +207,7 @@ async function resolveCodexAppServerClientStartContext(
     (requestedStartOptions.homeScope === "user"
       ? undefined
       : resolveDefaultAgentDir(options?.config ?? {}));
-  const desktopGeneration = shouldTrackDesktopGeneration(
+  const desktopGeneration = codexStartup.shouldTrackDesktopGeneration(
     requestedStartOptions,
     options?.pluginConfig,
   )
@@ -323,7 +318,7 @@ async function resolveCodexAppServerClientStartContext(
   });
   // Preserve ordinary profile environment policy; only explicitly prepared
   // handoffs clear all inherited auth variables before spawning.
-  const startOptions = await bridgeCodexAppServerStartOptions({
+  const startOptions = await codexStartup.prepareClientStartOptions({
     startOptions: managedStartOptions,
     agentId: options?.agentId,
     agentDir,
@@ -373,12 +368,13 @@ export function releaseLeasedSharedCodexAppServerClient(client: CodexAppServerCl
   return true;
 }
 
-/** Temporary probes own isolated processes but only borrow shared-client leases. */
+/** Probe-call ownership decides cleanup; an isolated process can still be borrowed. */
 export async function releaseCodexProbeClient(
   client: CodexAppServerClient,
   factory: CodexAppServerClientFactory,
+  callerOwned = factory === createIsolatedCodexAppServerClient,
 ): Promise<void> {
-  if (factory === createIsolatedCodexAppServerClient) {
+  if (callerOwned) {
     await client.closeAndWait();
   } else {
     releaseLeasedSharedCodexAppServerClient(client);
@@ -648,11 +644,7 @@ export async function createIsolatedCodexAppServerClient(
       assertCurrent: options?.assertCurrent,
       assertCurrentAsync: options?.assertCurrentAsync,
       onStartedClient: (client) => {
-        const state = getSharedCodexAppServerClientState();
-        state.isolatedClients.add(client);
-        client.addTransportExitHandler((exitedClient) => {
-          state.isolatedClients.delete(exitedClient);
-        });
+        trackIsolatedCodexAppServerClient(client);
         options?.onStartedClient?.(client);
       },
     }),
@@ -762,7 +754,7 @@ async function startInitializedCodexAppServerClientOnce(
       throw error;
     }
     const runtimeArtifactModule = params.runtimeArtifactMode
-      ? await waitForStartup(() => import("./runtime-artifact.js"))
+      ? await waitForStartup(codexStartup.loadRuntimeArtifact)
       : undefined;
     const runtimeArtifactBeforeStart = runtimeArtifactModule
       ? await waitForStartup(() =>
@@ -1022,7 +1014,7 @@ export function captureCodexAppServerClientLifetime(
       "Codex manual thread adoption requires an OpenClaw-managed local stdio process, not an external socket or app-server proxy. No turn was sent; reconnect through managed local stdio before continuing.",
     );
   }
-  const isolated = requiredOwnership !== "connection" && state.isolatedClients.has(client);
+  const isolated = state.isolatedClients.has(client);
   const isCurrent = isolated
     ? () => state.isolatedClients.has(client) && !client.getCloseError()
     : captureSharedClientRegistration(client);
@@ -1074,22 +1066,12 @@ export async function clearSharedCodexAppServerClientAndWait(
   }
 }
 
-(
-  globalThis as typeof globalThis & {
-    [SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER]?: () => Promise<void>;
-  }
-)[SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER] = clearSharedCodexAppServerClientAndWait;
-
-export function clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
-  client: CodexAppServerClient | undefined,
-): { found: boolean; closed: boolean; activeLeases: number; pendingAcquires: number } {
-  const entry = getCurrentSharedClientEntry(client);
-  return {
-    found: entry !== undefined,
-    closed: entry ? closeSharedClientEntryIfUnclaimed(entry) : false,
-    activeLeases: entry?.activeLeases ?? 0,
-    pendingAcquires: entry?.pendingAcquires ?? 0,
-  };
-}
+// Keep the harness retirement callback build-scoped, and let Gateway shutdown
+// drain clients even when no Codex harness was registered.
+resolveGlobalSingleton(
+  codexBuildSymbol("openclaw.codexAppServerClientDisposer"),
+  () => clearSharedCodexAppServerClientAndWait,
+  (dispose) => dispose(),
+);
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -18,6 +18,7 @@ import { agentCommand } from "./agent.js";
 export function registerAgentThinkingTests({
   withTempHome,
   mockConfig,
+  getLastEmbeddedCall,
   runtime,
 }: {
   withTempHome: <T>(fn: (home: string) => Promise<T>) => Promise<T>;
@@ -88,5 +89,51 @@ export function registerAgentThinkingTests({
       );
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
       expect(readPreparedModelCatalog).not.toHaveBeenCalled();
+    }));
+
+  it("falls back from an unsupported machine thinking preference instead of failing", () =>
+    withTempHome(async (home) => {
+      const model = catalogModel({
+        api: "openai-chatgpt-responses",
+        compat: { supportedReasoningEfforts: ["none", "high", "max"] },
+      });
+      const ref = `${model.provider}/${model.id}`;
+      mockConfig(home, path.join(home, "sessions.json"), {
+        model: { primary: ref },
+        models: { [ref]: {} },
+      });
+      vi.mocked(loadManifestModelCatalog).mockReturnValue([model]);
+      installThinkingProvider(model.provider);
+      vi.mocked(resolveEffectiveAgentRuntime).mockReturnValue("codex");
+      vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([
+        catalogModel({
+          nativeRuntime: "codex",
+          compat: { supportedReasoningEfforts: ["high"] },
+        }),
+      ]);
+      // Talk consults pass their configured level as a preference, not a user command.
+      await agentCommand(
+        {
+          message: "ping",
+          to: "+1222",
+          model: ref,
+          thinkingOnce: "off",
+          normalizeThinkingLevelOverride: true,
+        },
+        runtime,
+      );
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(getLastEmbeddedCall()?.thinkLevel).not.toBe("off");
+    }));
+
+  it("names the selected model's row levels for an invalid --thinking value", () =>
+    withTempHome(async (home) => {
+      mockConfig(home, path.join(home, "sessions.json"), {
+        model: { primary: "deepseek/deepseek-v4-pro" },
+        models: { "deepseek/deepseek-v4-pro": {} },
+      });
+      await expect(
+        agentCommand({ message: "ping", to: "+1222", thinking: "bogus" }, runtime),
+      ).rejects.toThrow(/xhigh, max/);
     }));
 }

@@ -279,7 +279,7 @@ export async function verifyPriorCiSecurity({
       run.status === "completed" &&
       run.conclusion === "success" &&
       run.path === workflowPath &&
-      ["workflow_run", "schedule", "issue_comment"].includes(run.event) &&
+      ["workflow_run", "schedule", "issue_comment", "workflow_dispatch"].includes(run.event) &&
       run.head_branch === "main" &&
       oid.test(run.head_sha ?? "") &&
       run.repository?.id === repositoryId &&
@@ -333,10 +333,10 @@ export async function verifyPriorCiSecurity({
       ),
     "incomplete Security Review job identities",
   );
-  // Comment reviews target a head; completed-CI reviews also name its exact attempt.
+  // Dispatched CI replays must name the selected attempt, not just its PR head.
   const matches = jobs.filter(
     (job) =>
-      job.name === `review (${pr}, ${head})` ||
+      (run.event !== "workflow_dispatch" && job.name === `review (${pr}, ${head})`) ||
       job.name === `review (${pr}, ${head}, ${ciRunId}, ${ciRunAttempt})`,
   );
   const steps = matches[0]?.steps?.filter((step) => step.name === "Enforce security review");
@@ -372,8 +372,17 @@ export async function verifyPriorCiSecurity({
       return list(path);
     },
   };
+  const membershipApi = {
+    request: async (path) => {
+      requireEvidence(
+        path.startsWith(`/orgs/${owner}/teams/openclaw-secops/memberships/`),
+        "security admission only reads this repository’s SecOps membership",
+      );
+      return read(path);
+    },
+  };
   const proof = await revalidatePublishedSecurityClearance(
-    { api, owner, repo, pullRequest, pullPath, issuePath: `${prefix}/issues/${pr}` },
+    { api, membershipApi, owner, repo, pullRequest, pullPath, issuePath: `${prefix}/issues/${pr}` },
     statuses,
     {
       url: combined.target_url,

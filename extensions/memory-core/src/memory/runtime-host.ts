@@ -1,8 +1,8 @@
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import type { MemoryCoreOpenKeyedStore } from "../dreaming-state.js";
-import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 
 export type MemoryCoreRuntimeHost = {
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
   openKeyedStore?: MemoryCoreOpenKeyedStore;
   runInBackgroundContext?: <T>(run: () => T) => T;
 };

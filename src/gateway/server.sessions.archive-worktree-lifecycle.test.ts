@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -34,12 +33,16 @@ import {
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { applySessionEntryPatch } from "../plugin-sdk/session-store-runtime.js";
 import * as sessionLifecycle from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import * as archiveTransitions from "./server-methods/sessions-patch-archive.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { worktreesHandlers } from "./server-methods/worktrees.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import { embeddedRunMock } from "./test-helpers.runtime-state.js";
@@ -126,6 +129,34 @@ async function createPeer() {
   return { ...peer, target: { key: peer.key, expectedSessionId: peer.sessionId } };
 }
 
+test("only a newly archived checkout wakes maintenance", async () => {
+  const fixture = await archiveFixture();
+  const peer = await createPeer();
+  using gc = vi.spyOn(managedWorktrees, "gc");
+  expect(
+    await directSessionReq("sessions.patch", { ...peer.target, archived: true }),
+  ).toMatchObject({ ok: true });
+  await fixture.tickWorktreeMaintenance();
+  expect.soft(gc).not.toHaveBeenCalled();
+  gc.mockClear();
+  for (let request = 0; request < 6; request++) {
+    expect(
+      await directSessionReq("sessions.patch", { ...peer.target, archived: true }),
+    ).toMatchObject({ ok: true });
+    await fixture.tickWorktreeMaintenance(10 * 60_000);
+    await fixture.tickWorktreeMaintenance();
+  }
+  expect.soft(gc).toHaveBeenCalledOnce(); // Only the hourly expiry pass remains.
+  gc.mockClear();
+  await fixture.archive();
+  await fixture.tickWorktreeMaintenance();
+  expect(gc).toHaveBeenCalledOnce();
+  await fixture.expectSnapshot();
+  await fixture.archive();
+  await fixture.tickWorktreeMaintenance();
+  expect(gc).toHaveBeenCalledOnce();
+});
+
 test("patchMany releases unrelated writes while restore waits for allocation", async ({
   signal,
 }) => {
@@ -199,6 +230,122 @@ test("patchMany releases unrelated writes while restore waits for allocation", a
   expect(fixture.entry()).toMatchObject({ label: "Same session" });
   expect(fixture.entry()?.archivedAt).toBeUndefined();
   await fixture.expectFile("draft.txt", "preserved work\n");
+});
+
+test("explicit Archive Undo preserves a retired checkout while ordinary Restore recovers it", async () => {
+  const f = await archiveFixture();
+  const connId = "worktree-undo";
+  const client: GatewayClient = {
+    connId,
+    connect: {
+      ...gatewayConnect(["operator.read", "operator.write"]),
+      caps: ["personal-session-pins"],
+    },
+    authenticatedUserProfile: gatewayProfile("worktree-undo-person"),
+  };
+  const context = {
+    isConnectionActive: (key: string, expected?: GatewayClient) =>
+      key === connId && expected === client,
+  };
+  const archive = async () => {
+    const result = await directSessionReq<{ archiveUndoToken: string }>(
+      "sessions.patch",
+      { ...f.target, archived: true, requestArchiveUndo: true },
+      { client, context },
+    );
+    expect(result).toMatchObject({ ok: true, payload: { archiveUndoToken: expect.any(String) } });
+    return result.payload!.archiveUndoToken;
+  };
+  const undo = (token: string) =>
+    f.patch({ archived: false, archiveUndoToken: token }, { client, context });
+  const sharedPin = (pinnedAt: number | undefined) =>
+    applySessionEntryPatch({
+      ...f.scope,
+      agentId: "main",
+      expected: { sessionId: f.sessionId },
+      patch: { pinnedAt },
+      preserveActivity: true,
+      skipMaintenance: true,
+    });
+  const transcript = await f.transcript();
+  await f.write("draft.txt", "preserved work\n");
+  await expect(sharedPin(731)).resolves.toMatchObject({ pinnedAt: 731 });
+  // A live checkout still supports the ordinary one-click Undo and its shared-pin postimage.
+  expect(await undo(await archive())).toMatchObject({ ok: true });
+  expect(f.entry()?.archivedAt).toBeUndefined();
+  expect(f.entry()?.pinnedAt).toBeGreaterThan(731);
+  await f.expectFile("draft.txt", "preserved work\n");
+
+  const token = await archive();
+  await f.cleanupWorktrees();
+  await f.expectSnapshot();
+  const retired = f.registry();
+  const archived = f.entry();
+  const refused = {
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("Use Restore"),
+      details: {
+        reason: "ARCHIVE_UNDO_REQUIRES_RESTORE",
+        archivedAt: archived!.archivedAt,
+        lifecycleRevision: archived!.lifecycleRevision,
+      },
+    },
+  };
+  expect(await undo(token)).toMatchObject(refused);
+  expect(f.entry()).toEqual(archived);
+  expect(f.registry()).toEqual(retired);
+  await expect(fs.stat(f.worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
+
+  // A supported SDK writer commits after this receipt's detached snapshot, before checkout preparation.
+  // Only order the two operations; the checkout service and both storage owners remain real.
+  const transition = archiveTransitions.prepareTargetArchiveTransition;
+  let acceptedClear = false;
+  using _ = vi
+    .spyOn(archiveTransitions, "prepareTargetArchiveTransition")
+    .mockImplementationOnce(async (params) => {
+      await expect(sharedPin(913)).resolves.toMatchObject({
+        pinnedAt: 913,
+        archivedAt: archived!.archivedAt,
+      });
+      const cleared = await sharedPin(undefined);
+      expect(cleared).toMatchObject({ sessionId: f.sessionId, archivedAt: archived!.archivedAt });
+      expect(cleared?.pinnedAt).toBeUndefined();
+      acceptedClear = true;
+      return await transition(params);
+    });
+  expect((await undo(token)).ok).toBe(false);
+  expect(acceptedClear).toBe(true);
+  expect(f.entry()).toEqual(archived);
+  expect(f.registry()).toEqual(retired);
+  await expect(fs.stat(f.worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(f.transcript()).resolves.toEqual(transcript);
+  // The newer intent remains authoritative, and explicit refusal did not discard the snapshot.
+  expect(await undo(token)).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining("no longer current") },
+  });
+  const restore = {
+    archived: false,
+    expectedArchivedAt: archived!.archivedAt,
+    expectedLifecycleRevision: archived!.lifecycleRevision,
+  };
+  for (const stale of [
+    { expectedArchivedAt: archived!.archivedAt! - 1 },
+    { expectedSessionId: "replaced" },
+    { expectedLifecycleRevision: "replaced" },
+  ]) {
+    expect(await f.patch({ ...restore, ...stale }, { client, context })).toMatchObject({
+      ok: false,
+    });
+    await f.expectSnapshot();
+  }
+  expect(await f.patch(restore, { client, context })).toMatchObject({ ok: true });
+  expect(f.entry()?.archivedAt).toBeUndefined();
+  expect(f.entry()?.pinnedAt).toBeUndefined();
+  expect(f.registry()?.removedAt).toBeUndefined();
+  await f.expectFile("draft.txt", "preserved work\n");
 });
 
 test("unarchive before cleanup preserves the live checkout", async () => {
@@ -691,7 +838,8 @@ test("automatic archive snapshots the checkout and restores its conversation", a
   const transcript = await fixture.transcript();
   await fixture.write("draft.txt", "automatic archive keeps work\n");
 
-  const reads = observeMainThreadReads();
+  const readSql: string[] = [];
+  const reads = observeMainThreadReads((sql) => readSql.push(sql));
   const worktreeReads: string[] = [];
   let grants = 0;
   using _ = probe.admission(workerAdmission, (request, grant, admit) => {
@@ -712,12 +860,13 @@ test("automatic archive snapshots the checkout and restores its conversation", a
     }
     grants += 1;
     reads.clear();
+    readSql.length = 0;
     try {
       admit(request, grant);
     } finally {
-      for (const statement of reads.calls.flatMap((call) => call.mock.contexts)) {
-        if (statement instanceof StatementSync && /\bworktrees\b/u.test(statement.sourceSQL)) {
-          worktreeReads.push(statement.sourceSQL);
+      for (const sql of readSql) {
+        if (/\bworktrees\b/u.test(sql)) {
+          worktreeReads.push(sql);
         }
       }
     }

@@ -14,9 +14,34 @@ vi.mock("./windows-install-roots.js", async (original) => ({
 
 import {
   createWindowsOutputDecoder,
+  createWindowsTextFileDecoder,
   decodeWindowsOutputBuffer,
   decodeWindowsTextFileBuffer,
 } from "./windows-encoding.js";
+
+it("keeps a Windows file's prefix-selected encoding across later invalid bytes", () => {
+  const prefix = Buffer.concat([
+    Buffer.from("café\n"),
+    Buffer.alloc(1024 * 1024 - 8, 0x20),
+    Buffer.from([0xe2, 0x82]),
+  ]);
+  const decoder = createWindowsTextFileDecoder({
+    prefix,
+    complete: false,
+    platform: "win32",
+    windowsEncoding: "windows-1252",
+  });
+  expect(decoder.encoding).toBe("utf-8");
+  expect(decoder.decode(prefix, { stream: true })).toMatch(/^café\n/);
+  expect(decoder.decode(Buffer.from([0xac, 0xe9]))).toBe("€�");
+  const legacy = createWindowsTextFileDecoder({
+    prefix: Buffer.from([0xe9, 0x0a]),
+    complete: false,
+    platform: "win32",
+    windowsEncoding: "windows-1252",
+  });
+  expect(legacy.decode(Buffer.from([0xe9, 0x0a, 0xe9]))).toBe("é\né");
+});
 
 const UTF16_OUTPUT_CASES = [
   Buffer.from([0xff, 0xfe, 0x68, 0x00, 0x69, 0x00, 0x0a, 0x00]),

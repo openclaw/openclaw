@@ -1,6 +1,7 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
+import { extractQueryTerms, formatUsageQueryToken } from "../../../../src/shared/usage-query.js";
 import type { SessionsUsageOverview } from "../../../../src/shared/usage-types.js";
 import type { CostDailyEntry, UsageSessionEntry } from "./usage-state-types.ts";
 
@@ -36,13 +37,6 @@ function buildCsv<Entry>(
   ].join("\n");
 }
 
-function usageCsvValue(
-  value: number | undefined,
-  report?: CostDailyEntry["usageReport"],
-): CsvValue {
-  return report?.state === "unavailable" ? undefined : value;
-}
-
 const buildSessionsCsv = (sessions: UsageSessionEntry[]): string =>
   buildCsv(sessions, {
     key: (session) => session.key,
@@ -56,29 +50,27 @@ const buildSessionsCsv = (sessions: UsageSessionEntry[]): string =>
     messages: (session) => session.usage?.messageCounts?.total,
     errors: (session) => session.usage?.messageCounts?.errors,
     toolCalls: (session) => session.usage?.messageCounts?.toolCalls,
-    inputTokens: (session) => usageCsvValue(session.usage?.input, session.usage?.usageReport),
-    outputTokens: (session) => usageCsvValue(session.usage?.output, session.usage?.usageReport),
-    cacheReadTokens: (session) =>
-      usageCsvValue(session.usage?.cacheRead, session.usage?.usageReport),
-    cacheWriteTokens: (session) =>
-      usageCsvValue(session.usage?.cacheWrite, session.usage?.usageReport),
-    totalTokens: (session) => usageCsvValue(session.usage?.totalTokens, session.usage?.usageReport),
-    totalCost: (session) => usageCsvValue(session.usage?.totalCost, session.usage?.usageReport),
+    inputTokens: (session) => session.usage?.input,
+    outputTokens: (session) => session.usage?.output,
+    cacheReadTokens: (session) => session.usage?.cacheRead,
+    cacheWriteTokens: (session) => session.usage?.cacheWrite,
+    totalTokens: (session) => session.usage?.totalTokens,
+    totalCost: (session) => session.usage?.totalCost,
   });
 
 const buildDailyCsv = (daily: CostDailyEntry[]): string =>
   buildCsv(daily, {
     date: (day) => day.date,
-    inputTokens: (day) => usageCsvValue(day.input, day.usageReport),
-    outputTokens: (day) => usageCsvValue(day.output, day.usageReport),
-    cacheReadTokens: (day) => usageCsvValue(day.cacheRead, day.usageReport),
-    cacheWriteTokens: (day) => usageCsvValue(day.cacheWrite, day.usageReport),
-    totalTokens: (day) => usageCsvValue(day.totalTokens, day.usageReport),
-    inputCost: (day) => usageCsvValue(day.inputCost, day.usageReport),
-    outputCost: (day) => usageCsvValue(day.outputCost, day.usageReport),
-    cacheReadCost: (day) => usageCsvValue(day.cacheReadCost, day.usageReport),
-    cacheWriteCost: (day) => usageCsvValue(day.cacheWriteCost, day.usageReport),
-    totalCost: (day) => usageCsvValue(day.totalCost, day.usageReport),
+    inputTokens: (day) => day.input,
+    outputTokens: (day) => day.output,
+    cacheReadTokens: (day) => day.cacheRead,
+    cacheWriteTokens: (day) => day.cacheWrite,
+    totalTokens: (day) => day.totalTokens,
+    inputCost: (day) => day.inputCost,
+    outputCost: (day) => day.outputCost,
+    cacheReadCost: (day) => day.cacheReadCost,
+    cacheWriteCost: (day) => day.cacheWriteCost,
+    totalCost: (day) => day.totalCost,
   });
 
 const buildQuerySuggestions = (
@@ -117,7 +109,7 @@ const buildQuerySuggestions = (
     case "provider":
     case "model":
     case "tool":
-      candidates = options[key].slice(0, 6);
+      candidates = options[key];
       break;
     case "has":
       candidates = ["errors", "tools", "context", "usage", "model", "provider"];
@@ -126,8 +118,14 @@ const buildQuerySuggestions = (
       return [];
   }
   return candidates
-    .filter((candidate) => !value || normalizeLowercaseStringOrEmpty(candidate).includes(value))
-    .map((candidate) => ({ label: `${key}:${candidate}`, value: `${key}:${candidate}` }));
+    .filter((candidate) =>
+      foldSearchCase(normalizeLowercaseStringOrEmpty(candidate)).includes(foldSearchCase(value)),
+    )
+    .slice(0, 6)
+    .map((candidate) => ({
+      label: `${key}:${candidate}`,
+      value: formatUsageQueryToken(key, candidate),
+    }));
 };
 
 const applySuggestionToQuery = (query: string, suggestion: string): string => {
@@ -159,7 +157,10 @@ const setQueryTokensForKey = (query: string, key: string, values: string[]): str
       tokens.push(term.raw);
     }
   }
-  const next = [...tokens, ...Array.from(remaining.values(), (value) => `${key}:${value}`)];
+  const next = [
+    ...tokens,
+    ...Array.from(remaining.values(), (value) => formatUsageQueryToken(key, value)),
+  ];
   return next.length ? `${next.join(" ")} ` : "";
 };
 

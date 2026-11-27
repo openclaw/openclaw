@@ -7,7 +7,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { getDiagnosticSessionState } from "./diagnostic-session-state.js";
-import { logToolLoopAction } from "./diagnostic-tool-loop.js";
+import { toolRepeatDiagnostics } from "./diagnostic-tool-loop.js";
 import {
   diagnosticLogger,
   logMessageDispatchCompleted,
@@ -17,12 +17,6 @@ import {
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 const events: DiagnosticEventPayload[] = [];
-function session(incognito: boolean, suffix: string) {
-  return {
-    sessionKey: `agent:main:dashboard:${incognito ? "incognito-" : ""}${suffix}`,
-    sessionId: `${incognito ? "private" : "ordinary"}-${suffix}-id`,
-  };
-}
 beforeEach(() => {
   resetDiagnosticStateForTest();
   resetDiagnosticEventsForTest();
@@ -37,17 +31,17 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   setDiagnosticsEnabledForProcess(false);
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 it.each(["key", "session-id"] as const)(
-  "keeps Incognito text out of formatted logs for a %s while retaining lifecycle state",
+  "hides Incognito text for a %s but retains lifecycle events",
   async (identity) => {
     const logs = (["debug", "warn", "error"] as const).map((level) =>
       vi.spyOn(diagnosticLogger, level).mockImplementation(() => {}),
     );
     for (const incognito of [true, false]) {
-      const { sessionKey, sessionId } = session(incognito, "diagnostic");
+      const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}diagnostic`;
+      const sessionId = `${incognito ? "private" : "ordinary"}-diagnostic-id`;
       const state = getDiagnosticSessionState({ sessionId, sessionKey });
       const ref = identity === "key" ? { sessionKey } : { sessionId };
       const marker = incognito
@@ -55,29 +49,17 @@ it.each(["key", "session-id"] as const)(
         : "SYNTHETIC_ORDINARY_DIAGNOSTIC_TEXT";
       const failure = { outcome: "error", reason: marker, error: marker } as const;
       const failed = { ...ref, ...failure };
-      logMessageDispatchCompleted({
-        ...failed,
-        source: "test",
-        durationMs: 1,
-      });
-      logMessageProcessed({
-        ...failed,
-        agentId: "main",
-        channel: "webchat",
-      });
+      logMessageDispatchCompleted({ ...failed, source: "test", durationMs: 1 });
+      logMessageProcessed({ ...failed, agentId: "main", channel: "webchat" });
       for (const next of ["processing", "idle"] as const) {
         logSessionStateChange({ ...ref, state: next, reason: marker });
         expect(state.state).toBe(next);
       }
-      logToolLoopAction({
-        ...ref,
-        agentId: "main",
-        toolName: "test",
-        level: "warning",
-        action: "warn",
-        detector: "generic_repeat",
+      toolRepeatDiagnostics({ ...ref, agentId: "main" })({
+        kind: "note",
+        toolCallId: "synthetic-tool-repeat",
+        toolName: marker,
         count: 3,
-        message: marker,
       });
       await waitForDiagnosticEventsDrained();
       const output = JSON.stringify(logs.flatMap((log) => log.mock.calls));
@@ -91,7 +73,14 @@ it.each(["key", "session-id"] as const)(
         { type: "message.processed", agentId: "main", ...failure },
         { type: "session.state", prevState: "idle", state: "processing", reason: marker },
         { type: "session.state", prevState: "processing", state: "idle", reason: marker },
-        { type: "tool.loop", agentId: "main", action: "warn", count: 3, message: marker },
+        {
+          type: "tool.loop",
+          agentId: "main",
+          toolName: marker,
+          action: "warn",
+          count: 3,
+          message: "redirect note added",
+        },
       ]) {
         expect(events).toContainEqual(expect.objectContaining({ sessionKey, ...expected }));
       }

@@ -119,11 +119,7 @@ the job's uploaded artifacts.
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                        |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                        |
 
-Partial workflow reruns reuse successful screenshot shards from earlier attempts
-of the same run. The reducer still requires matching source and workflow SHAs,
-run ID, pinned tooling, artifact digests, and successful captures. It preserves
-each family's producer attempt and records the reducer attempt separately;
-future-attempt artifacts remain invalid.
+A reducer-only rerun can reuse the successful combined screenshot capture from an earlier attempt of the same run. The reducer still requires matching source and workflow SHAs, run ID, pinned tooling, artifact digests, and successful captures. All three families must come from one capture attempt. The final manifest preserves that producer attempt and records the reducer attempt separately; future-attempt artifacts remain invalid.
 
 Android screenshot capture runs phone and Wear serially on `ubuntu-24.04`, using
 the shared Android toolchain action's API 36 phone and API 34 Wear images and KVM
@@ -145,9 +141,11 @@ and scene readiness; it does not compare pixels against a baseline.
 Pull requests and automatic main CI use the pinned Bun fork. The planner
 selects `bun-all` for every Linux test lane routed through
 `scripts/lib/ci-test-runtime.mts`, including Control UI Chromium unit shards and
-plugin prerelease extension batches. Full Release Validation uses `dual-all`:
-the complete Node selection runs first, followed by its Bun portion in the same
-runner slots. Either runtime failing fails the job.
+plugin prerelease extension batches. Full Release Validation uses `dual-all`.
+Root test shards and plugin extension batches run the complete Node selection
+and its Bun portion in independent matrix jobs on separate runners; Control UI
+retains colocated runtime execution. Either required runtime failing fails the existing CI gate.
+Matrix fail-fast stays disabled, so one runtime cannot cancel its sibling.
 
 Manual dispatches retain the optional `test_runtime_policy` override: `node`,
 `bun-all`, or `dual-all`. Leaving it empty uses the event default: Bun for daily
@@ -169,13 +167,24 @@ Every selected Bun process checks its revision against
 the job identity and setup instruction. The existing `setup-test-bun` action
 installs the pinned fork for jobs that need it.
 
-The workflows retain their job definitions, matrix shapes, runner classes, and
-concurrency caps. Both runtime passes reuse the selected runner; there are no
-per-runtime duplicate jobs. Runtime-specific timing estimates can repack selected
-tests within the existing planner caps. `dual-all` doubles
-each selected Linux test row's deadline, including the default 60-minute budget,
-to cover its sequential runtime passes. `bun-all` keeps the original deadline.
-macOS and Windows runtime policies remain unchanged.
+For full manual validation, the existing matrix owners emit a `(node)` or `(bun)` job for each runtime
+selected by the runtime owner. The policy still owns exact file membership:
+`bun-all` emits a Node companion only for selected Node exceptions or both-host
+contracts; `dual-all` retains the complete Node selection without duplicating
+those exceptions. Each job uses the original per-runtime deadline, runner class,
+and worker limits. Full dispatch reuses one bounded complete-inventory compact plan, then expands
+its runtime membership into independent rows below GitHub’s matrix limit.
+Automatic daily and pull-request CI keep their existing colocation and job caps.
+Control UI keeps its original three colocated jobs and auxiliary checks. Its
+three-slot concurrency limit offers no general extra runtime capacity, so this
+change does not duplicate browser setup. Root and plugin runtime jobs repeat
+setup in exchange for independent execution and retries; macOS and Windows runtime policies remain unchanged.
+
+Stable runtime-specific job names let GitHub retry only the failed runtime. FRV
+composes evidence by that exact name, retaining a successful sibling from its
+original attempt. Frozen targets without the runtime-job capability keep their
+historical sequential execution and deadline multiplier; current harness code
+does not retrofit their runtime contract.
 
 The following direct-entrypoint lanes still use Node and remain follow-up work:
 
@@ -195,16 +204,17 @@ The following direct-entrypoint lanes still use Node and remain follow-up work:
 | `openclaw-performance`                                       | Add runtime identity to benchmark artifacts, isolate runs, and compare matching workloads before changing performance baselines. |
 
 The protected cache warmer continues to publish its existing Node/Bun inventory.
-Timing learning, refit, and refresh keep separate identities for Node,
-`bun-all`, and `dual-all`. A `bun-all` measurement covers its complete envelope:
-Bun/Vitest, native Bun, and any named Node companions. A `dual-all` measurement
-records the combined wall time of its sequential runtime passes. Old `bun:`
-timings from qualified partial selections are not reused. Per-runtime pruning
-cannot remove the other policies' samples, and failed or incomplete measurements
-never become timing samples.
+Timing learning, refit, and refresh distinguish runtime jobs from legacy
+combined policy envelopes. A split job cannot overwrite a combined `bun-all` or
+`dual-all` timing sample with a partial measurement. Bun/Vitest and native Bun
+remain within the selected Bun job. Old `bun:` timings from qualified partial
+selections are not reused. Per-runtime pruning cannot remove another identity's
+samples, and failed or incomplete measurements never become timing samples.
 Until matching policy measurements exist, scheduling retains historical Node or
 release-envelope estimates. Measured runtime-placement observations never fall
-back across policies.
+back across policies. Readers distinguish policy and runtime when a runtime is
+selected; the shared full-dispatch plan continues to use combined-policy costs.
+The complete `dual-all` Node pass continues to share ordinary Node history.
 
 Five paired main trials established the switch: runs
 [38870726251](https://github.com/openclaw/openclaw/actions/runs/38870726251),
@@ -223,10 +233,10 @@ node scripts/ci-compare-test-runtimes.mjs <run-id>
 ```
 
 The comparison downloads logs once and reports each shard's Node and Bun wall
-time, failures, and incomplete measurements. Dual validation reuses the selected
-jobs and their runner registrations. The `dual-all` deadline multiplier budgets both serial
-runs; a silence-watchdog failure or exhausted budget remains failed or incomplete
-evidence and is never treated as a timing sample.
+time, failures, and incomplete measurements. Root and plugin full dual validation
+use independent runtime jobs; UI and historical combined jobs retain their serial timing
+interpretation. A silence-watchdog failure or exhausted budget remains failed or
+incomplete evidence and is never treated as a timing sample.
 
 CI's `setup-test-bun` action consumes `scripts/lib/openclaw-bun.json` through
 `scripts/stage-openclaw-bun.sh`, the same owner used by the macOS and Tauri apps.
@@ -267,6 +277,7 @@ Vitest without dropping coverage. Production sources remain free to change and
 are still exercised. Extra Vitest arguments, including cache-warming collection,
 retain the existing Vitest path.
 
+Shared fingerprints include the pinned Bun manifest and PostgreSQL test-root guard.
 A changed shared setup fingerprint invalidates the entire native cohort.
 Refreshing those fingerprints requires fresh qualification of the retained
 entries; tests without matching proof keep their Vitest coverage.
@@ -282,8 +293,9 @@ the repository tsconfig, and the shared test deadline. It disables automatic env
 file loading and runs one test process inside the existing plan and worker budget.
 The shared process owner retains output watchdogs, interruption handling, and
 joined descendant cleanup. Release validation runs the complete Node selection
-before the Bun/Vitest and native Bun portions in that same slot;
-every result remains required. Native execution adds no CI jobs or worker fanout.
+in its own job, alongside the Bun job. Bun/Vitest and native Bun remain sequential
+within that Bun job; every result remains required. Native execution itself adds
+no extra CI jobs or worker fanout.
 
 The runtime owner's named Node routes cover documented Node/V8 contracts and
 confirmed fork defects. They remain exact-file exceptions even for broad or
@@ -293,10 +305,13 @@ and worker budgets. The shared Vitest config resolves `ws` to the installed
 package so imports and mocks use the same module identity on both runtimes.
 
 Control UI uses three native shards and three workers per row, including
-exact-target Full Release Validation dispatches. The runtime partition applies
+exact-target Full Release Validation dispatches. Partial PR unit selections target
+three files per row, up to the same three-row cap; full UI owners keep three shards.
+The runtime partition applies
 after Vitest selects a shard, preserving original file ownership. Files with
 Node-only heap or WeakRef contracts keep Node coverage; the remaining selection
-uses Bun. `dual-all` runs the original shard on Node before its Bun portion.
+uses Bun. UI `dual-all` keeps the original Node pass followed by its Bun portion
+in the same job to preserve the three-slot capacity and avoid duplicate browser setup.
 Partitions without browser files retain browser discovery for native sharding
 but omit Chromium version checking and Playwright's speculative browser startup.
 Historical targets without runtime-selection support retain their original Node
@@ -331,18 +346,30 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `807211511f81e0a6639bc9eb41d67120f6b85316` with WebKit
-`a2976f02e69fde8ccc45dc8fb346173f9d63f8a1` in prerelease
-`openclaw-v1.4.4-20261024-807211511f-webkit-a2976f02e6`.
+The pinned build pairs Bun `191755ec115ece3dd642eba3cb0143cecb5e5d7a` with WebKit
+`b82bc917e99110b61c3a21202d6def7457aa194c` in prerelease
+`openclaw-v1.4.4-20261026-191755ec11-webkit-b82bc917e9`.
+
+It includes the eMudhra compromised-key blocklist and checks current trust before
+accepting saved TLS sessions. QUIC clients recheck saved-session authorization,
+and QUIC servers defer early application data until current client-certificate
+authorization succeeds ([fork change #213](https://github.com/openclaw/bun/pull/213)).
+These checks retain rejection when an affected certificate is added as an extra
+or explicit CA. Stock Bun 1.4.4's full-handshake blocklist alone does not provide
+these session and early-data repairs. Native incident/session/product proof is
+macOS ARM64; the other release targets have build and smoke qualification, with
+the shared Windows compatibility selection on x64 and ARM64.
 
 It restores SNI set with `tlsSocket.setServername()` before connecting, including
 with `autoSelectFamily` ([fork change #197](https://github.com/openclaw/bun/pull/197)).
-The Buffer copy reduction was withdrawn pending a container-neutral design;
-serialization remains unchanged from the previous `ef37c31de3` pin.
+Large single-recipient Worker Buffer messages avoid redundant serialized copies
+while preserving ordinary cloning and multi-recipient behavior
+([fork change #211](https://github.com/openclaw/bun/pull/211)).
 
-It includes 58 upstream Bun commits through `ad4089bf`, including native
+It includes the upstream Bun sync through `a8fcd319`, including native
 lint/format performance improvements and `--no-script` to bypass package scripts.
-The engine replays the 16 fork patches onto upstream WebKit `87ee10da`.
+It uses the separately published WebKit pairing above; this pin does not rebase
+WebKit or complete the independent WebKit remediation qualification.
 It retains disabled source-map handling in the transpiler cache and shares
 identical `node:vm` source buffers and source-map URIs.
 This build preserves `DONT_CONTEXTIFY` global receiver identity for jsdom, keeps
@@ -454,8 +481,8 @@ Preflight's manifest bootstrap uses the exact `NODE_VERSION` pin in `ci.yml`
 `24.x` request from an older cached patch below OpenClaw's support floor.
 
 CI's execution version does not define the supported user runtime matrix.
-`package.json` accepts Node 24.22.1+ and Node 26.12.1+. The full manual CI graph checks
-the Node 24.22.1 floor; `node-runtime-compat.yml` checks Node 26.12.1 weekly and on
+`package.json` accepts Node 24.16.0+ on 24.x and Node 26.1.0+; CI exercises the recommended
+security patches instead. The full manual CI graph checks Node 24.22.1; `node-runtime-compat.yml` checks Node 26.12.1 weekly and on
 dispatch. Current packaged fresh-install and upgrade checks run on both
 Node 24.22.1 and Node 26.12.1, with Windows Node 24 fresh-install proof on 24.22.1.
 Both runtime variants use the same candidate package. These support cells stay
@@ -491,7 +518,10 @@ baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilat
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
 
-Package tests start after preflight and do not consume the Linux runtime artifact.
+Package tests and full-validation release compilation start after preflight and do not
+consume the Linux runtime artifact. The release phase shares the independent package
+matrix and its two-worker cap. It no longer waits for Linux build verification;
+all native suites and total job counts are unchanged.
 App tests wait for `build-artifacts` before allocating their macOS runner, so Linux
 runner queueing cannot consume the native test job's 30-minute budget. They download
 the producer's artifact by its output ID and verify the selected checkout SHA before
@@ -502,7 +532,12 @@ Full nonpublishing manual validation also stages the exact candidate runtime and
 ordinary bundled recovery and relaunch through two fresh `.app` test-host processes.
 The existing launcher owns their private home, Keychain, selected service, and process
 settlement. Both phase event streams are retained in `macos-bundled-recovery-proof`.
-Only this full-tier test phase has a 75-minute budget for the runtime build, staging,
+For selected sources supporting complete runtime reuse, the existing Linux artifact
+also carries the UI, plugin outputs, runtime overlay, and sealed worker distribution.
+No host `node_modules` are transferred. The Mac still installs its own dependencies
+and performs native runtime staging, verification, and recovery tests; only the
+duplicate source build is omitted. Older selected sources retain that build.
+Only this full-tier test phase has a 75-minute budget for preparation, staging,
 and native composition; ordinary tests and independent packages retain 30 minutes.
 The proof does not sign or publish an app.
 
@@ -628,7 +663,7 @@ The job is part of `openclaw/ci-gate`. It uses at most one runner registration p
 selected run; widening survivor selection does not increase the full-inventory
 registration cap, job count, or matrix fanout.
 
-The iOS and combined macOS Periphery workflows enforce zero dead-code findings for their apps. The combined macOS workflow builds one Swift index for separate app and shared OpenClawKit scans, alongside an independent iOS shared scan. It reports a shared declaration only when Periphery emits the same Swift USR from both consumers. The shared OpenClawKit workflow remains a manual entrypoint for those shared scans. Its generated `GenerateGatewayProtocol/GatewayModels.swift` build-plugin output is retained as generator-owned code rather than treated as app-local dead code. The shared scan and native CI jobs install the filtered gateway-protocol generator dependencies alongside their existing native asset dependencies; CodeQL installs the same generator dependencies before its Swift build.
+The combined macOS Periphery workflow owns automatic iOS and macOS dead-code checks. Each selected platform builds one Swift index for separate app and shared OpenClawKit scans, with independent reports and enforcement. App scans enforce zero findings; a shared declaration is reported only when Periphery emits the same Swift USR from both consumers. The iOS and shared OpenClawKit workflows remain manual entrypoints for their respective scans. The generated `GenerateGatewayProtocol/GatewayModels.swift` build-plugin output is retained as generator-owned code rather than treated as app-local dead code. The shared scan and native CI jobs install the filtered gateway-protocol generator dependencies alongside their existing native asset dependencies; CodeQL installs the same generator dependencies before its Swift build.
 
 All four scans use `scripts/install-periphery.sh` to install the checksum-pinned Periphery 3.8.0 OSS release, including its adjacent `libIndexStore.dylib`, in a dedicated runner-temporary directory. The installer rejects download, checksum, and version failures without falling back to Homebrew. Installer changes automatically select the iOS and combined macOS workflows, including both shared consumers.
 
@@ -639,11 +674,11 @@ All four scans use `scripts/install-periphery.sh` to install the checksum-pinned
 Security review separates product changes that maintainers can approve from the
 small set of security policy and enforcement files that require SecOps approval.
 
-| Change                                     | User account with `maintain` or `admin` access   | Other authors                                                                    |
-| ------------------------------------------ | ------------------------------------------------ | -------------------------------------------------------------------------------- |
-| Sensitive product code                     | Informational notice; no extra security approval | `/allow-security-sensitive-change` from a user with `maintain` or `admin` access |
-| Dependency changes requiring review        | Same maintainer exemption                        | `/allow-dependencies-change` from a user with either role                        |
-| SecOps-owned files in `.github/CODEOWNERS` | Independent SecOps code-owner approval           | Independent SecOps code-owner approval                                           |
+| Change                                     | User account with `maintain` or `admin` access                             | Other authors                                                                                       |
+| ------------------------------------------ | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Sensitive product code                     | Informational notice; no extra security approval                           | `/allow-security-sensitive-change` from a user with `maintain` or `admin` access                    |
+| Dependency changes requiring review        | Admin authors exempt; Maintain authors qualify for release alignment below | `/allow-dependencies-change` from a repository admin or active SecOps member; SecOps authors exempt |
+| SecOps-owned files in `.github/CODEOWNERS` | Independent SecOps code-owner approval                                     | Independent SecOps code-owner approval                                                              |
 
 The **Security Review** workflow runs both guards from trusted repository code.
 It publishes a commit status named `openclaw/ci-gate` that requires both the
@@ -809,16 +844,34 @@ remove its review requirement.
 The **Dependency Guard** publishes `openclaw/dependency-review` and retains its
 dependency classification and lockfile autoscrub behavior. Dependency removals
 that already qualify as informational remain informational.
+Maintain authors need no additional dependency approval when every dependency-sensitive
+edit qualifies as release-version alignment:
+
+- Top-level `version` changes in existing `package.json`,
+  `packages/{ai,gateway-client,gateway-protocol}/package.json`, or
+  `extensions/*/package.json` files. The extension glob matches exactly one directory.
+- In those extension manifests only, changes to existing
+  `devDependencies.openclaw` or `peerDependencies.openclaw` values, with both
+  values remaining `>=<OpenClaw release version>` and other entries unchanged.
+
+Old and new versions must satisfy the shared OpenClaw release-version parser,
+including its alpha, beta, and correction forms. Versions may decrease or differ
+from the root version. Unrelated source and unprotected metadata edits may coexist.
+Added, removed, or renamed manifests, lockfiles, patches, workspace policy, and
+other dependency edits do not qualify for this exemption. Existing removal-only
+behavior remains unchanged. The workflow and native merge admission share this
+classification against the PR merge base.
+
 Automatic lockfile cleanup is best effort. If neither cleanup App can provide a
 write token, or GitHub explicitly denies the cleanup mutation's permissions, the
 dependency notice explains how to remove the remaining changes or request
-maintainer approval. These expected access limitations do not fail the Actions
+admin or SecOps approval. These expected access limitations do not fail the Actions
 job or satisfy dependency review. Unexpected cleanup errors remain failures.
 
 Edit `.github/security-review-policy.yml` to change path classification. Its
 `categories` group product paths with descriptions and review guidance;
 `exclude` names the product-only exclusions; and `dependencies` lists manifests,
-lockfiles, and other dependency files. Paths are quoted, repository-relative
+release manifests, lockfiles, and other dependency files. Paths are quoted, repository-relative
 globs: `*` stays within a path segment, `**` crosses directories, and `{a,b}`
 matches either alternative. Hidden paths are included. Matching is
 case-sensitive unless an exclusion explicitly sets `case-insensitive: true`.
@@ -834,12 +887,19 @@ and dependency caches disabled. That action's manifest and npm lock mirror the
 root dependency pins and `pnpm-lock.yaml`; update them together when those pins
 change. Approval decisions and dependency graph analysis remain in JavaScript.
 
-Both guards use current repository permissions. Only GitHub user accounts with
-`maintain` or `admin` access can grant command approval or receive the author exemption.
-`write` access and organization membership are insufficient. A maintainer pushing
-to an external contributor's branch does not transfer the author exemption.
-Automation using a GitHub user account qualifies under the same role check;
-GitHub App bot identities do not qualify.
+Both guards use current GitHub authority. Sensitive product changes retain the
+`maintain` or `admin` author exemption and command approval. Dependency changes
+require repository `admin` access or active membership in `@openclaw/openclaw-secops`,
+except for the Maintain-author release-alignment exemption above. Maintain commenters
+cannot approve another author's dependency changes; organization membership alone
+is insufficient.
+SecOps membership reads use a separate organization Members-read App token from
+the existing primary/fallback GitHub Apps; repository statuses and notices keep
+using the workflow token. Missing membership credentials or failed reads never
+grant dependency approval. A maintainer pushing to another
+author's branch does not transfer the author exemption. Automation using a GitHub
+user account qualifies under the same guard-specific checks; GitHub App bot
+identities do not qualify.
 
 For other authors, wait for the applicable guard notice to show the current PR
 commit, then post the command on its own line in a new PR comment:
@@ -937,7 +997,7 @@ automation account, and SecOps-owned-path cases before declaring enforcement act
 2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs. Additional checks start directly after preflight. Narrow PRs with additional checks also place the existing `check-guards` and `check-dependencies` rows there: their complete guard, dependency, unused-file, and export scans do not consume the installed compiler/lint plan. Guards use the same commands and fetch the exact comparison base during checkout. Full selections and runs without that family retain the central rows, and the aggregate requires each selected owner. Extension-only compiler inputs can be planned from the four noncore graphs when an already selected additional boundary row owns the full core graph check. This requires existing regular source files without symlink aliases; mixed source changes retain complete discovery, and missing or uncertain inputs retain full checking. Known full selections skip discovery and retain boundary proof in an already selected additional boundary row or the required planner. No extra boundary row is admitted for that optimization. Ordinary pull-request, push, and scheduled CI skip the production dependency audit. Only `workflow_dispatch` IDs beginning with `full-release-validation-` or `release-native-android-` run it. The audit sends one complete graph with up to four attempts and a four-minute total request budget, including retries and response reading. Every non-zero audit exit produces a warning and exits 0, including findings, unavailable advisories, and invalid data. An unavailable audit is incomplete coverage, not a clean result. The optional pre-commit audit hook uses the same warn-only wrapper. The separate daily [Dependency Audit](/ci/scheduled-workflows#dependency-audit) remains strict for triage, is not a required PR check, and points to a dependency-bump follow-up. Release dependency evidence retains its separate known-malware gate; vulnerability advisories remain warnings.
 3. `build-artifacts` and the locale checks overlap with the fast Linux lanes. Control UI and native app source PRs exclude generated locale snapshots/resources; their serialized refresh workflows repair and auto-merge isolated generated PRs in the background. Source CI still blocks stale source inventories and unsafe localization calls. Generated PRs, manual CI, and release prep enforce full translated/platform-generated parity. Upstream `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
 4. Baseline ratchets and selected Node test shards start independently after preflight. Node rows consume the manifest, not ratchet outputs. `ci-gate` still requires every selected ratchet to pass; a failed ratchet leaves sibling jobs running. Frozen targets retain their existing ratchet selection.
-5. Current plans with guards run `check:coercion-helpers` there once; fast-only plans retain its standalone row. Other platform and runtime lanes fan out independently: `checks-fast-core` (including startup corpus), `checks-fast-contracts-plugins`, `checks-fast-contracts-channels`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, the screenshot shards, and `android`.
+5. Current plans with guards run `check:coercion-helpers` there once; fast-only plans retain its standalone row. Other platform and runtime lanes fan out independently: `checks-fast-core` (including startup corpus), `checks-fast-contracts-plugins`, `checks-fast-contracts-channels`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, `ios-screenshot-capture`, and `android`.
 6. PR jobs and independent check steps keep running after failures, including forks and reruns. `check-plan` materializes its outputs before running required global guards; consumers need those outputs rather than a green guard result. Prepared SDK and candidate-package consumers likewise need the uploaded artifact, rather than every check in the producer job passing. Independent shell checks collect every exit and then fail together. Node projects, static compiler groups, lint, documentation checks, and Docker seed lanes finish their selected inventory. Setup/build/plan failures still prevent consumers of missing data, and contract envelopes stop after failure to avoid admitting another envelope before safe cleanup. Cancellation, watchdogs, and timeouts remain deliberate stops. Failing runs take longer and consume more runner time; selection, names, runner counts, and concurrency stay unchanged. `pr-failure-report` waits for the planned jobs, then uses `ci-known-main-red.mjs` to compare every failed or timed-out job with the same name/shard in the newest completed scheduled `ci.yml` run on main. A matching failed job is **pre-existing**, with matching signatures required wherever the existing Node or static evidence helpers support comparison. Other jobs identify their job-name-only match in the reason; check the failing tests against main before attributing those failures. A main pass or different failure signature is **new**. A missing, canceled, unplanned, or otherwise incomparable main job is **unknown**; unavailable supported evidence never implies a match. Detected build-verifier or lint-mode scope differences are **unknown**; the reason notes when selected scope was not compared. The compact summary links the main run and job and is copied into `openclaw/ci-gate`'s summary and log. JSON output exposes `job`, `conclusion`, `class`, `mainRunId`, `mainJobId`, and `reason` for scripts and agents. Reporting keeps the existing runner routes and fanout budget; it never cancels work.
 7. `openclaw/ci-gate` waits for every selected lane and the failure report. Preflight and security must succeed; downstream jobs may skip only when unselected by the manifest and existing event, runner, and compatibility conditions. Unexpected selected skips, failures, and cancellations retain their existing gate semantics, including the known-main-red allowance below. Classification alone does not make a failed gate pass. Superseded runs keep their existing concurrency behavior.
 
@@ -1037,10 +1097,22 @@ provenance metadata. Private QA shards select their private runtime entries. The
 `build-artifacts` job owns Control UI and SDK declaration validation; release
 package builds still generate the full declarations.
 
+Successful scheduled-main artifact builds publish their existing build-all cache
+after compilation, including the SDK-only declaration record. Publication requires
+trusted current-main source and cache-write authority; PRs, manual runs, frozen or
+compatibility targets, release gates, and exact-dist-cache hits do not publish.
+The full warmer retains its release declaration profile. Both profiles share the
+archive while their existing compiler-input and output checks decide reuse; no
+extra compiler pass runs to populate it. Archive upload cost and consumer hit
+rates still need CI measurement.
+
 Source-only Linux Node 24 shards can restore compiled Vitest workers from the
-protected cache warmer. The warmer prepares one generation before SDK or runtime
-builds change package resolution, joins the preparation owner, and publishes only
-the retained cache. PR jobs restore it without publishing. Consumers enable
+protected cache warmer. The warmer prepares separate full, runtime, and tooling
+generations before SDK or runtime builds change package resolution, joins each
+preparation owner, and publishes each retained slot in its own archive. The
+manifest uses the worker owner's selection rules to hint which archive to restore;
+unknown or mixed selections restore the full archive. Execution recomputes the
+preset and validates the restored generation before reuse. PR jobs restore it without publishing. Consumers enable
 reuse only when an archive exists; cold runners keep ordinary fresh compilation.
 The worker owner verifies source and dependency bytes, compiler identity,
 resolution topology, environment, output inventory, and the exact checkout and
@@ -1099,6 +1171,14 @@ remains the explicit operator override for attempting a different budget.
 sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
+
+Both the absolute check and `ui:check-performance:base` normalize generated
+asset hashes before measuring gzip and Brotli budgets. Asset stems, extensions,
+and code stay intact, so a rename alone cannot consume the budget. The report's
+compressed budget numbers are normalized; its separate **served** gzip, Brotli,
+and raw sizes describe the bytes on the wire, including identity fallback when
+a compression sidecar is absent. JSON metrics use `gzipBytes`/`brotliBytes` for
+budgets and `servedGzipBytes`/`servedBrotliBytes` for transfer sizes (schema 2).
 
 Every production UI build checks generated protocol validators before building
 or reusing cached output. After changing a schema used by the Control UI, run

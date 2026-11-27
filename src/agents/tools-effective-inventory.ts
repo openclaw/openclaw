@@ -13,6 +13,10 @@ import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../config/model-provider-config.js";
+import {
+  hasBundledPluginPublicSurface,
+  loadBundledPluginPublicSurfaceModuleSync,
+} from "../plugin-sdk/facade-runtime.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
@@ -27,18 +31,21 @@ import {
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
-import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
+import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.async.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
-import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
+import { normalizeStaticProviderModelId } from "./model-selection-normalize.js";
 import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { retainRuntimePluginWork } from "./runtime-plugin-work.js";
 import { createToolAccessDiagnostics } from "./tool-access-diagnostics.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-import { buildRuntimeCompatibleToolInventory } from "./tools-effective-inventory-build.js";
+import {
+  buildReadableToolsByName,
+  buildRuntimeCompatibleToolInventory,
+} from "./tools-effective-inventory-build.js";
 import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
+import { CODEX_GITHUB_PREVIEW_UNAVAILABLE_NOTICE } from "./tools-effective-inventory-shared.js";
 import type {
   EffectiveToolInventoryNotice,
   EffectiveToolInventoryEntry,
@@ -285,13 +292,15 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
   let transferred = false;
   try {
     const stores = lease.snapshot.createStores();
-    const resolved = await resolveModelAsync(provider, modelId, agentDir, params.cfg, {
-      agentId,
-      workspaceDir,
-      authStorage: stores.authStorage,
-      modelRegistry: stores.modelRegistry,
-      preparedModelRuntime: lease.snapshot,
-    });
+    const resolved = await lease.run(() =>
+      resolveModelAsync(provider, modelId, agentDir, params.cfg, {
+        agentId,
+        workspaceDir,
+        authStorage: stores.authStorage,
+        modelRegistry: stores.modelRegistry,
+        preparedModelRuntime: lease.snapshot,
+      }),
+    );
     const runtimeModel = resolved.model as ProviderRuntimeModel | undefined;
     if (!runtimeModel) {
       return { run: (project) => project({}), [Symbol.asyncDispose]: async () => {} };
@@ -304,7 +313,9 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
         if (released) {
           throw new Error("Tool inventory model context has been released");
         }
-        return withPluginRuntimeGenerationScope(lease.snapshot, () => project(context));
+        return lease.run(() =>
+          withPluginRuntimeGenerationScope(lease.snapshot, () => project(context)),
+        );
       },
       [Symbol.asyncDispose]() {
         released = true;
@@ -347,7 +358,6 @@ export async function resolveEffectiveToolInventory(
     resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
-  const authProfileStoreSource = await hasAnyAuthProfileStoreSourceAsync(agentDir);
   const runtimeModelContext =
     Object.hasOwn(params, "modelApi") || Object.hasOwn(params, "runtimeModel")
       ? {
@@ -373,12 +383,15 @@ export async function resolveEffectiveToolInventory(
       agentAccountId: params.accountId,
     }));
   const diagnostics = createToolAccessDiagnostics({ profiles: capabilityProfile.policy.profiles });
-  const effectiveTools = await withGatewayToolInventoryScope(params.cfg, workspaceDir, () =>
-    createOpenClawCodingToolsInternalAsync(
+  let githubPreviewUnavailable = false;
+  const effectiveTools = await withGatewayToolInventoryScope(params.cfg, workspaceDir, async () => {
+    const tools = await createOpenClawCodingToolsInternalAsync(
       {
         ...params,
         conversationCapabilityProfile: capabilityProfile,
-        authProfileStoreSource,
+        githubPublicationPreview: true,
+        githubPublicationConfigurationAware:
+          !params.agentRuntime || params.agentRuntime === "openclaw" ? true : undefined,
         agentId,
         workspaceDir,
         agentDir,
@@ -397,8 +410,34 @@ export async function resolveEffectiveToolInventory(
       },
       undefined,
       diagnostics.onFilter,
-    ),
-  );
+    );
+    if (params.agentRuntime !== "codex" || !params.githubPublicationAvailable) {
+      return tools;
+    }
+    // Only project these brokered additions here; other tools retain their native-surface semantics.
+    const toolsByName = buildReadableToolsByName(tools);
+    const githubToolNames = ["github_identity_status", "github_publish"].filter((name) =>
+      toolsByName.has(name),
+    );
+    if (githubToolNames.length === 0) {
+      return tools;
+    }
+    const surface = { dirName: "codex", artifactBasename: "tool-profile-api.js" };
+    githubPreviewUnavailable = !hasBundledPluginPublicSurface(surface);
+    const allowed = new Set(
+      githubPreviewUnavailable
+        ? []
+        : loadBundledPluginPublicSurfaceModuleSync<{
+            filterDynamicToolNames: (names: readonly string[], config: OpenClawConfig) => string[];
+          }>(surface).filterDynamicToolNames(githubToolNames, params.cfg),
+    );
+    const excluded = new Set(
+      githubToolNames
+        .filter((name) => !allowed.has(name))
+        .flatMap((name) => toolsByName.get(name) ?? []),
+    );
+    return tools.filter((tool) => !excluded.has(tool));
+  });
   const projectedInventory = buildRuntimeCompatibleToolInventory({
     tools: effectiveTools,
     cfg: params.cfg,
@@ -411,10 +450,13 @@ export async function resolveEffectiveToolInventory(
   const effectivePolicy = capabilityProfile.policy;
   const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
   const entries = projectedInventory.entries;
-  const notices = [
+  const notices: EffectiveToolInventoryNotice[] = [
     ...projectedInventory.notices,
     ...(buildToolInventoryNotices({ cfg: params.cfg, profile, entries, effectivePolicy }) ?? []),
   ];
+  if (githubPreviewUnavailable) {
+    notices.push(CODEX_GITHUB_PREVIEW_UNAVAILABLE_NOTICE);
+  }
   const groups = buildEffectiveToolInventoryGroups(entries);
 
   return {

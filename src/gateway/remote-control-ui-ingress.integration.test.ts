@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,6 +15,7 @@ import type {
   GatewayControlUiIngressFactoryV2,
   GatewayControlUiIngressV2,
 } from "../plugins/gateway-ingress.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { uploadUserBackground } from "../state/user-background.js";
 import {
@@ -31,10 +32,20 @@ import {
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
+import * as operatorRunAuthority from "./operator-run-authority.js";
+import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
+import { defineIdMemberPluginHttpTests } from "./remote-control-ui-ingress-http.test-support.js";
 import {
   connect,
+  prepareIngressMember,
+  heldReadBarrier,
+  heldMutationBarrier,
   request,
   expectHello,
+  expectStatus,
+  expectNegotiatedIngressArchive,
   PNG_BYTES,
   usePeer,
   expectReadWriteWithoutAdmin,
@@ -49,6 +60,7 @@ import {
   createIngressPerson,
   setIngressRole,
 } from "./remote-control-ui-mcp-relay.test-support.js";
+import { captureGatewayIngressPersonPrincipal } from "./remote-ingress-principal-admission.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { getControlUiModule } from "./server-http-modules.js";
@@ -57,7 +69,9 @@ import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
 import { usersHandlers } from "./server-methods/users.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import { createGatewayWsTestRequestContext } from "./server/ws-connection.test-helpers.js";
@@ -80,13 +94,6 @@ const SHARED_TOKEN = "remote-control-ui-integration-shared-token";
 const TOKEN_AUTH = { mode: "token", token: SHARED_TOKEN, allowTailscale: false } as const;
 const SCOPES = ["operator.read", "operator.write"] as const;
 const OWNER_SESSION_KEY = "agent:main:ingress-owner-chat";
-
-function heldReadBarrier() {
-  return { entered: createDeferred(), release: createDeferred() };
-}
-function heldMutationBarrier(count: number) {
-  return { ...heldReadBarrier(), remaining: count, unsettled: count, settled: createDeferred() };
-}
 
 describe("remote Control UI ingress production composition", () => {
   let state: OpenClawTestState;
@@ -123,6 +130,7 @@ describe("remote Control UI ingress production composition", () => {
   const lifetime = new AbortController();
   const grantLifetime = new AbortController();
   const clients = new GatewayClientRegistry();
+  const pluginRegistry = createEmptyPluginRegistry();
   let listener: Awaited<
     ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>
   >;
@@ -149,7 +157,7 @@ describe("remote Control UI ingress production composition", () => {
 
   beforeAll(async () => {
     state = await createOpenClawTestState({
-      label: "remote-control-ui-ingress",
+      prefix: "ingress-", // Leave room for the Unix socket beneath nested CI temporary roots.
       layout: "state-only",
     });
     const root = path.dirname(
@@ -216,6 +224,7 @@ describe("remote Control UI ingress production composition", () => {
         logGateway: logger,
         broadcastVoiceWakeChanged: () => {},
         forgetConnectionAncestors: () => {},
+        getSessionEventSubscriberConnIds: () => new Set<string>(),
         getMcpAppSandboxPort: () => 443,
         getGatewayMethodRegistry: () => methodRegistry,
         isConnectionActive: (connId: string) => Boolean(clients.getByConnectionId(connId)),
@@ -268,6 +277,11 @@ describe("remote Control UI ingress production composition", () => {
       getRuntimeConfig: () => config,
       getGatewayRequestContext: () => requestContext as never,
       handleHooksRequest: async () => false,
+      handlePluginRequest: createGatewayPluginRequestHandler({
+        registry: pluginRegistry,
+        log: logger,
+        getGatewayRequestContext: () => gatewayContext,
+      }),
     });
     listener = await reserveTestPortListener({
       offsets: [0],
@@ -300,7 +314,8 @@ describe("remote Control UI ingress production composition", () => {
           await http!(req, res);
         },
         handleUpgrade,
-        handleSandboxRequest: createSandboxHostHttpRequestHandler(),
+        handleSandboxRequest: createSandboxHostHttpRequestHandler({ clients }),
+        admissionSignal: lifetime.signal,
         signal: lifetime.signal,
       },
     });
@@ -402,12 +417,6 @@ describe("remote Control UI ingress production composition", () => {
     nextAuth: ResolvedGatewayAuth,
     roles?: NonNullable<OpenClawConfig["gateway"]>["roles"],
   ) => configure({ ...config, gateway: { ...config.gateway, roles, auth: nextAuth } }, nextAuth);
-
-  async function expectStatus(response: Promise<Response>, status: number) {
-    const result = await response;
-    expect(result.status).toBe(status);
-    await result.body?.cancel();
-  }
 
   const personOptions = (profileId: string) => ({
     ...principalOptions,
@@ -536,6 +545,72 @@ describe("remote Control UI ingress production composition", () => {
     await response.body?.cancel();
   });
 
+  it("lets a negotiated ingress browser archive without requesting a direct-only Undo receipt", async () => {
+    await usePeer(await openRemote(), (peer) => expectNegotiatedIngressArchive(peer, SCOPES));
+  });
+
+  it("delivers preview resources only through the issuing ingress grant and live connection", async () => {
+    const controller = new AbortController();
+    const owner = await factory.open({
+      ...openOptions,
+      audienceId: "preview-issuer",
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+    });
+    const foreign = await factory.open({ ...openOptions, audienceId: "preview-other-grant" });
+    const code = "window.previewReady = true;";
+    const policy =
+      "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+    const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><script defer src="csp-preview.js"></script></head><body>Preview</body></html>`;
+    await fs.writeFile(path.join(state.workspaceDir, "csp-preview.html"), html);
+    await fs.writeFile(path.join(state.workspaceDir, "csp-preview.js"), code);
+    let resourcePath = "";
+    const readResource = async (handle: GatewayControlUiIngressV2) =>
+      (
+        await handle.request({
+          surface: "sandbox",
+          method: "GET",
+          pathAndQuery: resourcePath,
+          headers: [],
+          signal: lifetime.signal,
+        })
+      ).response;
+    try {
+      await usePeer(await openRemote(owner), async (peer) => {
+        const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-preview-browser" });
+        expectHello(
+          await connect(peer, { identity, scopes: [...SCOPES] }),
+          "remote-ingress",
+          SCOPES,
+        );
+        const result = await request(peer, "sessions.files.preview", {
+          sessionKey: OWNER_SESSION_KEY,
+          path: "csp-preview.html",
+          html,
+        });
+        expect(result.ok, JSON.stringify(result.error)).toBe(true);
+        expect(result.payload?.status).toBe("ready");
+        const sandboxPath = result.payload?.sandboxPath;
+        assert(typeof sandboxPath === "string", "Missing admitted preview URL");
+        resourcePath = new URL("csp-preview.js", SANDBOX_ORIGIN + sandboxPath).pathname;
+        const allowed = await readResource(owner);
+        expect(allowed.status).toBe(200);
+        expect(await allowed.text()).toBe(code);
+        const denied = await readResource(foreign);
+        expect(denied.status).toBe(404);
+        expect(await denied.text()).toBe("Not Found");
+      });
+      const retired = await readResource(owner);
+      expect(retired.status).toBe(404);
+      expect(await retired.text()).toBe("Not Found");
+      controller.abort(new Error("preview ingress revoked"));
+      await expect(readResource(owner)).rejects.toThrow();
+    } finally {
+      await owner.close();
+      await foreign.close();
+    }
+  });
+
   it("rejects invalid devices, reusable credentials, roles and scopes at WebSocket admission", async () => {
     const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-rejected-browser" });
     const cases = [
@@ -566,6 +641,28 @@ describe("remote Control UI ingress production composition", () => {
           error: { message: expect.stringContaining(message) },
         });
       });
+    }
+  });
+
+  it("captures a durable source from owner-resumable principal transport without handshake auth", async () => {
+    await factory.registerPrincipalRecovery?.(async (audienceId) =>
+      audienceId === principalOptions.audienceId
+        ? { ...principalOptions, recoveryId: "issued-transport-grant" }
+        : undefined,
+    );
+    const capture = vi.spyOn(operatorRunAuthority, "prepareGatewayOperatorRunAuthority");
+    const binding = await factory.bindPrincipal(principalOptions);
+    try {
+      await binding.request("voicewake.get", {});
+      const captured = await capture.mock.results.at(-1)?.value;
+      expect(captured?.authority.recoverySnapshot).toMatchObject({
+        sourceIngress: "principal",
+        ingress: { audienceId: principalOptions.audienceId },
+        scopes: [...SCOPES],
+      });
+    } finally {
+      capture.mockRestore();
+      await binding.close();
     }
   });
 
@@ -683,6 +780,165 @@ describe("remote Control UI ingress production composition", () => {
     }
   });
 
+  defineIdMemberPluginHttpTests(() => ({
+    factory,
+    pluginRegistry,
+    workspaceDir: state.workspaceDir,
+    options: openOptions,
+    foreignSessionKey: OWNER_SESSION_KEY,
+    configureAuth,
+  }));
+
+  it("uses the original ID membership and profile role for app RPC, browser access, and recovery", async () => {
+    await configureAuth(TOKEN_AUTH, {
+      definitions: {
+        ...structuredClone(MEMBER_ROLE_PRESETS),
+        viewer: { ...MEMBER_ROLE_PRESETS.viewer, scopes: ["operator.read"] },
+      },
+    });
+    const { claw, profile, peerKey, accountId, release } = await prepareIngressMember(
+      config,
+      (next) => configure(next, TOKEN_AUTH),
+    );
+    try {
+      for (const role of ["operator", "viewer"] as const) {
+        await setIngressRole(profile.id, role);
+        expect(
+          await claw.authority.submit(
+            await claw.sign({
+              op: "add",
+              account_id: accountId,
+              role,
+              peer_keys: [peerKey],
+              invite_id: null,
+            }),
+            "tunnel",
+          ),
+        ).toMatchObject({ ok: true });
+        setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
+        const source = await claw.authority.resolvePeer(peerKey);
+        assert(source, "Missing signed ID member");
+        const principal = captureGatewayIngressPersonPrincipal({
+          connect: gatewayConnect(["operator.read"]),
+          authenticatedUserProfile: gatewayProfile(profile.id),
+          internal: { authenticatedOperator: true, openclawIdPrincipal: source },
+        });
+        const options = {
+          ...personOptions(profile.id),
+          audienceId: `id-app-${role}`,
+          principal,
+          operatorScopeCeiling: ["operator.read", "operator.write", "operator.admin"],
+        };
+        let resumable = false;
+        await factory.registerPrincipalRecovery?.(async (audienceId) =>
+          resumable && audienceId === options.audienceId
+            ? { ...options, recoveryId: `original-${role}-app` }
+            : undefined,
+        );
+        const capture = vi.spyOn(operatorRunAuthority, "prepareGatewayOperatorRunAuthority");
+        const ephemeral = await factory.bindPrincipal(options);
+        try {
+          await ephemeral.request("users.self", {});
+          const captured = await capture.mock.results.at(-1)?.value;
+          expect(captured?.authority.recoverySnapshot).toBeUndefined();
+        } finally {
+          await ephemeral.close();
+          capture.mockRestore();
+        }
+        resumable = true;
+        const binding = await factory.bindPrincipal(options);
+        let recovered: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
+        try {
+          const durableCapture = vi.spyOn(
+            operatorRunAuthority,
+            "prepareGatewayOperatorRunAuthority",
+          );
+          let snapshot;
+          try {
+            expect(await binding.request("users.self", {})).toHaveProperty(
+              "profile.id",
+              profile.id,
+            );
+            snapshot = (await durableCapture.mock.results.at(-1)?.value)?.authority
+              .recoverySnapshot;
+          } finally {
+            durableCapture.mockRestore();
+          }
+          assert(snapshot, "Missing original app recovery source");
+          const persisted = JSON.stringify(snapshot);
+          const restore = () =>
+            restoreGatewayOperatorSource({
+              snapshot: JSON.parse(persisted),
+              context: gatewayContext,
+              assertCurrent() {},
+            });
+          if (role === "operator") {
+            recovered = await restore();
+            expect(recovered.authority.readCurrentRoleFacts?.().assignedRole).toBe(role);
+            expect(recovered.authority.rolePolicy?.sessionAccessCap).toBe("write");
+            expect(recovered.authority.scopes).not.toContain("operator.admin");
+          } else {
+            // A read-only requester's saved source starts no new work.
+            await expect(restore()).rejects.toThrow("I did not run your queued request.");
+          }
+          resumable = false;
+          await expect(restore()).rejects.toThrow("The sign-in it was started with");
+          resumable = true;
+          await expect(binding.request("config.set", { raw: "{}" })).rejects.toThrow(
+            "operator.admin",
+          );
+          const ui = await binding.openControlUi(presentationOptions);
+          await usePeer(await openRemote(ui), async (peer) => {
+            const identity = loadOrCreateDeviceIdentity({ identityKey: `id-member-${role}` });
+            expectHello(
+              await connect(peer, { identity, profileId: profile.id }),
+              "remote-ingress",
+              role === "operator"
+                ? [
+                    "operator.read",
+                    "operator.write",
+                    "operator.approvals",
+                    "operator.questions",
+                    "operator.talk",
+                  ]
+                : ["operator.read"],
+            );
+            if (role === "operator") {
+              await expectReadWriteWithoutAdmin(peer, "id-member-app");
+              await binding.request("voicewake.set", { triggers: ["id-member-rpc"] });
+            } else {
+              expect(await request(peer, "voicewake.set", { triggers: ["denied"] })).toMatchObject({
+                ok: false,
+              });
+              await expect(
+                binding.request("voicewake.set", { triggers: ["denied"] }),
+              ).rejects.toThrow("operator.write");
+            }
+            expect(
+              await claw.authority.submit(
+                await claw.sign({ op: "remove", account_id: accountId }),
+                "tunnel",
+              ),
+            ).toMatchObject({ ok: true });
+            setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
+            await expect(binding.request("voicewake.get", {})).rejects.toThrow();
+            await expect(restore()).rejects.toThrow();
+            await expect(readRemote("/claw/control-ui-config.json", ui)).rejects.toThrow();
+          });
+          await expect(
+            factory.bindPrincipal({ ...personOptions(profile.id), principal }),
+          ).rejects.toMatchObject({ code: "forbidden" });
+        } finally {
+          recovered?.release();
+          await binding.close();
+        }
+      }
+    } finally {
+      setOpenClawIdTunnelPrincipalLookup(undefined);
+      await release();
+    }
+  });
+
   it("fences held HTTP, WebSocket and RPC work before effects and publication on grant revocation", async () => {
     const subject = { id: "gateway-owner" };
     await configureAuth(TOKEN_AUTH);
@@ -768,5 +1024,6 @@ describe("remote Control UI ingress production composition", () => {
       sharedToken: SHARED_TOKEN,
       ownerSessionKey: OWNER_SESSION_KEY,
       configure,
+      gatewayServer: () => listener.listener,
     }));
 });

@@ -2,18 +2,47 @@
 // implements only the CLI/service boundary; no host service is installed.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
 const args = process.argv.slice(2);
 const installed = "fixture-runtime-installed.json";
+const baseline = "fixture-runtime-baseline.json";
+const terminal = "fixture-runtime-terminal.json";
 const expectedPin = { revision: "fixture-absent", definition: null };
 const prefix = path.join(homedir(), ".openclaw");
 const port = 18789;
 const reply = (value) => console.log(JSON.stringify(value));
 
-if (args[0] === "gateway" && args[1] === "install") {
+if (args[0] === "setup" && args[1] === "--terminal-path") {
+  const launcher = path.join(prefix, "bin/openclaw");
+  assert.deepEqual(args, ["setup", "--terminal-path", launcher]);
+  const info = lstatSync(launcher);
+  assert.ok(
+    info.isFile() && info.uid === process.getuid() && (info.mode & 0o111) !== 0,
+    "terminal setup requires the app-managed executable launcher",
+  );
+  assert.equal(existsSync(installed), false, "terminal setup must precede service installation");
+  // Emulate only the CLI boundary: never edit shell startup files or the host PATH.
+  writeFileSync(terminal, JSON.stringify({ launcher }));
+  reply({ ok: true });
+} else if (args[0] === "setup") {
+  assert.deepEqual(args, ["setup", "--baseline", "--json"]);
+  assert.deepEqual(
+    JSON.parse(readFileSync(terminal)),
+    { launcher: path.join(prefix, "bin/openclaw") },
+    "each fresh setup attempt must qualify terminal exposure before baseline setup",
+  );
+  const configPath = path.join(prefix, "openclaw.json");
+  if (!existsSync(configPath)) {
+    writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+  }
+  writeFileSync(baseline, JSON.stringify({ configPath }));
+  unlinkSync(terminal);
+  reply({ ok: true, configPath });
+} else if (args[0] === "gateway" && args[1] === "install") {
+  assert.ok(existsSync(baseline), "baseline setup must initialize the profile before service installation");
   assert.equal(existsSync(installed), false, "fresh setup must install exactly once");
   assert.deepEqual(args, [
     "gateway", "install", "--force", "--json", "--runtime", "bun", "--runtime-path",
@@ -28,23 +57,27 @@ if (args[0] === "gateway" && args[1] === "install") {
     console.error(readFileSync(failure, "utf8"));
     process.exit(1);
   }
-  writeFileSync(path.join(prefix, "openclaw.json"), JSON.stringify({ gateway: { mode: "local" } }));
   writeFileSync(installed, JSON.stringify({ bun: process.execPath, entry: process.argv[1] }));
   reply({ ok: true });
 } else if (args[0] === "gateway" && args[1] === "status" && args.includes("--deep")) {
   assert.deepEqual(args.slice(0, 4), ["gateway", "status", "--deep", "--json"]);
   assert.ok(args.length === 4 || (args.length === 5 && args[4] === "--no-probe"));
   const active = existsSync(installed);
+  const initialized = existsSync(baseline);
   const bun = active ? JSON.parse(readFileSync(installed)).bun : null;
   reply({
     service: {
-      loaded: active, targetRole: "target", definitionMutation: "writable",
-      launcherOverridden: false, revision: active ? "fixture-bundled" : "fixture-absent",
+      loaded: active, targetRole: "target",
+      ...(initialized ? {
+        definitionMutation: "writable", revision: active ? "fixture-bundled" : "fixture-absent",
+      } : {}),
+      launcherOverridden: false,
       command: active ? { programArguments: [bun, process.argv[1], "gateway"] } : null,
       runtime: active ? { status: "running", pid: 4100 } : null,
       runtimeIntent: active
         ? { status: "known", revision: "fixture-bundled", definition: "fixture-service", pin: { runtime: "bun", path: bun } }
-        : { status: "known", ...expectedPin },
+        : initialized ? { status: "known", ...expectedPin }
+          : { status: "migrationPending", nextStep: "run openclaw doctor" },
     },
     config: { daemon: { path: path.join(prefix, "openclaw.json") } },
     gateway: { port }, rpc: { ok: active },

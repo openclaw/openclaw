@@ -18,10 +18,7 @@ import {
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  resolveSessionTranscriptDatabasePath,
-  waitForSessionTranscriptProjection,
-} from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptProjection } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { retainSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -33,7 +30,7 @@ import {
   extractAssistantPhaseText,
   extractAssistantTextForPhase,
 } from "../../shared/chat-message-content.js";
-import { combineNonStreamingReplyParts } from "../../shared/text/text-projection.js";
+import { combineNonStreamingReplyParts } from "../../shared/text/trim-code-text.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { isToolHistoryBlockType } from "../chat-display-projection.canvas.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
@@ -83,7 +80,9 @@ export function createChatSendReplyDispatch(params: {
   accountId: string | undefined;
   requesterContext?: WebchatReplyMediaRequesterContext;
   isAgentRunStarted: () => boolean;
+  /** Publishes pre-run block text: every block of a command turn, otherwise compaction notices. */
   onCommandBlock?: (text: string) => void;
+  commandTurn?: boolean;
   isRunCurrent?: () => boolean;
   abortSignal?: AbortSignal;
   assertWorkCurrent?: () => void;
@@ -185,12 +184,7 @@ export function createChatSendReplyDispatch(params: {
           isRunCurrent() &&
           current.entry?.sessionId === admission.sessionId &&
           current.entry.lifecycleRevision === lifecycleRevision &&
-          resolveSessionTranscriptDatabasePath({
-            agentId: session.agentId,
-            sessionId: admission.sessionId,
-            sessionKey: session.sessionKey,
-            storePath: current.storePath,
-          }) === admission.storePath
+          current.readSource?.path === admission.storePath
         );
       };
       if (
@@ -434,6 +428,7 @@ export function createChatSendReplyDispatch(params: {
         // identity so media materialization cannot append a parallel reply.
         rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
           content: persistedContentForAppend,
+          responseUsageLine: payloadMetadata?.responseUsageLine,
           mediaBySource,
           idempotencyKey: ownedTranscriptIdempotencyKey,
           managedMediaUrls: sourceMediaUrls,
@@ -452,6 +447,7 @@ export function createChatSendReplyDispatch(params: {
           messageId: assistantTranscriptMessageId,
           runId: agentRunId,
           content: persistedContentForAppend,
+          responseUsageLine: payloadMetadata?.responseUsageLine,
           mediaBySource,
           mediaUrls: sourceMediaUrls,
           expectedLifecycleRevision: assistantTranscriptRewriteState?.lifecycleRevision ?? null,
@@ -479,6 +475,7 @@ export function createChatSendReplyDispatch(params: {
           afterSeq: assistantTranscriptRewriteState.afterSeq,
           assistantMessageIndex,
           content: persistedContentForAppend,
+          responseUsageLine: payloadMetadata?.responseUsageLine,
           mediaBySource,
           expectedGeneration: assistantTranscriptRewriteState.generation,
           mediaUrls: sourceMediaUrls,
@@ -592,7 +589,12 @@ export function createChatSendReplyDispatch(params: {
         ) {
           const parts = deliveredReplies.map(({ input: replyInput, kind }) => {
             const reply = readChatSendReplyPayload(replyInput);
-            if (kind !== "block" || reply.isReasoning === true || isBtwReplyPayload(reply)) {
+            if (
+              kind !== "block" ||
+              reply.isReasoning === true ||
+              isBtwReplyPayload(reply) ||
+              (!params.commandTurn && reply.isCompactionNotice !== true)
+            ) {
               return "";
             }
             const displayText =

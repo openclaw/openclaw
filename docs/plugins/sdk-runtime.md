@@ -46,6 +46,59 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+## Resource profile
+
+`openclaw/plugin-sdk/resource-profile` exposes the host's read-only resource
+policy as `ResourceProfile` (`"standard" | "lean"`):
+
+```typescript
+import { getResourceProfile, onResourceProfileChange } from "openclaw/plugin-sdk/resource-profile";
+
+const profile = getResourceProfile();
+const unsubscribe = onResourceProfileChange((nextProfile) => {
+  // Update plugin-owned resource policy; let admitted work settle first.
+  applyResourcePolicy(nextProfile);
+});
+api.lifecycle.onDispose(unsubscribe);
+```
+
+Reads return the Gateway owner's resolved decision, without inspecting config,
+memory or CPUs again. Before Gateway initialization and in standalone commands,
+the default is `standard`. The subscription observes future changes only; it
+does not immediately call the listener. Listeners run synchronously after the
+new value is visible, and one listener throwing does not stop the others.
+Unsubscribe on plugin disposal; Gateway shutdown also clears subscriptions.
+
+`gateway.resources.profile` still requires a Gateway restart. This signal does
+not enable hot configuration changes or grant execution authority. Plugins own
+their policy: lean can defer optional startup and retire idle resources, but
+must preserve watches, accepted operations and durable maintenance obligations.
+
+## Settled agent lifecycle events
+
+Use `api.agent.events.registerAgentEventSubscription` with `streams: ["lifecycle"]`
+and `phases: ["end", "error"]` to observe run outcomes. A publication with
+`data.executionSettled === true` records the execution owner's final decision
+across fallback attempts; `agent_end` is an attempt hook, not that guarantee.
+This fact does not imply source-reply delivery or completion of a yielded parent.
+Events without it can still require session-state reconciliation.
+
+`openclaw/plugin-sdk/agent-lifecycle` exposes the same stateless classifiers used
+by the host: `isAgentLifecycleYieldedWaiting(data)` identifies a parent still
+waiting, and `resolveAgentRunLifecycleTerminalFacts({ phase, data })` classifies
+success, failure, cancellation, and timeout. Match the event's session and run
+identity before updating plugin state. These helpers grant no execution authority.
+
+## Reply session initialization conflicts
+
+Use `isReplySessionInitConflictError(error)` from
+`openclaw/plugin-sdk/reply-runtime` to recognize an exhausted reply-session
+initialization conflict. Core owns classification, including errors serialized
+across runtime boundaries; plugins should not match the error text themselves.
+Channels can send a terminal busy notice or record intentional delivery-policy
+suppression before completing the inbound event. If notice delivery fails, keep
+the event retryable through the channel's durable ingress owner.
+
 ## Module loading and host identity
 
 Declare plugin entries in `package.json` under `openclaw.extensions`, import
@@ -82,7 +135,7 @@ runtime; the compiled entry map is not a compatibility certificate.
 - [Background work](/plugins/sdk-runtime/background-work) — hook agent turns, subagent runs, and native harness completion delivery.
 - [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, bounded session facts through `gateway.readSessionFacts`, plugin-written agent messages through `gateway.appendAgentMessage`, paired node invocation, and Gateway service events.
 - [Media helpers](/plugins/sdk-runtime/media) — speech, media understanding, image/video/music generation, web search, and media utilities.
-- [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, SQLite-backed plugin state, system utilities, events, and logging.
+- [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, shared plugin state, system utilities, events, and logging.
 - [Channel helpers](/plugins/sdk-runtime/channel) — channel-specific runtime helper groups for chunking, routing, pairing, media, and mentions.
 
 ## Runtime namespaces
@@ -114,84 +167,197 @@ Every `api.runtime` namespace and the page that documents it.
 | `api.runtime.modelAuth`          | [Model helpers](/plugins/sdk-runtime/models#api-runtime-modelauth)              |
 | `api.runtime.state`              | [State and system](/plugins/sdk-runtime/state-and-system#api-runtime-state)     |
 | `api.runtime.channel`            | [Channel helpers](/plugins/sdk-runtime/channel#api-runtime-channel)             |
+| `api.runtime.skills`             | [Skill usage](#skill-usage)                                                     |
 
-### Read-only session forks
+### Session forks
 
-Use `api.runtime.subagent.forkSession({ sessionKey, message, signal?, timeoutMs? })`
-for background inference against an existing session. It returns
-`{ text, usage? }`; usage uses the completion fields `inputTokens`, `outputTokens`,
-`cacheReadTokens`, `cacheWriteTokens`, `totalTokens`, and `costUsd`.
-The timeout defaults to 30 seconds.
+`forkSession` and `runForkedTurn` both run through one core owner. A fork is a
+hidden agent run on a copy of a session's conversation. It sends the session's
+own provider request (system prompt, tool definitions, prompt-cache key,
+thinking setting and history) and appends its own prompt, so the provider serves
+the session's cached prefix:
 
-The fork uses the session's model and harness, with no model override. Codex
-inherits the conversation and tool definitions in an ephemeral thread, but denies
-local tool calls at dispatch and disables provider-hosted web search. On managed
-inference routes, it replays the parent's last prepared instructions, tool schemas,
-and input prefix, including after parent completion, with tool choice set to `none`.
-Snapshots share a 32 MiB in-memory LRU budget; evicted or oversized snapshots
-and WebSocket continuation requests fall back to native thread reconstruction
-without guaranteed cache reuse. Native reconstructed history also takes precedence when
-its prefix no longer matches the recorded request. Completed parent responses and
-subsequent fork tool-denial outcomes remain before the side question or continuation.
-While the prepared request remains in the snapshot budget,
-instructions and tool schemas stay parent-identical even on that native reconstruction path.
-Denied forks always set tool choice to `none` on managed inference requests,
-while native hosted search remains disabled. The fork has its own thread,
-session, and current model authority.
-Start a normal parent turn
-in the current runtime before requesting a fork. The native hook relay must be
-enabled and available; otherwise the request fails closed.
-The built-in `openclaw` runtime builds the fork request when `forkSession` is
-called. Normal model turns do not serialize or retain fork snapshots, copy
-published messages, or schedule fork expiry timers. Active forks read the running
-session's current context; completed sessions are reconstructed from the persisted
-model context, including compaction and the pinned system prompt and tool schemas.
-Sessions with history can be forked after a restart without sending another normal
-message first. Routes without a persisted prompt pin rebuild their configured
-system prompt at fork time.
-Completed-session forks apply the configured channel history window and preserve
-compaction summaries. All built-in runtime forks omit the parent's prompt-cache
-identity, including forks of running sessions: they rebuild context independently
-and do not share the parent's complete request preparation.
+- While the session's run is live, the fork replays that run's last prepared
+  request byte for byte, then appends its own items. Rebuilt history can differ
+  from what the parent sent (runtime-context order, rewritten tool-call IDs);
+  the replay keeps the fork on the parent's bytes.
+- After the run settles, the fork rebuilds the request from the transcript with
+  the session's pinned system prompt and tool definitions.
+- The fork sends its rebuilt request instead of the replay when the parent sent
+  an item the rebuilt context lacks, the parent request is a continuation that
+  carries only its delta, or the fork may run a tool the parent request never
+  listed.
 
-The fork uses the same provider payload builders as a normal request. Unchanged
-prompt and tool prefixes can reuse the provider's prompt cache. Cache reuse is
-not guaranteed: reconstruction, compaction, images, and one-shot context or
-payload hooks can produce different bytes. Forks do not re-run the parent's
-one-shot hooks. They return text and usage even when reconstruction misses the
-cache; callers should use the returned cache-read usage to measure actual reuse.
+Every tool the session lists stays in the request, including provider-hosted
+tools such as web search, so the fork shares the session's cached tool list. The
+fork runs only the client tools it was given; a call to any other client tool
+returns a normal result such as `exec is not available in this background
+run.` A fork that runs tools may also use the session's provider-hosted tools,
+because the provider runs those before the fork's tool gate. A tool-free fork
+sets tool choice to `none` on OpenAI Responses (including native ChatGPT), Chat
+Completions and Anthropic Messages, so no tool runs. Other APIs keep the
+parent's tool choice; a tool-free fork whose request carries a provider-hosted
+tool on those APIs fails before it is sent.
 
-Completed tool calls and their outcomes remain in conversation order. A tool
-call still running when the fork starts receives a non-error placeholder saying
-its result is not available yet. This does not cancel the call or persist a
-result in the parent session.
+A fork uses the session's full model context with the model's own context
+window and compaction, not an excerpt. Thinking follows the session, because
+Anthropic and OpenAI serve a cached prefix only at the same thinking setting.
+Output tokens follow the session unless the caller sets its own limit. The model
+is locked: no fallbacks and no transient retries. A fork stops when the caller's
+signal or timeout fires, when a Gateway restart drains, or when the source
+session is reset, replaced or deleted. Runs in other sessions, including cron
+runs, do not stop it. A fork never writes the source transcript, never appears in
+the Control UI and never delivers a reply. Cache reuse is not guaranteed:
+compaction, images and one-shot payload hooks can still change bytes, so use the
+returned cache-read usage to measure actual reuse.
 
-The request uses the current model's credentials, proxy, and TLS policy. Session
-read authority is checked immediately before network sends, including retries.
-Native ChatGPT forks use independent connections without consuming or replacing
-the parent's continuation. Supported APIs are OpenAI Responses (including native
-ChatGPT), Chat Completions, and Anthropic Messages. Other APIs, including Bedrock,
-fail before dispatch because their transports cannot enforce live fork authority.
-Tool choice is set to `none` to prevent hosted tool execution; local tool calls
-are denied, with at most two additional inference attempts. On Anthropic, changing
-tool choice invalidates the messages cache, while the tool and system caches can
-remain reusable.
-
-Read-only forks do not acquire workspace placement authority, write a transcript,
-or change the parent's history. Normal parent settlement preserves a fork's read
-authority; session reset or deletion revokes it before an answer can be returned.
-CLI runtimes remain unsupported for `forkSession`. Ordinary `/btw` keeps its
-lightweight, tool-free context.
-
-Conversation access is required through
+Conversation access is required: approved through the plugin's capability review
+when its manifest declares `contracts.conversationAccess: ["read"]`, or set with
 `plugins.entries.<id>.hooks.allowConversationAccess` (enabled by default only for
 bundled plugins). The caller must also have the target session's `sessions.get`
-read access. That authority, the Gateway binding, and conversation access remain
-live through inference and return. Requests share the subagent command lane and
-the `agents.defaults.subagents.maxConcurrent` cap with `subagent.complete`, and
-are cancelled when their runtime is retired. A fork does not write a transcript,
-deliver an answer, fire agent-turn lifecycle hooks, or consume queued injections
-or steering. Missing session context and unsupported harnesses produce errors.
+read access. That authority, the Gateway binding and conversation access remain
+live through the run and its settlement. Tool policy is checked as the anchored
+turn's requester: the sender, group and channel that the turn's stored user
+message recorded. The owner flag is the caller's admitted authority, never the
+turn's. Plugins cannot supply requester facts.
+
+A session whose model runs on a subscription login that a CLI backend owns (for
+example `claude-cli` with a Claude login or Claude subscription token) forks
+through that CLI, so the fork stays within the plan. The CLI starts a fresh
+session with the conversation as context, so the session's prompt cache is not
+reused, and only the fork's own tools are available to it. A fork that grants
+the plugin's own tools or sets `maxTokens` cannot run on the CLI and uses the
+direct provider route instead. API-key sessions keep the request replay above.
+
+Sandboxed managed-worktree forks prepare the same private workspace and selected
+working directory as an ordinary turn of the source session. The durable project
+workspace remains the transcript cwd. Host-executed forks retain their durable
+workspace behavior.
+
+#### Tool-free forks
+
+Use `api.runtime.subagent.forkSession({ sessionKey, message, signal?, timeoutMs? })`
+to ask a question against an existing session's current conversation. It
+returns `{ text, usage? }`; usage uses the completion fields `inputTokens`,
+`outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `totalTokens`, and
+`costUsd`. The timeout defaults to 30 seconds. The fork uses the session's model,
+with no model override, and runs no tools.
+
+On the Codex harness, the fork is an ephemeral `thread/fork` that inherits the
+conversation and tool definitions, denies local tool calls at dispatch and
+disables provider-hosted web search. The native hook relay must be enabled and
+available; otherwise the request fails closed. Requests share the subagent
+command lane and the `agents.defaults.subagents.maxConcurrent` cap with
+`subagent.complete`, and are cancelled when their runtime is retired.
+
+#### Forked turns with plugin tools
+
+Use `api.runtime.subagent.runForkedTurn(...)` when background work must act on a
+stored session's conversation with tools, for example a reviewer that records
+what it learned. The fork reads through one transcript entry: the one `through`
+names, or the session's latest message when `through` is omitted. In an
+`agent_end` hook, `ctx.sessionKey` and `ctx.completedTurn` name the finished
+turn to fork.
+
+```typescript
+const result = await api.runtime.subagent.runForkedTurn({
+  sessionKey,
+  through: { sessionId, entryId }, // optional; the latest message when omitted
+  prompt: "Review this conversation and record one reusable note.",
+  tools: ["my_plugin_note", "read"], // this plugin's tools, plus read, ls or exec
+  runId: `my-plugin-review:${reviewId}`, // optional; unique per run
+  timeoutMs: 120_000, // optional; defaults to 120 seconds, no upper bound
+  maxTokens: 4_096, // optional; defaults to the session's output limit
+  signal, // optional cancellation
+  onSettled: async (outcome) => {
+    // Runs inside the fork's Gateway work admission: a graceful restart waits for it.
+    if (!outcome.ok && outcome.cancelled) return "cancelled";
+    return outcome.ok ? outcome.text : "failed";
+  },
+});
+if (result.status === "refused") {
+  // The session's tool policy does not allow every requested tool; nothing ran.
+}
+```
+
+- `tools` names the tools the fork may run: exact tools the calling plugin
+  uniquely registered, plus `read`, `ls` and `exec`. Other core tools and tools
+  another plugin registered are rejected, the same rule as
+  `subagent.run({ toolsAlsoAllow })`. Every tool the session lists stays in the
+  request, so the provider serves its cached prefix; a call to any other tool
+  returns "not available in this background run" as a normal tool result.
+- The source session's tool policy is still checked, including explicit denies;
+  a denied tool returns `{ status: "refused", reason: "tool_policy" }` before any
+  model call. `read`, `ls` and `exec` are never added to that policy: the session
+  must already allow them. Pass `[]` for a tool-free fork.
+- Called from a Gateway method that declares
+  [`sessionAccess`](/plugins/sdk-runtime/gateway-and-nodes#session-resource-methods),
+  the fork runs as a run of the session that request admitted, so a caller
+  with only `operator.sessions.write` can fork their own session. `sessionKey`
+  must name that same session. Without `sessionAccess`, the fork needs the
+  caller's permission to run the agent.
+- A request for `exec` returns `{ status: "refused", reason: "tool_policy" }`
+  unless the caller holds owner authority (the `operator.admin` scope), decided
+  once when the fork starts. Who sent the anchored turn does not matter: an
+  owner may fork a turn whose latest input is an internal wake, such as a
+  subagent or exec completion. A fork with no admitted operator caller, such as
+  background work no Gateway request started, never gets `exec`; request only
+  `read` and `ls` there. A fork never asks for approval: a command the agent's
+  exec approvals would ask about is denied, and nothing is queued for approval.
+  Allowlist entries and full-permission exec apply as they do for the session's
+  own turns.
+- A manifest's `contracts.tools` may claim a core catalog id only when the
+  catalog marks it plugin-built (as `browser` and `skill_workshop`); claiming
+  `exec`, `read` or another core-built tool grants nothing.
+- `through.sessionId` must still be the session's current id, and the entry must
+  be on its active transcript; otherwise the call fails. A reset that keeps the
+  session id does not refuse the fork. `outcome.source` reports the
+  `sessionId` and `lifecycleRevision` the fork read, so a follow-up notice can
+  target that same generation.
+- The fork runs on the model the anchored turn ran on. An explicit `provider`
+  and `model` that name the turn's or the session's own model need no extra
+  trust; any other override uses the subagent override policy above.
+- Lane, admission and diagnostics belong to the plugin (`plugin:<id>`); callers
+  do not choose an owner label. Forks of the same plugin run one at a time.
+- `onSettled` receives `{ runId, source?, ok: true, text? }` or
+  `{ runId, source?, ok: false, error, cancelled }`. `cancelled` marks an
+  expected stop: the caller's signal, a Gateway restart drain, or the source
+  session changing during the fork. Its return value is the call's `value` in
+  `{ status: "settled", runId, value }`.
+- Tools running inside the fork see `toolContext.backgroundRun`
+  (`{ sourceSessionKey, ownerPluginId }`); compare `ownerPluginId` with your own
+  plugin id before applying fork-only behavior.
+- The fork belongs to the plugin registration that started it. That
+  registration is checked again before admission, before each tool runs, and
+  before `onSettled`; once it is no longer live, the call rejects and
+  `onSettled` does not run. A plugin reload waits for in-flight forks and their
+  `onSettled` to finish before it replaces the registration.
+
+## Skill usage
+
+Core records one use per demonstrated skill read, keyed by the canonical
+`SKILL.md` path. `api.runtime.skills` reads those counters and lets a plugin
+tool report a skill read that core cannot see, such as a tool that shows a
+skill's instructions itself.
+
+```ts
+const { tracked, usage } = await api.runtime.skills.readUsage({
+  skillFiles: ["/home/me/.openclaw/workspace/skills/deploy/SKILL.md"],
+});
+const deploy = usage.get("/home/me/.openclaw/workspace/skills/deploy/SKILL.md");
+// deploy?.useCount, deploy?.lastUsedAtMs
+```
+
+- `readUsage` keys results by the paths you pass; core canonicalizes them for
+  the lookup. A file without recorded use has no entry.
+- `tracked` is `false` when this process does not persist skill use (for
+  example, outside the Gateway). Treat a missing entry as unknown, not unused.
+- `recordUsed({ skillFile, skillName, skillSource? })` records one read of an
+  absolute `SKILL.md` path from inside a tool's `execute`. Core takes run,
+  session, and agent attribution from the executing tool call, so a plugin
+  cannot attribute use to another run. It returns `false` outside a live tool
+  execution, including from work that continues after the call settled, and
+  throws for a relative or non-`SKILL.md` path.
 
 ## Storing runtime references
 
@@ -269,6 +435,58 @@ its managed handles. Already admitted calls and streams have a bounded chance
 to finish before disposal; retaining an old function does not make it a current
 runtime handle.
 
+### Reload-safe plugins
+
+By default, `openclaw plugins reload` waits for running turns that resolved or
+invoked the plugin's capabilities. Loading a plugin with no used capability does
+not retain it for every turn. A long retaining turn can make an explicit reload
+wait out its drain budget and roll back.
+
+Two capability classes retain their captured instance when a turn is admitted:
+registered hooks, which may first run during finalization, and model providers,
+which may first resolve during fallback. These callbacks cannot safely switch
+generations between paired hooks or model attempts. Plugins declaring
+`generationOverlap` also keep their existing admitted consumer custody, so their
+old generation remains callable during replacement. Tool factories retain their
+instance when the turn resolves the tool, before its execution callback runs.
+
+A plugin that declares `reload.turnHandover` in `openclaw.plugin.json` lets
+the reload hand those turns over instead: each running turn stops at its next
+model step, the swap happens, and the same turn continues on the new plugin
+version. The reload usually completes in seconds.
+
+```json
+{
+  "id": "my-plugin",
+  "reload": { "turnHandover": true },
+  "configSchema": { "type": "object" }
+}
+```
+
+We recommend declaring it for new plugins and for any plugin that already meets
+these rules:
+
+- **No in-memory state that a later call in the same turn depends on.** Keep
+  cross-call state in `api.runtime.state` or the plugin's own database.
+- **Disposal releases everything the plugin started.** Register cleanup with
+  `api.lifecycle.onDispose` and wait for your own workers and timers there.
+- **A context engine keeps turn state durable.** At handover OpenClaw disposes
+  the old version's engine and creates one from the new version for the rest
+  of the turn. The new engine finishes the turn: it receives `commitTurn` for
+  the whole turn and runs its maintenance once.
+
+In return, OpenClaw never runs calls on two versions of the plugin at once,
+stops and disposes the old version only after its admitted calls finish, and
+makes calls that arrive during the swap wait for the new version instead of
+failing.
+
+Handover happens only between model steps. A long-running tool call keeps the
+reload waiting until it returns. A turn hands over only when every plugin the
+reload replaces and the turn retains declares the field; one undeclared retained plugin keeps the whole turn
+waiting. If the new version no longer registers the turn's context engine, the
+turn ends with an error instead of switching engines mid-turn. Reload status and
+logs name the plugins that kept a turn waiting.
+
 ### Plugin value boundary
 
 OpenClaw admits native plugins when it loads and registers them, using the
@@ -282,7 +500,12 @@ Plugin authors must not mutate values after handing them to the host, including
 nested objects and byte buffers. Produce a new value for a later update.
 Registered callables retain their instance scope, receiver binding, and lifecycle
 fencing. Plugin code runs inside a Gateway request scope established for its
-invocation.
+invocation. When that scope is released, later calls into a registered instance,
+such as post-turn hooks, Gateway access-policy checks, and deferred deliveries,
+take ordinary counted admission on the instance: they run while it accepts
+calls and are refused only while it is quiesced, replaced, or retired. Callbacks
+explicitly bound to a closed consumer remain unavailable. A policy evaluation
+error means unavailable access and never grants permission.
 
 Tool factories and provider schema normalizers keep the same tool-object API.
 The host separates their definition data from executable callbacks: schemas and
@@ -295,6 +518,10 @@ an unreadable schema can be quarantined without invoking the tool.
 Callable tools and Proxy-backed objects retain their admitted callable and live
 property contracts, including execution methods supplied by `get` traps.
 
+Realtime voice bridge requests likewise keep configuration, provider options,
+audio formats, and tools as plain data. Their callbacks retain the originating
+transport plugin's invocation scope.
+
 `before_tool_call` inputs and approval parameters retain detached snapshots so
 plugin mutations cannot alter caller arguments or an approved request. These
 snapshots reject shared memory in the cloned graph; properties omitted by
@@ -303,7 +530,7 @@ structured cloning do not cross this boundary.
 `before_prompt_build` and `agent_turn_prepare` receive fresh message arrays and
 envelopes with shared, frozen transcript payload leaves. Treat nested history as
 read-only and return contribution fields instead of mutating message content.
-Non-owned values still receive detached snapshots with shared-memory checks.
+Values without an immutability proof receive detached snapshots with shared-memory checks.
 See the [prompt-hook migration](/plugins/sdk-migration#prompt-hook-history-is-read-only).
 
 Host-created request scopes borrow their plugin registry. A direct registry-scope
@@ -311,6 +538,10 @@ callback keeps its registry until its returned operation settles; detached async
 resources do not extend that lifetime. Access to a released registry fails instead
 of silently selecting the current generation. Admitted turns and explicitly
 retained consumers keep their selected generation until they settle.
+Queued channel replies retain their delivery and run-observer callbacks until
+source settlement, independently of the inbound turn's adoption lifecycle.
+An internal delivery-recovery turn takes its own callback hold; completing the
+original turn does not close the recovery's callbacks or reuse its cancellation identity.
 Registry-dependent runtime APIs re-enter their live plugin owner after adoption
 and preserve an explicitly prepared registry, including an empty selection.
 
@@ -339,24 +570,48 @@ load-time facts belong to the instance until the plugin owner replaces it throug
 restart or an explicit reload or installation operation.
 
 Context engines selected by an admitted turn remain owned through that turn's
-commit and engine disposal. Replacing an enabled plugin waits for those consumers
+commit and engine disposal. Serialized replacement waits for those consumers
 to close before registering its successor. Disabling or removing a plugin can
 report their cleanup as deferred; starting engine disposal closes normal engine
 callbacks while cleanup finishes.
 
-Replacement validates metadata and configuration first, then stops services and
-channels, drains admitted work, runs `gateway_stop`, and disposes the old instance
+Automatic config edits defer while a serialized plugin has retained work or calls,
+without closing admission or making the Gateway unready. The saved edit reports
+why application is deferred and retries after the work settles; restart also applies it.
+
+An explicit reload validates metadata and configuration first, then closes admission to
+the old instance and waits for in-flight work while its services and channels
+keep running. If that work does not finish in time, the reload fails once and
+resumes admission. Otherwise, replacement stops services and channels, drains
+remaining admitted work, runs `gateway_stop`, and disposes the old instance
 before invoking the new registration. Session-extension and runtime-lifecycle
 `cleanup` callbacks receive `reason: "restart"` before the replacement registers,
 so they can unsubscribe observers and release in-memory buffers. Persistent
 session-state and scheduler reconciliation remain part of registry retirement.
-Pre-publication failure triggers automatic
+Once services and channels begin stopping, a pre-publication failure triggers automatic
 recovery by registering the captured previous code with its previous config;
 a stopped instance is not assumed to be restartable. A plugin cannot synchronously
 replace itself from its own active call: the operation rejects before shutdown
 and can be retried after that call finishes. Cleanup that cannot finish within
 its budget can prevent safe replacement or recovery. Unaffected instances remain
 active, and the Gateway process stays running.
+
+Native plugins can declare
+[`generationOverlap: true`](/plugins/manifest#generation-overlap) when each
+generation owns its registration, services, runtime state, and cleanup
+independently. Both generations must opt in, and the Gateway keeps channel and
+exclusive-resource replacements serialized. A declaration does not make shared
+module globals, exclusive ports, or predecessor-affecting service startup safe.
+
+For eligible overlap, successor preparation leaves the predecessor active. Once
+preparation succeeds, publication selects the successor for new admissions.
+Admitted old turns keep their original tools, hooks, end hooks, and services
+until their last holder releases; only then does predecessor cleanup run. A
+failed unpublished successor is cleaned up without switching the active
+generation. Authors must ensure that this cleanup cannot affect the predecessor.
+Rapid replacements may retain multiple predecessors while their admitted work
+finishes. Process shutdown still closes every retained generation. Current
+credential, approval, and external-effect checks remain in force throughout.
 
 Managed instances expose `api.lifecycle.signal` and
 `api.lifecycle.onDispose(cleanup)`. The signal aborts when disposal reaches
@@ -423,8 +678,12 @@ manager must not look up a replacement plugin instance. Return asynchronous work
 from the callback so the instance retains it until it settles. Disposal does not
 wait for this work before running `onDispose`, so cleanup can stop the work and
 safely await it; module teardown still waits for it to settle, and work that
-outlives the cleanup budget is force-retired like other calls. New calls reject after admission
-closes; already admitted host cleanup retains its teardown authority. The runner
+outlives the cleanup budget is force-retired like other calls. By default, new calls
+reject after admission closes. With `generationOverlap: true`, the instance's
+background owner remains callable during supersession, including callbacks needed
+by an admitted turn that opens a resource for the first time. Terminal revocation
+still rejects new background work; already admitted host cleanup retains its
+teardown authority. The runner
 does not schedule work or cancel native resources: release those in the existing
 cleanup owner. Like the other instance lifecycle fields, it can be absent on an
 API host without a managed instance.
@@ -479,8 +738,9 @@ Without an unambiguous live owner, preparation loads separate instances. Borrowi
 turns run the Gateway's `registrationMode: "full"` registrations and share its
 services and runtime store; only plugins the Gateway lacks or configures
 differently load a separate discovery instance. After `openclaw plugins reload`,
-later turns use the reloaded Gateway instance, and the reload waits for turns that
-still hold the previous one. Borrowed channel methods and read-authority grants
+later turns use the reloaded Gateway instance. Serialized reload waits for turns
+that still hold the previous one; eligible generation overlap lets those turns
+finish on their predecessor after publication. Borrowed channel methods and read-authority grants
 expire with the borrowing runtime or invocation scope; retiring the borrower does
 not retire the Gateway's instance.
 
@@ -508,6 +768,12 @@ by Doctor after backup, the maintenance scope owns the reader. Other sources use
 an artifact-preserving private copy with the existing unstable-source refusal.
 The helper owns cleanup; callbacks must not retain or close the connection.
 
+Optional metadata checks can use `isSqliteSnapshotCapacityError(error)` from the
+same facade to report an unavailable inspection when disposable snapshot storage
+runs out of space or quota. This classification excludes source-open failures and
+unsettled cleanup. It does not establish source corruption or authorize skipping
+backup, migration, schema, or write-admission checks.
+
 First-party imports of an external SQLite database can use
 `startSqliteReadOnlyLocationAsync(path, { signal })` from the private
 `sqlite-runtime` facade. Snapshot preparation, native flushes, and staging
@@ -515,6 +781,12 @@ retirement run outside the Gateway thread. Await `preparation.result` to read
 its private `location`, and always await `preparation.startClose().result` in
 `finally`, including when preparation fails. Keep readers closed before disposal;
 cleanup failure rejects instead of reporting a successful import.
+
+Use `openSqliteWorkerStore({ ..., isolation: "external" })` for externally managed
+databases such as Messages `chat.db`. These opens share a separate admission queue
+and worker pool, so a blocked external open or read cannot pin ordinary storage
+workers. Physical database ownership and input budgets stay with the same broker;
+the backend still determines read-only or writable access.
 
 SQLite worker backends set connection lock-wait policy with
 `setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
@@ -544,6 +816,10 @@ The experimental mixed-mode configuration is described in
 
 External stores continue using `resolveDatabaseEngineInput(config)`, which follows
 `database.engine` independently of the built-in family overrides.
+For PostgreSQL stores, `openclaw database port` and the built-in backup and restore
+commands cover only the registered database families listed in the
+[PostgreSQL operator guide](/gateway/postgresql#support-matrix). Plugins using
+private PostgreSQL stores need their own migration, backup, and restore procedures.
 
 Engine-aware stores keep host secret resolution and operation settlement in
 `openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction
@@ -580,6 +856,12 @@ use the latter to attach the committed scope receipt to a transaction result.
 Each participating writer names its affected scopes with
 `withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
 all scope receipts. These tokens describe committed data, never effect authority.
+
+The process keeps one identity descriptor open per admitted database file, because
+closing it can release SQLite's POSIX locks. An owner that deletes a private database
+file it created calls `retireSqliteDatabaseAdmissionForPath(path)` from
+`sqlite-runtime` first, after every connection and worker using that file has closed.
+Otherwise the deleted file keeps its disk space until the process exits.
 
 `readSqliteDatabaseWriteRevision` from `sqlite-worker-runtime` reads the in-process
 write revision without SQL. PostgreSQL owners retaining a snapshot across their own
@@ -623,6 +905,49 @@ assertion checks physical source identity, not sharing permissions or row freshn
 revalidate access before publishing data after an await. Keep the reader within
 its consumer's lifecycle and discard it when configuration changes.
 
+### Background session notices
+
+A plugin that finishes background work can post a notice into the session that
+started it. Capture the session generation before the work starts, then post to
+that generation when the work ends:
+
+```ts
+const generation = await api.runtime.system.captureSessionGeneration({ agentId, sessionKey });
+// ... background work ...
+const result = await api.runtime.system.postSessionNotice({
+  generation,
+  notice: { type: "job-done", text: "Report ready.", data: { jobId }, presentation },
+  idempotencyKey: `my-plugin:${jobId}`,
+  systemEvent: "The report job finished; the file is in reports/.",
+  deliver: {},
+});
+```
+
+- `captureSessionGeneration` returns `{ agentId, storePath, sessionKey, sessionId, lifecycleRevision }`,
+  or `undefined` when the session has no active conversation. It is plain data that
+  you can keep with the job.
+- `postSessionNotice` posts nothing when the session was reset or replaced after the
+  capture and returns `{ status: "skipped", reason: "session-changed" }`.
+- Otherwise it appends one transcript-only row with the
+  `{ kind: "plugin-notice", pluginId, type, data }` marker. The host sets
+  `pluginId` to the calling plugin. The model never sees the row; `systemEvent`
+  is the optional context for the next turn.
+- With `deliver`, the host also sends the text and `presentation` to the session's
+  channel when that channel can deliver. `deliver.skipChannels` excludes channels
+  where the notice is unwanted. Without `deliver`, the notice stays in the
+  transcript.
+- The result is `{ status: "posted", delivered }` or
+  `{ status: "failed", stage: "delivery" | "transcript", error }`. A failed
+  channel send does not write the transcript row. Reuse the same
+  `idempotencyKey` to retry safely.
+- The host checks that the calling plugin is still loaded before the system
+  event, right before the channel send, and before the transcript commit. If the
+  plugin was unloaded, the call throws and makes no further change. A channel
+  message that was already sent stays sent.
+- A channel send still queued when the Gateway restarts is sent after the restart
+  only if the plugin is still loaded and enabled; otherwise it is dropped with a
+  logged reason.
+
 `cleanupSessionLifecycleArtifacts` from `openclaw/plugin-sdk/session-store-runtime`
 joins the selected database owner's pending startup preparation before capturing
 its physical identity. Prepared agents do not wait. Failed preparation still
@@ -633,8 +958,10 @@ surfaces through normal database admission checks; Gateway shutdown cancels the 
 Memory runtimes may implement `prepareReload({ retireRuntime, retiringEmbeddingProviders })`
 and return `drain()` and `resume()`. Preparation synchronously fences affected
 manager acquisition, including lazy and fallback work. Match the exact acquired
-adapter objects rather than provider IDs. Drain removes affected managers from
-reuse before attempting to close them. It may return `{ errors }` to report
+adapter objects rather than provider IDs. Managers whose lazy embedding
+dependency is not known yet drain conservatively when any embedding adapter
+retires; managers with known, unaffected adapters stay live. Drain removes
+affected managers from reuse before attempting to close them. It may return `{ errors }` to report
 cleanup failures. Resume reopens admission after cancellation, or after publication
 when the runtime is retained, even if old cleanup remains unfinished. Retiring
 managers must not publish late results into a replacement manager's caches.
@@ -646,6 +973,18 @@ all of that runtime's managers as best-effort cleanup; it cannot identify depend
 managers or prevent concurrent manager acquisition.
 
 ## Browser meeting transport builders
+
+Use `MeetingPlatformAdapter.defineBrowserMeetingPlugin` from
+`openclaw/plugin-sdk/meeting-runtime` for browser-only meeting plugins. A plugin
+that also supports dial-in can extend `MeetingSessionRuntime` and delegate its
+`releaseBrowserTab` callback to the protected `releaseTrackedBrowserTab` method.
+Supply the platform's leave operation and operator messages. The runtime checks
+for another active session on the same tab. After a confirmed leave, status reports
+the final audio state without searching for a replacement tab.
+
+Official plugins with a custom meeting entry can use `registerMeetingPluginRuntime`
+from `openclaw/plugin-sdk/meeting-plugin-entry`. Gateway handlers and the registered
+live-caption source share one runtime and wait for its initial transcript policy.
 
 `MeetingPlatformAdapter.createBrowserAdapterOptions` builds the `browser` and
 `parsing` options for `MeetingPlatformAdapter.create` from platform page scripts,
@@ -768,6 +1107,30 @@ current hosts supply this assertion, and bundled providers reject missing
 allocation authority before performing work. An older host must be updated to
 use these providers.
 
+## Harness request-policy denials
+
+A native harness that confirms a deployment model-request gate refusal can return
+`AgentHarnessModelRequestPolicyError` from `openclaw/plugin-sdk/agent-harness-runtime`
+as its prompt error. This host-owned error stops credential and model fallback and
+carries fixed operator guidance into lifecycle events and assistant history.
+Preserve the Error object through terminal emission; do not replace it with its
+message before the lifecycle owner receives it.
+
+Do not use this error for an ordinary upstream 401/403 or an unverified diagnostic
+code. Those remain provider failures. A code string alone does not establish a
+deployment-policy denial.
+
+## Harness runtime updates
+
+A native harness whose own runtime is too old for the requested model can return
+`AgentHarnessRuntimeUpdateRequiredError` from
+`openclaw/plugin-sdk/agent-harness-runtime` as its prompt error. Its message must
+name the update. The host records the code `harness_update_required` in the
+run's failure notice, and Control UI then offers **Start a new session**, which
+starts a session on the OpenClaw harness that asks the agent to perform the
+update. OpenClaw never installs or updates the runtime itself. Preserve the
+Error object through terminal emission, as for request-policy denials.
+
 ## Harness execution identity
 
 The harness host's closure-bound `preparedEnvironment()` returns non-secret
@@ -807,7 +1170,7 @@ Beyond `api.runtime`, the API object also provides:
   Scoped logger (`debug`, `info`, `warn`, `error`).
 </ParamField>
 <ParamField path="api.registrationMode" type="PluginRegistrationMode">
-  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), or `"cli-metadata"` (CLI command metadata collection).
+  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), `"cli-metadata"` (CLI command metadata collection), or `"memory-backend"` (passive memory backend for the slot owner).
 </ParamField>
 <ParamField path="api.resolvePath(input)" type="(string) => string">
   Resolve a path relative to the plugin root.

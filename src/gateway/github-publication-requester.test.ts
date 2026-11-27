@@ -1,23 +1,28 @@
+import { createServer, request as httpRequest } from "node:http";
+import { registerPublicationCredentialFixture } from "./github-publication-credential.test-helpers.js";
 // Install shared transport mocks before publication owners enter the module cache.
 // oxfmt-ignore
 import {
-  BRANCH,
-  NEW_HEAD,
-  OLD_HEAD,
-  WORKSPACE_TREE,
-  commandResult,
-  createRealPublicationWorkspace,
-  createTestGitHubPublicationCoordinator,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-  persistPublicationTestSession,
-  seedLocalPublication,
+    NEW_HEAD,
+    OLD_HEAD,
+    WORKSPACE_TREE,
+    commandResult,
+    createRealPublicationWorkspace,
+    createTestGitHubPublicationCoordinator,
+    githubPublicationTestMocks,
+    installGitHubPublicationTestHarness,
+    persistPublicationTestSession,
+    seedLocalPublication,
 } from "./github-publication.test-support.js";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { getPluginRegistryState } from "../plugins/runtime-state.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { encodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -26,7 +31,12 @@ import {
 } from "../state/user-profile-writes.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
-import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
+import {
+  prepareGitHubPublicationRequesterV2,
+  prepareGitHubPublicationTaskRequester,
+  restoreGitHubPublicationRequester,
+} from "./github-publication-requester.js";
 import {
   createGitHubPublicationRequesterFixture,
   capturePublicationGuest as guestRequester,
@@ -36,6 +46,7 @@ import {
   guestScopes,
   holdWorkerTurn,
   publicationBackends as backends,
+  publicationPullRequest as pullRequest,
   publicationGuestEmail as email,
   queueGuestPublication as queueGuest,
   requireVisitorPublicationPolicy,
@@ -43,21 +54,17 @@ import {
   startVisitorPublicationFixture,
   withPublicationGuestRole,
 } from "./github-publication-requester.test-support.js";
-import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
-import {
-  GatewayOperatorAccessUnavailableError,
-  hasGatewayOperatorAccessPolicies,
-} from "./operator-access-policy.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
+// mock-isolation: Synthetic checkpoints isolate publication from real repository and session state.
 vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
-  withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
+  withSessionRepositoryPublicationCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 
 const fixture = createRequesterPublicationFixture.bind(undefined, checkpoint);
@@ -65,28 +72,6 @@ type Fixture = Awaited<ReturnType<typeof fixture>>;
 const request = (f: Fixture, key: string, requester = f.guest) =>
   f.coordinator.requestForSessionV2(f.request(key, requester));
 const identityChanged = { status: "failed", code: "identity_changed" } as const;
-const publicationUrl = (backend: (typeof backends)[number]) =>
-  backend === "local"
-    ? "https://github.com/openclaw/openclaw/pull/125200"
-    : "https://github.com/owner/repository/pull/1";
-const pullRequest = (
-  overrides: Partial<{
-    url: string;
-    state: string;
-    body: string;
-    headSha: string;
-    baseRef: string;
-  }> = {},
-) => ({
-  url: publicationUrl("local"),
-  userId: 42,
-  state: "open",
-  body: "",
-  headSha: NEW_HEAD,
-  headRef: BRANCH,
-  baseRef: "main",
-  ...overrides,
-});
 const jsonResult = (value: unknown) => commandResult(JSON.stringify(value));
 function interceptTransport(
   intercept: (
@@ -138,6 +123,7 @@ describe("shared GitHub publication requester authority", () => {
     onTestFinished(system.release);
     expect(system.requester.snapshot).toEqual({
       version: 1,
+      authenticationSource: "non-member",
       actor: { kind: "system" },
       scopes: ["operator.admin"],
       grant: null,
@@ -152,7 +138,7 @@ describe("shared GitHub publication requester authority", () => {
         label,
       ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
     }
-    const source = (await captureGatewayOperatorRunAuthority({
+    const source = (await prepareGatewayOperatorRunAuthority({
       client: f.guestSource.client,
       context,
     }))!;
@@ -171,7 +157,104 @@ describe("shared GitHub publication requester authority", () => {
         },
         session,
       ),
-    ).rejects.toThrow("no longer active");
+    ).rejects.toThrow("Operator execution ended.");
+    expect(f.externalWrites).toEqual([]);
+  });
+
+  it("restores task publication under the original scope ceiling and exact parent lifecycle", async () => {
+    const f = await createRequesterPolicyFixture();
+    const parent = f.guestSource.session;
+    const entry = loadSessionEntryReadOnly(parent)!;
+    const source = { agentId: parent.agentId, sessionKey: "agent:main:publication:source" };
+    await upsertSessionEntryCore(source, {
+      sessionId: "publication-source",
+      updatedAt: 1,
+      createdActor: entry.createdActor,
+      owner: entry.owner,
+      parentSessionKey: parent.sessionKey,
+    });
+    const origin = {
+      ...parent,
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision ?? null,
+      runId: "publication-parent-run",
+    };
+    const transferred = await prepareGitHubPublicationTaskRequester(
+      f.guest,
+      source,
+      origin,
+      f.guestSource.context.getCommittedRuntimeConfig,
+    );
+    onTestFinished(transferred.release);
+    expect(transferred.requester.snapshot).toEqual({ ...f.guest.snapshot, origin });
+    expect(transferred.requester.assertCurrent).not.toThrow();
+    const restored = await restoreGitHubPublicationRequester(
+      JSON.stringify(transferred.requester.snapshot),
+      source,
+      f.guestSource.context.getCommittedRuntimeConfig,
+    );
+    onTestFinished(restored.release);
+    f.guestSource.release();
+    expect(transferred.requester.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(restored.assertCurrent).not.toThrow();
+    await upsertSessionEntryCore(parent, { ...entry, lifecycleRevision: "parent-reset" });
+    expect(restored.assertCurrent).toThrow(GitHubPublicationRecoveryPendingError);
+    await expect(
+      restoreGitHubPublicationRequester(
+        JSON.stringify(transferred.requester.snapshot),
+        source,
+        f.guestSource.context.getCommittedRuntimeConfig,
+      ),
+    ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(f.externalWrites).toEqual([]);
+  });
+
+  it("refuses task publication for a different parent or another creator's source", async () => {
+    const f = await createRequesterPolicyFixture();
+    const parent = f.guestSource.session;
+    const entry = loadSessionEntryReadOnly(parent)!;
+    const source = { agentId: parent.agentId, sessionKey: "agent:main:publication:other-source" };
+    await upsertSessionEntryCore(source, {
+      sessionId: "other-publication-source",
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: f.maintainerProfile },
+    });
+    const origin = {
+      ...parent,
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision ?? null,
+    };
+    for (const target of [
+      { ...origin, sessionKey: "agent:main:unrelated-parent" },
+      { ...origin, sessionId: "another-parent-incarnation" },
+      origin,
+    ]) {
+      await expect(
+        prepareGitHubPublicationTaskRequester(
+          f.guest,
+          source,
+          target,
+          f.guestSource.context.getCommittedRuntimeConfig,
+        ),
+      ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+    }
+    expect(f.externalWrites).toEqual([]);
+  });
+
+  it("settles revoked repository requests while waiting for the first checkpoint", async () => {
+    const f = await fixture("repository", undefined, { initialCheckpoint: false });
+    const accepted = await request(f, "revoked-before-checkpoint");
+    expect(accepted.status).toBe("requested");
+    await f.revoke();
+    const restarted = createTestGitHubPublicationCoordinator({
+      placements: f.placements,
+      recovery: {
+        shared: createGitHubPublicationRecoveryBackoff(),
+        repository: createGitHubPublicationRecoveryBackoff(),
+      },
+    });
+    await restarted.resumeSessionRequests();
+    await expectResult(restarted, accepted.requestId, identityChanged);
     expect(f.externalWrites).toEqual([]);
   });
 
@@ -184,7 +267,7 @@ describe("shared GitHub publication requester authority", () => {
       scopes: ["operator.admin"],
       ...f.guestSource.session,
     });
-    const source = (await captureGatewayOperatorRunAuthority({ client, context }))!;
+    const source = (await prepareGatewayOperatorRunAuthority({ client, context }))!;
     onTestFinished(source.release);
     const captured = await prepareGitHubPublicationRequesterV2(
       {
@@ -205,6 +288,7 @@ describe("shared GitHub publication requester authority", () => {
     const stored = f.readRequester(accepted.requestId);
     expect(stored).toEqual({
       version: 1,
+      authenticationSource: "non-member",
       actor: { kind: "operator", profileId: f.guestProfile },
       scopes: guestScopes,
       grant: null,
@@ -219,28 +303,27 @@ describe("shared GitHub publication requester authority", () => {
   });
 
   it.each(backends)(
-    "does not adopt a newly required missing policy for a grant-free %s request",
+    "defers a grant-free %s request when its newly required policy is unavailable",
     async (backend) => {
       const f = await fixture(backend);
-      expect(hasGatewayOperatorAccessPolicies(f.config)).toBe(false);
       const claim = await holdWorkerTurn(f);
       const guest = await request(f, "before-policy");
-      const staff = await request(f, "independent-staff", f.maintainer);
       const original = f.readRequester(guest.requestId);
       expect(original).toEqual(f.guest.snapshot);
       expect(original?.grant).toBeNull();
-      expect([guest.status, staff.status]).toEqual(["requested", "requested"]);
-      const requiredConfig = requireVisitorPublicationPolicy(f);
-      expect(hasGatewayOperatorAccessPolicies(requiredConfig)).toBe(true);
-      expect(getPluginRegistryState()?.activeRegistry?.gatewayAccessPolicies ?? []).toEqual([]);
+      expect(guest.status).toBe("requested");
+      const beforePolicy = structuredClone(f.config);
+      requireVisitorPublicationPolicy(f);
       await f.placements.releaseTurn(claim);
       f.guestSource.release();
-      f.maintainerSource.release();
-      const restarted = await resumePublicationFixture(f);
-      await expectResult(restarted, guest.requestId, identityChanged);
+      const restarted = f.restart();
+      await expect(restarted.resumeSessionRequests()).rejects.toBeInstanceOf(AggregateError);
+      expectPending(f, guest.requestId);
       expect(f.readRequester(guest.requestId)).toEqual(original);
-      await expectResult(restarted, staff.requestId);
-      expect(f.publishedTitles).toEqual(["independent-staff"]);
+      setRuntimeConfigSnapshot(beforePolicy);
+      await restarted.resumeSessionRequests();
+      await expectResult(restarted, guest.requestId);
+      expect(f.publishedTitles).toEqual(["before-policy"]);
     },
   );
 
@@ -248,39 +331,38 @@ describe("shared GitHub publication requester authority", () => {
     const f = await fixture("local");
     let committed = f.config;
     const restricted = withPublicationGuestRole(f.config, { scopes: [] });
-    setRuntimeConfigSnapshot(restricted);
     const getCommittedRuntimeConfig = () => committed;
-    const captured = await createGitHubPublicationRequesterFixture({
+    const caller = await createGitHubPublicationRequesterFixture({
       profileId: f.guestProfile,
       scopes: guestScopes,
       ...f.guestSource.session,
       getCommittedRuntimeConfig,
     });
-    const coordinator = createTestGitHubPublicationCoordinator({
+    setRuntimeConfigSnapshot(restricted);
+    const captured = await prepareGitHubPublicationRequesterV2(caller, caller.session);
+    onTestFinished(captured.release);
+    const { requester } = captured;
+    const runner = createTestGitHubPublicationCoordinator({
       placements: f.placements,
       getCommittedRuntimeConfig,
     });
     const claim = await holdWorkerTurn(f);
-    const tentative = await coordinator.requestForSessionV2(
-      f.request("tentative-config", captured.requester),
-    );
+    const tentative = await runner.requestForSessionV2(f.request("tentative-config", requester));
     expect(tentative.status).toBe("requested");
     await f.placements.releaseTurn(claim);
-    await coordinator.resumeSessionRequests();
-    await expectResult(coordinator, tentative.requestId);
-    const later = await coordinator.requestForSessionV2(
-      f.request("committed-config", captured.requester),
-    );
+    await runner.resumeSessionRequests();
+    await expectResult(runner, tentative.requestId);
+    const later = await runner.requestForSessionV2(f.request("committed-config", requester));
     expect(later.status).toBe("requested");
     committed = restricted;
-    await coordinator.resumeSessionRequests();
-    await expectResult(coordinator, later.requestId, identityChanged);
-    expect(f.readRequester(later.requestId)).toEqual(captured.requester.snapshot);
+    await runner.resumeSessionRequests();
+    await expectResult(runner, later.requestId, identityChanged);
+    expect(f.readRequester(later.requestId)).toEqual(requester.snapshot);
     expect(f.publishedTitles).toEqual(["tentative-config"]);
   });
 
   it.each(backendCases(["policy unavailable", "alias restored"] as const))(
-    "rechecks $backend publication after $change during a preparation read",
+    "finishes admitted $backend publication after $change during a preparation read",
     async ({ backend, change }) => {
       const f = await fixture(backend);
       await linkCanonicalUserProfileEmail("publication-secondary@example.test", f.guestProfile);
@@ -293,46 +375,22 @@ describe("shared GitHub publication requester authority", () => {
         const { original, claim, queued: accepted } = await queueGuest(f, "policy-readiness");
         await f.placements.releaseTurn(claim);
         original.release();
-        interceptTransport(async (argv, options, transport) => {
-          const result = await transport(argv, options);
-          const read =
-            (argv[0] === "git" &&
-              ["config", "rev-parse", "ls-tree", "symbolic-ref"].some((arg) =>
-                argv.includes(arg),
-              )) ||
-            (argv[0] === "gh" &&
-              argv.includes("api") &&
-              !argv.includes("POST") &&
-              !argv.includes("graphql"));
-          if (!availability.reached && read) {
-            if (change === "policy unavailable") {
-              availability.restore = visitors.suspendRegistry();
-            } else {
-              await linkCanonicalUserProfileEmail(email, other.id);
-              await linkCanonicalUserProfileEmail(email, f.guestProfile);
-            }
-            availability.reached = true;
+        const prepare = mocks.prepareIdentity.getMockImplementation()!;
+        mocks.prepareIdentity.mockImplementationOnce(async (...args) => {
+          const identity = await prepare(...args);
+          if (change === "policy unavailable") {
+            availability.restore = visitors.suspendRegistry();
+          } else {
+            await linkCanonicalUserProfileEmail(email, other.id);
+            await linkCanonicalUserProfileEmail(email, f.guestProfile);
           }
-          return result;
+          availability.reached = true;
+          return identity;
         });
         const restarted = f.restart();
-        const recovery = restarted.resumeSessionRequests();
-        if (change === "alias restored") {
-          await recovery;
-          expect(availability.reached).toBe(true);
-          await expectResult(restarted, accepted.requestId, identityChanged);
-          expect(f.readRequester(accepted.requestId)).toEqual(original.requester.snapshot);
-          expect(f.externalWrites).toEqual([]);
-          return;
-        }
-        await expect(recovery).rejects.toThrow(new GatewayOperatorAccessUnavailableError().message);
-        expect(availability.reached).toBe(true);
-        expectPending(f, accepted.requestId);
-        expect(f.externalWrites).toEqual([]);
-        availability.restore?.();
-        availability.restore = undefined;
         await restarted.resumeSessionRequests();
-        await expectResult(restarted, accepted.requestId);
+        expect(availability.reached).toBe(true);
+        await expectResult(restarted, accepted.requestId, published);
         expect(f.readRequester(accepted.requestId)).toEqual(original.requester.snapshot);
         expect(f.publishedTitles).toEqual(["policy-readiness"]);
       } finally {
@@ -369,14 +427,18 @@ describe("shared GitHub publication requester authority", () => {
         await expect(publishing).rejects.toBeInstanceOf(GitHubPublicationRecoveryPendingError);
         await f.restart().resumeSessionRequests();
       } else {
-        await expect(publishing).resolves.toMatchObject(identityChanged);
+        await expect(publishing).resolves.toMatchObject({ status: "published" });
       }
       expect(refAccepted).toBe(true);
       const receipt = readGitHubPublicationRequest(openOpenClawStateDatabase().db, {
         sessionId: f.session.sessionId,
         idempotencyKey,
       });
-      expect(receipt).toMatchObject({ status: "failed", error_code: "identity_changed" });
+      expect(receipt).toMatchObject(
+        outcome === "accepted"
+          ? { status: "published", error_code: null }
+          : { status: "failed", error_code: "identity_changed" },
+      );
       const headCommit = await local.git("rev-parse", "HEAD");
       expect(headCommit).not.toBe(originalHead);
       expect(receipt?.head_commit).toBe(outcome === "accepted" ? headCommit : originalHead);
@@ -394,8 +456,8 @@ describe("shared GitHub publication requester authority", () => {
             name.startsWith(`${nodePath.basename(index)}.openclaw-`),
         ),
       ).toEqual([]);
-      expect(local.effects).toEqual([]);
-      expect(f.externalWrites).toEqual([]);
+      expect(local.effects).toEqual(outcome === "accepted" ? ["push", "pull_request"] : []);
+      expect(f.publishedTitles).toEqual(outcome === "accepted" ? [idempotencyKey] : []);
     },
   );
 
@@ -454,7 +516,7 @@ describe("shared GitHub publication requester authority", () => {
   );
 
   it.each(["renewal", "revoke", "expiry"] as const)(
-    "restores only the original Visitor grant after %s and restart",
+    "uses current Visitor access for queued work after %s and restart",
     async (ending) => {
       const f = await fixture("repository");
       const visitors = await startVisitorPublicationFixture(f);
@@ -499,9 +561,7 @@ describe("shared GitHub publication requester authority", () => {
           vi.useFakeTimers({ toFake: ["Date"] });
           vi.setSystemTime(first.expiresAt!);
         }
-        expect(original.requester.assertCurrent).toThrow(
-          GitHubPublicationRequesterUnavailableError,
-        );
+        expect(original.requester.assertCurrent).not.toThrow();
         await visitors.execute("visitor_invite", { email, days: 2 });
         const replacement = (await visitors.store.lookup(email))!;
         expect(replacement.grantId).not.toBe(first.grantId);
@@ -518,9 +578,7 @@ describe("shared GitHub publication requester authority", () => {
         );
         await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
         invalidateOperatorRolePolicy(f.guestProfile);
-        expect(original.requester.assertCurrent).toThrow(
-          GitHubPublicationRequesterUnavailableError,
-        );
+        expect(original.requester.assertCurrent).not.toThrow();
         await f.placements.releaseTurn(claim);
         original.release();
         reinvited.release();
@@ -552,6 +610,7 @@ describe("shared GitHub publication requester authority", () => {
         expect(f.guestSource.client.internal?.operatorAccessAuthority).toBeNull();
         expect(f.guest.snapshot).toEqual({
           version: 1,
+          authenticationSource: "non-member",
           actor: { kind: "operator", profileId: f.guestProfile },
           scopes: guestScopes,
           grant: null,
@@ -606,32 +665,17 @@ describe("shared GitHub publication requester authority", () => {
       });
       const result = await request(f, "late-pr-response");
       const receipt = f.readReceipt(result.requestId)!;
-      if (effect === "push") {
-        expect(result).toMatchObject(identityChanged);
-        expect(receipt).toMatchObject({
-          head_commit: expect.stringMatching(/^[a-f0-9]{40}$/u),
-          pull_request_url: null,
-        });
-        if (backend === "repository") {
-          expect(readRepositoryGitHubPublication(result.requestId)).toMatchObject({
-            pushed_head_commit: receipt.head_commit,
-            last_effect: "push",
-            effect_state: "observed",
-          });
-        }
-      } else {
-        expect(result.status).toBe("published");
-        expect(receipt.pull_request_url).toBe(publicationUrl(backend));
-      }
+      expect(result.status).toBe("published");
+      expect(receipt.pull_request_url).toBe(pullRequest({}, backend).url);
       const writes = [...f.externalWrites];
       const acceptedEffects = local && [...local.effects];
       await f.restart().resumeSessionRequests();
       expect(f.externalWrites).toEqual(writes);
       if (local) {
         expect(local.effects).toEqual(acceptedEffects);
-        expect(local.effects).toEqual(effect === "push" ? ["push"] : ["push", "pull_request"]);
+        expect(local.effects).toEqual(["push", "pull_request"]);
       }
-      expect(f.publishedTitles).toEqual(effect === "push" ? [] : ["late-pr-response"]);
+      expect(f.publishedTitles).toEqual(["late-pr-response"]);
     },
   );
 
@@ -732,7 +776,7 @@ describe("shared GitHub publication requester authority", () => {
       if (is("accepted", "advanced-closed")) {
         await expectResult(coordinator, requestId, {
           status: "published",
-          url: publicationUrl("local"),
+          url: pullRequest().url,
           headCommit: NEW_HEAD,
         });
       } else {
@@ -816,7 +860,7 @@ describe("shared GitHub publication requester authority", () => {
       expect(f.readReceipt(requestId)?.pull_request_url).toBeNull();
       const acceptedWrites = [...writes];
       await f.revoke();
-      expect(f.guest.assertCurrent).toThrow();
+      expect(f.guest.assertCurrent).not.toThrow();
       const restarted = f.restart();
       const readsBeforeRecovery = unavailableReads;
       await expect(restarted.resumeSessionRequests()).rejects.toBeInstanceOf(AggregateError);
@@ -830,10 +874,109 @@ describe("shared GitHub publication requester authority", () => {
       await restarted.resumeSessionRequests();
       await expectResult(restarted, requestId, {
         status: "published",
-        url: publicationUrl(backend),
+        url: pullRequest({}, backend).url,
       });
       expect(writes).toEqual(acceptedWrites);
       expect(f.publishedTitles).toEqual(["lost-pr-response"]);
+    },
+  );
+});
+
+describe("local production-owner proof", () => {
+  installGitHubPublicationTestHarness({
+    creatorEmail: email,
+    sandbox: "required",
+    realWorktree: true,
+  });
+  it.each(["allowed", "revoked", "reassigned"] as const)(
+    "qualifies credential-before-network authority with real owners: %s",
+    async (scenario) => {
+      const f = await createRequesterPolicyFixture();
+      const identity = { ...f.session, agentId: "main" };
+      const placements = createWorkerSessionPlacementStore({ database: f.database });
+      const events: string[] = [];
+      const synthetic = registerPublicationCredentialFixture(f, events);
+      const server = createServer((req, res) => {
+        events.push("network");
+        expect(req.headers.authorization).toBe("Bearer " + synthetic);
+        res.end("ok");
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback address");
+      }
+
+      try {
+        if (scenario === "revoked") {
+          await f.revoke();
+          await expect(
+            restoreGitHubPublicationRequester(
+              encodeGitHubPublicationRequester(f.guest.snapshot),
+              f.guestSource.session,
+              f.guestSource.context.getCommittedRuntimeConfig,
+            ),
+          ).rejects.toBeInstanceOf(GitHubPublicationRequesterUnavailableError);
+        }
+        if (scenario === "reassigned") {
+          await placements.startDispatch({ ...identity, agentId: "other-agent" });
+        }
+        const run = placements.withRepositoryWorkspaceReservation(
+          identity,
+          async (assertPlacementCurrent) => {
+            events.push("placement-admitted");
+            const read = f.guest.prepareDispatchCredential!({
+              sessionId: identity.sessionId,
+              requestDigest: "local-proof",
+              assertCurrent: assertPlacementCurrent,
+            });
+            expect(read).toBeTypeOf("function");
+            const credential = await read!({});
+            await new Promise<void>((resolve, reject) => {
+              const req = httpRequest(
+                {
+                  host: "127.0.0.1",
+                  port: address.port,
+                  headers: { authorization: "Bearer " + credential },
+                },
+                (res) => {
+                  res.resume();
+                  res.on("end", resolve);
+                },
+              );
+              req.setTimeout(5000, () => req.destroy(new Error("Loopback sink timed out")));
+              req.on("error", reject);
+              req.end();
+            });
+          },
+        );
+        if (scenario !== "reassigned") {
+          await run;
+          expect(events).toEqual([
+            "placement-admitted",
+            "integration-admitted",
+            "credential",
+            "network",
+          ]);
+        } else {
+          await expect(run).rejects.toThrow("workspace placement identity changed");
+          expect(events).not.toContain("credential");
+          expect(events).not.toContain("network");
+          expect(events).not.toContain("integration-admitted");
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
+      }
     },
   );
 });

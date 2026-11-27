@@ -9,6 +9,9 @@ import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantPhaseText } from "../../../../src/shared/chat-message-content.js";
 import { stripAssistantMessageText } from "./assistant-message-text.ts";
 
+export const isInlineImageSource = (source: string | undefined): source is string =>
+  source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
+
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
@@ -56,7 +59,7 @@ export function extractTextCached(message: unknown): string | null {
   return readCachedMessageExtraction(message, textCache, extractText);
 }
 
-function contentText(
+export function readContentBlockText(
   content: unknown,
   read: (item: Record<string, unknown>) => string | undefined,
 ): string | null {
@@ -71,10 +74,12 @@ function contentText(
 }
 
 function extractThinking(message: unknown): string | null {
-  return contentText((message as Record<string, unknown> | null | undefined)?.content, (item) =>
-    item.type === "thinking" && typeof item.thinking === "string"
-      ? item.thinking.trim() || undefined
-      : undefined,
+  return readContentBlockText(
+    (message as Record<string, unknown> | null | undefined)?.content,
+    (item) =>
+      item.type === "thinking" && typeof item.thinking === "string"
+        ? item.thinking.trim() || undefined
+        : undefined,
   );
 }
 
@@ -93,7 +98,7 @@ function extractRawText(message: unknown): string | null {
     return content;
   }
   return (
-    contentText(content, (item) =>
+    readContentBlockText(content, (item) =>
       (item.type === "text" ||
         (role === "user" && item.type === "input_text") ||
         (role === "assistant" && (item.type === "input_text" || item.type === "output_text"))) &&
@@ -104,17 +109,7 @@ function extractRawText(message: unknown): string | null {
   );
 }
 
-export function readTranscriptMediaEntries(message: unknown): Array<{
-  factIndex: number;
-  path: string;
-  mediaType: string | undefined;
-  fileName: string | undefined;
-  origin?: "paste" | "file";
-  sizeBytes?: number;
-  durationMs?: number;
-  width?: number;
-  height?: number;
-}> {
+export function readTranscriptMediaEntries(message: unknown) {
   if (!message || typeof message !== "object") {
     return [];
   }

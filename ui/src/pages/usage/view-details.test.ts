@@ -122,7 +122,6 @@ function mount(
     sessionLogs?: string;
     sessionLogsData?: SessionLogEntry[] | null;
     sessionLogsHasLoaded?: boolean;
-    logFilters?: UsageProps["detail"]["logFilters"];
     session?: UsageSessionEntry;
     stale?: boolean;
     contextWeight?: UsageSessionEntry["contextWeight"];
@@ -159,7 +158,6 @@ function mount(
           },
           sessionLogs: errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
           sessionLogsStatus: status(errors.sessionLogs, errors.sessionLogsHasLoaded),
-          logFilters: errors.logFilters ?? defaults.detail.logFilters,
           context: { weight: errors.contextWeight, read: null, status: status() },
         },
         callbacks: {
@@ -249,24 +247,6 @@ it("retains the focused handle through consecutive cursor adjustments", () => {
   }
 });
 
-it("retains manually expanded log tools across a cursor update", () => {
-  const container = mount(
-    [1000, 2000, 3000, 4000].map((timestamp) => point({ timestamp })),
-    {
-      sessionLogsData: [log(3, "assistant", "[Tool: read]")],
-      sessionLogsHasLoaded: true,
-    },
-  );
-  const tools = container.querySelector<HTMLDetailsElement>(".session-log-tools")!;
-  tools.open = true;
-  container
-    .querySelector(".chart-handle-left")
-    ?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-  flush();
-  expect(container.querySelector(".session-log-tools")).toBe(tools);
-  expect(tools.open).toBe(true);
-});
-
 it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
   const localOffsetMs = 8 * 60 * 60 * 1000;
   for (const [local, utc] of [
@@ -326,23 +306,12 @@ it("keeps interval header totals on the timeline's selected days", () => {
   expectText(container, ".timeseries-summary", "$0.30");
   expectText(container, ".session-detail-stats", "300 tokens", "$0.30");
   expect(summary(container)).toMatchObject([{ value: "2" }, { value: "2" }, {}, {}]);
-  expectText(container, ".session-logs-header-count", "3 of 4");
-  expect(container.textContent).not.toContain("Deselected May 14");
-  expect(container.textContent).toContain("Selected May 13");
-  expect(container.textContent).toContain("Selected May 15");
-  expect(container.textContent).toContain("Undated entry remains visible");
-  expect(
-    Array.from(container.querySelectorAll<HTMLSelectElement>(".session-log-filters select"))[1]
-      ?.textContent,
-  ).toContain("exec");
   const reset = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
     (button) => button.textContent?.trim() === "Reset",
   );
   reset?.click();
   flush();
   expect(container.querySelector(".session-summary-value")?.textContent).toBe("10");
-  expect(container.textContent).toContain("Deselected May 14");
-  expect(container.querySelector(".session-logs-header-count")?.textContent).not.toContain("of");
 });
 
 it("aggregates selected tokens while counting actual loaded message roles", () => {
@@ -379,7 +348,7 @@ it("aggregates selected tokens while counting actual loaded message roles", () =
   expectText(container, ".session-detail-stats", "300", "$0.30");
   expect(container.querySelector(".session-detail-indicator")).not.toBeNull();
   expect(summary(container)).toMatchObject([
-    { value: "3", meta: "0 user · 3 assistant Loaded conversation · selected interval" },
+    { value: "3", meta: "0 user · 3 assistant Loaded messages · selected interval" },
     {},
     { value: "—", meta: "— tool results" },
     { value: "1s" },
@@ -387,7 +356,7 @@ it("aggregates selected tokens while counting actual loaded message roles", () =
   const breakdown = texts(container, ".timeseries-breakdown .legend-item").map((value) =>
     value?.replaceAll(/\s+/g, " "),
   );
-  expect(breakdown).toEqual(["Output 20", "Input 10", "Cache Write 5", "Cache Read 12"]);
+  expect(breakdown).toEqual(["Output 20", "Input 10", "Cache write 5", "Cache read 12"]);
   expect(text(container, ".timeseries-breakdown .cost-breakdown-total")).toContain("47");
 
   const full = mount(points, data);
@@ -416,7 +385,7 @@ it("keeps interval message and tool counts unavailable for initial failure", () 
     sessionLogs: "logs unavailable",
   });
   expect(summary(container)).toMatchObject([
-    { value: "—", meta: "— Loaded conversation · selected interval" },
+    { value: "—", meta: "— Loaded messages · selected interval" },
     { value: "—", meta: "— tools used" },
     {},
     {},
@@ -427,25 +396,25 @@ it("keeps interval message and tool counts unavailable for initial failure", () 
   ]);
 });
 
-it("keeps stale loaded counts independent of conversation search and role filters", () => {
+it("keeps stale interval counts after a refresh failure", () => {
   const start = Date.parse("2026-08-20T12:00:00Z");
   const container = mount([point({ timestamp: start }), point({ timestamp: start + 1000 })], {
     start,
     end: start + 1000,
-    sessionLogsData: [log(start, "user", "Question"), log(start + 1000, "assistant", "Answer")],
+    sessionLogsData: [log(start, "user", "A\u0308"), log(start + 1000, "assistant", "Answer")],
     sessionLogsHasLoaded: true,
     sessionLogs: "refresh failed",
     stale: true,
-    logFilters: { roles: ["tool"], tools: [], hasTools: false, query: "not present" },
   });
   expect(summary(container)).toMatchObject([
-    { value: "2", meta: "1 user · 1 assistant Loaded conversation · selected interval" },
+    { value: "2", meta: "1 user · 1 assistant Loaded messages · selected interval" },
     { value: "0" },
     {},
     {},
   ]);
-  expect(container.querySelectorAll(".session-log-entry")).toHaveLength(0);
-  expect(text(container, ".usage-detail-error--conversation")).toContain("Showing stale data");
+  expect(text(container, ".usage-detail-error--interval-counts")).toContain(
+    "Showing last known data",
+  );
 });
 
 it("counts repeated assistant calls without counting toolResult results in the selected range", () => {
@@ -469,10 +438,6 @@ it("counts repeated assistant calls without counting toolResult results in the s
     ["read", "2"],
     ["exec", "0"],
   ]);
-  expect(text(selected, ".session-log-tools-pill")?.trim()).toBe("read × 2");
-  expect(texts(selected, ".session-log-tools-pill").map((value) => value?.trim())).toContain(
-    "exec × 1",
-  );
 });
 
 it("accepts a reversed range and falls back to full totals when no points match", () => {
@@ -502,8 +467,11 @@ it("renders detail request failure messages without retry buttons", () => {
   });
 
   for (const [kind, message] of [
-    ["timeline", "Could not load usage over time: timeline unavailable"],
-    ["conversation", "Could not load conversation: logs unavailable"],
+    ["timeline", "Couldn’t load usage over time. Try again. timeline unavailable"],
+    [
+      "interval-counts",
+      "Couldn’t load interval message and tool counts. Try again. logs unavailable",
+    ],
   ]) {
     const error = container.querySelector(`.usage-detail-error--${kind}`);
     expect(error?.textContent).toContain(message);
@@ -539,26 +507,13 @@ it("keeps loaded details visible and marks them stale after refresh failures", a
       );
 
       expect(container.querySelectorAll(".usage-detail-error--timeline strong")).toHaveLength(1);
-      expect(container.querySelectorAll(".usage-detail-error--conversation strong")).toHaveLength(
-        1,
-      );
+      expect(
+        container.querySelectorAll(".usage-detail-error--interval-counts strong"),
+      ).toHaveLength(1);
       expect(container.querySelector(".timeseries-svg")).not.toBeNull();
-      expect(container.textContent).toContain("retained message");
-      expect(container.textContent).toContain("undated message");
       expect(container.textContent).toContain(
-        locale === "en" ? "Showing stale data" : t("common.staleData"),
+        locale === "en" ? "Showing last known data" : t("common.staleData"),
       );
-      const timestamps = [...container.querySelectorAll(".session-log-meta > span:nth-child(2)")];
-      expect(timestamps.map((element) => element.textContent)).toEqual([
-        new Date(timestamp).toLocaleString(locale, {
-          year: "numeric",
-          month: "numeric",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        }),
-        t("common.na"),
-      ]);
     }
   } finally {
     await restoreI18n();

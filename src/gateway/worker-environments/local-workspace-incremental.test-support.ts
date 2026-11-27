@@ -1,9 +1,17 @@
+import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { stagedInputDirectory, STAGED_INPUT_GITIGNORE } from "../../media/staged-inputs.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import * as workspaceStore from "./local-workspace-store.js";
@@ -23,8 +31,8 @@ const writeText = (directory: string, relative: string, data: string) =>
   fs.writeFile(path.join(directory, relative), data);
 const expectText = async (directory: string, relative: string, expected: string) =>
   expect(await fs.readFile(path.join(directory, relative), "utf8")).toBe(expected);
-const expectMissing = async (directory: string, relative: string) =>
-  expect(fs.stat(path.join(directory, relative))).rejects.toMatchObject({ code: "ENOENT" });
+export const expectMissing = async (directory: string, ...parts: string[]) =>
+  expect(fs.stat(path.join(directory, ...parts))).rejects.toMatchObject({ code: "ENOENT" });
 
 export function observeAcknowledgedUpdate(
   observe: (row: workspaceStore.LocalWorkspaceProjection) => void,
@@ -51,15 +59,51 @@ export async function proveWorkerOwnedIncrementalWorkspace(owner: LocalWorkspace
   sql.calibrate();
   const projection = await prepare(owner);
   await writeText(projection, "source.txt", "worker-persisted edit\n");
-  await synchronize(owner);
+  const readFastState = () =>
+    Promise.all([
+      executeExistingOpenClawStateRead(
+        {},
+        { type: "config.health.read", input: undefined },
+        { current: true, live: true },
+      ),
+      executeExistingOpenClawStateRead(
+        {},
+        { type: "subagents.runs", scope: { kind: "ids", runIds: ["synthetic-missing-run"] } },
+        { current: true, live: true },
+      ),
+      executeExistingOpenClawStateRead(
+        {},
+        { type: "deliveryQueue.outbound", mode: "pending" },
+        { current: true, live: true },
+      ),
+    ]);
+  const expectedReads = await readFastState();
+  expect(expectedReads.map((reply) => reply?.type)).toEqual([
+    "config.health.read",
+    "subagents.runs",
+    "deliveryQueue.outbound",
+  ]);
+  let synchronized = false;
+  const synchronizing = synchronize(owner).finally(() => {
+    synchronized = true;
+  });
+  const reading = (async () => {
+    for (;;) {
+      expect(await readFastState()).toEqual(expectedReads);
+      if (synchronized) {
+        return;
+      }
+    }
+  })();
+  // Drain both owners on failure before the fixture can delete its workspace.
+  await Promise.allSettled([synchronizing, reading]);
+  await synchronizing;
+  await reading;
   await expectText(owner.worktree.path, "source.txt", "worker-persisted edit\n");
   await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
     expect(store.get()!.baseline_json).toBeNull();
     const baseline = await store.manifest(store.get()!, { kind: "materialize" });
-    expect(baseline.kind).toBe("materialize");
-    if (baseline.kind !== "materialize") {
-      throw new Error("Expected complete baseline at the publication boundary");
-    }
+    assert(baseline.kind === "materialize", "Expected complete baseline at publication");
     const manifest = parseWorkerWorkspaceManifest(baseline.rawManifest, baseline.manifestRef);
     expect(manifest.entries.find((entry) => entry.path === "source.txt")).toMatchObject({
       type: "file",
@@ -102,6 +146,56 @@ export async function proveIncrementalWorkspaceEdits(owner: LocalWorkspaceOwner)
   await expectText(projection, "source.txt", "modified\n");
 }
 
+export async function proveHostAdmittedBuildInputs(owner: LocalWorkspaceOwner) {
+  const canonical = owner.worktree.path;
+  const inputs = [
+    ".artifacts/build-all-cache/compile/outputs/dist/authored.txt",
+    ".artifacts/build-cache-inputs/authored.json",
+  ];
+  await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
+  for (const entryPath of inputs) {
+    await fs.mkdir(path.dirname(path.join(canonical, entryPath)), { recursive: true });
+    await writeText(canonical, entryPath, "original input\n");
+  }
+  await requireGit(canonical, ["add", "--force", "--", ...inputs]);
+  const projection = await prepare(owner);
+  for (const entryPath of inputs) {
+    await expectText(projection, entryPath, "original input\n");
+    await writeText(projection, entryPath, "guest input edit\n");
+  }
+  const cache = ".artifacts/build-all-cache/other/outputs/generated.js";
+  await fs.mkdir(path.dirname(path.join(projection, cache)), { recursive: true });
+  await writeText(projection, cache, "disposable cache\n");
+  // The guest's independent index cannot turn generated outputs into host-admitted inputs.
+  await requireGit(projection, ["add", "--force", "--", cache]);
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, cache), 0);
+  }
+  await synchronize(owner);
+  await closeOpenClawStateDatabaseAsync();
+  await prepare(owner);
+  for (const entryPath of inputs) {
+    await expectText(canonical, entryPath, "guest input edit\n");
+    await expectText(projection, entryPath, "guest input edit\n");
+  }
+  await expectMissing(canonical, cache);
+  await writeText(canonical, inputs[0]!, "human input edit\n");
+  await writeText(projection, inputs[0]!, "conflicting guest edit\n");
+  await expect(synchronize(owner)).rejects.toThrow("conflict");
+  await expectText(canonical, inputs[0]!, "human input edit\n");
+  await writeText(canonical, inputs[0]!, "guest input edit\n");
+  await withLocalWorkspaceProjection(owner, (state) => state.settle());
+  await expectText(canonical, inputs[0]!, "conflicting guest edit\n");
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, inputs[1]!), 0);
+    try {
+      await expect(synchronize(owner)).rejects.toThrow("EACCES");
+    } finally {
+      await fs.chmod(path.join(projection, inputs[1]!), 0o644);
+    }
+  }
+}
+
 export async function proveStagedInputCheckpointOwnership(owner: LocalWorkspaceOwner) {
   const projection = await prepare(owner);
   const directory = stagedInputDirectory(randomUUID());
@@ -117,38 +211,110 @@ export async function proveStagedInputCheckpointOwnership(owner: LocalWorkspaceO
   await expectText(projection, input, "edited input\n");
 }
 
-export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner) {
-  const [
-    projectionOwner,
-    { prepareLocalSandboxWorkspace, bindLocalSandboxWorkspace },
-    { resolveSandboxConfigForAgent },
-    { createSandboxTestContext },
-    { createHostSandboxFsBridge },
-    { createSandboxedWriteTool },
-    { createApplyPatchTool },
-  ] = await Promise.all([
-    import("./local-workspace-projection.js"),
-    import("../../agents/sandbox/local-workspace.js"),
-    import("../../agents/sandbox/config.js"),
-    import("../../agents/sandbox/test-fixtures.js"),
-    import("../../agents/test-helpers/host-sandbox-fs-bridge.js"),
-    import("../../agents/agent-tools.read.js"),
-    import("../../agents/apply-patch.js"),
-  ]);
+export async function prepareSandboxCheckpointFixture(
+  owner: LocalWorkspaceOwner & Partial<Disposable>,
+  assertCurrent?: () => void,
+  signal?: AbortSignal,
+) {
+  const projectionOwner = await import("./local-workspace-projection.js");
+  const { prepareLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
+  const { resolveSandboxConfigForAgent } = await import("../../agents/sandbox/config.js");
   vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner").mockResolvedValue({
     ...owner,
-    [Symbol.dispose]() {},
+    [Symbol.dispose]: owner[Symbol.dispose] ?? (() => {}),
   });
-  using projection = await prepareLocalSandboxWorkspace({
+  const projection = await prepareLocalSandboxWorkspace({
     cfg: { worktreeAcceleration: false },
     agentId: owner.agentId,
     sessionKey: owner.sessionKey,
     workspaceDir: owner.worktree.path,
     sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
+    assertCurrent,
+    signal,
   });
-  if (!projection) {
-    throw new Error("Expected managed projection");
+  assert(projection, "Expected managed projection");
+  return projection;
+}
+
+export async function proveSharedSandboxCheckpoints(
+  owner: LocalWorkspaceOwner,
+  signal: AbortSignal,
+) {
+  using first = await prepareSandboxCheckpointFixture(owner);
+  using second = await prepareSandboxCheckpointFixture(owner);
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  let scans = 0;
+  let beforeRun: (() => Promise<void>) | undefined;
+  let afterScan: (() => Promise<void>) | undefined;
+  vi.spyOn(workspaceStore, "withLocalWorkspaceStore").mockImplementation((params, run) =>
+    withStore(params, async (store) => {
+      await beforeRun?.();
+      return await run({
+        ...store,
+        manifest: async (row, action) => {
+          const result = await store.manifest(row, action);
+          if (
+            (action.kind === "scan" || (action.kind === "probe" && result.kind === "scan")) &&
+            !action.prehash &&
+            action.target === "canonical"
+          ) {
+            scans++;
+            await afterScan?.();
+          }
+          return result;
+        },
+      });
+    }),
+  );
+  for (const phase of ["waiting", "captured", "known mutation"] as const) {
+    const entered = createDeferred();
+    const released = createDeferred();
+    const pause = async () => {
+      beforeRun = undefined;
+      afterScan = undefined;
+      entered.resolve();
+      await released.promise;
+    };
+    beforeRun = phase !== "captured" ? pause : undefined;
+    afterScan = phase === "captured" ? pause : undefined;
+    scans = 0;
+    if (phase === "waiting") {
+      await writeText(first.workspaceDir, "source.txt", "shared checkpoint\n");
+    }
+    const initial = first.checkpoint();
+    let later: Promise<void> | undefined;
+    let results: PromiseSettledResult<void | undefined>[];
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, initial, "Checkpoint did not reach its gate"),
+        signal,
+      );
+      if (phase === "captured") {
+        await writeText(second.workspaceDir, "late.txt", "write after capture\n");
+      }
+      later = second.checkpoint(phase === "known mutation" ? { knownMutation: true } : undefined);
+    } finally {
+      released.resolve();
+      results = await Promise.allSettled([initial, later]);
+    }
+    expect(results[0]).toEqual({ status: "fulfilled", value: undefined });
+    expect(results[1]).toEqual({ status: "fulfilled", value: undefined });
+    expect.soft(scans).toBe(phase === "captured" || phase === "known mutation" ? 2 : 1);
+    await expectText(owner.worktree.path, "source.txt", "shared checkpoint\n");
+    if (phase === "captured") {
+      await expectText(owner.worktree.path, "late.txt", "write after capture\n");
+    }
   }
+}
+
+export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner) {
+  const { bindLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
+  const { createSandboxTestContext } = await import("../../agents/sandbox/test-fixtures.js");
+  const { createHostSandboxFsBridge } =
+    await import("../../agents/test-helpers/host-sandbox-fs-bridge.js");
+  const { createSandboxedWriteTool } = await import("../../agents/agent-tools.read.js");
+  const { createApplyPatchTool } = await import("../../agents/apply-patch.js");
+  using projection = await prepareSandboxCheckpointFixture(owner);
   const backend: SandboxBackendHandle = {
     id: "docker",
     runtimeId: "file-checkpoint-fixture",
@@ -182,7 +348,7 @@ export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner
       run({
         ...store,
         manifest: async (row, action) => {
-          if (action.kind === "scan") {
+          if (action.kind === "scan" && !action.prehash) {
             scans.push(action.target);
           }
           return await store.manifest(row, action);
@@ -209,4 +375,98 @@ export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner
     pending_target: null,
     journal_json: null,
   });
+}
+
+export async function prepareLocalWorkspaceArchiveFixture(
+  owner: LocalWorkspaceOwner,
+  provisionedPaths: string[] = [],
+) {
+  const [registry, { ManagedWorktreeService, SNAPSHOT_RETENTION_MS }] = await Promise.all([
+    import("../../agents/worktrees/registry.js"),
+    import("../../agents/worktrees/service.js"),
+  ]);
+  const service = new ManagedWorktreeService();
+  owner.worktree.repoFingerprint = (
+    await service.resolveRepositoryIdentity(owner.worktree.path)
+  ).fingerprint;
+  await registry.insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths });
+  return { service, registry, retentionMs: SNAPSHOT_RETENTION_MS };
+}
+
+export async function proveWorkerOwnedArchive(owner: LocalWorkspaceOwner) {
+  const { service } = await prepareLocalWorkspaceArchiveFixture(owner);
+  const projection = await prepare(owner);
+  const snapshot = await requireGit(owner.worktree.repoRoot, ["rev-parse", "HEAD"]);
+  const mergeHead = await requireGit(owner.worktree.path, [
+    "rev-parse",
+    "--git-path",
+    "MERGE_HEAD",
+  ]);
+  const mergePath = path.resolve(owner.worktree.path, mergeHead);
+  await fs.writeFile(mergePath, `${snapshot}\n`);
+  await expect(service.remove({ id: owner.worktree.id, reason: "idle-gc" })).rejects.toThrow(
+    "Workspace integration is pending",
+  );
+  expect(
+    await requireGit(owner.worktree.repoRoot, [
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/openclaw/snapshots/",
+    ]),
+  ).toBe("");
+  expect(
+    (await service.listRegistryRecords()).find((record) => record.id === owner.worktree.id)
+      ?.snapshotRef,
+  ).toBeUndefined();
+  expect(await fs.readFile(mergePath, "utf8")).toBe(`${snapshot}\n`);
+  expect(await fs.readFile(path.join(projection, "source.txt"), "utf8")).toBe(
+    await fs.readFile(path.join(owner.worktree.path, "source.txt"), "utf8"),
+  );
+  await fs.unlink(mergePath);
+  const before = await readLocalWorkspaceProjection(owner.worktree.id);
+  const source = path.join(projection, "source.txt");
+  const original = await fs.readFile(source);
+  for (const change of ["edit", "delete", "add", "symlink"] as const) {
+    const added = path.join(projection, "new.txt");
+    const saved = `${projection}-saved`;
+    if (change === "symlink") {
+      await fs.rename(projection, saved);
+      await fs.symlink(saved, projection, "junction");
+    } else if (change === "delete") {
+      await fs.unlink(source);
+    } else {
+      await fs.writeFile(change === "edit" ? source : added, "changed\n");
+    }
+    try {
+      await expect(
+        withLocalWorkspaceProjection(owner, async (state) =>
+          (await state.prepareArchive())(snapshot),
+        ),
+      ).rejects.toThrow(
+        change === "symlink"
+          ? "Local sandbox workspace directory changed"
+          : "Local workspace changed before archive capture",
+      );
+      expect((await readLocalWorkspaceProjection(owner.worktree.id))?.baseline_ref).toBe(
+        before?.baseline_ref,
+      );
+    } finally {
+      if (change === "symlink") {
+        await fs.unlink(projection);
+        await fs.rename(saved, projection);
+      } else if (change === "add") {
+        await fs.unlink(added);
+      } else {
+        await fs.writeFile(source, original);
+      }
+    }
+  }
+  const manifests = await import("./workspace-manifest.js");
+  const parse = vi.spyOn(manifests, "parseWorkerWorkspaceManifest");
+  expect((await service.gc({ readOwnerState: () => "active" })).removed).toEqual([]);
+  expect((await fs.stat(owner.worktree.path)).isDirectory()).toBe(true);
+  expect(parse).not.toHaveBeenCalled();
+  expect((await service.gc()).removed).toContain(owner.worktree.id);
+  await expectMissing(owner.worktree.path, "");
+  expect(parse).not.toHaveBeenCalled();
 }

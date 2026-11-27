@@ -1,13 +1,18 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { nodeTestConfigRequiresCanonicalMetadata } from "../../scripts/lib/ci-node-test-plan.mts";
+import { isExclusiveCiTestConfig } from "../../scripts/lib/local-check-runtime.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
+// Start cold, then reuse the discovered inventories for the remaining planner cases.
+vi.hoisted(() => vi.resetModules());
+afterAll(() => vi.resetModules());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 const configPath = (name: string) => `test/vitest/vitest.${name}.config.ts`;
@@ -20,14 +25,7 @@ function fixture(files: Record<string, string>) {
   return cwd;
 }
 
-it("keeps exclusive aggregates out of cold canonical metadata discovery", async () => {
-  vi.resetModules();
-  onTestFinished(() => {
-    vi.resetModules();
-  });
-  const { nodeTestConfigRequiresCanonicalMetadata } =
-    await import("../../scripts/lib/ci-node-test-plan.mts");
-  const { isExclusiveCiTestConfig } = await import("../../scripts/lib/local-check-runtime.mts");
+it("keeps exclusive aggregates out of cold canonical metadata discovery", () => {
   const readFile = vi.spyOn(fs, "readFileSync");
   for (const config of [
     "vitest.config.ts",

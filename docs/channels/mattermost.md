@@ -78,6 +78,10 @@ commands flush buffered text before their own dispatch. Channel batches preserve
 arrival order through turn admission. Stopping the monitor cancels buffered work
 and leaves unadopted durable posts available for recovery.
 
+Human posts carrying message attachment cards, such as `slack_attachment` link
+previews, follow normal sender and bot admission checks and stay separate from
+batched text. Actual `system_*` posts are ignored.
+
 ## Native slash commands
 
 Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash commands on every team the bot is a member of and receives callback POSTs on the gateway HTTP server.
@@ -235,6 +239,7 @@ Notes:
 - Approve via:
   - `openclaw pairing list mattermost`
   - `openclaw pairing approve mattermost <CODE>`
+- If the pending pairing queue is full, slash commands return a capacity message instead of an empty pairing code. Ask the bot owner to approve or dismiss requests in **Settings → Channels → DM access requests**, then retry. Existing pending requests keep their valid codes.
 - Public DMs: `channels.mattermost.dmPolicy="open"` plus `channels.mattermost.allowFrom=["*"]` (the config schema enforces the wildcard).
 - `channels.mattermost.allowFrom` accepts user ids (recommended) and `accessGroup:<name>` entries. See [Access groups](/channels/access-groups).
 
@@ -266,6 +271,39 @@ Example:
 }
 ```
 
+## Posts from other bots
+
+Mattermost marks every post created by a bot account with `from_bot`. OpenClaw uses that marker to tell bot posts apart from human posts. The receiving bot's own posts are always ignored.
+
+`channels.mattermost.allowBots` controls whether posts from other bot accounts can start a turn:
+
+- `true` (default): bot posts follow the same access and mention rules as human posts.
+- `"mentions"`: in channels, a bot post must @mention this bot, match a mention pattern, or use an `onchar` prefix. Thread participation does not count, so two bots replying in the same thread cannot keep waking each other. Unmentioned bot posts are kept as channel context. Direct messages from bots are unaffected.
+- `false`: bot posts are ignored.
+
+Account values override the channel-wide value. For an individual channel, `groups.<channelId>.allowBots` overrides `groups["*"].allowBots`, then the account value.
+
+Accepted bot posts pass through [bot loop protection](/channels/bot-loop-protection). When two bots exchange more than `maxEventsPerWindow` posts in one channel within `windowSeconds`, the receiving bot ignores the other one for `cooldownSeconds`. Set `channels.mattermost.botLoopProtection`, `channels.mattermost.accounts.<id>.botLoopProtection`, or `channels.mattermost.groups.<channelId>.botLoopProtection`; values merge key by key over `groups["*"]`, the account, and `channels.defaults.botLoopProtection`. Each suppressed post is logged as `mattermost: drop bot post (bot-loop-protection channel=<id> sender=<id>)`.
+
+The default budget (20 posts in 60 seconds) stops fast loops. Agent replies often take tens of seconds, so two agents sharing a channel can stay under it. For that setup, combine `allowBots: "mentions"` with a longer window:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      allowBots: "mentions",
+      botLoopProtection: {
+        maxEventsPerWindow: 6,
+        windowSeconds: 600,
+        cooldownSeconds: 1800,
+      },
+    },
+  },
+}
+```
+
+Only Mattermost bot accounts carry the marker. An integration that posts with a regular user's access token looks like a person to OpenClaw.
+
 ## Targets for outbound delivery
 
 Use these target formats with `openclaw message send` or cron/webhooks:
@@ -279,6 +317,7 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 
 Outbound sends support at most one attachment per message; split multiple files into separate sends.
 Unsupported binary attachment objects are rejected before any message is posted.
+Text sent with an attachment follows `textChunkLimit` and `streaming.chunkMode`: the first chunk is posted with the file and the rest follow as separate posts in the same thread.
 
 Set `channels.mattermost.mediaMaxMb` to limit each inbound download and outbound
 attachment in MiB. `accounts.<id>.mediaMaxMb` overrides the channel root, then
@@ -346,12 +385,13 @@ Preview streaming is **on by default** in `partial` mode. Configure via `channel
   <Accordion title="Streaming modes">
     - `partial` (default): one preview post that is edited as the reply grows, then finalized with the complete answer.
     - `block` rotates the preview between completed text and tool-activity blocks, so each block stays visible as its own post instead of being overwritten in place. Parallel and consecutive tool updates share the current tool-activity post.
-    - `progress` shows a status preview while generating and only posts the final answer at completion.
+    - `progress` shows a status preview (thinking and tool activity, no partial answer text) while generating, then finalizes that preview with the answer.
     - `off` disables preview streaming. With `streaming.block.enabled: true`, completed assistant blocks are still delivered as normal block replies (separate posts) rather than a single coalesced final post.
 
   </Accordion>
   <Accordion title="Streaming behavior notes">
     - If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
+    - The answer finalizes the preview in place only while the preview is still the newest post in its thread (or in the channel, for a preview outside a thread). If anything was posted after it, such as a `message` tool send, a person's reply, or another bot's post, OpenClaw sends the answer as a new post and deletes the preview: Mattermost keeps posts in creation order, and an edit neither moves a post nor notifies. System posts such as channel joins do not count. The same check runs before answer text first replaces the preview's status: if a newer post is already below the preview, the preview keeps its status and the answer appears only in the new post. If a check fails, the preview is streamed into and finalized in place.
     - Clearing a plan removes an otherwise empty preview; a replacement plan gets a fresh preview even when its text is unchanged. At turn completion, failed deletions of old previews are attempted once more without deleting the finalized reply. If deletion still fails, the old preview may remain; verbose logs include the cleanup failure.
     - Thinking-only payloads are suppressed from channel posts, including text that arrives as a `> Thinking` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
     - See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.
@@ -422,7 +462,7 @@ Presentation button fields:
   Display label (alias: `text`).
 </ParamField>
 <ParamField path="value" type="string">
-  Value sent back on click, used as the action ID (aliases: `callback_data`, `callbackData`). Required for a clickable button unless `url` is set.
+  Value sent back on click (aliases: `callback_data`, `callbackData`). Any text works, including spaces, punctuation and non-ASCII characters. Required for a clickable button unless `url` is set.
 </ParamField>
 <ParamField path="url" type="string">
   Link button; rendered as `label: url` text in the message body instead of an interactive button.
@@ -461,7 +501,7 @@ When a user clicks a button:
   <Accordion title="Implementation notes">
     - Button callbacks use HMAC-SHA256 verification (automatic, no config needed).
     - The whole attachment block is replaced on click, so all buttons are removed together - partial removal is not possible.
-    - Action IDs containing hyphens or underscores are sanitized automatically (Mattermost routing limitation).
+    - Mattermost only routes alphanumeric action IDs, so a button whose value is not alphanumeric gets a derived alphanumeric ID; the value itself reaches the agent unchanged.
     - Clicks whose `action_id` does not match an action on the original post are rejected with `403` ("Unknown action").
 
   </Accordion>
@@ -519,7 +559,7 @@ External scripts and webhooks can post buttons directly via the Mattermost REST 
 1. Attachments go in `props.attachments`, not top-level `attachments` (silently ignored).
 2. Every action needs `type: "button"` - without it, clicks are swallowed silently.
 3. Every action needs an `id` field - Mattermost ignores actions without IDs.
-4. Action `id` must be **alphanumeric only** (`[a-zA-Z0-9]`). Hyphens and underscores break Mattermost's server-side action routing (returns 404). Strip them before use.
+4. Action `id` must be **alphanumeric only** (`[a-zA-Z0-9]`). Any other character, including hyphens, underscores and non-ASCII text, breaks Mattermost's server-side action routing (returns 404). Keep the full value in `context` instead.
 5. `context.action_id` must match the button's `id`; the gateway rejects clicks whose `action_id` does not exist on the post.
 6. `context.action_id` is required - the interaction handler returns 400 without it.
 7. The callback source IP must be allowed (see `interactions.allowedSourceIps` above).
@@ -626,7 +666,7 @@ Account values override top-level fields; `channels.mattermost.defaultAccount` p
   <Accordion title="Buttons issues">
     - Buttons appear as white boxes or not at all: the button data is malformed. Each presentation button needs a `label` and a `value` (buttons missing either are dropped).
     - Buttons render but clicks do nothing: verify the gateway is reachable from the Mattermost server, the Mattermost server IP is included in `channels.mattermost.interactions.allowedSourceIps` (only loopback is accepted without it), and `ServiceSettings.AllowedUntrustedInternalConnections` includes the callback host for private targets.
-    - Buttons return 404 on click: the button `id` likely contains hyphens or underscores. Mattermost's action router breaks on non-alphanumeric IDs. Use `[a-zA-Z0-9]` only.
+    - Buttons return 404 ("Page not found") on click: the action `id` contains a character outside `[a-zA-Z0-9]`, so Mattermost's action router never reaches OpenClaw. Buttons sent through OpenClaw and `buildButtonAttachments` get valid IDs; raw JSON integrations must use `[a-zA-Z0-9]` only.
     - Gateway logs `rejected callback source`: the click came from an IP outside `interactions.allowedSourceIps`. Allowlist the Mattermost server or your ingress, and set `gateway.trustedProxies` behind a reverse proxy.
     - Gateway logs `invalid _token`: HMAC mismatch. Check that you sign all context fields (not a subset), use sorted keys, and use compact JSON (no spaces). See the HMAC section above.
     - Gateway logs `missing _token in context`: the `_token` field is not in the button's context. Include it when building the integration payload.

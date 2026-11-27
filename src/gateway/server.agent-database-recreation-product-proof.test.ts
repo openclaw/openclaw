@@ -33,6 +33,7 @@ import type {
   ResourceFixtureReply,
 } from "../infra/worker-task-pool.resources.test-support.js";
 import { registerMemoryCapability } from "../plugins/memory-state.js";
+import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import { disposePluginRegistryInstances, requireActivePluginRegistry } from "../plugins/runtime.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -423,9 +424,18 @@ describe("agent deletion product proof with a state dir outside home and the tem
               const memory = createMemory(async () => {
                 memoryCloses += 1;
               });
+              const closeMemory = vi.fn<
+                NonNullable<typeof memory.runtime.closeMemorySearchManager>
+              >(async (params) => {
+                await runPluginCleanup(memory.runtime, () =>
+                  memory.runtime.closeMemorySearchManager?.(params),
+                );
+              });
               const registry = requireActivePluginRegistry();
               const priorMemoryCapabilities = [...registry.memoryCapabilities];
-              registerMemoryCapability("memory-fixture", { runtime: memory.runtime });
+              registerMemoryCapability("memory-fixture", {
+                runtime: { ...memory.runtime, closeMemorySearchManager: closeMemory },
+              });
               const memoryClient = client;
               // The real Memory fixture's watcher needs its public worker artifact,
               // even though the generic Gateway fixture disables bundled plugins.
@@ -456,13 +466,21 @@ describe("agent deletion product proof with a state dir outside home and the tem
                     ).resolves.toMatchObject({
                       ok: true,
                     });
-                    const deleted = await memoryClient.request<AgentsDeleteResult>(
-                      "agents.delete",
-                      {
+                    const deleted = await memoryClient
+                      .request<AgentsDeleteResult>("agents.delete", {
                         agentId: EXTERNAL_STATE_AGENT_ID,
                         deleteFiles: true,
-                      },
-                    );
+                      })
+                      .catch((error: unknown) => {
+                        // RPC errors lose the cleanup phase. Log the real runtime's settlement
+                        // before teardown, which can itself fail and replace the RPC error.
+                        const close = closeMemory.mock.settledResults.at(-1);
+                        console.error(
+                          `Agent deletion failed (memory close: ${close?.type ?? "not called"})`,
+                          close?.type === "rejected" ? close.value : error,
+                        );
+                        throw error;
+                      });
                     expect(memoryCloses).toBe(1);
                     expect(survivor.manager!.status().dbPath).toBe(
                       resolveOpenClawAgentSqlitePath({ agentId: "main" }),
@@ -470,8 +488,11 @@ describe("agent deletion product proof with a state dir outside home and the tem
                     return deleted;
                   } finally {
                     registry.memoryCapabilities = priorMemoryCapabilities;
-                    await memory.runtime.closeAllMemorySearchManagers?.();
-                    await disposePluginRegistryInstances(memory.registry);
+                    try {
+                      await memory.runtime.closeAllMemorySearchManagers?.();
+                    } finally {
+                      await disposePluginRegistryInstances(memory.registry);
+                    }
                   }
                 },
               );

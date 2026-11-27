@@ -2,43 +2,208 @@ import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import {
   TUI_PTY_BUILT_CLI_CANARY_PATTERN,
+  resolveCiVitestWorkerPreset,
   shouldUseRuntimeOnlyVitestWorkers,
+  shouldUseToolingOnlyVitestWorkers,
 } from "../../scripts/lib/vitest-runtime-selection.mts";
+import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
+import { boundaryTestFiles } from "../vitest/vitest.unit-paths.mjs";
 
 const e2e = "test/vitest/vitest.e2e.config.ts";
 const tui = "test/vitest/vitest.tui-pty.config.ts";
 const doctor = "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts";
 const sqlite = "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts";
+const nativeHost = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
+const discord = "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts";
+const execApproval = "src/agents/bash-tools.exec-gateway-approval.e2e.test.ts";
 const local = "src/tui/tui-pty-local.e2e.test.ts";
 const built = { OPENCLAW_TUI_PTY_USE_BUILT_CLI: "1" };
+const reply = "test/vitest/vitest.auto-reply.config.ts";
+const delivery = "src/auto-reply/reply/dispatch-from-config.delivery.test.ts";
+const gatewayServer = "test/vitest/vitest.gateway-server.config.ts";
+const gatewayDatabase = "test/vitest/vitest.gateway-database-workers.config.ts";
+const gatewayMethods = "test/vitest/vitest.gateway-methods.config.ts";
+const gatewayAggregate = "test/vitest/vitest.gateway.config.ts";
+const githubReadTarget = "src/gateway/server-methods/sessions-github-read.target.test.ts";
+const gatewayLifecycle = [
+  "src/gateway/server.sessions.fixture-lifecycle.test.ts",
+  "src/gateway/server.startup-fixture-lifetime.test.ts",
+];
+const gatewayAcquisition = "src/gateway/test-helpers.acquisition.test.ts";
+const commands = "test/vitest/vitest.commands.config.ts";
+const doctorCommandFiles = [
+  "src/commands/doctor-config-preflight.container-upgrade.test.ts",
+  "src/commands/doctor-maintenance.schema-preflight.test.ts",
+  "src/commands/doctor-maintenance.stopped-systemd.test.ts",
+  "src/commands/doctor-plugin-package-consent.test.ts",
+];
+const ciVolumeTargets = [
+  "src/config/io.load-async.test.ts",
+  "src/plugins/loader.runtime-registry.test.ts",
+  "test/scripts/ci-git-prerequisites.test.ts",
+  "test/scripts/ci-node-test-plan.selection-capacity.test.ts",
+  "test/scripts/ci-node-test-volume.test.ts",
+  "test/scripts/type-suppression-inventory.test.ts",
+];
 
 it.each([
-  { name: "Doctor", config: e2e, files: [doctor], env: {}, runtime: true },
-  { name: "SQLite", config: e2e, files: [sqlite], env: {}, runtime: true },
   {
-    name: "both built proofs",
-    config: e2e,
-    files: [doctor, `./${sqlite}`],
-    env: {},
+    name: "GitHub publication target reads",
+    config: gatewayMethods,
+    files: [githubReadTarget],
     runtime: true,
   },
-  { name: "broad E2E", config: e2e, files: [], env: {}, runtime: false },
-  { name: "E2E directory", config: e2e, files: ["test/scripts"], env: {}, runtime: false },
+  {
+    name: "mixed GitHub publication target reads",
+    config: gatewayMethods,
+    files: [githubReadTarget, "src/gateway/server-methods/unknown.test.ts"],
+    runtime: false,
+  },
+  { name: "broad Gateway aggregate", config: gatewayAggregate, files: [], runtime: false },
+  {
+    name: "mixed Gateway aggregate",
+    config: gatewayAggregate,
+    files: [githubReadTarget, "src/gateway/server-methods/unknown.test.ts"],
+    runtime: false,
+  },
+  {
+    name: "custom GitHub publication config",
+    config: "custom.config.ts",
+    files: [githubReadTarget],
+    runtime: false,
+  },
+  { name: "Gateway lifecycle", config: gatewayServer, files: gatewayLifecycle, runtime: true },
+  {
+    name: "Gateway acquisition",
+    config: gatewayDatabase,
+    files: [gatewayAcquisition],
+    runtime: true,
+  },
+  {
+    name: "mixed Gateway lifecycle",
+    config: gatewayServer,
+    files: [...gatewayLifecycle, "src/gateway/unknown.test.ts"],
+    runtime: false,
+  },
+  { name: "Doctor commands", config: commands, files: doctorCommandFiles, runtime: true },
+  {
+    name: "Doctor infra",
+    config: "test/vitest/vitest.infra.config.ts",
+    files: [
+      "src/flows/doctor-health.update-schema.test.ts",
+      "src/flows/doctor-health.managed-admission.test.ts",
+      "src/flows/doctor-health.managed-approvals.test.ts",
+      "src/flows/doctor-health.managed-settlement.test.ts",
+      "src/flows/doctor-health.readonly-config.test.ts",
+    ],
+    runtime: true,
+  },
+  {
+    name: "Doctor unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: [
+      "src/flows/doctor-health.migration-refusal.test.ts",
+      "src/flows/doctor-health.nocow.test.ts",
+      "src/flows/doctor-health.plugin-load.test.ts",
+      "src/flows/doctor-health.readonly-filesystem.test.ts",
+    ],
+    runtime: true,
+  },
+  {
+    name: "broad unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: [],
+    runtime: false,
+  },
+  {
+    name: "mixed Doctor unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: ["src/flows/doctor-health.nocow.test.ts", "src/flows/unknown.test.ts"],
+    runtime: false,
+  },
+  {
+    name: "mixed Doctor infra",
+    config: "test/vitest/vitest.infra.config.ts",
+    files: ["src/flows/doctor-health.managed-settlement.test.ts", "src/flows/unknown.test.ts"],
+    runtime: false,
+  },
+  { name: "broad Doctor commands", config: commands, files: [], runtime: false },
+  {
+    name: "CI volume tooling",
+    config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+    files: ciVolumeTargets.slice(2),
+    runtime: true,
+  },
+  {
+    name: "mixed Doctor commands",
+    config: commands,
+    files: [...doctorCommandFiles, "src/commands/unknown.test.ts"],
+    runtime: false,
+  },
+  {
+    name: "Doctor setup and runtime registry",
+    config: "test/vitest/vitest.plugins.config.ts",
+    files: [
+      "src/plugins/doctor-repair-setup.test.ts",
+      "src/plugins/loader.runtime-registry.test.ts",
+    ],
+    runtime: true,
+  },
+  {
+    name: "plugin reload product",
+    config: "test/vitest/vitest.gateway-server.config.ts",
+    files: [
+      "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
+      "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
+    ],
+    runtime: true,
+  },
+  {
+    name: "mixed plugin reload product",
+    config: "test/vitest/vitest.gateway-server.config.ts",
+    files: ["src/gateway/server.plugin-reload-send-revocation.product.test.ts", "unknown.test.ts"],
+    runtime: false,
+  },
+  { name: "reply delivery", config: reply, files: [delivery], runtime: true },
+  { name: "broad reply", config: reply, files: [], runtime: false },
+  {
+    name: "custom reply config",
+    config: "custom.config.ts",
+    files: [delivery],
+    runtime: false,
+  },
+  {
+    name: "mixed reply",
+    config: reply,
+    files: [delivery, "src/auto-reply/reply/unknown.test.ts"],
+    runtime: false,
+  },
+  { name: "Doctor", config: e2e, files: [doctor], runtime: true },
+  { name: "SQLite", config: e2e, files: [sqlite], runtime: true },
+  { name: "native host", config: e2e, files: [nativeHost], runtime: true },
+  { name: "Discord attachment", config: e2e, files: [discord], runtime: true },
+  { name: "exec approval", config: e2e, files: [execApproval], runtime: true },
+  {
+    name: "all built proofs",
+    config: e2e,
+    files: [doctor, `./${sqlite}`, nativeHost, discord],
+    runtime: true,
+  },
+  { name: "broad E2E", config: e2e, files: [], runtime: false },
+  { name: "E2E directory", config: e2e, files: ["test/scripts"], runtime: false },
   {
     name: "unknown built proof",
     config: e2e,
     files: ["test/scripts/other.built-cli.e2e.test.ts"],
-    env: {},
     runtime: false,
   },
   {
     name: "mixed E2E",
     config: e2e,
     files: [doctor, "test/e2e/other.e2e.test.ts"],
-    env: {},
     runtime: false,
   },
-  { name: "custom config", config: "custom.config.ts", files: [doctor], env: {}, runtime: false },
+  { name: "custom config", config: "custom.config.ts", files: [doctor], runtime: false },
   {
     name: "built local PTY canaries",
     config: tui,
@@ -68,11 +233,10 @@ it.each([
     name: "source local PTY canaries",
     config: tui,
     files: [local],
-    env: {},
     pattern: TUI_PTY_BUILT_CLI_CANARY_PATTERN,
     runtime: false,
   },
-  { name: "source local PTY", config: tui, files: [local], env: {}, runtime: false },
+  { name: "source local PTY", config: tui, files: [local], runtime: false },
   {
     name: "broad built PTY",
     config: tui,
@@ -89,8 +253,54 @@ it.each([
     pattern: TUI_PTY_BUILT_CLI_CANARY_PATTERN,
     runtime: false,
   },
-])("keeps the compiler scope for $name", ({ config, files, env, pattern, runtime }) => {
+])("keeps the compiler scope for $name", ({ config, files, env = {}, pattern, runtime }) => {
   expect(shouldUseRuntimeOnlyVitestWorkers(config, ["run", ...files], env, pattern)).toBe(runtime);
+});
+
+it("uses runtime workers for the planned GitHub publication target", () => {
+  const plans = buildVitestRunPlans([githubReadTarget]);
+  expect(plans).toHaveLength(1);
+  const plan = plans[0]!;
+  expect(plan.config).toBe(gatewayAggregate);
+  expect(
+    shouldUseRuntimeOnlyVitestWorkers(
+      plan.config,
+      ["run", ...plan.forwardedArgs],
+      {},
+      undefined,
+      plan.includePatterns ?? undefined,
+    ),
+  ).toBe(true);
+});
+
+it.each([
+  { targets: ciVolumeTargets, extraArgs: false, preset: "runtime" },
+  { targets: [...ciVolumeTargets, "unknown.test.ts"], extraArgs: false, preset: "full" },
+  { targets: [githubReadTarget], extraArgs: false, preset: "runtime" },
+  { targets: [githubReadTarget, "unknown.test.ts"], extraArgs: false, preset: "full" },
+  { targets: [...gatewayLifecycle, gatewayAcquisition], extraArgs: false, preset: "runtime" },
+  { targets: [execApproval, delivery], extraArgs: false, preset: "runtime" },
+  { targets: [execApproval, "unknown.test.ts"], extraArgs: false, preset: "full" },
+  { targets: [execApproval], extraArgs: true, preset: "full" },
+])("keeps CI target workers $preset for $targets", ({ targets, extraArgs, preset }) => {
+  expect(
+    resolveCiVitestWorkerPreset(
+      targets.map((target) => ({ target })),
+      extraArgs,
+    ),
+  ).toBe(preset);
+});
+
+it("retains full workers when the boundary inventory gains an unqualified owner", () => {
+  const previousLength = boundaryTestFiles.length;
+  boundaryTestFiles.push("test/new-boundary-owner.test.ts");
+  try {
+    expect(
+      shouldUseToolingOnlyVitestWorkers("test/vitest/vitest.boundary.config.ts", ["run"], {}),
+    ).toBe(false);
+  } finally {
+    boundaryTestFiles.length = previousLength;
+  }
 });
 
 it("keeps the built PTY CI canary aligned with runtime-only preparation", () => {

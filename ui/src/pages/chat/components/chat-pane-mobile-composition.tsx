@@ -29,7 +29,7 @@ import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { companionClearAction } from "../chat-panel-header-actions.tsx";
 import { chatPaneLayoutModel, ChatPaneLayoutHeaderActions } from "./chat-header-panel-actions.tsx";
 import type { HeaderSessionMenuPage } from "./chat-header-session-menu-mobile.tsx";
-import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
+import { ChatHeaderSessionMenu, type HeaderMenuVersions } from "./chat-header-session-menu.tsx";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileChrome } from "./chat-pane-mobile-chrome.runtime.tsx";
 import {
@@ -37,8 +37,9 @@ import {
   type ChatPanePlacementProps,
 } from "./chat-pane-placement.tsx";
 import type { HeaderMenuSessionAction } from "./chat-quick-action.tsx";
-import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.tsx";
-import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
+import { canManageChatSessionSharing } from "./chat-session-sharing-shared.tsx";
+// The route retains its sharing stylesheet while optional People content loads separately.
+import "../../../styles/chat/sharing-mobile.css";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -47,7 +48,6 @@ export function ChatPaneMobileComposition(props: {
   header: ChatPaneHeaderProps;
   project?: Element;
   details: Component<{ placement: ChatPanePlacementProps; onOpenMachine: () => void }>;
-  notice: Element;
   fallback: (
     sessionMenu: Element,
     machineName: () => string | undefined,
@@ -58,7 +58,7 @@ export function ChatPaneMobileComposition(props: {
   // The destination's first visit mounts its content under this retained header owner.
   const retainPage = (render: () => Element) => {
     const opened = createMemo<boolean>(
-      (previous) => previous === true || host()?.destination.page?.render === page,
+      (previous) => previous === true || activePageRender() === page,
     );
     const content = (
       <Show when={opened()}>
@@ -106,8 +106,8 @@ export function ChatPaneMobileComposition(props: {
     }
     return page;
   };
-  const ChatMobilePeopleBody = lazy(() => import("./chat-mobile-people.tsx"), {
-    export: "ChatMobilePeopleBody",
+  const ChatPaneMobilePeople = lazy(() => import("./chat-mobile-people.tsx"), {
+    export: "ChatPaneMobilePeople",
   });
   const ChatMachine = lazy(() => import("./chat-machine.tsx"), { export: "ChatMachine" });
   const ChatSessionSharingMobile = lazy(() => import("./chat-session-sharing-mobile.tsx"), {
@@ -117,6 +117,7 @@ export function ChatPaneMobileComposition(props: {
     export: "ChatSessionAccessMobile",
   });
   const host = () => props.header.detailsControl?.mobileHost;
+  const activePageRender = createMemo(() => host()?.destination.page?.render);
   const mobile = () => Boolean(props.header.mergedChrome && host());
   const compactActions = createMediaQuery("(max-width: 349px)");
   const panePresented = usePanePresentation(() => props.header.presented);
@@ -166,101 +167,60 @@ export function ChatPaneMobileComposition(props: {
   };
   const actionSource = () => actionsMenu?.readTrigger();
   const peopleId = () => `${props.header.paneId}-mobile-people`;
-  const labels = {
-    get people() {
-      return t("chat.sessionHeader.people");
-    },
-    get viewingNow() {
-      return t("activityFeed.viewingNow");
-    },
-    get creator() {
-      return t("chat.sessionSharing.creator");
-    },
-    get owner() {
-      return t("chat.sessionSharing.owner");
-    },
-    get participants() {
-      return t("chat.sessionHeader.peopleParticipants");
-    },
-    get mention() {
-      return t("chat.sessionHeader.mention");
-    },
-    mentionPerson: (name: string) => t("chat.sessionHeader.mentionPerson", { name }),
-    morePeople: (count: number) => t("chat.sessionHeader.morePeople", { count: String(count) }),
+  const sharingAvailable = () => {
+    const session = sharing()?.session;
+    return Boolean(session && canManageChatSessionSharing(session));
   };
-  const adapter = createChatSessionSharingMobileAdapter(sharing, {
-    onOpenSharing: () => {
-      const current = host();
-      // Sharing opened within People retains the People trigger as its return focus.
-      current?.navigate(
-        sharingPage,
-        current.open && current.destination === people ? undefined : actionSource(),
-      );
+  const openSharing = () => {
+    const current = sharing();
+    if (!sharingAvailable() || current?.openDisabledReason) {
+      return;
+    }
+    current?.onOpen();
+    const target = host();
+    target?.navigate(
+      sharingPage,
+      target.open && target.destination === people ? undefined : actionSource(),
+    );
+  };
+  const createAdapter = createMemo(
+    async () => {
+      const { createChatSessionSharingMobileAdapter } =
+        await import("./chat-session-sharing-mobile-adapter.ts");
+      return createChatSessionSharingMobileAdapter;
     },
-    onOpenAccess: () => host()?.navigate(accessPage),
-    onApplied: () => host()?.navigate(sharingPage),
-    accessTarget: () =>
-      presented() && host()?.open && !host()?.suspended && host()?.destination === accessPage
-        ? accessPage
-        : undefined,
-  });
+    { lazy: true },
+  );
+  // Retained destination content keeps this presentation alive after its first use.
+  const adapter = createMemo(
+    () => {
+      return createAdapter()(sharing, {
+        onOpenSharing: openSharing,
+        onOpenAccess: () => host()?.navigate(accessPage),
+        onApplied: () => host()?.navigate(sharingPage),
+        accessTarget: () =>
+          presented() && host()?.open && !host()?.suspended && host()?.destination === accessPage
+            ? accessPage
+            : undefined,
+      });
+    },
+    { lazy: true },
+  );
   const people: MobileHostDestination = {
     area: "details",
     backTo: { area: "details" },
     page: {
       key: "people",
       get title() {
-        return labels.people;
+        return t("chat.sessionHeader.people");
       },
       render: retainPage(() => (
-        <div id={peopleId()}>
-          <Show when={props.header.mobilePeopleMentions?.status === "loading"}>
-            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
-          </Show>
-          <Show
-            when={
-              props.header.mobilePeopleMentions?.status === "error" ||
-              props.header.mobilePeopleMentions?.status === "unavailable" ||
-              props.header.mobilePeopleMentions?.status === "insert-rejected"
-            }
-          >
-            <p role="alert">
-              {props.header.mobilePeopleMentions?.status === "insert-rejected"
-                ? t("chat.sessionHeader.mentionRejected")
-                : (props.header.mobilePeopleMentions?.error ?? t("chat.mentions.unavailable"))}
-              <button
-                type="button"
-                class="btn btn--ghost"
-                onClick={() => void props.header.mobilePeopleMentions?.request()}
-              >
-                {t("common.retry")}
-              </button>
-            </p>
-          </Show>
-          <Show when={props.header.mobilePeopleMentions?.truncated}>
-            <p role="status">{t("chat.sessionHeader.mentionsTruncated")}</p>
-          </Show>
-          <Show when={props.header.mobilePeople}>
-            {(data) => (
-              <ChatMobilePeopleBody
-                people={data()}
-                labels={labels}
-                onMention={(person) => {
-                  if (props.header.mobilePeopleMentions?.insert(person.profileId)) {
-                    // Native close restores its source synchronously; the queued
-                    // composer focus runs afterwards. Do not add another focus task.
-                    host()?.close();
-                  }
-                }}
-                sharingOptions={
-                  <Show when={adapter.available}>
-                    <ChatSessionSharingOptions {...adapter.options} />
-                  </Show>
-                }
-              />
-            )}
-          </Show>
-        </div>
+        <ChatPaneMobilePeople
+          header={props.header}
+          controls={peopleId()}
+          onClose={() => host()?.close()}
+          onOpenSharing={openSharing}
+        />
       )),
     },
   };
@@ -278,7 +238,7 @@ export function ChatPaneMobileComposition(props: {
       get title() {
         return t("chat.sessionSharing.sharingOptions");
       },
-      render: retainPage(() => <ChatSessionSharingMobile {...adapter.sharing} />),
+      render: retainPage(() => <ChatSessionSharingMobile {...adapter().sharing} />),
     },
   };
   const accessPage: MobileHostDestination = {
@@ -289,7 +249,7 @@ export function ChatPaneMobileComposition(props: {
       get title() {
         return t("chat.sessionSharing.sessionAccess");
       },
-      render: retainPage(() => <ChatSessionAccessMobile {...adapter.access} />),
+      render: retainPage(() => <ChatSessionAccessMobile {...adapter().access} />),
     },
   };
   const machinePage: MobileHostDestination = {
@@ -385,8 +345,10 @@ export function ChatPaneMobileComposition(props: {
   // Desktop View keeps only session-pane closure; panel controls belong to their frames.
   const desktopViewActions = () =>
     layoutModel().actions.filter((action) => action.id === "close-pane");
-  const desktopSessionActions = (): HeaderMenuSessionAction[] => [
-    ...(props.header.sessionMenuAction?.sessionActions ?? []),
+  const desktopSessionActions = (
+    native = props.header.sessionMenuAction?.sessionActions ?? [],
+  ): HeaderMenuSessionAction[] => [
+    ...native,
     ...(!props.header.mergedChrome
       ? layoutModel().actions.flatMap((action) =>
           action.id === "open-split-view" && action.kind !== "status" ? [action] : [],
@@ -427,7 +389,7 @@ export function ChatPaneMobileComposition(props: {
         ]
       : [],
   );
-  const nativeActions = createMemo((): HeaderMenuSessionAction[] => [
+  const nativeActions = (native: HeaderMenuSessionAction[]): HeaderMenuSessionAction[] => [
     ...compactHeaderActions(),
     ...(clearSideChat() ? [clearSideChat()!] : []),
     ...(props.header.runAction
@@ -440,7 +402,7 @@ export function ChatPaneMobileComposition(props: {
           },
         ]
       : []),
-    ...(props.header.sessionMenuAction?.sessionActions ?? []),
+    ...native,
     ...(machine()?.showPlacementMenu
       ? [
           {
@@ -465,19 +427,19 @@ export function ChatPaneMobileComposition(props: {
           },
         ]
       : []),
-    ...(adapter.available && (!props.header.mobilePeople?.header.length || incognito())
+    ...(sharingAvailable() && (!props.header.mobilePeople?.header.length || incognito())
       ? [
           {
             id: "header-sharing",
             label: t("chat.sessionSharing.sharingOptions"),
             icon: "users" as const,
             onActivate: () => {
-              adapter.options.onOpen();
+              openSharing();
             },
           },
         ]
       : []),
-  ]);
+  ];
   const adaptMenuPage = (page: HeaderSessionMenuPage): MobileHostDestination => ({
     area: "details",
     transient: true,
@@ -505,21 +467,31 @@ export function ChatPaneMobileComposition(props: {
   // One native menu also serves desktop/native-command callers. Its page roots
   // outlive the placement of the trigger in either header.
   const sessionCommandsAvailable = () =>
-    mobile()
-      ? !props.header.gatewayStatus?.kind || props.header.gatewayStatus.kind === "connected"
-      : props.header.gatewayStatus?.kind !== "offline" &&
-        props.header.gatewayStatus?.kind !== "reconnecting";
+    !mobile() ||
+    !props.header.gatewayStatus?.kind ||
+    props.header.gatewayStatus.kind === "connected";
   // Keep the trigger mounted as metadata arrives or the connection changes so keyboard focus survives.
   const sessionMenuAction = () =>
     sessionCommandsAvailable() ? props.header.sessionMenuAction : undefined;
+  // Desktop versions live in the session menu; mobile lists them in Details.
+  const versions = createMemo((): HeaderMenuVersions | undefined =>
+    mobile() ||
+    props.header.catalog ||
+    !(props.header.hasVersions ?? props.header.branches.length > 1)
+      ? undefined
+      : {
+          branches: props.header.branches,
+          disabledReason: props.header.branchSwitchDisabledReason,
+          onSelect: props.header.onBranchSelect,
+        },
+  );
   const sessionMenu = (
     <Show
       when={
         mobile() ||
-        (sessionCommandsAvailable() &&
-          (props.header.sessionMenuAction ||
-            (!props.header.actionsDisabled &&
-              (desktopSessionActions().length > 0 || desktopViewActions().length > 0))))
+        props.header.sessionMenuAction ||
+        (!props.header.actionsDisabled &&
+          (desktopSessionActions().length > 0 || desktopViewActions().length > 0))
       }
     >
       <span>
@@ -527,14 +499,15 @@ export function ChatPaneMobileComposition(props: {
           ref={elementRef(registerActionsMenu)}
           {...sessionMenuAction()}
           paneTitle={sessionMenuAction() ? undefined : props.header.title}
-          sessionActions={
+          composeSessionActions={(native) =>
             mobile()
               ? sessionCommandsAvailable()
-                ? nativeActions()
+                ? nativeActions(native)
                 : compactHeaderActions()
-              : desktopSessionActions()
+              : desktopSessionActions(native)
           }
           viewActions={mobile() ? layoutActions() : desktopViewActions()}
+          versions={versions()}
           viewContent={
             mobile() ? (
               <ChatPaneLayoutHeaderActions
@@ -553,7 +526,8 @@ export function ChatPaneMobileComposition(props: {
             } else if (!mobile() && action.kind === "split-below" && props.header.onSplitDown) {
               props.header.onSplitDown(props.header.paneId);
             } else {
-              sessionMenuAction()?.onAction(action);
+              const handler = sessionMenuAction()?.onAction;
+              return handler ? handler(action) : false;
             }
           }}
           mobile={mobile() || sessionMenuAction()?.mobile}
@@ -571,7 +545,6 @@ export function ChatPaneMobileComposition(props: {
       header={props.header}
       project={props.project}
       details={details}
-      notice={props.notice}
       sessionMenu={sessionMenu}
       mobile={mobile()}
       presented={presented()}
@@ -580,8 +553,8 @@ export function ChatPaneMobileComposition(props: {
       deviceOffline={machine()?.deviceOffline}
       machineName={machineName()}
       peopleControls={peopleId()}
-      peopleLabel={labels.people}
-      morePeople={labels.morePeople}
+      peopleLabel={t("chat.sessionHeader.people")}
+      morePeople={(count) => t("chat.sessionHeader.morePeople", { count: String(count) })}
       peopleExpanded={Boolean(host()?.open && !host()?.suspended && host()?.destination === people)}
       onChromeRef={(element) => {
         chromeRoot = element;

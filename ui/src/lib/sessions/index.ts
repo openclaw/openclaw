@@ -4,7 +4,6 @@ import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
-import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import { isSessionRunStateActive } from "../session-run-state.ts";
 import type { SessionCreateOutcome } from "./create.ts";
@@ -22,7 +21,7 @@ import { createSessionEventSubscriptionOwner } from "./session-event-subscriptio
 import { createSessionGitHubPublication } from "./session-github-publication.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
-import { isPrimarySessionListQuery } from "./session-list-query.ts";
+import { isPrimarySessionListQuery, isSessionListInvalidation } from "./session-list-query.ts";
 import { createSessionMutations } from "./session-mutations.ts";
 import { optimisticSessionRowFields } from "./session-pending-rows.ts";
 import { createSessionPermissionProjection } from "./session-permission-projection.ts";
@@ -33,7 +32,6 @@ import { sanitizeSessionRow } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { createSessionThinkingClaims } from "./session-thinking-claims.ts";
-import { SwarmActivityTracker } from "./swarm-activity.ts";
 
 export type { SessionArchivedFilter } from "./navigation.ts";
 export type {
@@ -119,7 +117,6 @@ export function createSessionCapability(
     snapshot: () => gateway.snapshot,
     deletionState: (row) => deletions.deletionState(row.key, row.agentId, row.sessionId),
   });
-  const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const pullRequestEpochs = new Map<string, object>();
   const listeners = new Set<(next: SessionState) => void>();
@@ -127,6 +124,7 @@ export function createSessionCapability(
   const thinkingClaims = createSessionThinkingClaims(gateway, () => roster.requestRevision);
   let publicationRevision = 0;
   let canonicalListRevision = 0;
+  let canonicalListScopeKey: number | undefined;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
   let hydratedSelfUserId: string | null = null;
   let connectionClient = gateway.snapshot.client;
@@ -171,7 +169,7 @@ export function createSessionCapability(
 
   // Canonical Gateway rows are the source of truth for everything except the
   // UI-owned facts the capability keeps beside them, so every published result
-  // passes through the same overlay: swarm notes, then in-flight row intents.
+  // passes through the same permission and in-flight row-intent overlays.
   const decorateRows = (
     result: SessionsListResult | null,
     owner = roster.primaryList(),
@@ -182,10 +180,7 @@ export function createSessionCapability(
       roster.observations.rowRevision,
       owner.scope.agentId,
     );
-    const annotated = swarmActivity.decorate(projected);
-    // Preserve receipts before a pending intent makes another tracked copy.
-    roster.observations.inherit(annotated, projected);
-    const decorated = deletions.apply(mutations.applyRows(annotated, owner.scope.agentId), owner);
+    const decorated = deletions.apply(mutations.applyRows(projected, owner.scope.agentId), owner);
     roster.observations.inherit(decorated, result);
     return decorated;
   };
@@ -271,6 +266,7 @@ export function createSessionCapability(
         thinkingClaims.settle(row, requestRevision, agentId);
       }
       canonicalListRevision += 1;
+      canonicalListScopeKey = gatewayPresentationScope(gateway).key;
     },
   });
 
@@ -360,8 +356,6 @@ export function createSessionCapability(
     connection,
     gateway,
     reconcileMutation: roster.reconcileMutation,
-    notifyCreated,
-    reportError: (error) => publish({ ...state, error: formatUiError(error) }, "operation"),
   });
 
   const capturePullRequestEpoch = (key: string): object => {
@@ -462,7 +456,6 @@ export function createSessionCapability(
         retireConnection(previousClient);
       }
       groups.invalidate();
-      swarmActivity.clear();
       mutations.retireConnection(retainDeferredIntents);
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
@@ -509,15 +502,15 @@ export function createSessionCapability(
       // Register events before delaying bulk metadata; its later read reconciles
       // anything observed while the selected transcript was loading.
       void sessionEventSubscription.ensure(scope);
+      // A known scope can recover roster and history together, even when its client is replaced.
       void roster
-        .bootstrap({
-          ...roster.lastOptions(), // Keep visible roster filters through reconnect hydration.
-          agentId: agentSelection.state.selectedId ?? undefined,
-          includeDerivedTitles: true,
-          includeLastMessage: true,
-          backgroundHydrate: true,
-          force: true,
-        })
+        .bootstrap(
+          {
+            ...roster.lastOptions(), // Keep visible roster filters through reconnect hydration.
+            agentId: agentSelection.state.selectedId ?? undefined,
+          },
+          canonicalListScopeKey === presentationScope.key,
+        )
         .then(() => {
           if (connection.isCurrent(scope)) {
             // Child jobs own their own slots; never wait for them inside a scheduler slot.
@@ -543,12 +536,12 @@ export function createSessionCapability(
       githubPublication.observePullRequests(event.payload);
       return;
     }
-    if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
+    const listInvalidated = isSessionListInvalidation(event);
+    if (event.event === "chat.metadata.changed" || listInvalidated) {
       roster.observations.descriptions.clear();
-    }
-    if (event.event === "config.changed") {
-      // Config can change configured-agent membership even with no chat pane mounted.
-      roster.scheduleEvent();
+      if (listInvalidated) {
+        roster.scheduleEvent();
+      }
       return;
     }
     if (event.event !== "sessions.changed" && event.event !== "session.message") {
@@ -567,7 +560,6 @@ export function createSessionCapability(
     }
     const canApplySnapshot = roster.canApplyPrimarySnapshot(event.payload);
     const eventObservation = roster.captureEvent(event.payload);
-    const swarmChanged = swarmActivity.observe(event.payload);
     const { eventInfo, reconciled, claimChanged, notifyManaged, notifyEvent } =
       reconcileChangedEvent(event.payload, eventObservation, {
         resultAgentId: state.agentId,
@@ -582,7 +574,6 @@ export function createSessionCapability(
     const primarySnapshotApplied = reconciled.applied && canApplySnapshot;
     if (
       claimChanged ||
-      swarmChanged ||
       (eventInfo?.archived !== null && !isTerminalMessage) ||
       (!isTerminalMessage &&
         reconciled.applied &&
@@ -664,6 +655,7 @@ export function createSessionCapability(
         ? registerListener(listeners, () => listener(roster.listSnapshot(scope)))
         : roster.subscribeList(scope, listener),
     refreshList: roster.refreshList,
+    wakeList: roster.wakeList,
     reconcile,
     captureReconcile,
     observeRow,
@@ -683,6 +675,7 @@ export function createSessionCapability(
     ...operations,
     patch: mutations.patch,
     patchMany: mutations.patchMany,
+    acknowledgeHiddenRuns: mutations.acknowledgeHiddenRuns,
     archiveVisibility: mutations.archiveVisibility,
     beginArchive: mutations.beginArchive,
     assignOwner: mutations.assignOwner,
@@ -734,7 +727,6 @@ export function createSessionCapability(
       mutations.dispose();
       permissions.clear();
       deletions.clear();
-      swarmActivity.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
       sessionEventSubscription.dispose();

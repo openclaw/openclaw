@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -10,11 +11,13 @@ import { cleanupStartupPluginSourceCaptures } from "../commands/startup-plugin-s
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as census from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { acquireSqliteStagingToken } from "../infra/sqlite-staging-token.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
@@ -25,7 +28,10 @@ import {
   prunePluginNativeCaptureDirectories,
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
-import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
+import {
+  interceptPluginCaptureReclamation,
+  sweepPluginSourceCapturesForTest,
+} from "./plugin-source-capture-directory.test-support.js";
 import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
 const temp = createTempDirTracker();
@@ -148,16 +154,138 @@ function expectArtifactBytes(artifact: ReturnType<typeof capturePluginGeneration
   expectBytes(artifact.resolve(path.join(source, "index.cjs")));
 }
 
-function runChild(script: string, args: string[] = [], exitCode = 0) {
+function runChild(
+  script: string,
+  args: string[] = [],
+  exitCode = 0,
+  execArgv: string[] = [],
+  execPath = process.execPath,
+) {
+  const childRuntimeArgs = resolveRuntimeWorkerArgv(artifactUrl, execPath).slice(0, -1);
   const result = spawnSync(
-    process.execPath,
-    [...runtimeArgs, "--input-type=module", "-e", script, ...args],
+    execPath,
+    [...execArgv, ...childRuntimeArgs, "--input-type=module", "-e", script, ...args],
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, encoding: "utf8", timeout: 15_000 },
   );
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(exitCode);
   return result;
 }
+
+it("retains a loaded addon token after completed source and cache close until host exit", async () => {
+  const result = runChild(`
+    const { captureLoadedAddonThroughSourceClose } = await import(${moduleSpecifier("loadedAddon")});
+    console.log(JSON.stringify(await captureLoadedAddonThroughSourceClose(process.env.OPENCLAW_STATE_DIR)));
+  `);
+  const { instance, captured } = JSON.parse(result.stdout.trim());
+  // Natural child exit must also retire its unrefed physical owner before cleanup.
+  await expect
+    .poll(() => {
+      try {
+        const release = acquireSqliteStagingToken(instance, "reclaim");
+        release();
+        return true;
+      } catch (error) {
+        if (!isSqliteLockError(error)) {
+          throw error;
+        }
+        return false;
+      }
+    })
+    .toBe(true);
+  expect(fs.existsSync(captured)).toBe(true);
+});
+
+// Forced WeakRef collection needs V8; JSC may retain dead objects through conservative stack roots.
+it("does not retain the caller that first imports source capture storage", () => {
+  runChild(
+    `
+    import assert from "node:assert/strict";
+    import { AsyncLocalStorage } from "node:async_hooks";
+    import { setImmediate } from "node:timers/promises";
+    await import(${moduleSpecifier("scheduler")});
+    const caller = new AsyncLocalStorage();
+    async function load() {
+      const payload = { text: "synthetic caller context" };
+      const reference = new WeakRef(payload);
+      await caller.run(payload, () => import(${moduleSpecifier("captureDirectory")}));
+      return reference;
+    }
+    const reference = await load();
+    function unowned() { return new WeakRef({ unowned: true }); }
+    const control = unowned();
+    try {
+      for (let pass = 0; pass < 8; pass++) {
+        await setImmediate();
+        globalThis.gc();
+      }
+      assert.equal(control.deref(), undefined, "Unowned control must collect");
+      assert.equal(reference.deref(), undefined, "Source capture import retained its caller");
+    } finally {
+      caller.disable();
+    }
+  `,
+    [],
+    0,
+    ["--expose-gc"],
+    resolveTestNodeExecPath(),
+  );
+});
+
+it("releases failed native loads only when their source capture is disposed", () => {
+  runChild(
+    `
+    import assert from "node:assert/strict";
+    import fs from "node:fs";
+    import path from "node:path";
+    import { setImmediate } from "node:timers/promises";
+    import { createPluginSourceCapture } from ${moduleSpecifier("metadataCapture")};
+    import { tryNativeRequireJavaScriptModule as load } from ${moduleSpecifier("nativeRequire")};
+    const captures = [createPluginSourceCapture(), createPluginSourceCapture()];
+    function fail(capture) {
+      const entry = path.join(capture.directory, "failed.cjs");
+      fs.writeFileSync(entry, 'throw Object.assign(new Error("fixture failure"), { payload: {} });');
+      try {
+        load(entry);
+        assert.fail("Expected the native load to throw");
+      } catch (error) {
+        assert.equal(error.message, "fixture failure");
+        return [new WeakRef(error), new WeakRef(error.payload)];
+      }
+    }
+    async function collect() {
+      for (let pass = 0; pass < 8; pass++) {
+        await setImmediate();
+        globalThis.gc();
+      }
+    }
+    const references = captures.map(fail);
+    try {
+      await collect();
+      for (const reference of references.flat()) assert.notEqual(reference.deref(), undefined);
+      captures[0].dispose();
+      await collect();
+      for (const reference of references[0]) {
+        assert.equal(reference.deref(), undefined, "Disposed capture retained its failed load");
+      }
+      for (const reference of references[1]) {
+        assert.notEqual(reference.deref(), undefined, "Live capture lost its original failure");
+      }
+      await captures[1].disposeAsync();
+      await collect();
+      for (const reference of references[1]) {
+        assert.equal(reference.deref(), undefined, "Async disposal retained its failed load");
+      }
+    } finally {
+      for (const capture of captures) await capture.disposeAsync();
+    }
+  `,
+    [],
+    0,
+    ["--expose-gc"],
+    resolveTestNodeExecPath(),
+  );
+});
 
 function capturePaths(boundaryRoot: string, capturedFile: string, worker = false) {
   const captureRoot = worker ? path.dirname(boundaryRoot) : boundaryRoot;
@@ -194,6 +322,7 @@ const legacyChildCapture = `
   const instance = fs.mkdtempSync(path.join(parent, "legacy-"));
   const owner = new DatabaseSync(path.join(instance, "owner.sqlite"));
   owner.exec("PRAGMA busy_timeout=0; PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE;");
+  process.on("exit", () => owner.close());
   fs.mkdirSync(path.join(instance, "captures"));
   const boundaryRoot = fs.mkdtempSync(path.join(instance, "captures", "openclaw-plugin-build-"));
   const capturedFile = path.join(boundaryRoot, "index.cjs");
@@ -411,10 +540,7 @@ async function startCliCapture(worker: boolean, legacy = false, signal = false) 
   child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const exited = new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", () => resolve());
-  });
+  const exited = once(child, "close");
   void exited.catch(() => {});
   const nextLine = async () => {
     const result = await lines.next();
@@ -545,14 +671,16 @@ it.each(["payload", "instance"])(
         inspected.mockRestore();
       }
     }
-    const remove = fsPromises.rm.bind(fsPromises);
-    const failure = Object.assign(new Error("Fixture cleanup cannot finish"), { code: "EACCES" });
-    const fault = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
-      if (target === (stage === "payload" ? captures : orphan.instanceRoot)) {
-        throw failure;
-      }
-      await remove(target, options);
-    });
+    const fault = interceptPluginCaptureReclamation(`
+      import promises from 'node:fs/promises';
+      const remove = promises.rm.bind(promises);
+      promises.rm = async (target, options) => {
+        if (target === ${JSON.stringify(stage === "payload" ? captures : orphan.instanceRoot)}) {
+          throw Object.assign(new Error('Fixture cleanup cannot finish'), { code: 'EACCES' });
+        }
+        return remove(target, options);
+      };
+    `);
     try {
       await sweepPluginSourceCapturesForTest(stateDir);
       exists(path.join(orphan.instanceRoot, "owner.sqlite"), true);
@@ -584,15 +712,28 @@ it("metadata retirement joins its sweep, not sibling schedules", async () => {
   acquireSqliteStagingToken(orphan, "create")();
   age(orphan);
   const entered = createDeferred();
-  const release = createDeferred();
-  const remove = fsPromises.rm.bind(fsPromises);
-  const removal = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
-    if (path.dirname(String(target)) === root) {
-      entered.resolve();
-      await release.promise;
-    }
-    await remove(target, options);
-  });
+  const barrier = temp.make("capture-sweep-exit-");
+  const release = () => fsPromises.writeFile(path.join(barrier, "release"), "exit");
+  const removal = interceptPluginCaptureReclamation(
+    `
+    import { access } from 'node:fs/promises';
+    import { setTimeout as delay } from 'node:timers/promises';
+    const deadline = Date.now() + 60_000;
+    void (async () => {
+      while (Date.now() < deadline) {
+        try {
+          await access(${JSON.stringify(path.join(barrier, "release"))});
+          return;
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+        }
+        await delay(10);
+      }
+      throw new Error('Fixture release was not published');
+    })();
+  `,
+    () => entered.resolve(),
+  );
   const sweep = time.advanceBy(hour);
   let closing: ReturnType<typeof metadata.close> | undefined;
   try {
@@ -609,13 +750,13 @@ it("metadata retirement joins its sweep, not sibling schedules", async () => {
     expect(closed).toBe(false);
     expect(sibling).toHaveBeenCalledOnce();
     expect(scheduler.signal.aborted).toBe(false);
-    release.resolve();
+    await release();
     await Promise.all([sweep, closing]);
     expect(closed).toBe(true);
     expect(fs.readdirSync(root)).toEqual([]);
     expect(scheduler.nextWakeAtMs).toBeNull();
   } finally {
-    release.resolve();
+    await release();
     await Promise.allSettled([sweep, closing]);
     removal.mockRestore();
     await metadata.close();

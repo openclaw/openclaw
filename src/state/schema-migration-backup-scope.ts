@@ -40,5 +40,15 @@ export function resolveSchemaMigrationIntegrityCheck(
   if (check === "full") {
     return { check: "full" };
   }
-  return { check, tables: resolveSchemaMigrationIntegrityTables(migration) };
+  return {
+    check,
+    tables: resolveSchemaMigrationIntegrityTables(migration),
+    // An agent version step reads and writes only its declared tables. A large store must
+    // not stay offline for a whole-file scan; the next Gateway start owes that check.
+    ...(migration.kind === "agent" &&
+    migration.foundVersion > 0 &&
+    migration.foundVersion < migration.supportedVersion
+      ? { schemaOnly: true as const }
+      : {}),
+  };
 }

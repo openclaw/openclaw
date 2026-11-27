@@ -11,6 +11,55 @@ const configFor = (entries: NonNullable<OpenClawConfig["plugins"]>["entries"]): 
   plugins: { entries },
 });
 
+it("parses published and captured plugin configs once without retaining mutable inputs", () => {
+  const parse = vi.fn((value: unknown) => structuredClone(value as { nested: { value: number } }));
+  const read = runtime.createPluginConfigParser("demo", parse);
+  const live = { nested: { value: 1 } };
+  const config = configFor({ demo: { config: live } });
+  snapshots.setRuntimeConfigSnapshot(config);
+  const captured = runtime.resolvePluginConfigObject(captureRuntimeConfig(config), "demo");
+  const first = read(live);
+  const snapshot = read(captured);
+  for (let i = 0; i < 3; i++) {
+    expect(read(live)).toBe(first);
+    expect(read(captured)).toBe(snapshot);
+  }
+  expect(parse).toHaveBeenCalledTimes(2);
+  expect(Object.isFrozen(first)).toBe(true);
+  expect(Object.isFrozen(first.nested)).toBe(true);
+
+  live.nested.value = 2;
+  snapshots.setRuntimeConfigSnapshot(config);
+  expect(read(live)).toEqual({ nested: { value: 2 } });
+  expect(read(captured)).toBe(snapshot);
+  expect(first).toEqual({ nested: { value: 1 } });
+  expect(parse).toHaveBeenCalledTimes(3);
+
+  snapshots.clearRuntimeConfigSnapshot();
+  live.nested.value = 3;
+  expect(read(live)).toEqual({ nested: { value: 3 } });
+  live.nested.value = 4;
+  expect(read(live)).toEqual({ nested: { value: 4 } });
+  expect(parse).toHaveBeenCalledTimes(5);
+});
+
+it("does not cache shallow-frozen configs or thrown parse errors", () => {
+  const read = runtime.createPluginConfigParser("demo", (value: unknown) => {
+    const record = value as { nested: { value: number } };
+    if (record.nested.value < 0) {
+      throw new Error("invalid value");
+    }
+    return structuredClone(record);
+  });
+  const value = Object.freeze({ nested: { value: 1 } });
+  expect(read(value).nested.value).toBe(1);
+  value.nested.value = 2;
+  expect(read(value).nested.value).toBe(2);
+  const invalid = Object.freeze({ nested: Object.freeze({ value: -1 }) });
+  expect(() => read(invalid)).toThrow("invalid value");
+  expect(() => read(invalid)).toThrow("invalid value");
+});
+
 it("reuses captured plugin policy across reads and keeps revisions independent", () => {
   using normalize = vi.spyOn(normalization, "normalizePluginsConfigWithResolverCore");
   const config = configFor({ " CODEX ": { config: { revision: 1 } } });

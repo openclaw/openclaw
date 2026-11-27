@@ -1,10 +1,13 @@
 import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import { safeParseJson } from "@openclaw/normalization-core";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  normalizeTabIconPreference,
+  UI_PREFERENCE_DEFAULTS,
+} from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../../../src/shared/control-ui-storage.js";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
@@ -33,6 +36,8 @@ import {
   normalizeChatMessageMaxWidth,
   normalizeChatSendShortcut,
   normalizeChatWorkspaceDock,
+  normalizeDashboardsDisplay,
+  normalizeSessionFilesDisplay,
   normalizeTextScale,
   UI_APPEARANCE_DEFAULTS,
   type UiPreferences,
@@ -67,7 +72,9 @@ type ScopedSessionSelection = {
   selectedAgentId?: string;
 };
 
-type ProfileNavigation = { railShortcuts: string[] };
+type ProfileNavigation = {
+  railShortcuts?: string[];
+};
 type PersistedUiSettings = Omit<
   UiSettings,
   | "token"
@@ -85,6 +92,7 @@ type PersistedUiSettings = Omit<
     // Retired sidebar order is preserved as opaque data, never used as rail shortcuts.
     sidebarEntries?: unknown;
     sidebarPinnedRoutes?: unknown;
+    personalSessionGroups?: unknown; // Preserve the retired layout without applying it.
   };
 
 type PersistedSettingsSource = {
@@ -194,7 +202,15 @@ export function readSettingsForGateway(
     scoped = {
       ...scoped,
       ...cached.record,
-      navigationByProfile: { ...scoped?.navigationByProfile, ...cached.pendingNavigation },
+      navigationByProfile: {
+        ...scoped?.navigationByProfile,
+        ...Object.fromEntries(
+          Object.entries(cached.pendingNavigation).map(([id, pending]) => [
+            id,
+            { ...scoped?.navigationByProfile?.[id], ...pending },
+          ]),
+        ),
+      },
     };
   }
   if (!scoped) {
@@ -355,9 +371,9 @@ export function loadUiPreferences(
     lastActiveSessionKey: "main",
     theme: UI_APPEARANCE_DEFAULTS.theme,
     themeMode: UI_APPEARANCE_DEFAULTS.themeMode,
-    chatShowThinking: true,
-    chatShowToolCalls: true,
-    chatPersistCommentary: true,
+    chatShowThinking: UI_PREFERENCE_DEFAULTS.chatShowThinking,
+    chatShowToolCalls: UI_PREFERENCE_DEFAULTS.chatShowToolCalls,
+    chatPersistCommentary: UI_PREFERENCE_DEFAULTS.chatPersistCommentary,
     chatShowTaskProgress: UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
     chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
     chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
@@ -419,6 +435,7 @@ export function loadUiPreferences(
       terminalFontFamily: normalizeTerminalFontFamily(parsed.terminalFontFamily),
       chatShowThinking: booleanSetting("chatShowThinking"),
       chatShowToolCalls: booleanSetting("chatShowToolCalls"),
+      chatInlineCommands: booleanSetting("chatInlineCommands"),
       chatPersistCommentary: booleanSetting("chatPersistCommentary"),
       chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
       chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
@@ -437,6 +454,8 @@ export function loadUiPreferences(
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
+      dashboardsDisplay: normalizeDashboardsDisplay(parsed.dashboardsDisplay),
+      sessionFilesDisplay: normalizeSessionFilesDisplay(parsed.sessionFilesDisplay),
       sidebarSessionLayouts: normalizeSidebarSessionLayouts(parsed.sidebarSessionLayouts),
       sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
         parsed.sidebarSessionActivePanels,
@@ -466,6 +485,7 @@ export function loadUiPreferences(
       ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
       ...(parsed.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
       ...(parsed.chatModelChangeConfirm === false ? { chatModelChangeConfirm: false } : {}),
+      dismissedReadOnlyConfigNotice: normalizeOptionalString(parsed.dismissedReadOnlyConfigNotice),
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
       ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
@@ -493,7 +513,7 @@ export function patchSettings(
   const next = { ...previous, ...patch };
   saveSettings(next, {
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
-    writeNavigation: Object.hasOwn(patch, "sidebarEntries"),
+    writeShortcuts: Object.hasOwn(patch, "sidebarEntries"),
   });
   settingsChangeListener?.(previous, next);
   return next;
@@ -514,7 +534,10 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 
 export function saveSettings(
   next: UiSettings,
-  options: { selectGateway?: boolean; writeNavigation?: boolean } = {},
+  options: {
+    selectGateway?: boolean;
+    writeShortcuts?: boolean;
+  } = {},
 ) {
   const storage = getSafeLocalStorage();
   const scope = gatewayOriginScope(next.gatewayUrl);
@@ -535,16 +558,18 @@ export function saveSettings(
     available = false;
   }
   const profileId = resolveProfileAppearanceProfileId(next.gatewayUrl);
-  const authoredNavigation = options.writeNavigation !== false;
-  const navigation = { railShortcuts: next.sidebarEntries };
+  const writesShortcuts = options.writeShortcuts !== false;
   const pendingNavigation = {
     ...(settingsFallback?.key === scopedKey ? settingsFallback.pendingNavigation : null),
-    ...(profileId &&
-    authoredNavigation &&
-    JSON.stringify(navigation) !== JSON.stringify(profileNavigation(source?.parsed, profileId))
-      ? { [profileId]: { ...source?.parsed.navigationByProfile?.[profileId], ...navigation } }
-      : {}),
   };
+  if (
+    profileId &&
+    writesShortcuts &&
+    JSON.stringify(next.sidebarEntries) !==
+      JSON.stringify(profileNavigation(source?.parsed, profileId)?.railShortcuts)
+  ) {
+    pendingNavigation[profileId] = { railShortcuts: next.sidebarEntries };
+  }
   const sessionsByGateway = Object.fromEntries(
     [
       ...Object.entries(existingSessionsByGateway).filter(([key]) => key !== scope),
@@ -571,6 +596,7 @@ export function saveSettings(
     terminalFontFamily: normalizeTerminalFontFamily(next.terminalFontFamily),
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
+    chatInlineCommands: next.chatInlineCommands === true ? true : undefined,
     chatPersistCommentary: next.chatPersistCommentary ?? true,
     chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
@@ -592,6 +618,8 @@ export function saveSettings(
       next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
         ? next.boardSessionViews
         : undefined,
+    dashboardsDisplay: normalizeDashboardsDisplay(next.dashboardsDisplay),
+    sessionFilesDisplay: normalizeSessionFilesDisplay(next.sessionFilesDisplay),
     sidebarSessionLayouts:
       next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
         ? next.sidebarSessionLayouts
@@ -607,7 +635,8 @@ export function saveSettings(
       ? normalizeUniqueTrimmedStringList(next.sidebarCollapsedAgentIds)
       : undefined,
     railShortcuts:
-      !profileId && authoredNavigation ? next.sidebarEntries : source?.parsed.railShortcuts,
+      !profileId && writesShortcuts ? next.sidebarEntries : source?.parsed.railShortcuts,
+    personalSessionGroups: source?.parsed.personalSessionGroups,
     sidebarEntries: source?.parsed.sidebarEntries,
     sidebarPinnedRoutes: source?.parsed.sidebarPinnedRoutes,
     navigationByProfile: {
@@ -636,6 +665,7 @@ export function saveSettings(
     // Only the opted-out value is persisted; absence means the safe default.
     sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
     chatModelChangeConfirm: next.chatModelChangeConfirm === false ? false : undefined,
+    dismissedReadOnlyConfigNotice: normalizeOptionalString(next.dismissedReadOnlyConfigNotice),
     // External links keep host behavior unless the operator explicitly opts in.
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
     openLinksExternally: next.openLinksExternally === true ? true : undefined,

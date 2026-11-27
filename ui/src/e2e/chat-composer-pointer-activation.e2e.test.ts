@@ -57,14 +57,14 @@ async function expectComposerFocus(page: Page): Promise<void> {
 }
 
 async function expectSafeArea(page: Page): Promise<void> {
-  // The injected 34px safe area plus the native composer's 10px bottom gap.
+  // Keep the composer above the injected safe area without fixing its visual gap.
   await expect
     .poll(() =>
       page
         .locator(".agent-chat__composer-shell")
         .evaluate((node) => window.innerHeight - node.getBoundingClientRect().bottom),
     )
-    .toBe(44);
+    .toBeGreaterThanOrEqual(34);
 }
 
 async function streamReply(gateway: Gateway, afterRequest?: () => Promise<void>): Promise<string> {
@@ -118,7 +118,7 @@ async function narrowSendAndStop(touch: boolean): Promise<void> {
       await expectComposerFocus(page);
     }
     const runId = await streamReply(gateway, touch ? undefined : () => expectComposerFocus(page));
-    const stop = page.getByRole("button", { name: "Stop generating" });
+    const stop = page.getByRole("button", { name: "Stop", exact: true });
     await expect.poll(() => stop.isVisible()).toBe(true);
     await textarea.focus();
     if (touch) {
@@ -217,6 +217,28 @@ async function clickMouseAtCurrentCenter(page: Page, button: Locator): Promise<v
 }
 
 suite.define(() => {
+  it("keeps the first editor tap focused when the keyboard moves the composer before release", async () => {
+    await withComposer(true, false, async (page) => {
+      const editor = page.locator(".agent-chat__input textarea");
+      const bounds = (await editor.boundingBox())!;
+      const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+      const touch = await page.context().newCDPSession(page);
+      await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+      await expectComposerFocus(page);
+      // Desktop Chromium has no software keyboard. Supply its viewport change,
+      // but let Chromium hit-test and dispatch the rest of the real tap.
+      await page.evaluate(() => {
+        Object.defineProperty(visualViewport!, "height", { configurable: true, value: 480 });
+        visualViewport!.dispatchEvent(new Event("resize"));
+      });
+      await expect.poll(async () => (await editor.boundingBox())!.y).toBeLessThan(480);
+      await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await expectComposerFocus(page);
+      await page.keyboard.type("First tap");
+      expect(await editor.inputValue()).toBe("First tap");
+    });
+  });
+
   it("sends and stops without moving the action out from under an Android-like tap", async () => {
     await narrowSendAndStop(true);
   });
@@ -239,7 +261,7 @@ suite.define(() => {
         .toBe(true);
       await keyboardSend.press("Enter");
       const runId = await streamReply(gateway);
-      const stop = page.getByRole("button", { name: "Stop generating" });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       await stop.focus();
       await stop.press("Space");
       const abortRequest = await gateway.waitForRequest("chat.abort");

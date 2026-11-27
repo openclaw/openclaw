@@ -1,12 +1,12 @@
 /** Canonical operational instance and optional enabled execution-identity evidence. */
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { CyberAccessProgram } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import {
   createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
   type ExecutionIdentityAdmissionFacts,
   type ExecutionIdentityAdmissionToken,
-  type ExecutionIdentityRecoveryAdmission,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
 import {
@@ -15,8 +15,8 @@ import {
   runWithSessionSourceScope,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
-import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeGatewayOperatorRecoverySnapshot } from "../gateway/operator-run-recovery-source.codec.js";
 import {
   captureAgentRunDelegatedSourceAssertion,
   claimAgentRunDelegatedAuthority,
@@ -26,15 +26,20 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
+import { scopeOperatorAccessDecisions } from "../infra/operator-access-decision.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-operator-authority.types.js";
 import {
   createOperationalRunInstanceRef,
   type OperationalRunInstanceRef,
 } from "./operational-run-instance.js";
-import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
+import { isOperatorAccessProgramAllowed } from "./operator-access-program.js";
+
+type OperatorModelSelection = ModelRef & { cyberAccessProgram?: CyberAccessProgram };
 
 export {
   createOperationalRunInstanceRef,
@@ -49,39 +54,7 @@ export type AdmittedRunContext = Readonly<{
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
 }>;
 
-export type AdmittedRunOperatorAuthority = Readonly<{
-  profileId: string;
-  /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
-  recoverySnapshot?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
-  /** Existing immutable policy and link; accepted-input owners may retain them for recovery. */
-  channelRecoverySource?: Readonly<{
-    reference: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;
-    modelPolicy?: PreparedOperatorModelPolicy;
-  }>;
-  scopes: readonly string[];
-  /** Original access dependency; null is proven independent, undefined is unclassified. */
-  gatewayAccessGrant?: GatewayAccessGrantRef | null;
-  assertCurrent: SessionSourceAssertion;
-  signal?: AbortSignal;
-  /** Opaque original source identity used only to compare compatible queued input. */
-  source?: object;
-  /** Retains the original source independently of a foreground run or request. */
-  retain?: () => () => void;
-  /** Assignment and verified login from one check of the original live profile authority. */
-  readCurrentRoleFacts?: (this: void) => Readonly<{
-    assignedRole: string | null;
-    githubLogin?: string | null;
-  }>;
-  /** Prepared role permissions; source-policy changes revoke the owning authority. */
-  rolePolicy?: Readonly<{
-    sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
-    sandboxRequired: boolean;
-    agents: "*" | readonly string[];
-  }>;
-  modelPolicy?: PreparedOperatorModelPolicy;
-  /** Committed policy changes invalidate only executions using a removed model. */
-  onModelPolicyChanged?: (listener: () => void) => () => void;
-}>;
+export type { AdmittedRunOperatorAuthority } from "./admitted-run-operator-authority.types.js";
 
 // Source and bundled module instances must recognize the same host-issued object.
 const operatorAuthorityIssuers = resolveGlobalSingleton(
@@ -93,56 +66,80 @@ const operatorAuthorityIssuers = resolveGlobalSingleton(
 export function createAdmittedRunOperatorAuthority(
   source: AdmittedRunOperatorAuthority,
 ): AdmittedRunOperatorAuthority {
-  const check = source.assertCurrent;
-  const signal = source.signal;
-  let revoked = false;
-  let revocationReason: unknown;
-  const assertCurrent = composeSessionSourceAssertion([check], (assertSource) => {
-    if (revoked) {
-      throw revocationReason;
-    }
-    try {
-      signal?.throwIfAborted();
-      assertSource();
-    } catch (error) {
-      revoked = true;
-      revocationReason = error;
-      throw error;
-    }
-  });
-  const readRoleFacts = source.readCurrentRoleFacts;
+  const readCurrentRoleFacts = source.readCurrentRoleFacts;
+  const recoverySnapshot =
+    source.participationCeiling && source.recoverySnapshot
+      ? normalizeGatewayOperatorRecoverySnapshot({
+          ...source.recoverySnapshot,
+          version: 2,
+          participationCeiling: source.participationCeiling,
+          scopes: intersectOperatorScopes(source.recoverySnapshot.scopes, source.scopes),
+        })
+      : source.recoverySnapshot;
   const authority = Object.freeze({
     profileId: source.profileId,
-    recoverySnapshot: source.recoverySnapshot
-      ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
+    canonicalIdentity:
+      source.canonicalIdentity &&
+      Object.freeze({
+        profileId: source.canonicalIdentity.profileId,
+      }),
+    clientId: source.clientId,
+    openclawIdPrincipal: source.openclawIdPrincipal
+      ? freezeJsonSnapshot(structuredClone(source.openclawIdPrincipal))
       : undefined,
+    device: source.device && Object.freeze({ ...source.device }),
+    deviceScopeCeiling: source.deviceScopeCeiling && Object.freeze([...source.deviceScopeCeiling]),
+    authPolicy: source.authPolicy && Object.freeze({ ...source.authPolicy }),
+    sharedGeneration: source.sharedGeneration,
+    ingress:
+      source.ingress &&
+      Object.freeze({
+        ...source.ingress,
+        principal: Object.freeze({ ...source.ingress.principal }),
+        scopeCeiling: Object.freeze([...source.ingress.scopeCeiling]),
+      }),
+    recoverySnapshot: recoverySnapshot
+      ? freezeJsonSnapshot(structuredClone(recoverySnapshot))
+      : undefined,
+    recoverySnapshotUnavailableReason:
+      source.recoverySnapshot && !recoverySnapshot
+        ? ("decode-failed" as const)
+        : source.recoverySnapshotUnavailableReason,
     channelRecoverySource: source.channelRecoverySource
       ? Object.freeze({
           reference: Object.freeze({ ...source.channelRecoverySource.reference }),
           modelPolicy: source.channelRecoverySource.modelPolicy,
         })
       : undefined,
+    channelOwner: source.channelOwner && Object.freeze({ ...source.channelOwner }),
     scopes: Object.freeze([...source.scopes]),
+    grant: source.grant,
+    participationCeiling: source.participationCeiling
+      ? freezeJsonSnapshot(structuredClone(source.participationCeiling))
+      : undefined,
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,
     source: source.source ?? {},
-    signal,
+    invocation: source.invocation,
+    signal: source.signal,
     retain: source.retain,
-    onModelPolicyChanged: source.onModelPolicyChanged,
     get modelPolicy() {
       return source.modelPolicy;
     },
-    assertCurrent,
-    readCurrentRoleFacts: readRoleFacts
-      ? () => {
-          assertCurrent();
-          return readRoleFacts();
-        }
-      : undefined,
+    readCurrentRoleFacts,
     rolePolicy: source.rolePolicy
       ? Object.freeze({
           ...source.rolePolicy,
+          ...(source.rolePolicy.accessPrograms
+            ? {
+                accessPrograms: Object.freeze({
+                  cyber: Object.freeze(
+                    [...new Set(source.rolePolicy.accessPrograms.cyber)].toSorted(),
+                  ),
+                }),
+              }
+            : {}),
           agents:
             source.rolePolicy.agents === "*"
               ? "*"
@@ -165,35 +162,51 @@ export function assertAdmittedRunOperatorAuthority(
 /** Selection never grants authority; callers must pass the original host-issued source. */
 export function assertOperatorModelAllowed(
   authority: AdmittedRunOperatorAuthority | undefined,
-  model: ModelRef | undefined,
+  model: OperatorModelSelection | undefined,
 ): void {
   createOperatorModelSelectionAssertion(authority, model)();
 }
 
-/** Carry the operator's source checks into writes without rereading its store on the host. */
+/** Applies the admitted model policy to a selection as a write guard. */
 export function createOperatorModelSelectionAssertion(
   authority: AdmittedRunOperatorAuthority | undefined,
-  model: ModelRef | undefined,
+  model: OperatorModelSelection | undefined,
 ): SessionSourceAssertion {
-  return composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
+  return composeSessionSourceAssertion([], () => {
     if (!authority) {
       return;
     }
     assertAdmittedRunOperatorAuthority(authority);
-    assertSource();
     const policy = authority.modelPolicy;
     if (policy && (!model || !policy.allows(model))) {
       throw new Error(
         "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
       );
     }
+    assertOperatorAccessProgramAllowed(authority, model?.cyberAccessProgram);
   });
 }
 
-/** Keeps one selected model current without revoking other work from the same source. */
+/** Clearing a stale Access selection must not require permission to its old model. */
+export function assertOperatorAccessProgramAllowed(
+  authority: AdmittedRunOperatorAuthority | undefined,
+  program: CyberAccessProgram | undefined,
+): void {
+  if (!authority) {
+    return;
+  }
+  assertAdmittedRunOperatorAuthority(authority);
+  if (!isOperatorAccessProgramAllowed(authority, program)) {
+    throw new Error(
+      "Your operator role cannot use this Access level. Choose Standard or ask a gateway administrator to grant this Access level to your role.",
+    );
+  }
+}
+
+/** Keeps one selected model bound to the admitted policy until release or Stop. */
 export function bindOperatorModelExecution(
   authority: AdmittedRunOperatorAuthority | undefined,
-  model: ModelRef | undefined,
+  model: OperatorModelSelection | undefined,
   mapAuthorizationError?: (error: unknown) => Error,
 ): Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined {
   if (!authority) {
@@ -201,7 +214,8 @@ export function bindOperatorModelExecution(
   }
   const selected = model ? { ...model } : undefined;
   const assertModelAllowed = createOperatorModelSelectionAssertion(authority, selected);
-  const mapError = (error: unknown) => mapAuthorizationError?.(error) ?? error;
+  const mapError = (error: unknown) =>
+    isOperatorAuthorityUnavailable(error) ? error : (mapAuthorizationError?.(error) ?? error);
   let releaseAuthority: (() => void) | undefined;
   try {
     assertModelAllowed();
@@ -213,35 +227,18 @@ export function bindOperatorModelExecution(
   let released = false;
   const assertCurrent = () => {
     if (released) {
-      throw mapError(new Error("operator model execution authority is no longer active"));
+      throw mapError(new Error("This agent run is no longer active. Start a new turn to retry."));
     }
     revoked.signal.throwIfAborted();
-    try {
-      assertModelAllowed();
-    } catch (error) {
-      const failure = mapError(error);
-      revoked.abort(failure);
-      throw failure;
-    }
-  };
-  const recheck = () => {
-    try {
-      assertCurrent();
-    } catch {
-      // The latched signal owns cancellation; notification must reach other executions.
-    }
   };
   const onSourceAbort = () => revoked.abort(mapError(authority.signal?.reason));
   authority.signal?.addEventListener("abort", onSourceAbort, { once: true });
-  const unsubscribe = authority.onModelPolicyChanged?.(recheck);
-  recheck();
   return {
     signal: revoked.signal,
     assertCurrent,
     release: () => {
       if (!released) {
         released = true;
-        unsubscribe?.();
         authority.signal?.removeEventListener("abort", onSourceAbort);
         releaseAuthority?.();
       }
@@ -269,39 +266,13 @@ export type PreparedAgentRunAdmission = Readonly<{
   ) => Promise<AdmittedRunContext>;
   /** Checks latched source revocation after normal close; never grants execution authority. */
   assertSourceCurrent: () => void;
+  /** Checks open preparation and its exact admitted owner without evaluating source predicates. */
+  assertCurrent: () => void;
   /** Host-only source restriction available before the runtime prepares its tools. */
   readOperatorAuthority?: () => AdmittedRunOperatorAuthority | undefined;
   /** Idempotently closes the exact delegated approval lease, if admission occurred. */
   close: () => void;
 }>;
-
-type PreparedRestartRecovery = Readonly<{
-  operationalRunInstance: OperationalRunInstanceRef;
-  assertCurrent: () => void;
-}>;
-
-// Existing adapters preserve this exact prepared owner through its close operation.
-const preparedRestartRecoveries = new WeakMap<
-  PreparedAgentRunAdmission["close"],
-  PreparedRestartRecovery
->();
-
-/** Recognizes an admitted restart continuation without granting execution permission. */
-export function isPreparedRunRestartRecovery(
-  prepared: PreparedAgentRunAdmission,
-  runId: string,
-): boolean {
-  const recovery = preparedRestartRecoveries.get(prepared.close);
-  if (
-    !recovery ||
-    recovery.operationalRunInstance !== prepared.operationalRunInstance ||
-    prepared.operationalRunInstance.runId !== runId
-  ) {
-    return false;
-  }
-  recovery.assertCurrent();
-  return true;
-}
 
 type DelegatedAuthorityLease = {
   authority: AgentRunDelegatedAuthority;
@@ -327,11 +298,11 @@ export function runWithPreparedRunSourceScope<T>(
 ): Promise<T> {
   let assertion = params.preparedRunAdmission?.assertSourceCurrent;
   if (params.admittedRunContext) {
-    const lease = delegatedAuthorityLeases.get(params.admittedRunContext);
-    const captured =
-      lease && captureAdmittedRunActiveAssertion(params.admittedRunContext, lease.authority);
+    const captured = resolveAdmittedRunActiveAssertion(params.admittedRunContext);
     if (!captured) {
-      return Promise.reject(new Error("admitted run authority is no longer active"));
+      return Promise.reject(
+        new Error("This agent run is no longer active. Start a new turn to retry."),
+      );
     }
     assertion = captured;
   }
@@ -379,7 +350,7 @@ export function readAdmittedRunOperatorAuthority(
     return undefined;
   }
   if (!getAdmittedRunDelegatedAuthority(context)) {
-    throw new Error("admitted run operator authority is no longer active");
+    throw new Error("This agent run is no longer active. Start a new turn to retry.");
   }
   return operatorAuthority;
 }
@@ -405,47 +376,56 @@ export function getAdmittedRunSource(
     : undefined;
 }
 
-/** Captures an exact admitted-run assertion for work that may cross an await boundary. */
+/** Reads the initiating profile only from the host's exact active admission lease. */
+export function getAdmittedRunOperatorProfileId(
+  authority: AgentRunDelegatedAuthority,
+): string | undefined {
+  const context = admittedContextsByAuthority.get(authority);
+  if (!context || getAdmittedRunDelegatedAuthority(context) !== authority) {
+    return undefined;
+  }
+  return readAdmittedRunOperatorAuthority(context)?.profileId;
+}
+
+/** Stop, run occurrence and the run's registry session source, for work that crosses an await. */
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
   signal?: AbortSignal,
-): ReturnType<typeof captureAdmittedRunActiveAssertion> {
-  const authority = getAdmittedRunDelegatedAuthority(context);
-  return authority ? captureAdmittedRunActiveAssertion(context, authority, signal) : undefined;
-}
-
-/** Capture an already-resolved authority without repeating its source reads. */
-export function captureAdmittedRunActiveAssertion(
-  context: AdmittedRunContext,
-  authority: AgentRunDelegatedAuthority,
-  signal?: AbortSignal,
 ) {
-  const operationalRunInstance = context.operationalRunInstance;
   const lease = delegatedAuthorityLeases.get(context);
+  if (!lease || lease.foregroundClosed) {
+    return undefined;
+  }
+  const { authority } = lease;
+  const operationalRunInstance = context.operationalRunInstance;
   const refuse = (): never => {
     throw new Error(
-      "admitted run authority is no longer active",
+      "This agent run is no longer active. Start a new turn to retry.",
       readAgentRunDelegatedAuthorityFailure(authority),
     );
   };
   const source = captureAgentRunDelegatedSourceAssertion(authority, refuse);
-  if (!lease || lease.foregroundClosed || lease.authority !== authority || !source) {
+  if (!source) {
     return undefined;
   }
   const assertLocalCurrent = (assertSource: () => void) => {
     if (
       signal?.aborted ||
       context.operationalRunInstance !== operationalRunInstance ||
-      delegatedAuthorityLeases.get(context) !== lease ||
       lease.foregroundClosed
     ) {
       refuse();
     }
     assertSource();
   };
-  return Object.assign(composeSessionSourceAssertion([source.assertCurrent], assertLocalCurrent), {
-    assertScopeCurrent: () => assertLocalCurrent(source.assertBinding),
-  });
+  return Object.assign(
+    composeSessionSourceAssertion([source.assertCurrent], assertLocalCurrent, {
+      synchronousCheck: true,
+    }),
+    {
+      assertScopeCurrent: () => assertLocalCurrent(source.assertBinding),
+    },
+  );
 }
 
 /** Idempotently compare-releases the authority captured by this admission. */
@@ -504,37 +484,6 @@ export function retainAdmittedRunBeforeToolCallRecovery(
   };
 }
 
-/** Creates a one-shot recovery admission owned by the durable recovery resolver. */
-export function createExecutionIdentityRecoveryAdmission(params: {
-  retryOnly: boolean;
-  token?: ExecutionIdentityAdmissionToken;
-  expectedOperationalRunId?: string;
-}): ExecutionIdentityRecoveryAdmission {
-  let consumed = false;
-  return Object.freeze({
-    retryOnly: params.retryOnly,
-    consume: (runId: string) => {
-      if (consumed) {
-        return { accepted: false };
-      }
-      consumed = true;
-      if (
-        params.expectedOperationalRunId !== undefined &&
-        params.expectedOperationalRunId !== runId
-      ) {
-        return { accepted: false };
-      }
-      // The trusted recovery resolver binds the current operational owner separately.
-      // Without that explicit binding, only the token's original run may redeem it.
-      const token =
-        params.expectedOperationalRunId !== undefined || params.token?.runId === runId
-          ? params.token
-          : undefined;
-      return { accepted: true, ...(token ? { token } : {}) };
-    },
-  });
-}
-
 /** Prepares a system-owned run without selecting its eventual execution runtime early. */
 export function prepareSystemAgentRunAdmission(
   cfg: OpenClawConfig,
@@ -566,7 +515,6 @@ export function prepareAgentRunAdmission(params: {
   admissionSource?: AdmittedRunContext["admissionSource"];
   facts: Omit<ExecutionIdentityAdmissionFacts, "runtime">;
   operationalRunInstance: OperationalRunInstanceRef;
-  recovery?: ExecutionIdentityRecoveryAdmission;
   onAdmitted?: (context: AdmittedRunContext) => void | Promise<void>;
   assertSourceCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -580,24 +528,32 @@ export function prepareAgentRunAdmission(params: {
   if (operatorAuthority !== undefined) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
   }
-  const assertOperatorCurrent = operatorAuthority?.assertCurrent;
   const releaseOperatorAuthority = operatorAuthority?.retain?.();
   let sourceFailure: Error | undefined;
   const assertSourceCurrent =
-    (sourceAssertion || assertOperatorCurrent) &&
-    composeSessionSourceAssertion([sourceAssertion, assertOperatorCurrent], (assertSources) => {
-      if (sourceFailure) {
-        throw sourceFailure;
-      }
-      try {
-        assertSources();
-      } catch (error) {
-        sourceFailure = new Error("source execution authority is no longer active", {
-          cause: error,
-        });
-        throw error;
-      }
-    });
+    sourceAssertion &&
+    composeSessionSourceAssertion(
+      [sourceAssertion],
+      scopeOperatorAccessDecisions((assertSources: () => void) => {
+        if (sourceFailure) {
+          throw sourceFailure;
+        }
+        try {
+          assertSources();
+        } catch (error) {
+          if (!isOperatorAuthorityUnavailable(error)) {
+            sourceFailure = new Error(
+              "This agent run is no longer active. Start a new turn to retry.",
+              {
+                cause: error,
+              },
+            );
+          }
+          throw error;
+        }
+      }),
+      { synchronousCheck: true },
+    );
   let admittedRuntimeKind: ExecutionIdentityAdmissionFacts["runtime"]["kind"] | undefined;
   let admittedRuntimeInstanceId: string | undefined;
   let admitted: Promise<AdmittedRunContext> | undefined;
@@ -608,25 +564,40 @@ export function prepareAgentRunAdmission(params: {
       throw new Error("prepared execution context is already closed");
     }
   };
-  const scopedSource = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
-    assertPreparationOpen();
-    assertSource();
-  });
+  const scopedSource = composeSessionSourceAssertion(
+    [assertSourceCurrent],
+    (assertSource) => {
+      assertPreparationOpen();
+      assertSource();
+    },
+    { synchronousCheck: true },
+  );
   const prepared: PreparedAgentRunAdmission = Object.freeze({
     operationalRunInstance,
-    assertSourceCurrent: Object.assign(composeSessionSourceAssertion([assertSourceCurrent]), {
-      assertScopeCurrent: assertPreparationOpen,
-      prepareSessionSourceScope: () => {
-        assertPreparationOpen();
-        return prepareSessionSourceScope(scopedSource);
+    assertCurrent: () => {
+      assertPreparationOpen();
+      if (!admittedContext) {
+        return;
+      }
+      const assertActive = resolveAdmittedRunActiveAssertion(admittedContext);
+      if (!assertActive) {
+        throw new Error("This agent run is no longer active. Start a new turn to retry.");
+      }
+      assertActive.assertScopeCurrent();
+    },
+    assertSourceCurrent: Object.assign(
+      composeSessionSourceAssertion([assertSourceCurrent], undefined, { synchronousCheck: true }),
+      {
+        assertScopeCurrent: assertPreparationOpen,
+        prepareSessionSourceScope: () => {
+          assertPreparationOpen();
+          return prepareSessionSourceScope(scopedSource);
+        },
       },
-    }),
+    ),
     readOperatorAuthority: () => {
-      if (operatorAuthority) {
-        if (closed) {
-          throw new Error("prepared operator authority is no longer active");
-        }
-        operatorAuthority.assertCurrent();
+      if (operatorAuthority && closed) {
+        throw new Error("This agent run is no longer active. Start a new turn to retry.");
       }
       return operatorAuthority;
     },
@@ -665,7 +636,6 @@ export function prepareAgentRunAdmission(params: {
             facts,
             operationalRunInstance,
             runtimeInstanceId: admittedRuntimeInstanceId,
-            ...(params.recovery ? { recovery: params.recovery } : {}),
           });
           bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, operatorAuthority);
           admittedContext = context;
@@ -685,20 +655,6 @@ export function prepareAgentRunAdmission(params: {
       return admitted;
     },
   });
-  if (
-    params.facts.ingress.kind === "recovery" &&
-    params.facts.ingress.boundary === "gateway.main-session-recovery"
-  ) {
-    preparedRestartRecoveries.set(prepared.close, {
-      operationalRunInstance,
-      assertCurrent: () => {
-        if (closed) {
-          throw new Error("prepared restart recovery is no longer active");
-        }
-        assertSourceCurrent?.();
-      },
-    });
-  }
   return prepared;
 }
 
@@ -721,7 +677,7 @@ export async function resolvePreparedRunAdmission(params: {
   }
   const lease = delegatedAuthorityLeases.get(admitted);
   if (lease && !getAdmittedRunDelegatedAuthority(admitted)) {
-    throw new Error("prepared execution authority is no longer active");
+    throw new Error("This agent run is no longer active. Start a new turn to retry.");
   }
   return admitted;
 }
@@ -736,7 +692,6 @@ function admitPreparedAgentRun(params: {
   facts: ExecutionIdentityAdmissionFacts;
   operationalRunInstance: OperationalRunInstanceRef;
   runtimeInstanceId?: string;
-  recovery?: ExecutionIdentityRecoveryAdmission;
 }): AdmittedRunContext {
   if (params.operationalRunInstance.runId !== params.facts.runId) {
     throw new Error("operational run instance disagrees with prepared admission");
@@ -746,29 +701,15 @@ function admitPreparedAgentRun(params: {
     operationalRunInstance,
     ...(params.admissionSource ? { admissionSource: params.admissionSource } : {}),
   };
-  // Consume the one-shot recovery lease even while collection is disabled so a
-  // later operational instance cannot adopt evidence that belonged to this run.
-  const recovery =
-    typeof params.recovery?.consume === "function"
-      ? params.recovery.consume(params.facts.runId)
-      : undefined;
   if (!isExecutionIdentityCollectionEnabled(params.cfg)) {
     return Object.freeze(prepareGatewayContextBindingOwner(admitted));
   }
-  const executionIdentityToken =
-    recovery?.token ??
-    (!params.recovery || (recovery?.accepted && !params.recovery.retryOnly)
-      ? createExecutionIdentityAdmissionToken(params.facts.runId)
-      : undefined);
-  if (!executionIdentityToken) {
-    return Object.freeze(prepareGatewayContextBindingOwner(admitted));
-  }
+  const executionIdentityToken = createExecutionIdentityAdmissionToken(params.facts.runId);
 
   enqueueExecutionIdentityContextAtAdmission(params.facts, {
     enabled: true,
     token: executionIdentityToken,
     runtimeInstanceId: params.runtimeInstanceId,
-    retryOnly: params.recovery?.retryOnly === true,
   });
   return Object.freeze(prepareGatewayContextBindingOwner({ ...admitted, executionIdentityToken }));
 }

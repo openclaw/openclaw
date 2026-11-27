@@ -3,7 +3,7 @@ import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { findSelectableAgent, listSelectableAgents } from "../../lib/agents/display.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
@@ -103,23 +103,12 @@ export class DraftPlaceState {
     return canUseDeviceFolder(this.deviceId, this.devices());
   }
 
-  selectDeviceFolder() {
+  selectDeviceFolder(path: string) {
     selectDraftDeviceFolder(this.targetActions(), () => {
-      this.deviceFolderValue = "";
+      this.deviceFolderValue = path;
     });
   }
 
-  setDeviceFolderPath(path: string) {
-    if (
-      this.deviceFolderValue === null ||
-      this.read().submitting ||
-      this.read().pendingPlacementSessionKey
-    ) {
-      return;
-    }
-    this.deviceFolderValue = path;
-    this.callbacks.changed();
-  }
   readonly cloudMachines = new DraftCloudMachineState();
   agentsHydrated = false;
   private agentSelectedByUser = false;
@@ -170,7 +159,7 @@ export class DraftPlaceState {
         folder: this.folderValue,
         workspace: this.workspacePath(),
         workspaceGit: this.selectedAgent()?.workspaceGit === true,
-        gateway: this.read().context?.gateway.snapshot,
+        gateway: this.read().context?.gateway,
       }),
       {
         changed: callbacks.changed,
@@ -181,7 +170,7 @@ export class DraftPlaceState {
     );
     this.modelControl = new NewSessionModelControl(
       callbacks.changed,
-      (selection) => this.persistPreference(selection),
+      (selection) => void this.gateway.persistModelPreference(this.agentIdValue, selection),
       (catalogId) =>
         this.read().context?.navigate("new-session", {
           search: newSessionSearch(this.agentIdValue, { catalogId }),
@@ -233,14 +222,7 @@ export class DraftPlaceState {
   }
 
   get currentCheckoutUnavailableReason(): string | undefined {
-    const reason = this.repositoryState.currentCheckoutUnavailable;
-    return reason === "checking"
-      ? t("newSession.checkingPlace")
-      : reason === "worktree"
-        ? t("newSession.checkoutRequiresWorktree")
-        : reason === "unavailable"
-          ? t("newSession.checkoutCheckUnavailable")
-          : undefined;
+    return this.repositoryState.currentCheckoutUnavailableReason;
   }
 
   get checkoutVisible(): boolean {
@@ -248,8 +230,7 @@ export class DraftPlaceState {
       !this.deviceFolder &&
       !this.hostedEnvironment &&
       !this.freshWorkspace &&
-      (this.repository.kind !== "direct" || Boolean(this.browser.projectId)) &&
-      (this.worktreeAvailable() || this.worktree || Boolean(this.browser.projectId))
+      this.repositoryState.checkoutVisible(Boolean(this.browser.projectId))
     );
   }
 
@@ -350,8 +331,8 @@ export class DraftPlaceState {
   }
 
   selectedAgent() {
-    const agentId = normalizeAgentId(this.agentIdValue);
-    return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
+    const agents = this.read().context?.agents.state.agentsList?.agents ?? [];
+    return findSelectableAgent(agents, this.agentIdValue);
   }
 
   devicePlacementRuntime() {
@@ -766,8 +747,12 @@ export class DraftPlaceState {
     this.repositoryState.synchronizeProjectCheckout();
   }
 
+  /** Gateway-host fs.listDir needs operator.write; outside agent workspaces it needs admin. */
   browseAvailable(): boolean {
-    return this.gateway.connected && (this.isAdmin() || Boolean(this.workspacePath()));
+    return (
+      this.gateway.connected &&
+      (this.isAdmin() || (this.canWrite() && Boolean(this.workspacePath())))
+    );
   }
 
   worktreeAvailable(): boolean {

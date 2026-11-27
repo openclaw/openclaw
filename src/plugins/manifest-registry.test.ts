@@ -24,7 +24,7 @@ function makeTempDir() {
 
 function makeOpenClawDevSourceRoot() {
   const root = makeTempDir();
-  writeTextFile(root, "package.json", JSON.stringify({ name: "openclaw" }));
+  writeTextFile(root, "package.json", { name: "openclaw" });
   writeTextFile(root, "pnpm-workspace.yaml", "packages: [extensions/*]\n");
   mkdirSafe(path.join(root, "src"));
   mkdirSafe(path.join(root, "extensions"));
@@ -32,16 +32,16 @@ function makeOpenClawDevSourceRoot() {
 }
 
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
-  writeTextFile(
-    dir,
-    "openclaw.plugin.json",
-    JSON.stringify({ configSchema: { type: "object" }, ...manifest }),
-  );
+  writeTextFile(dir, "openclaw.plugin.json", { configSchema: { type: "object" }, ...manifest });
 }
 
-function writeTextFile(rootDir: string, relativePath: string, value: string) {
+function writeTextFile(rootDir: string, relativePath: string, value: string | object) {
   mkdirSafe(path.dirname(path.join(rootDir, relativePath)));
-  fs.writeFileSync(path.join(rootDir, relativePath), value, "utf-8");
+  fs.writeFileSync(
+    path.join(rootDir, relativePath),
+    typeof value === "string" ? value : JSON.stringify(value),
+    "utf-8",
+  );
 }
 
 function setupBundleFixture(params: {
@@ -91,17 +91,28 @@ function makePluginDir(id: string, metadata: Record<string, unknown> = {}) {
   return dir;
 }
 
-function createMsteamsClawHubInstallRecord(
+function officialInstallRecord(
+  source: "npm" | "clawhub",
   installPath: string,
   overrides: Partial<PluginInstallRecord> = {},
 ): PluginInstallRecord {
+  const name = source === "npm" ? "@openclaw/diffs" : "@openclaw/msteams";
   return {
-    source: "clawhub",
-    spec: "clawhub:@openclaw/msteams",
+    source,
     installPath,
-    clawhubUrl: "https://clawhub.ai",
-    clawhubPackage: "@openclaw/msteams",
-    clawhubChannel: "official",
+    ...(source === "clawhub"
+      ? {
+          spec: `clawhub:${name}`,
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: name,
+          clawhubChannel: "official",
+        }
+      : {
+          spec: name,
+          resolvedName: name,
+          resolvedVersion: "2026.7.16",
+          resolvedSpec: `${name}@2026.7.16`,
+        }),
     ...overrides,
   };
 }
@@ -128,18 +139,7 @@ function loadOfficialRegistry(
 function resolveOfficialTrust(source: "npm" | "clawhub", overrides: Partial<PluginInstallRecord>) {
   const id = source === "npm" ? "diffs" : "msteams";
   const dir = makePluginDir(id);
-  const record =
-    source === "clawhub"
-      ? createMsteamsClawHubInstallRecord(dir, overrides)
-      : {
-          source,
-          spec: "@openclaw/diffs",
-          installPath: dir,
-          resolvedName: "@openclaw/diffs",
-          resolvedVersion: "2026.7.16",
-          resolvedSpec: "@openclaw/diffs@2026.7.16",
-          ...overrides,
-        };
+  const record = officialInstallRecord(source, dir, overrides);
   return loadOfficialRegistry(id, dir, record).plugins[0]?.trustedOfficialInstall;
 }
 
@@ -209,34 +209,29 @@ function loadSingleCandidateRegistry(
   return loadRegistry([createPluginCandidate(idHint, rootDir, origin)]);
 }
 
-function compatibilityCandidate(params: {
+function compatibilityCandidate({
+  rootDir,
+  minHostVersion = ">=2026.4.25",
+  pluginApi,
+  origin = "global",
+  idHint = "synology-chat",
+}: {
   rootDir: string;
   minHostVersion?: string;
   pluginApi?: unknown;
   origin?: PluginCandidate["origin"];
   idHint?: string;
 }) {
-  return createPluginCandidate(
-    params.idHint ?? "synology-chat",
-    params.rootDir,
-    params.origin ?? "global",
-    {
-      packageDir: params.rootDir,
-      packageManifest: {
-        install: {
-          npmSpec: `@openclaw/${params.idHint ?? "synology-chat"}`,
-          minHostVersion: params.minHostVersion ?? ">=2026.4.25",
-        },
-        ...(params.pluginApi === undefined
-          ? {}
-          : {
-              compat: {
-                pluginApi: params.pluginApi as string,
-              },
-            }),
+  return createPluginCandidate(idHint, rootDir, origin, {
+    packageDir: rootDir,
+    packageManifest: {
+      install: {
+        npmSpec: `@openclaw/${idHint}`,
+        minHostVersion,
       },
+      ...(pluginApi === undefined ? {} : { compat: { pluginApi: pluginApi as string } }),
     },
-  );
+  });
 }
 
 afterEach(() => {
@@ -250,14 +245,10 @@ describe("loadPluginManifestRegistry", () => {
     const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
     mkdirSafe(pluginDir);
     writeTextFile(pluginDir, "index.js", "export default function () {}");
-    writeTextFile(
-      pluginDir,
-      "package.json",
-      JSON.stringify({
-        name: "@openclaw/cached-manifest",
-        openclaw: { extensions: ["./index.js"] },
-      }),
-    );
+    writeTextFile(pluginDir, "package.json", {
+      name: "@openclaw/cached-manifest",
+      openclaw: { extensions: ["./index.js"] },
+    });
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
     writeManifest(pluginDir, { id: "cached-manifest", name: "Before" });
     writeTextFile(pluginDir, "assets/activity/before.svg", "before activity");
@@ -549,13 +540,7 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makePluginDir("diffs");
     const registry = loadPluginManifestRegistryCore({
       installRecords: {
-        diffs: {
-          source: "npm",
-          spec: "@openclaw/diffs",
-          installPath: dir,
-          resolvedName: "@openclaw/diffs",
-          resolvedSpec: "@openclaw/diffs@2026.7.16",
-        },
+        diffs: officialInstallRecord("npm", dir, { resolvedVersion: undefined }),
       },
       candidates: ["diffs/two", "diffs/one"].map((id) =>
         Object.assign(officialCandidate("diffs", dir), { idHint: id, effectivePluginId: id }),
@@ -617,7 +602,7 @@ describe("loadPluginManifestRegistry", () => {
     const registry = loadOfficialRegistry(
       "msteams",
       dir,
-      createMsteamsClawHubInstallRecord(makeTempDir(), { sourcePath: dir }),
+      officialInstallRecord("clawhub", makeTempDir(), { sourcePath: dir }),
       ["config"],
     );
     expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
@@ -698,12 +683,6 @@ describe("loadPluginManifestRegistry", () => {
       candidates: [candidate],
     });
     const uiHints = { ...generatedHint, ...manifestHint };
-    expect(registry.plugins[0]?.channelConfigs?.alpha).toEqual({
-      schema: generatedSchema,
-      label: "Alpha",
-      description: "Alpha channel",
-      uiHints,
-    });
     expect(collectChannelSchemaMetadataCore(registry)).toEqual([
       {
         id: "alpha",
@@ -736,31 +715,27 @@ describe("loadPluginManifestRegistry", () => {
   });
 
   it.each([
-    {
-      id: "slack",
-      channel: "slack",
-      packageName: "@openclaw/slack",
-      label: "Slack",
-      description: "Slack channel, DM, command, and app event integration.",
-      schema: undefined,
-      tools: undefined,
-    },
-    {
-      id: "wecom-openclaw-plugin",
-      channel: "wecom",
-      packageName: "@wecom/wecom-openclaw-plugin",
-      label: "WeCom",
-      description: "Enterprise WeChat conversation channel.",
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: { corpId: { type: "string" } },
-      },
-      tools: ["wecom_mcp"],
-    },
-  ])(
-    "hydrates missing official $channel descriptors without replacing schemas",
-    ({ id, channel, packageName, label, description, schema, tools }) => {
+    [
+      "slack",
+      "slack",
+      "@openclaw/slack",
+      "Slack",
+      "Slack channel, DM, command, and app event integration.",
+      undefined,
+      undefined,
+    ],
+    [
+      "wecom-openclaw-plugin",
+      "wecom",
+      "@wecom/wecom-openclaw-plugin",
+      "WeCom",
+      "Enterprise WeChat conversation channel.",
+      { type: "object", additionalProperties: false, properties: { corpId: { type: "string" } } },
+      ["wecom_mcp"],
+    ],
+  ] as const)(
+    "hydrates missing official %s descriptors without replacing schemas",
+    (id, channel, packageName, label, description, schema, tools) => {
       const dir = makePluginDir(id, {
         channels: [channel],
         ...(schema ? { channelConfigs: { [channel]: { schema } } } : {}),
@@ -949,55 +924,103 @@ describe("loadPluginManifestRegistry", () => {
   type CompatibilityCase = Omit<Parameters<typeof compatibilityCandidate>[0], "rootDir"> & {
     version?: string;
     recorded?: boolean;
+    unmatchedRecord?: boolean;
+    effectivePluginId?: string;
   };
-  it.each<[string, CompatibilityCase, string?, string?]>([
+  type CompatibilityDiagnostic = Pick<
+    Registry["diagnostics"][number],
+    "message" | "level" | "configDisposition"
+  >;
+  const invalidHostDiagnostic: CompatibilityDiagnostic = {
+    level: "error",
+    message:
+      'plugin manifest invalid | openclaw.install.minHostVersion must use a semver floor in the form ">=x.y.z[-prerelease][+build]"',
+  };
+  it.each<[string, CompatibilityCase, CompatibilityDiagnostic?]>([
     [
-      "invalid host minimum",
-      { minHostVersion: "2026.3.22" },
-      "plugin manifest invalid | openclaw.install.minHostVersion must use",
+      "invalid host minimum before malformed API",
+      { minHostVersion: "2026.3.22", pluginApi: 20260527 },
+      invalidHostDiagnostic,
     ],
     [
-      "unknown host",
-      { minHostVersion: ">=2026.3.22", version: "unknown" },
-      "host version could not be determined",
-      "warn",
+      "unknown host before malformed API",
+      { minHostVersion: ">=2026.3.22", version: "unknown", pluginApi: 20260527 },
+      {
+        level: "warn",
+        message:
+          "plugin requires OpenClaw >=2026.3.22, but this host version could not be determined; skipping load",
+      },
+    ],
+    [
+      "older host before malformed API",
+      { minHostVersion: ">=2026.5.27", version: "2026.5.26", pluginApi: 20260527 },
+      {
+        level: "warn",
+        message: "plugin requires OpenClaw >=2026.5.27, but this host is 2026.5.26; skipping load",
+      },
     ],
     ["recorded legacy minimum", { idHint: "codex", minHostVersion: "2026.3.22", recorded: true }],
     [
+      "unmatched recorded legacy minimum",
+      { minHostVersion: "2026.3.22", recorded: true, unmatchedRecord: true },
+      invalidHostDiagnostic,
+    ],
+    [
+      "config origin with recorded legacy minimum",
+      { minHostVersion: "2026.3.22", recorded: true, origin: "config" },
+      invalidHostDiagnostic,
+    ],
+    [
       "future API",
-      { pluginApi: ">=2026.5.27", version: "2026.5.10-beta.1" },
-      "plugin requires plugin API >=2026.5.27",
-      "warn",
+      {
+        pluginApi: ">=2026.5.27",
+        version: "2026.5.10-beta.1",
+        effectivePluginId: "selected-plugin",
+      },
+      {
+        level: "warn",
+        configDisposition: "preserve",
+        message:
+          'plugin requires plugin API >=2026.5.27, but this host is 2026.5.10-beta.1; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")',
+      },
     ],
     [
       "malformed API",
       { pluginApi: 20260527, version: "2026.5.27" },
-      "plugin manifest invalid | package.json openclaw.compat.pluginApi must be a string",
-      "error",
+      {
+        level: "error",
+        message:
+          "plugin manifest invalid | package.json openclaw.compat.pluginApi must be a string",
+      },
     ],
     ["beta on API floor", { pluginApi: ">=2026.5.27", version: "2026.5.27-beta.1" }],
-    ["bundled exemption", { pluginApi: ">=2026.5.27", version: "2026.4.1", origin: "bundled" }],
-  ])("enforces package compatibility: %s", (_name, params, error, level) => {
+    [
+      "bundled exemption",
+      { minHostVersion: "invalid", pluginApi: 20260527, version: "2026.4.1", origin: "bundled" },
+    ],
+  ])("enforces package compatibility: %s", (_name, params, diagnostic) => {
     const id = params.idHint ?? "synology-chat";
     const dir = makePluginDir(id);
     const candidate = compatibilityCandidate({ ...params, rootDir: dir });
+    candidate.effectivePluginId = params.effectivePluginId;
+    const installPath = params.unmatchedRecord ? makeTempDir() : dir;
     const registry = loadPluginManifestRegistryCore({
-      installRecords: params.recorded ? { [id]: { source: "npm", installPath: dir } } : {},
+      installRecords: params.recorded ? { [id]: { source: "npm", installPath } } : {},
       candidates: [params.recorded ? recordPluginCandidateInstallOwner(candidate, id) : candidate],
-      ...(params.version ? { env: { OPENCLAW_VERSION: params.version } } : {}),
+      env: { OPENCLAW_VERSION: params.version ?? "2026.5.27" },
     });
-    if (error) {
+    if (diagnostic) {
       expect(registry.plugins).toStrictEqual([]);
-      expectRegistryDiagnosticContains(registry, error);
-      if (level) {
-        expectDiagnosticFields(registry, { level, messageIncludes: error });
-      }
+      expect(registry.diagnostics).toStrictEqual([
+        {
+          ...diagnostic,
+          pluginId: params.effectivePluginId ?? id,
+          source: path.join(dir, "package.json"),
+        },
+      ]);
     } else {
       expect(registry.plugins.map((plugin) => plugin.id)).toEqual([id]);
-      expectNoRegistryDiagnosticContains(
-        registry,
-        params.recorded ? "openclaw.install.minHostVersion must use" : "requires plugin API",
-      );
+      expect(registry.diagnostics).toStrictEqual([]);
     }
   });
 

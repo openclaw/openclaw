@@ -14,6 +14,7 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
+import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 export const outputLimitDetails = {
@@ -50,6 +51,9 @@ export const outputLimitScenarios = [
 ];
 
 export type TransportDropScenario = {
+  continueFromCurrentTranscript?: Awaited<
+    ReturnType<typeof createEmbeddedRunSessionPromptState>
+  >["continueFromCurrentTranscript"];
   config?: OpenClawConfig;
   assistant?: AssistantMessage;
   providerOwner?: PreparedProviderFailoverOwner;
@@ -191,7 +195,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     assistant: erroredAssistant,
   });
   const markOwnedTranscriptRetry = vi.fn();
-  const continueFromCurrentTranscript = vi.fn();
+  const continueFromCurrentTranscript = vi.fn(scenario.continueFromCurrentTranscript);
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
     runInput: {
@@ -203,6 +207,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       globalLane: "test",
       agentDir: "/tmp/provider-recovery-test",
       fallbackConfigured: scenario.fallbackConfigured ?? false,
+      startedAtMs: Date.now(),
     },
     preparedRuntime: {
       provider,

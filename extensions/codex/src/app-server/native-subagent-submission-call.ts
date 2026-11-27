@@ -323,15 +323,18 @@ export function createNativeSubagentSubmissionCalls(
         return false;
       }
       const nativeTurnId = child.nativeTurnId;
-      if (
-        !nativeTurnId ||
-        nativeTurnId === submissionId ||
-        known.assignment.nativeTurnId !== nativeTurnId
-      ) {
+      if (!nativeTurnId || known.assignment.nativeTurnId !== nativeTurnId) {
         return true;
       }
       const ended = readString(turn, "id") === nativeTurnId ? readNativeTurnEnd(turn) : undefined;
       const nativeState = ended ?? child.nativeTurnState;
+      if (nativeTurnId === submissionId) {
+        // After resume, the first observed turn can be the submission itself.
+        // Once it ends, there is no predecessor left to wait for.
+        return (
+          nativeState !== "completed" && nativeState !== "failed" && nativeState !== "interrupted"
+        );
+      }
       const owner =
         call.owner && [...state.owners.values()].includes(call.owner) ? call.owner : undefined;
       if (nativeState === "interrupted") {

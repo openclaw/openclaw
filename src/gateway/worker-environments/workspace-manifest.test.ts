@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { resolveGitHubPublicationFailure } from "../github-publication-failure.js";
+import { applyWorkspaceSourceOverlay } from "./workspace-manifest-overlay.js";
 import {
   parseWorkerWorkspaceManifest,
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceManifest as serializeManifest,
 } from "./workspace-manifest.js";
+import * as pathExclusions from "./workspace-path-exclusions.js";
 
 const sha256 = "a".repeat(64);
 const file = { path: "file", type: "file" as const, mode: 0o644, size: 0, sha256 };
@@ -41,6 +44,45 @@ function rejectsEntry(value: unknown, error: string) {
   expect(() => readManifest({ ...manifest, entries: [value] })).toThrow(error);
   expect(() => readJournal({ ...journal, baseEntries: [value] })).toThrow(error);
 }
+
+it("projects each overlay inventory once while preserving incoming and setup edits", () => {
+  const source = {
+    ...manifest,
+    entries: ["unchanged.txt", "changed.txt", "deleted.txt", "__pycache__/cache.pyc"].map(
+      namedFile,
+    ),
+  };
+  const prepared = {
+    ...source,
+    entries: [...source.entries, namedFile("setup.txt")],
+  };
+  const incoming = {
+    ...source,
+    entries: [
+      source.entries[0]!,
+      { ...namedFile("changed.txt"), sha256: "b".repeat(64) },
+      namedFile("added.txt"),
+    ],
+  };
+  const projectPath = vi.spyOn(pathExclusions, "isDerivedWorkspacePath");
+  let result: ReturnType<typeof applyWorkspaceSourceOverlay>;
+  let projectionCount: number;
+  try {
+    result = applyWorkspaceSourceOverlay(source, prepared, incoming);
+    projectionCount = projectPath.mock.calls.length;
+  } finally {
+    projectPath.mockRestore();
+  }
+  expect(result.entries).toEqual([
+    source.entries[0],
+    prepared.entries.at(-1),
+    incoming.entries[1],
+    incoming.entries[2],
+  ]);
+  expect(projectionCount).toBe(
+    source.entries.length + prepared.entries.length + incoming.entries.length,
+  );
+});
 
 it.each([false, true])("projects caches using trusted input context: %s", (trusted) => {
   const authored = ".artifacts/build-all-cache/authored.txt";
@@ -106,6 +148,25 @@ it("preserves null, SHA-1, and SHA-256 base commits", () => {
     (baseCommit) => readManifest({ ...manifest, baseCommit }),
     "unsupported shape",
   );
+});
+
+it("preserves actionable inventory-limit guidance through publication failure mapping", () => {
+  const directories = Array.from({ length: 250_001 }, (_, index) => String(index));
+  for (const read of [
+    () => readManifest({ ...manifest, entries: directories.map(directory) }),
+    () => serializeManifest({ ...manifest, entries: [], directories }),
+  ]) {
+    let failure: unknown;
+    try {
+      read();
+    } catch (error) {
+      failure = error;
+    }
+    expect(resolveGitHubPublicationFailure(failure)).toEqual({
+      code: "workspace_changed",
+      nextAction: expect.stringMatching(/250001.*limit 250000.*\.gitignore.*retrying/s),
+    });
+  }
 });
 
 it("rejects duplicate or unsorted manifest paths", () => {

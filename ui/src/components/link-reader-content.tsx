@@ -1,70 +1,56 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, onSettled, Repeat, Show } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
-import { elementRef } from "../lib/reactive/element-ref.ts";
+import { takeGraphemes } from "../lib/graphemes.ts";
+import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
-import { LinkReaderMarkdown, documentUrl, type LoadImage } from "./link-reader-markdown.tsx";
+import { ChecksContent } from "./link-reader-checks.tsx";
+import { DateLabel } from "./link-reader-date-label.tsx";
+import { LinkReaderExternalAction } from "./link-reader-external-action.tsx";
+import { Diff, FileContent } from "./link-reader-files.tsx";
+import {
+  LinkReaderMarkdown,
+  ReaderLink,
+  documentUrl,
+  type LoadImage,
+} from "./link-reader-markdown.tsx";
 import type { ReaderReadyView, ReaderSection } from "./link-reader-panel-view.ts";
-import { linkReaderAuthorHref } from "./link-reader-response.ts";
+import { linkReaderAuthorHref, safePreviewImage } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
-import { Icon, type IconName } from "./solid/icon.tsx";
+import { IconButton } from "./solid/icon-button.tsx";
+import { Icon } from "./solid/icon.tsx";
+import { Popover } from "./solid/popover.tsx";
 
 type ControlUiLinkReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
-type ControlUiLinkReaderFile = NonNullable<ControlUiLinkReaderDocument["files"]>[number];
+type SectionKey = "overview" | ReaderSection;
+type SectionState = "idle" | "loading" | "error";
 
 registerEnglishCatalog(registerLinkReaderEnglish);
 
-function ReaderLink(props: JSX.IntrinsicElements["a"]) {
-  return <a {...props} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" />;
-}
+// Document order, which differs from the navigation: checks sit above the description.
+const SECTION_ORDER = ["checks", "overview", "files", "discussion"] as const;
 
-function DateLabel(props: { value: string | undefined }) {
+/** A person: their picture when the source provides one, otherwise their initial. */
+function Avatar(props: { name: string; imageUrl?: string }) {
   return (
-    <Show when={props.value}>
-      {(value) => {
-        const display = () => {
-          const date = new Date(value());
-          return Number.isNaN(date.getTime()) ? value() : date.toLocaleString();
-        };
-        return (
-          <time datetime={value()} title={value()}>
-            {display()}
-          </time>
-        );
-      }}
-    </Show>
-  );
-}
-
-function Diff(props: {
-  patch: string;
-  filename: string;
-  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
-}) {
-  return (
-    <pre
-      ref={[elementRef(props.onScrollPortRef)]}
-      class="lr-diff"
-      tabindex={0}
-      aria-label={t("linkReader.diffLabel", { filename: props.filename })}
-    >
-      <code>
-        <For each={props.patch.split("\n")}>
-          {(line) => {
-            const kind = line.startsWith("+")
-              ? "add"
-              : line.startsWith("-")
-                ? "delete"
-                : line.startsWith("@@")
-                  ? "hunk"
-                  : "context";
-            return <span class={["lr-diff-line", `lr-diff-line--${kind}`]}>{line}</span>;
-          }}
-        </For>
-      </code>
-    </pre>
+    <span class="lr-avatar" aria-hidden="true">
+      {takeGraphemes(props.name, 1).toUpperCase()}
+      <Show when={safePreviewImage(props.imageUrl)}>
+        {(source) => (
+          <img
+            alt=""
+            decoding="async"
+            crossorigin="anonymous"
+            referrerpolicy="no-referrer"
+            src={source()}
+            onError={(event) => event.currentTarget.remove()}
+          />
+        )}
+      </Show>
+    </span>
   );
 }
 
@@ -76,329 +62,26 @@ function TruncationNote(props: { truncated: boolean | undefined; label: string }
   );
 }
 
-function FileContent(props: {
-  file: ControlUiLinkReaderFile;
-  expanded: boolean;
-  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
-}) {
-  // Preserve native toggles until the document changes its expansion preference.
-  const expanded = createMemo(() => props.expanded);
-  return (
-    <details class="lr-file" open={expanded()}>
-      <summary>
-        <span class="lr-filename">{props.file.path}</span>
-        <span class="lr-stats">
-          <span class="lr-add">+{props.file.additions}</span>{" "}
-          <span class="lr-delete">−{props.file.deletions}</span>
-        </span>
-      </summary>
-      <Show when={props.file.previousPath}>
-        {(path) => <p class="lr-meta">{t("linkReader.renamedFrom", { filename: path() })}</p>}
-      </Show>
-      <Show
-        when={props.file.patch}
-        fallback={<p class="lr-note">{t("linkReader.patchUnavailable")}</p>}
-      >
-        {(patch) => (
-          <Diff
-            patch={patch()}
-            filename={props.file.path}
-            onScrollPortRef={props.onScrollPortRef}
-          />
-        )}
-      </Show>
-      <TruncationNote truncated={props.file.patchTruncated} label="linkReader.patchTruncated" />
-    </details>
-  );
-}
-
-function CommentContent(props: {
-  comment: ControlUiLinkReaderComment;
-  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
-  base: string;
-  loadImage?: LoadImage;
-}) {
-  const location = () =>
-    [props.comment.context?.path, props.comment.context?.lineLabel].filter(Boolean).join(":");
-  const permalink = () => documentUrl(props.comment.url, props.base)?.href;
-  const reply = () => {
-    const value = props.comment.context?.replyUrl;
-    return value ? documentUrl(value, props.base)?.href : undefined;
-  };
-  return (
-    <article class="lr-comment" id={props.comment.id}>
-      <header class="lr-meta">
-        <strong>{props.comment.author}</strong>{" "}
-        <ReaderLink href={permalink()} title={t("linkReader.commentPermalink")}>
-          <Show when={props.comment.createdAt} fallback={t("linkReader.commentPermalink")}>
-            {(value) => <DateLabel value={value()} />}
-          </Show>
-        </ReaderLink>{" "}
-        <Show when={props.comment.label}>
-          {(label) => <span class="lr-comment-kind">{label()}</span>}
-        </Show>
-      </header>
-      <Show when={location() || props.comment.context?.label}>
-        <p class="lr-review-location">
-          <ReaderLink href={permalink()}>{location()}</ReaderLink> {props.comment.context?.label}
-        </p>
-      </Show>
-      <Show when={reply()}>
-        {(url) => (
-          <ReaderLink class="lr-meta" href={url()}>
-            {props.comment.context?.replyLabel ?? t("linkReader.replyContext")}
-          </ReaderLink>
-        )}
-      </Show>
-      <Show when={props.comment.context?.diff}>
-        {(diff) => (
-          <details class="lr-file lr-review-diff">
-            <summary>{t("linkReader.reviewContext")}</summary>
-            <Diff
-              patch={diff()}
-              filename={props.comment.context?.path ?? ""}
-              onScrollPortRef={props.onScrollPortRef}
-            />
-            <TruncationNote
-              truncated={props.comment.context?.diffTruncated}
-              label="linkReader.patchTruncated"
-            />
-          </details>
-        )}
-      </Show>
-      <LinkReaderMarkdown body={props.comment.body} base={props.base} loadImage={props.loadImage} />
-      <TruncationNote truncated={props.comment.bodyTruncated} label="linkReader.bodyTruncated" />
-    </article>
-  );
-}
-
-type ReaderChecks = NonNullable<ControlUiLinkReaderDocument["checks"]>;
-const checkIcons: Record<ReaderChecks["state"], IconName> = {
-  success: "check",
-  failure: "circleX",
-  pending: "clock",
-  unavailable: "circleQuestionMark",
-  neutral: "circle",
-};
-const checkLabels = {
-  success: "linkReader.checkSuccess",
-  failure: "linkReader.checkFailure",
-  pending: "linkReader.checkPending",
-  neutral: "linkReader.checkNeutral",
-} as const;
-const checksLabels = {
-  success: "linkReader.checksSuccess",
-  failure: "linkReader.checksFailure",
-  pending: "linkReader.checksPending",
-  neutral: "linkReader.checksNeutral",
-  unavailable: "linkReader.checksUnavailable",
-} as const;
-
-function ChecksContent(props: {
-  checks: ReaderChecks;
-  base: string;
-  provider: string;
-  refreshState?: "idle" | "loading" | "error";
-  sectionRef: (element: HTMLElement) => void;
-}) {
-  const source = () =>
-    props.checks.url ? documentUrl(props.checks.url, props.base)?.href : undefined;
-  return (
-    <details
-      ref={(element) => props.sectionRef(element)}
-      class={["lr-checks", `lr-checks--${props.checks.state}`]}
-      data-reader-section="checks"
-      tabindex={-1}
-      open={props.checks.state === "failure"}
-    >
-      <summary>
-        <span class="lr-checks-icon" aria-hidden="true">
-          <Icon name={checkIcons[props.checks.state]} />
-        </span>
-        <span class="lr-checks-heading">
-          <strong>
-            {props.refreshState
-              ? t(
-                  props.refreshState === "error"
-                    ? "linkReader.sectionRefreshFailed"
-                    : "linkReader.sectionRefreshing",
-                  { section: t("linkReader.checks") },
-                )
-              : t(checksLabels[props.checks.state])}
-          </strong>
-          <span class="lr-meta">{props.checks.summary}</span>
-        </span>
-        <span class="lr-checks-chevron" aria-hidden="true">
-          <Icon name="chevronDown" />
-        </span>
-        <Show
-          when={
-            !props.checks.truncated &&
-            props.checks.state !== "unavailable" &&
-            props.checks.items.length === props.checks.total &&
-            props.checks.total > 0
-          }
-        >
-          <span class="lr-checks-meter" aria-hidden="true">
-            <For each={props.checks.items}>
-              {(item) => <span class={["lr-check-segment", `lr-check-segment--${item.state}`]} />}
-            </For>
-          </span>
-        </Show>
-      </summary>
-      <ul class="lr-check-list">
-        <For each={props.checks.items}>
-          {(item) => {
-            const url = () => (item.url ? documentUrl(item.url, props.base)?.href : undefined);
-            return (
-              <li class={["lr-check", `lr-check--${item.state}`]}>
-                <span class="lr-check-symbol" role="img" aria-label={t(checkLabels[item.state])}>
-                  <Icon name={checkIcons[item.state]} />
-                </span>
-                <span class="lr-check-copy">
-                  <Show when={url()} fallback={<span>{item.name}</span>}>
-                    {(href) => (
-                      <ReaderLink href={href()} data-link-reader-external="">
-                        {item.name}
-                        <Icon name="externalLink" />
-                      </ReaderLink>
-                    )}
-                  </Show>
-                  <span class="lr-meta">{item.detail ?? t(checkLabels[item.state])}</span>
-                </span>
-              </li>
-            );
-          }}
-        </For>
-      </ul>
-      <Show when={props.checks.truncated}>
-        <p class="lr-note">
-          {t("linkReader.checksTruncated")}
-          <Show when={source()}>
-            {(url) => (
-              <>
-                {" "}
-                <ReaderLink href={url()} data-link-reader-external="">
-                  {t("linkReader.checksSourceExternal", { provider: props.provider })}
-                  <Icon name="externalLink" />
-                </ReaderLink>
-              </>
-            )}
-          </Show>
-        </p>
-      </Show>
-      <footer class="lr-checks-footer">
-        <Show when={props.checks.commit}>
-          {(commit) => (
-            <code title={t("linkReader.checksCommit", { commit: commit() })}>
-              {commit().slice(0, 7)}
-            </code>
-          )}
-        </Show>
-        <Show when={source()}>
-          {(url) => (
-            <ReaderLink href={url()} data-link-reader-external="">
-              {t("linkReader.checksSource")}
-              <Icon name="externalLink" />
-            </ReaderLink>
-          )}
-        </Show>
-      </footer>
-    </details>
-  );
-}
-
-function SectionLink(props: {
-  destination: () => HTMLElement | undefined;
-  label: string;
-  count?: number;
-  onLoad?: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        props.onLoad?.();
-        const destination = props.destination();
-        if (destination instanceof HTMLDetailsElement) {
-          destination.open = true;
-        }
-        destination?.focus({ preventScroll: true });
-        destination?.scrollIntoView({ block: "start" });
-      }}
-    >
-      {props.label}
-      <Show when={props.count !== undefined}>
-        <span class="lr-count">{props.count}</span>
-      </Show>
-    </button>
-  );
-}
-
+/** One section shell for every load state, so its heading never moves when content arrives. */
 function ListSection(props: {
   kind: "files" | "comments";
-  count: number;
+  /** Loaded rows; undefined until the section arrives. */
+  count: number | undefined;
   total?: number;
   truncated?: boolean;
+  state?: SectionState;
   children: JSX.Element;
-  refreshState?: "idle" | "loading" | "error";
-  onLoad: () => void;
-  sectionRef: (element: HTMLElement) => void;
-}) {
-  return (
-    <section
-      ref={(element) => props.sectionRef(element)}
-      aria-label={t(`linkReader.${props.kind}`)}
-      class={{ "lr-files": props.kind === "files", "lr-comments": props.kind === "comments" }}
-      id={props.kind === "files" ? "files" : undefined}
-      data-reader-section={props.kind}
-      tabindex={-1}
-    >
-      <h2>
-        {t(`linkReader.${props.kind}`)}
-        <span class="lr-count">
-          {props.count}
-          {props.total !== undefined && props.total !== props.count ? " / " + props.total : ""}
-        </span>
-      </h2>
-      <Show when={props.refreshState}>
-        <p class="lr-meta" role="status">
-          {t(
-            props.refreshState === "error"
-              ? "linkReader.sectionRefreshFailed"
-              : "linkReader.sectionRefreshing",
-            {
-              section: t(props.kind === "comments" ? "linkReader.discussion" : "linkReader.files"),
-            },
-          )}
-          {props.refreshState === "error" && (
-            <button type="button" class="lr-retry" onClick={() => props.onLoad()}>
-              {t("linkReader.retry")}
-            </button>
-          )}
-        </p>
-      </Show>
-      {props.children}
-      <TruncationNote truncated={props.truncated} label={`linkReader.${props.kind}Truncated`} />
-      <Show when={props.count === 0 && !props.truncated}>
-        <p class="lr-meta">
-          {t(props.kind === "files" ? "linkReader.noFiles" : "linkReader.noComments")}
-        </p>
-      </Show>
-    </section>
-  );
-}
-
-function DeferredSection(props: {
-  section: ReaderSection;
-  state: "idle" | "loading" | "error";
   onLoad: () => void;
   sectionRef: (element: HTMLElement) => void;
 }) {
   let element: HTMLElement | undefined;
-  const label = () => t("linkReader." + props.section);
+  const section = () => (props.kind === "files" ? "files" : "discussion");
+  const sectionLabel = () => t("linkReader." + section());
+  const loaded = () => props.count !== undefined;
+  // File diffs are the heaviest section: they load when the reader reaches them.
   createIntersectionObserver(
-    () => (props.section === "files" && props.state === "idle" && element ? [element] : []),
+    () =>
+      props.kind === "files" && !loaded() && props.state === "idle" && element ? [element] : [],
     (entries) => {
       if (entries.some((entry) => entry.isIntersecting)) {
         props.onLoad();
@@ -412,28 +95,122 @@ function DeferredSection(props: {
         element = node;
         props.sectionRef(node);
       }}
-      class={["lr-section-loading", { "lr-section-loading--checks": props.section === "checks" }]}
-      data-reader-section={props.section === "discussion" ? "comments" : props.section}
+      aria-label={t(props.kind === "files" ? "linkReader.files" : "linkReader.discussion")}
+      class={{ "lr-files": props.kind === "files", "lr-comments": props.kind === "comments" }}
+      id={props.kind === "files" ? "files" : undefined}
+      data-reader-section={props.kind}
       tabindex={-1}
-      aria-label={label()}
+      aria-busy={!loaded() && props.state === "loading" ? "true" : "false"}
+    >
+      <h2>
+        {t(props.kind === "files" ? "linkReader.files" : "linkReader.discussion")}
+        <Show when={props.count ?? props.total}>
+          <span class="lr-count">
+            {props.count ?? props.total}
+            {loaded() && props.total !== undefined && props.total !== props.count
+              ? " / " + props.total
+              : ""}
+          </span>
+        </Show>
+      </h2>
+      <Show
+        when={loaded()}
+        fallback={
+          <Show
+            when={props.state !== "error"}
+            fallback={
+              <p class="lr-section-status">
+                <span role="status">
+                  {t("linkReader.sectionFailed", { section: sectionLabel() })}
+                </span>
+                <button class="lr-retry" type="button" onClick={() => props.onLoad()}>
+                  {t("linkReader.retry")}
+                </button>
+              </p>
+            }
+          >
+            {/* One placeholder row per expected row: arrival replaces them in place. */}
+            <div
+              class={[
+                "lr-section-skeleton",
+                {
+                  "lr-section-skeleton--waiting": props.state === "idle" && props.kind === "files",
+                },
+              ]}
+              role="status"
+            >
+              {/* Waiting file diffs are not loading yet; only a request in flight is announced. */}
+              <Show when={props.state === "loading" || props.kind === "comments"}>
+                <span class="sr-only">
+                  {t("linkReader.sectionLoading", { section: sectionLabel() })}
+                </span>
+              </Show>
+              <Repeat count={props.kind === "files" ? Math.min(props.total || 3, 30) : 2}>
+                {() => <span />}
+              </Repeat>
+            </div>
+          </Show>
+        }
+      >
+        <Show when={props.state}>
+          <p class="lr-section-status" role="status">
+            {t(
+              props.state === "error"
+                ? "linkReader.sectionRefreshFailed"
+                : "linkReader.sectionRefreshing",
+              { section: sectionLabel() },
+            )}
+            {props.state === "error" && (
+              <button type="button" class="lr-retry" onClick={() => props.onLoad()}>
+                {t("linkReader.retry")}
+              </button>
+            )}
+          </p>
+        </Show>
+        {props.children}
+        <TruncationNote truncated={props.truncated} label={`linkReader.${props.kind}Truncated`} />
+        <Show when={props.count === 0 && !props.truncated}>
+          <p class="lr-section-status">
+            {t(props.kind === "files" ? "linkReader.noFiles" : "linkReader.noComments")}
+          </p>
+        </Show>
+      </Show>
+    </section>
+  );
+}
+
+/** Checks placeholder with the loaded summary's geometry, so arrival does not move the page. */
+function DeferredChecks(props: {
+  state: SectionState;
+  onLoad: () => void;
+  sectionRef: (element: HTMLElement) => void;
+}) {
+  return (
+    <section
+      ref={(node) => props.sectionRef(node)}
+      class="lr-checks lr-checks--loading"
+      data-reader-section="checks"
+      tabindex={-1}
+      aria-label={t("linkReader.checks")}
       aria-busy={props.state === "loading" ? "true" : "false"}
     >
-      <span
-        class={["lr-loading-dot", { "lr-loading-dot--active": props.state === "loading" }]}
-        aria-hidden="true"
-      />
-      <span role="status">
-        {props.state === "error"
-          ? t("linkReader.sectionFailed", { section: label() })
-          : props.section === "files" && props.state === "idle"
-            ? t("linkReader.filesOnDemand")
-            : t("linkReader.sectionLoading", { section: label() })}
-      </span>
-      {(props.state === "error" || (props.section === "files" && props.state === "idle")) && (
-        <button class="lr-retry" type="button" onClick={() => props.onLoad()}>
-          {t(props.state === "error" ? "linkReader.retry" : "linkReader.loadFiles")}
-        </button>
-      )}
+      <div class="lr-checks-summary">
+        <span class="lr-checks-emblem" aria-hidden="true">
+          <svg class="lr-checks-meter" viewBox="0 0 32 32">
+            <circle class="lr-checks-track" cx="16" cy="16" r="13.5" />
+          </svg>
+        </span>
+        <span class="lr-checks-heading" role="status">
+          {props.state === "error"
+            ? t("linkReader.sectionFailed", { section: t("linkReader.checks") })
+            : t("linkReader.sectionLoading", { section: t("linkReader.checks") })}
+        </span>
+        {props.state === "error" && (
+          <button class="lr-retry" type="button" onClick={() => props.onLoad()}>
+            {t("linkReader.retry")}
+          </button>
+        )}
+      </div>
     </section>
   );
 }
@@ -444,91 +221,378 @@ export function LinkReaderContent(props: {
   loadImage?: LoadImage;
   sections?: ReaderReadyView["sections"];
   onLoadSection?: (section: ReaderSection) => void;
+  /** Fetches the item again; the header shows no refresh action without it. */
+  onRefresh?: () => void;
+  refreshing?: boolean;
+  refreshDisabled?: boolean;
+  /** Why the document may be out of date, such as a failed refresh. Replaces the date. */
+  notice?: string;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+  /** The element that scrolls this document; the navigation follows its position. */
+  scrollPort?: () => HTMLElement | undefined;
 }) {
-  const elements: Partial<Record<"overview" | ReaderSection, HTMLElement>> = {};
+  const elements: Partial<Record<SectionKey, HTMLElement>> = {};
+  let navigation!: HTMLElement;
+  // Presentation state: the full check list opens on request, never because a run failed.
+  const [checksExpanded, setChecksExpanded] = createSignal(false);
+  const [current, setCurrent] = createSignal<SectionKey>("overview");
+  onSettled(() => {
+    const port = props.scrollPort?.();
+    if (!port) {
+      return undefined;
+    }
+    const owner = {};
+    const measure = () => {
+      const line = navigation.getBoundingClientRect().bottom + 24;
+      let next: SectionKey = "overview";
+      for (const key of SECTION_ORDER) {
+        // A collapsed check summary is part of the overview, not a place of its own.
+        if (key === "checks" && !checksExpanded()) {
+          continue;
+        }
+        const element = elements[key];
+        if (element?.isConnected && element.getBoundingClientRect().top <= line) {
+          next = key;
+        }
+      }
+      // A short last section never reaches the top; the end of the document selects it.
+      if (port.scrollTop > 0 && port.scrollTop + port.clientHeight >= port.scrollHeight - 2) {
+        next = elements.discussion?.isConnected
+          ? "discussion"
+          : elements.files?.isConnected
+            ? "files"
+            : next;
+      }
+      return () => setCurrent(next);
+    };
+    const stop = listen(port, "scroll", () => scheduleLayout(owner, measure), { passive: true });
+    return () => {
+      stop();
+      cancelLayout(owner);
+    };
+  });
   const authorHref = () => linkReaderAuthorHref(props.detail.authorUrl, props.detail.url);
+  const coAuthors = () => props.detail.coAuthors ?? [];
   const coAuthorNames = () => {
-    const authors = props.detail.coAuthors ?? [];
-    const unnamed = Math.max(authors.length, props.detail.coAuthorCount ?? 0) - authors.length;
+    const unnamed =
+      Math.max(coAuthors().length, props.detail.coAuthorCount ?? 0) - coAuthors().length;
     return (
-      authors.map((author) => author.name).join(", ") + (unnamed ? " +" + unnamed : "")
+      coAuthors()
+        .map((author) => author.name)
+        .join(", ") + (unnamed ? " +" + unnamed : "")
     ).trim();
   };
+  // The mark on the Checks tab is named only when it says something: failed, running or passed.
+  const checksStatusLabel = () => {
+    const state = props.detail.checks?.state;
+    return state === "failure"
+      ? t("linkReader.checkFailure")
+      : state === "pending"
+        ? t("linkReader.checkPending")
+        : state === "success"
+          ? t("linkReader.checkSuccess")
+          : undefined;
+  };
+  // Signed totals such as "+64" sit apart from named facts such as the branch.
+  const totals = () => (props.detail.metadata ?? []).filter((item) => item.tone);
+  const facts = () => (props.detail.metadata ?? []).filter((item) => !item.tone);
+  function SectionLink(link: {
+    section: SectionKey;
+    label: string;
+    count?: number;
+    status?: string;
+    statusLabel?: string;
+    onActivate?: () => void;
+  }) {
+    return (
+      <button
+        type="button"
+        aria-current={current() === link.section ? "location" : undefined}
+        onClick={() => {
+          link.onActivate?.();
+          const destination = elements[link.section];
+          destination?.focus({ preventScroll: true });
+          destination?.scrollIntoView({ block: "start" });
+        }}
+      >
+        {link.label}
+        <Show when={link.status}>
+          {(status) => (
+            <span
+              class={["lr-nav-status", `lr-nav-status--${status()}`]}
+              role={link.statusLabel ? "img" : undefined}
+              aria-label={link.statusLabel}
+            />
+          )}
+        </Show>
+        <Show when={link.count !== undefined}>
+          <span class="lr-count">{link.count}</span>
+        </Show>
+      </button>
+    );
+  }
+  function CommentContent(childProps: { comment: ControlUiLinkReaderComment }) {
+    const location = () =>
+      [childProps.comment.context?.path, childProps.comment.context?.lineLabel]
+        .filter(Boolean)
+        .join(":");
+    const permalink = () => documentUrl(childProps.comment.url, props.detail.url)?.href;
+    const reply = () => {
+      const value = childProps.comment.context?.replyUrl;
+      return value ? documentUrl(value, props.detail.url)?.href : undefined;
+    };
+    return (
+      <article class="lr-comment" id={childProps.comment.id}>
+        <header>
+          <Avatar name={childProps.comment.author} />
+          <strong>{childProps.comment.author}</strong>
+          <Show when={childProps.comment.label}>
+            {(label) => <span class="lr-comment-kind">{label()}</span>}
+          </Show>
+          <ReaderLink
+            class="lr-comment-time"
+            href={permalink()}
+            title={t("linkReader.commentPermalink")}
+          >
+            <Show when={childProps.comment.createdAt} fallback={t("linkReader.commentPermalink")}>
+              {(value) => <DateLabel value={value()} />}
+            </Show>
+          </ReaderLink>
+        </header>
+        <div class="lr-comment-body">
+          <Show when={location() || childProps.comment.context?.label || reply()}>
+            <p class="lr-review-location">
+              <Show when={location()}>
+                {(value) => (
+                  <ReaderLink class="lr-review-file" href={permalink()}>
+                    {value()}
+                  </ReaderLink>
+                )}
+              </Show>
+              <Show when={childProps.comment.context?.label}>
+                {(label) => <span>{label()}</span>}
+              </Show>
+              <Show when={reply()}>
+                {(url) => (
+                  <ReaderLink href={url()}>
+                    {childProps.comment.context?.replyLabel ?? t("linkReader.replyContext")}
+                  </ReaderLink>
+                )}
+              </Show>
+            </p>
+          </Show>
+          <Show when={childProps.comment.context?.diff}>
+            {(diff) => (
+              <details class="lr-review-diff">
+                <summary>
+                  <span class="lr-file-chevron" aria-hidden="true">
+                    <Icon name="chevronRight" />
+                  </span>
+                  {t("linkReader.reviewContext")}
+                </summary>
+                <Diff
+                  patch={diff()}
+                  filename={childProps.comment.context?.path ?? ""}
+                  onScrollPortRef={props.onScrollPortRef}
+                />
+                <TruncationNote
+                  truncated={childProps.comment.context?.diffTruncated}
+                  label="linkReader.patchTruncated"
+                />
+              </details>
+            )}
+          </Show>
+          <LinkReaderMarkdown
+            body={childProps.comment.body}
+            base={props.detail.url}
+            loadImage={props.loadImage}
+          />
+          <TruncationNote
+            truncated={childProps.comment.bodyTruncated}
+            label="linkReader.bodyTruncated"
+          />
+        </div>
+      </article>
+    );
+  }
+
+  // A refresh in flight is announced, not shown: the button already spins.
+  const notice = () => (props.refreshing ? undefined : props.notice);
+  const noticeId = createUniqueId();
+  const subtitle = () => props.detail.subtitle ?? props.target.reader.label;
+  const reference = createMemo(() => / (?:#\d+|· [\da-f]{12})$/i.exec(subtitle()));
   return (
     <article class="lr-document">
       <header class="lr-document-header">
-        <div class="lr-eyebrow">{props.detail.subtitle ?? props.target.reader.label}</div>
-        <h1>{props.detail.title}</h1>
-        <div class="lr-meta lr-item-meta">
+        <div class="lr-identity">
           <Show when={props.detail.badge}>
             {(badge) => (
-              <span class={["lr-state", `lr-state--${badge().tone}`]}>{badge().label}</span>
+              <span class={["lr-state", `lr-state--${badge().tone}`]}>
+                <span class="lr-state-dot" aria-hidden="true" />
+                {badge().label}
+              </span>
             )}
-          </Show>{" "}
-          <Show when={props.detail.author}>
-            {(author) => (
-              <Show
-                when={authorHref()}
-                fallback={<span>{t("linkReader.byAuthor", { author: author() })}</span>}
+          </Show>
+          <span class="lr-eyebrow" title={subtitle()}>
+            <span>{subtitle().slice(0, reference()?.index)}</span>
+            <span>{reference()?.[0]}</span>
+          </span>
+          <span class="sr-only" role="status">
+            {props.refreshing ? t("linkReader.refreshingSaved") : notice()}
+          </span>
+          <Show
+            when={notice()}
+            keyed
+            fallback={<DateLabel value={props.detail.badge?.timestamp ?? props.detail.createdAt} />}
+          >
+            {(message) => (
+              <Popover
+                id={noticeId}
+                label={message}
+                triggerClass="lr-notice"
+                class="lr-notice-popover"
+                placement="bottom-end"
+                sameRoot
+                lazy="while-open"
               >
-                {(href) => (
-                  <a
-                    href={href()}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    data-link-reader-external=""
-                  >
-                    {t("linkReader.byAuthor", { author: author() })}
-                  </a>
-                )}
-              </Show>
+                {message}
+              </Popover>
             )}
-          </Show>{" "}
+          </Show>
+          <span class="lr-actions">
+            <Show when={props.onRefresh}>
+              {(refresh) => (
+                <IconButton
+                  size={28}
+                  class="lr-refresh"
+                  label={t("linkReader.refresh")}
+                  icon={props.refreshing ? "loaderCircle" : "refresh"}
+                  busy={props.refreshing}
+                  disabled={props.refreshDisabled || props.refreshing}
+                  onClick={() => refresh()()}
+                />
+              )}
+            </Show>
+            <LinkReaderExternalAction target={props.target} />
+          </span>
+        </div>
+        <h1>{props.detail.title}</h1>
+        <div class="lr-byline">
+          <Show when={props.detail.author}>
+            {(author) => {
+              const person = () => (
+                <>
+                  <Avatar name={author()} imageUrl={props.detail.imageUrl} />
+                  {author()}
+                </>
+              );
+              return (
+                <Show when={authorHref()} fallback={<span class="lr-author">{person()}</span>}>
+                  {(href) => (
+                    <a
+                      class="lr-author"
+                      href={href()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-link-reader-external=""
+                    >
+                      {person()}
+                    </a>
+                  )}
+                </Show>
+              );
+            }}
+          </Show>
           <Show when={coAuthorNames()}>
             {(names) => (
-              <span class="lr-coauthors">{t("linkReader.coAuthors", { authors: names() })}</span>
+              <span
+                class="lr-coauthors"
+                role="img"
+                aria-label={t("linkReader.coAuthors", { authors: names() })}
+                title={t("linkReader.coAuthors", { authors: names() })}
+              >
+                <For each={coAuthors().slice(0, 3)}>
+                  {(author) => <Avatar name={author.name} imageUrl={author.imageUrl} />}
+                </For>
+                <Show
+                  when={
+                    Math.max(coAuthors().length, props.detail.coAuthorCount ?? 0) -
+                    Math.min(coAuthors().length, 3)
+                  }
+                >
+                  {(hidden) => <span class="lr-coauthors-more">+{hidden()}</span>}
+                </Show>
+              </span>
             )}
-          </Show>{" "}
-          <DateLabel value={props.detail.badge?.timestamp ?? props.detail.createdAt} />
+          </Show>
+          <Show when={facts().length}>
+            <dl class="lr-facts">
+              <For each={facts()}>
+                {(item) => (
+                  <div class="lr-fact">
+                    <dt>{item.label}</dt>
+                    <dd>{item.value}</dd>
+                  </div>
+                )}
+              </For>
+            </dl>
+          </Show>
+          <Show when={totals().length}>
+            <dl class="lr-facts lr-facts--totals">
+              <For each={totals()}>
+                {(item) => (
+                  <div
+                    class={[
+                      "lr-fact",
+                      {
+                        "lr-fact--positive": item.tone === "positive",
+                        "lr-fact--negative": item.tone === "negative",
+                      },
+                    ]}
+                  >
+                    {/* A signed total such as "+64" reads on sight; its label stays for assistive tech. */}
+                    <dt class={{ "sr-only": /^[+−-]\d/.test(item.value) }}>{item.label}</dt>
+                    <dd>{item.value}</dd>
+                  </div>
+                )}
+              </For>
+            </dl>
+          </Show>
         </div>
-        <Show when={props.detail.metadata?.length}>
-          <dl class="lr-metadata">
-            <For each={props.detail.metadata}>
-              {(item) => (
-                <div class={["lr-metric", `lr-metric--${item.tone ?? "neutral"}`]}>
-                  <dt>{item.label}</dt>
-                  <dd>{item.value}</dd>
-                </div>
-              )}
-            </For>
-          </dl>
-        </Show>
       </header>
-      <nav class="lr-section-nav" aria-label={t("linkReader.navigation")}>
-        <SectionLink destination={() => elements.overview} label={t("linkReader.overview")} />
+      <nav
+        ref={(element) => (navigation = element)}
+        class="lr-section-nav"
+        aria-label={t("linkReader.navigation")}
+      >
+        <SectionLink section="overview" label={t("linkReader.overview")} />
         <Show when={props.detail.checks || props.sections?.checks}>
           <SectionLink
-            destination={() => elements.checks}
+            section="checks"
             label={t("linkReader.checks")}
-            count={props.detail.checks?.total}
-            onLoad={() => props.onLoadSection?.("checks")}
+            // A state mark, present from the first paint: a late count would move the tabs after it.
+            status={props.detail.checks?.state ?? "loading"}
+            statusLabel={checksStatusLabel()}
+            onActivate={() => {
+              props.onLoadSection?.("checks");
+              setChecksExpanded(true);
+            }}
           />
         </Show>
         <Show when={props.detail.files || props.sections?.files}>
           <SectionLink
-            destination={() => elements.files}
+            section="files"
             label={t("linkReader.filesShort")}
             count={props.detail.filesTotal ?? props.detail.files?.length}
-            onLoad={() => props.onLoadSection?.("files")}
+            onActivate={() => props.onLoadSection?.("files")}
           />
         </Show>
         <Show when={props.detail.comments || props.sections?.discussion}>
           <SectionLink
-            destination={() => elements.discussion}
+            section="discussion"
             label={t("linkReader.discussion")}
             count={props.detail.commentsTotal ?? props.detail.comments?.length}
-            onLoad={() => props.onLoadSection?.("discussion")}
+            onActivate={() => props.onLoadSection?.("discussion")}
           />
         </Show>
       </nav>
@@ -542,6 +606,8 @@ export function LinkReaderContent(props: {
                 checks={checks()}
                 base={props.detail.url}
                 provider={props.target.reader.label}
+                expanded={checksExpanded()}
+                onExpandedChange={setChecksExpanded}
                 refreshState={props.sections?.checks}
               />
             )}
@@ -549,9 +615,8 @@ export function LinkReaderContent(props: {
         }
       >
         {(state) => (
-          <DeferredSection
+          <DeferredChecks
             sectionRef={(element) => (elements.checks = element)}
-            section="checks"
             state={state()}
             onLoad={() => props.onLoadSection?.("checks")}
           />
@@ -585,7 +650,7 @@ export function LinkReaderContent(props: {
           when={props.detail.body}
           fallback={
             <div class="lr-markdown">
-              <p class="lr-meta">{t("linkReader.noDescription")}</p>
+              <p class="lr-section-status">{t("linkReader.noDescription")}</p>
             </div>
           }
         >
@@ -595,74 +660,45 @@ export function LinkReaderContent(props: {
         </Show>
         <TruncationNote truncated={props.detail.bodyTruncated} label="linkReader.bodyTruncated" />
       </section>
-      <Show when={props.sections?.files && !props.detail.files && props.sections.files}>
-        {(state) => (
-          <DeferredSection
-            sectionRef={(element) => (elements.files = element)}
-            section="files"
-            state={state()}
-            onLoad={() => props.onLoadSection?.("files")}
-          />
-        )}
+      <Show when={props.detail.files || props.sections?.files}>
+        <ListSection
+          sectionRef={(element) => (elements.files = element)}
+          kind="files"
+          count={props.detail.files?.length}
+          total={props.detail.filesTotal}
+          truncated={props.detail.filesTruncated}
+          state={props.sections?.files}
+          onLoad={() => props.onLoadSection?.("files")}
+        >
+          <Show when={props.detail.files?.length}>
+            <div class="lr-file-list">
+              <For each={props.detail.files} keyed={(file) => file.path}>
+                {(file) => (
+                  <FileContent
+                    file={file()}
+                    expanded={props.detail.filesExpanded === true}
+                    onScrollPortRef={props.onScrollPortRef}
+                  />
+                )}
+              </For>
+            </div>
+          </Show>
+        </ListSection>
       </Show>
-      <Show when={props.detail.files}>
-        {(files) => (
-          <ListSection
-            sectionRef={(element) => (elements.files = element)}
-            kind="files"
-            count={files().length}
-            total={props.detail.filesTotal}
-            truncated={props.detail.filesTruncated}
-            refreshState={props.sections?.files}
-            onLoad={() => props.onLoadSection?.("files")}
-          >
-            <For each={files()} keyed={(file) => file.path}>
-              {(file) => (
-                <FileContent
-                  file={file()}
-                  expanded={props.detail.filesExpanded === true}
-                  onScrollPortRef={props.onScrollPortRef}
-                />
-              )}
-            </For>
-          </ListSection>
-        )}
-      </Show>
-      <Show
-        when={props.sections?.discussion && !props.detail.comments && props.sections.discussion}
-      >
-        {(state) => (
-          <DeferredSection
-            sectionRef={(element) => (elements.discussion = element)}
-            section="discussion"
-            state={state()}
-            onLoad={() => props.onLoadSection?.("discussion")}
-          />
-        )}
-      </Show>
-      <Show when={props.detail.comments}>
-        {(comments) => (
-          <ListSection
-            sectionRef={(element) => (elements.discussion = element)}
-            kind="comments"
-            count={comments().length}
-            total={props.detail.commentsTotal}
-            truncated={props.detail.commentsTruncated}
-            refreshState={props.sections?.discussion}
-            onLoad={() => props.onLoadSection?.("discussion")}
-          >
-            <For each={comments()} keyed={(comment) => comment.id}>
-              {(comment) => (
-                <CommentContent
-                  comment={comment()}
-                  onScrollPortRef={props.onScrollPortRef}
-                  base={props.detail.url}
-                  loadImage={props.loadImage}
-                />
-              )}
-            </For>
-          </ListSection>
-        )}
+      <Show when={props.detail.comments || props.sections?.discussion}>
+        <ListSection
+          sectionRef={(element) => (elements.discussion = element)}
+          kind="comments"
+          count={props.detail.comments?.length}
+          total={props.detail.commentsTotal}
+          truncated={props.detail.commentsTruncated}
+          state={props.sections?.discussion}
+          onLoad={() => props.onLoadSection?.("discussion")}
+        >
+          <For each={props.detail.comments} keyed={(comment) => comment.id}>
+            {(comment) => <CommentContent comment={comment()} />}
+          </For>
+        </ListSection>
       </Show>
     </article>
   );

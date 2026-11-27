@@ -1,6 +1,7 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
 import path from "node:path";
 import { inspect } from "node:util";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   EvaluatedModuleNode as ViteEvaluatedModuleNode,
   EvaluatedModules as ViteEvaluatedModules,
@@ -25,7 +26,6 @@ import {
 } from "../src/process/gateway-work-admission.js";
 import { resetSessionControllerStorageForTest } from "../src/sessions/session-controller-storage-reset.test-support.js";
 import { readGlobalSingleton } from "../src/shared/global-singleton.js";
-import { hasOpenClawAgentDatabaseAsyncResources } from "../src/state/openclaw-agent-db-resources.js";
 import { cleanupSolid } from "../ui/src/test-helpers/solid-cleanup.ts";
 import { clearJsdomViewportFocus } from "./jsdom-compat.mjs";
 import {
@@ -73,6 +73,13 @@ type TestRunnerInternals = {
 
 const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
 const RETIRED_TEST_API_EXECUTIONS = Symbol.for("openclaw.retiredTestApiExecutions");
+const AI_TRANSPORT_HOST = Symbol.for("openclaw.ai.transportHost");
+const AI_BASE_TRANSPORT_HOST = Symbol.for("openclaw.ai.baseTransportHostInstalled");
+const aiTransportHostFile = path.resolve(import.meta.dirname, "../packages/ai/src/host.ts");
+const aiBaseTransportHostFile = path.resolve(
+  import.meta.dirname,
+  "../src/llm/ai-transport-host.ts",
+);
 const EMBEDDED_RUNS_TEST_API = Symbol.for("openclaw.embeddedRunsTestApi");
 const SESSION_CONTROLLER_TEST_API = Symbol.for("openclaw.sessionControllerTestApi");
 const DIAGNOSTIC_EVENTS_STATE = Symbol.for("openclaw.diagnosticEvents.state.v1");
@@ -140,6 +147,7 @@ function resetEvaluatedModules(
   // or changing Vitest's timing/coverage data; each evaluation gets a new record.
   const retiredExecutions = (modules[RETIRED_TEST_API_EXECUTIONS] ??= new WeakSet());
 
+  let retireTransportHost = false;
   modules.idToModuleMap.forEach((node, modulePath) => {
     if (skipPaths.some((pattern) => pattern.test(modulePath))) {
       return;
@@ -158,8 +166,13 @@ function resetEvaluatedModules(
     // using the unprefixed id for automocks. Module resets preserve those records.
     const key = repositoryTestApiPublications.get(node.file);
     const sqliteKeys = sqliteTestSingletonPublications.get(node.file) ?? [];
+    const transportHost = node.file === aiTransportHostFile;
+    const baseTransportHost = node.file === aiBaseTransportHostFile;
     const execution = retirableModuleExecution(node, modules, executions);
-    if ((key || (sqliteKeys.length > 0 && !retainedSqlite)) && execution) {
+    if (
+      (key || ((sqliteKeys.length > 0 || transportHost || baseTransportHost) && !retainedSqlite)) &&
+      execution
+    ) {
       retiredExecutions.add(execution);
       const publication =
         key === undefined ? undefined : Object.getOwnPropertyDescriptor(globalThis, key);
@@ -167,6 +180,7 @@ function resetEvaluatedModules(
         Reflect.deleteProperty(globalThis, key);
       }
       if (!retainedSqlite) {
+        retireTransportHost ||= transportHost || baseTransportHost;
         for (const sqliteKey of sqliteKeys) {
           retireSqliteTestSingleton(sqliteKey, testFiles);
         }
@@ -184,6 +198,18 @@ function resetEvaluatedModules(
     }
     node.importers.clear();
   });
+  // Native-only SDK calls can install policy without a transformed host execution.
+  if (!retainedSqlite && (retireTransportHost || readGlobalSingleton(AI_BASE_TRANSPORT_HOST))) {
+    const state = readGlobalSingleton(AI_TRANSPORT_HOST) as
+      | { active: unknown; inert: unknown; pendingRegistrations: unknown[] }
+      | undefined;
+    if (state) {
+      // Native providers retain this owner; retire policy and installation as one lifecycle.
+      state.active = state.inert;
+      state.pendingRegistrations.length = 0;
+    }
+    Reflect.deleteProperty(globalThis, AI_BASE_TRANSPORT_HOST);
+  }
 }
 
 function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): void {
@@ -457,12 +483,18 @@ async function drainMockerResolveMocks(mocker: ModuleMocker | undefined): Promis
 export default class OpenClawNonIsolatedRunner extends TestRunner {
   declare onTaskUpdate: VitestTestRunner["onTaskUpdate"];
 
-  override onCollectStart(file: RunnerTestFile) {
-    super.onCollectStart(file);
+  override importFile(...args: Parameters<TestRunner["importFile"]>) {
+    // Vitest does not await onCollectStart's queue notification. Track resources
+    // before setup or collection can evaluate their source modules.
     if (!this.config.isolate) {
       installCustomElementTracking();
       installDomResourceTracking();
     }
+    return super.importFile(...args);
+  }
+
+  override onCollectStart(file: RunnerTestFile) {
+    super.onCollectStart(file);
     restoreRealTimers();
     restoreNativeTimerGlobals();
     restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
@@ -521,9 +553,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     const executions = internals.workerState.moduleExecutionInfo;
     const failed = new Set<RunnerTestFile>();
     const recordFailure = (phase: string, error: unknown) => {
+      // Preserve nested failure messages independently of redacted stack locations.
+      const summary = formatErrorMessage(error);
       const detail = inspect(error, { depth: null, customInspect: false, colors: false });
       for (const file of files) {
-        const message = `${path.relative(this.config.root, file.filepath)}: ${phase} failed\n${detail}`;
+        const message = `${path.relative(this.config.root, file.filepath)}: ${phase} failed\n${summary}\n${detail}`;
         file.result ??= { state: "fail" };
         file.result.state = "fail";
         (file.result.errors ??= []).push({
@@ -560,6 +594,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     clean("Vitest file completion", () => super.onAfterRunFiles(files));
     clean("Solid roots", cleanupSolid);
     await drain("mock resolution", () => drainMockerResolveMocks(internals.moduleRunner?.mocker));
+    if (!this.config.isolate) {
+      // Lazy modules may still register elements after their rendering root is disposed.
+      // Finish that generation before dropping its tags and resetting the module graph.
+      await drain("dynamic imports", () => vi.dynamicImportSettled());
+    }
     // The last test's scheduled closes must finish before cleanup restores shared state.
     await settleSqliteTestAgentCloses();
     // Restore independent file state even when failed cancellation retains the runtime owners.
@@ -613,7 +652,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     }
     if (!hasRetainedSqliteTestCustody()) {
       const drained = await drain("agent database custody", async () => {
-        if (hasOpenClawAgentDatabaseAsyncResources()) {
+        // A cleanup probe must not initialize a database owner for resource-free files.
+        const resources = readGlobalSingleton(
+          Symbol.for("openclaw.agentDatabaseAsyncResources"),
+        ) as { active: ReadonlySet<unknown>; closing: ReadonlyMap<unknown, unknown> } | undefined;
+        if (resources && (resources.active.size > 0 || resources.closing.size > 0)) {
           const { closeOpenClawAgentDatabasesAsync } = await vi.importActual<
             typeof import("../src/state/openclaw-agent-db-lifecycle.js")
           >("../src/state/openclaw-agent-db-lifecycle.js");

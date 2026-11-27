@@ -7,6 +7,7 @@ import {
   buildQuerySuggestions,
   buildSessionsCsv,
   removeQueryToken,
+  setQueryTokensForKey,
 } from "./query.ts";
 import type { UsageSessionEntry } from "./types.ts";
 import { buildUsageFilterOptions } from "./view.test-support.ts";
@@ -20,59 +21,60 @@ it.each(['label:"Team  Planning"', '"label:Team  Planning"'])(
   },
 );
 
-it("limits suggestions before matching while preserving raw option spelling", () => {
-  const values = [
-    "OpenAI",
-    "OpenAI",
-    "openai",
-    " ",
-    "",
-    undefined,
-    "four",
-    "five",
-    "six",
-    "seventh",
-  ];
-  const sessions = values.map((value, index) => ({
-    key: `session-${index}`,
-    agentId: value,
-    channel: value,
-    modelProvider: value,
-    model: value,
-    usage: null,
-  }));
-  const options = buildUsageFilterOptions(sessions);
+it("matches the full catalog before capping suggestions and preserves raw spelling", () => {
+  const values = ["first", "second", "third", "fourth", "fifth", "sixth", "OpenAI", "openai"];
+  const options = { agent: values, channel: values, provider: values, model: values, tool: values };
   const suggest = (query: string) =>
     buildQuerySuggestions(query, extractQueryTerms(query), options);
-  expect(options.agent).toEqual(["OpenAI", "openai", " ", "four", "five", "six"]);
-  for (const key of ["agent", "channel", "provider", "model"]) {
+  for (const key of ["agent", "channel", "provider", "model", "tool"]) {
     for (const query of [`${key}:OPEN`, `"${key}:OPEN"`, `${key}:"OPEN"`]) {
       expect(suggest(query).map((entry) => entry.value)).toEqual([
         `${key}:OpenAI`,
         `${key}:openai`,
       ]);
     }
-    expect(suggest(`${key}:seventh`)).toEqual([]);
+    expect(suggest(`${key}:`).map((entry) => entry.value)).toEqual(
+      ["first", "second", "third", "fourth", "fifth", "sixth"].map((value) => `${key}:${value}`),
+    );
+    expect(suggest(`${key}:missing`)).toEqual([]);
   }
   expect(suggest("constructor:")).toEqual([]);
   expect(suggest("has:err")).toEqual([{ label: "has:errors", value: "has:errors" }]);
 });
 
+it("suggests values whose Greek sigma form differs from the query", () => {
+  const options = buildUsageFilterOptions([
+    { key: "session-greek", agentId: "ΕΛΕΓΧΟΣ", usage: null },
+  ]);
+  for (const query of ["agent:Σ", "agent:σ", "agent:ς"]) {
+    expect(
+      buildQuerySuggestions(query, extractQueryTerms(query), options).map((entry) => entry.value),
+    ).toEqual(["agent:ΕΛΕΓΧΟΣ"]);
+  }
+});
+
+it.each([
+  ["Local Model", 'model:"Local Model"'],
+  ['Atlas "Mini Pro"', 'model:"Atlas ""Mini Pro"""'],
+  ['A"B', 'model:"A""B"'],
+])("keeps the selected model %s as one query term", (model, token) => {
+  const query = setQueryTokensForKey("provider:local ", "model", [model]);
+  expect(query).toBe(`provider:local ${token} `);
+  expect(extractQueryTerms(query).map(({ key, value }) => ({ key, value }))).toEqual([
+    { key: "provider", value: "local" },
+    { key: "model", value: model },
+  ]);
+  // Reselecting keeps the existing quoted term instead of appending a duplicate.
+  expect(setQueryTokensForKey(query, "model", [model])).toBe(query);
+
+  const options = buildUsageFilterOptions([{ key: "session-1", model, usage: null }]);
+  expect(buildQuerySuggestions("model:", extractQueryTerms("model:"), options)).toEqual([
+    { label: `model:${model}`, value: token },
+  ]);
+});
+
 const csvForLabel = (label: string, usage: UsageSessionEntry["usage"] = null) =>
   buildSessionsCsv([{ key: "session-1", label, updatedAt: 0, usage }]);
-it("leaves unavailable numeric cells blank rather than exporting zero or a completed subtotal", () => {
-  const usage = {
-    ...createEmptyCostUsageTotals(),
-    input: 50,
-    totalTokens: 50,
-    totalCost: 0.01,
-    usageReport: { state: "unavailable" as const },
-  };
-  const daily = buildDailyCsv([{ date: "2026-10-11", ...usage }]);
-  expect(daily.split("\n")[1]).toBe("2026-10-11,,,,,,,,,,");
-  const sessions = buildSessionsCsv([{ key: "interrupted", usage }]);
-  expect(sessions.split("\n")[1]?.split(",").slice(-6)).toEqual(Array(6).fill(""));
-});
 
 it("keeps daily headers aligned with numeric cells", () => {
   const csv = buildDailyCsv([
@@ -89,6 +91,7 @@ it("keeps daily headers aligned with numeric cells", () => {
       cacheWriteCost: 4,
       totalCost: -2,
       missingCostEntries: 2,
+      cacheUnmeasuredInput: 0,
     },
   ]);
   expect(csv).toBe(

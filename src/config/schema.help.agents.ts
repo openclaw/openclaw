@@ -3,9 +3,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
   "ui.prefs.accent":
-    "Control UI accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured accent color or theme default.",
+    "Web app accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured accent color or theme default.",
   "ui.prefs.locale":
-    "Language for the Control UI, as a supported locale id such as en, de, or zh-CN. Leave unset to follow the browser or system language. Set it from Settings → Appearance → Language. It does not set the assistant's timezone (agents.defaults.userTimezone).",
+    "Language for the web app, as a supported locale id such as en, de, or zh-CN. Leave unset to follow the browser or system language. Set it from Settings → Appearance → Language. It does not set the assistant's timezone (agents.defaults.userTimezone).",
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
@@ -14,7 +14,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.enabled":
     "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
   "plugins.allow":
-    "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
+    "Optional allowlist of plugin IDs; a non-empty list restricts loading, except for the selected memory plugin (including the default memory-core selection), equal-ID context-engine plugins, and explicitly enabled bundled chat channels. Differently named context-engine owners must be independently enabled or allowlisted and included in any non-empty allowlist. Plugin-owned tools outside the allowlist remain unavailable. Use plugins.deny or plugins.entries.<id>.enabled: false to block a plugin regardless of slot selection.",
   "plugins.deny":
     "Optional denylist of plugin IDs that are blocked even if allowlists or paths include them. Use deny rules for emergency rollback and hard blocks on risky plugins.",
   "plugins.load":
@@ -24,19 +24,25 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.slots":
     "Selects which plugins own exclusive runtime slots such as memory so only one plugin provides that capability. Use explicit slot ownership to avoid overlapping providers with conflicting behavior.",
   "plugins.slots.memory":
-    'Select the active memory plugin by id, or "none" to disable memory plugins.',
+    'Select the active memory plugin by id (default: memory-core), or "none" to disable memory plugins. The selected plugin can load even when plugins.allow omits it; plugins.deny and explicit per-plugin disable still take precedence.',
   "plugins.slots.contextEngine":
     "Selects the registered context engine ID. Plugins with different plugin and engine IDs declare contextEngineIds in their manifest so OpenClaw can load the owner.",
   "plugins.entries":
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":
     "Per-plugin enablement override for a specific entry, applied on top of global plugin policy. With the default hybrid reload mode, changes hot-reload the plugin runtime for new agent turns without restarting the Gateway unless the plugin requires a restart for this path. Use this to stage plugin rollout gradually across environments.",
+  "plugins.entries.*.allowMetrics":
+    "Allow this plugin to publish its own metric families through an enabled diagnostics exporter. Off by default. Does not enable the plugin or the exporter.",
+  "plugins.entries.*.memoryBackend":
+    'Load this memory plugin as a passive backend that the selected memory slot owner can list and query through its provider runtime. Defaults to the slot owner manifest: true when the owner declares memoryBackends, otherwise false. Set false to keep this plugin out of an owner that requests backends. The backend registers only its memory provider runtime: no tools, hooks, services, prompt or recall contributions. Has no effect on the slot owner, when plugins.slots.memory is "none", or on plugins that are not memory plugins. Does not enable the plugin.',
   "plugins.entries.*.hooks":
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
-  "plugins.entries.*.hooks.allowPromptInjection":
-    "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build`.",
+  "plugins.entries.*.hooks.allowPromptModification":
+    "Allows this plugin to add or change the context and instructions sent to the model, which can influence its responses. Only allow this for plugins you trust. Allowed by default. Set false to block prompt-modifying hooks, tool prompt guidance, next-turn prompt contributions, and active-run steering.",
   "plugins.entries.*.hooks.allowConversationAccess":
     "Controls whether this plugin may read raw conversation content from typed hooks such as `before_agent_run`, `before_model_resolve`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
+  "plugins.entries.*.hooks.allowModelRequest":
+    "Allows this plugin's `before_model_request` hook to rewrite or withhold the final provider request body of embedded model calls and the prompt text handed to CLI-backed runtimes. Off by default for every plugin, bundled ones included; when off, the hook registration is ignored with a plugin warning. The hook also needs conversation access and prompt modification. Only enable it for plugins you trust.",
   "plugins.entries.*.hooks.timeoutMs":
     "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. When unset, each hook uses the plugin's declared timeout or the Gateway's per-hook policy; there is no single fixed default. Per-hook values in hooks.timeouts take precedence.",
   "plugins.entries.*.hooks.timeouts":
@@ -65,6 +71,10 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-plugin environment variable map injected for that plugin runtime context only. Use this to scope provider credentials to one plugin instead of sharing global process environment.",
   "plugins.entries.*.config":
     "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
+  "agents.entries.*.description":
+    "Optional agent purpose shown on the Control UI chat welcome screen.",
+  "agents.entries.*.recommendedPrompts":
+    "Optional plain-text prompts on the agent chat welcome when no recent chats are available. Up to three entries, each at most 128 Unicode code points after whitespace normalization. Clicking a prompt submits it; omitted or empty uses defaults.",
   "agents.entries.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
   "agents.entries.*.nativeRuntimeConsent":
@@ -97,7 +107,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.modelPolicy":
     "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
   "agents.entries.*.modelPolicy.allow":
-    'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*" or "provider/namespace/*"; empty permits any model.',
+    'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*", "provider/namespace/*" or "provider/family-*"; empty permits any model.',
   "agents.entries.*.models.*.agentRuntime":
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
   "agents.entries.*.models.*.agentRuntime.id":
@@ -135,7 +145,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
-    "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
+    "Max image side length in pixels when sanitizing chat and tool-result image payloads (default: 1200).",
   "agents.defaults.imageQuality":
     'Image-tool media compression preference: "auto" adapts to provider/model limits and image count, "efficient" saves tokens and bytes, "balanced" keeps the current middle ground, and "high" preserves more detail for screenshots and document images.',
   "agents.defaults.compaction":
@@ -150,6 +160,12 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     'Thinking level used only for embedded OpenClaw compaction summaries: "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra", or "inherit". Defaults to the provider compaction preference, otherwise "low"; native local Ollama prefers "off". Set "inherit" to reuse the session level. Explicit settings override provider defaults, and the selected level is clamped to the actual compaction model/runtime. Native Codex app-server compaction ignores this setting because its compact request has no per-operation thinking override, and OpenClaw logs a warning.',
   "agents.defaults.compaction.keepRecentTokens":
     "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
+  "agents.defaults.compaction.maxSummaryChars":
+    "Maximum characters in a persisted client-side compaction summary (default: 16000; range: 1000–200000). Larger summaries retain more generated context but increase replay cost on later requests. The active model token budget can require a smaller summary. Does not control provider-native compaction.",
+  "agents.entries.*.compaction":
+    "Per-agent client-side compaction overrides. Omitted settings inherit agents.defaults.compaction.",
+  "agents.entries.*.compaction.maxSummaryChars":
+    "Per-agent persisted client-side summary character ceiling (1000–200000), overriding agents.defaults.compaction.maxSummaryChars. The active model token budget may require a smaller summary.",
   "agents.defaults.compaction.identifierPolicy":
     'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), while "off" disables this prefix.',
   "agents.defaults.compaction.recentTurnsPreserve":
@@ -161,9 +177,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.qualityGuard.maxRetries":
     "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
   "agents.defaults.compaction.midTurnPrecheck":
-    "Optional embedded OpenClaw tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
+    "Optional estimated-pressure threshold between tool rounds using the compaction reserve. Provider-measured threshold maintenance and hard context-window admission run independently, reusing safe truncation or compaction recovery.",
   "agents.defaults.compaction.midTurnPrecheck.enabled":
-    "Enable structured mid-turn context pressure checks for embedded OpenClaw tool loops. Default: false. Keep disabled unless long tool-heavy sessions hit context overflow before normal turn-end compaction can run.",
+    "Enable the optional estimated-pressure threshold between tool rounds. Default: false. Measured threshold maintenance and the hard context-window check remain active when this is disabled.",
   "agents.defaults.compaction.postIndexSync":
     'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
   "agents.defaults.compaction.postCompactionSections":
@@ -183,7 +199,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
-    'Forces pre-compaction memory flush when the model-visible transcript window reaches this threshold (bytes or strings like "2mb"). After compaction, this includes the retained tail and subsequent turns rather than discarded history. Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
+    'Forces pre-compaction memory flush when the model-visible chat history reaches this threshold (bytes or strings like "2mb"). After compaction, this includes the retained tail and subsequent turns rather than discarded history. Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
   "agents.defaults.embeddedAgent":
     "Embedded OpenClaw runner hardening controls for how workspace-local agent settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":

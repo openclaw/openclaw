@@ -6,10 +6,18 @@ import type {
 import type { ImageContent } from "../../../packages/llm-core/src/types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
-export type AgentHarnessContextMedia = { text?: string; images: ImageContent[] };
+export type AgentHarnessContextMedia = {
+  text?: string;
+  images: ImageContent[];
+  /** User native-image sources, including intentionally suppressed or unavailable pixels. */
+  hasImageAttachments?: boolean;
+  /** User attachments are exclusively native images, even if restoration failed. */
+  imageOnly?: boolean;
+};
+/** maxChars=0 classifies the user source without hydrating attachment content. */
 export type AgentHarnessContextMediaRequest = { message: AgentMessage; maxChars: number };
 
-type AgentHarnessHostApprovalResult = Readonly<{
+export type AgentHarnessHostApprovalResult = Readonly<{
   decision: ApprovalDecision | null | undefined;
   terminalReason: ApprovalTerminalReason | null | undefined;
 }>;
@@ -39,7 +47,11 @@ type AgentHarnessToolSurfaceOptions = Omit<
 >;
 
 type AgentHarnessModelExecutionBinder = (
-  model: import("@openclaw/model-catalog-core/model-catalog-refs").ProviderModelRef | undefined,
+  model:
+    | (import("@openclaw/model-catalog-core/model-catalog-refs").ProviderModelRef & {
+        cyberAccessProgram?: import("../../../packages/gateway-protocol/src/schema/sessions-row.js").CyberAccessProgram;
+      })
+    | undefined,
 ) => Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined;
 
 type AgentHarnessToolSurfaceBindingOptions = Readonly<{
@@ -80,14 +92,14 @@ export type AgentHarnessHostCapabilities = Readonly<{
   }>;
   /** Native delegation retains the incumbent execution and requires its current authority. */
   assertNativeSubagentSpawnAllowed?: () => void;
-  /** Binds the actual native model; returns undefined only for runs without an operator source. */
+  /** Binds the actual native model and Access selection; returns undefined only for runs without an operator source. */
   bindModelExecution?: AgentHarnessModelExecutionBinder;
   /** Retains the original source for already-admitted work beyond foreground completion. */
   retainSourceAuthority?: () =>
     | Readonly<{
         assertCurrent: () => void;
         signal?: AbortSignal;
-        /** Live preflight fact; absence means unknown, not an unrestricted source. */
+        /** Model or Access dispatch enforcement; absence means unknown, not unrestricted. */
         modelPolicyRequired?: boolean;
         /** Opaque equality for compatible active input; never authority by itself. */
         sourceIdentity?: object;
@@ -118,6 +130,16 @@ export type AgentHarnessHostCapabilities = Readonly<{
     assertCurrent: () => void;
     signal?: AbortSignal;
   }) => Promise<string | undefined>;
+  /**
+   * Fits a current request over the runtime's hard per-turn text cap. The harness
+   * passes its own placement-aware preparer, so the full request becomes an
+   * attachment only where the runtime can read it; otherwise its middle is cut.
+   */
+  fitCurrentInput?: (request: {
+    prompt: string;
+    maxChars: number;
+    stageAttachment?: import("./current-input-budget.js").StageCurrentInputAttachment;
+  }) => Promise<string>;
   /** Rebuilds retained attachments under this host's captured media policy and run authority. */
   prepareContextMedia?: (
     request: AgentHarnessContextMediaRequest,
@@ -164,6 +186,10 @@ export type AgentHarnessHostCapabilities = Readonly<{
   }>;
   /** Closure-bound non-secret maps prepared before harness placement. */
   preparedEnvironment?: () => AgentHarnessPreparedEnvironment;
+  /** Prepare disposable scratch only after selecting an admitted local execution root. */
+  prepareLocalExecScratch?: (
+    workspace: Readonly<{ cwd: string }>,
+  ) => Promise<Readonly<Record<"TMPDIR" | "TMP" | "TEMP", string>>>;
   /** Current bounded presence hint; physical activity does not identify the message source. */
   activeComputerContext?: () => string;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
@@ -222,3 +248,7 @@ export type AgentHarnessHostCapabilities = Readonly<{
     signal?: AbortSignal;
   }) => Promise<AgentHarnessHostApprovalResult | undefined>;
 }>;
+
+export type HostToolSurfaceOptions = Parameters<
+  NonNullable<AgentHarnessHostCapabilities["createToolSurfaceAsync"]>
+>[0];

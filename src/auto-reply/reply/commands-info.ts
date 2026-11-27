@@ -1,8 +1,15 @@
+import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
+import { agentHarnessExposesOpenClawTools } from "../../agents/harness/tool-surface.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   resolveEffectiveToolInventory,
   acquireEffectiveToolInventoryRuntimeModelContext,
 } from "../../agents/tools-effective-inventory.js";
+import { resolveSessionToolPreviewSandboxPolicy } from "../../agents/tools-effective-sandbox-policy.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   prepareSkillCommandsForAgents,
   resolveSkillCommandInvocation,
@@ -48,7 +55,7 @@ async function resolveSkillCommands(params: HandleCommandsParams, requireFullLis
 }
 
 export const handleHelpCommand: CommandHandler = defineAuthorizedTextCommand(
-  { label: "/help", match: (body) => (body === "/help" ? true : null), silentUnauthorized: true },
+  { label: "/help", match: (body) => (body === "/help" ? true : null) },
   (params) => commandReply(buildHelpMessage(params.cfg)),
 );
 
@@ -56,7 +63,6 @@ export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCom
   {
     label: "/commands",
     match: (body) => (body === "/commands" ? true : null),
-    silentUnauthorized: true,
   },
   async (params) => {
     const skillCommands = await resolveSkillCommands(params);
@@ -83,7 +89,6 @@ export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextComma
   {
     label: "/skill",
     match: (body) => matchCommandPrefix(body, "/skill"),
-    silentUnauthorized: true,
   },
   async (params) => {
     const normalized = params.command.commandBodyNormalized;
@@ -130,6 +135,10 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   if (rejectUnauthorizedCommand(params, "/tools")) {
     return { shouldContinue: false };
   }
+  const model = params.model;
+  if (!model) {
+    return commandReply(NO_MODEL_CONFIGURED_MESSAGE);
+  }
 
   try {
     const effectiveAccountId = resolveChannelAccountId(params);
@@ -146,14 +155,49 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       agentDir: sessionBound ? undefined : params.agentDir,
       workspaceDir: params.workspaceDir,
       modelProvider: params.provider,
-      modelId: params.model,
+      modelId: model,
     });
     await using acquired =
       await acquireEffectiveToolInventoryRuntimeModelContext(inventoryModelContext());
     return await acquired.run(async (runtimeModelContext) => {
+      const gateway = getInProcessGatewayRequestContext(
+        readChannelContextGatewayContextResolver(params.rootCtx ?? params.ctx),
+      );
+      const agentRuntime = resolveEffectiveAgentRuntime({
+        cfg: params.cfg,
+        provider: params.provider,
+        modelId: model,
+        modelApi: runtimeModelContext.modelApi,
+        modelBaseUrl: runtimeModelContext.runtimeModel?.baseUrl,
+        agentScope: { kind: "prepared", agentId: params.agentId },
+        sessionKey: params.sessionKey,
+        sessionEntry: targetSessionEntry,
+      });
+      const githubPublicationAvailable =
+        sessionBound &&
+        gateway &&
+        !gateway.localEmbedded &&
+        agentHarnessExposesOpenClawTools(agentRuntime) &&
+        !(await readAcpSessionMetaForEntryAsync({
+          cfg: params.cfg,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          entry: targetSessionEntry,
+        }))
+          ? true
+          : undefined;
       const result = await resolveEffectiveToolInventory({
         ...inventoryModelContext(),
         sessionKey: params.sessionKey,
+        githubPublicationAvailable,
+        agentRuntime,
+        sandboxToolPolicy: await resolveSessionToolPreviewSandboxPolicy({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sessionEntry: targetSessionEntry,
+          context: gateway,
+        }),
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
         messageProvider: params.command.channel,
@@ -196,7 +240,6 @@ export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
         ? normalized
         : null;
     },
-    silentUnauthorized: true,
   },
   async (params, normalizedStatusCommand) => {
     if (normalizedStatusCommand === "/status plugins") {

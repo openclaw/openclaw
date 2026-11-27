@@ -103,3 +103,64 @@ runWithPowerShell.each(["valid", "missing-head", "broken-gitfile", "subdirectory
     expect(result.status, result.stdout + result.stderr).toBe(0);
   },
 );
+const runHandoffFixture = (scenario: string) => {
+  const result = runPowerShell([
+    "-File",
+    "test/scripts/install-ps1-handoff.ps1",
+    "-InstallerPath",
+    join(process.cwd(), SCRIPT_PATH),
+    "-FixtureRoot",
+    harness.createTempDir("openclaw-install-handoff-"),
+    "-Scenario",
+    scenario,
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+};
+runWithPowerShell("prints a manual setup command after batch process creation fails", () => {
+  runHandoffFixture("failure");
+});
+const runWithWindowsPowerShell = process.platform === "win32" ? runWithPowerShell : it.skip;
+runWithWindowsPowerShell(
+  "executes a batch shim in a literal special-character path and preserves its exit status",
+  () => {
+    runHandoffFixture("launch");
+  },
+);
+runWithWindowsPowerShell("accepts a Git checkout directly under a drive root", () => {
+  const define = (name: string) => `function ${name} {\n${body(name)}}`;
+  const result = runPowerShell([
+    "-Command",
+    `$ErrorActionPreference = 'Stop'
+${define("Resolve-PhysicalDirectoryPath")}
+${define("Resolve-GitCheckoutPath")}
+Resolve-GitCheckoutPath -RepoDir "$env:SystemDrive\\openclaw-drive-root-checkout"`,
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stdout.trim()).toMatch(/^[A-Za-z]:\\openclaw-drive-root-checkout$/);
+});
+runWithPowerShell("replaces an existing command wrapper when reinstalling", () => {
+  const define = (name: string) => `function ${name} {\n${body(name)}}`;
+  const wrapper = join(harness.createTempDir("openclaw-install-wrapper-"), "openclaw.cmd");
+  const result = runPowerShell([
+    "-Command",
+    `$ErrorActionPreference = 'Stop'
+${define("Publish-TextFileAtomically")}
+$path = '${wrapper.replaceAll("'", "''")}'
+Set-Content -LiteralPath $path -Value 'previous wrapper'
+Publish-TextFileAtomically -Path $path -Contents 'current wrapper'
+Get-Content -LiteralPath $path`,
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stdout.trim()).toBe("current wrapper");
+});
+runWithPowerShell("restores a conflicted pull before continuing a Git install", () => {
+  const result = runPowerShell([
+    "-File",
+    "test/scripts/install-git-pull.ps1",
+    "-InstallerPath",
+    join(process.cwd(), SCRIPT_PATH),
+    "-FixtureRoot",
+    join(harness.createTempDir("openclaw-install-pull-"), "fixture"),
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+});

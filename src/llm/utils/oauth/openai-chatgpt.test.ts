@@ -1,5 +1,6 @@
 // OpenAI ChatGPT OAuth tests cover login, token refresh, and auth persistence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 
 type LoginOpenAICodexOAuth =
   typeof import("../../../plugins/provider-openai-chatgpt-oauth.js").loginOpenAICodexOAuth;
@@ -69,10 +70,7 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
   });
 
   it("waits for the auth URL to render before requesting manual input", async () => {
-    let finishAuth!: () => void;
-    const authRendered = new Promise<void>((resolve) => {
-      finishAuth = resolve;
-    });
+    const { promise: authRendered, resolve: finishAuth } = createDeferred();
     const onAuth = vi.fn(async () => authRendered);
     const onPrompt = vi.fn(async () => "manual-code");
     mocks.loginOpenAICodexOAuth.mockImplementationOnce(async (params) => {

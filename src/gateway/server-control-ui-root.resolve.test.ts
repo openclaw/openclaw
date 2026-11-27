@@ -2,10 +2,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareLocalAgentAvatar } from "../agents/identity-avatar-file-runtime.js";
-import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
+import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
+import * as workerCpu from "../infra/worker-cpu.js";
 import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
@@ -31,7 +36,7 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 4,
 }));
 
-import type { ControlUiFileSnapshot } from "./control-ui-file.js";
+import type { ControlUiFileRead, ControlUiFileSnapshot } from "./control-ui-file.js";
 import {
   createGatewayControlUiRootLifecycle,
   readControlUiRootAsset,
@@ -94,18 +99,22 @@ describe("createGatewayControlUiRootLifecycle", () => {
   }
 
   test("does not admit a first file read after its root has stopped", async () => {
-    const { lifecycle, root } = preparedLifecycle("resolved");
+    const { lifecycle, root } = preparedLifecycle("bundled");
     const read = vi.spyOn(WorkerTaskPool.prototype, "run").mockResolvedValue(null);
+    const list = vi.spyOn(fs.promises, "readdir");
     await lifecycle.stop();
-    expect(() => readControlUiRootAsset(root, "index.html", true)).toThrow();
+    expect(() =>
+      readControlUiRootAsset(root, "assets/app-AbCd1234.js", true, ["gzip", "identity"]),
+    ).toThrow();
     expect(read).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
   });
 
   test("drops disabled bundled assets without disturbing another root's cache", async () => {
-    const rootPath = tempDirs.make("control-ui-cache-disable-");
+    const rootPath = await fs.promises.realpath(tempDirs.make("control-ui-cache-disable-"));
     fs.mkdirSync(path.join(rootPath, "assets"));
-    const writeAssets = (body: string) =>
-      fs.writeFileSync(path.join(rootPath, "assets/app.js"), body);
+    const fileRel = "assets/app-AbCd1234.js";
+    const writeAssets = (body: string) => fs.writeFileSync(path.join(rootPath, fileRel), body);
     controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue(rootPath);
     controlUiAssetsMocks.isPackageProvenControlUiRootSync.mockReturnValue(true);
     const { lifecycle } = createLifecycle();
@@ -116,20 +125,66 @@ describe("createGatewayControlUiRootLifecycle", () => {
       throw new Error("Expected bundled roots");
     }
     try {
+      const list = vi.spyOn(fs.promises, "readdir");
+      const encodings = ["gzip", "identity"] as const;
       writeAssets("original");
-      const original = await readControlUiRootAsset(root, "assets/app.js", true);
-      await readControlUiRootAsset(siblingRoot, "assets/app.js", true);
+      const original = await readControlUiRootAsset(root, fileRel, true, encodings);
+      await readControlUiRootAsset(siblingRoot, fileRel, true, encodings);
+      expect(list).toHaveBeenCalledTimes(2);
       writeAssets("changed");
       lifecycle.setEnabled(false);
-      await expectBody(readControlUiRootAsset(root, "assets/app.js", true), "changed");
+      await expectBody(readControlUiRootAsset(root, fileRel, true, encodings), "changed");
+      expect(list).toHaveBeenCalledTimes(2);
       writeAssets("reenabled");
+      fs.writeFileSync(path.join(rootPath, `${fileRel}.gz`), "new variant");
       await enable(lifecycle);
-      const refreshed = await readControlUiRootAsset(root, "assets/app.js", true);
-      await expectBody(Promise.resolve(refreshed), "reenabled");
-      expect(await readControlUiRootAsset(root, "assets/app.js", false)).toBe(refreshed);
-      expect(await readControlUiRootAsset(siblingRoot, "assets/app.js", true)).toEqual(original);
+      const refreshed = await readControlUiRootAsset(root, fileRel, true, encodings);
+      expect(refreshed?.gzip).toMatchObject({ body: Buffer.from("new variant") });
+      expect(list).toHaveBeenCalledTimes(3);
+      expect(await readControlUiRootAsset(root, fileRel, false, encodings)).toBe(refreshed);
+      expect(await readControlUiRootAsset(siblingRoot, fileRel, true, encodings)).toEqual(original);
     } finally {
       await Promise.all([lifecycle.stop(), sibling.stop()]);
+      await drainGlobalSingletonLifecycleState();
+    }
+  });
+
+  test("shares sidecar discovery across files and falls back when discovery fails", async () => {
+    const rootPath = await fs.promises.realpath(tempDirs.make("control-ui-sidecar-discovery-"));
+    fs.mkdirSync(path.join(rootPath, "assets"));
+    const files = ["first-AbCd1234.js", "second-AbCd1234.js", "third-AbCd1234.js"];
+    for (const file of files) {
+      fs.writeFileSync(path.join(rootPath, "assets", file), "source");
+    }
+    controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue(rootPath);
+    controlUiAssetsMocks.isPackageProvenControlUiRootSync.mockReturnValue(true);
+    const { lifecycle } = createLifecycle();
+    const root = lifecycle.state;
+    if (root.kind !== "bundled") {
+      throw new Error("Expected a bundled root");
+    }
+    const read = (file: string) =>
+      readControlUiRootAsset(root, `assets/${file}`, true, ["gzip", "identity"]);
+    const list = vi.spyOn(fs.promises, "readdir");
+    try {
+      fs.writeFileSync(path.join(rootPath, "assets", `${files[0]}.gz`), "mixed-case variant");
+      const [compressed, identity] = await Promise.all(files.slice(0, 2).map(read));
+      expect(compressed?.gzip).toMatchObject({ body: Buffer.from("mixed-case variant") });
+      expect(identity?.file.body).toEqual(Buffer.from("source"));
+      expect(list).toHaveBeenCalledExactlyOnceWith(path.join(rootPath, "assets"), {
+        withFileTypes: true,
+      });
+      lifecycle.setEnabled(false);
+      await enable(lifecycle);
+      fs.writeFileSync(path.join(rootPath, "assets", `${files[0]}.gz`), "discovered variant");
+      list.mockRejectedValueOnce(new Error("EACCES: synthetic directory listing failure"));
+      expect((await read(files[0]!))?.gzip).toMatchObject({
+        body: Buffer.from("discovered variant"),
+      });
+      await expectBody(read(files[2]!), "source");
+      expect(list).toHaveBeenCalledTimes(2);
+    } finally {
+      await lifecycle.stop();
       await drainGlobalSingletonLifecycleState();
     }
   });
@@ -155,51 +210,251 @@ describe("createGatewayControlUiRootLifecycle", () => {
     expect(await readControlUiRootAsset(root, "icon.png", true)).toBe(refreshed);
   });
 
-  test("joins outstanding reads across enablement changes during stop", async () => {
-    const { lifecycle, root } = preparedLifecycle("resolved");
-    const file = createDeferred<ControlUiFileSnapshot | null>();
-    vi.spyOn(WorkerTaskPool.prototype, "run").mockReturnValueOnce(file.promise);
-    const read = readControlUiRootAsset(root, "icon.png", true);
-    const rejected = expect(read).rejects.toThrow();
-    lifecycle.setEnabled(false);
-    await enable(lifecycle);
-    let stopped = false;
-    const stop = lifecycle.stop().then(() => {
-      stopped = true;
+  test("shares in-flight reads across toggles of the same root while a sibling reads independently", async () => {
+    const { lifecycle, root } = preparedLifecycle("bundled");
+    const sibling = preparedLifecycle("bundled").root;
+    const blocked = createDeferred<ControlUiFileSnapshot | null>();
+    let attempts = 0;
+    const file = "assets/toggle.js";
+    const snapshot = (body: string) => ({
+      path: path.join(root.path, file + ".br"),
+      size: body.length,
+      mtimeMs: 1,
+      body: Buffer.from(body),
     });
-    await Promise.resolve();
-    expect(stopped).toBe(false);
-    file.resolve(iconSnapshot());
-    await rejected;
-    await stop;
-    expect(stopped).toBe(true);
-  });
-
-  test("reads a cold asset while the shared compute budget is occupied", async () => {
-    const root = tempDirs.make("control-ui-compute-contention-");
-    fs.writeFileSync(path.join(root, "index.html"), "synthetic asset");
-    const capacity = getWorkerComputeCapacity();
-    const permits = Array.from({ length: capacity.getSnapshot().limit }, () => {
-      const permit = capacity.acquire(
-        () => {},
-        () => false,
-      );
-      if (!permit) {
-        throw new Error("Expected an unused compute budget");
+    vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (input) => {
+      const { filePath } = input as ControlUiFileRead;
+      if (filePath.endsWith(".br")) {
+        return ++attempts === 1 ? blocked.promise : snapshot("sibling");
       }
-      return permit;
+      return { path: filePath, size: 2, mtimeMs: 1 };
     });
-    const read = readControlUiRootAsset({ kind: "resolved", path: root }, "index.html", true);
+    const get = (target: typeof root) =>
+      readControlUiRootAsset(target, file, true, ["br", "gzip", "identity"]);
+    const initial = get(root);
     try {
-      await expectBody(read, "synthetic asset");
+      await vi.waitFor(() => expect(attempts).toBe(1));
+      lifecycle.setEnabled(false);
+      await enable(lifecycle);
+      expect(get(root)).toBe(initial);
+      const mixed = readControlUiRootAsset(root, file, true, ["br", "identity"]);
+      const independent = await get(sibling);
+      expect(independent?.br).toMatchObject({ body: Buffer.from("sibling") });
+      blocked.resolve(snapshot("original"));
+      const admitted = await initial;
+      expect((await mixed)?.br).toBe(admitted?.br);
+      expect(await get(root)).toBe(admitted);
+      expect(await get(sibling)).toBe(independent);
+      expect(attempts).toBe(2);
     } finally {
-      for (const permit of permits) {
-        capacity.release(permit);
-      }
-      await read;
-      await drainGlobalSingletonLifecycleState();
+      blocked.resolve(snapshot("original"));
+      await initial;
     }
   });
+
+  test.each(["resolved", "bundled"] as const)(
+    "admits a GET while a %s root's HEAD is pending",
+    async (kind) => {
+      const { root } = preparedLifecycle(kind);
+      const metadata = createDeferred<ControlUiFileSnapshot | null>();
+      const read = vi
+        .spyOn(WorkerTaskPool.prototype, "run")
+        .mockImplementation((input) =>
+          (input as ControlUiFileRead).readBody
+            ? Promise.resolve(iconSnapshot("body"))
+            : metadata.promise,
+        );
+      const head = readControlUiRootAsset(root, "icon.png", false);
+      const body = readControlUiRootAsset(root, "icon.png", true);
+      try {
+        await vi.waitFor(() =>
+          expect(read.mock.calls.map(([input]) => (input as ControlUiFileRead).readBody)).toEqual([
+            false,
+            true,
+          ]),
+        );
+        await expectBody(body, "body");
+      } finally {
+        metadata.resolve({ ...iconSnapshot("body"), body: undefined });
+        await Promise.all([head, body]);
+      }
+    },
+  );
+
+  test("admits gzip while the same bundled file's Brotli read is pending", async () => {
+    const { root } = preparedLifecycle("bundled");
+    const brotli = createDeferred<ControlUiFileSnapshot | null>();
+    const read = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (input) => {
+      const { filePath, readBody } = input as ControlUiFileRead;
+      if (filePath.endsWith(".br")) {
+        return brotli.promise;
+      }
+      return {
+        path: filePath,
+        size: 4,
+        mtimeMs: 1,
+        ...(readBody && { body: Buffer.from("gzip") }),
+      };
+    });
+    const file = "assets/parallel.js";
+    const saw = (suffix: string) =>
+      read.mock.calls.some(([input]) => (input as ControlUiFileRead).filePath.endsWith(suffix));
+    const first = readControlUiRootAsset(root, file, true, ["br", "identity"]);
+    try {
+      await vi.waitFor(() => expect(saw(".br")).toBe(true));
+      const second = readControlUiRootAsset(root, file, true, ["gzip", "identity"]);
+      await vi.waitFor(() => expect(saw(".gz")).toBe(true));
+      expect((await second)?.gzip).toMatchObject({ body: Buffer.from("gzip") });
+    } finally {
+      brotli.resolve({
+        path: path.join(root.path, file + ".br"),
+        size: 2,
+        mtimeMs: 1,
+        body: Buffer.from("br"),
+      });
+      await first;
+    }
+  });
+
+  test("retries a preferred sidecar after its admitted read fails", async () => {
+    const { root } = preparedLifecycle("bundled");
+    const failure = new Error("first sidecar read failed");
+    let attempts = 0;
+    vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (input) => {
+      const { filePath, readBody } = input as ControlUiFileRead;
+      if (filePath.endsWith(".br") && ++attempts === 1) {
+        throw failure;
+      }
+      return { path: filePath, size: 2, mtimeMs: 1, ...(readBody && { body: Buffer.from("br") }) };
+    });
+    const get = () => readControlUiRootAsset(root, "assets/retry.js", true, ["br", "identity"]);
+    expect((await get())?.br).toBe(failure);
+    expect((await get())?.br).toMatchObject({ body: Buffer.from("br") });
+    expect(attempts).toBe(2);
+  });
+
+  test.each(["file", "inventory"] as const)(
+    "joins outstanding %s reads across enablement changes during stop",
+    async (mode) => {
+      const { lifecycle, root } = preparedLifecycle(mode === "file" ? "resolved" : "bundled");
+      const file = createDeferred<ControlUiFileSnapshot | null>();
+      const inventory = createDeferred();
+      const listingStarted = createDeferred();
+      vi.spyOn(WorkerTaskPool.prototype, "run").mockReturnValueOnce(file.promise);
+      if (mode === "inventory") {
+        vi.spyOn(fs.promises, "readdir").mockImplementationOnce(async () => {
+          listingStarted.resolve();
+          await inventory.promise;
+          return [];
+        });
+      }
+      const read =
+        mode === "file"
+          ? readControlUiRootAsset(root, "icon.png", true)
+          : readControlUiRootAsset(root, "assets/app-AbCd1234.js", false, ["gzip", "identity"]);
+      const rejected = expect(read).rejects.toThrow();
+      if (mode === "inventory") {
+        file.resolve({ ...iconSnapshot(), path: "/repo/dist/control-ui/assets/app-AbCd1234.js" });
+        await listingStarted.promise;
+      }
+      lifecycle.setEnabled(false);
+      await enable(lifecycle);
+      let stopped = false;
+      const stop = lifecycle.stop().then(() => {
+        stopped = true;
+      });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      if (mode === "file") {
+        file.resolve(iconSnapshot());
+      } else {
+        inventory.resolve();
+      }
+      await rejected;
+      await stop;
+      expect(stopped).toBe(true);
+    },
+  );
+
+  test.for(["control-ui-file", "identity-file", "identity-avatar-file"])(
+    "reads cold, unchanged, and changed %s files while the shared compute budget is occupied",
+    async (script, { signal }) => {
+      await drainGlobalSingletonLifecycleState();
+      const created = vi.spyOn(workerCpu, "createCpuTrackedWorker");
+      const root = tempDirs.make("control-ui-compute-contention-");
+      const name = script === "identity-file" ? "IDENTITY.md" : "avatar.png";
+      const file = path.join(root, name);
+      const write = (body: string) =>
+        fs.writeFileSync(file, script === "identity-file" ? `- Name: ${body}\n` : body);
+      const read = async () => {
+        if (script === "identity-file") {
+          return (await loadAgentIdentityFromFile(file))?.name;
+        }
+        if (script === "identity-avatar-file") {
+          const result = await prepareLocalAgentAvatar({
+            workspaceDir: root,
+            source: name,
+            readBody: true,
+          });
+          return result.ok ? result.file.body?.toString() : undefined;
+        }
+        return (
+          await readControlUiRootAsset({ kind: "resolved", path: root }, name, true)
+        )?.file.body?.toString();
+      };
+      const capacity = getWorkerComputeCapacity();
+      const contention = createDeferred();
+      const permits = [];
+      const reads: Promise<unknown>[] = [];
+      const readBeforeContention = () => {
+        const pending = read();
+        reads.push(pending);
+        return withinTest(
+          awaitGateBeforeSettlement(
+            pending,
+            contention.promise,
+            "File reader waited for shared compute admission",
+          ),
+          signal,
+        );
+      };
+      try {
+        for (let index = 0; index < capacity.getSnapshot().limit; index++) {
+          const permit = capacity.acquire(
+            () => {},
+            () => {
+              contention.resolve();
+              return false;
+            },
+          );
+          if (!permit) {
+            throw new Error("Expected an unused compute budget");
+          }
+          permits.push(permit);
+        }
+        write("original");
+        expect(await readBeforeContention()).toBe("original");
+        expect(await readBeforeContention()).toBe("original");
+        write("changed file");
+        expect(await readBeforeContention()).toBe("changed file");
+        expect(capacity.getSnapshot().active).toBe(permits.length);
+        const index = created.mock.calls.findIndex(([url]) =>
+          new RegExp(`${script}\\.worker\\.[cm]?[jt]s$`).test(String(url)),
+        );
+        expect(index).toBeGreaterThanOrEqual(0);
+        expect(created.mock.calls[index]?.[1]?.resourceLimits).toMatchObject({
+          maxOldGenerationSizeMb: 512,
+          ...(script === "control-ui-file" ? { maxYoungGenerationSizeMb: 16 } : {}),
+        });
+      } finally {
+        for (const permit of permits) {
+          capacity.release(permit);
+        }
+        await drainGlobalSingletonLifecycleState();
+        await Promise.allSettled(reads);
+      }
+    },
+  );
 
   test.each(["control-ui-file", "identity-avatar-file"])(
     "reuses both %s workers across sparse reads, then releases them after inactivity",
@@ -208,9 +463,9 @@ describe("createGatewayControlUiRootLifecycle", () => {
       const files = ["first.png", "second.png"];
       const source = { kind: "resolved" as const, path: root };
       const starts = () =>
-        getTrackedWorkerLifecycleSnapshot().workerLifecycle.find((entry) =>
-          entry.script.includes(`${script}.worker`),
-        )?.started ?? 0;
+        workerCpu
+          .getTrackedWorkerLifecycleSnapshot()
+          .workerLifecycle.find((entry) => entry.script.includes(`${script}.worker`))?.started ?? 0;
       const read = async (file: string) => {
         if (script === "control-ui-file") {
           return (await readControlUiRootAsset(source, file, true))?.file.body;

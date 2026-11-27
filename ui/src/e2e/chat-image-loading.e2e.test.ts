@@ -12,7 +12,7 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it.each([true, false])(
-    "keeps saved images stable through metadata, decode, and remount (dimensions: %s)",
+    "sizes saved images through metadata, decode, and remount (dimensions: %s)",
     async (sized) => {
       await suite.withPage(
         { reducedMotion: "reduce", viewport: { width: 1440, height: 900 } },
@@ -113,7 +113,9 @@ suite.define(() => {
             await image.evaluate((element) => (element as HTMLImageElement).naturalHeight),
           ).toBe(240);
           await waitForChatScrollIdle(page);
-          expect(await geometry()).toEqual(before);
+          const decoded = await geometry();
+          expect(decoded.imageHeight).toBeCloseTo(sized ? 200 : 400 / 1.5, 1);
+          expect(decoded).toEqual(before);
           const gap = () =>
             image.evaluate((element) => {
               const row = element.closest<HTMLElement>(".chat-virtual-row")!;
@@ -136,11 +138,13 @@ suite.define(() => {
           await thread.hover();
           await page.mouse.wheel(0, -100_000);
           await image.waitFor({ state: "visible" });
-          await expect.poll(async () => (await geometry()).height).toBe(before.height);
+          await expect
+            .poll(async () => (await geometry()).height)
+            .toBeCloseTo(decoded.height - decoded.imageHeight + 200, 0);
           await image.evaluate((element) => (element as HTMLImageElement).decode());
           const returned = await geometry();
-          expect(returned.imageWidth).toBe(before.imageWidth);
-          expect(returned.imageHeight).toBe(before.imageHeight);
+          expect(returned.imageWidth).toBe(decoded.imageWidth);
+          expect(returned.imageHeight).toBeCloseTo(200, 1);
           expect(Math.abs(await gap())).toBeLessThanOrEqual(1);
         },
       );
@@ -223,7 +227,7 @@ suite.define(() => {
               expect(Math.abs(highlightX + motion.width)).toBeLessThanOrEqual(1);
             } else {
               expect(motion.name).toBe("shimmer");
-              expect(motion.duration).toBe(2.4);
+              expect(motion.duration).toBe(2);
               expect(motion.iterations).toBe("infinite");
             }
             ready.resolve();

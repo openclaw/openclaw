@@ -3,8 +3,13 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   AgentsListResult,
   ModelsListResult,
+  ModelChoice,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-operator-authority.types.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import {
@@ -12,6 +17,10 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
+import {
+  isOperatorAccessProgramAllowed,
+  resolveAgentHarnessOperatorPolicyError,
+} from "../agents/operator-access-program.js";
 import {
   prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
@@ -22,6 +31,7 @@ import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveOperatorRolePolicy } from "./operator-role-policy.js";
 import { SerializedJsonArray } from "./serialized-json.js";
@@ -74,7 +84,7 @@ export function modelSelectionPoliciesMatch(
         cfg,
         agentId,
         catalog: [],
-        defaultProvider: model.provider,
+        defaultProvider: model?.provider ?? DEFAULT_PROVIDER,
         defaultModel: model,
         manifestPlugins,
       });
@@ -94,6 +104,7 @@ export function modelSelectionPoliciesMatch(
 type HistoricalModelFields = {
   model?: unknown;
   modelProvider?: unknown;
+  modelDisplayName?: unknown;
   activeModel?: unknown;
   activeModelProvider?: unknown;
   contextBudgetStatus?: unknown;
@@ -127,7 +138,7 @@ export function projectOperatorModelRead<
     policyConfig: scope.context.getCommittedRuntimeConfig?.() ?? cfg,
     client: scope.client,
   });
-  if (!presentation) {
+  if (!presentation || (!presentation.restrictsModels && !result.metadata)) {
     return result;
   }
   const policy =
@@ -139,12 +150,16 @@ export function projectOperatorModelRead<
     ...(result.defaults && policy ? { defaults: policy.defaults(result.defaults) } : {}),
     ...(result.metadata && policy ? { metadata: policy.metadata(result.metadata) } : {}),
     ...(result.sessionInfo ? { sessionInfo: presentation.session(result.sessionInfo) } : {}),
-    ...(result.messages
+    // Access-only metadata filtering must not decode and re-encode unchanged history.
+    ...(result.messages && presentation.restrictsModels
       ? {
-          messages: (result.messages instanceof SerializedJsonArray
-            ? result.messages.materialize()
-            : result.messages
-          ).map(result.kind === "delta" ? presentation.deltaMessage : presentation.message),
+          messages:
+            result.messages instanceof SerializedJsonArray && result.kind !== "delta"
+              ? result.messages.mapIndexedRows(presentation.message)
+              : (result.messages instanceof SerializedJsonArray
+                  ? result.messages.materialize()
+                  : result.messages
+                ).map(result.kind === "delta" ? presentation.deltaMessage : presentation.message),
         }
       : {}),
     ...(Object.hasOwn(result, "message") ? { message: presentation.message(result.message) } : {}),
@@ -160,8 +175,8 @@ export function prepareOperatorModelPresentation(params: {
 }) {
   const { cfg, policyConfig, client } = params;
   // Catalog facts retain their runtime owner; permissions exclude tentative config activation.
-  const modelPolicy = resolveOperatorRolePolicy(client, policyConfig)?.modelPolicy;
-  if (!modelPolicy) {
+  const role = resolveOperatorRolePolicy(client, policyConfig);
+  if (!role) {
     return undefined;
   }
   const metadataSnapshot =
@@ -171,26 +186,111 @@ export function prepareOperatorModelPresentation(params: {
   const manifestPlugins = metadataSnapshot ?? [];
   const policy = prepareOperatorModelPolicy({
     cfg: policyConfig,
-    policy: modelPolicy,
+    policy: role.modelPolicy,
     manifestPlugins,
   });
-  return prepareOperatorModelPolicyPresentation({ cfg, policy, metadataSnapshot });
+  const clientScopes = client?.connect.scopes ?? [];
+  // Internal adapters may hold broader RPC scopes than the original requester.
+  const scopes = intersectOperatorScopes(
+    client?.internal?.operatorRunAuthority?.scopes ?? clientScopes,
+    intersectOperatorScopes(clientScopes, role.scopes),
+  );
+  return prepareOperatorModelPolicyPresentation({
+    cfg,
+    policy,
+    rolePolicy: role,
+    scopes,
+    metadataSnapshot,
+  });
 }
 
 /** Same projection for a host-admitted requester without synthesizing a Gateway client. */
 export function prepareOperatorModelPolicyPresentation(params: {
   cfg: OpenClawConfig;
   policy?: PreparedOperatorModelPolicy;
+  rolePolicy?: Pick<NonNullable<AdmittedRunOperatorAuthority["rolePolicy"]>, "accessPrograms">;
+  scopes?: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot | null;
 }) {
-  const { cfg, policy, metadataSnapshot } = params;
-  if (!policy) {
+  const { cfg, policy, rolePolicy, metadataSnapshot } = params;
+  const accessPolicy = { rolePolicy, scopes: params.scopes ?? [] };
+  if (!policy && !rolePolicy) {
     return undefined;
   }
   const manifestPlugins = metadataSnapshot ?? [];
-  const filterModels = <T extends { provider: string; id: string }>(models: T[]) =>
-    models.filter((model) => policy.allows({ provider: model.provider, model: model.id }));
+  const projectAccess = <T extends Pick<ModelChoice, "availableAccessPrograms">>(entry: T): T =>
+    entry.availableAccessPrograms
+      ? {
+          ...entry,
+          availableAccessPrograms: {
+            cyber: entry.availableAccessPrograms.cyber.filter((program) =>
+              isOperatorAccessProgramAllowed(accessPolicy, program),
+            ),
+          },
+        }
+      : entry;
+  const filterModels = <T extends ModelChoice>(models: T[]): T[] => {
+    const harnesses = new Map(
+      listRegisteredAgentHarnesses().map(({ harness }) => [harness.id, harness]),
+    );
+    const projectRuntime = <
+      R extends Pick<ModelChoice, "agentRuntime" | "availableAccessPrograms">,
+    >(
+      entry: R,
+    ): R => {
+      const projected = projectAccess(entry);
+      const harness = entry.agentRuntime && harnesses.get(entry.agentRuntime.id);
+      return resolveAgentHarnessOperatorPolicyError(harness || undefined, {
+        modelPolicy: policy,
+        ...accessPolicy,
+      })
+        ? { ...projected, available: false, unavailableReason: "unsupported-runtime" }
+        : projected;
+    };
+    const visible: T[] = [];
+    for (const model of models) {
+      if (policy && !policy.allows({ provider: model.provider, model: model.id })) {
+        continue;
+      }
+      const projected = projectRuntime(model);
+      const defaults = model.defaultModelRuntimes;
+      visible.push(
+        model.runtimeChoices || defaults
+          ? {
+              ...projected,
+              ...(model.runtimeChoices
+                ? { runtimeChoices: model.runtimeChoices.map(projectRuntime) }
+                : {}),
+              ...(defaults
+                ? {
+                    defaultModelRuntimes: {
+                      base: projectRuntime(defaults.base),
+                      alternatives: defaults.alternatives.map(projectRuntime),
+                    },
+                  }
+                : {}),
+            }
+          : projected,
+      );
+    }
+    return visible;
+  };
+  const projectUtilitySelection = (result: ModelsListResult) => {
+    const selection = result.utilityModel;
+    if (!selection?.modelRef) {
+      return selection;
+    }
+    const { model, profile } = splitTrailingAuthProfile(selection.modelRef);
+    const disclosedProfileId =
+      result.accountSelection?.kind === "automatic"
+        ? undefined
+        : result.accountSelection?.authProfileId;
+    return profile && profile !== disclosedProfileId
+      ? { ...selection, modelRef: model }
+      : selection;
+  };
   const hidden = (provider: unknown, model: unknown) =>
+    policy !== undefined &&
     (provider != null || model != null) &&
     (typeof provider !== "string" ||
       typeof model !== "string" ||
@@ -224,7 +324,7 @@ export function prepareOperatorModelPolicyPresentation(params: {
     }
     const projected = { ...row };
     // Nulls clear merge-event state; omit identifiers without replacing those clearing facts.
-    for (const field of ["modelProvider", "model"] as const) {
+    for (const field of ["modelProvider", "model", "modelDisplayName"] as const) {
       if (hideModel && projected[field] != null) {
         delete projected[field];
       }
@@ -263,6 +363,7 @@ export function prepareOperatorModelPolicyPresentation(params: {
   };
 
   return {
+    restrictsModels: policy !== undefined,
     session: projectSession,
     message: projectMessage,
     deltaMessage(this: void, value: unknown): unknown {
@@ -273,15 +374,38 @@ export function prepareOperatorModelPolicyPresentation(params: {
       const session = asOptionalRecord(envelope.session);
       // Delta copies were budgeted before the last readiness await. Recheck all three
       // concrete disclosure sites at publication; removing fields only shrinks that budget.
+      const projected = projectSession(envelope);
+      const projectedSession = session ? projectSession(session) : session;
+      const message = projectMessage(envelope.message);
+      if (projected === envelope && projectedSession === session && message === envelope.message) {
+        return value;
+      }
       return {
-        ...projectSession(envelope),
-        ...(session ? { session: projectSession(session) } : {}),
-        ...(Object.hasOwn(envelope, "message")
-          ? { message: projectMessage(envelope.message) }
-          : {}),
+        ...projected,
+        ...(session ? { session: projectedSession } : {}),
+        ...(Object.hasOwn(envelope, "message") ? { message } : {}),
       };
     },
     forAgent(agentId: string, catalog: ModelCatalogEntry[] = []) {
+      // Access-only roles must not introduce model restrictions or change defaults.
+      if (!policy) {
+        return {
+          catalog: (result: ModelsListResult): ModelsListResult => ({
+            ...result,
+            models: filterModels(result.models),
+            ...(result.utilityModel ? { utilityModel: projectUtilitySelection(result) } : {}),
+            ...(result.decisionModels
+              ? { decisionModels: filterModels(result.decisionModels) }
+              : {}),
+          }),
+          metadata: (result: ChatMetadataResult): ChatMetadataResult => ({
+            ...result,
+            ...(result.models ? { models: filterModels(result.models) } : {}),
+          }),
+          defaults: (defaults: GatewaySessionsDefaults) => defaults,
+          agent: (row: AgentsListResult["agents"][number]) => row,
+        };
+      }
       const normalization = {
         cfg,
         agentId,
@@ -290,7 +414,10 @@ export function prepareOperatorModelPolicyPresentation(params: {
         allowPluginNormalization: false,
       };
       const configuredDefault = resolveDefaultModelForAgent(normalization);
-      const selection = { ...normalization, defaultProvider: configuredDefault.provider };
+      const selection = {
+        ...normalization,
+        defaultProvider: configuredDefault?.provider ?? DEFAULT_PROVIDER,
+      };
       let aliasIndex: ReturnType<typeof buildModelAliasIndex> | undefined;
       const allowedReference = (raw: string) => {
         const ref = resolveModelRefFromString({
@@ -309,8 +436,8 @@ export function prepareOperatorModelPolicyPresentation(params: {
           (manualPolicy ??= createModelVisibilityPolicy({
             ...normalization,
             catalog,
-            defaultProvider: configuredDefault.provider,
-            defaultModel: configuredDefault,
+            defaultProvider: configuredDefault?.provider ?? DEFAULT_PROVIDER,
+            ...(configuredDefault ? { defaultModel: configuredDefault } : {}),
           })).allows(ref),
       });
       const modelSelectionPolicy = {
@@ -349,6 +476,11 @@ export function prepareOperatorModelPolicyPresentation(params: {
       };
       return {
         catalog(result: ModelsListResult): ModelsListResult {
+          const { utilityModel: selectedUtilityModel, ...catalogResult } = result;
+          const visibleUtilitySelection =
+            !selectedUtilityModel?.modelRef || allowedReference(selectedUtilityModel.modelRef)
+              ? projectUtilitySelection(result)
+              : undefined;
           const models = filterModels(result.models);
           const decisionModels = result.decisionModels && filterModels(result.decisionModels);
           const utilityModel = result.defaultModels?.automaticUtilityModel
@@ -384,8 +516,9 @@ export function prepareOperatorModelPolicyPresentation(params: {
               visibleProviders.has(provider) && (!profileId || profileId === disclosedProfileId),
           );
           return {
-            ...result,
+            ...catalogResult,
             models,
+            ...(visibleUtilitySelection ? { utilityModel: visibleUtilitySelection } : {}),
             modelSelectionPolicy,
             pendingProviders: (result.pendingProviders ?? []).filter((provider) =>
               visibleProviders.has(provider),
@@ -425,6 +558,8 @@ export function prepareOperatorModelPolicyPresentation(params: {
             thinkingLevels: _levels,
             thinkingOptions: _options,
             thinkingDefault: _thinking,
+            // Resolved from the hidden model's params; the policy model has its own default.
+            thinkingInheritedDefault: _inheritedThinking,
             ...identity
           } = row;
           const defaults = projectDefaults({

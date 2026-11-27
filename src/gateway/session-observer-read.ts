@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { captureSessionStoreEnvironment } from "../config/sessions/session-store-target-inventory.js";
+import { captureSessionStoreEnvironment } from "../config/sessions/session-store-target-routing.js";
 import type { SessionObserverDeps, SessionObserverRead } from "./session-observer-model.js";
 import { defaultPersistDigest } from "./session-observer-model.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";

@@ -25,11 +25,13 @@ import {
 import { markIosResourcePhase } from "../ios-resource-timeline.mjs";
 import {
   collectGatewayProcessDiagnostics,
+  parseIOSSimulatorTiming,
   summarizeGatewayLanes,
   summarizeGatewayLogs,
   summarizeIOSBuildTiming,
 } from "./ios-release-e2e-diagnostics.js";
 import { prepareIOSReleaseGateway } from "./ios-release-gateway.js";
+import { waitForIOSSimulatorHeadroom } from "./ios-simulator-headroom.js";
 import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs";
 
 const DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro";
@@ -43,6 +45,11 @@ const CHAT_MARKERS = [
 export async function createNativeDependencies(options: {
   mode: Mode;
   targetSha: string;
+  candidateRoot?: string;
+  harnessSha?: string;
+  clientRoot?: string;
+  clientSha?: string;
+  clientReleaseTag?: string;
   signal: AbortSignal;
   proof: Record<string, unknown>;
   buildDir?: string;
@@ -55,10 +62,21 @@ export async function createNativeDependencies(options: {
   assertCurrentSource: () => Promise<void>;
   cleanup: () => Promise<void>;
 }> {
+  const cwd = process.cwd();
+  const candidateRoot = path.resolve(options.candidateRoot ?? cwd);
+  const harnessSha = options.harnessSha ?? options.targetSha;
+  const clientRoot = options.clientRoot ? path.resolve(options.clientRoot) : cwd;
+  const clientSha = options.clientSha ?? options.targetSha;
+  if (options.clientRoot) {
+    options.proof.client = {
+      kind: "stable-release-source-rebuild",
+      clientSha,
+      releaseTag: options.clientReleaseTag,
+    };
+  }
   if (process.platform !== "darwin" || process.arch !== "arm64") {
     throw new Error("macos-arm64-required");
   }
-  const cwd = process.cwd();
   let retainRoot = false;
   const preserveResources = () => {
     if (!retainRoot) {
@@ -73,6 +91,7 @@ export async function createNativeDependencies(options: {
     status: "running" | "passed" | "failed";
     ms: number;
     checkpoint?: string;
+    preparationTimings?: NonNullable<ReturnType<typeof parseIOSSimulatorTiming>>[];
   }[] = [];
   options.proof.phases = phases;
   let currentTrial: number | undefined;
@@ -110,6 +129,7 @@ export async function createNativeDependencies(options: {
     bin: string,
     args: string[],
     config: {
+      cwd?: string;
       env?: NodeJS.ProcessEnv;
       timeoutMs?: number;
       cleanup?: boolean;
@@ -120,6 +140,12 @@ export async function createNativeDependencies(options: {
     phase(operation, async () => {
       let stdout = "";
       let stderr = "";
+      let timingTail = "";
+      const preparationPhase = operation === "simulator-slim" ? phases.at(-1) : undefined;
+      if (preparationPhase) {
+        preparationPhase.preparationTimings = [];
+      }
+      const preparationTimings = preparationPhase?.preparationTimings;
       const started = performance.now();
       let failureContext: Promise<string[]> | undefined;
       const observeChatFailure = () => {
@@ -144,7 +170,7 @@ export async function createNativeDependencies(options: {
         code = await runManagedCommand({
           bin,
           args,
-          cwd,
+          cwd: config.cwd ?? cwd,
           env: { ...process.env, ...config.env },
           stdio: ["ignore", "pipe", "pipe"],
           timeoutMs: config.timeoutMs ?? 120_000,
@@ -169,6 +195,16 @@ export async function createNativeDependencies(options: {
             });
             child.stderr?.on("data", (chunk: Buffer) => {
               stderr = (stderr + chunk.toString()).slice(-4096);
+              if (preparationTimings) {
+                const lines = (timingTail + chunk.toString()).split("\n");
+                timingTail = lines.pop()!.slice(-256);
+                for (const line of lines) {
+                  const timing = parseIOSSimulatorTiming(line);
+                  if (timing && preparationTimings.length < 4) {
+                    preparationTimings.push(timing);
+                  }
+                }
+              }
               observeChatFailure();
             });
           },
@@ -193,18 +229,46 @@ export async function createNativeDependencies(options: {
       return stdout.trim();
     });
   const assertCurrentSource = async () => {
-    const head = await command("source-head", "git", ["rev-parse", "HEAD"]);
-    if (head !== options.targetSha) {
-      throw new OperationError("source-head", "identity-mismatch");
+    if (options.clientRoot) {
+      if (
+        clientRoot === path.resolve(cwd) ||
+        (await command("source-head", "git", ["rev-parse", "--show-toplevel"], {
+          cwd: clientRoot,
+        })) !== clientRoot ||
+        (await command(
+          "source-head",
+          "git",
+          ["rev-parse", `${options.clientReleaseTag}^{commit}`],
+          { cwd: clientRoot },
+        )) !== clientSha
+      ) {
+        throw new OperationError("source-head", "identity-mismatch");
+      }
     }
-    if (
-      await command("source-status", "git", ["status", "--porcelain=v1", "--untracked-files=all"])
-    ) {
-      throw new OperationError("source-status", "dirty-source");
+    // The harness owns fixtures; the candidate owns the Gateway and the release owns native code.
+    const sources = [{ root: cwd, sha: harnessSha }];
+    if (options.clientRoot) {
+      sources.push({ root: clientRoot, sha: clientSha });
+    }
+    for (const source of sources) {
+      const head = await command("source-head", "git", ["rev-parse", "HEAD"], { cwd: source.root });
+      if (head !== source.sha) {
+        throw new OperationError("source-head", "identity-mismatch");
+      }
+      if (
+        await command(
+          "source-status",
+          "git",
+          ["status", "--porcelain=v1", "--untracked-files=all"],
+          { cwd: source.root },
+        )
+      ) {
+        throw new OperationError("source-status", "dirty-source");
+      }
     }
   };
   await assertCurrentSource();
-  options.proof.harnessSha = options.targetSha;
+  options.proof.harnessSha = harnessSha;
   const xcodeVersion = await command("xcode-version", "xcodebuild", ["-version"]);
   const xcode = /^Xcode ([0-9.]+)\r?\nBuild version ([A-Za-z0-9]+)$/u.exec(xcodeVersion);
   if (!xcode) {
@@ -253,8 +317,10 @@ export async function createNativeDependencies(options: {
     simslim: binary ? "0.11.0" : null,
   });
   const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-release-e2e-"));
+  let disposeGateway: (() => Promise<void>) | undefined;
   // Never export raw xcresults or fixture logs: they can contain pairing credentials.
   const cleanup = async () => {
+    await disposeGateway?.();
     if (retainRoot) {
       throw new OperationError("cleanup", "cleanup-unconfirmed");
     }
@@ -268,12 +334,14 @@ export async function createNativeDependencies(options: {
     if (!options.buildOnly) {
       const installStarted = performance.now();
       gateway = await phase("gateway-install", async () => {
-        if (!options.gatewaySelectionDir) {
+        if (!options.clientRoot && !options.gatewaySelectionDir) {
           throw new OperationError("gateway-install", "not-found");
         }
         try {
           return await prepareIOSReleaseGateway({
-            selectionDir: options.gatewaySelectionDir,
+            ...(options.clientRoot
+              ? { candidateDir: candidateRoot }
+              : { selectionDir: options.gatewaySelectionDir! }),
             installDir: path.join(root, "gateway"),
             targetSha: options.targetSha,
             signal: options.signal,
@@ -285,6 +353,7 @@ export async function createNativeDependencies(options: {
           throw operationError("gateway-install", error);
         }
       });
+      disposeGateway = gateway.dispose;
       options.proof.gateway = gateway.identity;
       options.proof.gatewayInstallMs = performance.now() - installStarted;
       const installedGateway = gateway;
@@ -342,6 +411,8 @@ export async function createNativeDependencies(options: {
       "-configuration",
       "Debug",
       "-showBuildTimingSummary",
+      `ARCHS=${process.arch}`,
+      "COMPILER_INDEX_STORE_ENABLE=NO",
       // Simulator Keychain access needs entitlements, but no signing certificate.
       "CODE_SIGNING_ALLOWED=YES",
       "CODE_SIGN_IDENTITY=-",
@@ -367,8 +438,8 @@ export async function createNativeDependencies(options: {
         prepareIOSReleaseNativeBuild({
           buildDir: options.buildDir ?? path.join(root, "native-build"),
           identity: {
-            sourceSha: options.targetSha,
-            checkoutPath: cwd,
+            sourceSha: clientSha,
+            checkoutPath: clientRoot,
             xcodeVersion,
             sdkVersion,
             nodeVersion: process.version,
@@ -380,7 +451,7 @@ export async function createNativeDependencies(options: {
           },
           assertCurrentSource,
           build: async (destination) => {
-            await command("native-generate", "pnpm", ["ios:gen"]);
+            await command("native-generate", "pnpm", ["ios:gen"], { cwd: clientRoot });
             await command(
               "native-build",
               "xcodebuild",
@@ -393,7 +464,7 @@ export async function createNativeDependencies(options: {
                 ...IOS_RELEASE_TESTS.map((test) => `-only-testing:${test}`),
                 "build-for-testing",
               ],
-              { timeoutMs: 1_800_000 },
+              { cwd: clientRoot, timeoutMs: 1_800_000 },
             );
           },
         }),
@@ -617,7 +688,11 @@ export async function createNativeDependencies(options: {
                 readinessAbort.abort();
               }
               const config = { gateway: { controlUi: { enabled: false } } };
-              applyMockOpenAiModelConfig(config, { mockPort: port, modelRef: MODEL_REF });
+              applyMockOpenAiModelConfig(config, {
+                mockPort: port,
+                modelRef: MODEL_REF,
+                utilityModelRef: "openai/ios-e2e-utility",
+              });
               try {
                 instance = await createOpenClawTestInstance({
                   name: `ios-release-e2e-${index}`,
@@ -832,6 +907,17 @@ export async function createNativeDependencies(options: {
                       },
                     );
                   }
+                  await phase("simulator-headroom", async () => {
+                    const readiness = await waitForIOSSimulatorHeadroom(fixtureSignal).catch(
+                      (error: unknown) => {
+                        throw operationError("simulator-headroom", error);
+                      },
+                    );
+                    fixtureEvidence.simulatorHeadroom = readiness;
+                    if (readiness.status !== "ready") {
+                      throw new OperationError("simulator-headroom", "timeout");
+                    }
+                  });
                 }
               } catch (error) {
                 if (!options.signal.aborted) {
@@ -886,6 +972,7 @@ export async function createNativeDependencies(options: {
                     "test-without-building",
                   ],
                   {
+                    cwd: clientRoot,
                     env:
                       test === IOS_RELEASE_TESTS[0]
                         ? testRunnerEnv(setupCode.trim())

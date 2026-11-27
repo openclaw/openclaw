@@ -3,7 +3,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
+  GATEWAY_EVENT_ID_PEOPLE_CHANGED,
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+  GATEWAY_EVENT_CATALOG_ROUTES_CHANGED,
   GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
 import {
@@ -16,6 +18,7 @@ import {
   TALK_SCOPE,
   WRITE_SCOPE,
 } from "./operator-scopes.js";
+import { isPublicationTransportScope } from "./publication-reader.js";
 import type { GatewayPluginEventScope } from "./server-broadcast-types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -24,16 +27,20 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 // must not passively receive chat-class broadcasts.
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   agent: [SESSION_READ_SCOPE],
+  [GATEWAY_EVENT_ID_PEOPLE_CHANGED]: [ADMIN_SCOPE],
   chat: [SESSION_READ_SCOPE],
   // This keyless, redacted invalidation tells session readers to refresh their own projection.
   "chat.metadata.changed": [SESSION_READ_SCOPE],
-  "board.changed": [READ_SCOPE],
-  "board.command": [READ_SCOPE],
+  "board.changed": [SESSION_READ_SCOPE],
+  "board.command": [SESSION_READ_SCOPE],
   "progressCard.changed": [SESSION_READ_SCOPE],
   "ui.command": [READ_SCOPE],
   "chat.send_timing": [READ_SCOPE],
   "chat.side_result": [SESSION_READ_SCOPE],
   cron: [READ_SCOPE],
+  "cron.inventory.changed": [READ_SCOPE],
+  "worktrees.branches.changed": [WRITE_SCOPE],
+  "projects.checkoutOptions.changed": [SESSION_READ_SCOPE],
   health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
@@ -45,11 +52,11 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "openclaw.approval.requested": [APPROVALS_SCOPE],
   "openclaw.approval.resolved": [APPROVALS_SCOPE],
   // The frame cadence itself exposes person activity; match system-presence access.
-  presence: [READ_SCOPE],
+  presence: [SESSION_READ_SCOPE],
   shutdown: [],
   "gateway.suspension": [],
   tick: [],
-  "talk.event": [READ_SCOPE],
+  "talk.event": [READ_SCOPE, SESSION_READ_SCOPE],
   "talk.mode": [TALK_SCOPE],
   "talk.voice.change": [TALK_SCOPE],
   task: [READ_SCOPE],
@@ -62,9 +69,12 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "agent.identity.changed": [READ_SCOPE],
   "users.prefs.changed": [SESSION_READ_SCOPE],
   "mentions.changed": [SESSION_READ_SCOPE],
+  "mentions.failed": [SESSION_READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "plugins.changed": [READ_SCOPE],
+  [GATEWAY_EVENT_CATALOG_ROUTES_CHANGED]: [SESSION_READ_SCOPE],
   "plugins.install.progress": [ADMIN_SCOPE],
+  "templates.add.progress": [ADMIN_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
   [GATEWAY_EVENT_DEVICE_PAIR_CHANGED]: [PAIRING_SCOPE],
@@ -114,6 +124,46 @@ export function isPlainEventPayload(payload: unknown): payload is Record<string,
   return (prototype === null || prototype === Object.prototype) && !("toJSON" in payload);
 }
 
+export function resolveBroadcastSessionScope(
+  payload: unknown,
+  explicit: readonly string[] | undefined,
+  explicitAgentId: string | undefined,
+): { sessionKeys: readonly string[]; agentId?: string } {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      sessionKeys: explicit ?? [],
+      ...(explicitAgentId ? { agentId: explicitAgentId } : {}),
+    };
+  }
+  // SAFETY: Internal event envelopes supply these optional fields; consumed values are checked below.
+  const record = payload as {
+    sessionKey?: unknown;
+    agentId?: unknown;
+    suggestion?: { sessionKey?: unknown; agentId?: unknown };
+    request?: { sessionKey?: unknown; agentId?: unknown };
+  };
+  const source = [record, record.suggestion, record.request].find(
+    (candidate) => typeof candidate?.sessionKey === "string" && candidate.sessionKey.trim(),
+  );
+  const sessionKey = typeof source?.sessionKey === "string" ? source.sessionKey.trim() : "";
+  const agentId =
+    explicitAgentId ??
+    (typeof source?.agentId === "string" ? source.agentId.trim() || undefined : undefined);
+  return {
+    sessionKeys: explicit?.length ? explicit : sessionKey ? [sessionKey] : [],
+    ...(agentId ? { agentId } : {}),
+  };
+}
+
+/** Realtime Talk stays operator-only; session readers receive only targeted dictation. */
+export function isTargetedTranscriptionEvent(payload: unknown, targeted: boolean): boolean {
+  return (
+    targeted &&
+    isPlainEventPayload(payload) &&
+    typeof Object.getOwnPropertyDescriptor(payload, "transcriptionSessionId")?.value === "string"
+  );
+}
+
 export function isSessionReadInvalidation(
   event: string,
   payload: unknown,
@@ -123,6 +173,32 @@ export function isSessionReadInvalidation(
     return false;
   }
   const fields = Object.entries(Object.getOwnPropertyDescriptors(payload));
+  if (event === "mentions.changed") {
+    // Inbox producers target only the recipient's connections; this signal carries no message data.
+    return (
+      targeted &&
+      Object.hasOwn(payload, "gatewayInstanceId") &&
+      Object.hasOwn(payload, "revision") &&
+      fields.every(
+        ([key, field]) =>
+          "value" in field &&
+          ((key === "gatewayInstanceId" && typeof field.value === "string") ||
+            (key === "revision" && Number.isSafeInteger(field.value) && field.value >= 0)),
+      )
+    );
+  }
+  if (event === "projects.checkoutOptions.changed") {
+    return (
+      targeted &&
+      Object.hasOwn(payload, "projectId") &&
+      fields.every(
+        ([key, field]) =>
+          "value" in field &&
+          ((key === "projectId" && typeof field.value === "string") ||
+            (key === "agentId" && (field.value === undefined || typeof field.value === "string"))),
+      )
+    );
+  }
   // Hidden/deleted rows send subscribed readers only a signal to repeat an authorized read.
   return (
     event === "sessions.changed" &&
@@ -137,18 +213,35 @@ export function isSessionReadInvalidation(
   );
 }
 
-export function modelMetadataInvalidationFragment(payload: unknown): string | undefined {
-  if (!isPlainEventPayload(payload)) {
+/** Undefined means an ordinary event; null withholds an invalid metadata envelope from scoped readers. */
+export function metadataInvalidationFragment(
+  event: string,
+  payload: unknown,
+): string | null | undefined {
+  if (event !== "chat.metadata.changed" && event !== GATEWAY_EVENT_CATALOG_ROUTES_CHANGED) {
     return undefined;
+  }
+  if (!isPlainEventPayload(payload)) {
+    return null;
   }
   const keys = Reflect.ownKeys(payload);
   if (keys.length === 0) {
     return ',"payload":{}';
   }
+  if (event === GATEWAY_EVENT_CATALOG_ROUTES_CHANGED) {
+    const field = Object.getOwnPropertyDescriptor(payload, "generation");
+    return keys.length === 1 &&
+      field?.enumerable &&
+      "value" in field &&
+      Number.isSafeInteger(field.value) &&
+      field.value >= 0
+      ? `,"payload":{"generation":${field.value}}`
+      : null;
+  }
   const fields: Record<string, boolean> = {};
   for (const key of keys) {
     if (key !== "modelSelectionChanged" && key !== "modelCatalogChanged" && key !== "authChanged") {
-      return undefined;
+      return null;
     }
     const field = Object.getOwnPropertyDescriptor(payload, key);
     if (
@@ -157,7 +250,7 @@ export function modelMetadataInvalidationFragment(payload: unknown): string | un
       typeof field.value !== "boolean" ||
       (key === "modelSelectionChanged" && !field.value)
     ) {
-      return undefined;
+      return null;
     }
     fields[key] = field.value;
   }
@@ -168,9 +261,19 @@ export function hasEventScope(
   client: GatewayWsClient,
   event: string,
   explicitPluginScope?: GatewayPluginEventScope,
-  ownRunQuestion = false,
-  hasSessionReadContext?: () => boolean,
+  context: {
+    ownRunQuestion?: boolean;
+    hasSessionReadContext?: () => boolean;
+    participationApprovalRecipient?: (client: GatewayWsClient) => boolean;
+  } = {},
 ): boolean {
+  const { ownRunQuestion, hasSessionReadContext, participationApprovalRecipient } = context;
+  if (
+    client.internal?.publicationTransport ||
+    client.connect.scopes?.some(isPublicationTransportScope)
+  ) {
+    return event === "tick";
+  }
   if (client.connectionKind === "worker") {
     return false;
   }
@@ -185,6 +288,20 @@ export function hasEventScope(
   if (!required) {
     return false;
   }
+  const participationApproval =
+    participationApprovalRecipient !== undefined &&
+    (event === "exec.approval.requested" ||
+      event === "exec.approval.resolved" ||
+      event === "session.approval");
+  if (participationApproval) {
+    try {
+      if (!participationApprovalRecipient(client)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
   return (
     required.length === 0 ||
     (role === "operator" &&
@@ -192,9 +309,40 @@ export function hasEventScope(
         (scope) =>
           operatorScopeSatisfied(scope, scopes) &&
           (scope !== SESSION_READ_SCOPE ||
+            // Presence carries no session content; its recipient projection filters rows.
+            event === "presence" ||
             operatorScopeSatisfied(READ_SCOPE, scopes) ||
             hasSessionReadContext?.() === true),
       ) ||
-        (ownRunQuestion && operatorScopeSatisfied("operator.sessions.write", scopes))))
+        (ownRunQuestion && operatorScopeSatisfied("operator.sessions.write", scopes)) ||
+        participationApproval))
+  );
+}
+
+/** Preserve transport liveness without exposing arbitrary tick payloads or state versions. */
+export function isPublicationTransportEventAllowed(
+  client: GatewayWsClient,
+  event: string,
+  payload: unknown,
+  stateVersion: unknown,
+): boolean {
+  if (
+    !client.internal?.publicationTransport &&
+    !client.connect.scopes?.some(isPublicationTransportScope)
+  ) {
+    return true;
+  }
+  const fields =
+    event === "tick" && isPlainEventPayload(payload)
+      ? Object.getOwnPropertyDescriptors(payload)
+      : undefined;
+  return Boolean(
+    fields &&
+    Reflect.ownKeys(fields).length === 1 &&
+    fields.ts &&
+    "value" in fields.ts &&
+    typeof fields.ts.value === "number" &&
+    Number.isFinite(fields.ts.value) &&
+    stateVersion === undefined,
   );
 }

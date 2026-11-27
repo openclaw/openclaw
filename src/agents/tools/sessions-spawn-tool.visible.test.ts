@@ -1,5 +1,5 @@
-import "./sessions-spawn-tool.mocks.test-support.js";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "./sessions-spawn-tool.mocks.test-support.js";
 import {
   bindChildSessionPublication,
   admitChildSessionPublication,
@@ -10,7 +10,7 @@ import {
   resolveConversationCapabilityProfile,
 } from "../conversation-capability-profile.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
-import { countActiveRunsForSessionFromRuns } from "../subagents/registry/subagent-registry-queries.js";
+import { countActiveSubagentRunsForSession as countActiveRunsForSessionFromRuns } from "../subagents/registry/subagent-registry-state.js";
 import {
   expectRegisteredSubagentRun,
   supportedSpawnModelChoice,
@@ -207,6 +207,38 @@ describe("sessions_spawn visible work receipts", () => {
     expect(result.details).toMatchObject({ status: "accepted", publicRead: true });
   });
 
+  it("names the child's runtime and API-key credential on the visible receipt", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "synthetic-anthropic-key");
+    hoisted.inProcessCreationMock.mockResolvedValue({
+      key: "agent:main:dashboard:billing-child",
+      sessionId: "billing-child",
+      runStarted: true,
+      runId: "billing-child-run",
+      entry: { sessionId: "billing-child", updatedAt: 1 },
+    });
+    try {
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          agents: { defaults: { model: "anthropic/claude-opus-4-6" }, entries: { main: {} } },
+        },
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+      const result = await withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: "agent:main:main" },
+        () => tool.execute("billing-spawn", { task: "inspect", visible: true }),
+      );
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        resolvedRuntime: "openclaw",
+        resolvedAuth: "api-key",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("keeps visible child quotas separate for agents sharing a bare requester key", async () => {
     hoisted.prepareModelChoiceMock.mockResolvedValue({
       kind: "automatic",
@@ -263,6 +295,13 @@ describe("sessions_spawn visible work receipts", () => {
       const registerRun = vi.fn();
       const tool = createSessionsSpawnTool({
         agentSessionKey: "agent:main:main",
+        agentChannel: "slack",
+        agentTo: "channel:C-stale",
+        agentThreadId: "stale-thread",
+        currentMessagingTarget: "channel:C-current",
+        currentThreadTs: "1793210000.000100",
+        currentMessageId: "1793210000.000100",
+        replyToMode: "off",
         config: {
           agents: {
             defaults: { model: "mock-provider/primary" },
@@ -303,32 +342,20 @@ describe("sessions_spawn visible work receipts", () => {
         label: "Track upstream fix",
         owner: { type: "agent", id: "main", label: "Roboclaw" },
       });
-      expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
-        "sessions.create",
-        expect.objectContaining({
-          agentId: "main",
-          label: "Track upstream fix",
-          parentSessionKey: "agent:main:main",
-          spawnDepth: 1,
-        }),
-        {
-          via: "spawn",
-          actor: { type: "agent", id: "main" },
-          requesterSessionKey: "agent:main:main",
-          requesterSenderIsOwner: false,
-          completionOwnerSessionKey: "agent:main:main",
-          spawnModelAutoSelection: { model: "mock-provider/primary", hasFallbackOrigin: false },
-          inheritedToolPolicy: {
-            version: 1,
-            allow: ["read", "sessions_spawn"],
-            deny: ["exec"],
-          },
+      expect(hoisted.inProcessCreationMock.mock.calls[0]?.[2]).toMatchObject({
+        requesterSessionKey: "agent:main:main",
+        requesterSenderIsOwner: false,
+        completionOwnerSessionKey: "agent:main:main",
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "sessions_spawn"],
+          deny: ["exec"],
         },
-        undefined,
-      );
+      });
       expectRegisteredSubagentRun(registerRun, {
         childSessionKey: "agent:main:dashboard:restricted-child",
         runId: "run-visible-restricted",
+        requesterOrigin: { channel: "slack", to: "channel:C-current" },
       });
     },
   );

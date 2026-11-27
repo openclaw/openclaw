@@ -1,4 +1,6 @@
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
+import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 const RUN_FIELDS = [
   "chatMessages",
@@ -27,16 +29,52 @@ type RunField = (typeof RUN_FIELDS)[number];
 type ChatRunFields<T> = Partial<Pick<T, Extract<RunField, keyof T>>>;
 type ChatRunPublication = "immediate" | "animation-frame";
 
+export type ChatToolMessageSource = {
+  readToolMessage(runId: string, toolCallId: string): Record<string, unknown> | undefined;
+  subscribeToolMessage(runId: string, toolCallId: string, notify: () => void): () => void;
+};
+
 const presentations = new WeakMap<object, ChatRunPresentation<object>>();
+
+function sameStartupPresentation(
+  left: ChatRunStartupState | null | undefined,
+  right: ChatRunStartupState | null | undefined,
+): boolean {
+  if (left?.state !== right?.state || left?.runId !== right?.runId) {
+    return false;
+  }
+  if (left?.state !== "status" || right?.state !== "status") {
+    return true;
+  }
+  if (left.phase !== right.phase) {
+    return false;
+  }
+  if (left.phase === "waiting_for_model" && right.phase === "waiting_for_model") {
+    return left.waitReason === right.waitReason;
+  }
+  if (
+    (left.phase === "retrying" || left.phase === "fallback") &&
+    (right.phase === "retrying" || right.phase === "fallback")
+  ) {
+    return left.retryAt === right.retryAt;
+  }
+  return true;
+}
 
 /** Synchronous run state with one publication boundary for each accepted event. */
 class ChatRunPresentation<T extends object> {
-  readonly values: ChatRunFields<T> = {};
+  readonly values: ChatRunFields<T> & {
+    chatRunStartup?: ChatRunStartupState | null;
+    chatToolMessages?: Record<string, unknown>[];
+  } = {};
   readonly fields = RUN_FIELDS;
   frame: number | null = null;
   private readonly listeners = createChangeListeners();
   private readonly nonTextListeners = createChangeListeners();
+  private readonly toolListeners = new Map<string, Set<() => void>>();
+  private readonly changedTools = new Set<string>();
   private nonTextChanged = false;
+  private publishedStartup: ChatRunStartupState | null | undefined;
   private depth = 0;
   private changed = false;
   private cadence: ChatRunPublication | false = false;
@@ -59,28 +97,83 @@ class ChatRunPresentation<T extends object> {
           if (Object.is(previous, value)) {
             return;
           }
-          Object.defineProperty(this.values, key, { value });
+          const previousStartup = this.values.chatRunStartup;
+          Reflect.set(this.values, key, value);
+          // Sequence receipts stay synchronous; an unchanged status needs no display frame.
+          if (
+            key === "chatRunStartup" &&
+            sameStartupPresentation(previousStartup, this.values.chatRunStartup)
+          ) {
+            return;
+          }
+          if (key === "chatToolMessages") {
+            // Direct replacement is structural (reset or history pruning).
+            for (const identity of this.toolListeners.keys()) {
+              this.changedTools.add(identity);
+            }
+          }
           // Arrival and removal change row membership; continuing text does not.
           this.nonTextChanged ||=
-            key !== "chatStream" || (typeof previous === "string") !== (typeof value === "string");
+            key !== "chatRunStartup" &&
+            (key !== "chatStream" ||
+              (typeof previous === "string") !== (typeof value === "string"));
           if (this.depth > 0) {
             this.changed = true;
           } else {
-            this.publish();
+            this.publish("immediate", false);
           }
         },
       });
     }
+    this.publishedStartup = this.values.chatRunStartup;
     Object.defineProperty(host, "chatStreamRenderFrame", {
       configurable: true,
       enumerable: true,
       get: () => this.frame,
-      set: (frame: number | null) => (this.frame = frame),
+      set: (frame: number | null) => {
+        this.frame = frame;
+      },
     });
   }
 
   readonly subscribe = this.listeners.subscribe;
   readonly subscribeNonText = this.nonTextListeners.subscribe;
+
+  readToolMessage(runId: string, toolCallId: string) {
+    return this.values.chatToolMessages?.find(
+      (message) => message.runId === runId && message.toolCallId === toolCallId,
+    );
+  }
+
+  subscribeToolMessage(runId: string, toolCallId: string, notify: () => void) {
+    const identity = buildToolStreamIdentity(runId, toolCallId);
+    let listeners = this.toolListeners.get(identity);
+    if (!listeners) {
+      listeners = new Set();
+      this.toolListeners.set(identity, listeners);
+    }
+    listeners.add(notify);
+    return () => {
+      listeners.delete(notify);
+      if (listeners.size === 0) {
+        this.toolListeners.delete(identity);
+      }
+    };
+  }
+
+  /** The stream owner distinguishes conversation changes from existing invocation contents. */
+  publishToolMessages(
+    messages: Record<string, unknown>[],
+    structureChanged: boolean,
+    changedTools: Iterable<string>,
+  ) {
+    for (const identity of changedTools) {
+      this.changedTools.add(identity);
+    }
+    Reflect.set(this.values, "chatToolMessages", messages);
+    this.nonTextChanged ||= structureChanged;
+    this.publish("immediate", false);
+  }
 
   batch<TResult>(operation: () => TResult, mode?: ChatRunPublication | false): TResult {
     if (this.depth === 0) {
@@ -96,15 +189,15 @@ class ChatRunPresentation<T extends object> {
       if (this.depth === 0 && this.changed) {
         this.changed = false;
         if (this.cadence) {
-          this.publish(this.cadence, true);
+          this.publish(this.cadence, false);
         }
       }
     }
   }
 
-  publish(mode: ChatRunPublication = "immediate", textOnly = false): void {
+  publish(mode: ChatRunPublication = "immediate", forceNonText = true): void {
     // Ordinary explicit publications also cover mutations inside retained objects.
-    this.nonTextChanged ||= !textOnly;
+    this.nonTextChanged ||= forceNonText;
     if (this.depth > 0) {
       this.changed = true;
       if (mode === "immediate") {
@@ -141,11 +234,22 @@ class ChatRunPresentation<T extends object> {
   }
 
   private readonly notify = () => {
-    const nonTextChanged = this.nonTextChanged;
+    // Preserve every sequence update, but compare the final displayed status of the frame.
+    const startup = this.values.chatRunStartup;
+    const nonTextChanged =
+      this.nonTextChanged || !sameStartupPresentation(this.publishedStartup, startup);
+    this.publishedStartup = startup;
     this.nonTextChanged = false;
+    const changedTools = [...this.changedTools];
+    this.changedTools.clear();
     this.listeners.publish();
     if (nonTextChanged) {
       this.nonTextListeners.publish();
+    }
+    for (const identity of changedTools) {
+      for (const notify of this.toolListeners.get(identity) ?? []) {
+        notify();
+      }
     }
   };
 }

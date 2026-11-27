@@ -1,4 +1,5 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
+import { prepareSystemPrompt } from "@openclaw/ai/internal/shared";
 import {
   createEmptyTransportUsage,
   replaceCompactionReplayOwnerContent,
@@ -27,6 +28,7 @@ import { createStreamSteering } from "./stream-steering.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
 import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
 import { resolveAgentAssistantTurnId } from "./tool-execution-context.js";
+import type { ToolRepeatVerdict } from "./tool-repeat-guard.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
   AgentContext,
@@ -36,7 +38,6 @@ import type {
   AgentToolCall,
   AgentToolResult,
   StreamFn,
-  ToolLoopIntervention,
   ToolResultContentSource,
 } from "./types.js";
 
@@ -45,6 +46,7 @@ export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 export type AsyncToolBatchScheduling = {
   waitForPrevious: () => Promise<void>;
   onParallelStarted: () => void;
+  onTerminalLoop: () => void;
   hasUnobservedAsyncToolResults: boolean;
 };
 
@@ -53,8 +55,8 @@ export type ExecutedToolCallBatch = {
   terminalToolCallIds: string[];
   steeringMessages: AgentMessage[];
   terminate: boolean;
-  terminateRun: boolean;
-  intervention?: ToolLoopIntervention;
+  /** The repeat guard capped this batch; the turn ends with `tool_repeat_limit`. */
+  repeatStop?: ToolRepeatVerdict;
   fatal?: { error: unknown };
 };
 
@@ -98,12 +100,12 @@ export function emitToolExecutionStart(
   });
 }
 
-export async function emitToolExecutionEnd(
+export function emitToolExecutionEnd(
   finalized: FinalizedToolCallOutcome,
   batch: { emit: AgentEventSink; assistantMessage: AssistantMessage },
-): Promise<void> {
+): ReturnType<AgentEventSink> {
   const assistantTurnId = resolveAgentAssistantTurnId(batch.assistantMessage);
-  await batch.emit({
+  return batch.emit({
     type: "tool_execution_end",
     toolCallId: finalized.toolCall.id,
     ...(assistantTurnId ? { assistantTurnId } : {}),
@@ -192,8 +194,13 @@ export async function streamAgentResponse(
   const llmMessages = await convertMessages(sourceMessages);
   let requestPrefix: string | undefined;
 
+  context.preparedSystemPrompt = prepareSystemPrompt(
+    context.systemPrompt,
+    context.preparedSystemPrompt,
+  );
   const llmContext: Context = {
     systemPrompt: context.systemPrompt,
+    preparedSystemPrompt: context.preparedSystemPrompt,
     messages: llmMessages,
     tools: context.tools,
   };
@@ -210,9 +217,16 @@ export async function streamAgentResponse(
     : executionAbort.signal;
   const modelAbort = new AbortController();
   const requestSignal = AbortSignal.any([executionSignal, modelAbort.signal]);
+  let toolRepeatStopped = false;
+  const onTerminalLoop = () => {
+    // Stop sampling before ordered publication waits for already-started effects.
+    toolRepeatStopped = true;
+    modelAbort.abort(new Error("Tool batch terminated"));
+  };
   const abortFailedResponse = (message?: AssistantMessage) => {
     if (
       message &&
+      !toolRepeatStopped &&
       (message.stopReason === "error" || message.stopReason === "aborted") &&
       message.errorCode !== REPETITIVE_OUTPUT_ERROR_CODE &&
       !isResponsesOutputLimitToolCallError(message)
@@ -282,14 +296,22 @@ export async function streamAgentResponse(
     });
     const execution = previousAdmission
       .then(async () => {
-        const batch = await executeAsyncTools(message, calls, executionSignal, emitToolEvent, {
+        // Later queued batches complete as unstarted calls without cancelling active work.
+        let batchSignal = executionSignal;
+        if (toolRepeatStopped) {
+          batchSignal = AbortSignal.abort(new Error("Tool repeat limit reached"));
+          // Sampling already stopped; keep their synthetic results behind earlier work.
+          await previousExecutions;
+        }
+        const batch = await executeAsyncTools(message, calls, batchSignal, emitToolEvent, {
           waitForPrevious: () => previousExecutions,
           onParallelStarted: releaseAdmission,
+          onTerminalLoop,
           hasUnobservedAsyncToolResults,
         });
         batches.push(batch);
-        if (batch.fatal || batch.terminateRun) {
-          executionAbort.abort(batch.fatal?.error ?? new Error("Tool batch terminated"));
+        if (batch.fatal) {
+          executionAbort.abort(batch.fatal.error);
         }
       })
       .catch((error: unknown) => {
@@ -431,7 +453,11 @@ export async function streamAgentResponse(
                 await emit({
                   type: "message_update",
                   assistantMessageEvent: fragmentEvent,
-                  message: { ...fragment },
+                  // Partial-free text already has a fresh envelope; providers still own snapshots.
+                  message:
+                    event.type === "text_delta" && !event.partial
+                      ? Object.freeze(fragment)
+                      : { ...fragment },
                 });
                 if (
                   completedToolCall &&

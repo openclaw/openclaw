@@ -1,7 +1,9 @@
+import type { CyberAccessProgram } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
 import type { SpawnRequesterConversationSource } from "../../spawn-requester-origin.js";
 import type { SpawnedToolContext } from "../../spawned-context.js";
+import type { SpawnResolvedAuth } from "./subagent-spawn-billing-route.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
@@ -16,6 +18,7 @@ export type SpawnSubagentParams = {
   taskName?: string;
   thinking?: string;
   fastMode?: FastMode;
+  cyberAccessProgram?: CyberAccessProgram;
   collect?: boolean;
   outputSchema?: Record<string, unknown>;
   groupId?: string;
@@ -91,7 +94,13 @@ export type SpawnSubagentResult = {
   resolvedModel?: string;
   /** Provider prefix parsed from resolvedModel when the ref includes one. */
   resolvedProvider?: string;
+  /** Runtime and credential the child resolves to; together they name its billing route. */
+  resolvedRuntime?: string;
+  resolvedAuth?: SpawnResolvedAuth;
+  resolvedAuthProfile?: string;
   modelApplied?: boolean;
+  /** Session Access applied to the child; omitted when the child uses its model default. */
+  cyberAccessProgram?: CyberAccessProgram;
   error?: string;
   attachments?: {
     count: number;
@@ -106,4 +115,31 @@ export type SpawnSubagentResult = {
 
 export function rejectSubagentSpawnRequest(status: "error" | "forbidden", error: string) {
   return { ok: false as const, result: { status, error } satisfies SpawnSubagentResult };
+}
+
+/** Report both the launch boundary and any still-owed accepted-run cleanup. */
+export function buildSubagentSpawnFailureResult(params: {
+  failure: { phase: "initialize" | "dispatch" | "register"; error: unknown; runId?: string };
+  childSessionKey: string;
+  childIdem: string;
+  acceptedRunCleanupError?: string;
+}): SpawnSubagentResult {
+  const { phase, error, runId } = params.failure;
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "error";
+  const spawnStatus =
+    error && typeof error === "object" && "spawnStatus" in error ? error.spawnStatus : undefined;
+  return {
+    status: spawnStatus === "forbidden" ? "forbidden" : "error",
+    error: [
+      phase === "register" && spawnStatus !== "forbidden"
+        ? `Failed to register subagent run: ${message}`
+        : message,
+      params.acceptedRunCleanupError,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    childSessionKey: params.childSessionKey,
+    ...(phase === "initialize" ? {} : { runId: runId ?? params.childIdem }),
+  };
 }

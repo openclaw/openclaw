@@ -15,7 +15,7 @@ import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db
 import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
 import { resolveOpenClientVoiceSessionId } from "../../../talk/client-voice-session-read.js";
 import * as voiceSessionReads from "../../../talk/client-voice-session-read.js";
-import { readOwnedVoiceSessionFacts } from "../../../talk/client-voice-session-store.js";
+import { readVoiceSessionRecord } from "../../../talk/client-voice-session-store.js";
 import { flushClientVoiceSessionWrites } from "../../../talk/client-voice-session.js";
 import { VoiceTranscriptOperationRegistry } from "../../../talk/voice-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
@@ -397,12 +397,13 @@ describe("native Talk through the public OpenAI plugin registration", () => {
               talkEventTypes(broadcast).filter((type) => type === "session.ready"),
             ).toHaveLength(1);
             expect(
-              readOwnedVoiceSessionFacts({
-                agentId: AGENT_ID,
-                sessionKey: SESSION_KEY,
-                voiceSessionId: requireString(result, "voiceSessionId"),
-              }),
-            ).toMatchObject({ origin: "client", status: "open", transcriptCapable: true });
+              readVoiceSessionRecord(AGENT_ID, requireString(result, "voiceSessionId")),
+            ).toMatchObject({
+              sessionKey: SESSION_KEY,
+              origin: "client",
+              status: "open",
+              transcriptCapable: true,
+            });
             expect(talkEventTypes(broadcast)).not.toContain("turn.ended");
             socket.serverEvent(
               nativeDelegation("real-runner-request", "Complete a small voice consultation."),
@@ -446,6 +447,16 @@ describe("native Talk through the public OpenAI plugin registration", () => {
               socket.serverEvent(transcript);
             }
             await settleNativeBackend(finishModel.resolve);
+            if (control !== "cancel") {
+              // The typed-turn owner finalizes the chat turn before the consult answer returns.
+              await vi.waitFor(
+                () =>
+                  expect(socket.sent.map((frame): unknown => JSON.parse(frame))).toContainEqual(
+                    nativeCompletion("real-runner-request"),
+                  ),
+                { timeout: 5_000 },
+              );
+            }
             const frames = socket.sent.map((frame): unknown => JSON.parse(frame));
             if (control === "cancel") {
               expect(frames).not.toContainEqual(
@@ -466,10 +477,9 @@ describe("native Talk through the public OpenAI plugin registration", () => {
               );
               expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
               socket.serverEvent(nativeDelegation("after-cancel", "Start a fresh small task."));
-              await socket.waitForSent(
-                (frame) =>
-                  frame.includes('"delegation_item_id":"after-cancel"') &&
-                  frame.includes("Real runner consultation completed."),
+              // Assert the terminal result below so a failed consultation cannot hang this fixture.
+              await socket.waitForSent((frame) =>
+                frame.includes('"delegation_item_id":"after-cancel"'),
               );
               expect(socket.sent.map((frame): unknown => JSON.parse(frame))).toContainEqual(
                 nativeCompletion("after-cancel"),
@@ -574,8 +584,10 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       expect(transcriptEvents()).toHaveLength(1);
       upstream.runEmbeddedAgent.mockImplementation(nativeConsult("Legacy provider consultation."));
       socket.serverEvent(nativeDelegation("legacy-status", "Status?"));
-      await vi.waitFor(() =>
-        expect(socket.sent.join("\n")).toContain("Legacy provider consultation."),
+      // The consult runs as a typed chat turn, whose preparation loads cold in this fixture.
+      await vi.waitFor(
+        () => expect(socket.sent.join("\n")).toContain("Legacy provider consultation."),
+        { timeout: 5_000 },
       );
       expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
     });

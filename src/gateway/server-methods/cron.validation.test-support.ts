@@ -4,7 +4,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, onTestFinished, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveCronListSnapshotRevision } from "../../cron/list-snapshot-revision.js";
+import {
+  resolveCronListSnapshotRevision,
+  resolveCronListSnapshotRows,
+} from "../../cron/list-snapshot-revision.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronService } from "../../cron/service.js";
 import type { CronJob } from "../../cron/types.js";
@@ -147,7 +150,10 @@ export function createCronTestContext(
         const nextOffset = offset + pageJobs.length;
         return {
           jobs: freezeJsonSnapshot(structuredClone(pageJobs)),
-          snapshotRevision: resolveCronListSnapshotRevision(filteredJobs),
+          snapshotRevision: resolveCronListSnapshotRevision(
+            filteredJobs,
+            resolveCronListSnapshotRows(filteredJobs),
+          ),
           total,
           offset,
           limit,

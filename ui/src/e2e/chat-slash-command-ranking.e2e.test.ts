@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type { CommandEntry } from "../../../packages/gateway-protocol/src/index.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { setupPages } from "./model-setup-fixtures.test-support.ts";
@@ -30,27 +31,17 @@ function makeCommand(
   };
 }
 
-async function installCommands(
-  page: Page,
-  commands: CommandEntry[],
-  sessionId: string,
-  metadata = false,
-) {
+async function installCommands(page: Page, commands: CommandEntry[], sessionId: string) {
   return installMockGateway(page, {
     methodResponses: {
       "chat.startup": {
-        agentsList: {
-          agents: [{ id: "main", name: "OpenClaw" }],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
+        agentsList: agentRoster({ main: "OpenClaw" }, "main", "agent"),
         messages: [],
         metadata: { commands, models: [] },
         sessionId,
         thinkingLevel: null,
       },
-      ...(metadata ? { "chat.metadata": { commands, models: [] } } : {}),
+      "chat.metadata": { commands, models: [] },
       "commands.list": { commands },
     },
   });
@@ -89,7 +80,7 @@ suite.define(() => {
 
         await page
           .locator(".chat-thread-inner")
-          .getByText("There are no messages to export yet.", { exact: true })
+          .getByText("No messages to export yet.", { exact: true })
           .waitFor({ state: "visible" });
         await expect.poll(() => composer.inputValue()).toBe("");
         expect(await attachment.isVisible()).toBe(true);
@@ -112,6 +103,7 @@ suite.define(() => {
           messages: rows,
           hasMore,
           nextOffset,
+          ...(hasMore ? { olderCursor: `older-export-${nextOffset}` } : {}),
           totalMessages: messages.length,
           sessionId: "export-pagination",
           deltaCursor: "stable-export-cursor",
@@ -177,7 +169,7 @@ suite.define(() => {
             },
           ]),
         );
-        const gateway = await installCommands(page, commands, "slash-viewport-session", true);
+        const gateway = await installCommands(page, commands, "slash-viewport-session");
         const composer = await openChat(page, gateway);
         await expect.poll(() => composer.isEnabled()).toBe(true);
         await composer.fill("/viewport-");
@@ -191,10 +183,11 @@ suite.define(() => {
           nodes.findIndex((node) => node.textContent?.trim().startsWith("/viewport-15")),
         );
         expect(targetIndex).toBeGreaterThan(10);
+        await polledAttribute(options.first(), "aria-selected").toBe("true");
         for (let index = 0; index < targetIndex; index += 1) {
           await composer.press("ArrowDown");
+          await polledAttribute(options.nth(index + 1), "aria-selected").toBe("true");
         }
-        await polledAttribute(options.nth(targetIndex), "aria-selected").toBe("true");
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         if (selection === "pointer") {
           await options.nth(targetIndex).click();
@@ -232,6 +225,7 @@ suite.define(() => {
         expect(activeIndex).toBeGreaterThanOrEqual(0);
         for (let index = activeIndex; index < choices.length - 1; index += 1) {
           await composer.press("ArrowDown");
+          await polledAttribute(options.nth(index + 1), "aria-selected").toBe("true");
         }
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         await composer.fill("/viewport-");
@@ -242,7 +236,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps visible search results and keyboard selection in relevance order", async () => {
+  it.each(["", "/help "])("ranks slash commands and selection (%s)", async (prefix) => {
     await withPage(async ({ page }) => {
       const commands = [
         makeCommand("pair", "Generate setup codes.", "tools"),
@@ -251,7 +245,7 @@ suite.define(() => {
       const gateway = await installCommands(page, commands, "slash-command-ranking-session");
       const composer = await openChat(page, gateway);
       await expect.poll(() => composer.isEnabled()).toBe(true);
-      await composer.fill("/pair");
+      await composer.fill(prefix + "/pair");
 
       const picker = page.locator(".slash-menu[role='listbox']");
       await picker.waitFor({ state: "visible" });
@@ -263,12 +257,24 @@ suite.define(() => {
         )
         .toEqual(["/pair", "/pair-device", "/openclaw"]);
 
+      await polledAttribute(options.first(), "aria-selected").toBe("true");
+      await composer.evaluate((textarea: HTMLTextAreaElement) => {
+        // Native selection events queue behind the keydown that opens the next option.
+        textarea.addEventListener(
+          "keydown",
+          () => {
+            textarea.setSelectionRange(0, 0);
+            textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+          },
+          { capture: true, once: true },
+        );
+      });
       await composer.press("ArrowDown");
       await polledAttribute(options.nth(1), "aria-selected").toBe("true");
       await polledText(options.nth(1).locator(".slash-menu-name")).toContain("/pair-device");
 
       await composer.press("Enter");
-      await expect.poll(() => composer.inputValue()).toBe("/pair-device ");
+      await expect.poll(() => composer.inputValue()).toBe(prefix || "/pair-device ");
       await expect.poll(() => picker.count()).toBe(0);
     });
   });

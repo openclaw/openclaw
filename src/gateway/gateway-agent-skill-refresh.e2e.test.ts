@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
 import { createFixtureRequest } from "../../test/helpers/gateway-built-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
@@ -25,6 +26,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
+import { formatGatewayPendingCloseSteps } from "./restart-trace.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -58,7 +60,25 @@ it(
       (gatewayClose ??= Promise.resolve().then(async () => {
         // A rejected acquisition may retain a server whose rollback did not finish.
         const started = gateway ?? (await gatewayStartup);
-        await started?.server.close({ reason: "skill refresh test cleanup" });
+        try {
+          await started?.server.close({ reason: "skill refresh test cleanup" });
+        } catch (error) {
+          console.error(
+            "Skill refresh Gateway cleanup failed",
+            JSON.stringify({
+              pending: formatGatewayPendingCloseSteps(),
+              discoveryWorkers: discoveryWorkers(),
+              errors: collectNestedErrorCandidates(error)
+                .slice(0, 8)
+                .map((nested) =>
+                  nested instanceof Error
+                    ? { name: nested.name, message: nested.message.slice(0, 500) }
+                    : { name: typeof nested },
+                ),
+            }),
+          );
+          throw error;
+        }
       }));
     return runQaGatewayTestFixture(
       context,

@@ -8,6 +8,10 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  MAX_PLUGIN_BLOB_BYTES_PER_ENTRY,
+  pluginBlobRegisterInDatabase,
+} from "../../plugin-state/plugin-blob-store.sqlite.js";
+import {
   capturePostgresBackup,
   preparePostgresRestore,
   readBackupEngine,
@@ -26,6 +30,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 describe.skipIf(!connection)("shared-state database port", () => {
   const client = new Client({ connectionString: connection });
   const namespaces = new Set<string>();
+  const rows = async (sql: string, values?: unknown[]) => (await client.query(sql, values)).rows;
   beforeAll(() => client.connect());
   afterAll(async () => {
     for (const namespace of namespaces) {
@@ -49,7 +54,9 @@ describe.skipIf(!connection)("shared-state database port", () => {
     }
     source.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
       INSERT INTO schema_meta VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, NULL, NULL, 1, 1);
-      INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION}', 1);
+      INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION - 1}', 1);
+      INSERT INTO skill_workshop_activity (agent_id, skill_name, changed_at_ms) VALUES
+        ('alpha', 'deploy', 1794000000123), ('beta', 'deploy', 1794000000456);
       INSERT INTO state_leases VALUES ('test', 'lease', 'synthetic', 2, 1, NULL, 1, 1);
       INSERT INTO secret_store_entries VALUES ('team', '', 'synthetic', 'retained', 'secret', 1, 1, NULL, NULL, NULL);
       INSERT INTO plugin_blob_entries VALUES ('test', 'test', 'ttl', '{}', X'00ff80', 1, 2);
@@ -65,6 +72,19 @@ describe.skipIf(!connection)("shared-state database port", () => {
     for (const key of ["newline\n", 'quote"', "slash\\"]) {
       source.prepare("INSERT INTO user_preferences VALUES ('profile', ?, '{}', 1)").run(key);
     }
+    // The blob owner's full allowance must survive inspection, port, backup and restore.
+    const blob = Buffer.alloc(MAX_PLUGIN_BLOB_BYTES_PER_ENTRY, 0xab);
+    pluginBlobRegisterInDatabase(source, {
+      pluginId: "test",
+      namespace: "test",
+      key: "durable",
+      bytes: blob,
+      metadataJson: JSON.stringify("m".repeat(65_534)),
+      maxEntries: 2,
+      maxBytesPerNamespace: MAX_PLUGIN_BLOB_BYTES_PER_ENTRY + 3,
+      overflowPolicy: "reject-new",
+    });
+    const blobMd5 = createHash("md5").update(blob).digest("hex");
     expect(descriptor.inspectSqliteSource!(source)).toEqual({
       version: OPENCLAW_STATE_SCHEMA_VERSION,
       migrationRequired: false,
@@ -80,30 +100,37 @@ describe.skipIf(!connection)("shared-state database port", () => {
       storeId,
       assertCurrent() {},
     });
-    expect(staged).toEqual({ tables: before.tables, allocations: before.allocations });
-    const plannerRows = async (schema: string) =>
-      (
-        await client.query(
-          `SELECT c.reltuples FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    const { catalog: _catalog, ...sourceVerification } = before;
+    expect(staged).toEqual(sourceVerification);
+    const plannerRows = (schema: string) =>
+      rows(
+        `SELECT c.reltuples FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
            WHERE n.nspname = $1 AND c.relname = 'user_profiles'`,
-          [schema],
-        )
-      ).rows;
+        [schema],
+      );
     expect(await plannerRows(namespace)).toEqual([{ reltuples: 1 }]);
-    expect((await client.query(`SELECT sequence FROM "${namespace}".audit_events`)).rows).toEqual([
+    expect(await rows(`SELECT sequence FROM "${namespace}".audit_events`)).toEqual([
       { sequence: "9007199254740993" },
     ]);
-    expect(Object.keys(staged.tables)).toHaveLength(133);
-    expect(
-      (await client.query(`SELECT display_name, avatar FROM "${namespace}".user_profiles`)).rows,
-    ).toEqual([{ display_name: "Café 🦞", avatar: Buffer.from([0, 255, 128]) }]);
-    expect(
-      (await client.query(`SELECT value FROM "${namespace}".secret_store_entries`)).rows,
-    ).toEqual([{ value: "retained" }]);
-    expect(
-      (await client.query(`SELECT count(*) AS count FROM "${namespace}".state_leases`)).rows[0]
-        .count,
-    ).toBe("1");
+    expect(Object.keys(staged.tables)).toHaveLength(138);
+    // PostgreSQL returns bigint as text; compare the same lossless representation on both engines.
+    const activityQuery = (schema?: string) =>
+      `SELECT agent_id, skill_name, CAST(changed_at_ms AS TEXT) AS changed_at_ms
+         FROM ${schema ? `"${schema}".` : ""}skill_workshop_activity ORDER BY agent_id`;
+    const expectedActivity = [
+      { agent_id: "alpha", skill_name: "deploy", changed_at_ms: "1794000000123" },
+      { agent_id: "beta", skill_name: "deploy", changed_at_ms: "1794000000456" },
+    ];
+    expect(await rows(activityQuery(namespace))).toEqual(expectedActivity);
+    expect(await rows(`SELECT display_name, avatar FROM "${namespace}".user_profiles`)).toEqual([
+      { display_name: "Café 🦞", avatar: Buffer.from([0, 255, 128]) },
+    ]);
+    expect(await rows(`SELECT value FROM "${namespace}".secret_store_entries`)).toEqual([
+      { value: "retained" },
+    ]);
+    expect((await rows(`SELECT count(*) AS count FROM "${namespace}".state_leases`))[0].count).toBe(
+      "1",
+    );
     {
       using destination = openNodeSqliteDatabase(path.join(directory, "roundtrip.sqlite"));
       expect(
@@ -115,6 +142,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
           assertCurrent() {},
         }),
       ).toEqual(staged);
+      expect(destination.prepare(activityQuery()).all()).toEqual(expectedActivity);
       expect(destination.prepare("SELECT display_name, avatar FROM user_profiles").get()).toEqual({
         display_name: "Café 🦞",
         avatar: Uint8Array.from([0, 255, 128]),
@@ -162,6 +190,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
       });
       namespaces.add(restored.namespace);
       expect(await plannerRows(restored.namespace)).toEqual([{ reltuples: 1 }]);
+      expect(await rows(activityQuery(restored.namespace))).toEqual(expectedActivity);
       expect(readBackupEngine(restoredPath)).toEqual({
         engine: "postgres",
         storeId,
@@ -171,44 +200,53 @@ describe.skipIf(!connection)("shared-state database port", () => {
         createHash("sha256").update(fs.readFileSync(restoredPath)).digest("hex"),
       );
       expect(
-        (
-          await client.query(
-            `SELECT display_name, avatar FROM "${restored.namespace}".user_profiles`,
-          )
-        ).rows,
+        await rows(`SELECT display_name, avatar FROM "${restored.namespace}".user_profiles`),
       ).toEqual([{ display_name: "Café 🦞", avatar: Buffer.from([0, 255, 128]) }]);
+      expect(await rows(`SELECT value FROM "${restored.namespace}".secret_store_entries`)).toEqual([
+        { value: "retained" },
+      ]);
       expect(
-        (await client.query(`SELECT value FROM "${restored.namespace}".secret_store_entries`)).rows,
-      ).toEqual([{ value: "retained" }]);
-      expect(
-        (await client.query(`SELECT count(*) AS count FROM "${restored.namespace}".state_leases`))
-          .rows,
+        await rows(`SELECT count(*) AS count FROM "${restored.namespace}".state_leases`),
       ).toEqual([{ count: profile === "exact" ? "1" : "0" }]);
       expect(
-        (
-          await client.query(
-            `SELECT entry_key FROM "${restored.namespace}".plugin_blob_entries ORDER BY entry_key`,
-          )
-        ).rows,
+        await rows(
+          `SELECT entry_key FROM "${restored.namespace}".plugin_blob_entries ORDER BY entry_key`,
+        ),
       ).toEqual(
         profile === "exact"
           ? [{ entry_key: "durable" }, { entry_key: "ttl" }]
           : [{ entry_key: "durable" }],
       );
+      expect(
+        await rows(
+          `SELECT octet_length(blob) AS bytes, md5(blob) AS md5 FROM "${restored.namespace}".plugin_blob_entries WHERE entry_key = 'durable'`,
+        ),
+      ).toEqual([{ bytes: MAX_PLUGIN_BLOB_BYTES_PER_ENTRY, md5: blobMd5 }]);
       expect(fs.readFileSync(anchorPath)).toEqual(anchorBytes);
     }
     expect(
-      (
-        await client.query(
-          `INSERT INTO "${namespace}".audit_events (event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type, actor_id) VALUES ('next', 'next', 3, 1, 'test', 'test', 'ok', 'test', 'test') RETURNING sequence`,
-        )
-      ).rows,
+      await rows(
+        `INSERT INTO "${namespace}".audit_events (event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type, actor_id) VALUES ('next', 'next', 3, 1, 'test', 'test', 'ok', 'test', 'test') RETURNING sequence`,
+      ),
     ).toEqual([{ sequence: "9007199254741000" }]);
+    for (const marker of ["{", String(OPENCLAW_STATE_SCHEMA_VERSION + 1)]) {
+      await client.query(
+        `UPDATE "${namespace}".config_machine_state SET value_json = $1 WHERE state_key = 'state.schema.contentVersion'`,
+        [marker],
+      );
+      await expect(
+        descriptor.admit!(anchorPath, { connection: connection!, schemaPrefix: "test" }),
+      ).rejects.toThrow("PostgreSQL state metadata mismatch");
+    }
+    await client.query(
+      `UPDATE "${namespace}".config_machine_state SET value_json = $1 WHERE state_key = 'state.schema.contentVersion'`,
+      [String(OPENCLAW_STATE_SCHEMA_VERSION - 1)],
+    );
     await client.query(`DROP INDEX "${namespace}".idx_state_leases_owner`);
     await expect(
       descriptor.admit!(anchorPath, { connection: connection!, schemaPrefix: "test" }),
     ).rejects.toThrow(/schema drift/);
-    expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
+    expect(fs.readFileSync(sourcePath).equals(sourceBytes)).toBe(true);
   });
 
   it("retains absence of optional fragments and Doctor-owned history", async () => {
@@ -231,12 +269,10 @@ describe.skipIf(!connection)("shared-state database port", () => {
       assertCurrent() {},
     });
     expect(
-      (
-        await client.query(
-          "SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename IN ('agent_deletion_journal', 'user_profiles')",
-          [namespace],
-        )
-      ).rows,
+      await rows(
+        "SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename IN ('agent_deletion_journal', 'user_profiles', 'skill_workshop_activity')",
+        [namespace],
+      ),
     ).toEqual([]);
     using destination = openNodeSqliteDatabase(":memory:");
     await materializeDatabasePort({
@@ -249,7 +285,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
     expect(
       destination
         .prepare(
-          "SELECT name FROM sqlite_schema WHERE name IN ('agent_deletion_journal', 'user_profiles')",
+          "SELECT name FROM sqlite_schema WHERE name IN ('agent_deletion_journal', 'user_profiles', 'skill_workshop_activity')",
         )
         .all(),
     ).toEqual([]);

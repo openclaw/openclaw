@@ -11,15 +11,11 @@ import {
   clearRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../../config/config.js";
-import {
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../../config/sessions/session-accessor.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { readInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { GatewayLifecycleRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { GatewayRequestOptions } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import type { WorkerSessionTurnClaim } from "../../../gateway/worker-environments/placement-record.js";
@@ -38,9 +34,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
-import { listSessionStateEventsSince } from "../../../sessions/session-state-events.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -62,7 +56,6 @@ import { withParentExecutionIdentity } from "./execution-identity-spawn-context.
 import "./subagent-spawn-model.mocks.shared.js";
 import { makeGatewayContext } from "./subagent-spawn.in-process-gateway.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
-import { createConfigOverride } from "./subagent-spawn.test-helpers.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
 // mock-isolation: In-process spawn tests supply registries without loading installed plugins.
@@ -135,7 +128,7 @@ async function configure(cfg: OpenClawConfig) {
 
 function workspaceAgents(...ids: string[]): NonNullable<OpenClawConfig["agents"]> {
   return {
-    defaults: { workspace: stateDir },
+    defaults: { workspace: stateDir, model: { primary: "openai/gpt-6-astra" } },
     entries: Object.fromEntries(ids.map((id) => [id, { workspace: stateDir }])),
   };
 }
@@ -184,36 +177,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     }
   });
 
-  it("persists explicit active effort through the in-process Gateway", async () => {
-    // Preference precedence is exhaustively covered in subagent-spawn.thinking-provenance.test.ts.
-    await configure(createConfigOverride({ agents: workspaceAgents("main") }));
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: "agent:main:main" },
-      { sessionId: "thinking-parent", thinkingLevel: "medium" },
-    );
-    subagentSpawnTesting.setDepsForTest({
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
-        expect(method).toBe("agent");
-        return { runId: params.idempotencyKey, status: "accepted" } as T;
-      },
-    });
-    const context = {
-      agentSessionKey: "agent:main:main",
-      requesterThinkingLevel: "ultra" as const,
-      requesterThinkingExplicit: true,
-    };
-    const result = await inGateway(() =>
-      spawnSubagentDirect({ task: "persist active thinking" }, context),
-    );
-    expect(result.status).toBe("accepted");
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey: result.childSessionKey! })?.thinkingLevel,
-    ).toBe("ultra");
-  });
-
   it("launches queued collectors after the parent admission lease is released", async ({
     signal,
   }) => {
@@ -228,10 +191,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     const unexpectedRecovery = async () => {
       throw new Error("Unexpected fixture recovery");
     };
-    gatewayContext.recoveryRuntime = {
-      prepareFailedWorkerPlacement: async () => undefined,
-      prepareRestartRecovery: () => undefined,
-      resumeChatInput: unexpectedRecovery,
+    gatewayContext.lifecycleRuntime = {
       waitForAgent: async <T>(params: { runId: string }): Promise<T> => {
         const index = launchedRunIds.indexOf(params.runId);
         const terminal = expectDefined(terminalReplies[index], "launched collector terminal owner");
@@ -247,8 +207,8 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       },
       dispatchAgent: unexpectedRecovery,
       dispatchSessionMethod: unexpectedRecovery,
-      sendRecoveryNotice: unexpectedRecovery,
-    } satisfies GatewayRecoveryRuntime;
+      sendNotice: unexpectedRecovery,
+    } satisfies GatewayLifecycleRuntime;
     subagentSpawnTesting.setDepsForTest({
       dispatchGatewayMethodInProcess: async <T>(
         method: string,
@@ -481,7 +441,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
             sessionKey,
             operationalRunInstance,
             executionIdentityToken: parentToken,
-            receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+            receiptAuthority: identity.receiptAuthority,
             ...(kind === "worker"
               ? {
                   receiptAuthority: identity.receiptAuthority,
@@ -506,22 +466,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
           expect(childRequester).toEqual(identity.requesterOrigin);
           expect(childIdentity?.delegatedAuthority).toMatchObject({ kind: "worker", turnClaim });
         } else {
-          const childSessionKey = expectDefined(result.childSessionKey, "accepted child session");
-          const events = (await listSessionStateEventsSince(childSessionKey, "main", 0)).events;
-          expect(events.map((event) => event.kind)).toEqual(["created", "child_spawned"]);
-          const spawned = expectDefined(events[1], "spawned signal");
-          expect(spawned).toMatchObject({ actorId: sessionKey, runId: result.runId });
-          expect(
-            openOpenClawStateDatabase()
-              .db.prepare(
-                "SELECT last_seen_sequence, notified_sequence, material_sequence FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
-              )
-              .get(sessionKey, childSessionKey),
-          ).toEqual({
-            last_seen_sequence: spawned.sequence,
-            notified_sequence: spawned.sequence,
-            material_sequence: spawned.sequence,
-          });
           expect(childIdentity?.executionIdentity).toBe(parentToken);
           expect(
             readAgentRuntimeExecutionLineage(childIdentity?.sessionSpawnContext),
@@ -633,7 +577,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       expect(subagentRuns.get(firstRunId!)).toEqual({
         ...killedSnapshot,
         swarmLaunchPending: false,
-        queuedLaunch: undefined,
         collectorLaunchCleanupPending: false,
         completion: {
           required: false,

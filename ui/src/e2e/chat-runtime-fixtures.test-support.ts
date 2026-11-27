@@ -38,7 +38,8 @@ export function modelPicker(root: Page | Locator) {
     trigger: picker.locator("[data-chat-model-select]"),
     search: picker.locator("[data-chat-model-search]"),
     option: (model: string) => picker.locator(`[data-chat-model-option="${model}"]`),
-    runtime: (id: string) => picker.locator(`[data-chat-model-runtime="${id}"]`),
+    runtime: (id: string) =>
+      picker.locator(`[data-chat-model-option][data-chat-model-runtime="${id}"]`),
   };
 }
 

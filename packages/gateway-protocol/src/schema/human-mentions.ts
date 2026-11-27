@@ -6,7 +6,10 @@ import {
   MENTION_INBOX_MAX_ITEMS,
 } from "../human-mention-limits.js";
 import { closedObject } from "./closed-object.js";
-import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
+import {
+  SessionMemberPermissionLevelSchema,
+  SessionVisibilitySchema,
+} from "./sessions-sharing-values.js";
 
 export {
   MAX_HUMAN_MENTIONS,
@@ -23,6 +26,7 @@ const MentionTimestampSchema = Type.Integer({ minimum: 0, maximum: Number.MAX_SA
 /** Explicit selections bound to UTF-16 offsets in the submitted message text. */
 export const HumanMentionSchema = closedObject({
   profileId: MentionReferenceSchema,
+  access: Type.Optional(SessionMemberPermissionLevelSchema),
   start: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
   end: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
 });
@@ -48,6 +52,14 @@ export const MentionableUserSchema = closedObject({
   displayName: MentionLabelSchema,
   avatarUrl: Type.Optional(MentionAvatarUrlSchema),
   online: Type.Boolean(),
+  /** Present only when mentioning this person will invite a ceiling-role member. */
+  inviteAccessOptions: Type.Optional(
+    Type.Array(SessionMemberPermissionLevelSchema, {
+      minItems: 1,
+      maxItems: 3,
+      uniqueItems: true,
+    }),
+  ),
 });
 export const UsersMentionableResultSchema = closedObject({
   users: Type.Array(MentionableUserSchema, { maxItems: MAX_MENTIONABLE_USERS }),
@@ -86,6 +98,13 @@ export const MentionsListResultSchema = closedObject({
   items: Type.Array(MentionInboxItemSchema, { maxItems: MENTION_INBOX_MAX_ITEMS }),
 });
 export const MentionsChangedEventSchema = closedObject(MentionInboxVersionProperties);
+export const MentionsFailedEventSchema = closedObject({
+  gatewayInstanceId: MentionReferenceSchema,
+  sessionKey: MentionSessionKeySchema,
+  agentId: MentionReferenceSchema,
+  messageId: MentionReferenceSchema,
+  errorMessage: Type.String({ minLength: 1, maxLength: 512 }),
+});
 
 export type HumanMention = Static<typeof HumanMentionSchema>;
 export type UsersMentionableParams = Static<typeof UsersMentionableParamsSchema>;
@@ -96,3 +115,4 @@ export type MentionsListParams = Static<typeof MentionsListParamsSchema>;
 export type MentionsDismissParams = Static<typeof MentionsDismissParamsSchema>;
 export type MentionsListResult = Static<typeof MentionsListResultSchema>;
 export type MentionsChangedEvent = Static<typeof MentionsChangedEventSchema>;
+export type MentionsFailedEvent = Static<typeof MentionsFailedEventSchema>;

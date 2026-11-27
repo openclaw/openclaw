@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createCanvasDocument } from "../../canvas/documents.js";
+import { createCanvasDocument, resolveCanvasDocumentsDir } from "../../canvas/documents.js";
 import { createShowWidgetTool } from "../../canvas/widget-tool.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -24,6 +24,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
+import * as transcriptMatch from "../../config/sessions/session-transcript-match.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { withSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -134,6 +135,21 @@ it("reads retained widget receipts and waits only for current live presentations
         html: expect.stringContaining("Saved before guest viewing"),
         sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/),
       });
+      const pruned = await show("pruned", "A widget whose retained file has expired");
+      await append("pruned-widget-result", receipt(pruned, "pruned-widget-call", 2));
+      await fs.rm(path.join(resolveCanvasDocumentsDir(), String(widgetId(pruned))), {
+        recursive: true,
+      });
+      const match = vi.spyOn(transcriptMatch, "findTranscriptEvent");
+      try {
+        expect((await view({ ...bound, docId: widgetId(pruned) }))[2]).toMatchObject({
+          code: "UNAVAILABLE",
+          message: "Canvas widget unavailable; reload the chat or ask the agent to recreate it.",
+        });
+        expect(match).not.toHaveBeenCalled();
+      } finally {
+        match.mockRestore();
+      }
       const forked = await forkSessionFromParentTranscript({
         agentId: "main",
         parentEntry: entry,
@@ -202,7 +218,8 @@ it("reads retained widget receipts and waits only for current live presentations
           reader.readColdMetadata({ sessionId: scope.sessionId, env: state.env });
         expect((await readCold()).archive).toBeDefined();
         expect((await view(bound))[1]).toEqual(first[1]);
-        expect((await readCold()).archive).toBeUndefined();
+        // Read-only probes stream the verified archive without restoring it (#185955).
+        expect((await readCold()).archive).toBeDefined();
       });
 
       const unbound = await createCanvasDocument({

@@ -1,4 +1,3 @@
-import type { PreparedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   resolveOpenClawAgentSqlitePath,
@@ -13,11 +12,12 @@ import {
 import { requireTranscriptEventAppendSnapshot } from "./session-accessor.sqlite-transcript-append-result.js";
 import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import { assertLockedTranscriptWriteAllowed } from "./session-accessor.sqlite-transcript-write-guard.js";
-import { appendTranscriptEventSnapshotSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSnapshotSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import type {
   SessionTranscriptRuntimeTarget,
   SessionTranscriptWriteScope,
 } from "./session-accessor.types.js";
+import type { PreparedCompactionAppend } from "./session-compaction-persistence.types.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
 import type {
   CompactionBoundaryOperations,

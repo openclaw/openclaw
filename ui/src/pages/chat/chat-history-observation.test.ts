@@ -651,9 +651,13 @@ it.each([
         };
       }
       return {
-        messages: (params.offset ? [1, 2, 3, 4] : [5, 6]).map((seq) => nativeHistoryMessage(seq)),
-        hasMore: !params.offset,
-        ...(params.offset ? {} : { nextOffset: 2, deltaCursor: "old-cursor" }),
+        messages: (params.cursor === "older-page" ? [1, 2, 3, 4] : [5, 6]).map((seq) =>
+          nativeHistoryMessage(seq),
+        ),
+        hasMore: params.cursor !== "older-page",
+        ...(params.cursor === "older-page"
+          ? {}
+          : { nextOffset: 2, olderCursor: "older-page", deltaCursor: "old-cursor" }),
         totalMessages: 6,
         sessionInfo: row,
       };

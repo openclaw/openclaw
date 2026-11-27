@@ -1,3 +1,5 @@
+// Rows can declare `compat.requiresReasoningContentOnAssistantMessages`; these IDs stay because
+// transcript policy reads only the model ID, and OpenRouter or custom routes have no catalog row.
 const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "deepseek-v4-flash",
   "deepseek-v4-pro",

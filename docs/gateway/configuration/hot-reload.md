@@ -39,6 +39,13 @@ UI preferences remain in `ui.prefs`. Changing them preserves prepared model
 catalogs, provider authentication, and plugin registrations. Display changes
 still publish the updated config to consumers that read those settings.
 
+Presentation and browser settings preserve prepared model catalogs and session
+snapshots. Connected Control UI conversations keep their model, membership,
+process, and session details when `ui`, `browser`, logging, diagnostics, telemetry,
+or update settings change. Config editors still receive the saved revision.
+Model, provider, authentication, and agent-model settings retain their invalidation.
+Settings with unknown reader dependencies conservatively refresh derived views.
+
 The `agents.create`, `agents.update`, and `agents.delete` Gateway methods wait
 for runtime application before reporting success. A successful response lets
 clients immediately create sessions or read the updated agent roster. If the
@@ -79,13 +86,16 @@ failure return `UNAVAILABLE` to waiting config mutations; a later config observa
 can retry the saved change. Shutdown cancels retries and settles waiting mutations.
 Reload failures remain visible in the Gateway log.
 
-If an automatic plugin reload cannot drain active work, the Gateway records the
-failure and keeps the last-good runtime. When the drain timed out on that
-plugin's admitted work, the Gateway retries the replacement automatically once
-the work finishes; no additional config edit is needed. A later config edit also
+If an automatic plugin reload times out on admitted work and successfully rolls
+back, the Gateway records a deferred reload and keeps the last-good runtime.
+It retries the replacement automatically once that plugin's work and cleanup
+finish; no additional config edit is needed. Waiting config mutations still
+return `UNAVAILABLE` after the bounded attempt: keeping their receipt open could
+prevent the writing turn itself from finishing. Run `config.get` to confirm the
+active revision after the work settles. A later config edit also
 retries the full unapplied plugin change through the normal reload transaction.
-If that attempt fails, the previous runtime keeps serving and the failure is
-logged again. A new attempt replaces any earlier idle retry; if it fails for
+Another admitted-work timeout defers again; other failures remain errors.
+A new attempt replaces any earlier idle retry; if it fails for
 another reason, make a new edit or use the manual reload command below after
 fixing the error. Unapplied plugin settings cannot publish through an unrelated
 hot update; all pending changes apply together only after the transaction succeeds.
@@ -189,6 +199,33 @@ own plugin settings still follows its plugin reload policy.
 Overlapping model or credential changes use the newer write's runtime application;
 superseding an earlier publication does not itself require a Gateway restart.
 
+Auth-profile edits refresh credential facts without replacing unchanged plugin
+instances.
+
+Configuration edits apply to the next turn. A session event that has started
+(a hook, model request, or delivery may have performed work), including a
+subagent turn or a scheduled run, finishes under the configuration it started
+with. Stop, cancellation, revoked source authority, and agent deletion still end
+it.
+
+Before execution starts, a session event compares the configuration it was
+admitted under with the current publication. Logging, diagnostics, UI
+preferences, telemetry, update settings, session maintenance (including
+cold-storage enablement), and plugin changes never refuse it. Session routing,
+storage location, sharing, communication, and tool or model policy changes do.
+The session-event owner then re-admits the same occurrence under current policy,
+with at most two retries.
+
+Each event compares only the configuration its own agent uses: shared settings,
+agent defaults, and that agent's entry. Adding or editing another agent leaves
+the event alone. Scheduled events compare only the channels on their route, and
+narrow auth, model-provider, and MCP changes to their selected model; other
+session events treat any such change as relevant.
+
+Session detail and process-list reads that encounter a retired model-catalog
+callback refresh their catalog binding once before preparing the response.
+If the replacement is unavailable, the read reports a session-read error.
+
 After a transient connection failure, an in-flight turn using a directly configured
 provider can retry with an endpoint whose hot reload has completed. It keeps the same
 model, permissions, prompt, conversation history, and model limits while resolving
@@ -207,6 +244,13 @@ and degraded while the Gateway keeps serving. Healthy services can finish their
 reloads. The warning names the plugin and service; plugin health includes its service
 failure. Once cleanup settles, retry `openclaw plugins reload <id>` to recover the
 affected plugin. A slow service cleanup does not schedule a Gateway restart.
+
+If a failed replacement also cannot restore model/reply publication, the Gateway
+requests its normal work-draining recovery restart, including for explicit
+`plugins.reload`. The replacement still reports failure. Failed model-owner
+recovery backs off while that restart prepares, preserving queued replies' retry
+budget. Previously dead-lettered messages require manual resubmission through
+[Channels](/cli/channels#inbound-dead-letters).
 
 Channel transport edits, such as `channels.slack.streaming.mode`, retain prepared
 session rows and model catalogs. Agent rosters, session policy, store topology,
@@ -302,7 +346,7 @@ newly selected workspace. Reload does not replay `gateway:startup`.
 
 Under `gateway.controlUi`, the `enabled`, `environment`, `github`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, `experimental.customPlugins`,
-`experimental.claws`, and
+`experimental.templates`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and

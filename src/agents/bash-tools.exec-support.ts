@@ -1,14 +1,19 @@
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
-import type { ExecProcessOutcome } from "./bash-tools.exec-output.js";
-import type {
-  ExecToolApprovalReview,
-  ExecToolDefaults,
-  ExecToolDetails,
-} from "./bash-tools.exec-types.js";
+import { listActiveProcessSessionReferences } from "./bash-process-references.js";
+import {
+  buildBackgroundExecFollowUp,
+  type ExecDroppedOutputFacts,
+  type ExecProcessOutcome,
+  renderExecDroppedOutputNote,
+  renderExecOutputText,
+} from "./bash-tools.exec-output.js";
+import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-result.types.js";
+import type { ExecProcessHandle } from "./bash-tools.exec-runtime.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { failedTextResult, textResult } from "./tools/common.js";
+import { textResult } from "./tools/tool-results.js";
 
 export function attachExecApprovalReview(
   result: AgentToolResult<ExecToolDetails>,
@@ -21,14 +26,51 @@ export function attachExecApprovalReview(
   return result;
 }
 
+/** Report process ownership only when the foreground wait actually yielded. */
+export function buildExecRunningResult(
+  run: Pick<ExecProcessHandle, "session" | "startedAt">,
+  yieldMs: number | undefined,
+  warnings: readonly string[],
+): AgentToolResult<ExecToolDetails> {
+  const { session, startedAt } = run;
+  // A waiter started during this turn is absent from the turn-start snapshot.
+  const otherRunning = listActiveProcessSessionReferences({
+    scopeKey: session.scopeKey,
+    exclude: session,
+  }).map((other) => `${other.sessionId} (${other.name})`);
+  const followUp = buildBackgroundExecFollowUp(session, yieldMs, otherRunning);
+  const deadlineAtMs = session.processActivity?.deadlineAtMs;
+  const deadline =
+    deadlineAtMs === undefined
+      ? ""
+      : `, times out in ${formatDurationCompact(Math.max(1_000, deadlineAtMs - Date.now()))}`;
+  const warningText = warnings.join("\n");
+  return textResult(
+    `${warnings.length ? warningText + "\n\n" : ""}Command still running (session ${session.id}, pid ${session.pid ?? "n/a"})${deadline}. ${followUp}`,
+    {
+      status: "running",
+      sessionId: session.id,
+      pid: session.pid ?? undefined,
+      startedAt,
+      ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
+      cwd: session.cwd,
+      tail: session.tail,
+      ...(warnings.length ? { warningText } : {}),
+      followUp,
+    },
+  );
+}
+
 export function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
   cwd?: string;
   warningText?: string;
-  aggregateOutputDropped?: boolean;
+  session?: ExecDroppedOutputFacts & { readonly aggregated?: string };
 }): AgentToolResult<ExecToolDetails> {
-  const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
-  const retentionCapNote = params.aggregateOutputDropped ? EXEC_RETENTION_CAP_NOTE : "";
+  const warning = params.warningText?.trim();
+  const warningText = warning ? `${params.warningText}\n\n` : "";
+  const retentionCapNote = params.session ? renderExecDroppedOutputNote(params.session) : "";
+  const file = params.session?.outputFile;
   const outcome = params.outcome;
   const details: ExecToolDetails = {
     status: outcome.status,
@@ -37,10 +79,19 @@ export function buildExecForegroundResult(params: {
     ...(outcome.status === "failed" ? { failureKind: outcome.failureKind } : {}),
     exitReason: outcome.exitReason,
     durationMs: outcome.durationMs,
-    aggregated: outcome.aggregated,
+    aggregated:
+      outcome.status === "completed" && outcome.exitCode === 0
+        ? (params.session?.aggregated ?? outcome.aggregated)
+        : outcome.aggregated,
     ...(outcome.status === "failed" ? { timedOut: outcome.timedOut } : {}),
     noOutputTimedOut: outcome.noOutputTimedOut,
     cwd: params.cwd,
+    ...(warning ? { warningText: warning } : {}),
+    // Record-time truncation keeps this path visible when it cuts the result; a file cut at
+    // its limit stays marked partial through history elision.
+    ...(file
+      ? { fullOutputPath: file.path, ...(file.limitReached ? { spillTruncated: true } : {}) }
+      : {}),
   };
   if (params.outcome.status === "failed") {
     const linuxOomGuidance =
@@ -53,7 +104,8 @@ export function buildExecForegroundResult(params: {
           "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits."
         : "";
     const outputText = `${retentionCapNote}${warningText}${params.outcome.reason}${linuxOomGuidance}`;
-    return failedTextResult(outputText, { ...details, status: "failed" });
+    const message = `${retentionCapNote}${warningText}${params.outcome.message}${linuxOomGuidance}`;
+    return textResult(outputText, { ...details, status: "failed", message });
   }
   const outputText = `${retentionCapNote}${warningText}${renderExecOutputText(params.outcome.aggregated)}`;
   return textResult(outputText, details);

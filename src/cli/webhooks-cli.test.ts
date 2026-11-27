@@ -28,22 +28,15 @@ function parse(command: string, args: string[] = []) {
   return program.parseAsync(["webhooks", "gmail", command, ...defaults, ...args], { from: "user" });
 }
 
-function runtimeErrors(): string[] {
-  return mocks.defaultRuntime.error.mock.calls.map(([message]) => String(message));
-}
-
-async function expectFailure(command: string, args: string[], json: boolean, message: string) {
-  await expect(parse(command, args)).rejects.toThrow(json ? message : "__exit__:1");
+async function expectFailure(run: Promise<unknown>, json: boolean, message: string) {
+  await expect(run).rejects.toThrow(json ? message : "__exit__:1");
   expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
-  if (json) {
-    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
-    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
-  } else {
-    expect(runtimeErrors()).toEqual([expect.stringContaining(message)]);
-  }
+  expect(mocks.runtimeErrors).toEqual(json ? [] : [expect.stringContaining(message)]);
+  expect(mocks.defaultRuntime.exit).toHaveBeenCalledTimes(json ? 0 : 1);
 }
 
 describe("webhooks cli", () => {
+  const tailscaleError = "Invalid --tailscale (must be funnel, serve, or off).";
   beforeEach(() => {
     mocks.runtimeLogs.length = 0;
     mocks.runtimeErrors.length = 0;
@@ -52,42 +45,48 @@ describe("webhooks cli", () => {
 
   it.each([
     ["setup", "--port", "8080x", "--port must be a positive integer.", true],
+    ["setup", "--account", " ", "--account is required.", true],
+    ["setup", "--tailscale", "invalid", tailscaleError, true],
+    ["setup", "--max-bytes", "10mb", "--max-bytes must be a positive integer.", true],
+    ["setup", "--renew-minutes", "30m", "--renew-minutes must be a positive integer.", true],
     ["run", "--max-bytes", "10mb", "--max-bytes must be a positive integer."],
     ["run", "--renew-minutes", "30m", "--renew-minutes must be a positive integer."],
-    ["setup", "--tailscale", "", "Invalid --tailscale (must be funnel, serve, or off)."],
-    ["run", "--tailscale", "offf", "Invalid --tailscale (must be funnel, serve, or off)."],
+    ["setup", "--tailscale", "", tailscaleError],
+    ["run", "--tailscale", "offf", tailscaleError],
   ])("rejects invalid gmail %s %s=%j", async (command, flag, value, message, json = false) => {
     const args = [flag, value, ...(json ? ["--json"] : [])];
-    await expectFailure(command, args, json, message);
-    for (const runner of [mocks.runGmailSetup, mocks.runGmailService]) {
-      expect(runner).not.toHaveBeenCalled();
+    if (command === "setup") {
+      await expect(parse(command, args)).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        humanOutput: expect.stringContaining(message),
+        machineOutput: expect.stringContaining(message),
+      });
+    } else {
+      await expectFailure(parse(command, args), json, message);
     }
+    expect(mocks.runGmailSetup).not.toHaveBeenCalled();
+    expect(mocks.runGmailService).not.toHaveBeenCalled();
   });
 
   it.each([
     { command: "setup", mode: "human", json: false },
     { command: "setup", mode: "JSON", json: true },
+    { command: "setup", mode: "expected JSON", json: true, name: "LocalStateOwnerError" },
     { command: "run", mode: "human", json: false },
-  ])("renders named gmail $command errors safely in $mode mode", async ({ command, json }) => {
+  ])("redacts $command failures in $mode mode", async ({ command, json, name }) => {
     const secret = "sk-abcdefghijklmnopqrstuv";
     const error = new Error(`Gmail failed: Authorization: Bearer ${secret}`);
-    error.name = "GmailCredentialError";
+    error.name = name ?? "GmailCredentialError";
     const runner = command === "setup" ? mocks.runGmailSetup : mocks.runGmailService;
     runner.mockRejectedValueOnce(error);
     const args = json ? ["--json"] : [];
-    await expectFailure(command, args, json, "Gmail failed: Authorization: Bearer");
-    const output = [...mocks.runtimeLogs, ...runtimeErrors()].join("\n");
+    const run = parse(command, args);
+    await expectFailure(run, json, "Gmail failed: Authorization: Bearer");
+    await expect(run).rejects.not.toThrow(secret);
+    const output = [...mocks.runtimeLogs, ...mocks.runtimeErrors].join("\n");
     for (const privateValue of [error.name, secret]) {
       expect(output).not.toContain(privateValue);
     }
-  });
-
-  it("accepts an explicitly disabled Gmail exposure mode", async () => {
-    await parse("run", ["--tailscale", "off"]);
-
-    expect(mocks.runGmailService).toHaveBeenCalledWith(
-      expect.objectContaining({ tailscale: "off" }),
-    );
   });
 
   it.each([
@@ -114,6 +113,7 @@ describe("webhooks cli", () => {
       [],
       { account: undefined, port: undefined, includeBody: undefined, tailscale: undefined },
     ],
+    ["run", ["--tailscale", "off"], { tailscale: "off" }],
     [
       "setup",
       [

@@ -27,7 +27,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { prepareCliHistoryCompactionBoundary } from "../cli-runner/history-boundary.js";
+import { readCompactionTranscriptBytes } from "../compaction-transcript-bytes.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { buildCompactionFailureResult } from "./compact-reasons.js";
@@ -237,16 +237,15 @@ export async function executeQueuedContextEngineCompaction(input: {
           compactionConfig?.maxActiveTranscriptBytes,
         );
         if (maxActiveTranscriptBytes !== null && maxActiveTranscriptBytes > 0) {
-          const { readSessionTranscriptAccountingAsync } =
-            await import("../../gateway/session-transcript-readers.js");
+          const pressureBytes = await readCompactionTranscriptBytes({
+            target: runtimeTarget,
+            rawBytes: undefined,
+            maxBytes: maxActiveTranscriptBytes,
+            runtime: preparedParams,
+            signal: params.abortSignal,
+          });
           assertCallerActive();
-          const snapshot = await readSessionTranscriptAccountingAsync(
-            runtimeTarget,
-            { includeByteSize: true, includeUsage: false },
-            params.abortSignal,
-          );
-          assertCallerActive();
-          if (snapshot.byteSize !== undefined && snapshot.byteSize >= maxActiveTranscriptBytes) {
+          if (pressureBytes !== undefined && pressureBytes >= maxActiveTranscriptBytes) {
             preflightCompactionTrigger = "transcript_bytes";
           }
         }
@@ -307,7 +306,6 @@ export async function executeQueuedContextEngineCompaction(input: {
       // Queued callers keep result-based failures; recovery rejects cancellation.
       let result: Awaited<ReturnType<typeof contextEngine.compact>>;
       let committedCompaction: CompactionAccountingReceipt | undefined;
-      let commitCliHistoryCompaction: (() => Promise<void>) | undefined;
       try {
         const compactionSessionTarget = projectQueuedCompactionSessionTarget(params);
         const ownedCompactor: Pick<ContextEngine, "compact" | "info"> = {
@@ -315,9 +313,13 @@ export async function executeQueuedContextEngineCompaction(input: {
           compact: async (backendParams) => {
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                operatorAuthority: host.sourceAuthority.operatorAuthority,
                 hostOwnsCompactionLifecycle: engineOwnsCompaction,
                 requestBudget: host.requestBudget,
                 pendingUserEntryId: host.pendingUserEntryId,
+                ...(params.preflightRequired === true
+                  ? { requestRequiresCompaction: true as const }
+                  : {}),
                 preparedSession:
                   contextEngine.info.id === "legacy" ? host.preparedSession : undefined,
                 withCompactionPersistenceAsync:
@@ -341,15 +343,9 @@ export async function executeQueuedContextEngineCompaction(input: {
               await assertPluginWriterActive(runtimeTarget, expectedEntry);
             }
             writeContext.assertCommitAllowed();
-            return withOwnedSessionTranscriptWrites(writeContext, async () => {
-              if (!host.preparedSession || host.preparedSession.entry.cliHistoryBoundary) {
-                commitCliHistoryCompaction = await prepareCliHistoryCompactionBoundary(
-                  runtimeTarget,
-                  writeContext.assertCommitAllowed,
-                );
-              }
-              return contextEngine.compact(backendParams);
-            });
+            return withOwnedSessionTranscriptWrites(writeContext, () =>
+              contextEngine.compact(backendParams),
+            );
           },
         };
         result = await compactContextEngineWithSafetyTimeout(
@@ -431,9 +427,6 @@ export async function executeQueuedContextEngineCompaction(input: {
         // Completion survives cancellation; a proposed successor's token snapshot
         // belongs to that identity only after the host accepts it.
         tokensAfter = sameTarget ? result.result?.tokensAfter : undefined;
-        if (!sameTarget) {
-          commitCliHistoryCompaction = undefined;
-        }
         try {
           successor =
             sameTarget && host.preparedSession && committedCompaction
@@ -522,9 +515,6 @@ export async function executeQueuedContextEngineCompaction(input: {
             abortSignal: params.abortSignal,
           });
           await maintenance;
-        }
-        if (result.ok && result.compacted && canContinue()) {
-          await commitCliHistoryCompaction?.();
         }
         if (engineOwnsCompaction && result.ok && result.compacted && canContinue()) {
           await runPostCompactionSideEffects({

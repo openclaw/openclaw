@@ -9,18 +9,17 @@ import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   inspectPortUsage,
-  createStartupMigrationActivityProbe,
   makeGatewayService,
   monotonicClock,
   callGateway,
-  readGatewayOwnerLease,
+  readActiveGatewayLockIdentity,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
+  readBestEffortConfig,
   sleep,
   waitForStoppedFreeGatewayRestart,
   waitForRunningGateway,
   portUsage,
-  ownerLease,
 } from "./restart-health.test-helpers.js";
 
 vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
@@ -55,9 +54,15 @@ describe("restart health", () => {
     setPlatform("win32");
     listenAfter(90_000);
     serveHealth();
-
-    const result = await waitForRunningGateway({ requireRunningService: true });
-
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    const result = await waitForRunningGateway({
+      requireRunningService: true,
+      service,
+      config: {},
+      probeHosts: ["127.0.0.1"],
+    });
+    expect(service.readCommand).not.toHaveBeenCalled();
+    expect(readBestEffortConfig).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       healthy: true,
       outcome: "ready",
@@ -97,41 +102,27 @@ describe("restart health", () => {
     });
   });
 
-  it.each([
-    [true, 100_000, 360],
-    [false, 2000, 20],
-  ] as const)(
-    "waits for owner readiness (expired lease=%s)",
-    async (expired, readyAt, attempts) => {
+  it.each([100_000, 2_000])(
+    "waits for a live file owner's readiness after %s ms",
+    async (readyAt) => {
       setPlatform("win32");
-      readGatewayOwnerLease.mockImplementation(() => {
-        if (expired) {
-          return { ...ownerLease(2080), expired: true };
-        }
-        return monotonicClock.nowMs < 1000
-          ? ownerLease(6464, "dead", 1000)
-          : ownerLease(2080, "live", 2000);
+      readActiveGatewayLockIdentity.mockResolvedValue({
+        pid: 2080,
+        port: 18789,
+        ownerId: "starting-gateway",
+        createdAt: "2026-11-25T00:00:00.000Z",
       });
       listenAfter(readyAt, 2080);
       serveHealth();
       const snapshot = await waitForRunningGateway({
         service: makeGatewayService({ status: "stopped" }),
-        attempts,
+        attempts: 360,
         delayMs: 500,
       });
       expectWait(snapshot, "healthy", readyAt);
       expect(snapshot.staleGatewayPids).toEqual([]);
     },
   );
-
-  it("returns as soon as an owner observed unknown in this wait dies with the port free", async () => {
-    readGatewayOwnerLease.mockImplementation(() => ({
-      ...ownerLease(2080),
-      state: monotonicClock.nowMs === 0 ? "unknown" : "dead",
-    }));
-    const snapshot = await waitForStoppedFreeGatewayRestart();
-    expectWait(snapshot, "stopped-free", 500);
-  });
 
   it.each([
     {
@@ -234,27 +225,32 @@ describe("restart health", () => {
     });
   });
 
-  it("accepts a launchd KeepAlive restart after the stopped-free grace window", async () => {
-    let runtimeReads = 0;
-    let portInspections = 0;
-    const service = makeGatewayService({ status: "stopped" });
-    vi.mocked(service.readRuntime).mockImplementation(async () =>
-      ++runtimeReads >= 27 ? { status: "running", pid: 8000 } : { status: "stopped" },
-    );
-    inspectPortUsage.mockImplementation(async () =>
-      portUsage(++portInspections >= 27 ? [{ pid: 8000, commandLine: "openclaw-gateway" }] : []),
-    );
-    serveHealth();
-
-    const snapshot = await waitForRunningGateway({
-      service,
-      attempts: 120,
-      delayMs: 500,
-      supervisorKeepsAlive: true,
-    });
-
-    expectWait(snapshot, "healthy", 13_000);
-  });
+  it.each([true, false])(
+    "waits for launchd KeepAlive without certifying a stop (successor=%s)",
+    async (arrives) => {
+      setPlatform("darwin");
+      const ready = () => arrives && monotonicClock.nowMs >= 13_000;
+      const service = makeGatewayService({ status: "stopped" });
+      vi.mocked(service.readRuntime).mockImplementation(async () =>
+        ready() ? { status: "running", pid: 8000 } : { status: "stopped" },
+      );
+      inspectPortUsage.mockImplementation(async () =>
+        portUsage(ready() ? [{ pid: 8000, commandLine: "openclaw-gateway" }] : []),
+      );
+      serveHealth();
+      const snapshot = await waitForRunningGateway({
+        service,
+        attempts: 120,
+        delayMs: 500,
+        supervisorKeepsAlive: true,
+      });
+      expectWait(snapshot, arrives ? "healthy" : "timeout", arrives ? 13_000 : 60_000);
+      if (!arrives) {
+        expect(snapshot.runtime.status).toBe("stopped");
+        expect(snapshot.portUsage.status).toBe("free");
+      }
+    },
+  );
 
   it("waits longer before stopped-free early exit on Windows", async () => {
     setPlatform("win32");
@@ -290,7 +286,6 @@ describe("restart health", () => {
       waitForRunningGateway({
         attempts: 1,
         delayMs: 60_000,
-        isStartupMigrationActive: createStartupMigrationActivityProbe(() => true),
         signal: controller.signal,
       }),
     ).rejects.toBe(aborted);

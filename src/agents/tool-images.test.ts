@@ -1,3 +1,4 @@
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { expectDefined } from "@openclaw/normalization-core";
 import { RastermillUnavailableError } from "rastermill";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,17 +7,21 @@ import {
   createSolidPngBuffer,
   createTinyJpegBuffer,
 } from "../../test/helpers/image-fixtures.js";
-import { getImageMetadata } from "../media/image-ops.js";
-import { resizeToJpeg } from "../media/media-services.js";
+import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
 import {
   sanitizeContentBlocksImages,
   sanitizeImageBlocks,
   sanitizeToolResultImages,
 } from "./tool-images.js";
 
-vi.mock("../media/media-services.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../media/media-services.js")>();
+vi.mock("../media/image-ops.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/image-ops.js")>();
   return { ...actual, resizeToJpeg: vi.fn(actual.resizeToJpeg) };
+});
+
+vi.mock("@openclaw/media-core/base64", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/media-core/base64")>();
+  return { ...actual, canonicalizeBase64: vi.fn(actual.canonicalizeBase64) };
 });
 
 function imageBlock(data: Buffer | string, mimeType = "image/png") {
@@ -52,6 +57,46 @@ describe("tool image sanitizing", () => {
 
     beforeEach(() => {
       resizeToJpegMock.mockClear();
+    });
+
+    it("prepares unchanged image bytes once and revalidates edits", async () => {
+      const canonicalize = vi.mocked(canonicalizeBase64).mockClear();
+      const original = solidImage(35, 24);
+      const block = {
+        ...original,
+        data: ` ${original.data.slice(0, 12)}\n${original.data.slice(12)} `,
+      };
+      const other = Object.freeze(solidImage(36, 24));
+      const first = getImageBlock(await replay(block));
+      expect(first).toEqual(original);
+      expect(getImageBlock(await replay(other))).toBe(other);
+      expect(await replay(block)).toEqual([original]);
+      expect(await replay(other)).toEqual([other]);
+      expect(await replay(first)).toEqual([original]);
+      expect(canonicalize).toHaveBeenCalledTimes(2);
+
+      block.data = 'AA==" onerror="alert(1)';
+      expect(await replay(block)).toEqual([
+        { type: "text", text: "[session:history] omitted image payload: invalid base64" },
+      ]);
+      block.data = original.data;
+      block.mimeType = "image/jpeg";
+      expect(await replay(block)).toEqual([original]);
+      expect(canonicalize).toHaveBeenCalledTimes(4);
+      block.mimeType = "image/gif";
+      expect(await replay(block)).toEqual([original]);
+      expect(canonicalize).toHaveBeenCalledTimes(5);
+    });
+
+    it("reuses rejected bytes without retaining the caller's label", async () => {
+      const canonicalize = vi.mocked(canonicalizeBase64).mockClear();
+      const block = imageBlock("invalid!");
+      for (const label of ["first", "second"]) {
+        expect(await sanitizeContentBlocksImages([block], label)).toEqual([
+          { type: "text", text: `[${label}] omitted image payload: invalid base64` },
+        ]);
+      }
+      expect(canonicalize).toHaveBeenCalledTimes(1);
     });
 
     it.each([false, true])(
@@ -130,6 +175,16 @@ describe("tool image sanitizing", () => {
     const meta = await getImageMetadata(Buffer.from(getImageBlock(out).data, "base64"));
     expect(meta?.width).toBeLessThanOrEqual(120);
     expect(meta?.height).toBeLessThanOrEqual(120);
+  }, 20_000);
+
+  it("downscales a tall screenshot above the generic decode cap", async () => {
+    // 25.2 MP: over MAX_IMAGE_INPUT_PIXELS, which used to drop the image before any resize.
+    const tall = createSolidPngBuffer(2000, 12_600, { r: 17, g: 31, b: 47 });
+    const image = getImageBlock(await sanitize(tall, { maxDimensionPx: 1200 }));
+    expect(image.mimeType).toBe("image/jpeg");
+    expect(await getImageMetadata(Buffer.from(image.data, "base64"))).toMatchObject({
+      height: 1200,
+    });
   }, 20_000);
 
   it("uses default image limits for non-finite options", async () => {

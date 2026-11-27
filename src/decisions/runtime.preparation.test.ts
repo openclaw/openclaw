@@ -14,8 +14,8 @@ import * as profileReader from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { decisionBatchV1ToV2 } from "./compatibility.js";
 import { waitForAbort } from "./contract.test-support.js";
+import type { DecisionProviderV1 } from "./provider-types.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
-import type { DecisionProviderV1 } from "./types.js";
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -98,7 +98,7 @@ it.each(
           expect(evaluate.mock.calls[0]?.[1].signal.aborted).toBe(true);
         }
         const authorityError = expect.objectContaining({
-          message: "Gateway caller authority is no longer active.",
+          message: "Gateway request could not start. Reconnect and try again.",
         });
         expect(await settled).toEqual(
           ending === "caller-aborted"

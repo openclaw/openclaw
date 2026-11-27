@@ -112,12 +112,12 @@ it.each([false, true])("detaches retired authority (optional=%s)", async (preemp
   const identity = {
     agentId: "main",
     sessionKey: "session:source",
-    receiptAuthority: () => !source.signal.aborted,
+    receiptAuthority: () => source.signal.throwIfAborted(),
   };
   await withOperatorAuthority(operator, () =>
     withCaller(identity, async () => {
       const caller = callerIdentity();
-      expect(caller?.receiptAuthority?.()).toBe(true);
+      expect(() => caller?.receiptAuthority?.()).not.toThrow();
       const owner = makeOwner({ preemptible });
       const assertDetached = () =>
         expect([callerIdentity(), operatorAuthority()]).toEqual([undefined, undefined]);
@@ -132,7 +132,7 @@ it.each([false, true])("detaches retired authority (optional=%s)", async (preemp
       await expect(work).resolves.toBe("maintenance completed");
       expect(owner.assertCurrent).toThrow();
       expect(callerIdentity()).toBe(caller);
-      expect(caller?.receiptAuthority?.()).toBe(false);
+      expect(() => caller?.receiptAuthority?.()).toThrow();
       expect(operatorAuthority()).toBe(operator);
       expect(operator.assertCurrent).toThrow();
     }),

@@ -170,15 +170,27 @@ export function createModelSetup(
     gatewayNotRespondingMessage: () => t("modelSetup.wizard.gatewayNotResponding"),
   });
 
+  const ownsDetection = (outcome: {
+    token: object;
+    client: GatewayBrowserClient;
+    hello: unknown;
+    agentId: string | null;
+  }) =>
+    state.detectionRequest === outcome.token &&
+    context.gateway.snapshot.client === outcome.client &&
+    context.gateway.snapshot.hello === outcome.hello &&
+    agentSelection().state.selectedId === outcome.agentId;
   const runDetection = createModelSetupDetectRequest({
     getHello: () => context.gateway.snapshot.hello,
+    onOptions: (outcome) => {
+      // Known choices become usable now; discovery still owns readiness and
+      // first-run recovery, so the ready connection waits for its result.
+      if (ownsDetection(outcome) && state.pageState.phase !== "ready" && !firstRun.awaitsRecovery) {
+        state.pageState = { phase: "ready", result: outcome.value };
+      }
+    },
     onComplete: (outcome): boolean => {
-      if (
-        state.detectionRequest !== outcome.token ||
-        context.gateway.snapshot.client !== outcome.client ||
-        context.gateway.snapshot.hello !== outcome.hello ||
-        agentSelection().state.selectedId !== outcome.agentId
-      ) {
+      if (!ownsDetection(outcome)) {
         return false;
       }
       state.detectionRequest = null;
@@ -271,7 +283,6 @@ export function createModelSetup(
       wizard.close({ retireOwner: true });
     }
     if (ownerChanged) {
-      state.nativeSessionCatalogsEnabled = false;
       state.manualProviderId = "";
       state.manualApiKey = "";
       state.manualError = null;
@@ -326,18 +337,26 @@ export function createModelSetup(
 
   async function detect(currentRoute = routeData()): Promise<SystemAgentSetupDetectResult | null> {
     const client = context.gateway.snapshot.client;
-    if (!canUseSetup(client, currentRoute) || state.detectionRequest) {
+    if (!canUseSetup(client, currentRoute)) {
       return null;
     }
     resetVerify();
     // Only a cold load replaces the content. Same-owner rescans keep forms and
     // focus mounted; a changed connection clears them in synchronizeGateway.
-    if (state.pageState.phase !== "ready") {
+    const cold = state.pageState.phase !== "ready";
+    if (cold) {
       state.pageState = { phase: "loading" };
     }
+    // Setup actions may run during discovery. A refresh they request replaces
+    // the older scan, whose result could predate their change.
     const token = {};
     state.detectionRequest = token;
-    const completion = runDetection([client, agentSelection(currentRoute).state.selectedId, token]);
+    const completion = runDetection([
+      client,
+      agentSelection(currentRoute).state.selectedId,
+      token,
+      cold,
+    ]);
     setDetectionRequest({ completion });
     const outcome = await completion;
     return outcome?.token === token && "value" in outcome ? outcome.value : null;
@@ -365,7 +384,7 @@ export function createModelSetup(
   }
 
   function activationBlocked(): boolean {
-    return actionsDisabled() || state.detectionRequest !== null || firstRun.unresolved;
+    return actionsDisabled() || firstRun.unresolved;
   }
 
   async function activate(params: SystemAgentSetupActivateParams, targetId: string): Promise<void> {
@@ -377,16 +396,7 @@ export function createModelSetup(
     state.activationState = { phase: "testing", targetId };
     pendingPrepareOption = null;
     state.wizardMode = "activate";
-    await runWizardMutation(() =>
-      wizard.activate({ ...params, ...nativeSessionCatalogPreference() }, targetId),
-    );
-  }
-
-  function nativeSessionCatalogPreference(): { nativeSessionCatalogsEnabled?: boolean } {
-    return state.pageState.phase === "ready" &&
-      state.pageState.result.nativeSessionCatalogPreferenceRequired === true
-      ? { nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled }
-      : {};
+    await runWizardMutation(() => wizard.activate(params, targetId));
   }
 
   function connectManual(): void {
@@ -428,7 +438,7 @@ export function createModelSetup(
   ): Promise<void> {
     const client = context.gateway.snapshot.client;
     if (
-      ((wizardMutationActive || state.detectionRequest !== null) && !settling) ||
+      (wizardMutationActive && !settling) ||
       !canUseSetup(client) ||
       (wizard.state.phase === "idle" && firstRun.unresolved)
     ) {
@@ -482,13 +492,11 @@ export function createModelSetup(
         wizardMutationActive = false;
         wizardSaving.retire();
         const prepareOption = pendingPrepareOption;
-        const catalogPreference = nativeSessionCatalogPreference();
         pendingPrepareOption = null;
         await completeModelSetupWizard(
           { state, firstRun, wizard, detect, activate },
           completion,
           prepareOption,
-          catalogPreference,
         );
       } else if (state.wizardState.phase === "step" && state.wizardState.busy) {
         state.wizardState = { ...state.wizardState, busy: false };
@@ -597,11 +605,7 @@ export function createModelSetup(
       manualApiKey: state.manualApiKey,
       manualError: state.manualError,
       moreSignInOpen: state.moreSignInOpen,
-      nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled,
       nativeModels,
-      onNativeSessionCatalogsChange: (enabled: boolean) => {
-        state.nativeSessionCatalogsEnabled = enabled;
-      },
       firstRun: routeData()?.firstRun === true,
       iconUrls: state.iconUrls,
       onDetect: () => {
@@ -616,16 +620,11 @@ export function createModelSetup(
           activationTargetId(candidate.kind, candidate.modelRef),
         ),
       onStartAuth: (option: NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number]) => {
-        wizard.prepareSignIn(option.kind, option.label);
+        wizard.prepareSignIn(option.kind, option.label, option.brandId);
         pendingPrepareOption = null;
         state.wizardMode = "auth";
         void runWizardMutation(() =>
-          wizard.start(
-            option.id,
-            "openclaw.setup.auth.start",
-            nativeSessionCatalogPreference(),
-            option.modelTarget,
-          ),
+          wizard.start(option.id, "openclaw.setup.auth.start", {}, option.modelTarget),
         );
       },
       onStartPrepare: (option: ModelSetupPrepareOption) => {
@@ -664,7 +663,7 @@ export function createModelSetup(
   };
   const synchronizeCurrentGateway = () => {
     synchronizeGateway(routeData());
-    login.synchronizePresentation();
+    login.synchronize();
     notify();
   };
   createEffect(

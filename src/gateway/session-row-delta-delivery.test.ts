@@ -16,6 +16,7 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
   const stringify = JSON.stringify;
   const encodings = new Map<object, number>();
   let fullEnvelopeEncodings = 0;
+  let patchEncodings = 0;
   let fieldPreparations = 0;
   let deliveries = 0;
   const keys = Object.keys;
@@ -30,6 +31,9 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
     if (value && typeof value === "object" && "full" in value && value.full === null) {
       fullEnvelopeEncodings++;
     }
+    if (value && typeof value === "object" && "set" in value && "remove" in value) {
+      patchEncodings++;
+    }
     if (value === first || value === replacement) {
       encodings.set(value, (encodings.get(value) ?? 0) + 1);
     }
@@ -40,6 +44,10 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
       const lastAssistantMessage = event < 6 ? first : replacement;
       const rows: GatewaySessionRow[] = Array.from({ length: audiences }, (_, audience) =>
         Object.freeze({
+          // Team-shaped rows have many unchanged metadata fields around a small runtime delta.
+          ...Object.fromEntries(
+            Array.from({ length: 40 }, (_value, field) => [`metadata${field}`, field]),
+          ),
           key: "agent:main:stream",
           agentId: "main",
           sessionId: "stream",
@@ -68,7 +76,7 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
             ...(event === 6 || (index === 1 && event === 7) ? { lastAssistantMessage } : {}),
           };
           expect(delivery.rows?.wire[0]).toMatchObject({ set, remove: [] });
-          expect(JSON.parse(delivery.rows!.encoded[0]!).set).toEqual(set);
+          expect(delivery.rows!.encoded[0]).toBe(stringify(delivery.rows!.wire[0]));
         }
         owner.deliver(delivery);
         deliveries++;
@@ -77,8 +85,9 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
     expect(deliveries).toBe(12 * owners.length - 1);
     expect(fieldPreparations).toBe(12 * audiences);
     expect([...encodings.values()]).toEqual([1, 1]);
-    // The first publication has no baseline; each later immutable row is sized once.
-    expect(fullEnvelopeEncodings).toBe(11 * audiences);
+    // Only the large replacement needs exact sizing; small runtime patches are already smaller.
+    expect(fullEnvelopeEncodings).toBe(audiences + 1);
+    expect(patchEncodings).toBe(11 * audiences + 1);
   } finally {
     encoding.mockRestore();
     preparing.mockRestore();

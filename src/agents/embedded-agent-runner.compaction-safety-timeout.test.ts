@@ -73,6 +73,26 @@ it("bounds reporting plugins at the existing overall ceiling", async () => {
   params()?.onProgress?.();
 });
 
+it("treats a caller-supplied deadlineAt as epoch ms", async () => {
+  let signal: AbortSignal | undefined;
+  const pending = compactWithSafetyTimeout(
+    (abortSignal) => {
+      signal = abortSignal;
+      return new Promise<never>(() => {});
+    },
+    30,
+    { deadlineAt: Date.now() + 20 },
+  );
+  const settled = pending.catch((error: unknown) =>
+    error instanceof Error ? error.message : String(error),
+  );
+  // Subtracting a monotonic timestamp from this epoch value would leave the budget at
+  // decades, so the caller's 20ms ceiling would be enforced as the whole 30ms window.
+  await vi.advanceTimersByTimeAsync(20);
+  expect(signal?.aborted).toBe(true);
+  expect(await settled).toBe("Compaction timed out");
+});
+
 it("retains the default timeout when cancellation cleanup throws", async () => {
   const onCancel = vi.fn(() => {
     throw new Error("abortCompaction failed");

@@ -7,11 +7,10 @@ import {
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const executionBudgetContext = resolveGlobalSingleton(
   Symbol.for("openclaw.agentToolExecutionBudgetContext"),
-  () => new AsyncLocalStorage<{ admit: () => void; assertCurrent: () => void }>(),
+  () => new AsyncLocalStorage<{ admit: () => void }>(),
 );
 
 /** One invocation owns the count and closes every tool closure it created. */
@@ -53,7 +52,7 @@ export function createAgentToolExecutionBudget(params: {
     },
     async run<T>(run: () => Promise<T>): Promise<T> {
       try {
-        return await executionBudgetContext.run({ admit, assertCurrent }, run);
+        return await executionBudgetContext.run({ admit }, run);
       } finally {
         active = false;
       }
@@ -64,24 +63,6 @@ export function createAgentToolExecutionBudget(params: {
 /** Capture at tool construction so retained tools cannot borrow a later budget. */
 export function captureAgentToolExecutionBudget(): (() => void) | undefined {
   return executionBudgetContext.getStore()?.admit;
-}
-
-/** Freeze the invocation's operational fence before asynchronous source work. */
-export function captureAgentToolSourceExecutionGuard(signal?: AbortSignal): SessionSourceAssertion {
-  // This host closure checks the exact delegated claim, even with audit disabled;
-  // neither diagnostic identity tokens nor their collection grant authority.
-  const authority = getGatewayToolCallerIdentity()?.receiptAuthority;
-  const assertBudgetCurrent = executionBudgetContext.getStore()?.assertCurrent;
-  const assertReceipt = Object.assign(() => {
-    if (authority?.() === false) {
-      throw new Error("tool invocation authority is no longer active");
-    }
-  }, authority);
-  return composeSessionSourceAssertion([assertReceipt], (assertSource) => {
-    signal?.throwIfAborted();
-    assertBudgetCurrent?.();
-    assertSource();
-  });
 }
 
 /** Prepare storage authority for one effect; its final callback checks the retained receipt. */

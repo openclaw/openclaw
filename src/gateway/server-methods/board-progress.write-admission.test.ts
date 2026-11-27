@@ -18,6 +18,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { boardStore } from "../board-store.js";
 import { progressCardStore } from "../progress-card-store.js";
@@ -50,6 +51,8 @@ it.each([
   ...variants("abort", ["board.update", "board.widget.grant", "progressCard.put"]),
   ...variants("route", ["board.widget.put", "progressCard.put"]),
   ...variants("lifecycle", ["progressCard.put"]),
+  ...variants("narrow-allow", ["board.update", "board.widget.put"]),
+  ...variants("narrow-replaced", ["board.update", "board.widget.put"]),
 ])("queues registered $method behind a native reservation ($change)", ({ method, change }) =>
   withOpenClawTestState(stateOptions, async () => {
     const cold = change === "abort";
@@ -58,10 +61,13 @@ it.each([
       agents: { ownership: "explicit", entries: { main: {}, work: {} } },
     };
     cfg.gateway!.roles!.definitions!.view!.scopes = [...scopes];
+    cfg.gateway!.roles!.definitions!.none!.scopes = [];
     setRuntimeConfigSnapshot(cfg, cfg);
     const target = { sessionKey: "global", agentId: "work" };
     const client = { ...roleClient("view", "admission-owner"), connId: "admission-owner" };
-    client.connect.scopes = [...scopes];
+    client.connect.scopes = change.startsWith("narrow-")
+      ? ["operator.sessions.write"]
+      : [...scopes];
     const entry = {
       ...profileSessionEntry("admission-session", 1, client.authenticatedUserProfile!.profileId),
       lifecycleRevision: "before",
@@ -162,6 +168,12 @@ it.each([
       expect(databaseState()).toEqual(previousState);
       expect(board.broadcast).not.toHaveBeenCalled();
     };
+    const caller = await prepareUserProfileRoleAuthority(
+      client.authenticatedUserProfile!.profileId,
+    );
+    if (!caller) {
+      throw new Error("expected prepared operator authority");
+    }
     const request = handleGatewayRequest({
       req: { type: "req", id: "admission", method, params },
       client,
@@ -187,6 +199,7 @@ it.each([
         },
       },
       signal: controller.signal,
+      hasCurrentClientAuthority: () => caller.isCurrent(),
       sessionMutationCommitGuard:
         change === "allow-worker"
           ? undefined
@@ -215,6 +228,15 @@ it.each([
           { ...target, storePath: database.path },
           { ...entry, lifecycleRevision: "after", updatedAt: 2 },
         );
+      } else if (change === "narrow-replaced") {
+        replaceSessionEntrySync(
+          { ...target, storePath: database.path },
+          {
+            ...entry,
+            sessionId: "replacement-session",
+            updatedAt: 2,
+          },
+        );
       }
     } finally {
       release.resolve();
@@ -236,7 +258,7 @@ it.each([
       expect(stages).toEqual(expect.arrayContaining(["transaction", "commit"]));
       expect(grantReads).toEqual([]);
     }
-    if (change !== "allow" && change !== "allow-worker") {
+    if (change !== "allow" && change !== "allow-worker" && change !== "narrow-allow") {
       expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
       expectUnchanged();
       expect(fs.existsSync(replacementPath)).toBe(false);

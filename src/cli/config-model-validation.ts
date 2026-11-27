@@ -170,11 +170,11 @@ function collectTouchedTextModelRefs(params: {
     defaultPrimaryTouched &&
     (!previousRefs ||
       previousDefaultAgentId === undefined ||
-      resolveDefaultModelForAgent({ cfg: params.config }).provider !==
+      resolveDefaultModelForAgent({ cfg: params.config })?.provider !==
         resolveDefaultModelForAgent({
           cfg: params.previousConfig!,
           agentId: previousDefaultAgentId,
-        }).provider);
+        })?.provider);
   const touchedRefs = refs.filter((ref) => {
     if (ref.fallback && defaultPrimaryProviderChanged) {
       const previousRef = previousRefsByIdentity?.get(modelRefComparisonKey(ref));
@@ -248,11 +248,9 @@ function resolveFallbackRef(
   manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
   agentId?: string,
 ) {
-  const defaultProvider = resolveDefaultModelForAgent({
-    cfg: config,
-    agentId,
-    manifestPlugins,
-  }).provider;
+  const defaultProvider =
+    resolveDefaultModelForAgent({ cfg: config, agentId, manifestPlugins })?.provider ??
+    DEFAULT_PROVIDER;
   return resolveModelRefFromString({
     cfg: config,
     agentId,
@@ -293,11 +291,10 @@ function resolveCanonicalModelRef(
     cfg: validationConfig,
     agentId,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: "",
     allowPluginNormalization: true,
     manifestPlugins,
   });
-  return resolved.model ? resolved : undefined;
+  return resolved?.model ? resolved : undefined;
 }
 
 function scopedModelRefComparisonKey(config: OpenClawConfig, ref: TouchedModelRef): string {
@@ -391,15 +388,17 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     }
     const { provider, model } = resolvedRef;
     const stores = lease.snapshot.createStores();
-    const resolution = await modelRuntime.resolveModelAsync(provider, model, agentDir, config, {
-      ...stores,
-      modelIdSource: "selected",
-      agentId: targetAgentId,
-      allowBundledStaticCatalogFallback: true,
-      ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
-      preparedModelRuntime: lease.snapshot,
-      workspaceDir,
-    });
+    const resolution = await lease.run(() =>
+      modelRuntime.resolveModelAsync(provider, model, agentDir, config, {
+        ...stores,
+        modelIdSource: "selected",
+        agentId: targetAgentId,
+        allowBundledStaticCatalogFallback: true,
+        ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
+        preparedModelRuntime: lease.snapshot,
+        workspaceDir,
+      }),
+    );
     return resolution.model
       ? undefined
       : (resolution.error ?? `Unknown model: ${provider}/${model}`);

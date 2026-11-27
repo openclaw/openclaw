@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 export const TALK_READY_HISTORY_MESSAGE = {
   role: "assistant",
   content: "Talk history is ready.",
+  __openclaw: { id: "talk-ready" },
 };
 
 export async function waitForTalkReady(page: Page): Promise<void> {
@@ -515,7 +516,7 @@ export async function captureWebRtcSdpAlertProof(
 ) {
   const artifactDir = path.join(owner.artifactDir, "webrtc-sdp");
   await page
-    .locator('.agent-chat__talk-status[role="alert"]')
+    .locator('.agent-chat__composer-alert[role="alert"]')
     .screenshot({ path: path.join(artifactDir, fileName) });
 }
 

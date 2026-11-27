@@ -125,16 +125,17 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
     const pcmData = await fs.readFile(tempPcm);
     const samples = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 2);
 
-    const step = Math.max(1, Math.floor(samples.length / WAVEFORM_SAMPLES));
     const waveform = Buffer.alloc(WAVEFORM_SAMPLES);
+    const binCount = Math.min(samples.length, WAVEFORM_SAMPLES);
 
-    for (let i = 0; i < WAVEFORM_SAMPLES && i * step < samples.length; i++) {
+    for (let i = 0; i < binCount; i++) {
+      const start = Math.floor((i * samples.length) / binCount);
+      const end = Math.floor(((i + 1) * samples.length) / binCount);
       let sum = 0;
-      const count = Math.min(step, samples.length - i * step);
-      for (let j = 0; j < count; j++) {
-        sum += Math.abs(expectDefined(samples.at(i * step + j), "bounded PCM waveform sample"));
+      for (let j = start; j < end; j++) {
+        sum += Math.abs(expectDefined(samples.at(j), "bounded PCM waveform sample"));
       }
-      const avg = sum / count;
+      const avg = sum / (end - start);
       // Normalize to 0-255 (16-bit signed max is 32767)
       const normalized = Math.min(255, Math.round((avg / 32767) * 255));
       waveform[i] = normalized;
@@ -266,6 +267,7 @@ type VoiceMessageOpts = Pick<
   | "reply"
   | "retry"
   | "silent"
+  | "signal"
   | "mediaAccess"
   | "mediaLocalRoots"
   | "mediaReadFile"

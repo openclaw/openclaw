@@ -4,6 +4,11 @@ import type {
   WizardNextResult as ProtocolWizardNextResult,
   WizardStep as ProtocolWizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
+import {
+  readProviderAuthFailure,
+  type ProviderAuthFailureReason,
+} from "../plugins/provider-auth-failure.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   DEVICE_CODE_PHISHING_WARNING,
@@ -190,9 +195,10 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       let stopped = false;
       session.pushProgress(label, undefined, label);
       return {
-        update: (message) => {
-          if (!stopped) {
-            session.pushProgress(message, undefined, message);
+        update: (message, reason) => {
+          // A refusal outlives the spinner: the prompt that replaced it still shows why.
+          if (!stopped || reason) {
+            session.pushProgress(message, undefined, message, reason);
           }
         },
         stop: (message) => {
@@ -239,6 +245,7 @@ export class WizardSession {
   >();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
+  private failureReason: ProviderAuthFailureReason | undefined;
   private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
   private preparedModelRef: string | undefined;
   private modelActivation: ProtocolWizardNextResult["modelActivation"];
@@ -297,6 +304,7 @@ export class WizardSession {
       done: true,
       status: this.status,
       error: this.error,
+      ...(this.failureReason ? { reason: this.failureReason } : {}),
       ...(this.configuredAccounts
         ? {
             channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
@@ -372,6 +380,7 @@ export class WizardSession {
     this.status = "cancelled";
     this.error = "cancelled";
     this.abortController.abort(new WizardCancelledError());
+    materializeErrorStack(this.abortController.signal.reason);
     this.rejectPendingAnswers();
     this.consumeExternalUrl();
     this.progressSteps = [];
@@ -385,7 +394,10 @@ export class WizardSession {
     if (this.status !== "running") {
       return;
     }
-    this.inputClosedError ??= error;
+    if (!this.inputClosedError) {
+      materializeErrorStack(error);
+      this.inputClosedError = error;
+    }
     this.consumeExternalUrl();
     if (!this.cancellationLocked && !this.preparationCancellationLocked) {
       this.abortController.abort(this.inputClosedError);
@@ -414,6 +426,13 @@ export class WizardSession {
   lockCancellationForPreparation() {
     this.signal.throwIfAborted();
     this.preparationCancellationLocked = true;
+    // Saving starts only after the browser sign-in returned. Retire its code and tab so the
+    // remaining setup never asks the user to enter a code they already approved.
+    if (this.pendingExternalUrl || this.devicePresentation.deviceCode) {
+      this.consumeExternalUrl();
+      const message = "Signed in. Finishing setup…";
+      this.pushProgress(message, undefined, message);
+    }
   }
 
   /** Resume cancellation after preparation, before more input or verification. */
@@ -443,8 +462,14 @@ export class WizardSession {
     message: string,
     presentation?: Pick<WizardStep, "title" | "deviceCode">,
     progressMessage?: string,
+    reason?: ProviderAuthFailureReason,
   ) {
     if (this.status !== "running") {
+      return;
+    }
+    if (reason && this.currentStep && wizardStepAwaitsInput(this.currentStep)) {
+      // The open prompt keeps its id, so an answer in flight still settles it.
+      this.currentStep = { ...this.currentStep, progressMessage: message, reason };
       return;
     }
     clearImmediate(this.externalUrlImmediate);
@@ -465,6 +490,7 @@ export class WizardSession {
           : message,
       executor: "gateway",
       ...(progressMessage !== undefined ? { progressMessage } : {}),
+      ...(reason ? { reason } : {}),
       ...(this.pendingExternalUrl ? { externalUrl: this.pendingExternalUrl } : {}),
     };
     if (this.stepDeferred) {
@@ -535,6 +561,7 @@ export class WizardSession {
       } else {
         this.status = "error";
         this.error = coerceErrorMessage(error);
+        this.failureReason = readProviderAuthFailure(error)?.reason;
       }
     } finally {
       this.settled = true;

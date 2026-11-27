@@ -5,12 +5,13 @@ import { isUnconfiguredConfigSource } from "../cli/fresh-install-config.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatUserCliCommand } from "../daemon/durable-service-entrypoint.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 // Guided onboarding verifies the selected AI connection before persisting its route.
 import type { SetupInferenceDetection } from "../system-agent/setup-inference.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { displayPath, resolveUserPath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import {
   resolveOnboardingAgentTarget,
@@ -69,7 +70,7 @@ async function runGuidedOnboardingFlow(
         : t("wizard.guided.invalidConfigUnknown");
     await prompter.note(
       t("wizard.guided.invalidConfigDetails", {
-        path: shortenHomePath(snapshot.path),
+        path: displayPath(snapshot.path),
         issues,
       }),
       t("wizard.setup.invalidConfigTitle"),
@@ -85,6 +86,10 @@ async function runGuidedOnboardingFlow(
   }
   const existingConfig =
     snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
+  // Migrations add an implicit agent roster, so only the pre-migration view shows authored setup.
+  const unconfigured = isUnconfiguredConfigSource(
+    snapshot.sourceConfigBeforeMigrations ?? existingConfig,
+  );
   const custodianMode = (deps.handoffMode ?? "hatch") === "hatch";
   const localOnboarding = custodianMode
     ? await import("../state/local-onboarding-state.js")
@@ -94,7 +99,7 @@ async function runGuidedOnboardingFlow(
   const previousLocalSetup = localOnboarding?.readLocalOnboardingState(snapshot.path);
   const offerQuickstart =
     custodianMode &&
-    (!snapshot.exists || isUnconfiguredConfigSource(existingConfig)) &&
+    (!snapshot.exists || unconfigured) &&
     // An interrupted setup's ask-first consent must survive; quick start assumes full discovery.
     existingConfig.wizard?.accessMode !== "guarded" &&
     opts.nonInteractive !== true &&
@@ -145,7 +150,7 @@ async function runGuidedOnboardingFlow(
   const replacePreviousSetup =
     !snapshot.exists ||
     (previousLocalSetup?.status === "pending" && localSetup === undefined) ||
-    (previousLocalSetup?.status === "completed" && isUnconfiguredConfigSource(existingConfig));
+    (previousLocalSetup?.status === "completed" && unconfigured);
   const handoffAgentId = firstAgent?.team
     ? normalizeAgentId(firstAgent.name)
     : resumingSetup && hasAuthoredRoster
@@ -378,14 +383,9 @@ async function runGuidedOnboardingFlow(
     }
   } else {
     // Declined discovery: build the manual picker from config/manifests only.
-    const { listManualSetupInferenceOptions } = await import("../system-agent/setup-inference.js");
-    detection = {
-      candidates: [],
-      unavailableCandidates: [],
-      // Install suggestions come from scanning; a declined scan offers none.
-      recommendedInstalls: [],
-      ...(await listManualSetupInferenceOptions()),
-    };
+    const { listManualSetupInferenceDetection } =
+      await import("../system-agent/setup-inference.js");
+    detection = await listManualSetupInferenceDetection();
   }
 
   const resultLines = await runManualStage({
@@ -397,6 +397,11 @@ async function runGuidedOnboardingFlow(
     activate,
   });
   const skippedInference = resultLines === null;
+  const resolveNextStepCommands = async () => ({
+    onboardCommand: await formatUserCliCommand("onboard"),
+    channelsCommand: await formatUserCliCommand("channels add"),
+    dashboardCommand: await formatUserCliCommand("dashboard"),
+  });
   if (localOnboarding && (resumingSetup || (!existingConfig.gateway && !detection.setupComplete))) {
     const { withConfigMutationExclusive } = await import("../config/config.js");
     // A verified existing route may need no config write. Claim before provisioning
@@ -425,7 +430,10 @@ async function runGuidedOnboardingFlow(
   if (!custodianMode) {
     if (skippedInference) {
       await prompter.note(
-        t("wizard.guided.nextStepsWithoutAi", { workspace }),
+        t("wizard.guided.nextStepsWithoutAi", {
+          workspace,
+          ...(await resolveNextStepCommands()),
+        }),
         t("wizard.guided.nextStepsTitle"),
       );
       return null;
@@ -447,7 +455,8 @@ async function runGuidedOnboardingFlow(
   // onboarding; authored model-only configs without that receipt stay untouched.
   const alreadyConfigured =
     localSetup?.status !== "pending" && Boolean(detection?.setupComplete || existingConfig.gateway);
-  let gatewayExternallyManaged = false;
+  // Something other than this terminal keeps the Gateway alive after onboarding exits.
+  let gatewayRunsWithoutTerminal = false;
   const { resolveSetupWorkspaceSelection } = await import("../wizard/setup.workspace.js");
   const workspaceSelection = await resolveSetupWorkspaceSelection({
     baseConfig: existingConfig,
@@ -490,6 +499,16 @@ async function runGuidedOnboardingFlow(
       await showSessionMigrationWarnings(prompter, created.sessionMigrationWarnings);
     }
   } else {
+    const { canOfferGatewayServiceForOnboarding } =
+      await import("../wizard/setup.gateway-service-offer.js");
+    const keepGatewayRunning =
+      quickstart &&
+      !skippedInference &&
+      (await canOfferGatewayServiceForOnboarding()) &&
+      (await prompter.confirm({
+        message: t("wizard.guided.quickstartKeepRunningQuestion"),
+        initialValue: true,
+      }));
     // Announced default: apply the same setup plan the conversational "yes"
     // would, then hand off to the hatch instead of parking in the OpenClaw chat.
     const applyProgress = prompter.progress(t("wizard.guided.settingUp"));
@@ -526,7 +545,9 @@ async function runGuidedOnboardingFlow(
               ? { finalizeConfig: enableDefaultOnboardingInternalHooks }
               : {}),
             surface: "cli",
-            ...(quickstart || skippedInference ? { installDaemon: false } : {}),
+            ...((quickstart && !keepGatewayRunning) || skippedInference
+              ? { installDaemon: false }
+              : {}),
             runtime,
           },
           localSetup?.status === "pending"
@@ -534,6 +555,7 @@ async function runGuidedOnboardingFlow(
             : undefined,
         ),
       );
+      applyProgress.stop();
       if (applied.lines.length > 0) {
         await prompter.note(applied.lines.join("\n"), t("wizard.guided.localSetupTitle"));
       }
@@ -548,8 +570,8 @@ async function runGuidedOnboardingFlow(
         failureTitle = t("wizard.guided.gatewaySetupFailed");
         throw new Error(gateway.error);
       }
-      gatewayExternallyManaged =
-        applied.gateway.status === "skipped" && applied.gateway.reason === "external";
+      gatewayRunsWithoutTerminal =
+        gateway.status === "skipped" ? gateway.reason === "external" : keepGatewayRunning;
       // Accepted one-shot setup exception: record completion after Gateway startup.
       const appliedSnapshot =
         localSetup?.status === "pending"
@@ -565,7 +587,6 @@ async function runGuidedOnboardingFlow(
         throw new Error("Setup wrote an invalid OpenClaw config.");
       }
       persistedConfig = appliedSnapshot.sourceConfig ?? appliedSnapshot.config;
-      applyProgress.stop(t("wizard.guided.setupDone"));
     } catch (error) {
       applyProgress.stop(failureTitle);
       if (teamCoordinatorId) {
@@ -595,10 +616,13 @@ async function runGuidedOnboardingFlow(
     : appliedWorkspace;
   if (skippedInference) {
     await prompter.note(
-      t("wizard.guided.nextStepsWithoutAi", { workspace: agentWorkspace }),
+      t("wizard.guided.nextStepsWithoutAi", {
+        workspace: agentWorkspace,
+        ...(await resolveNextStepCommands()),
+      }),
       t("wizard.guided.nextStepsTitle"),
     );
-    await prompter.outro(t("wizard.guided.setupDone"));
+    await prompter.outro(t("wizard.guided.completeWithoutAi"));
     return null;
   }
   const { runMemorySetupFlow } = await import("../flows/memory-setup.js");
@@ -623,7 +647,7 @@ async function runGuidedOnboardingFlow(
     })?.modelTarget === "utility";
   if (setupOnly) {
     await prompter.note(
-      "Your setup and utility model is ready. It can help finish setup here. Choose a primary model in Model Setup or run openclaw onboard before regular agent chat.",
+      `Your setup and utility model is ready. It can help finish setup here. Choose a primary model in Model Setup or run ${await formatUserCliCommand("onboard")} before regular agent chat.`,
       "Setup and utility inference",
     );
   }
@@ -658,7 +682,7 @@ async function runGuidedOnboardingFlow(
           existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
         )
       : appliedWorkspace;
-  if (quickstart && !gatewayExternallyManaged) {
+  if (quickstart && !gatewayRunsWithoutTerminal) {
     await prompter.outro(t("wizard.guided.setupDone"));
     return {
       next: "foreground-gateway",

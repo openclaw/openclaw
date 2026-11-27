@@ -10,12 +10,8 @@ const hoisted = vi.hoisted(() => ({
   isReasoningTagProviderMock: vi.fn(),
 }));
 
-vi.mock("../../agents/agent-scope.js", async () => ({
-  modelFallbackOverrideFromAvailability: (
-    await vi.importActual<typeof import("../../agents/agent-scope.js")>(
-      "../../agents/agent-scope.js",
-    )
-  ).modelFallbackOverrideFromAvailability,
+vi.mock("../../agents/model-selection-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-selection-config.js")>()),
   resolveModelFallbackAvailability: (...args: unknown[]) =>
     hoisted.resolveModelFallbackAvailabilityMock(...args),
 }));
@@ -91,6 +87,23 @@ describe("agent-runner-utils", () => {
     hoisted.isReasoningTagProviderMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
   });
+
+  it.each([true, undefined] as const)(
+    "carries admitted restart board authoring, not provenance (%s)",
+    async (admitted) => {
+      const resolved = await buildExecution({
+        run: makeRun({
+          inputProvenance: { kind: "internal_system", sourceTool: "restart" },
+          internalEventExecution: {
+            pinnedWidgetAuthoring: admitted,
+            onStarted: () => {},
+            onTerminal: () => {},
+          },
+        }),
+      });
+      expect(resolved.pinnedWidgetAuthoring).toBe(admitted);
+    },
+  );
 
   describe("message action turn capabilities", () => {
     const source = {

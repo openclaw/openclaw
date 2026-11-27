@@ -12,7 +12,10 @@ import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-o
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { beginPluginStatePublication } from "../../plugin-state/plugin-state-publication.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
+import type {
+  AgentDatabaseExecutionFileIdentity,
+  AgentDatabaseExecutionScope,
+} from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   hydrateOpenClawStateWorkerError,
@@ -21,6 +24,7 @@ import {
 import type { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
+import type { SessionMaintenanceMcpRelease } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   collectReclamationDeletionEntries,
   prepareReclamationPublication,
@@ -52,8 +56,13 @@ const unresolved = resolveGlobalSingleton(
 export function deleteSessionWithNativeBindingsInWorker(
   plan: SessionNativeBindingDeletion["plan"],
   captured: NativeDeletionCapture,
-  assertCurrent: () => void,
-  onResult?: (result: SessionNativeBindingCandidate["result"], identity: string) => void,
+  assertCurrent: (operation?: RetainedWorkerTransactionAdmission) => void,
+  onResult?: (
+    result: SessionNativeBindingCandidate["result"],
+    identity: string,
+    fileIdentity: AgentDatabaseExecutionFileIdentity,
+  ) => void,
+  onMaintenanceMcpCommit?: (release: SessionMaintenanceMcpRelease) => void,
 ) {
   return runSessionNativeBindingWorkerOperation<
     SessionNativeBindingCandidate,
@@ -64,12 +73,20 @@ export function deleteSessionWithNativeBindingsInWorker(
     entries: collectReclamationDeletionEntries(plan),
     captured,
     assertCurrent,
+    assertCandidate: (_candidate, operation) => assertCurrent(operation),
     candidateKind: "session-native-binding-deletion",
+    onAgentCommitReceipt: onMaintenanceMcpCommit
+      ? ({ result }) => {
+          if (result.kind === "maintenance-finalize" && result.value.mcpRelease) {
+            onMaintenanceMcpCommit(result.value.mcpRelease);
+          }
+        }
+      : undefined,
     execute: (worker, participants) =>
       worker.execute({ type: "session.nativeBindings.delete", input: { ...participants, plan } }),
-    onCommitted(candidate, published, identity) {
+    onCommitted(candidate, published, identity, _context, fileIdentity) {
       try {
-        onResult?.(candidate.result, identity);
+        onResult?.(candidate.result, identity, fileIdentity);
         publishSessionLifecycleWorkerEffects(plan, candidate.result);
       } finally {
         if (plan.kind === "lifecycle-projection-commit") {

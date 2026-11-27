@@ -1,8 +1,10 @@
 import "./doctor-health.test-support.js";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
+import * as retainedRuntime from "../commands/doctor-retained-runtime.js";
 import * as nocow from "../commands/doctor-sqlite-nocow.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
@@ -12,6 +14,7 @@ import {
   acquireStateDatabaseSchemaLease,
 } from "../infra/gateway-state-owner.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import {
   collectUpdateDoctorFailureFacts,
@@ -68,7 +71,6 @@ const maintenance = vi.hoisted(() => ({
   releaseState: vi.fn(),
   repairSqliteNoCow: vi.fn(),
   enableSqliteReclamation: vi.fn(),
-  cleanupRetainedRuntimes: vi.fn(),
   release: vi.fn(),
 }));
 const resultWriter = await vi.importActual<typeof import("../infra/update-doctor-result.js")>(
@@ -122,6 +124,8 @@ describe("Doctor refused-migration maintenance outcome", () => {
     vi.clearAllMocks();
     maintenance.enableSqliteReclamation.mockReset();
     vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(maintenance);
+    // Runtime cleanup scans the host temp directory; these cases observe only its outcome and order.
+    vi.spyOn(retainedRuntime, "cleanupRetainedUpdateRuntimesBeforeMaintenance").mockResolvedValue();
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
   });
@@ -132,7 +136,7 @@ describe("Doctor refused-migration maintenance outcome", () => {
     { fix: true, updating: "1", request: undefined, repair: false, conversion: true },
     { fix: true, updating: "1", request: "1", repair: true, conversion: true },
   ])(
-    "gates SQLite repairs after checks and before restoration (fix=$fix, update=$updating, request=$request)",
+    "cleans updater runtimes before the stop and gates SQLite repairs before restoration (fix=$fix, update=$updating, request=$request)",
     async ({ fix, updating, request, repair, conversion }) => {
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updating);
       vi.stubEnv("OPENCLAW_DOCTOR_SQLITE_NOCOW_REPAIR", request);
@@ -153,7 +157,7 @@ describe("Doctor refused-migration maintenance outcome", () => {
       for (const [fn, event] of [
         [maintenance.repairSqliteNoCow, "repair"],
         [maintenance.enableSqliteReclamation, "conversion"],
-        [maintenance.cleanupRetainedRuntimes, "cleanup"],
+        [vi.mocked(retainedRuntime.cleanupRetainedUpdateRuntimesBeforeMaintenance), "cleanup"],
         [maintenance.finish, "restoration"],
       ] as const) {
         fn.mockReset().mockImplementationOnce(async () => {
@@ -167,10 +171,10 @@ describe("Doctor refused-migration maintenance outcome", () => {
       proceed.resolve();
       await work;
       expect(events).toEqual([
+        ...(fix ? ["cleanup"] : []),
         "checks completed",
         ...(repair ? ["repair"] : []),
         ...(conversion ? ["conversion"] : []),
-        ...(fix ? ["cleanup"] : []),
         "restoration",
       ]);
       expect(maintenance.enableSqliteReclamation).toHaveBeenCalledTimes(Number(conversion));
@@ -183,6 +187,21 @@ describe("Doctor refused-migration maintenance outcome", () => {
       expect(runtime.log.mock.calls.some(([message]) => message === deferred)).toBe(fix && !repair);
     },
   );
+
+  it("reports an updater runtime cleanup failure and still runs the stopped repairs", async () => {
+    await withDoctorState(async () => {
+      const cleanupFailure = new Error("fixture native broker could not settle");
+      vi.mocked(
+        retainedRuntime.cleanupRetainedUpdateRuntimesBeforeMaintenance,
+      ).mockRejectedValueOnce(cleanupFailure);
+      const runtime = createDoctorRuntime();
+      await runDoctorHealthFlow(runtime, repairOptions);
+      expect(runtime.error).toHaveBeenCalledWith(cleanupFailure.message);
+      expect(doctorMaintenance.beginDoctorMaintenance).toHaveBeenCalledOnce();
+      expect(mocks.runContributions).toHaveBeenCalledOnce();
+      expect(maintenance.finish).toHaveBeenCalledOnce();
+    });
+  });
 
   it("settles runtime exit before forwarding database write proof", async () => {
     const resultPath = createUpdatePostInstallDoctorResultPath();
@@ -365,7 +384,7 @@ describe("Doctor maintenance admission", () => {
       [false, true].map((updating) => ({ owner, updating })),
     ),
   )(
-    "preserves the live $owner owner before snapshots (updating=$updating)",
+    "preserves the live $owner owner before repair snapshots (updating=$updating)",
     async ({ owner, updating }) => {
       const resultPath = updating ? createUpdatePostInstallDoctorResultPath() : undefined;
       const env = {
@@ -385,6 +404,11 @@ describe("Doctor maintenance admission", () => {
         }
         closeOpenClawStateDatabaseByPath(database.path);
         const before = readConfig(state.configPath);
+        const readDatabaseFamily = () =>
+          resolveSqliteDatabaseFilePaths(database.path).map((file) =>
+            fs.existsSync(file) ? fs.readFileSync(file) : null,
+          );
+        const familyBefore = readDatabaseFamily();
         const stateOwner =
           owner === "gateway"
             ? acquireGatewayStateOwner({ databasePath: database.path })
@@ -403,10 +427,35 @@ describe("Doctor maintenance admission", () => {
           const result = resultPath
             ? await consumeUpdatePostInstallDoctorResult(resultPath)
             : undefined;
+          const readImages = snapshotProcesses.execFile.mock.calls.flatMap((call) => {
+            const args = call[1];
+            if (!Array.isArray(args)) {
+              return [];
+            }
+            const childIndex = args.indexOf(SQLITE_READONLY_CHILD_ARG);
+            return childIndex < 0 ? [] : [args.slice(childIndex + 1)];
+          });
+          if (owner === "agent") {
+            // Inspect current WAL leases in a private shared-state image before refusing repair.
+            for (const [mode, source, temporaryRoot] of readImages) {
+              expect(mode).toBe("sync");
+              expect(source).toBe(database.path);
+              expect(temporaryRoot).toBeTypeOf("string");
+              if (typeof temporaryRoot !== "string") {
+                throw new Error("Lease inspection did not identify its temporary image");
+              }
+              expect(path.dirname(temporaryRoot)).toBe(mocks.runtimeTmpDir());
+              expect(path.basename(temporaryRoot)).toMatch(/^openclaw-sqlite-readonly-v2-/);
+              expect(fs.existsSync(temporaryRoot)).toBe(false);
+            }
+          } else {
+            expect(readImages).toEqual([]);
+          }
+          expect(readDatabaseFamily()).toEqual(familyBefore);
           expect(
-            snapshotProcesses.execFile.mock.calls.filter(
-              (call) => Array.isArray(call[1]) && call[1].includes(SQLITE_READONLY_CHILD_ARG),
-            ),
+            fs
+              .readdirSync(path.dirname(database.path))
+              .filter((entry) => entry.includes(".pre-startup-migration-")),
           ).toEqual([]);
           if (updating) {
             expect(failure).toBeUndefined();

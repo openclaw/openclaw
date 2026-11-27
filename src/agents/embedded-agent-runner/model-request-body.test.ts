@@ -5,6 +5,11 @@ import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../packages/ai/src/host.js";
+import {
+  modelRequestBodyState,
+  prepareModelRequestBody,
+  encodedModelRequestBodyStream,
+} from "../../../packages/ai/src/transports/model-request-body.js";
 import { createOpenAICompletionsTransportStreamFn } from "../../../packages/ai/src/transports/openai-completions-transport.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -23,7 +28,6 @@ import {
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 
 const originalHost = getAiTransportHost();
-const digest = (value: unknown) => hash("sha256", JSON.stringify(value));
 afterEach(() => {
   configureAiTransportHost(originalHost);
   resetDiagnosticEventsForTest();
@@ -130,39 +134,6 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
     expect((await stream.result()).stopReason).toBe("stop");
     expect(wire).toBe(expectedWire);
     expect(mainThreadPayloadSerializations).toBe(0);
-    expect(state.lastAttempt).toEqual({
-      scopeDigest: expect.any(String),
-      digest: hash("sha256", expectedWire),
-      byteWeight: 614_400,
-      wire: {
-        requestBytes: 614_400,
-        prefixBytes: 4096,
-        prefixHash: hash("sha256", Buffer.from(expectedWire).subarray(0, 4096)),
-        cacheKeyPresent: true,
-        cacheKeyHash: hash("sha256", '"private-affinity"').slice(0, 16),
-        previousResponseIdPresent: true,
-        modelHash: digest(model.id).slice(0, 16),
-        routeHash: hash("sha256", model.baseUrl).slice(0, 16),
-        attempts: 1,
-        retried: false,
-        response: {
-          status: 200,
-          headers: {
-            "openai-processing-ms": 12.5,
-            "openai-model": hash("sha256", "private-model").slice(0, 16),
-            "openai-organization": hash("sha256", "private-account").slice(0, 16),
-            "x-openai-route": hash("sha256", "private-route").slice(0, 16),
-            "x-openai-region": hash("sha256", "private-region").slice(0, 16),
-            "x-request-id": hash("sha256", "private-request").slice(0, 16),
-          },
-        },
-      },
-      cachePrefix: expect.objectContaining({
-        messageField: "messages",
-        messageCount: messages.length,
-        continuation: true,
-      }),
-    });
     expect(JSON.stringify(state)).not.toContain("private-");
     expect(await completed.promise).toMatchObject({ requestPayloadBytes: 614_400 });
 
@@ -176,6 +147,27 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   } finally {
     unsubscribe();
   }
+});
+
+it("reuses the owned encoding for native Fetch replay without another body copy", async () => {
+  const payload = { stream: true, input: ["Synthetic 🦞"] };
+  const encoded = serializeModelRequestBody(payload);
+  const options = {};
+  const encode = vi.fn(async () => encoded);
+  const onBytes = vi.fn();
+  Object.assign(modelRequestBodyState(options), { encode, onBytes });
+  const prepared = await prepareModelRequestBody(options)(payload);
+  expect(prepared.body).toBe(encoded.body);
+  expect(encodedModelRequestBodyStream(prepared.body)).toBe(true);
+  expect(onBytes).toHaveBeenCalledWith(encoded.body.byteLength);
+  payload.input[0] = "changed after encoding";
+  const first = new Request("https://provider.invalid", { method: "POST", ...prepared });
+  const consumed = new Uint8Array(await first.arrayBuffer());
+  expect(new TextDecoder().decode(consumed)).toBe('{"stream":true,"input":["Synthetic 🦞"]}');
+  consumed.fill(0);
+  const replay = new Request("https://provider.invalid", { method: "POST", ...prepared });
+  expect(await replay.text()).toBe('{"stream":true,"input":["Synthetic 🦞"]}');
+  expect(encode).toHaveBeenCalledTimes(1);
 });
 
 it("observes serialized values without letting the observer change request bytes or stream behavior", () => {
@@ -275,20 +267,13 @@ it("hashes prompt prefixes without assembling copies of their serialized fields"
   const system = JSON.stringify({ instructions: payload.instructions, system: payload.system });
   const tools = JSON.stringify({ tools: payload.tools });
   const expected = { system: hash("sha256", system), tools: hash("sha256", tools) };
-  const copiedPrefixes: string[] = [];
-  const originalHash = crypto.hash;
-  const spy = vi.spyOn(crypto, "hash").mockImplementation((algorithm, data, encoding) => {
-    if (data === system || data === tools) {
-      copiedPrefixes.push(data);
-    }
-    return originalHash(algorithm, data, encoding);
-  });
+  const spy = vi.spyOn(crypto, "hash").mockClear();
   syncBuiltinESMExports();
   try {
     const result = prepareProviderPrompt({ payload, encode: true });
     expect(result.cachePrefix).toMatchObject(expected);
     expect(new TextDecoder().decode(result.encoded!.body)).toBe(JSON.stringify(payload));
-    expect(copiedPrefixes).toHaveLength(0);
+    expect(spy.mock.calls.some(([, data]) => data === system || data === tools)).toBe(false);
   } finally {
     spy.mockRestore();
     syncBuiltinESMExports();

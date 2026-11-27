@@ -1,6 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import { shellCallResultKey } from "../config/sessions/transcript-shell-receipt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindAgentAssistantSource, readAgentAssistantSource } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -18,9 +20,7 @@ import {
 } from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
-import { prepareCodeModeCheckpoint } from "./code-mode-checkpoint.js";
 import type { AgentMessage } from "./runtime/index.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import {
   getRawSessionAppendMessage,
   setRawSessionAppendMessage,
@@ -152,11 +152,6 @@ export function installSessionToolResultGuard(
      */
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
-    /**
-     * Optional set/list of tool names accepted for assistant toolCall/toolUse blocks.
-     * When set, tool calls with unknown names are dropped before persistence.
-     */
-    allowedToolNames?: Iterable<string>;
     config?: OpenClawConfig;
     maxToolResultChars?: number;
     suppressNextUserMessagePersistence?: boolean;
@@ -302,10 +297,7 @@ export function installSessionToolResultGuard(
     AppendReceipt
   > {
     const assistantSource = readAgentAssistantSource(acknowledgementSource);
-    const runOwnedMessage = prepareCodeModeCheckpoint(
-      attachSessionTranscriptRunId(message, context.runId),
-      acknowledgementSource,
-    );
+    const runOwnedMessage = attachSessionTranscriptRunId(message, context.runId);
     const parentEntryId = sessionManager.getLeafId();
     const originalTarget = sessionManager.getSessionTarget();
     const {
@@ -359,6 +351,26 @@ export function installSessionToolResultGuard(
     }
     if (!appended || !sessionTarget) {
       return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
+    }
+    // Image results become previewable as soon as their durable artifact owner exists.
+    // Ordinary tool text stays on the live tool lane until history reconciliation.
+    if (
+      persistedMessage.role !== "toolResult" ||
+      persistedMessage.content.some((item) => item.type === "image")
+    ) {
+      const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, context.runId);
+      void publishTranscriptUpdate(sessionTarget, {
+        lifecycleRevision,
+        message: persistedMessage,
+        messageId: entryId,
+        ...(messageSeq !== undefined ? { messageSeq } : {}),
+        ...(runId ? { runId } : {}),
+      }).catch(() =>
+        log.warn(
+          "Transcript update publication failed after append; reload the session to refresh its transcript.",
+          { sessionId: sessionTarget.sessionId, messageId: entryId },
+        ),
+      );
     }
     return {
       entryId,
@@ -470,9 +482,9 @@ export function installSessionToolResultGuard(
     }
     let nextMessage = message;
     if (message.role === "assistant") {
-      const sanitized = sanitizeToolCallInputs([message], {
-        allowedToolNames: opts?.allowedToolNames,
-      });
+      // The live run answers every call, including unknown tool names, and keeps it in
+      // provider history. Replay applies the tool allowlist once results are known.
+      const sanitized = sanitizeToolCallInputs([message]);
       if (sanitized.length === 0) {
         if (pending.size > 0) {
           yield* flushPendingToolResultsOperation(context);
@@ -502,9 +514,15 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      // A blocked or failed append must remain pending for transcript repair.
+      // A generated missing-result row or a discarded write cannot settle a shell call.
+      const key = shellCallResultKey(message, context.runId, id ?? undefined);
+      const finalResult = capToolResultForPersistence(persisted.message, maxToolResultChars);
+      const accepted =
+        key && finalResult.role === "toolResult" && finalResult.toolCallId === id
+          ? { ...finalResult, idempotencyKey: key }
+          : finalResult;
       return (yield* appendMessageAndCacheTranscriptSeq(
-        capToolResultForPersistence(persisted.message, maxToolResultChars),
+        accepted,
         context,
         {
           invalidateSerializedPrefixCache:
@@ -569,9 +587,7 @@ export function installSessionToolResultGuard(
       anchor,
       appended,
       entryId: result,
-      lifecycleRevision,
       message: persistedMessage,
-      messageSeq,
       sessionTarget,
     } = yield* appendMessageAndCacheTranscriptSeq(
       finalMessage,
@@ -582,21 +598,6 @@ export function installSessionToolResultGuard(
       },
       message,
     );
-    if (sessionTarget) {
-      const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, context.runId);
-      void publishTranscriptUpdate(sessionTarget, {
-        lifecycleRevision,
-        message: persistedMessage,
-        messageId: result,
-        ...(messageSeq !== undefined ? { messageSeq } : {}),
-        ...(runId ? { runId } : {}),
-      }).catch(() =>
-        log.warn(
-          "Transcript update publication failed after append; reload the session to refresh its transcript.",
-          { sessionId: sessionTarget.sessionId, messageId: result },
-        ),
-      );
-    }
 
     if (finalMessage.role === "user" && persistedMessage.role === "user") {
       void context.onUserMessagePersisted?.(finalMessage, {

@@ -1,5 +1,4 @@
-import { createContext, createSignal, createUniqueId, onCleanup, onSettled } from "solid-js";
-import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
+import { createContext, createSignal, createUniqueId, onCleanup } from "solid-js";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 
 export type ChatModelSearchRow = {
@@ -9,9 +8,10 @@ export type ChatModelSearchRow = {
   keywords?: string;
   providerLabel: string;
   reference: string;
+  recommended?: boolean;
   disabled: boolean;
   selected: boolean;
-  /** Rows without keycaps still consume digit positions, but do not advertise global shortcuts. */
+  /** Rows without global shortcuts still consume digit positions. */
   hasShortcut: boolean;
   provider?: string;
   more?: boolean;
@@ -27,12 +27,18 @@ export type ChatModelSearchCatalog = {
 
 type SearchMatch = { row: ChatModelSearchRow; rank: number };
 export type ChatModelSearchView = {
+  focusSearch(): void;
+  onPickerKeydown(event: KeyboardEvent): void;
+  rowRef(readKey: () => string): (node: HTMLElement) => HTMLElement;
   matches(): SearchMatch[];
   selectable(): SearchMatch[];
   reveal(key: string): void;
   highlighted(): string | undefined;
+  isHighlighted(key: string): boolean;
   highlight(value: string | undefined): void;
   providerOpen(provider: string): boolean;
+  /** Return to the opening provider so a closed picker never reopens elsewhere. */
+  resetProvider(): void;
   moreOpen(provider: string): boolean;
   filtering(): boolean;
   empty(): boolean;
@@ -51,8 +57,9 @@ type ModelSearchState = {
   details?: HTMLDetailsElement;
   summary?: HTMLElement;
   input?: HTMLInputElement;
+  pendingSearchFocus?: Element | null;
   focusRow?: string;
-  rows: Map<string, HTMLButtonElement>;
+  rows: Map<string, HTMLElement>;
   query(): string;
   setQuery(value: string): void;
   view?: ChatModelSearchView;
@@ -67,16 +74,6 @@ export function createChatModelSearch() {
   const state: ModelSearchState = { rows: new Map(), query, setQuery };
   const optionId = (key: string) => `${prefix}-option-${encodeURIComponent(key)}`;
   const listId = (key: string) => `${prefix}-list-${encodeURIComponent(key)}`;
-  onSettled(() =>
-    state.details
-      ? registerMenuShortcuts(state.details, () =>
-          (state.view?.selectable() ?? []).slice(0, 9).flatMap(({ row }, index) => {
-            const element = state.rows.get(row.key);
-            return row.hasShortcut && element ? [{ element, key: String(index + 1) }] : [];
-          }),
-        )
-      : undefined,
-  );
   return {
     query,
     open,
@@ -91,40 +88,18 @@ export function createChatModelSearch() {
     summaryRef(this: void, element: HTMLElement) {
       state.summary = element;
     },
-    inputRef() {
-      return elementRef<HTMLInputElement>((element) => {
-        state.input = element;
-        return () => {
-          if (state.input === element) {
-            state.input = undefined;
-          }
-        };
-      });
+    focusOnOpen() {
+      state.pendingSearchFocus = state.details?.ownerDocument.activeElement;
+      requestAnimationFrame(() => state.view?.focusSearch());
     },
     rowRef(readKey: () => string) {
-      let element: HTMLButtonElement;
-      onSettled(() => {
-        // The keyed row keeps this identity for its mounted lifetime.
-        const initialKey = readKey();
-        state.rows.set(initialKey, element);
-        if (state.focusRow === initialKey) {
-          state.focusRow = undefined;
-          if (state.details?.open) {
-            element.focus({ preventScroll: true });
-          }
-        }
-        return () => {
-          if (state.rows.get(initialKey) === element) {
-            state.rows.delete(initialKey);
-          }
-        };
-      });
-      return (node: HTMLButtonElement) => (element = node);
+      return state.view?.rowRef(readKey);
     },
     row(key: string) {
       return state.view?.row(key);
     },
     highlighted: () => state.view?.highlighted(),
+    isHighlighted: (key: string) => state.view?.isHighlighted(key) ?? false,
     bindView(view: ChatModelSearchView) {
       // Rows read this synchronous bridge while mounting; cleanup belongs to this primitive.
       state.view = view;
@@ -133,6 +108,7 @@ export function createChatModelSearch() {
           state.view = undefined;
         }
       });
+      return state;
     },
   };
 }
@@ -155,10 +131,15 @@ export function resetModelSearch(details: HTMLDetailsElement): void {
   if (state) {
     state.focusRow = undefined;
   }
-  const rows = state?.view?.selectable() ?? [];
-  // An unchanged empty query cannot invalidate the writable highlight derivation.
-  const fallback = rows.find(({ row }) => row.selected) ?? rows[0];
-  state?.view?.highlight(state.query().trim() ? undefined : fallback?.row.key);
+  // Clear explicit navigation even when the query is already empty.
+  state?.view?.highlight(undefined);
+  // Escape also clears search while open; only dismissal resets the tab.
+  if (!details.open) {
+    if (state) {
+      state.pendingSearchFocus = undefined;
+    }
+    state?.view?.resetProvider();
+  }
   state?.setQuery("");
 }
 
@@ -185,28 +166,6 @@ export function clearChatModelSearchOnEscape(event: KeyboardEvent): boolean {
 }
 
 export function handleModelPickerKeydown(event: KeyboardEvent): void {
-  const state = chatModelSearchState(event.currentTarget);
-  const details = state?.details;
-  if (
-    !state ||
-    event.defaultPrevented ||
-    !details?.open ||
-    event.target instanceof HTMLInputElement ||
-    event
-      .composedPath()
-      .some(
-        (target) =>
-          target instanceof HTMLElement &&
-          target !== details &&
-          target.matches('[role="menu"][popover], details[data-chat-native-picker]'),
-      ) ||
-    !/^[1-9]$/u.test(event.key)
-  ) {
-    return;
-  }
-  event.preventDefault();
-  const row = state.view?.selectable()[Number(event.key) - 1]?.row;
-  if (row) {
-    state.rows.get(row.key)?.click();
-  }
+  // Before the lazy panel binds its view, there are no shortcut targets.
+  chatModelSearchState(event.currentTarget)?.view?.onPickerKeydown(event);
 }

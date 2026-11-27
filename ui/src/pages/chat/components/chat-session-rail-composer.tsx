@@ -2,7 +2,7 @@ import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../../lib/browser-platform.ts";
 import {
   clearCompositionEnd,
@@ -35,11 +35,12 @@ import {
 import { createComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
 import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import { ChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.tsx";
+import { ChatModelControls } from "./chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { ComposerDictationStatus } from "./chat-voice-activity.tsx";
 import { DirectDictationView } from "./direct-dictation-view.tsx";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 const SIDE_CHAT_QUESTION_MAX_LENGTH = 400;
 
@@ -48,7 +49,9 @@ export function sessionRailQuestion(companion: ChatSessionCompanionThread): stri
     companion.draft.trim() ||
     (companion.attachments?.some((attachment) => attachment.mimeType.startsWith("image/"))
       ? t("chat.rail.askImageQuestion")
-      : "")
+      : companion.attachments?.some((attachment) => attachment.selectionAnnotation)
+        ? t("chat.rail.askSelectionQuestion")
+        : "")
   );
 }
 
@@ -60,6 +63,7 @@ export function sessionRailQuestion(companion: ChatSessionCompanionThread): stri
  */
 export function SessionRailComposer(props: {
   sessionKey: string;
+  agentId?: string | null;
   companion: ChatSessionCompanionThread;
   modelControls?: ChatModelControlsProps;
   client: GatewayBrowserClient | null;
@@ -86,8 +90,8 @@ export function SessionRailComposer(props: {
     isConnected: () => props.connected,
     // Follow-ups stay editable while an answer is pending; submit owns that gate.
     canCommit: () => props.connected,
-    onMessage: (message) => props.onDraftChange?.(message.slice(0, SIDE_CHAT_QUESTION_MAX_LENGTH)),
-    onError: (message) => showToast({ message }),
+    onMessage: (message) => props.onDraftChange?.(message),
+    onError: (message) => showToast({ severity: "error", message }),
     onSubmit: () => props.submit(),
   });
   const dictation = projectOwner(dictationControl, (owner) => owner);
@@ -105,6 +109,24 @@ export function SessionRailComposer(props: {
       }
     };
   });
+  const pendingAskId = () => props.companion.turns.find((turn) => turn.status === "pending")?.askId;
+  const stop = async () => {
+    const askId = pendingAskId();
+    if (!props.client || !askId) {
+      return;
+    }
+    try {
+      await props.client.request("sessions.companion.reset", {
+        sessionKey: props.sessionKey,
+        ...(props.agentId ? { agentId: props.agentId } : {}),
+        cancelAskId: askId,
+      });
+    } catch {
+      if (pendingAskId() === askId) {
+        showToast({ severity: "error", message: t("chat.rail.askStopFailed") });
+      }
+    }
+  };
   const dictationActive = createMemo(() => dictation.read().active);
   // Dictation admission reads these inputs synchronously; a changed input re-prepares it.
   const dictationRevision = createMemo(() => ({
@@ -172,7 +194,11 @@ export function SessionRailComposer(props: {
         pendingReads={props.attachmentProps.attachmentReads?.pendingReads ?? 0}
       />
       <div class="agent-chat__composer-lede">
-        <ComposerDictationStatus readDictation={() => dictation.read().dictation} />
+        <Show when={props.companion.commentsSaving}>
+          <div class="muted chat-session-rail__save-status" role="status">
+            {t("common.saving")}
+          </div>
+        </Show>
       </div>
       <div class="agent-chat__composer-input-row">
         <label class="agent-chat__composer-combobox chat-session-rail__prompt">
@@ -282,6 +308,7 @@ export function SessionRailComposer(props: {
               </div>
             )}
           </Show>
+          <ComposerDictationStatus readDictation={() => dictation.read().dictation} />
           <div class="agent-chat__composer-actions">
             {/* Preparing dictation starts capability reads and follows the settled rail. */}
             <Show when={settled()}>
@@ -292,19 +319,35 @@ export function SessionRailComposer(props: {
                 renderRevision={dictationRevision()}
               />
             </Show>
-            <Show when={!dictationActive()}>
+            <Show
+              when={pendingAskId() && props.client}
+              fallback={
+                <Show when={!dictationActive()}>
+                  <button
+                    class="chat-send-btn"
+                    type="submit"
+                    aria-label={t("chat.rail.askSubmit")}
+                    disabled={
+                      !props.connected ||
+                      props.pending ||
+                      Boolean(props.attachmentProps.attachmentReads?.pendingReads) ||
+                      !sessionRailQuestion(props.companion)
+                    }
+                  >
+                    <Icon name="arrowUp" />
+                  </button>
+                </Show>
+              }
+            >
               <button
-                class="chat-send-btn"
-                type="submit"
-                aria-label={t("chat.rail.askSubmit")}
-                disabled={
-                  !props.connected ||
-                  props.pending ||
-                  Boolean(props.attachmentProps.attachmentReads?.pendingReads) ||
-                  !sessionRailQuestion(props.companion)
-                }
+                class="chat-send-btn chat-send-btn--stop"
+                type="button"
+                aria-label={t("chat.rail.askStop")}
+                title={t("chat.rail.askStop")}
+                disabled={!props.connected}
+                onClick={() => void stop()}
               >
-                <Icon name="arrowUp" />
+                <Icon name="stop" />
               </button>
             </Show>
           </div>

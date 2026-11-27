@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { inheritSessionSelection, SessionLabelOwnerIndex } from "./session-entry-selection.js";
 import type { SessionEntry } from "./types.js";
 
@@ -53,26 +53,25 @@ it.each([
   },
 );
 
-it("indexes the store once and answers repeated conflicts without rescanning entries", () => {
-  const labelReads = vi.fn();
-  const entry = (sessionId: string, label: string): SessionEntry => ({
-    sessionId,
-    updatedAt: 1,
-    get label() {
-      labelReads();
-      return label;
-    },
-  });
-  const store = {
-    "agent:main:a": entry("a", "Alpha"),
-    "agent:main:b": entry("b", "Beta"),
+it("retains the projected patch entry while updating label ownership and removing aliases", () => {
+  const store: Record<string, SessionEntry> = {
+    alias: { sessionId: "target", updatedAt: 1, label: "Old" },
+    target: { sessionId: "target", updatedAt: 1, label: "Old" },
+    sibling: { sessionId: "sibling", updatedAt: 1, label: "Taken" },
   };
   const index = new SessionLabelOwnerIndex(store);
+  const projected: SessionEntry = {
+    sessionId: "target",
+    updatedAt: 2,
+    label: "New",
+    skillsSnapshot: { prompt: "retained instructions".repeat(1_000), skills: [] },
+  };
 
-  expect(labelReads).toHaveBeenCalledTimes(2);
-  for (let iteration = 0; iteration < 20; iteration += 1) {
-    expect(index.isLabelInUse("Alpha", ["agent:main:b"])).toBe(true);
-    expect(index.isLabelInUse("Beta", ["agent:main:b"])).toBe(false);
-  }
-  expect(labelReads).toHaveBeenCalledTimes(2);
+  expect(index.replaceEntry(["alias", "target"], "target", projected)).toBe(projected);
+  expect(store.target).toBe(projected);
+  expect(store).not.toHaveProperty("alias");
+  expect(index.isLabelInUse("Old", [])).toBe(false);
+  expect(index.isLabelInUse("New", [])).toBe(true);
+  expect(index.isLabelInUse("New", ["target"])).toBe(false);
+  expect(index.isLabelInUse("Taken", ["target"])).toBe(true);
 });

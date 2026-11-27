@@ -1,4 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type {
+  SessionCatalogProfileRelation,
+  SessionCatalogSourceProfileRelation,
+} from "../../packages/gateway-protocol/src/schema/session-catalog-query.js";
 import type { SessionParticipant } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
@@ -18,15 +22,20 @@ import type {
   UserProfileCatalogIdentityInput,
   UserProfileCatalogIdentityRead,
 } from "../state/user-profile-catalog-identity.read.js";
+import { captureUserProfileAuthorityRead } from "../state/user-profile-events.js";
 import { selectStoredGitHubIdentities } from "../state/user-profile-github-identity.js";
 import { getUserProfileDisplaysNative } from "../state/user-profile-list.native.js";
+import { prepareCurrentUserProfileIdentity } from "../state/user-profile-reads.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { projectSessionActor, projectSessionParticipant } from "./session-identity-projection.js";
 
 type CatalogSourceIdentity = { pluginId: string; sourceDomain: string };
 
-async function prepareIdentityFacts(input: UserProfileCatalogIdentityInput) {
-  const context = captureOpenClawStateReadWorkerContext();
+async function prepareIdentityFacts(
+  input: UserProfileCatalogIdentityInput,
+  options: { env?: NodeJS.ProcessEnv } = {},
+) {
+  const context = captureOpenClawStateReadWorkerContext(options);
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "userProfiles.catalogIdentity", input },
@@ -110,11 +119,13 @@ export async function prepareSessionCatalogSourceParticipantProjector(
     ? await prepareIdentityFacts({ kind: "source", profileIds: ids })
     : undefined;
   return {
+    assertCurrent: () => prepared?.assertCurrent(),
     project: (params: SourceParticipantParams): SessionParticipant =>
       projectSourceParticipant(params, (id) => {
         if (!prepared) {
           throw new Error("Session catalog sender was not prepared");
         }
+        prepared.assertCurrent();
         return prepared.readProfile(id);
       }),
   };
@@ -209,13 +220,15 @@ export async function prepareSessionCatalogSourceActorProjector(
   const prepared = ids.length
     ? await prepareIdentityFacts({ kind: "source", profileIds: ids })
     : undefined;
-  return (actor: StoredSessionActor | undefined) =>
-    projectSourceActor({ ...params, actor }, (id) => {
+  return (actor: StoredSessionActor | undefined) => {
+    prepared?.assertCurrent();
+    return projectSourceActor({ ...params, actor }, (id) => {
       if (!prepared) {
         throw new Error("Session catalog creator was not prepared");
       }
       return prepared.readProfile(id);
     });
+  };
 }
 
 /** Link only the selected page's portable claims; these display facts never grant access. */
@@ -244,7 +257,7 @@ export async function prepareSessionCatalogGitHubLinker(params: {
   const prepared = await prepareIdentityFacts({
     kind: "link",
     accountIds,
-    owners: params.owners ?? [],
+    owners: [...(params.owners ?? [])],
   });
   const profiles: Parameters<typeof projectSessionParticipant>[1] = new Map();
   const prepareDisplay = (id: string) => {
@@ -345,4 +358,66 @@ export function createSessionCatalogGitHubLinker() {
         : undefined;
     },
   };
+}
+
+/** Expand local human selection into a portable query target, never an authentication claim. */
+export async function resolveSessionCatalogProfileRelation(
+  query: SessionCatalogProfileRelation | undefined,
+  authenticatedProfileId?: string,
+): Promise<SessionCatalogSourceProfileRelation | undefined> {
+  if (!query) {
+    return undefined;
+  }
+  const { target, relationship } = query;
+  if (target.type === "github-account") {
+    return { relationship, target: { type: target.type, id: target.id } };
+  }
+  const profileId = target.type === "me" ? authenticatedProfileId : target.id;
+  if (!profileId) {
+    throw new Error("Profile selection requires an authenticated human profile");
+  }
+  const facts = await prepareIdentityFacts({ kind: "source", profileIds: [profileId] });
+  const account = facts.readProfile(profileId).github;
+  if (!account) {
+    throw new Error("Profile selection requires a verified GitHub account link");
+  }
+  facts.assertCurrent();
+  return { relationship, target: { type: "github-account", id: String(account.accountId) } };
+}
+
+// Session Share turns this closed code into a client-side-filter fallback. Node transports
+// flatten thrown errors to text, so callers must branch on `code`, never on the message.
+function unresolvedRelationError(message: string) {
+  return Object.assign(new Error(message), { code: "PROFILE_RELATION_UNRESOLVED" as const });
+}
+
+/** Resolve only the supplied target in the source's existing identity catalog. */
+export async function prepareSessionCatalogRelationIdentity(
+  query: SessionCatalogSourceProfileRelation,
+  options: { env?: NodeJS.ProcessEnv } = {},
+) {
+  const context = captureOpenClawStateReadWorkerContext(options);
+  const authority = await captureUserProfileAuthorityRead(context.admission);
+  const target = query.target;
+  const facts = await prepareIdentityFacts(
+    { kind: "link", accountIds: [target.id], owners: [] },
+    options,
+  );
+  const profileId = facts.accounts.get(target.id);
+  if (!profileId) {
+    throw unresolvedRelationError("Profile selection is unresolved or ambiguous on this source");
+  }
+  const identity = await prepareCurrentUserProfileIdentity(profileId, options);
+  if (!identity.profile) {
+    throw unresolvedRelationError("Profile selection is unresolved on this source");
+  }
+  const current = authority.bind([profileId, identity.profile.profileId]);
+  const assertCurrent = () => {
+    identity.assertCurrent();
+    if (!current?.()) {
+      throw new Error("Profile selection changed; refresh the catalog");
+    }
+  };
+  assertCurrent();
+  return { profile: identity.profile, assertCurrent };
 }

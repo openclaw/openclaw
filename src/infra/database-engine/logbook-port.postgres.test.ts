@@ -125,11 +125,11 @@ portSuite("Logbook PostgreSQL port and exact backup", (client) => {
     expect(rows(file("backup/database.sqlite"), descriptor)).toEqual(snapshot);
     const anchorPath = file("restored-anchor.sqlite");
     const restored = await fixture.restore(manifest, anchorPath);
-    const { tables, allocations: restoredAllocations } = await fixture.inspect(
+    const { catalog: _catalog, ...restoredVerification } = await fixture.inspect(
       restored.namespace,
       true,
     );
-    expect({ tables, allocations: restoredAllocations }).toEqual(forward);
+    expect(restoredVerification).toEqual(forward);
     using anchor = openNodeSqliteDatabase(anchorPath);
     expect(anchor.prepare("SELECT * FROM openclaw_engine_anchor").get()).toEqual({
       engine: "postgres",
@@ -162,6 +162,40 @@ portSuite("Logbook PostgreSQL port and exact backup", (client) => {
       ],
     ] as const) {
       expect(await query(sql)).toEqual([{ id }]);
+    }
+  });
+
+  it("bounds sequence allocations by rows committed before the export snapshot", async () => {
+    const { file, namespace, query } = fixture;
+    await fs.rm(file("backup"), { recursive: true, force: true });
+    const writer = new Client({ connectionString: connection });
+    await writer.connect();
+    const forward = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+    // A running Gateway commits a row after any pre-snapshot read but before the export snapshot.
+    const spy = vi.spyOn(client, "query").mockImplementation((async (...args: unknown[]) => {
+      if (args[0] === "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY") {
+        spy.mockRestore();
+        await writer.query(
+          `INSERT INTO "${namespace}".batches (day, start_ms, end_ms, created_ms, updated_ms) VALUES ('2026-07-04', 1, 2, 1, 2)`,
+        );
+      }
+      return forward(...args);
+    }) as never);
+    try {
+      const manifest = await fixture.export(sourcePath);
+      expect(manifest.verification.allocations["batches.id"]).toEqual({
+        value: "71",
+        called: true,
+      });
+      const restored = await fixture.restore(manifest, file("online-anchor.sqlite"));
+      expect(
+        await query(
+          `INSERT INTO "${restored.namespace}".batches (day, start_ms, end_ms, created_ms, updated_ms) VALUES ('2026-07-05', 1, 2, 1, 2) RETURNING id`,
+        ),
+      ).toEqual([{ id: "72" }]);
+    } finally {
+      spy.mockRestore();
+      await writer.end();
     }
   });
 

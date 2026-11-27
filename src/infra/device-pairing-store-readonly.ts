@@ -71,7 +71,7 @@ async function readPairing<Command extends DevicePairingReadCommand>(
       throw new Error("Device pairing read publication was replaced");
     }
     return refreshed;
-  });
+  }, command.type);
 }
 
 /** Current paired rows and prepared node bindings share the publication's revision and lifetime. */
@@ -150,7 +150,7 @@ export async function loadBoundDeviceBootstrapContextReadOnly(
   baseDir?: string,
 ) {
   const { reply } = await readPairing(
-    { type: "devicePairing.bootstrapContext", input },
+    { type: "devicePairing.bootstrapContext", input: { ...input } },
     baseDir,
     true,
   );

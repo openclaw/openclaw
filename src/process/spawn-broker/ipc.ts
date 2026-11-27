@@ -9,6 +9,9 @@ export const MAX_PENDING_BYTES = 256 * 1024 * 1024;
 export const MAX_PENDING_MESSAGES = 1024;
 const FRAME_KIND = "openclaw-spawn-broker-frame";
 
+/** The IPC owner refused this message before any native write was scheduled. */
+export class BrokerIpcAdmissionError extends SpawnBrokerError {}
+
 type IpcSender = (
   message: Serializable,
   handle: SendHandle | undefined,
@@ -38,7 +41,7 @@ export function createBrokerSender(send: IpcSender) {
     });
   const enqueue = <T>(size: number, operation: () => Promise<T>): Promise<T> => {
     if (bytes + size > MAX_PENDING_BYTES || messages >= MAX_PENDING_MESSAGES) {
-      return Promise.reject(new SpawnBrokerError("Spawn broker IPC capacity exceeded"));
+      return Promise.reject(new BrokerIpcAdmissionError("Spawn broker IPC capacity exceeded"));
     }
     bytes += size;
     messages += 1;
@@ -57,17 +60,19 @@ export function createBrokerSender(send: IpcSender) {
     handle?: SendHandle,
     initiateSpawn?: SpawnInitiation,
   ): Promise<void> => {
-    const payload = serialize(message);
+    // The resource owner can hand off a message it already serialized at admission.
+    const prepared = Buffer.isBuffer(message);
+    const payload = prepared ? message : serialize(message);
     const size = payload.byteLength;
     if (size > FRAME_BYTES && handle) {
       return Promise.reject(
-        new SpawnBrokerError("Spawn broker handle metadata exceeds one IPC frame"),
+        new BrokerIpcAdmissionError("Spawn broker handle metadata exceeds one IPC frame"),
       );
     }
     const id = ++sequence;
     const operation = async () => {
       if (size <= FRAME_BYTES) {
-        await write(message, handle, initiateSpawn);
+        await write(prepared ? deserialize(payload) : message, handle, initiateSpawn);
         return;
       }
       for (let offset = 0; offset < size; offset += FRAME_BYTES) {

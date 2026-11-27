@@ -1,7 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
-import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
+import { isRouteId, pluginTabLocation, pluginTabKey } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
@@ -11,41 +11,48 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
-import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
+import { resolveTrustedAvatarUrl } from "../lib/identity-avatar.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import { pluginTabKey } from "../pages/plugin/route.tsx";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { SidebarAttention } from "./sidebar-attention.tsx";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
+import { GatewayIdentityPlaceholder } from "./solid/gateway-connection-view.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
-import { renderSessionLeadingState, SessionRowBadges } from "./solid/session-presentation.tsx";
+import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
+import { renderSessionUnreadBadge, SessionGlyph } from "./solid/session-presentation.tsx";
 import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
+  readonly scroll?: { windowKeys(): string[] | undefined; rowFloor(): number };
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
   readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
-  renderPinnedSidebarSession(session: () => SidebarRecentSession): SolidJSX.Element;
   toggleSection(sectionId: string): void;
 };
 
 function readSidebarNativeGateway(host: AppSidebarRenderHost): NativeGateway | null {
   const snapshot = host.nativeGatewaySnapshot;
   return snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
+}
+
+/**
+ * The saved collapse choice. The page decides whether a sidebar shows at all, so a page
+ * without one reads as collapsed; only this choice may expand or collapse the sidebar.
+ */
+export function sidebarCollapsedByChoice(host: AppSidebarRenderHost): boolean {
+  return host.navigationCollapsedByChoice ?? host.navigationCollapsed;
 }
 
 export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Element {
@@ -106,19 +113,11 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   function AgentCard() {
     const avatarGateway = useAvatarGatewayContext();
-    const avatarLoader = createIdentityAvatars();
-    onSettled(() => avatarLoader.connect());
-    const avatarSource = projectOwner(avatarLoader, (owner) => owner);
-    const avatar = createMemo(() => {
-      avatarGateway();
-      const sourceUrl = avatarUrl();
-      const pending = Boolean(sourceUrl?.startsWith("/") && !avatarAuthReady());
-      return avatarSource.read().withActiveRoutes(() => ({
-        sourceUrl,
-        pending,
-        url: sourceUrl && !pending ? avatarLoader.resolve(sourceUrl) : null,
-      }));
-    });
+    const avatar = () => {
+      const url = avatarUrl();
+      // Keep the sidebar's canonical-route policy; the avatar owns image loading.
+      return url?.startsWith("/") ? resolveTrustedAvatarUrl(url, avatarGateway().origin) : url;
+    };
     const menuLabel = () =>
       cardAgents().length > 1 ? t("agentChip.switchAgent") : t("agentChip.menuLabel");
     return (
@@ -166,19 +165,19 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
                 { "sidebar-agent-card__avatar--environment": Boolean(environment()) },
               ]}
             >
-              <AgentIdentityAvatar
-                agent={{
-                  id: cardAgentId(),
-                  avatar: avatar().url,
-                  textAvatar: avatarText(),
-                  pending: avatar().pending,
-                }}
-                onImageError={
-                  avatar().sourceUrl
-                    ? avatarLoader.imageErrorHandler(avatar().sourceUrl!)
-                    : undefined
-                }
-              />
+              <Show
+                when={!host.connectionPending}
+                fallback={<GatewayIdentityPlaceholder kind="agent" />}
+              >
+                <AgentIdentityAvatar
+                  agent={{
+                    id: cardAgentId(),
+                    avatar: avatar(),
+                    textAvatar: avatarText(),
+                    pending: Boolean(avatarUrl()?.startsWith("/") && !avatarAuthReady()),
+                  }}
+                />
+              </Show>
               {menuUnread() && !menuOpen() ? (
                 <span
                   class="session-unread-dot sidebar-agent-card__menu-unread"
@@ -275,16 +274,16 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Elem
       <button
         type="button"
         class="sidebar-workspace-header__main"
-        ref={(element) => {
+        ref={(element: HTMLButtonElement) => {
           button = element;
           host.sidebarMenus.focusAgentRoster = focusHeader;
         }}
         aria-haspopup="menu"
         aria-expanded={menuOpen() ? "true" : "false"}
         aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
-        onPointerMove={(event) => {
-          host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
-        }}
+        onPointerMove={(event) =>
+          host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event)
+        }
         onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
         onPointerDown={(event: PointerEvent) => event.stopPropagation()}
         onClick={(event) => {
@@ -298,7 +297,11 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Elem
           }
         }}
       >
-        {branding().brandIcon !== "claw" ? (
+        {host.connectionPending ? (
+          <span class="sidebar-workspace-header__mark" aria-hidden="true">
+            <GatewayIdentityPlaceholder kind="agent" />
+          </span>
+        ) : branding().brandIcon !== "claw" ? (
           <span
             class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
             aria-hidden="true"
@@ -333,6 +336,30 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Elem
         </span>
       </button>
     </div>
+  );
+}
+
+export function SidebarNewSessionAction(props: {
+  host: Pick<
+    AppSidebarRenderHost,
+    "basePath" | "expandedAgentId" | "readNewSessionAccess" | "requestOpenNewSession"
+  >;
+  class: string;
+}) {
+  const disabledReason = createMemo(() => {
+    const access = props.host.readNewSessionAccess();
+    return access.allowed ? undefined : access.reason;
+  });
+  return (
+    <NewSessionLink
+      basePath={props.host.basePath}
+      agentId={props.host.expandedAgentId()}
+      class={props.class}
+      label={t("agentChip.newConversation")}
+      showShortcut
+      disabledReason={disabledReason()}
+      onOpen={(agentId) => props.host.requestOpenNewSession(agentId)}
+    />
   );
 }
 
@@ -423,6 +450,26 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
         <openclaw-tooltip>
           <span slot="content">
             <ShortcutHint
+              label={t("chat.openCommandPalette")}
+              combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette}
+            />
+          </span>
+          <button
+            type="button"
+            class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
+            aria-label={t("chat.openCommandPalette")}
+            disabled={!host.onOpenPalette}
+            onClick={() => host.onOpenPalette?.()}
+          >
+            <Icon name="search" />
+          </button>
+        </openclaw-tooltip>
+        <Show when={host.newSessionInRail}>
+          <SidebarNewSessionAction host={host} class="sidebar-rail__button sidebar-new-session" />
+        </Show>
+        <openclaw-tooltip>
+          <span slot="content">
+            <ShortcutHint
               label={t("assistantPanel.toggle")}
               combo={KEYBOARD_SHORTCUT_COMBOS.homePanel}
             />
@@ -444,27 +491,28 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             }}
           >
             <Show when={home()} fallback={<Icon name="home" />}>
-              {(session) => (
-                <>
-                  {
-                    renderSessionLeadingState({
-                      get session() {
-                        return session();
-                      },
-                      attribution: "owned",
-                      icon: <Icon name="home" />,
-                    }).leadingIndicator
-                  }
-                  <SessionRowBadges
-                    outboxAttentionCount={session().outboxAttentionCount}
-                    hasComposerDraft={session().hasComposerDraft}
+              {(session) => {
+                const running = () =>
+                  ((session().isRunVisuallyActive ?? session().hasActiveRun) &&
+                    session().status !== "queued") ||
+                  session().hasRunningDescendant === true;
+                return (
+                  <SessionGlyph
+                    content={<Icon name="home" />}
+                    running={running()}
+                    badge={
+                      <Show when={session().unread && !running()}>
+                        {renderSessionUnreadBadge()}
+                      </Show>
+                    }
                   />
-                </>
-              )}
+                );
+              }}
             </Show>
           </button>
         </openclaw-tooltip>
         <SidebarAttention
+          cachedCount={host.sidebarSnapshot?.issuesCount}
           activeRouteId={host.activeRouteId}
           onNavigate={host.onNavigate}
           watchUpdateProgress={host.watchUpdateProgress}
@@ -488,13 +536,18 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
           class="sidebar-identity-card"
           aria-haspopup="menu"
           aria-expanded={host.sidebarMenus.identityMenuPosition !== null ? "true" : "false"}
-          title={flagOpen() ? "" : identityLabel()}
+          title={flagOpen() ? "" : (statusLabel() ?? "")}
           data-connection-status={connectionStatus() ?? (host.connected ? "connected" : undefined)}
           aria-label={identityLabel()}
           onClick={(event) => host.sidebarMenus.toggleIdentityMenu(event.currentTarget)}
         >
           <span class="sidebar-identity-card__avatar">
-            <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+            <Show
+              when={!host.connectionPending}
+              fallback={<GatewayIdentityPlaceholder kind="user" />}
+            >
+              <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+            </Show>
             <span class="sidebar-identity-card__status" aria-hidden="true" />
           </span>
           <span class="sidebar-identity-card__text">
@@ -544,13 +597,15 @@ export function renderAppSidebarPluginTab(
       ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
       : "plug";
   });
+  const active = () =>
+    host.activeRouteId === "plugin" && host.activePluginTabId === pluginTabKey(tab());
   const link = (
     <SidebarNavLink
       ref={triggerRef}
       href={`${location().pathname}${location().search}`}
-      icon={<Icon name={iconName()} />}
+      icon={<Icon name={iconName()} filled={active()} />}
       label={tab().label}
-      active={host.activeRouteId === "plugin" && host.activePluginTabId === pluginTabKey(tab())}
+      active={active()}
       onNavigate={() => host.onNavigate?.("plugin", location())}
     />
   );

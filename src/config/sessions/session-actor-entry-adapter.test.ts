@@ -1,13 +1,25 @@
+import syncFs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  createWorkspaceFilesystemSource,
+} from "../../agents/workspace-state-guard.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { applySessionEntryLifecycleMutation } from "./session-accessor.js";
 import { createSessionEntryWithTranscriptInScope as createEntry } from "./session-accessor.sqlite-creation.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
+import { resetSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
 import { applySessionEntryExactReplacements as replaceExact } from "./session-accessor.sqlite-replacement-projection.js";
 import type { SessionActor, SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
@@ -17,10 +29,14 @@ import {
 } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageWrites } from "./session-actor-storage-contract.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import { readSessionEntryInWorker as readWorkerEntry } from "./session-entry-read-runtime.js";
+import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import * as maintenanceRuntime from "./store-maintenance-runtime.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+
+const pinDirs = useSessionStoreTempDirs(afterAll, "openclaw-memory-pin-scope-");
 
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
@@ -76,8 +92,8 @@ afterEach(async () => {
   }
 });
 
-async function fixture(name: string) {
-  const env = { OPENCLAW_STATE_DIR: `/synthetic/actor-entry-adapter/${name}` };
+async function fixture(name: string, stateDir = `/synthetic/actor-entry-adapter/${name}`) {
+  const env = { OPENCLAW_STATE_DIR: stateDir };
   const options = {
     agentId: "main",
     path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
@@ -120,8 +136,28 @@ async function fixture(name: string) {
 }
 
 describe("generic session entry APIs with actor memory storage", () => {
+  it("keeps participant constraints when replacing an incognito child's generation", async () => {
+    const { run, scope, read, patch } = await fixture("participation");
+    const delegatedOperatorSource = { kind: "unavailable" as const, reason: "no-source" as const };
+    await patch({ delegatedOperatorSource });
+    await patch({ delegatedOperatorSource: undefined });
+    await patch({ delegatedOperatorSource: { kind: "unavailable", reason: "unauthenticated" } });
+    expect(read()?.delegatedOperatorSource).toEqual(delegatedOperatorSource);
+    await run(() =>
+      resetSessionEntryLifecycle({
+        ...scope,
+        target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+        buildNextEntry: () => ({ sessionId: "next", updatedAt: 2 }),
+      }),
+    );
+    expect(read()).toMatchObject({
+      sessionId: "next",
+      delegatedOperatorSource,
+    });
+  });
+
   it("merges concurrent fixed patches and exposes detached read-after-write results", async () => {
-    const { run, read, patch } = await fixture("fixed-patches");
+    const { run, read, patch, scope } = await fixture("fixed-patches");
     await run(async () => {
       const before = read();
       await Promise.all([
@@ -141,6 +177,15 @@ describe("generic session entry APIs with actor memory storage", () => {
       const detached = read()!;
       detached.skillsSnapshot!.prompt = "Caller edit";
       expect(read()?.skillsSnapshot?.prompt).toBe("Retained prompt");
+      await expect(readWorkerEntry({ ...scope, projection: "list" })).resolves.not.toHaveProperty(
+        "skillsSnapshot",
+      );
+      await expect(
+        readWorkerEntry({ ...scope, projection: ["skillsSnapshot"] }),
+      ).resolves.toMatchObject({ skillsSnapshot: { prompt: "Retained prompt", skills: [] } });
+      await expect(readWorkerEntry(scope)).resolves.toMatchObject({
+        skillsSnapshot: { prompt: "Retained prompt", skills: [] },
+      });
     });
   });
 
@@ -162,6 +207,89 @@ describe("generic session entry APIs with actor memory storage", () => {
         model: "kept-model",
       });
     });
+  });
+
+  it.each(["phase", "storage"] as const)(
+    "refuses a memory %s effect after its selected file source changes",
+    async (effect) => {
+      const { actor, binding, scope } = await fixture(`file-source-${effect}`);
+      const before = bindStorage(binding, () => loadSessionEntryReadOnly(scope));
+      const root = pinDirs.make();
+      const original = path.join(root, "original.sqlite");
+      const replacement = path.join(root, "replacement.sqlite");
+      const alias = path.join(root, "selected.sqlite");
+      await fs.writeFile(original, "original");
+      await fs.writeFile(replacement, "replacement");
+      await fs.symlink(original, alias);
+      const selected = {
+        ...authority,
+        readCustody: [
+          { sourcePath: original, candidates: [captureSessionStoreReadCandidate(alias)] },
+        ],
+      };
+      const mutate = () =>
+        effect === "phase"
+          ? actor.patch(
+              {
+                commandId: "activity",
+                phaseId: "turn",
+                reducers: [{ kind: "activity", updatedAt: 50 }],
+              },
+              selected,
+            )
+          : actor.storage!.mutate(
+              {
+                type: "session.entry.patch",
+                input: { operation: { kind: "fields", patch: { label: "Updated" } } },
+              },
+              selected,
+            );
+      await fs.unlink(alias);
+      await fs.symlink(replacement, alias);
+      expect(await mutate()).toMatchObject({ kind: "rolled-back" });
+      expect(bindStorage(binding, () => loadSessionEntryReadOnly(scope))).toEqual(before);
+      await fs.unlink(alias);
+      await fs.symlink(original, alias);
+      expect(await mutate()).toMatchObject({ kind: "committed" });
+    },
+  );
+
+  it("refuses incognito creation after its workspace alias moves without synchronous filesystem checks", async () => {
+    const { actor, binding, scope, creationScope } = await fixture("workspace-source");
+    const root = pinDirs.make();
+    const original = path.join(root, "original");
+    const replacement = path.join(root, "replacement");
+    const alias = path.join(root, "workspace");
+    await fs.mkdir(original);
+    await fs.mkdir(replacement);
+    await fs.symlink(original, alias, "junction");
+    const source = createWorkspaceFilesystemSource(
+      await captureWorkspaceFilesystemEvidence(alias),
+      () => {},
+    );
+    const stats = vi.spyOn(syncFs, "lstatSync");
+    await bindStorage(binding, async () => {
+      await expect(
+        createEntry(
+          creationScope,
+          async () => {
+            await fs.unlink(alias);
+            await fs.symlink(replacement, alias, "junction");
+            return { ok: true, entry: { sessionId: "uncommitted", updatedAt: 20 } };
+          },
+          { commitGuard: source },
+        ),
+      ).rejects.toMatchObject({ name: "WorkspaceAliasRepointedError" });
+      expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+        sessionId: "workspace-source",
+        label: "Original",
+      });
+      expect(await readHistory(actor.storage!)).toMatchObject({
+        kind: "full",
+        snapshot: { events: [] },
+      });
+    });
+    expect(stats.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
   });
 
   it("creates over an existing entry with its transcript, owner, and explicit label together", async () => {
@@ -425,3 +553,61 @@ describe("selected actor storage binding", () => {
     });
   });
 });
+
+it.each(["patch", "cleanup", "replacement"] as const)(
+  "uses the memory owner state root for personal pins during %s maintenance",
+  async (operation) => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now - 40 * 24 * 60 * 60 * 1000);
+    const f = await fixture("personal-pin-root", pinDirs.make());
+    const unpinned = await f.sibling("unpinned");
+    const peer = await f.sibling("newer");
+    const profile = ensureProfileForEmail("memory-pin@example.test", { env: f.env }).id;
+    expect(
+      await setCanonicalUserPreferences(
+        profile,
+        {
+          [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: [`session:${f.sessionKey}`],
+        },
+        { env: f.env },
+      ),
+    ).toMatchObject({ ok: true });
+    vi.mocked(Date.now).mockReturnValue(now);
+    vi.spyOn(maintenanceRuntime, "resolveMaintenanceConfig").mockReturnValue(
+      resolveMaintenanceConfigFromInput({ mode: "enforce", pruneAfter: "1d", maxEntries: 100 }),
+    );
+    if (operation === "patch") {
+      await bindStorage({ ...f.binding, actor: peer.actor }, () =>
+        upsertSessionEntryCore(
+          { ...f.scope, sessionKey: peer.key },
+          { label: "Triggers maintenance" },
+        ),
+      );
+    } else if (operation === "cleanup") {
+      await applySessionEntryLifecycleMutation({
+        storePath: f.binding.path,
+        activeSessionKey: peer.key,
+        maintenanceOverride: resolveMaintenanceConfigFromInput({
+          mode: "enforce",
+          pruneAfter: "1d",
+          maxEntries: 100,
+        }),
+      });
+    } else {
+      await replaceExact({
+        storePath: f.binding.path,
+        agentId: "main",
+        sessionKeys: [peer.key],
+        activeSessionKey: peer.key,
+        skipMaintenance: false,
+        update: (rows) => ({
+          result: undefined,
+          replacements: labels(rows, "Triggers maintenance"),
+        }),
+      });
+    }
+    expect((await readEntry(unpinned.storage))?.archivedAt).toEqual(expect.any(Number));
+    expect(await readEntry(f.storage)).toMatchObject({ sessionId: "personal-pin-root" });
+    expect((await readEntry(f.storage))?.archivedAt).toBeUndefined();
+  },
+);

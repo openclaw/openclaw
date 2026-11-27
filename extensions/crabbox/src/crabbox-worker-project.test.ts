@@ -97,6 +97,15 @@ function notSubmittedReceipt(leaseId: string) {
   };
 }
 
+function captureFailure(receipt: unknown, result: Partial<SpawnResult> = {}) {
+  return commandResult({
+    code: 2,
+    stdout: JSON.stringify(receipt),
+    stderr: "checkpoint mode must be auto, native, or archive",
+    ...result,
+  });
+}
+
 describe("Crabbox project snapshot provisioning", () => {
   it("skips refused native captures across restart until the refresh interval expires", async () => {
     const now = 1_800_000_000_000;
@@ -108,13 +117,9 @@ describe("Crabbox project snapshot provisioning", () => {
     const command = (call: CommandCall) => {
       current.observe(call);
       if (unsupported && call.argv[2] === "create") {
-        return commandResult({
-          code: 2,
-          stdout: JSON.stringify(
-            unsupportedCaptureReceipt(call.argv[call.argv.indexOf("--id") + 1]!, "hetzner"),
-          ),
-          stderr: "checkpoint mode must be auto, native, or archive",
-        });
+        return captureFailure(
+          unsupportedCaptureReceipt(call.argv[call.argv.indexOf("--id") + 1]!, "hetzner"),
+        );
       }
       return undefined;
     };
@@ -178,14 +183,12 @@ describe("Crabbox project snapshot provisioning", () => {
             HOME: home,
             PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
             CRABBOX_TEST_NODE: resolveTestNodeExecPath(),
-            ...(call.argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")
-              ? {
-                  CRABBOX_WORKER_BOOTSTRAP_TOKEN: JSON.stringify({
-                    nodeBootstrap: nodeBootstrap.token,
-                    workerBundle: workerBundle.token,
-                  }),
-                }
-              : {}),
+            CRABBOX_WORKER_BOOTSTRAP_TOKEN: call.argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")
+              ? JSON.stringify({
+                  nodeBootstrap: nodeBootstrap.token,
+                  workerBundle: workerBundle.token,
+                })
+              : undefined,
           },
           encoding: "utf8",
           timeout: 5_000,
@@ -327,10 +330,18 @@ exec "$CRABBOX_TEST_NODE" "$@"
     ]);
     expect((await warmImage())?.capture).toEqual(capture);
 
-    // Operator recovery closes the persisted claim; the next eligible teardown can capture.
+    // Recovery releases the stopped source; only a new dispatch may capture again.
     blocked = false;
     await recoverCrabboxWarmImageCapture(crabboxState, capture!.selector, true);
+    expect(await f.allocation()).toBeUndefined();
     await destroyAndWait(provider, lease);
+    expect(commandCount(calls, "create")).toBe(1);
+    const fresh = await provider.provision(PROFILE, "post-recovery", options);
+    expect(fresh.leaseId).not.toBe(lease.leaseId);
+    expect(commandCount(calls, "create")).toBe(2);
+    expect((await warmImage())?.checkpointId).toBe(CHECKPOINT_ID);
+    expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
+    await destroyAndWait(provider, { ...fresh, profile: PROFILE });
     expect(commandCount(calls, "create")).toBe(2);
     expect((await warmImage())?.capture).toBeUndefined();
   });
@@ -361,13 +372,10 @@ exec "$CRABBOX_TEST_NODE" "$@"
             },
           });
         }
-        return commandResult({
-          code: 2,
-          stdout: JSON.stringify(
-            unsupported ? unsupportedCaptureReceipt(f.leaseId) : notSubmittedReceipt(f.leaseId),
-          ),
-          stderr: "image submission rejected; source rollback failed",
-        });
+        return captureFailure(
+          unsupported ? unsupportedCaptureReceipt(f.leaseId) : notSubmittedReceipt(f.leaseId),
+          { stderr: "image submission rejected; source rollback failed" },
+        );
       });
 
       await expect(f.provision()).rejects.toThrow(
@@ -716,18 +724,15 @@ exec "$CRABBOX_TEST_NODE" "$@"
     },
   );
 
-  it.each<{
-    failure: string;
-    result?: Partial<SpawnResult>;
-    receipt?: Partial<ReturnType<typeof notSubmittedReceipt>>;
-  }>([
-    { failure: "aborted" },
-    { failure: "response lost", result: { stdout: "" } },
-    { failure: "retained reservation", receipt: { localReservation: "retained" } },
-    { failure: "unknown schema", receipt: { schema: "crabbox.checkpoint.create.failure.v2" } },
+  it.each<[string, Partial<SpawnResult>, Record<string, unknown>]>([
+    ["aborted", {}, {}],
+    ["response lost", { stdout: "" }, {}],
+    ["retained reservation", {}, { localReservation: "retained" }],
+    ["unknown schema", {}, { schema: "crabbox.checkpoint.create.failure.v2" }],
+    ["different lease", { code: 2, stderr: "" }, unsupportedCaptureReceipt("cbx_other")],
   ])(
-    "retains uncertainty and prevents enrollment after native capture: $failure",
-    async ({ failure, result, receipt }) => {
+    "retains uncertainty and prevents enrollment after native capture: %s",
+    async (failure, result, receipt) => {
       const controller = new AbortController();
       const f = projectFixture((call) => {
         if (call.argv[2] !== "create") {
@@ -737,23 +742,27 @@ exec "$CRABBOX_TEST_NODE" "$@"
           controller.abort();
         }
         expect(call.options.signal).toBe(controller.signal);
-        return commandResult({
-          code: 7,
-          stderr: "capture failed",
-          stdout: JSON.stringify({
-            ...notSubmittedReceipt(f.leaseId),
-            ...receipt,
-          }),
-          ...result,
-        });
+        return captureFailure(
+          failure === "different lease"
+            ? receipt
+            : { ...notSubmittedReceipt(f.leaseId), ...receipt },
+          {
+            code: 7,
+            stderr: "capture failed",
+            ...result,
+          },
+        );
       }, controller);
 
-      await expect(f.provision()).rejects.toThrow();
+      await expect(f.provision()).rejects.toThrow(
+        failure === "aborted" ? undefined : "capture is unresolved",
+      );
 
       expect(f.events).toContain("capture");
       expect(f.options.beginNodeEnrollment).not.toHaveBeenCalled();
       expect(f.events).not.toContain("enrollment-install");
       expect((await warmImage())?.capture?.phase).toBe("uncertain");
+      expect((await warmImage())?.captureUnsupported).toBeUndefined();
       expect(f.count("stop") > 0).toBe(failure !== "aborted");
     },
   );
@@ -790,30 +799,9 @@ exec "$CRABBOX_TEST_NODE" "$@"
   ])("rejects an unsupported capture receipt for %s", (_failure, result, receipt) => {
     const context = { provider: "aws", id: operationLeaseId("unsupported") };
     const error = new CrabboxCheckpointCreateError(
-      commandResult({
-        code: 2,
-        stdout: JSON.stringify({ ...unsupportedCaptureReceipt(context.id), ...receipt }),
-        stderr: "checkpoint mode must be auto, native, or archive",
-        ...result,
-      }),
+      captureFailure({ ...unsupportedCaptureReceipt(context.id), ...receipt }, result),
     );
     expect(CrabboxCheckpointCreateError.unsupportedCapture(error, context)).toBeUndefined();
-  });
-
-  it("keeps an unsupported refusal for a different lease uncertain before enrollment", async () => {
-    const f = projectFixture(({ argv }) =>
-      argv[2] === "create"
-        ? commandResult({
-            code: 2,
-            stdout: JSON.stringify(unsupportedCaptureReceipt("cbx_other")),
-          })
-        : undefined,
-    );
-    await expect(f.provision()).rejects.toThrow("capture is unresolved");
-    expect(f.options.beginNodeEnrollment).not.toHaveBeenCalled();
-    const image = await warmImage();
-    expect(image?.capture?.phase).toBe("uncertain");
-    expect(image?.captureUnsupported).toBeUndefined();
   });
 
   it.each([false, true])(

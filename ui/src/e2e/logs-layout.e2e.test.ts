@@ -29,7 +29,66 @@ const logLines = Array.from({ length: 40 }, (_value, index) =>
 );
 
 suite.define(() => {
-  it("keeps wrapped filters inside their rows in the macOS dashboard viewport", async () => {
+  it("paints keyboard focus around the framed log stream without moving it", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        viewport: { width: 820, height: 1180 },
+        hasTouch: true,
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "logs.tail": {
+              cursor: 1,
+              file: "/synthetic/gateway.log",
+              lines: logLines.slice(0, 1),
+              reset: true,
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "logs");
+        const stream = page.getByRole("region", { name: "Logs", exact: true });
+        await stream.getByRole("listitem").waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        const follow = page.getByRole("switch", { name: "Auto-follow", exact: true });
+        await follow.focus();
+        const bounds = (await stream.boundingBox())!;
+        // Sample outside each edge, away from controls, text and rounded corners.
+        const x = Math.round(bounds.x),
+          y = Math.round(bounds.y);
+        const right = Math.round(bounds.x + bounds.width),
+          bottom = Math.round(bounds.y + bounds.height);
+        const middleX = Math.round(bounds.x + bounds.width / 2),
+          middleY = Math.round(bounds.y + bounds.height / 2);
+        const clips = [
+          { x: middleX - 16, y: y - 5, width: 32, height: 5 },
+          { x: right, y: middleY - 16, width: 5, height: 32 },
+          { x: middleX - 16, y: bottom, width: 32, height: 5 },
+          { x: x - 5, y: middleY - 16, width: 5, height: 32 },
+        ];
+        const edges = () => Promise.all(clips.map((clip) => page.screenshot({ clip })));
+        const inactive = await edges();
+        await page.keyboard.press("Tab");
+        expect(
+          await stream.evaluate(
+            (el) => el === document.activeElement && el.matches(":focus-visible"),
+          ),
+        ).toBe(true);
+        expect(await stream.boundingBox()).toEqual(bounds);
+        const active = await edges();
+        expect(active.map((edge, i) => !edge.equals(inactive[i]!))).toEqual([
+          true,
+          true,
+          true,
+          true,
+        ]);
+      },
+    );
+  });
+
+  it("keeps the toolbar and footer clear of the stream in the macOS dashboard viewport", async () => {
     const proofDir = artifactRoot
       ? path.join(createControlUiE2eArtifactDir("logs-layout", artifactRoot), proofLabel)
       : undefined;
@@ -75,7 +134,12 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/general`);
         await page.locator('.settings-sidebar__item[href="/logs"]').click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/logs");
-        await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
+        const logRows = page.locator(".log-row");
+        await logRows.first().waitFor({ state: "visible" });
+        await expect
+          .poll(() => logRows.first().getAttribute("aria-setsize"))
+          .toBe(String(logLines.length));
+        await expect.poll(() => logRows.count()).toBeLessThan(logLines.length);
         if (proofDir) {
           await writeFile(
             path.join(proofDir, "logs-layout.png"),
@@ -85,25 +149,98 @@ suite.define(() => {
           );
         }
 
-        const metrics = await page.locator(".logs-card").evaluate((card) => {
-          const rows = [...card.querySelectorAll<HTMLElement>(":scope > .settings-row")];
-          const stream = card.querySelector<HTMLElement>(":scope > .log-stream");
+        const metrics = await page.evaluate(() => {
+          const box = (selector: string) =>
+            document.querySelector(selector)!.getBoundingClientRect();
+          const card = document.querySelector<HTMLElement>(".logs-card")!;
+          const stream = card.querySelector<HTMLElement>(":scope > .log-stream")!;
+          const toolbar = document.querySelector<HTMLElement>(".logs-toolbar")!;
           return {
             cardDisplay: getComputedStyle(card).display,
-            streamFlexGrow: stream ? getComputedStyle(stream).flexGrow : "",
-            overflow: rows.map((row) => row.scrollHeight - row.clientHeight),
-            overlap: rows.map(
-              (row, index) =>
-                row.getBoundingClientRect().bottom -
-                ((rows[index + 1] ?? stream)?.getBoundingClientRect().top ?? Number.NaN),
-            ),
+            streamFlexGrow: getComputedStyle(stream).flexGrow,
+            toolbarOverflow: toolbar.scrollWidth - toolbar.clientWidth,
+            toolbarOverlap: box(".logs-toolbar").bottom - box(".logs-card").top,
+            footerOverlap: box(".logs-card").bottom - box(".logs-footer").top,
           };
         });
         expect(metrics).toMatchObject({ cardDisplay: "flex", streamFlexGrow: "1" });
-        expect(metrics.overflow).toHaveLength(2);
-        for (const delta of [...metrics.overflow, ...metrics.overlap]) {
-          expect(delta).toBeLessThanOrEqual(1);
-        }
+        expect(metrics.toolbarOverflow).toBeLessThanOrEqual(1);
+        expect(metrics.toolbarOverlap).toBeLessThanOrEqual(1);
+        expect(metrics.footerOverlap).toBeLessThanOrEqual(1);
+      },
+    );
+  });
+
+  it("gives the stream the rest of a phone viewport and keeps every control reachable", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 844, width: 390 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "logs.tail": {
+              cursor: logLines.length,
+              file: "/tmp/openclaw/openclaw-2026-07-21.log",
+              lines: logLines,
+              reset: true,
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}logs`);
+        const logRows = page.locator(".log-row");
+        await logRows.first().waitFor({ state: "visible" });
+
+        const layout = await page.evaluate(() => {
+          const stream = document.querySelector<HTMLElement>(".log-stream")!;
+          const content = document.querySelector<HTMLElement>("main.content")!;
+          const search = document.querySelector<HTMLInputElement>(".logs-toolbar input")!;
+          const row = stream.querySelector<HTMLElement>(".log-row")!;
+          const streamBox = stream.getBoundingClientRect();
+          return {
+            contentBottom: content.getBoundingClientRect().bottom,
+            contentScrolls: content.scrollHeight > content.clientHeight + 1,
+            streamBottom: streamBox.bottom,
+            streamScrolls: stream.scrollHeight > stream.clientHeight,
+            searchAlign: getComputedStyle(search).textAlign,
+            subsystem: row.querySelector<HTMLElement>(".log-subsystem")!.getBoundingClientRect()
+              .width,
+            pageWidth: document.documentElement.scrollWidth,
+          };
+        });
+        expect(layout.contentScrolls).toBe(false);
+        expect(layout.streamScrolls).toBe(true);
+        expect(layout.contentBottom - layout.streamBottom).toBeLessThanOrEqual(56);
+        expect(layout.searchAlign).not.toBe("right");
+        expect(layout.subsystem).toBeGreaterThan(0);
+        expect(layout.pageWidth).toBeLessThanOrEqual(390);
+
+        // The heading stays for assistive tech at phone width, and stays on screen above the
+        // width where the shell header takes over the title.
+        const heading = page.getByRole("heading", { name: "Logs", level: 1 });
+        await expect.poll(() => heading.count()).toBe(1);
+        await page.setViewportSize({ height: 844, width: 641 });
+        await heading.waitFor({ state: "visible" });
+        await expect
+          .poll(async () => (await heading.boundingBox())?.height ?? 0)
+          .toBeGreaterThan(1);
+        await page.setViewportSize({ height: 844, width: 390 });
+
+        const autoFollow = page.getByRole("switch", { name: "Auto-follow", exact: true });
+        await autoFollow.waitFor({ state: "visible" });
+
+        await page.getByRole("button", { name: "Filter", exact: true }).click();
+        const info = page.getByRole("menuitemcheckbox", { name: "info", exact: true });
+        await info.waitFor({ state: "visible" });
+        await expect.poll(() => page.getByRole("menuitemcheckbox").count()).toBe(6);
+        await info.click();
+        const filter = page.locator('[aria-controls="logs-levels:content"]');
+        await expect.poll(() => filter.getAttribute("class")).toContain("active");
+        await info.click();
+        await expect.poll(() => filter.getAttribute("class")).not.toContain("active");
+        await page.keyboard.press("Escape");
+
+        await page.getByRole("button", { name: "More actions", exact: true }).click();
+        await page.getByRole("menuitem", { name: "Refresh", exact: true }).waitFor();
+        await page.getByRole("menuitem", { name: "Export visible", exact: true }).waitFor();
       },
     );
   });

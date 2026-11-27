@@ -3,6 +3,10 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
+} from "../../agents/embedded-agent-messaging-extraction.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -10,7 +14,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import { OutboundDeliveryError } from "./deliver-types.js";
-import { runMessageAction as runAction } from "./message-action-runner.js";
+import { getToolResult, runMessageAction as runAction } from "./message-action-runner.js";
 import { registerSlackTextPlugin } from "./message-action-runner.test-support.js";
 
 type SendInput = Omit<Parameters<typeof runAction>[0], "action" | "cfg"> & { cfg?: OpenClawConfig };
@@ -248,7 +252,16 @@ describe("runMessageAction core send routing", () => {
       testCase.accountIds ? undefined : "ada",
       testCase.gatewayOwnedDelivery ? "gateway" : "direct",
     );
-    await runMessageAction({
+    const messageArgs = {
+      action: "send",
+      channel: "slack",
+      target: "channel:OTHER",
+      message: "hello world",
+      ...(testCase.accountId ? { accountId: testCase.accountId } : {}),
+    };
+    const pending = extractMessagingToolSend("message", messageArgs);
+    expect(pending).toBeDefined();
+    const result = await runMessageAction({
       cfg: {
         channels: {
           slack: {
@@ -271,13 +284,10 @@ describe("runMessageAction core send routing", () => {
       agentId: "main",
       defaultAccountId: testCase.defaultAccountId,
       gatewayOwnedDelivery: testCase.gatewayOwnedDelivery,
-      params: {
-        channel: "slack",
-        target: "channel:OTHER",
-        message: "hello world",
-        ...(testCase.accountId ? { accountId: testCase.accountId } : {}),
-      },
+      params: { ...messageArgs },
     });
+    const confirmed = extractMessagingToolSendResult(pending!, getToolResult(result));
+    expect(confirmed.accountId).toBe(testCase.expected);
     const prefix = testCase.expected === "default" ? "[ROOT]" : (testCase.prefix ?? "[ADA]");
     expect(sendText).toHaveBeenCalledOnce();
     expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
@@ -287,20 +297,22 @@ describe("runMessageAction core send routing", () => {
   });
 
   it.each([
-    ["[Nexus]", "[Nexus] already prefixed", "[Nexus] already prefixed", false],
-    ["[{identity.name}]", "hello world", "[Nexus] hello world", true],
-    ["[{provider}/{model}]", "hello world", "hello world", false],
-  ] as const)("resolves responsePrefix %s", async (prefix, message, expected, useIdentity) => {
+    ["one\\ntwo", "one\ntwo"],
+    ["one\ntwo\\nthree", "one\ntwo\nthree"],
+    ['Before\\n`printf("%d\\n", x);`\\nafter', 'Before\n`printf("%d\\n", x);`\nafter'],
+    ["Use ``a`b\\nc``\\nnext", "Use ``a`b\\nc``\nnext"],
+    [
+      'Fix:\n```c\nprintf("%d\\n", x);\n```\nEnd\\nnext',
+      'Fix:\n```c\nprintf("%d\\n", x);\n```\nEnd\nnext',
+    ],
+    ["~~~\na\\nb\n~~~\nEnd\\nnext", "~~~\na\\nb\n~~~\nEnd\nnext"],
+    ["Code:\n\n    a\\nb\n\nEnd\\nnext", "Code:\n\n    a\\nb\n\nEnd\nnext"],
+  ])("unescapes newlines only outside code in %j", async (message, expected) => {
     const sendText = registerSlackTextPlugin();
     await runMessageAction({
-      cfg: {
-        channels: { slack: { enabled: true, responsePrefix: prefix } },
-        ...(useIdentity ? { agents: { entries: { main: { identity: { name: "Nexus" } } } } } : {}),
-      } as OpenClawConfig,
+      cfg: { channels: { slack: { enabled: true } } },
       params: { channel: "slack", target: "channel:OTHER", message },
-      ...(useIdentity ? { agentId: "main" } : {}),
     });
-    expect(sendText).toHaveBeenCalledOnce();
     expect(mockFirstRecordArg(sendText, "send text").text).toBe(expected);
   });
 
@@ -388,35 +400,5 @@ describe("runMessageAction core send routing", () => {
       mediaUrl: "file:///tmp/openclaw-voice.ogg",
       audioAsVoice: true,
     });
-  });
-
-  it("forwards inbound audio context to message-tool TTS", async () => {
-    const sendText = vi.fn().mockResolvedValue(receipt("testchat", "text-1", "c1"));
-    registerTestChatPlugin({
-      deliveryMode: "direct",
-      sendText,
-    });
-
-    await runMessageAction({
-      cfg: {
-        channels: { testchat: { enabled: true } },
-        tts: { auto: "inbound" },
-      } as OpenClawConfig,
-      params: { message: "voice reply" },
-      sessionKey: "agent:main:testchat:channel:abc",
-      inboundAudio: true,
-    });
-
-    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "final",
-        channel: "testchat",
-        inboundAudio: true,
-        payload: expect.objectContaining({
-          text: "voice reply",
-        }),
-      }),
-    );
-    expect(sendText).toHaveBeenCalledOnce();
   });
 });

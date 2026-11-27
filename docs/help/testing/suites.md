@@ -41,6 +41,16 @@ PR CI reports numeric ratchet violations as warnings too. The suppression
 baseline ratchet remains strict locally. See [surface ratchets](/ci/local-proof#surface-ratchets) for
 comparison bases and shrink-only maintenance.
 
+## Released mobile apps against a candidate Gateway
+
+The existing mobile release E2E suites build candidate apps against a published
+stable Gateway. The independent Stable Release Source Compatibility workflow
+reverses that direction using a frozen stable repository release for native
+client rebuilds, the candidate checkout for the Gateway, and the reviewed
+qualification checkout for harness code. This is not exact store-binary coverage. See
+[released app compatibility](/help/testing/released-app-compatibility) for inputs,
+proof boundaries, and remaining native runtime validation.
+
 ## Runner exit status
 
 `pnpm test`, `scripts/test-projects.mts`, and `scripts/run-vitest.mjs` distinguish
@@ -86,7 +96,9 @@ environment variable. It redacts the connection from child output.
 Arguments after `--` go to the normal test runner. Start with a file or directory
 to replace the default targets; options alone retain all suites. For example,
 append `-- src/infra/postgres-sync/locks.test.ts --maxWorkers=1` for a smoke test.
-Use `--shard 1/3`, `--shard 2/3`, or `--shard 3/3` for the CI partitions.
+Use `--shard 1/6` through `--shard 6/6` to reproduce the PostgreSQL 17
+partitions in `ci.yml`. For the separate scheduled qualification workflow, use
+`--shard 1/4` through `--shard 4/4`.
 The shared weighted allocator balances the existing target inventory using committed
 `config/postgres-conformance-timings.json` measurements. Refresh those advisory
 weights from per-file case spans in PostgreSQL conformance job logs when costs change;
@@ -120,17 +132,19 @@ the existing Vitest workers can overlap independent recovery and custody cases.
 They retain real one-shot command workers, isolated state, and PostgreSQL namespaces;
 no additional job or service is started.
 
-CI's **PostgreSQL conformance** matrix runs three shards in parallel with a 30-minute
+CI's **PostgreSQL conformance** matrix runs six shards in parallel with a 30-minute
 job budget each. Every shard has a
 fresh PostgreSQL 17 service using the pinned `pgvector/pgvector:pg17` image and
 the `unaccent`, `pg_trgm`, and `vector` extensions. It runs
 on scheduled main CI, manual CI validations, and PRs touching `src/infra/database-engine/**`,
 `src/infra/postgres-sync/**`, `src/infra/sql-connection.ts`,
 `src/infra/sql-query-compiler.ts`, `src/infra/kysely-sync*.ts`,
-`src/infra/sqlite-transaction.ts`, `extensions/workboard/**`,
+`src/infra/sqlite-transaction.ts`, the Gateway lock and PostgreSQL custody code,
+`extensions/workboard/**`,
 `src/config/zod-schema.database.ts`, or `scripts/test-database-conformance*.mjs`.
 Unknown PR paths conservatively select it; older targets without the runner
-omit it. All selected shards are required by `openclaw/ci-gate`.
+omit it. Pull requests also run the PostgreSQL 16 Gateway cron smoke in a
+separate parallel row. All selected rows are required by `openclaw/ci-gate`.
 
 ### Unit / integration (default)
 
@@ -421,6 +435,7 @@ Its explicit inventory, selection, and capacity policy are documented in
   - Runs in CI as part of `pnpm test:e2e`; the resource groups add no CI jobs
   - No provider keys required; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes real-Gateway suites
   - Chromium and Playwright FFmpeg must be present; `node --import tsx scripts/ensure-playwright-chromium.mts` installs them, and `pnpm test:ui:e2e` already runs it
+  - On Linux, install missing Chromium system libraries as root: `pnpm --dir ui exec playwright install-deps chromium`
   - The workboard native-bundle suite also needs WebKit with system dependencies (`pnpm --dir ui exec playwright install --with-deps webkit`); Crabbox Linux hydration installs both browser prerequisites
 
 The dedicated real-Gateway CI lane uses `test/vitest/vitest.ui-e2e-prebuilt.config.ts` after `OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm build` completes in each clean checkout. The separate artifact job retains SDK declaration validation. The planner balances existing serial files and selected standalone companions in one row, with the remaining audited parallel files in another. The companions share the existing two-worker phase after serial execution without an extra bundled preview. The real node/SSH desktop resize tour is release-only: when its file is selected by full manual/release validation or a direct spec edit, the first row runs `node --import tsx scripts/test-desktop-resize-real.mts` once for both carriers. The bootstrap remains required; invoking the desktop spec without its real fixture is not equivalent proof. Frequent resize, revocation, view-only filtering, takeover, and UI sizing tests remain in ordinary CI. Placement consumes the parallel-eligibility allowlist from `vitest.ui-paths.mjs` without changing Vitest scheduling. Each selected file has one CI owner; the desktop bootstrap executes each carrier once. Full manual and release selection retain the complete inventory. Prebuilt previews borrow the validated standard Control UI assets without rebuilding or deleting them; default mocked Gateway hellos use the same artifact identity, and explicit mock identity overrides still apply. Ordinary local runs retain their private builds. Keep source and built outputs unchanged until all workers and children finish. Fixtures retain their private HOME, state, ports, cleanup, and existing worker limits. Readiness failures stop without rebuilding or falling back. The ordinary local config keeps real-Gateway files serial; frozen targets and older planners retain one complete CI row and their own config/command. See [CI](/ci) for the resource policy and timing evidence.
@@ -447,6 +462,8 @@ node scripts/run-vitest.mjs --isolated-image "$IMAGE_ID" run \
 
 The adapter requires Linux, an existing rootless Podman installation with its native init helper (normally catatonit), checkout-local `pnpm install --frozen-lockfile` dependencies, and native Node and pnpm executables compatible with the image. Put the native pnpm executable matching `package.json` on `PATH`, or select it through the existing `npm_execpath` environment variable; a Corepack/download shim is not an offline executable. The image must already contain the Chromium revision required by the installed Playwright package under `/ms-playwright`, including its headless shell and system libraries. The runner checks versions and launches Chromium before starting the test command. SELinux-labeled hosts are not supported by this initial adapter: it refuses before creating a container rather than relabeling shared host files or disabling enforcement. Use an already supported isolated runner instead of changing host security policy.
 
+Node remains the default test runtime. To match Bun CI, add `--isolated-runtime=bun` alongside `--isolated-image` (the only values are `node` and `bun`). This uses only the already prepared canonical OpenClaw Bun cache, ignores host runtime/path overrides, and never installs or downloads a runtime. The pinned executable is copied into an invocation-owned readonly binding; its SHA-256 and revision are checked against the source snapshot pin before admission and again inside the container. Missing, corrupt, or symlinked executables fail setup. Only the normal Vitest process and runtime-inheriting test children, including Gateway fixtures, select Bun; Node still owns orchestration, builds, and the container entrypoint. The exact environment and mount checks admit only this fixed runtime binding, not arbitrary pass-through inputs.
+
 For WebKit browser tests, the image must also contain the installed Playwright package's WebKit revision and system libraries. Prepare a trusted upstream Playwright image matching that package version before invoking the adapter; image preparation is separate from the offline test run. Select the standalone WebKit config instead of the package config's environment opt-in or `--project` (neither is forwarded by this isolated launcher):
 
 ```bash
@@ -459,7 +476,21 @@ If the host pnpm executable auto-selects another version, resolve the already pr
 
 It runs Vitest, the selected browser, the provider fixture, and the test Gateway in the same network-none namespace. Podman’s init owns PID 1 so detached test children are reaped after their launchers exit; the Node entrypoint still owns the test invocation and cleanup. Host proxy settings stay unchanged; host credentials, Gateway state, Git metadata, and private scratch are not exposed to the container. There are no published ports or external network access. Missing prerequisites fail with setup guidance instead of installing packages or weakening isolation.
 
+Runtime builds also require the existing lock-pinned Darwin worker-native archives in `.artifacts/worker-native-assets`, prepared by the normal build before isolation. The adapter copies only the exact packages selected by the installed fs-safe manifest and snapshot lockfile, verifies their integrity, and records their package identities and SHA-256 hashes. Missing, corrupt, mismatched, or symlinked archives fail setup; unrelated cache files are never copied. This does not admit the surrounding artifact cache or enable network access.
+
 Use the ordinary local config, not the CI-only prebuilt config. The adapter uses the standard test selection to prepare `qaRuntime` artifacts inside the container for tests that consume built runtime, including private-QA artifacts when required. Source-only selections do not pay for a runtime build and retain the 8 GiB container memory cap. Runs that prepare built artifacts use a bounded 16 GiB cap to accommodate the compiler heap and native build memory; CPU, network, filesystem, and process limits are unchanged. For the standard Control UI E2E config, it retains the private-QA `ciArtifacts` build before admitting tests; backend readiness alone does not mean the dashboard assets are ready. The host’s live-Gateway artifact admission is unchanged. The isolated source snapshot uses tracked working-tree files, including staged new files; stage a new test before selecting it. Keep source and dependencies unchanged during the invocation, and keep dependency installation separate. The initial interface supports exact tracked test files, a tracked config, and console reporters; it does not export files from the disposable snapshot. This route is not suitable for live-provider tests or tests that must contact services outside their own container.
+
+### E2E: native Codex command and gateway OAuth
+
+`test/e2e/qa-lab/runtime/codex-native-command-auth.e2e.test.ts` remains in the ordinary `test:e2e:gateway` suite. Its primary-command case runs on supported native Codex platforms. Its combined-auth case uses the Linux Secret Service backend and runs whenever this file is selected on Linux; it is explicitly skipped on other platforms, whose credential stores this fixture does not qualify. Missing Linux prerequisites are setup failures, not skips. Changed-node CI can select this full Gateway composition, including under pinned Bun. Its selected Linux row provisions the Secret Service binaries before execution; inspect the actual job selection and result rather than inferring coverage from an aggregate green check.
+
+For the isolated runner above, prepare the trusted image with `dbus`, `gnome-keyring`, and `libglib2.0-bin` (Debian/Ubuntu package names), in addition to the runner’s existing prerequisites. Image preparation is separate from the network-none test invocation; the runner never installs these packages. The fixture starts a real Secret Service on a fresh private D-Bus address with task-owned HOME/XDG directories, seeds a synthetic native OAuth account, closes that native process, and then proves refresh and both native credentials through a new Gateway process. It never uses the host session bus or keyring. No Podman-specific environment flag is required by the fixture.
+
+```bash
+node scripts/run-vitest.mjs --isolated-image "$IMAGE_ID" run \
+  --config test/vitest/vitest.e2e.config.ts --configLoader runner \
+  test/e2e/qa-lab/runtime/codex-native-command-auth.e2e.test.ts --maxWorkers=1
+```
 
 ### E2E: OpenShell backend smoke
 
@@ -716,3 +747,12 @@ the admitted-agent matrix supplies a synthetic typed completion event. Neither
 fixture delivers an external announcement. These assertions define the offline regression contract; mock
 token usage is not evidence of provider cache reuse, which requires a successful
 live run.
+
+## Opt-in Gateway restart stress
+
+The existing team-shaped stress controller also supports bounded real-process
+restart chaos, with a mock dry mode and an explicitly selected approved live model.
+It combines concurrent coding turns, subagents, background exec, steering, queued
+messages, metadata churn, and a local TPM-429 proxy. It never connects to an existing
+Gateway or runs in CI. See `scripts/perf/team-shape-stress.md` in the repository for
+commands, credential isolation, report artifacts, and the limits of each invariant.

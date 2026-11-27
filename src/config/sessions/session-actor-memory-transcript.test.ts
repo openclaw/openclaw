@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   SessionActorAppend,
   SessionActorOutcome,
@@ -7,7 +7,7 @@ import type {
 } from "./session-actor-contract.js";
 import { authority, memoryOwnerFixture } from "./session-actor-memory-family.test-support.js";
 import type { SessionPendingInputWorkerFacts } from "./session-pending-input.types.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -95,17 +95,17 @@ function turn(
   };
 }
 
-async function fixture(
-  initialEntry: Partial<InternalSessionEntry> = {},
-  cliWriter?: SessionTurnPlan["cliWriter"],
-) {
+async function fixture(initialEntry: Partial<InternalSessionEntry> = {}) {
   const { actor } = await openFixture(sessionKey);
   committed(
     await actor.acceptInput(
       {
         commandId: "initialize",
         phaseId: "turn",
-        expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
+        expectedState: buildSessionTranscriptTurnExpectedState({
+          sessionId: "session-1",
+          updatedAt: 1,
+        }),
         lifecycle: {},
         turn: {
           ...turn(
@@ -118,7 +118,6 @@ async function fixture(
               initialSessionEntry: { sessionId, incognito: true, updatedAt: 1, ...initialEntry },
             },
           ),
-          cliWriter,
         },
       },
       authority,
@@ -127,11 +126,7 @@ async function fixture(
   let command = 0;
   const append = (plan: SessionTurnPlan) =>
     actor.appendToolResult(
-      {
-        commandId: `append-${++command}`,
-        phaseId: "turn",
-        turn: plan,
-      },
+      { commandId: `append-${++command}`, phaseId: "turn", turn: plan },
       authority,
     );
   return {
@@ -156,7 +151,7 @@ async function fixture(
         {
           commandId,
           phaseId: "turn",
-          expectedState: buildRestartRecoveryExpectedState({ sessionId, updatedAt: 1 }),
+          expectedState: buildSessionTranscriptTurnExpectedState({ sessionId, updatedAt: 1 }),
           lifecycle: {},
           pending: {
             kind: "stage",
@@ -192,7 +187,10 @@ describe("memory actor transcript", () => {
       ...messageInput("assistant-1", "user-1", messageJson),
       view: { loadedVersion: { generation: null, rawSeq: null, updatedAt: null } },
     };
+    using parse = vi.spyOn(JSON, "parse");
     const first = committed(await metadata("metadata", input));
+    // Decode once for admission and once for the detached result; reload uses the envelope.
+    expect(parse.mock.calls.filter(([json]) => json === messageJson).length).toBeLessThanOrEqual(2);
     const result = metadataResult(first);
     assert(result.reload?.ok && result.reload.value.kind === "full");
     expect(result.reload.value.snapshot.eventJson?.at(-1)).toContain(`"message":${messageJson}}`);
@@ -405,43 +403,6 @@ describe("memory actor transcript", () => {
       ),
     ).toMatchObject({ kind: "rolled-back" });
     expect(actor.snapshot(authority)).toEqual(before);
-  });
-
-  it("advances CLI account coverage only across its own contiguous writes", async () => {
-    const writer = {
-      runId: "cli-run",
-      authFingerprint: "a".repeat(64),
-      lifecycleRevision: "cli-life",
-    };
-    const { actor, append } = await fixture(
-      {
-        activeWriterRunId: writer.runId,
-        lifecycleRevision: writer.lifecycleRevision,
-        cliHistoryBoundary: {
-          version: 1,
-          state: "known",
-          sessionId,
-          writerRunId: writer.runId,
-          authFingerprint: writer.authFingerprint,
-          generation: null,
-          maxSeq: null,
-        },
-      },
-      writer,
-    );
-    expect(actor.snapshot(authority)?.entry?.cliHistoryBoundary).toMatchObject({ maxSeq: 1 });
-    const message = { role: "assistant", content: "CLI output" };
-    committed(await append({ ...turn({ message, eventId: "cli-2" }), cliWriter: writer }));
-    expect(actor.snapshot(authority)?.entry?.cliHistoryBoundary).toMatchObject({ maxSeq: 2 });
-    committed(
-      await append({
-        ...turn({ message, eventId: "other-account" }),
-        cliWriter: { ...writer, authFingerprint: "b".repeat(64) },
-      }),
-    );
-    committed(await append({ ...turn({ message, eventId: "after-gap" }), cliWriter: writer }));
-    expect(actor.snapshot(authority)?.entry?.cliHistoryBoundary).toMatchObject({ maxSeq: 2 });
-    expect(actor.snapshot(authority)?.transcript.anchors.at(-1)?.entryId).toBe("after-gap");
   });
 
   it("commits a Goal with its admission turn and replays the receipt without another user message", async () => {

@@ -20,6 +20,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
+import type { PreparedReadinessChecker } from "./health/types.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { GatewayHttpRequestLifetime } from "./http-request-authority.js";
 import {
@@ -56,7 +57,7 @@ import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
 } from "./server/preauth-connection-budget.js";
-import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
+import type { StartupChecker } from "./server/readiness.js";
 import { GATEWAY_PER_MESSAGE_DEFLATE } from "./server/ws-compression.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
@@ -104,6 +105,7 @@ export async function createGatewayHttpTransport(params: {
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
   getPluginRouteRegistry?: () => PluginRegistry;
+  isRequestRuntimeReady?: () => boolean;
   isStartupPluginRuntimeReady?: () => boolean;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   httpRequestLifetime?: GatewayHttpRequestLifetime;
@@ -112,7 +114,7 @@ export async function createGatewayHttpTransport(params: {
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
-  getReadiness?: ReadinessChecker;
+  getReadiness?: PreparedReadinessChecker;
   getStartup?: StartupChecker;
   isStartupPending?: () => boolean;
   waitForRequestRuntime?: () => Promise<void>;
@@ -174,6 +176,7 @@ export async function createGatewayHttpTransport(params: {
           deps: params.deps,
           logHooks: params.logHooks,
           deferHookWake: params.deferHookWake,
+          resolvePluginRegistry: resolvePluginRouteRegistry,
           ...(params.getGatewayRequestContext
             ? { resolveGatewayContext: params.getGatewayRequestContext }
             : {}),
@@ -369,6 +372,7 @@ export async function createGatewayHttpTransport(params: {
       getRuntimeConfig: loadRuntimeConfig,
       getGatewayRequestContext: params.getGatewayRequestContext,
       waitForRequestRuntime: params.waitForRequestRuntime,
+      isRequestRuntimeReady: params.isRequestRuntimeReady,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
       httpRequestLifetime: params.httpRequestLifetime,
       isTerminalEnabled: params.isTerminalEnabled,
@@ -428,7 +432,7 @@ export async function createGatewayHttpTransport(params: {
   }
   if (params.getGatewayRequestContext && controlUiUpgradeHandler) {
     const gatewayLifetime = getGatewayContextLifetime(params.getGatewayRequestContext).signal;
-    const requestLifetime = params.httpRequestLifetime?.requestEntryLifetime?.signal;
+    const requestLifetime = params.httpRequestLifetime?.requestEntryLifetime;
     bindGatewayControlUiIngressHost(params.getGatewayRequestContext, {
       resolveGatewayContext: params.getGatewayRequestContext,
       controlUiBasePath: params.controlUiBasePath,
@@ -436,9 +440,10 @@ export async function createGatewayHttpTransport(params: {
       getRuntimeConfig: loadRuntimeConfig,
       handleRequest: getGatewayHttpRequestHandler(httpServer),
       handleUpgrade: controlUiUpgradeHandler,
-      handleSandboxRequest: createSandboxHostHttpRequestHandler(),
+      handleSandboxRequest: createSandboxHostHttpRequestHandler({ clients: params.clients }),
+      admissionSignal: requestLifetime?.signal ?? gatewayLifetime,
       signal: requestLifetime
-        ? AbortSignal.any([gatewayLifetime, requestLifetime])
+        ? AbortSignal.any([gatewayLifetime, requestLifetime.retainedSignal])
         : gatewayLifetime,
     });
   }
@@ -463,6 +468,7 @@ export async function createGatewayHttpTransport(params: {
       const sandboxServers = bindHosts.map(() =>
         createSandboxHostHttpServer(
           params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+          { clients: params.clients },
         ),
       );
       // Register before binding so normal runtime cleanup closes a partially

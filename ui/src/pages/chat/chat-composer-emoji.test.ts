@@ -156,12 +156,14 @@ it("keeps native editing while cold and converts closing colons once ready", asy
   expect(imports.started).not.toHaveBeenCalled();
   f.input(":smile");
   expect(imports.started).toHaveBeenCalledTimes(1);
+  expect(textareaAnchor.createTextareaTokenAnchor).not.toHaveBeenCalled();
   expect(f.key("Tab").defaultPrevented).toBe(false);
   expect(f.colon().defaultPrevented).toBe(false);
   f.input(":smile:");
   imports.release();
   await settleImports();
   f.closed(":smile:");
+  expect(textareaAnchor.createTextareaTokenAnchor).toHaveBeenCalledTimes(1);
   f.input(":smile");
   expect(f.colon().defaultPrevented).toBe(true);
   f.closed("😄");
@@ -178,6 +180,25 @@ it("discovers suggestions at the current draft and caret when cold data arrives"
   expect(f.menu()?.textContent).toContain(":heart:");
   expect(f.key("Tab").defaultPrevented).toBe(true);
   f.closed("New 🎧 suffix");
+});
+
+it.each([
+  { maxLength: 13, value: "Use :f here", caret: 6 },
+  { maxLength: 14, value: "Use 😮‍💨 here", caret: 9 },
+])("only accepts the complete catalog emoji with maxlength $maxLength", async (row) => {
+  const f = await fixture();
+  f.textarea.maxLength = row.maxLength;
+  f.input("Use :f here", 6);
+  await settleImports();
+  expect(f.menu()?.textContent).toContain(":face_exhaling:");
+  expect(f.key("Enter").defaultPrevented).toBe(true);
+  expect(f.draft()).toBe(row.value);
+  expect(f.textarea).toMatchObject({
+    value: row.value,
+    selectionStart: row.caret,
+    selectionEnd: row.caret,
+  });
+  expect(f.send).not.toHaveBeenCalled();
 });
 
 it.each(["blur", "detach"])("does not reopen cold suggestions after %s", async (retirement) => {

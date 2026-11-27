@@ -9,6 +9,7 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { useFakeClock } from "../../test-helpers/fake-clock.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
+import { retryableGatewayError as unavailable } from "../../test-helpers/gateway-errors.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost, requestCalls, requireRecord } from "./chat-host.test-support.ts";
 import { admitHostQueueItems, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
@@ -19,14 +20,6 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 useChatSendBrowserFixture();
 
-function unavailable(message = "History is temporarily unavailable") {
-  return new GatewayRequestError({
-    code: "UNAVAILABLE",
-    message,
-    retryable: true,
-    retryAfterMs: 100,
-  });
-}
 function requestTimeout(method: string) {
   return new GatewayProtocolRequestTimeoutError({ method, timeoutMs: 30_000, requestSent: true });
 }

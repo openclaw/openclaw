@@ -21,6 +21,12 @@ vi.mock("./in-process-gateway.js", async (importOriginal) => ({
 }));
 
 const caller = { agentId: "main", sessionKey: "agent:main:host-owned" };
+
+it("does not prescribe switching to a bound session", () => {
+  expect(createGitHubPublishTool().description).not.toMatch(
+    /Select an existing bound session|separately authorize supported binding\/adoption/,
+  );
+});
 const publication = {
   requestId: "publication-1",
   status: "requested" as const,
@@ -36,6 +42,43 @@ function setup() {
     withGatewayToolCallerIdentity(caller, () => tool.execute(id, args));
   return { callGateway, tool, execute };
 }
+
+it("reserves the comment approval lifetime and completion without extending other actions", () => {
+  const tool = createGitHubPublishTool();
+  expect(tool.getExecutionTimeoutMs?.({ action: "create_comment" })).toBeGreaterThan(300_000);
+  expect(tool.getExecutionTimeoutMs?.({ action: "readiness" })).toBeUndefined();
+});
+
+it("offers issue creation without workspace publication, but not in observation-only mode", async () => {
+  const input = { action: "create_issue", title: "Report", body: "Details" };
+  const tool = createGitHubPublishTool({ publicationAvailable: false });
+  expect(Value.Check(tool.parameters, input)).toBe(true);
+  expect(Value.Check(createGitHubPublishTool({ observationOnly: true }).parameters, input)).toBe(
+    false,
+  );
+  const { callGateway } = setup();
+  await withGatewayToolCallerIdentity(caller, () => tool.execute("issue", input));
+  expect(callGateway).toHaveBeenCalledWith("sessions.github.action", {
+    sessionKey: caller.sessionKey,
+    agentId: caller.agentId,
+    ...input,
+  });
+  await expect(
+    withGatewayToolCallerIdentity(caller, () =>
+      tool.execute("issue", { ...input, publishingSessionKey: "other" }),
+    ),
+  ).rejects.toThrow(/only/);
+  expect(callGateway).toHaveBeenCalledTimes(1);
+});
+
+it("does not execute inventory previews even with a current Gateway caller", async () => {
+  const { callGateway } = setup();
+  const tool = createGitHubPublishTool({ preview: true });
+  await expect(
+    withGatewayToolCallerIdentity(caller, () => tool.execute("preview", { action: "readiness" })),
+  ).rejects.toThrow("GitHub tool previews cannot execute actions");
+  expect(callGateway).not.toHaveBeenCalled();
+});
 
 it("applies deployment action limits when publication and operator actions are available", () => {
   const [tool] = applyGatewayToolPolicy([createGitHubPublishTool()], {
@@ -198,9 +241,6 @@ it.each<{
     }
     expect(tool.description.includes(action), action).toBe(offered);
   }
-  if (!refresh) {
-    expect(tool.description).not.toMatch(/refresh/i);
-  }
   expect(Value.Check(tool.parameters, {})).toBe(true);
   expect(
     Value.Check(tool.parameters, {
@@ -208,7 +248,7 @@ it.each<{
       pullRequestUrl: "https://github.com/example/repository/pull/1",
     }),
   ).toBe(true);
-  for (const action of ["publish", "edit", "ready", "request_review"]) {
+  for (const action of ["readiness", "publish", "edit", "ready", "request_review"]) {
     expect(Value.Check(tool.parameters, { action }), action).toBe(true);
   }
   for (const action of ["inspect", "merge", "close"]) {
@@ -304,17 +344,48 @@ it("offers current-PR preparation and lists actions gated by the Gateway", () =>
   }
   check({ action: "ready", publishingSessionKey: "another" });
   check({ action: "edit", publishingSessionKey: "another" });
-  expect(tool.description).toContain("omit action to append accepted changes to the original PR");
+  expect(tool.description).toContain("- prepare_pr: continue an existing PR by pullRequestUrl.");
   expect(tool.description).not.toContain("Imported source publication is not available");
-  expect(tool.description).toContain("used only when creating a PR");
-  expect(tool.description).toContain("retain requestId, finish the turn and await its result here");
-  expect(tool.description).toContain("do not submit another publication to recover it");
-  expect(tool.description).toContain("Edit never synchronizes, stages, commits or pushes");
   const actionOnly = createGitHubPublishTool({
     publicationAvailable: false,
   });
   expect(Value.Check(actionOnly.parameters, { action: "edit" })).toBe(false);
   expect(Value.Check(actionOnly.parameters, prepare)).toBe(false);
+});
+
+it("keeps the definition short and delivers each procedure in the result that needs it", async () => {
+  for (const [options, max] of [
+    [{}, 800],
+    [{ publicationAvailable: false }, 600],
+    [{ observationOnly: true }, 300],
+  ] as const) {
+    expect(createGitHubPublishTool(options).description.length).toBeLessThanOrEqual(max);
+  }
+  const { callGateway, execute } = setup();
+  const next = async (args: unknown) => {
+    const [block] = (await execute(args)).content;
+    return block?.type === "text" ? String(JSON.parse(block.text).next ?? "") : "";
+  };
+  const published = await execute({ title: "Change" });
+  expect(published.details).toEqual(publication);
+  expect(await next({ title: "Change" })).toContain(
+    "retain requestId, finish the turn and await its result here; do not submit another publication",
+  );
+  callGateway.mockResolvedValue({ status: "failed", requestId: "r", error: "no" });
+  expect(await next({ title: "Change" })).toBe("");
+  callGateway.mockResolvedValue({
+    headCommit: "a".repeat(40),
+    custody: { kind: "bound_workspace" },
+  });
+  for (const [args, guidance] of [
+    [{ action: "edit" }, "send this headCommit as expectedHeadCommit"],
+    [{ action: "edit", title: "New", expectedTitle: "T" }, "read again with edit"],
+    [{ action: "request_review" }, 'Only "@clawsweeper re-review" was posted'],
+    [{ action: "inspect" }, "full operator write access, after review and required checks pass"],
+    [{ action: "readiness" }, "never resubmit it"],
+  ] as const) {
+    expect(await next(args), args.action).toContain(guidance);
+  }
 });
 
 it.each(["responseId", "turnId"] as const)(
@@ -383,3 +454,62 @@ it.each([undefined, false, true])(
     });
   },
 );
+
+it("retains original receipt observation without offering or invoking authenticated actions", async () => {
+  const { callGateway } = setup();
+  const requestId = "a1111111-1111-4111-8111-111111111111";
+  const receipt = {
+    policy: { read: "admitted", write: "unknown" },
+    custody: { kind: "qualified", source: "worktree" },
+    target: { kind: "unknown", reason: "not-qualified" },
+    request: { kind: "observed", selection: "exact", receipt: { status: "requested", requestId } },
+    remedies: [{ kind: "observe_request", requestId }],
+  };
+  callGateway.mockResolvedValue(receipt);
+  const tool = createGitHubPublishTool({ observationOnly: true });
+  const execute = (args: unknown) =>
+    withGatewayToolCallerIdentity(caller, () => tool.execute("observe", args));
+  const observation = { action: "readiness", requestId };
+  expect(Value.Check(tool.parameters, observation)).toBe(true);
+  expect(Value.Check(tool.parameters, { action: "publish" })).toBe(false);
+  expect(Value.Check(tool.parameters, {})).toBe(false);
+  expect((await execute(observation)).details).toEqual(receipt);
+  expect(callGateway).toHaveBeenCalledExactlyOnceWith("sessions.github.readiness", {
+    ...caller,
+    requestId,
+  });
+  await expect(execute({ action: "publish" })).rejects.toThrow("Only publication readiness");
+  expect(callGateway).toHaveBeenCalledTimes(1);
+});
+
+it("names placeholder fields instead of blaming the host", async () => {
+  const { callGateway, execute } = setup();
+  const placeholders = { title: "x", body: "", workspacePath: "/tmp" };
+  await expect(execute({ action: "readiness", ...placeholders })).rejects.toThrow(
+    "workspacePath is accepted only with action publish. Send only the fields readiness needs",
+  );
+  await expect(execute({ action: "readiness", title: "x", body: "" })).rejects.toThrow(
+    "remove title, body",
+  );
+  await expect(
+    execute({ action: "inspect_pr", pullRequestUrl: "https://github.com/o/r/pull/1", body: "" }),
+  ).rejects.toThrow("remove body");
+  expect(callGateway).not.toHaveBeenCalled();
+});
+
+it("tells an unbound conversation how to publish, but not when reading a child", async () => {
+  const { callGateway, execute } = setup();
+  const unbound = {
+    policy: { read: "admitted", write: "unknown" },
+    custody: { kind: "unbound_workspace" },
+    target: { kind: "unknown", reason: "not-qualified" },
+    request: { kind: "none", selection: "current" },
+    remedies: [],
+  };
+  callGateway.mockResolvedValue(unbound);
+  const own = (await execute({ action: "readiness" })).details as { next?: string };
+  expect(own.next).toContain("publish with workspacePath");
+  const child = (await execute({ action: "readiness", publishingSessionKey: "agent:main:child" }))
+    .details;
+  expect(child).toEqual(unbound);
+});

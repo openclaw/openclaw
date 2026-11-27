@@ -218,11 +218,14 @@ export function mergeProviderModels(
       maxTokensSource === undefined ? {} : { maxTokensSource },
       { compat },
       {
+        // Another route withdraws a plain chat grant to unknown, as if discovery had not
+        // matched this row. Only a typed route keeps the veto so it never becomes legacy chat.
         inference:
           explicitModel.inference ??
           (catalogRouteMatches
             ? implicitModel.inference
-            : implicitModel.inference
+            : implicitModel.inference &&
+                (!implicitModel.inference.chat || implicitModel.inference.decision)
               ? { chat: false }
               : undefined),
       },
@@ -325,7 +328,60 @@ function shouldPreserveExistingBaseUrl(params: {
   return !existingApi || !nextApi || existingApi === nextApi;
 }
 
-export function isWritableProviderConfig(entry: ProviderConfig): boolean {
+/** Returns why the model registry rejects this provider's models, if it does. */
+function findProviderModelsError(
+  providerName: string,
+  config: ProviderModelCatalog,
+  source: "catalog" | "registration",
+): string | undefined {
+  const models = config.models ?? [];
+  if (models.length > 0 && !config.baseUrl) {
+    const subject = source === "catalog" ? "custom models" : "models";
+    return `Provider ${providerName}: "baseUrl" is required when defining ${subject}.`;
+  }
+  for (const model of models) {
+    if (!model.api && !config.api) {
+      const guidance = source === "catalog" ? " Set at provider or model level." : "";
+      return `Provider ${providerName}, model ${model.id}: no "api" specified.${guidance}`;
+    }
+    if (source === "catalog") {
+      for (const field of ["contextWindow", "maxTokens"] as const) {
+        if (model[field] !== undefined && model[field] <= 0) {
+          return `Provider ${providerName}, model ${model.id}: invalid ${field}`;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Throws the model registry's rejection reason for this provider's models. */
+export function validateProviderModels(
+  ...params: Parameters<typeof findProviderModelsError>
+): void {
+  const error = findProviderModelsError(...params);
+  if (error) {
+    throw new Error(error);
+  }
+}
+
+/** Returns why models.json must omit this provider: the model registry would reject the file. */
+export function findUnwritableProviderReason(
+  providerName: string,
+  entry: ProviderConfig,
+): string | undefined {
+  // AuthStorage can supply omitted keys; an explicitly empty key still violates the schema.
+  if (entry.apiKey === "" && entry.models?.length) {
+    return `Provider ${providerName}: "apiKey" is empty.`;
+  }
+  return findProviderModelsError(providerName, entry, "catalog");
+}
+
+/**
+ * Retention rule for entries already in models.json. It skips the registry's model rule:
+ * an entry that exists only in the file is the user's data, so a rewrite never drops it for that.
+ */
+function isWritableProviderConfig(entry: ProviderConfig): boolean {
   if (!Array.isArray(entry.models) || entry.models.length === 0) {
     return true;
   }

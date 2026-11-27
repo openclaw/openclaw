@@ -3,6 +3,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import type { ShellOwner } from "./app-host.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts";
+import { trackForegroundActivity } from "./foreground-activity.ts";
 
 function canPreload(): boolean {
   // SAFETY: Network Information is optional and is not in TypeScript's DOM library.
@@ -10,7 +11,6 @@ function canPreload(): boolean {
   return navigator.onLine && !connection?.saveData && document.visibilityState === "visible";
 }
 
-/** Fetch and compile code without evaluating modules or applying route styles. */
 /** Optional shell services share the existing deferred import and its lifetime. */
 export function connectShellIdle(
   host: ShellOwner,
@@ -59,16 +59,23 @@ export function connectShellIdle(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let idle: number | undefined;
   let intent: string | undefined;
-  // Explicit intent wins. A declared next interaction owns this route's idle work;
-  // routes without one fall back to New Session.
+  // Explicit intent wins. Chat warms its controls before the existing New Session warmup.
   const nextPending = () => {
     if (intent && pending.has(intent)) {
       return intent;
     }
     const currentRoute = router.getState().matches[0]?.routeId;
-    const currentNext = currentRoute ? `${currentRoute}-next` : undefined;
-    if (currentNext && manifest?.[currentNext]) {
-      return pending.has(currentNext) ? currentNext : undefined;
+    const currentNext =
+      currentRoute === "new-session" && context.theme.settings.sidebarAgentsMode === "roster"
+        ? "roster-next"
+        : currentRoute
+          ? `${currentRoute}-next`
+          : undefined;
+    if (currentNext && pending.has(currentNext)) {
+      return currentNext;
+    }
+    if (currentRoute !== "chat" && currentNext && manifest?.[currentNext]) {
+      return undefined;
     }
     return pending.has("new-session") ? "new-session" : undefined;
   };
@@ -147,14 +154,23 @@ export function connectShellIdle(
       const loads: Promise<void>[] = [];
       for (const file of manifest?.[key] ?? []) {
         const href = new URL(file, base).href;
-        if (seen.has(href)) {
+        // Plugin activation owns its styles; roster warming only applies host Chat CSS.
+        const applyStyle =
+          key === "roster-next" && file.endsWith(".css") && !file.startsWith("assets/plugins/");
+        const styleApplied = () =>
+          [...document.styleSheets].some((stylesheet) => stylesheet.href === href);
+        if (seen.has(href) && (!applyStyle || styleApplied())) {
           continue;
         }
         seen.add(href);
         const link = document.createElement("link");
-        link.rel = file.endsWith(".css") ? "preload" : "modulepreload";
+        const entryOnly = key === "chat-session-menu" || key === "sidebar-menus";
+        link.rel = file.endsWith(".css") || entryOnly ? "preload" : "modulepreload";
         if (file.endsWith(".css")) {
           link.as = "style";
+        } else if (entryOnly) {
+          // Cache the entry bytes without asking the browser to prepare its dependencies.
+          link.as = "script";
         }
         link.crossOrigin = "";
         link.fetchPriority = "low";
@@ -166,14 +182,28 @@ export function connectShellIdle(
               stopError();
               resolve();
             };
-            const stopLoad = listen(link, "load", finish, { once: true });
+            const stopLoad = listen(
+              link,
+              "load",
+              () => {
+                if (applyStyle && !styleApplied()) {
+                  // Keep Chat's style matching out of Create Template, but its JS lazy.
+                  // Vite adopts this loaded sheet; it must outlive the idle owner.
+                  link.rel = "stylesheet";
+                  link.removeAttribute("as");
+                  links.delete(link);
+                }
+                finish();
+              },
+              { once: true },
+            );
             const stopError = listen(link, "error", finish, { once: true });
             links.set(link, finish);
             document.head.append(link);
           }),
         );
       }
-      await Promise.all(loads);
+      await trackForegroundActivity(Promise.all(loads));
     } catch {
       // Speculation never triggers stale-chunk recovery; navigation owns failures.
       manifest = {};
@@ -212,6 +242,16 @@ export function connectShellIdle(
   };
   const onIntent = (event: Event) => {
     if (!(event.target instanceof Element)) {
+      return;
+    }
+    if (event.type === "pointerdown") {
+      if (
+        event instanceof MouseEvent &&
+        event.button === 2 &&
+        event.target.closest(".sidebar--rail [data-session-key]")
+      ) {
+        prioritize("sidebar-menus");
+      }
       return;
     }
     const anchor = event.target.closest<HTMLAnchorElement>("a[href]");
@@ -254,11 +294,15 @@ export function connectShellIdle(
       ? "palette"
       : event.target.closest(".chat-controls__model-trigger")
         ? "model-picker"
-        : event.target.closest('[data-value="command:settings"]')
-          ? "appearance"
-          : event.target.closest('[data-value="command:debug-overlay"]')
-            ? "debug"
-            : undefined;
+        : event.target.closest(".chat-header-session-menu__trigger")
+          ? "chat-session-menu"
+          : event.target.closest(".sidebar-identity-card, [data-sidebar-session-menu]")
+            ? "sidebar-menus"
+            : event.target.closest('[data-value="command:settings"]')
+              ? "appearance"
+              : event.target.closest('[data-value="command:debug-overlay"]')
+                ? "debug"
+                : undefined;
     if (key) {
       prioritize(key);
       if (key === "appearance" && ready()) {
@@ -271,8 +315,10 @@ export function connectShellIdle(
   const stops = [
     router.subscribe(schedule),
     gateway.subscribe(schedule),
+    context.theme.subscribe(schedule),
     listen(shell, "pointerover", onIntent),
     listen(shell, "pointerout", onIntent),
+    listen(shell, "pointerdown", onIntent, { passive: true }),
     listen(shell, "focusin", onIntent),
     listen(shell, "focusout", onIntent),
     listen(shell, "touchstart", onIntent, { passive: true }),

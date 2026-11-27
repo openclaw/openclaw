@@ -148,7 +148,7 @@ it.each(["unresolved-unknown", "windows-queued", "windows-startup-unknown", "spl
           expect(await service.readRuntime()).toMatchObject({ status: "running", pid: 4200 });
         } else {
           await expect(run).rejects.toThrow("gateway status --deep");
-          await expect(run).rejects.toThrow("openclaw doctor --fix");
+          await expect(run).rejects.toThrow("update or remove that override");
           await expect(run).rejects.not.toThrow(/--no-restart|before the update/);
           expectNotCalled(mocks.config, mocks.runContributions);
         }
@@ -199,7 +199,9 @@ it("refuses blocked required migration, then completes after the writer releases
       vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", state.path("advisory.json"));
       await runCommandWithRuntime(runtime, () => runDoctorHealthFlow(runtime, options));
       expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(leaseRefusal);
+      expect(runtime.error).toHaveBeenCalledWith(
+        `${leaseRefusal} Observed lease holder PID ${process.pid}.`,
+      );
       expect(maintenanceOutcome()).toEqual({ outcome: "startup_failed" });
       expect(
         mocks.writeUpdatePostInstallDoctorResult.mock.lastCall?.[0].result.failureFacts,

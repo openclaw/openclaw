@@ -1,4 +1,3 @@
-import { serialize } from "node:v8";
 import {
   decodeMetadataAppendEvent,
   sessionMetadataAppendNeedsReload,
@@ -11,13 +10,12 @@ import {
   runWithMetadataMessageAdmission,
   type MetadataWorkerAdmission,
 } from "../../agents/sessions/session-manager-message-admission.worker.js";
-import { readSessionManagerReload } from "../../agents/sessions/session-manager-reload.js";
+import { readSessionManagerReload } from "../../agents/sessions/session-manager-reload.kernel.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isUserMessage } from "../../sessions/user-turn-transcript.message.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
-import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import { ensureSessionEntryInTransaction } from "./session-accessor.sqlite-initial-entry.js";
 import { readSessionPendingInputWorkerReceipt } from "./session-accessor.sqlite-pending-inputs.js";
 import {
@@ -30,7 +28,7 @@ import type { SessionActorAppend, SessionActorAppendCommitted } from "./session-
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
 import { writableSessionActorMap } from "./session-actor-transaction.js";
-import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 import type {
   InitialSessionEntryCommit,
   SessionMetadataOperations,
@@ -39,6 +37,10 @@ import { applySessionMessageRewrite } from "./session-message-rewrite.worker.js"
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
+import {
+  beginAgentToolUsageInDatabase,
+  flushAgentToolUsageInDatabase,
+} from "./tool-usage.kernel.js";
 import { transcriptSerializedBytes } from "./transcript-payload.js";
 
 /** Prepared SessionManager appends share the actor's transaction and its live admission. */
@@ -89,6 +91,17 @@ export function applySessionActorAppend(
     databasePath: database.path,
     admit,
     checkMessage: (facts: unknown) => context.admit("transaction", facts),
+  };
+  const applyToolUsage = () => {
+    const usage = append.toolUsage;
+    if (!usage) {
+      return undefined;
+    }
+    if (usage.kind === "begin") {
+      return beginAgentToolUsageInDatabase(database.db, usage.now, usage.runId).generation;
+    }
+    flushAgentToolUsageInDatabase(database.db, usage);
+    return usage.generation;
   };
   let initialEntry: InitialSessionEntryCommit | undefined;
   if (append.initialization) {
@@ -178,38 +191,31 @@ export function applySessionActorAppend(
         ? { options: { ...input.options, expectedMutationAt: undefined } }
         : {}),
     };
-    const result = runWithCliHistoryWriter(
-      input.cliWriter
-        ? {
-            ...input.cliWriter,
-            target: scoped.scope,
-            assertCurrent: () => context.admit("transaction"),
-            assertReadable: () => context.admit("transaction"),
-          }
-        : undefined,
-      () =>
-        runWithMetadataMessageAdmission(messageContext, input.message, (authorize, beforeFresh) => {
-          const value = applySessionMetadataAppendInTransaction(
-            database,
-            scoped,
-            beforeFresh,
-            undefined,
-            persistActorMutation,
-            initializationBatch?.cursor,
+    const result = runWithMetadataMessageAdmission(
+      messageContext,
+      input.message,
+      (authorize, beforeFresh) => {
+        const value = applySessionMetadataAppendInTransaction(
+          database,
+          scoped,
+          beforeFresh,
+          undefined,
+          persistActorMutation,
+          initializationBatch?.cursor,
+        );
+        if (initializationBatch && input.initialModel) {
+          // Each append already advanced the actor; settlement only persists that watermark.
+          initializationBatch.settle(
+            true,
+            initializationBatch.cursor.batch.events.length,
+            value.projectionNeedsReconcile,
+            { steps: 0, adjustedTime: 0 },
           );
-          if (initializationBatch && input.initialModel) {
-            // Each append already advanced the actor; settlement only persists that watermark.
-            initializationBatch.settle(
-              true,
-              initializationBatch.cursor.batch.events.length,
-              value.projectionNeedsReconcile,
-              { steps: 0, adjustedTime: 0 },
-            );
-          }
-          authorize("commit");
-          value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
-          return value;
-        }),
+        }
+        authorize("commit");
+        value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
+        return value;
+      },
     );
     const value = result.value;
     finalizeProjection(value.snapshot);
@@ -226,7 +232,6 @@ export function applySessionActorAppend(
             ),
           ),
         };
-        serialize(value);
       } catch (error) {
         value.reload = {
           ok: false,
@@ -298,32 +303,34 @@ export function applySessionActorAppend(
     );
   }
   if (append.kind === "metadata") {
+    const value = metadata(append.input, appendScope);
     return {
       kind: "metadata",
-      value: metadata(append.input, appendScope),
+      value,
+      ...(value.snapshot.ok ? { toolUsageGeneration: applyToolUsage() } : {}),
       initialEntry,
       header,
       modelPromptProjection,
     };
   }
   const input = { ...append.input, scope: appendScope };
-  const result = runWithCliHistoryWriter(
-    input.cliWriter
-      ? {
-          ...input.cliWriter,
-          target: input.scope,
-          assertCurrent: () => context.admit("transaction"),
-          assertReadable: () => context.admit("transaction"),
-        }
-      : undefined,
-    () =>
-      runWithMetadataMessageAdmission(messageContext, input, (authorize, beforeFresh) => {
-        const value = applySessionDirectMessageInTransaction(database, input, beforeFresh);
-        authorize("commit");
-        value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
-        return value;
-      }),
+  const result = runWithMetadataMessageAdmission(
+    messageContext,
+    input,
+    (authorize, beforeFresh) => {
+      const value = applySessionDirectMessageInTransaction(database, input, beforeFresh);
+      authorize("commit");
+      value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
+      return value;
+    },
   );
   finalizeProjection(result.value.snapshot);
-  return { kind: "message", value: result.value, initialEntry, header, modelPromptProjection };
+  return {
+    kind: "message",
+    value: result.value,
+    ...(result.value.snapshot.ok ? { toolUsageGeneration: applyToolUsage() } : {}),
+    initialEntry,
+    header,
+    modelPromptProjection,
+  };
 }

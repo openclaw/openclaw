@@ -3,7 +3,7 @@ import { parseModelRef } from "openclaw/plugin-sdk/provider-model-shared";
 import { expect, it } from "vitest";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
-import { KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
+import { isKimiK3ModelId } from "./provider-policy-api.js";
 
 const catalog = manifest.modelCatalog.providers.kimi;
 
@@ -13,6 +13,7 @@ it.each(catalog.models.filter((model) => ["k3", "k3-256k"].includes(model.id)))(
     const model: Model<"anthropic-messages"> = {
       ...row,
       api: "anthropic-messages",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat: undefined,
       provider: "kimi",
       baseUrl: catalog.baseUrl,
@@ -47,22 +48,22 @@ it("builds the bundled Kimi coding defaults", () => {
   expect(provider.models.map((m) => [m.id, m.name, m.contextWindow, m.maxTokens])).toEqual([
     ["k3", "Kimi K3", 1_048_576, 131_072],
     ["k3-256k", "Kimi K3 (256k)", 262_144, 131_072],
+    ["k3.1-pro", "Kimi K3.1 Pro", 1_048_576, 131_072],
+    ["k3.1-pro-highspeed", "Kimi K3.1 Pro Highspeed", 1_048_576, 131_072],
     ["kimi-for-coding", "Kimi Code", 262_144, 32_768],
     ["kimi-for-coding-highspeed", "Kimi K2.7 Code HighSpeed", 262_144, 32_768],
   ]);
-  expect(provider.models.map((m) => m.reasoning)).toEqual([true, true, true, true]);
+  expect(provider.models.every((m) => m.reasoning)).toBe(true);
   expect(provider.models.slice(2).map((model) => model.compat?.codeMode)).toEqual([
+    undefined,
+    undefined,
     undefined,
     undefined,
   ]);
 });
 
-it("covers every K3 catalog row with the K3 thinking policy", () => {
-  const ids = buildKimiCodingProvider()
-    .models.filter((model) => model.thinkingLevelMap)
-    .map((model) => model.id);
-
-  expect(KIMI_K3_MODEL_IDS).toEqual(expect.arrayContaining([...ids, "kimi-k3"]));
+it("keeps the K3 policy for IDs without a Kimi Code row", () => {
+  expect(["kimi-k3", "k3[1m]"].filter((id) => !isKimiK3ModelId(id))).toEqual([]);
 });
 
 it.each([

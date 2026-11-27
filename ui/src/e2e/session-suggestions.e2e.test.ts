@@ -1,5 +1,9 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, type Locator } from "playwright/test";
 import { it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -131,6 +135,34 @@ function caretPrefix(preview: Locator) {
   });
 }
 
+function caretTextGeometry(preview: Locator) {
+  return preview.evaluate((element) => {
+    const caret = element.querySelector(".agent-chat__typing-caret")!;
+    const box = caret.getBoundingClientRect();
+    const style = getComputedStyle(caret, "::after");
+    const height = Number.parseFloat(style.height);
+    const bottom = box.bottom - Number.parseFloat(style.bottom);
+    // A text Range supplies the font's actual inline box, not the line-height
+    // or an em approximation. The first glyph stays on the first draft line.
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let text = walker.nextNode();
+    while (text && !text.textContent) {
+      text = walker.nextNode();
+    }
+    const range = document.createRange();
+    range.setStart(text!, 0);
+    range.setEnd(text!, 1);
+    const glyph = range.getBoundingClientRect();
+    return {
+      top: bottom - height,
+      height,
+      textTop: glyph.top,
+      textHeight: glyph.height,
+      lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+    };
+  });
+}
+
 function bubbleGeometry(locator: Locator) {
   return locator.evaluate((element) => {
     const text = getComputedStyle(element);
@@ -187,6 +219,17 @@ suite.define(() => {
     const caret = preview.locator(".agent-chat__typing-caret");
     await expect(caret).toHaveCount(1);
     expect(await caretPrefix(preview)).toBe(draft.slice(0, cursor));
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const frame = await takeControlUiScreenshotFrame(page, row, [preview], {
+        animations: "disabled",
+        elements: [row],
+      });
+      await writeFile(path.join(suite.artifactDir, "typing-detail.png"), frame.elements[0]!.png);
+      await writeFile(
+        path.join(suite.artifactDir, "typing-geometry.json"),
+        JSON.stringify(await caretTextGeometry(preview), null, 2),
+      );
+    }
     const firstLine = await caret.boundingBox();
     const initialPreview = await preview.boundingBox();
     for (const position of [0, draft.length]) {
@@ -205,6 +248,43 @@ suite.define(() => {
         );
         expect(box!.y - firstLine!.y).toBeCloseTo(5 * lineHeight, 0);
       }
+    }
+  });
+
+  it("aligns the watched caret with text across text sizes and paragraph boundaries", async () => {
+    const { page, gateway } = await openSuggestions("owner");
+    await page.clock.install();
+    await pauseVirtualClock(page);
+    const preview = page.locator(".agent-chat__typing-preview-text");
+    const draft = "Text in progress.\n\nSecond paragraph.\n";
+    for (const scale of [0.9, 1, 1.1, 1.25, 1.4]) {
+      await page.evaluate((value) => {
+        document.documentElement.style.setProperty("--control-ui-text-scale", String(value));
+      }, scale);
+      for (const cursor of [
+        0,
+        1,
+        draft.indexOf("\n"),
+        draft.indexOf("\n") + 1,
+        draft.indexOf("Second"),
+        draft.length,
+      ]) {
+        await typingEvent(gateway, { preview: draft, cursor });
+        await expect.poll(() => caretPrefix(preview)).toBe(draft.slice(0, cursor));
+        await preview.evaluate(() => document.fonts.ready);
+        const geometry = await caretTextGeometry(preview);
+        const line = draft.slice(0, cursor).split("\n").length - 1;
+        expect(geometry.height).toBeCloseTo(geometry.textHeight, 1);
+        // Each rendered line may round its fractional height to a layout unit.
+        expect(
+          Math.abs(geometry.top - (geometry.textTop + line * geometry.lineHeight)),
+        ).toBeLessThanOrEqual(0.5);
+      }
+    }
+    for (const empty of ["", "\n\n"]) {
+      await typingEvent(gateway, { preview: empty, cursor: 0 });
+      await expect(preview).toHaveCount(0);
+      await expect(page.locator(".agent-chat__typing-bubble > span")).toHaveCount(3);
     }
   });
 
@@ -252,8 +332,67 @@ suite.define(() => {
       sessionKey: "agent:main:main",
       text: "Try the focused change",
     });
-    await expect(page.locator(".session-suggestion__state")).toHaveText("Pending");
+    await expect(page.locator(".session-suggestion__state")).toHaveText("Awaiting approval");
     await expect(page.locator(".session-suggestion__text")).toHaveText("Try the focused change");
+  });
+
+  it("shows an accepted suggestion as the approver's turn credited to its author", async () => {
+    const { page, gateway } = await openSuggestions("owner", {
+      presenceUsers: [presenceUser("owner", true), presenceUser("alice")],
+    });
+    await gateway.emitGatewayEvent("session.message", {
+      sessionKey: "main",
+      agentId: "main",
+      message: ownerMessage("why you no answer", {
+        id: "accepted-suggestion",
+        suggestedBy: { id: "alice", name: "Alice" },
+      }),
+    });
+    const group = page.locator(".chat-group.user", { hasText: "why you no answer" });
+    const credit = group.locator(".chat-message-source");
+    await expect(credit).toHaveText("Suggested by Alice");
+    await expect(group).not.toHaveClass(/chat-group--peer/);
+    await expect(group.locator(".chat-avatar")).not.toHaveText("SB");
+  });
+
+  it("keeps a long guest suggestion, its avatar and approval state on one line", async () => {
+    const prompt =
+      "Compare the two approaches in the release notes and explain which one keeps the migration simple for teams that already have a working setup.";
+    const { page } = await openSuggestions("viewer", {
+      methodResponses: {
+        "session.suggestions.list": {
+          suggestions: [pendingSuggestion("guest", prompt, 1)],
+          role: "viewer",
+        },
+      },
+    });
+    const row = page.locator(".session-suggestion");
+    const text = row.locator(".session-suggestion__text");
+    const state = row.locator(".session-suggestion__state");
+    await expect(text).toHaveText(prompt);
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const frame = await takeControlUiScreenshotFrame(page, row, [text, state], {
+        animations: "disabled",
+        elements: [row, state],
+      });
+      await writeFile(path.join(suite.artifactDir, "guest.png"), frame.png);
+      await writeFile(
+        path.join(suite.artifactDir, "guest-bounds.json"),
+        JSON.stringify(frame.elements.map((item) => item.bounds)),
+      );
+      console.info("Guest suggestion proof:", suite.artifactDir);
+    }
+    await expect(state).toHaveText("Awaiting approval");
+    await expect(row.locator(".chat-author-avatar")).toHaveAttribute("aria-label", "Alice");
+    const preview = row.locator(".session-suggestion__preview");
+    for (const width of [1180, 400]) {
+      await page.setViewportSize({ width, height: 760 });
+      await expect(preview).toHaveCSS("text-overflow", "ellipsis");
+      expect(await preview.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+      const [promptBox, stateBox] = await Promise.all([bounds(preview), bounds(state)]);
+      expect(promptBox.y + promptBox.height / 2).toBeGreaterThan(stateBox.y);
+      expect(promptBox.y + promptBox.height / 2).toBeLessThan(stateBox.y + stateBox.height);
+    }
   });
 
   it("does not offer live-session commands in a viewer suggestion composer", async () => {
@@ -301,6 +440,7 @@ suite.define(() => {
       );
       const typingRow = page.locator('[data-virtual-row-key="presence:typing"]');
       const previewBubble = typingRow.locator(".agent-chat__typing-preview-text");
+      const caret = previewBubble.locator(".agent-chat__typing-caret");
 
       await page.clock.install();
       const ownerTyping = (preview?: string) => typingEvent(gateway, preview ? { preview } : {});
@@ -311,7 +451,11 @@ suite.define(() => {
       const typingAvatar = typingRow.locator(
         ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot)",
       );
-      await expect(typingAvatar).toBeVisible();
+      const typingInitials = typingRow.locator(
+        ".chat-message-avatar-anchor .chat-avatar--sender-initials",
+      );
+      await expect(typingInitials).toBeVisible();
+      await expect(typingInitials).toHaveText("O");
       await expect(typingAvatar).toHaveCSS("position", "absolute");
 
       const draft = "yea, cool. Live drafts stream into the bubble now.";
@@ -322,15 +466,16 @@ suite.define(() => {
         await expect(previewBubble).toHaveText(visible);
       }
       await expect(typingRow.locator(".agent-chat__typing-preview-label")).toHaveText("Owner");
-      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing...");
+      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing…");
       await expect(typingRow.locator(".agent-chat__typing-bubble")).toHaveCount(0);
+      expect(await afterAnimation(caret)).not.toBe("none");
       const activeBox = await previewBubble.boundingBox();
       await page.clock.runFor(10_000);
       await expect(previewBubble).toHaveText(draft);
       await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Draft");
       await expect(typingRow.locator(".sr-only")).toBeEmpty();
       expect(await previewBubble.boundingBox()).toEqual(activeBox);
-      expect(await afterAnimation(previewBubble)).toBe("none");
+      expect(await afterAnimation(caret)).toBe("none");
 
       await typingEvent(gateway, {
         actor: { type: "human", id: "zoe", label: "Zoe" },
@@ -370,10 +515,11 @@ suite.define(() => {
           await previewBubble.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
       }
+      expect(await afterAnimation(caret)).not.toBe("none");
       await page.emulateMedia({ reducedMotion: "reduce" });
       await ownerTyping("مسودة لم ترسل بعد 👋");
       await expect(previewBubble).toHaveCSS("direction", "rtl");
-      expect(await afterAnimation(previewBubble)).toBe("none");
+      expect(await afterAnimation(caret)).toBe("none");
       await page.setViewportSize({ width: 1180, height: 760 });
       await page.evaluate(() => {
         document.documentElement.dataset.theme = "light";
@@ -381,13 +527,7 @@ suite.define(() => {
       });
       await ownerTyping(draft);
       await expect(previewBubble).toHaveText(draft);
-      await expect
-        .poll(() =>
-          typingRow
-            .locator(".chat-group")
-            .evaluate((row) => Number.parseFloat(getComputedStyle(row).gridTemplateColumns)),
-        )
-        .toBeGreaterThan(0);
+      await waitForLayoutSettled(page, '[data-virtual-row-key="presence:typing"] .chat-group');
       const beforeSend = await bubbleGeometry(previewBubble);
       await gateway.emitGatewayEvent("session.message", {
         sessionKey: "main",
@@ -401,6 +541,7 @@ suite.define(() => {
       await expect(typingRow).toHaveCount(0);
       const sentText = page.locator(".chat-group--peer .chat-text").filter({ hasText: draft });
       await expect(sentText).toHaveCount(1);
+      await waitForLayoutSettled(page, ".chat-group--peer .chat-text");
       const afterSend = await bubbleGeometry(sentText);
       expect(afterSend).toMatchObject({
         padding: beforeSend.padding,

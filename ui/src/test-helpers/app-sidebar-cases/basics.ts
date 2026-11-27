@@ -9,11 +9,13 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
+  createGatewayHarness,
   createSessions,
   createSessionsHarness,
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { sidebarGatewayHello } from "../gateway-methods.ts";
 import { agentList, sessionList } from "./compact.test-support.ts";
 import { settleRoster } from "./roster.test-support.ts";
 import "../../components/app-sidebar.tsx";
@@ -65,6 +67,7 @@ async function mountNavigation(
 it("honors deployment policy and existing Community dismissals", async () => {
   localStorage.setItem("openclaw:control-ui:community-invite:v2", "dismissed");
   const { sidebar, context, find } = await mountAgentSidebar(undefined, null);
+  sidebar.communityInviteAllowed = true;
   const fetch = vi.spyOn(globalThis, "fetch");
   try {
     for (const enabled of [true, false]) {
@@ -87,6 +90,20 @@ it("honors deployment policy and existing Community dismissals", async () => {
   }
 });
 
+it("explains why a read-only connection cannot create a session", async () => {
+  const { gateway, publish } = createGatewayHarness({} as GatewayBrowserClient);
+  const hello = sidebarGatewayHello();
+  publish({ hello: { ...hello, auth: { role: "operator", scopes: ["operator.read"] } } });
+  const { sidebar, find } = await mountAgentSidebar(undefined, undefined, gateway);
+  sidebar.connected = true;
+  await sidebar.updateComplete;
+  const link = find(".sidebar-session-toolbar .sidebar-new-session")!;
+  expect(link.getAttribute("aria-disabled")).toBe("true");
+  expect(link.closest("openclaw-tooltip")?.content).toBe(
+    "You don’t have permission to create a session.",
+  );
+});
+
 it.each(["chip", "roster"] as const)(
   "opens new-session links directly in %s mode without intercepting browser gestures",
   async (mode) => {
@@ -106,14 +123,19 @@ it.each(["chip", "roster"] as const)(
     await sidebar.updateComplete;
     await settleRoster(sidebar);
 
-    const newSessionLink = find<HTMLAnchorElement>(".sidebar-rail .sidebar-new-session");
+    // New session lives in the Sessions panel header, beside Filter & sort.
+    const newSessionLink = find<HTMLAnchorElement>(".sidebar-session-toolbar .sidebar-new-session");
     expect(findAll(".sidebar-new-session")).toHaveLength(1);
+    expect(find(".sidebar-rail .sidebar-new-session")).toBeNull();
     expect(find(".sidebar-brand__collapse")).toBeNull();
+    // With its panel closed, the Sessions item reopens it.
+    sidebar.navigationCollapsed = true;
+    await sidebar.updateComplete;
     find<HTMLButtonElement>('[data-navigation-view="sessions"]')?.click();
     find<HTMLButtonElement>(".sidebar-rail .sidebar-brand__search")?.click();
     expect(onToggleSidebar).toHaveBeenCalledOnce();
     expect(onOpenPalette).toHaveBeenCalledOnce();
-    expect(newSessionLink?.getAttribute("aria-label")).toBe("New conversation");
+    expect(newSessionLink?.getAttribute("aria-label")).toBe("New session");
     expect(newSessionLink).toBeInstanceOf(HTMLAnchorElement);
     expect(newSessionLink?.getAttribute("aria-disabled")).toBe("true");
     expect(newSessionLink?.hasAttribute("href")).toBe(false);
@@ -123,8 +145,8 @@ it.each(["chip", "roster"] as const)(
 
     sidebar.connected = true;
     await sidebar.updateComplete;
-    const link = find<HTMLAnchorElement>(".sidebar-rail .sidebar-new-session")!;
-    expect(link.getAttribute("aria-label")).toBe("New conversation");
+    const link = find<HTMLAnchorElement>(".sidebar-session-toolbar .sidebar-new-session")!;
+    expect(link.getAttribute("aria-label")).toBe("New session");
     expect(link.getAttribute("href")).toBe("/control/new?agent=research");
     expect(link.hasAttribute("aria-disabled")).toBe(false);
     for (const modifiers of [
@@ -138,19 +160,19 @@ it.each(["chip", "roster"] as const)(
       expect(event.defaultPrevented).toBe(false);
       expect(onOpenNewSession).not.toHaveBeenCalled();
     }
-    for (const view of ["pages", "sessions", "online"] as const) {
-      for (const collapsed of [false, true]) {
-        sidebar.navigationView = view;
-        sidebar.navigationCollapsed = collapsed;
-        await sidebar.updateComplete;
-        const current = find<HTMLAnchorElement>(".sidebar-rail .sidebar-new-session");
-        expect(current).toBe(link);
-        expect(findAll(".sidebar-new-session")).toHaveLength(1);
-        expect(find(".sidebar-session-toolbar .sidebar-new-session")).toBeNull();
-        current!.click();
-        expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
-        onOpenNewSession.mockClear();
+    for (const view of ["sessions", "online"] as const) {
+      sidebar.navigationView = view;
+      sidebar.navigationCollapsed = false;
+      await sidebar.updateComplete;
+      expect(find(".sidebar-rail .sidebar-new-session")).toBeNull();
+      const current = find<HTMLAnchorElement>(".sidebar-session-toolbar .sidebar-new-session");
+      if (view !== "sessions") {
+        expect(current).toBeNull();
+        continue;
       }
+      current!.click();
+      expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+      onOpenNewSession.mockClear();
     }
   },
 );
@@ -265,6 +287,10 @@ it("switches the Skills owner without opening an agent conversation", async () =
   sidebar.connected = true;
   sidebar.onNavigate = onNavigate;
   await sidebar.updateComplete;
+  // Skills opens the Customize list; the agent menu belongs to Sessions.
+  sidebar.navigationView = "sessions";
+  sidebar.invalidate();
+  await sidebar.updateComplete;
 
   await clickAgentMenu(sidebar);
   await clickAgentMenu(sidebar, "agent:research");
@@ -297,7 +323,7 @@ it("keeps the identity card available during recovery and offers retry only offl
   expect(find(".gateway-status")).toBeNull();
   expect(card?.getAttribute("data-connection-status")).toBe("reconnecting");
   expect(card?.querySelector(".sidebar-identity-card__status")).not.toBeNull();
-  expect(card?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Reconnecting…");
+  expect(card?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Reconnecting");
   expect(find(".sidebar-agent-card__subtitle-row")).toBeNull();
 
   card?.click();
@@ -466,13 +492,5 @@ it("keeps main-session activity on its agent header without duplicate main or su
   expect(findAll(header)).toHaveLength(1);
   expect(find(`[data-session-key="${key}"]`)).toBeNull();
   expect(find(`${header} .session-glyph__ring`)).toBeNull();
-  const attention = find(`${header} [data-session-attention="error"]`)!;
-  expect(attention).not.toBeNull();
-  await attention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
-    .updateComplete;
-  const description = (attention.getAttribute("aria-describedby") ?? "")
-    .split(/\s+/u)
-    .map((id) => attention.ownerDocument.getElementById(id)?.textContent ?? "")
-    .join(" ");
-  expect(description).toContain("Child session Spawned thread failed: Review failed");
+  expect(find(`${header} [data-session-attention="error"]`)).toBeNull();
 });

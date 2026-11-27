@@ -29,7 +29,20 @@ export function resolveCronSessionTargetSessionKey(
   return assertSafeCronSessionTargetId(sessionTarget.slice(8));
 }
 
-/** Returns whether cron executes the job in a detached run session. */
+/**
+ * The conversation a job continues in place. Its run starts only after that conversation's own
+ * turn ends, even when the job has no captured operator source.
+ */
+export function resolveCronContinuationSessionKey(job: {
+  sessionTarget?: string | null;
+}): string | undefined {
+  return resolveCronSessionTargetSessionKey(job.sessionTarget);
+}
+
+/**
+ * Returns whether cron executes the job under its own `cron:<jobId>` run key. A
+ * `current` job is still a child of its creating conversation; this decides only the key.
+ */
 export function isDetachedCronSessionTarget(sessionTarget?: string | null): boolean {
   return sessionTarget === "isolated" || sessionTarget === "current";
 }

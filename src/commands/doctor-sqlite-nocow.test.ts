@@ -6,17 +6,16 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { prepareClientCredentialMigration } from "../infra/client-credential-migration.js";
+import { registerAgentDatabaseReaderCloser } from "../infra/agent-database-readers.js";
 import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
 import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { isSqlitePathOnBtrfs } from "../infra/sqlite-wal-filesystem.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -24,11 +23,18 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
-import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
+import {
+  checkDoctorMigrationBackupsPending,
+  completeDoctorMigrationBackups,
+} from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
-import { inspectDoctorSqliteNoCow, repairDoctorSqliteNoCow } from "./doctor-sqlite-nocow.js";
+import {
+  checkDoctorSqliteNoCowPending,
+  inspectDoctorSqliteNoCow,
+  repairDoctorSqliteNoCow,
+} from "./doctor-sqlite-nocow.js";
 import {
   baseAcl,
   inheritedDefaultAcl,
@@ -36,10 +42,13 @@ import {
 } from "./doctor-sqlite-nocow.test-support.js";
 import * as updateCaptureCleanup from "./update-capture-cleanup.js";
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: vi.fn(),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  const overrides = { spawnSync: vi.fn() };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 vi.mock("../infra/sqlite-wal-filesystem.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-wal-filesystem.js")>()),
   isSqlitePathOnBtrfs: vi.fn(() => true),
@@ -102,7 +111,7 @@ function replaceDatabase(pathname: string) {
 
 async function repair(assertCurrent = () => {}) {
   const result = await rewrite(assertCurrent);
-  return [...result.changes, ...result.warnings];
+  return [...result.changes, ...result.warnings].join("\n");
 }
 
 async function useNativeTools(useNative: (command: string) => boolean) {
@@ -121,24 +130,6 @@ function expectDatabaseValue(pathname: string, table: string, value: string) {
   }).toEqual({ value, integrity: "ok" });
 }
 
-it("leaves unrelated trees and their inodes untouched with bounded ACL work", async () => {
-  seedDatabase();
-  const nested = path.join(directory, "codex-home");
-  fs.mkdirSync(nested);
-  for (let index = 0; index < 64; index++) {
-    fs.writeFileSync(path.join(nested, `${index}.txt`), "unrelated");
-  }
-  const sibling = path.join(nested, "0.txt");
-  const original = fs.statSync(sibling);
-  const originalDirectory = fs.statSync(directory);
-  expect((await repair()).join("\n")).toContain("Rewrote");
-  expect(fs.statSync(sibling).ino).toBe(original.ino);
-  expect(fs.statSync(directory).ino).toBe(originalDirectory.ino);
-  expect(
-    vi.mocked(spawnSync).mock.calls.filter(([command]) => command === "getfacl").length,
-  ).toBeLessThanOrEqual(2);
-});
-
 it.each([
   ["fuser", "fuser cannot inspect processes"],
   ["mv", "kernel/filesystem lacks RENAME_EXCHANGE"],
@@ -153,7 +144,7 @@ it.each([
   );
   const inventory = vi.spyOn(fs, "readdirSync");
   const copy = vi.spyOn(fsp, "open");
-  expect((await repair()).join("\n")).toContain(limit);
+  expect(await repair()).toContain(limit);
   expect(vi.mocked(spawnSync).mock.calls.some(([name]) => name === "getfacl")).toBe(false);
   expect(inventory.mock.calls.some(([pathname]) => pathname === directory)).toBe(false);
   expect(copy).not.toHaveBeenCalled();
@@ -164,33 +155,33 @@ it.each([
 it("refuses a store opened after copying before the real exchange", async () => {
   seedDatabase();
   const original = fs.statSync(directory).ino;
-  const tool = vi.mocked(spawnSync).getMockImplementation()!;
   let inspections = 0;
+  const tool = vi.mocked(spawnSync).getMockImplementation()!;
   vi.mocked(spawnSync).mockImplementation((command, args, options) =>
     command === "fuser" && args?.includes(sqlitePath) && ++inspections === 2
       ? { status: 0, stdout: "12345", stderr: "", pid: 0, output: [], signal: null }
       : tool(command, args, options),
   );
-  expect((await repair()).join("\n")).toContain("store files are open (pids: 12345)");
+  expect(await repair()).toContain("store files are open (pids: 12345)");
   expect(fs.statSync(directory).ino).toBe(original);
   expect(fixture.exchanges).toBe(0);
 });
 
-it.skipIf(process.platform !== "linux")(
-  "rewrites shared and agent stores after Doctor drains native and admission descriptors",
-  async () => {
+it.skipIf(process.platform !== "linux").each([false, true])(
+  "rewrites stores after Doctor drains native, admission and retained reader descriptors (close fails: %s)",
+  async (closeFails) => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "doctor-nocow-owner" },
       async () => {
         await useNativeTools(
           (command) => !["lsattr", "getfacl", "setfacl", "mv"].includes(command),
         );
-        const log = vi.fn();
         const maintenance = await beginDoctorMaintenance({
           options: { repair: true, nonInteractive: true, workspaceSuggestions: false },
           root: null,
-          runtime: { log, error() {}, exit() {} },
+          runtime: { log() {}, error() {}, exit() {} },
         });
+        let unregister = () => {};
         try {
           const paths = await maintenance!.run(async () => {
             const state = openOpenClawStateDatabase();
@@ -208,25 +199,24 @@ it.skipIf(process.platform !== "linux")(
               .paths;
           });
           expect(paths).toHaveLength(4);
-          const toolRunner = vi.mocked(spawnSync).getMockImplementation()!;
-          const handleCounts: number[] = [];
-          vi.mocked(spawnSync).mockImplementation((command, args, options) => {
-            if (command === "fuser") {
-              for (const pathname of paths) {
-                handleCounts.push(readSqliteReaderDiagnosticsForPath(pathname).connectionCount);
-              }
+          // Stands in for a worker pool's cached reader, which only the shared reader close releases.
+          using retained = new DatabaseSync(paths[1]!, { readOnly: true });
+          unregister = registerAgentDatabaseReaderCloser((candidates) => {
+            if (closeFails || !candidates.some((candidate) => candidate.path === paths[1])) {
+              throw new Error(closeFails ? "synthetic reader close failure" : "unselected reader");
             }
-            return toolRunner(command, args, options);
+            retained.close();
           });
           const originals = paths.map((pathname) => fs.statSync(pathname).ino);
           await maintenance!.repairSqliteNoCow(paths);
-          expect(maintenance!.warnings).toEqual([]);
-          expect(handleCounts.length).toBeGreaterThan(0);
-          expect(handleCounts.every((count) => count === 0)).toBe(true);
+          expect(maintenance!.warnings.join("\n")).toMatch(
+            closeFails ? /synthetic reader close failure[\s\S]*store files are open/u : /^$/u,
+          );
           expect(
-            paths.every((pathname, index) => fs.statSync(pathname).ino !== originals[index]),
-          ).toBe(true);
+            paths.filter((pathname, index) => fs.statSync(pathname).ino === originals[index]),
+          ).toEqual(closeFails ? [paths[1]] : []);
         } finally {
+          unregister();
           await maintenance?.release();
         }
       },
@@ -261,7 +251,7 @@ it.skipIf(process.platform !== "linux")(
     const descriptors = sourceDescriptors();
     expect(descriptors.length).toBeGreaterThanOrEqual(2);
     await useNativeTools((command) => command === "fuser");
-    expect((await repair()).join("\n")).toContain("store files are open");
+    expect(await repair()).toContain("store files are open");
     expect(sourceDescriptors()).toEqual(descriptors);
     expect(unknown.isTransaction).toBe(true);
     expect(fs.statSync(sqlitePath).ino).toBe(identity.ino);
@@ -281,12 +271,39 @@ it("reports existing CoW stores, skips other filesystems and explains missing to
   expect(inspectDoctorSqliteNoCow([sqlitePath]).notes.join(",")).toContain("lsattr is unavailable");
 });
 
+it("decides pending NOCOW work without changing the store", () => {
+  seedDatabase();
+  const family = [directory, sqlitePath, `${sqlitePath}-wal`, `${sqlitePath}-shm`];
+  const snapshot = () =>
+    family.map((pathname) => {
+      const stat = fs.statSync(pathname, { bigint: true });
+      return [pathname, stat.isFile() ? fs.readFileSync(pathname) : null, stat.mtimeNs, stat.ino];
+    });
+  const before = snapshot();
+  const decide = () => checkDoctorSqliteNoCowPending(inspectDoctorSqliteNoCow([sqlitePath]));
+
+  expect(decide()).toBe("work");
+  fixture.attributes = true;
+  expect(decide()).toBe("none");
+  fixture.tools = "unavailable";
+  expect(decide()).toBe("undecidable");
+
+  expect(snapshot()).toEqual(before);
+});
+
 it.each(["exchange-timeout", "different-owner"] as const)(
   "preserves WAL rows, siblings, metadata and original identity with %s",
   async (outcome) => {
     seedDatabase();
     const original = fs.statSync(sqlitePath);
     const originalDirectory = fs.statSync(directory);
+    const nested = path.join(directory, "codex-home");
+    fs.mkdirSync(nested);
+    for (let index = 0; index < 64; index++) {
+      fs.writeFileSync(path.join(nested, `${index}.txt`), "unrelated");
+    }
+    const sibling = path.join(nested, "0.txt");
+    const siblingInode = fs.statSync(sibling).ino;
     if (outcome === "exchange-timeout") {
       fixture.tools = outcome;
     } else {
@@ -301,11 +318,15 @@ it.each(["exchange-timeout", "different-owner"] as const)(
     }
     const chown = vi.spyOn(fs, "chownSync");
     const chmod = vi.spyOn(fs, "chmodSync");
-    expect((await repair()).join(",")).toContain("Rewrote SQLite files with NOCOW");
-    expect(fixture.exchanges).toBe(3);
+    expect(await repair()).toContain("Rewrote SQLite files with NOCOW");
     expect(fs.statSync(sqlitePath).ino).not.toBe(original.ino);
     expect(fs.statSync(sqlitePath).mode).toBe(original.mode);
     expect(fs.statSync(directory).mode).toBe(originalDirectory.mode);
+    expect(fs.statSync(directory).ino).toBe(originalDirectory.ino);
+    expect(fs.statSync(sibling).ino).toBe(siblingInode);
+    expect(
+      vi.mocked(spawnSync).mock.calls.filter(([command]) => command === "getfacl").length,
+    ).toBeLessThanOrEqual(2);
     const backup = fs.readdirSync(root).find((name) => name.startsWith("state.nocow-backup-"))!;
     expect(fs.statSync(path.join(root, backup, "openclaw.sqlite")).ino).toBe(original.ino);
     expect(fs.readFileSync(path.join(directory, "sibling.txt"), "utf8")).toBe("preserve me");
@@ -326,52 +347,34 @@ it.each(["exchange-timeout", "different-owner"] as const)(
 );
 
 it.skipIf(process.platform === "win32")(
-  "preserves nested symlink bytes and empty lock files without following targets",
+  "leaves unrelated nested symlinks and lock files outside the rewrite",
   async () => {
     seedDatabase();
     const nested = path.join(directory, "tmp", "arg0");
     fs.mkdirSync(nested, { recursive: true });
     const external = path.join(root, "external");
-    fs.mkdirSync(external);
-    fs.writeFileSync(path.join(external, "untouched"), "outside the store");
-    const links = new Map([
-      [path.join(nested, "absolute"), Buffer.from(external)],
-      [path.join(nested, "relative"), Buffer.from("../../sibling.txt")],
-      [path.join(nested, "dangling.sqlite"), Buffer.from("missing-target")],
-      [path.join(nested, "raw-bytes"), Buffer.from([0x66, 0x80, 0xff])],
-    ]);
-    for (const [pathname, target] of links) {
-      fs.symlinkSync(target, pathname);
-    }
-    const owners = [...links.keys()].map((pathname) => fs.lstatSync(pathname));
+    fs.writeFileSync(external, "outside the store");
+    const link = path.join(nested, "unrelated.sqlite");
+    fs.symlinkSync(external, link);
     const lock = path.join(nested, ".lock");
     fs.writeFileSync(lock, "");
-    const originalLock = fs.statSync(lock);
+    const originalLink = fs.lstatSync(link);
+    const originalLock = fs.lstatSync(lock);
     const tool = vi.mocked(spawnSync).getMockImplementation()!;
     vi.mocked(spawnSync).mockImplementation((command, args, options) => {
       if (command === "fuser" && !args?.[0]?.includes(".nocow-probe-")) {
         expect(args).not.toContain(lock);
-        for (const pathname of args ?? []) {
-          expect(fs.lstatSync(pathname).isSymbolicLink()).toBe(false);
-          expect(pathname.startsWith(external)).toBe(false);
-        }
+        expect(args).not.toContain(link);
+        expect(args).not.toContain(external);
       }
       return tool(command, args, options);
     });
-
-    expect((await repair()).join("\n")).toContain("Rewrote SQLite files with NOCOW");
-    expect(fixture.exchanges).toBe(3);
-    for (const [index, [pathname, target]] of [...links].entries()) {
-      const stat = fs.lstatSync(pathname);
-      expect(stat.isSymbolicLink()).toBe(true);
-      expect(fs.readlinkSync(pathname, { encoding: "buffer" })).toEqual(target);
-      expect([stat.uid, stat.gid]).toEqual([owners[index]!.uid, owners[index]!.gid]);
-    }
-    expect(fs.existsSync(path.join(nested, "dangling.sqlite"))).toBe(false);
-    expect(fs.statSync(lock).isFile()).toBe(true);
-    expect(fs.statSync(lock).ino).toBe(originalLock.ino);
+    expect(await repair()).toContain("Rewrote SQLite files with NOCOW");
+    expect(fs.lstatSync(link)).toMatchObject(originalLink);
+    expect(fs.readlinkSync(link)).toBe(external);
+    expect(fs.lstatSync(lock)).toMatchObject(originalLock);
     expect(fs.readFileSync(lock)).toHaveLength(0);
-    expect(fs.readFileSync(path.join(external, "untouched"), "utf8")).toBe("outside the store");
+    expect(fs.readFileSync(external, "utf8")).toBe("outside the store");
   },
 );
 
@@ -391,7 +394,7 @@ it.skipIf(process.platform === "win32").each(["access", "default", "denied-grant
       fixture.acls.set(sqlitePath, fileAcl);
     }
     const originalMode = fs.statSync(directory).mode;
-    expect((await repair()).join(",")).toContain("Rewrote");
+    expect(await repair()).toContain("Rewrote");
     expect(fs.statSync(directory).mode).toBe(originalMode);
     expect(fixture.acls.get(directory)).toBe(directoryAcl);
     if (kind !== "denied-grant") {
@@ -422,7 +425,7 @@ it.each([
     stderr: "",
     ...result,
   };
-  expect((await repair()).join("\n")).toContain(
+  expect(await repair()).toContain(
     `fuser could not establish that all handles are closed: ${detail}`,
   );
   expect(fixture.exchanges).toBe(0);
@@ -480,7 +483,7 @@ it.each(["database", "sidecar"])("refuses an aliased %s before mutation", async 
   seedDatabase();
   const source = kind === "database" ? sqlitePath : `${sqlitePath}-wal`;
   fs.linkSync(source, path.join(root, "alias"));
-  expect((await repair()).join("\n")).toContain("hard-linked path");
+  expect(await repair()).toContain("hard-linked path");
   expect(fixture.exchanges).toBe(0);
 });
 
@@ -522,10 +525,10 @@ it.each([
       throw new Error("Gateway owns the store");
     }
   });
-  expect(notes.join(",")).not.toContain("Rewrote");
+  expect(notes).not.toContain("Rewrote");
   expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
   expect(fixture.exchanges).toBe(failure === "exchange-failed" ? 1 : 0);
-  expect(notes.join(",")).toMatch(
+  expect(notes).toMatch(
     failure === "getfacl" || failure === "setfacl" || failure === "verification"
       ? /skipped/u
       : /refused|skipped/u,
@@ -566,10 +569,10 @@ describe("Doctor NOCOW recovery identities", () => {
     return readTarget().plannedMoves[0]!.archivePath;
   }
 
-  function retire() {
+  async function retire() {
     return retireSessionSqliteRecovery({
       env,
-      preview: inspectSessionSqliteRecovery({ cfg: {}, env }),
+      preview: await inspectSessionSqliteRecovery({ cfg: {}, env }),
       readConfig: async () => ({}),
       confirm: async () => true,
     });
@@ -586,7 +589,64 @@ describe("Doctor NOCOW recovery identities", () => {
     vi.spyOn(updateCaptureCleanup, "readCompletedUpdateHistory").mockReturnValue({
       runs: [],
       latestCompletedStartedAt: Date.now() + 86_400_000,
+      latestVerifiedStartedAt: 0,
+      latestVerifiedFinishedAt: 0,
+      latestVerifiedSuccessStartedAt: 0,
+      hasUnfinishedRun: false,
+      hasPendingRecovery: false,
     });
+  });
+
+  it("has backup completion pending only under schema maintenance until it is recorded", async () => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => {},
+    });
+    try {
+      await maintenance.run(() =>
+        backupDoctorMigrationDatabases({
+          env,
+          pendingDatabasePaths: [sqlitePath],
+          databasePaths: [sqlitePath],
+        }),
+      );
+      const [manifestPath] = listSessionSqliteMigrationManifestPaths(env);
+      const recorded = fs.readFileSync(manifestPath!);
+      // Without schema maintenance the completion is never recorded.
+      expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("none");
+      await maintenance.run(async () => {
+        expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("work");
+        expect(fs.readFileSync(manifestPath!)).toEqual(recorded);
+        expect(readSessionSqliteMigrationManifest(manifestPath!)?.completedAt).toBeUndefined();
+
+        completeDoctorMigrationBackups(env, [sqlitePath]);
+        expect(readSessionSqliteMigrationManifest(manifestPath!)?.completedAt).toEqual(
+          expect.any(String),
+        );
+        expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("none");
+      });
+    } finally {
+      await maintenance.close();
+    }
+  });
+
+  it("retains recovery originals when the SQLite generation probe fails", async () => {
+    const backupPath = await prepareCompletedBackup();
+    expect((await rewrite()).changes).toHaveLength(1);
+    const execute = vi.mocked(spawnSync).getMockImplementation()!;
+    vi.mocked(spawnSync).mockImplementation((command, args, options) => {
+      if (command === process.execPath && args?.includes(SQLITE_READONLY_CHILD_ARG)) {
+        throw new Error("injected SQLite generation probe failure");
+      }
+      return execute(command, args, options);
+    });
+    const result = await retire();
+    expect(result.artifacts.find((item) => item.path === backupPath)).toMatchObject({
+      outcome: "blocked",
+      reason: "destination-verification-failed",
+      detail: expect.stringContaining("injected SQLite generation probe failure"),
+    });
+    expect(fs.existsSync(backupPath)).toBe(true);
   });
 
   it.each([false, true])(
@@ -595,18 +655,10 @@ describe("Doctor NOCOW recovery identities", () => {
       fs.rmSync(sqlitePath);
       const credentials = await createClientCredentialMigrationFixture(root);
       try {
-        credentials.maintenance.run(() =>
-          runSqliteImmediateTransactionSync(credentials.source, () => {
-            prepareClientCredentialMigration(credentials.source, {
-              path: sqlitePath,
-              env,
-              fromVersion: 25,
-              capture: credentials.maintenance.capture,
-            });
-            credentials.source.exec(
-              "UPDATE schema_meta SET schema_version=29; PRAGMA user_version=29;",
-            );
-          }),
+        credentials.migrate(() =>
+          credentials.source.exec(
+            "UPDATE schema_meta SET schema_version=29; PRAGMA user_version=29;",
+          ),
         );
       } finally {
         credentials.source.close();

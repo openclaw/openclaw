@@ -1,6 +1,6 @@
 AndroidX WebKit
 Artifacts:
-- androidx.webkit:webkit:1.17.1
+- androidx.webkit:webkit:1.18.0
 
 Copyright 2018 The Android Open Source Project
 

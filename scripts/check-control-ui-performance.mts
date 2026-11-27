@@ -3,12 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import {
   CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE,
   selectControlUiRoutePreloads,
 } from "../src/gateway/control-ui-route-preloads.ts";
+import {
+  createControlUiBudgetNormalizer,
+  measureControlUiBudgetAsset,
+  shouldPrecompressControlUiAsset,
+} from "../ui/config/control-ui-asset-compression.ts";
 import { extractControlUiStartupAssetPaths } from "../ui/config/control-ui-startup-assets.ts";
-import { reportLimitViolations } from "./lib/check-limits.mts";
+import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import {
   MERMAID_RENDERER_ASSET,
@@ -29,16 +35,20 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
 // Each landed change can consume this much ratchet tolerance, so small increases
 // may accumulate. The fixed startup JS ceiling bounds that cumulative creep.
 const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
+// Generated hashes are normalized; retain only the cross-toolchain variance floor.
 const CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES = 64;
 const CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES = 45 * KIB;
 // Immediate Home and diagnostic frames approved in #147574, including shared header styles.
 const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
-const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
+const MERMAID_RENDERER_GZIP_BYTES = 256 * KIB;
 const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
+  // Coordinator-approved full locale hints plus the warm-frame admission hint
+  // (#195865): measured 13,962 B plus 64 B headroom.
+  documentGzipBytes: 14_026,
   // Consolidated eager/route partitions measure 5/20/17 requests over HTTP/1.1.
   // Preserve the initial two-request headroom; route limits match their measured graphs.
   startupJsRequests: 7,
@@ -48,45 +58,113 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Streaming token-to-DOM: 1,274,050 B measured + the existing 811 B headroom.
-  // Peter accepted chat growth for less streaming CPU and HTML parsing.
-  chatBootJsGzipBytes: 1_274_861,
-  newBootJsGzipBytes: 797_395,
+  // Coordinator-accepted shipped feature cost after paydown #199196.
+  // Measured on main 5328b275: exact route totals, with no added headroom.
+  // Coordinator-accepted native signing (#199136): +235 B in the shared lazy signer.
+  // Chat reader stability (#199080): its anchor and row-admission code, measured +1,333 B.
+  // Josh approved the #198491 member-welcome cost (2026-11-14): measured 1,313,182 B
+  // (+1,215 B over main 97dd78cc) plus 64 B headroom.
+  // Continuation wakes (#200056): measured 1,314,286 B (+979 B over main 7f234bd9) plus 64 B.
+  // Ayaan approved the #198133 tool-call history cost (2026-11-16): measured +10,341 B
+  // over its merge base plus 64 B headroom.
+  // Approved publication task filtering: +90 B over 054fd978, with no added headroom.
+  // Popover prompt cache hit rate (#200223, Ayaan shipped 2026-11-17): measured +737 B
+  // over its merge base plus 64 B headroom.
+  // Vyctor-approved navigation stack (#200013): +5,501 B vs paired base 1d82bed0.
+  // Preserve the original main headroom; no additional margin.
+  // Ayaan approved the #201130 Codex update recovery (2026-11-18): measured 1,332,226 B
+  // (+911 B over paired base 1,331,315 B) plus 64 B headroom.
+  // Ayaan approved the plugin composer task card (#201695, 2026-11-19): measured 1,332,573 B
+  // (+849 B over paired base 1,331,724 B) plus 64 B headroom.
+  // Josh approved the #202534 transcript file-link availability cost (2026-11-20): measured
+  // 1,333,835 B (+477 B over paired base 1,333,358 B at d5a99b07) plus 64 B headroom.
+  // First-frame composer banner (#203246): #202800 lazy-loaded the banner that the
+  // #202534 measurement included; restoring it measured 1,334,416 B (+777 B over paired
+  // base 1,333,639 B at a3357794) plus 64 B headroom.
+  // Provider plugin labels on chat failure headings (#204230, standing merge authority):
+  // measured 1,334,559 B (+89 B over paired base 1,334,470 B at d16017ca) plus 64 B headroom.
+  // Voice API-key guidance (#204128): measured 1,335,688 B (+1,221 B over paired
+  // base 1,334,467 B at e2973f93), with no added headroom.
+  // Combined with b36ba3fed2: measured 1,335,757 B, retaining main's 64 B headroom.
+  // Peter requested the single Daybreak toggle (#204302, 2026-11-23): model-switch remap and
+  // stale-program repair measured +451 B over paired base 1,334,559 B at 34c8570c; on top of
+  // main's 1,335,821 B limit (which keeps its 64 B headroom) that is 1,336,272 B.
+  chatBootJsGzipBytes: 1_336_272,
+  // The same shared lazy signer adds the coordinator-accepted +235 B here.
+  // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
+  // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
+  // Same #200223 popover cache hit rate: measured +408 B over its merge base plus 64 B.
+  // Vyctor-approved navigation stack (#200013): +5,611 B vs paired base 1d82bed0.
+  // Preserve the original main headroom; no additional margin.
+  newBootJsGzipBytes: 822_243,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
-  // The separate 512 B growth and 64 B build-variance allowances are unchanged.
+  // The separate growth allowance stays 512 B; build variance is bounded above.
   startupJsGzipBytes: 325_131,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  // Fewer boot requests save 15,022 B across Chat JS/CSS. The consolidated
-  // Chat chunk measures 463,077 B; the cap retains 25,328 B headroom.
-  largestJsGzipBytes: 488_405,
+  // Same snapshot-save repair, measured shared chunk plus 64 B.
+  // The same shared-chunk trade, measured plus 64 B.
+  // Josh approved the #196456 key-warning delta: +2,527 B; inherited debt stays.
+  // Same #198491 approval, absorbing inherited debt: measured 572,080 B (+1,010 B over main)
+  // plus 64 B headroom.
+  // Continuation wakes (#200056): measured 572,376 B plus 64 B.
+  // Vyctor-approved navigation stack (#200013): +4,803 B vs paired base 1d82bed0.
+  // Preserve the original main headroom; no additional margin.
+  largestJsGzipBytes: 577_243,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // CLS reservation costs 266 B gzip over main while all measured reloads stay <=0.02.
-  // The campaign permits this measured win; retain only 64 B of build variance.
-  totalCssGzipBytes: 307_769,
-  totalCssRawBytes: 1_597_441,
+  // Coordinator-accepted shipped feature cost after paydown #196291 and #196320.
+  // Measured on main a58dbe09: exact totals, with no added headroom.
+  // Josh approved the #198491 member-welcome styles (2026-11-14), absorbing inherited debt:
+  // measured 336,879 B gzip (+371 B over main) / 1,737,690 B raw (+771 B), plus 64 B each.
+  // Ayaan approved the #198133 tool-call history styles (2026-11-16), absorbing inherited debt:
+  // measured 337,248 B gzip (+209 B over main) / 1,740,170 B raw (+2,064 B), plus 64 B each.
+  // Ayaan accepted the automations (#200808, #200817) and catalog/Skill Workshop (#202515,
+  // #202537, #202531, #202572, #202532) redesign styles (2026-11-22): measured on main 265577c4
+  // at 344,948 B gzip / 1,779,112 B raw, with no added headroom. Trim tracked in #203445.
+  // Vyctor approved the Gridlines layout-fix batch (2026-11-25): main b21965c2 plus 30 of its
+  // 34 CSS PRs measured 348,171 B gzip / 1,792,058 B raw; 512 B / 2,048 B cover the other four.
+  totalCssGzipBytes: 348_683,
+  totalCssRawBytes: 1_794_106,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
-function readAssetMetrics(assetsDir: string, entry: fs.Dirent) {
+function readAssetMetrics(
+  assetsDir: string,
+  entry: fs.Dirent,
+  normalize: (source: string) => string,
+  bootAssets: ReadonlySet<string>,
+) {
   const file = `assets/${entry.name}`;
   const sourcePath = path.join(assetsDir, entry.name);
   const gzipPath = `${sourcePath}.gz`;
   const brotliPath = `${sourcePath}.br`;
   const rawBytes = fs.statSync(sourcePath).size;
   const type = entry.name.endsWith(".js") ? "js" : "css";
+  const gzipSize = fs.statSync(gzipPath, { throwIfNoEntry: false })?.size;
+  const brotliSize = fs.statSync(brotliPath, { throwIfNoEntry: false })?.size;
+  // The Gateway serves identity when a requested compression sidecar is absent.
+  const servedGzipBytes = gzipSize ?? rawBytes;
+  const servedBrotliBytes = brotliSize ?? rawBytes;
   return {
     file,
     type,
     rawBytes,
-    // The Gateway serves identity when a requested compression sidecar is absent.
-    gzipBytes: fs.statSync(gzipPath, { throwIfNoEntry: false })?.size ?? rawBytes,
-    brotliBytes: fs.statSync(brotliPath, { throwIfNoEntry: false })?.size ?? rawBytes,
+    servedGzipBytes,
+    servedBrotliBytes,
+    ...measureControlUiBudgetAsset(
+      fs.readFileSync(sourcePath, "utf8"),
+      normalize,
+      { gzipBytes: servedGzipBytes, brotliBytes: servedBrotliBytes },
+      {
+        eligible: shouldPrecompressControlUiAsset(file, rawBytes, bootAssets.has(file)),
+        boot: bootAssets.has(file),
+      },
+    ),
   };
 }
 
@@ -97,8 +175,17 @@ function summarizeAssets(assets: Array<ReturnType<typeof readAssetMetrics>>) {
       rawBytes: summary.rawBytes + asset.rawBytes,
       gzipBytes: summary.gzipBytes + asset.gzipBytes,
       brotliBytes: summary.brotliBytes + asset.brotliBytes,
+      servedGzipBytes: summary.servedGzipBytes + asset.servedGzipBytes,
+      servedBrotliBytes: summary.servedBrotliBytes + asset.servedBrotliBytes,
     }),
-    { requests: 0, rawBytes: 0, gzipBytes: 0, brotliBytes: 0 },
+    {
+      requests: 0,
+      rawBytes: 0,
+      gzipBytes: 0,
+      brotliBytes: 0,
+      servedGzipBytes: 0,
+      servedBrotliBytes: 0,
+    },
   );
 }
 
@@ -136,10 +223,14 @@ function collectControlUiLocaleAssetGroups(assets: Array<ReturnType<typeof readA
 export function collectControlUiPerformanceMetrics(distDir: string) {
   const assetsDir = path.join(distDir, "assets");
   const html = fs.readFileSync(path.join(distDir, "index.html"), "utf8");
-  const assets = fs
-    .readdirSync(assetsDir, { withFileTypes: true })
+  const entries = fs.readdirSync(assetsDir, { withFileTypes: true });
+  const normalize = createControlUiBudgetNormalizer(
+    entries.filter((entry) => entry.isFile()).map((entry) => entry.name),
+  );
+  const compressionBootAssets = new Set(extractControlUiStartupAssetPaths(html));
+  const assets = entries
     .filter((entry) => entry.isFile() && /\.(?:css|js)$/u.test(entry.name))
-    .map((entry) => readAssetMetrics(assetsDir, entry));
+    .map((entry) => readAssetMetrics(assetsDir, entry, normalize, compressionBootAssets));
   const assetsByFile = new Map(assets.map((asset) => [asset.file, asset]));
   const collectBootAssets = (document: string) => {
     const bootAssets = extractControlUiStartupAssetPaths(document).map((file) => {
@@ -178,7 +269,8 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
     throw new Error("Control UI performance check found an incomplete production bundle");
   }
   return {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
+    document: { rawBytes: Buffer.byteLength(html), gzipBytes: gzipSync(html).byteLength },
     startup,
     routeBoot,
     total: {
@@ -207,6 +299,7 @@ function collectControlUiPerformanceBudgetChecks(
     ].map((asset) => asset.file),
   );
   const checks: Array<[string, number, number, "count" | "bytes"]> = [
+    ["document gzip", metrics.document.gzipBytes, budgets.documentGzipBytes, "bytes"],
     ["startup JS requests", metrics.startup.js.requests, budgets.startupJsRequests, "count"],
     ["startup CSS requests", metrics.startup.css.requests, budgets.startupCssRequests, "count"],
     ["startup JS gzip", metrics.startup.js.gzipBytes, startupJsLimit, "bytes"],
@@ -390,7 +483,7 @@ function formatRequestCount(count: number): string {
 }
 
 function formatAssetSummary(summary: ReturnType<typeof summarizeAssets>): string {
-  return `${formatRequestCount(summary.requests)}, ${formatControlUiPerformanceBytes(summary.gzipBytes)} gzip (${summary.gzipBytes} B), ${formatControlUiPerformanceBytes(summary.brotliBytes)} br, ${summary.rawBytes} B raw`;
+  return `${formatRequestCount(summary.requests)}, ${formatControlUiPerformanceBytes(summary.gzipBytes)} gzip (${summary.gzipBytes} B), ${formatControlUiPerformanceBytes(summary.brotliBytes)} br normalized; served ${summary.servedGzipBytes} B gzip, ${summary.servedBrotliBytes} B br, ${summary.rawBytes} B raw`;
 }
 
 function controlUiPerformanceWarnings(
@@ -398,6 +491,15 @@ function controlUiPerformanceWarnings(
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS>,
 ): string[] {
   const warnings: string[] = [];
+  for (const [metric, actual, cap] of [
+    ["document gzip", metrics.document.gzipBytes, budgets.documentGzipBytes],
+    ["total CSS gzip", metrics.total.css.gzipBytes, budgets.totalCssGzipBytes],
+    ["total CSS raw", metrics.total.css.rawBytes, budgets.totalCssRawBytes],
+  ] as const) {
+    if (actual > cap) {
+      warnings.push(`${metric} is ${actual - cap} B over its fixed ceiling (${actual} > ${cap} B)`);
+    }
+  }
   if (metrics.startup.css.gzipBytes > CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES) {
     warnings.push(
       `startup CSS gzip is above the ${CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES} B advisory target; remaining hard-ceiling headroom: ${budgets.startupCssGzipBytes - metrics.startup.css.gzipBytes} B`,
@@ -446,7 +548,8 @@ export function formatControlUiPerformanceReport(
   );
   const lines = [
     "Control UI performance:",
-    `  measurement: shipped sidecars with identity fallback; Node ${process.version}`,
+    `  measurement: generated asset hashes normalized for budgets; served sizes retain sidecars with identity fallback; Node ${process.version}`,
+    `  document: ${metrics.document.rawBytes} B raw, ${metrics.document.gzipBytes} B gzip (limit: ${budgets.documentGzipBytes} B)`,
     `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {
@@ -770,6 +873,16 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     );
   } else {
     process.stdout.write(`${result.report}\n`);
+  }
+  // Keep inherited overages visible even when the build only reports budgets.
+  if (limitsAreAdvisory()) {
+    reportLimitViolations(
+      result.warnings.map((message) => ({
+        file: "scripts/check-control-ui-performance.mts",
+        title: "Control UI performance warning",
+        message,
+      })),
+    );
   }
   if (!reportOnly) {
     const metricFiles: Record<string, string> = {

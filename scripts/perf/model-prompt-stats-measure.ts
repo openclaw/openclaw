@@ -10,7 +10,7 @@ import { mock } from "node:test";
 import { setTimeout as delay, setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({

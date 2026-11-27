@@ -8,6 +8,7 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { ComposerDictationStatus } from "./components/chat-voice-activity.tsx";
 import { DirectDictationView } from "./components/direct-dictation-view.tsx";
+import { placeComposerDictation } from "./composer-dictation-session.ts";
 import type * as ComposerDictationModule from "./composer-dictation.ts";
 
 const dictationHarness = vi.hoisted(() => {
@@ -15,6 +16,7 @@ const dictationHarness = vi.hoisted(() => {
     active = false;
     connecting = false;
     finalizing = false;
+    transcribing = false;
     transcript = "";
 
     get locksComposer() {
@@ -38,7 +40,12 @@ const dictationHarness = vi.hoisted(() => {
       return true;
     });
 
-    constructor(private options: { onCommit: (transcript: string) => void }) {
+    constructor(
+      private options: {
+        onCommit: (transcript: string) => void;
+        prepareSession?: () => Promise<string | undefined>;
+      },
+    ) {
       super();
       this.update(options);
       harness.controllers.push(this);
@@ -47,7 +54,10 @@ const dictationHarness = vi.hoisted(() => {
       this.addEventListener("change", listener);
       return () => this.removeEventListener("change", listener);
     }
-    update(options: { onCommit: (transcript: string) => void }) {
+    update(options: {
+      onCommit: (transcript: string) => void;
+      prepareSession?: () => Promise<string | undefined>;
+    }) {
       this.options = options;
       harness.options = options;
     }
@@ -59,7 +69,10 @@ const dictationHarness = vi.hoisted(() => {
     }
   }
   const harness = {
-    options: null as null | { onCommit: (transcript: string) => void },
+    options: null as null | {
+      onCommit: (transcript: string) => void;
+      prepareSession?: () => Promise<string | undefined>;
+    },
     controllers: [] as Controller[],
   };
   return Object.assign(harness, { Controller });
@@ -202,8 +215,11 @@ describe("DirectDictationControl", () => {
     controller.transcript = "spoken";
     expect(control.previewDraft()).toBe("draft spoken");
     const { container, update } = mountControl(control, true);
-    expect(container.querySelector(".agent-chat__dictation-status")?.textContent).toContain(
-      "Listening",
+    // The phase view is a lazy chunk that loads with the first dictation.
+    await vi.waitFor(() =>
+      expect(container.querySelector(".agent-chat__dictation-status")?.textContent).toContain(
+        "Listening",
+      ),
     );
     expect(container.querySelector(".agent-chat__dictation-phase--listening")).not.toBeNull();
     container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating")?.click();
@@ -222,6 +238,32 @@ describe("DirectDictationControl", () => {
     container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit")?.click();
     await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
     expect(controller.finishActive).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the lazy status visible after Stop until transcription settles", async () => {
+    const { control } = fixture();
+    control.prepare("agent-a");
+    const controller = expectDefined(dictationHarness.controllers[0], "dictation owner");
+    const { container, update } = mountControl(control, true);
+    controller.active = true;
+    controller.transcribing = true;
+    update();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".agent-chat__dictation-phase")?.textContent).toContain(
+        "Listening",
+      ),
+    );
+    controller.active = false;
+    update();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".agent-chat__dictation-phase")?.textContent).toMatch(
+        /Finishing|Transcribing/,
+      ),
+    );
+    expect(container.querySelector('[data-status="thinking"]')).not.toBeNull();
+    controller.transcribing = false;
+    update();
+    expect(container.querySelector(".agent-chat__dictation-status")).toBeNull();
   });
 
   it("does not submit a replacement route after finishing the previous draft's dictation", async () => {
@@ -273,4 +315,62 @@ describe("DirectDictationControl", () => {
     expect(insertTranscript).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
   });
+});
+
+it.each([
+  { draft: "ask me", start: 6, end: 6, limit: 8, spoken: "🌱", expected: "ask me " },
+  {
+    draft: "ask basil about peas?",
+    start: 4,
+    end: 9,
+    limit: 21,
+    spoken: "🌱 basil",
+    expected: "ask 🌱 ba about peas?",
+  },
+])(
+  "fits the dictated replacement into the available space in '$draft'",
+  ({ draft, start, end, limit, spoken, expected }) => {
+    const target = document.createElement("textarea");
+    target.maxLength = limit;
+    target.value = draft;
+    target.setSelectionRange(start, end);
+    const editor = createDirectDictationTextarea(() => target);
+    editor.captureSelection();
+    expect(editor.previewTranscript(placeComposerDictation, spoken)).toBe(expected);
+    expect(editor.insertTranscript(placeComposerDictation, spoken)).toBe(expected);
+    expect(target.value).toBe(expected);
+  },
+);
+
+it("keeps edits made after Stop when a late replacement reaches the limit", () => {
+  const target = document.createElement("textarea");
+  target.maxLength = 12;
+  target.value = "old";
+  const editor = createDirectDictationTextarea(() => target);
+  editor.captureSelection();
+  target.value = "pick a pear";
+  target.setSelectionRange(5, 6);
+  expect(editor.insertTranscript(placeComposerDictation, "ripe", true)).toBe("pick ri pear");
+});
+
+it("keeps a newer preview provisional when earlier dictation text arrives", () => {
+  const target = document.createElement("textarea");
+  target.value = "base";
+  target.setSelectionRange(4, 4);
+  const editor = createDirectDictationTextarea(() => target);
+  editor.captureSelection();
+  target.value = editor.previewTranscript(placeComposerDictation, "new preview") ?? "";
+  expect(editor.insertTranscript(placeComposerDictation, "first", true, true)).toBe("base first");
+  target.value = editor.previewTranscript(placeComposerDictation, "new preview") ?? "";
+  expect(target.value).toBe("base first new preview");
+  expect(editor.insertTranscript(placeComposerDictation, "second", true, true)).toBe(
+    "base first second",
+  );
+  expect(editor.previewTranscript(placeComposerDictation, "new preview")).toBe(
+    "base first second new preview",
+  );
+  target.value = "base first second";
+  expect(editor.insertTranscript(placeComposerDictation, "final words", true)).toBe(
+    "base first second final words",
+  );
 });

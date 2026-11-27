@@ -14,16 +14,28 @@ type Flow = {
   closed: boolean;
   stop: () => void;
   transmit: (chunk: Buffer, deliveredAtMs: number, receivedAtMs: number) => void;
+  delivered?: (chunk: Buffer, atMs: number) => void;
 };
 
-/** A shared 10 Mbps direction; propagation overlaps later packet transmission. */
-export function createControlUiWireLink() {
+/** One shared direction; propagation overlaps later packet transmission. */
+export function createControlUiWireLink({
+  megabitsPerSecond = 10,
+  latencyMs = 50,
+}: { megabitsPerSecond?: number; latencyMs?: number } = {}) {
+  if (
+    !Number.isFinite(megabitsPerSecond) ||
+    megabitsPerSecond <= 0 ||
+    !Number.isFinite(latencyMs) ||
+    latencyMs < 0
+  ) {
+    throw new Error("Wire link requires positive bandwidth and nonnegative latency");
+  }
   const quantumBytes = 16 * 1024;
-  const bytesPerMs = 1250;
-  const latencyMs = 50;
+  const bytesPerMs = (megabitsPerSecond * 1_000_000) / 8 / 1000;
   const flows = new Set<Flow>();
   const ready: Flow[] = [];
-  const deliveries = new Set<ReturnType<typeof setTimeout>>();
+  const deliveries: Array<{ flow: Flow; packet: Buffer; atMs: number }> = [];
+  let delivering: ReturnType<typeof setTimeout> | undefined;
   let transmitting: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
 
@@ -31,6 +43,31 @@ export function createControlUiWireLink() {
     if (!flow.closed && flow.ended && !flow.chunk && flow.pending === 0) {
       flow.target.end();
     }
+  };
+  const deliver = () => {
+    if (closed || delivering !== undefined || deliveries.length === 0) {
+      return;
+    }
+    // Nearby per-packet timers can wake out of order and corrupt the TCP stream.
+    delivering = setTimeout(
+      () => {
+        delivering = undefined;
+        while (deliveries[0] && deliveries[0].atMs <= performance.now()) {
+          const { flow, packet } = deliveries.shift()!;
+          flow.pending--;
+          if (!flow.closed && !flow.target.destroyed) {
+            if (!flow.target.write(packet)) {
+              flow.blocked = true;
+              flow.source.pause();
+            }
+            flow.delivered?.(packet, performance.now());
+            finish(flow);
+          }
+        }
+        deliver();
+      },
+      Math.ceil(deliveries[0]!.atMs - performance.now()),
+    );
   };
   const enqueue = (flow: Flow) => {
     if (!flow.closed && !flow.blocked && flow.chunk && !flow.queued) {
@@ -60,21 +97,8 @@ export function createControlUiWireLink() {
     const deliveredAtMs = serializedAtMs + latencyMs;
     selected.pending++;
     selected.transmit(packet, deliveredAtMs, selected.receivedAtMs);
-    const delivery = setTimeout(
-      () => {
-        deliveries.delete(delivery);
-        selected.pending--;
-        if (!selected.closed && !selected.target.destroyed) {
-          if (!selected.target.write(packet)) {
-            selected.blocked = true;
-            selected.source.pause();
-          }
-          finish(selected);
-        }
-      },
-      Math.ceil(deliveredAtMs - performance.now()),
-    );
-    deliveries.add(delivery);
+    deliveries.push({ flow: selected, packet, atMs: deliveredAtMs });
+    deliver();
     transmitting = setTimeout(
       () => {
         transmitting = undefined;
@@ -98,7 +122,12 @@ export function createControlUiWireLink() {
   };
 
   return {
-    connect(source: Readable, target: Writable, onTransmit: Flow["transmit"]): () => void {
+    connect(
+      source: Readable,
+      target: Writable,
+      onTransmit: Flow["transmit"],
+      onDelivered?: Flow["delivered"],
+    ): () => void {
       if (closed) {
         throw new Error("Control UI wire link is closed");
       }
@@ -114,6 +143,7 @@ export function createControlUiWireLink() {
         closed: false,
         stop,
         transmit: onTransmit,
+        delivered: onDelivered,
       };
       function dispose(destroySource: boolean) {
         if (flow.closed) {
@@ -138,8 +168,8 @@ export function createControlUiWireLink() {
         dispose(true);
       }
       function targetClose() {
-        // After a clean half-close, the reverse link still owns response delivery.
-        dispose(!flow.ended);
+        // A normally closed upstream can leave delayed response bytes in the reverse link.
+        dispose(!flow.ended && !target.writableFinished);
       }
       function data(chunk: Buffer) {
         source.pause();
@@ -178,8 +208,9 @@ export function createControlUiWireLink() {
       closed = true;
       clearTimeout(transmitting);
       transmitting = undefined;
-      deliveries.forEach(clearTimeout);
-      deliveries.clear();
+      clearTimeout(delivering);
+      delivering = undefined;
+      deliveries.length = 0;
       flows.forEach((flow) => flow.stop());
       ready.length = 0;
     },

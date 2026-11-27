@@ -108,6 +108,34 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
+  it("preserves literal TLS client paths from config", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      url: "https://mcp.example.com/sse",
+      clientCert: " cert.pem ",
+      clientKey: " key.pem ",
+    });
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        kind: "http",
+        clientCert: " cert.pem ",
+        clientKey: " key.pem ",
+      }),
+    );
+  });
+
+  it("treats whitespace-only TLS client paths from config as absent", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      url: "https://mcp.example.com/sse",
+      clientCert: "   ",
+      clientKey: "\t",
+    });
+
+    expect(resolved).toEqual(expect.objectContaining({ kind: "http" }));
+    expect(resolved).not.toHaveProperty("clientCert");
+    expect(resolved).not.toHaveProperty("clientKey");
+  });
+
   it.each([
     { url: "ftp://mcp.example.com/tools", transport: "streamable-http" },
     { url: "https://mcp.example.com/http", transport: "http" },

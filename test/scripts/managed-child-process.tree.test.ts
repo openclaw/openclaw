@@ -50,6 +50,13 @@ it("preserves deferred spawn errors and releases ownership when output streams w
   const root = dirs.make("managed-spawn-no-streams-");
   const owner = createVitestResourceOwner(root);
   const child = new ChildProcess();
+  Object.defineProperties(child, {
+    stdin: { value: null },
+    stdout: { value: undefined },
+    stderr: { value: undefined },
+    stdio: { value: undefined },
+    connected: { value: false },
+  });
   const failure = Object.assign(new Error("file descriptor limit reached"), { code: "EMFILE" });
   // Node returns before creating stdout/stderr on EMFILE/ENFILE, then emits error.
   const emitted = once(child, "error");

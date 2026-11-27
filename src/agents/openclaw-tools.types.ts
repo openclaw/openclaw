@@ -4,9 +4,13 @@ import type { ConversationReadInvocationOrigin } from "../channels/plugins/conve
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
+import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
-import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
+import type {
+  AgentRunClientContext,
+  AgentRunMessageContext,
+} from "./command/execution-context.types.js";
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
 import type { resolveConversationQuestionInputMode } from "./conversation-capability-profile.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
@@ -22,10 +26,11 @@ import type {
   SessionsYieldCallback,
   SessionsYieldRuntimeClaim,
 } from "./tools/sessions-yield-tool.js";
-import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factory.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Reads the sticky untrusted-content flag for the current user turn. */
+  isTurnTainted?: () => boolean;
   /** Session-owned declaration used only for tool listing, never invocation authority. */
   listingClientCaps?: string[];
   /** Creator policy retained by the scheduled session owner. */
@@ -33,8 +38,6 @@ export type OpenClawSharedToolsOptions = {
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;
-  /** Restrict mixed tool owners to reads before the recovery surface is filtered. */
-  forceRestartSafeTools?: boolean;
   /**
    * Overrides the originating-channel sender for blocking questions. An actual
    * harness prompt reservation retains delivery ownership.
@@ -79,12 +82,15 @@ export type OpenClawSharedToolsOptions = {
    * boundary should opt out explicitly.
    */
   wrapBeforeToolCallHook?: boolean;
-  /** Run-owned Workshop authority: review guard and personal library access. */
-  skillWorkshop?: SkillWorkshopRunOptions;
+  /** Run-owner-granted personal-library authority; adds `skill_library`. */
+  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
   /** Construction fact for prompt guidance; never contains credentials or diagnostics. */
   onWebSearchConfiguration?: (configured: boolean) => void;
+  /** Assembly records permission ceilings before applying route-only presentation. */
+  retainUnavailableMessageTool?: boolean;
+  onMessageToolAvailability?: (available: boolean) => void;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
   /** Dynamic audio state for runs that can accept steered input after tool creation. */
@@ -94,8 +100,12 @@ export type OpenClawSharedToolsOptions = {
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   runtimeToolAllowlist?: string[];
+  /** The session lists one fixed set: the run allowlist gates calls, never construction. */
+  fixedToolListing?: boolean;
   /** Session-owned Gateway publication surface; the broker checks current identity and authority. */
   githubPublicationAvailable?: boolean;
+  /** Admitted session is in its default workspace. The move checks live authority separately. */
+  sessionProjectMoveEligible?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
@@ -115,6 +125,12 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Host-owned admission policy, separate from model and tool-listing config. */
+  readDelegationConfig?: () => OpenClawConfig;
+  /** Internal listing owner pins discovery changes or renders a read-only inventory. */
+  githubPublicationConfigurationAware?: true;
+  /** Internal inventory projection; the resulting GitHub tool cannot execute. */
+  githubPublicationPreview?: true;
   /** Actual prepared sandbox passed only by the coding-tool assembly owner. */
   sandbox?: import("./sandbox/types.js").SandboxContext | null;
   abortSignal?: AbortSignal;
@@ -143,6 +159,8 @@ export type OpenClawToolsOptions = {
   execSession?: ExecSessionDefaults;
   /** Effective run-local exec overrides, including prepared permission mode. */
   execOverrides?: ExecPolicyOverrides;
+  /** Host-owned execution path with final callable exec and no unverified client-side policy. */
+  delegationExecAuthority?: () => "gateway-host" | undefined;
   /** Trusted operator devices allowed to review this run's terminal input. */
   approvalReviewerDeviceIds?: string[];
   /** Trusted account used for authorization; delivery keeps agentAccountId. */
@@ -175,8 +193,8 @@ export type OpenClawToolsOptions = {
   cronSandboxContext?: CronToolOptions["sandboxContext"];
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  /** Prepared profile authority for the gateway tool's configuration-read actions. */
-  gatewayConfigReadAllowed?: boolean;
+  /** Whether the tool profile exposes Gateway management actions beyond maintenance. */
+  gatewayManagementActionsAllowed?: boolean;
   /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
   cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
   cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];
@@ -192,6 +210,8 @@ export type OpenClawToolsOptions = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   /** Restrict cron operations to the active cron job's self-scoped surface. */
   cronSelfRemoveOnlyJobId?: string;
+  /** Host-stamped user turn; non-conversational callers retain the native add contract. */
+  requireCronCreationPlan?: boolean;
   /** Process-local completion authority restricted to the current source conversation. */
   sourceReplyOnly?: boolean;
   /**

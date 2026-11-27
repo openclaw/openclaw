@@ -1,9 +1,4 @@
-import {
-  startMatrixQaFaultProxy,
-  type MatrixQaFaultProxyObserver,
-  type MatrixQaFaultProxyRule,
-  type MatrixQaFaultProxyRuleHandle,
-} from "./fault-proxy.js";
+import { startMatrixQaFaultProxy, type MatrixQaFaultProxyObserver } from "./fault-proxy.js";
 import { normalizeMatrixQaRoute } from "./recording-proxy-internals.js";
 
 type MatrixQaRecordedExchange = {
@@ -16,17 +11,7 @@ type MatrixQaRecordedExchange = {
   };
 };
 
-export type MatrixQaRecordingProxy = MatrixQaFaultProxyObserver & {
-  baseUrl: string;
-  installFaultRule(rule: MatrixQaFaultProxyRule): MatrixQaFaultProxyRuleHandle;
-  records(): readonly MatrixQaRecordedExchange[];
-  setTargetBaseUrl(targetBaseUrl: string): void;
-  stop(): Promise<void>;
-};
-
-export async function startMatrixQaRecordingProxy(params: {
-  targetBaseUrl: string;
-}): Promise<MatrixQaRecordingProxy> {
+export async function startMatrixQaRecordingProxy(params: { targetBaseUrl: string }) {
   const records: MatrixQaRecordedExchange[] = [];
   // Scenarios count completed native media uploads; never retain bodies, headers or query tokens.
   const observer: MatrixQaFaultProxyObserver = {
@@ -50,7 +35,7 @@ export async function startMatrixQaRecordingProxy(params: {
     baseUrl: proxy.baseUrl,
     ...observer,
     installFaultRule: proxy.installRule.bind(proxy),
-    records: () => records,
+    records: (): readonly MatrixQaRecordedExchange[] => records,
     setTargetBaseUrl: proxy.setTargetBaseUrl.bind(proxy),
     stop: proxy.stop.bind(proxy),
   };

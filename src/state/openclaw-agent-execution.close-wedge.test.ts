@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { withWorkerPreload } from "../../test/helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSessionActorFactory } from "../config/sessions/session-actor-durable.js";
 import * as backoff from "../infra/backoff.js";
@@ -138,19 +139,13 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
       filename: string | URL,
       options: ConstructorParameters<typeof Worker>[1],
     ) {
-      const worker = actual.createCpuTrackedWorker(filename, {
-        ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
-        ],
-        workerData: {
-          ...options?.workerData,
+      const worker = actual.createCpuTrackedWorker(
+        filename,
+        withWorkerPreload(options, preload, {
           closeWedgeMarker: fault.marker,
           closeWedgeEnabled: fault.enabled,
-        },
-      });
+        }),
+      );
       fault.workers.add(worker);
       worker.once("exit", () => fault.workers.delete(worker));
       return worker;

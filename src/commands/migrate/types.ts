@@ -35,6 +35,8 @@ export type MigrateApplyOptions = MigrateCommonOptions & {
   noBackup?: boolean;
   force?: boolean;
   backupOutput?: string;
+  // Imports from the Gateway or onboarding: the process cwd is incidental.
+  preferHomeBackupOutput?: boolean;
   preflightPlan?: MigrationPlan;
   // Internal RPC mode: return item-level failures with recovery metadata.
   allowPartialResult?: boolean;

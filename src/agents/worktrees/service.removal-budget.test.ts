@@ -1,24 +1,38 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gitExec from "../../infra/git-exec.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  expectPrivateMetadata,
+  gitCommonDirectory,
+  gitDirectory,
+  linkDirectory,
+  relocatePrivateGitDirectory,
+  write,
+} from "./eviction.test-support.js";
 import { requireGit } from "./git.js";
 import { deferWorktreeCleanup } from "./registry-retirement.js";
+import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { isWorktreeRepositoryCorruptionError } from "./removal-errors.js";
 import { resolveRepository } from "./repository-paths.js";
+import { acquireWorktreeRunLease } from "./run-lease.js";
+import { hasLiveWorktreeRunLease, testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
+import * as snapshotHost from "./snapshot-host.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
+    runLeaseTesting.resetForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
@@ -148,6 +162,16 @@ it("backs off shared-repository snapshots after a missing-object failure", async
   expect(retryState(env, failed.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
   const [healthy] = await materialize(["healthy"], { repoRoot: source });
   expect((await gc()).removed).toEqual([healthy!.id]);
+  await setRetryAt(env, failed.id, Date.now() - 1);
+  expect((await gc()).failedCount).toBe(1);
+  expect(retryState(env, failed.id)).toMatchObject({
+    stage: "repository-corrupt",
+    attempts: 3,
+    retryAt: null,
+  });
+  await closeOpenClawStateDatabaseAsync();
+  expect((await gc()).failedCount).toBe(0);
+  expect(retryState(env, failed.id)?.attempts).toBe(3);
   await git(repo, "remote", "set-url", "origin", source);
   expect((await gc(true)).removed.toSorted()).toEqual(
     records.map((record) => record.id).toSorted(),
@@ -158,24 +182,158 @@ it("backs off shared-repository snapshots after a missing-object failure", async
   }
 });
 
+it("records nested repositories as terminal preserved checkouts across restart", async () => {
+  const { root, env, materialize } = await fixture();
+  const [record] = await materialize(["nested-preserved"]);
+  const nested = path.join(record!.path, "nested");
+  await fs.mkdir(nested);
+  await git(nested, "init", "-b", "main");
+  await fs.writeFile(path.join(nested, "valuable.txt"), "uncommitted inner work\n");
+  await expect(makeService(env).remove({ id: record!.id, reason: "archive" })).rejects.toThrow(
+    "nested git repositories cannot be snapshotted losslessly",
+  );
+  expect(retryState(env, record!.id)).toMatchObject({
+    stage: "nested-repository",
+    attempts: 1,
+    retryAt: null,
+  });
+  await closeOpenClawStateDatabaseAsync();
+  const gc = await makeService(env).gc();
+  expect(gc.removed).toEqual([]);
+  expect(gc.failedCount).toBe(0);
+  expect(gc.issues.some((issue) => issue.reason.includes("automatic retries stopped"))).toBe(true);
+  expect(retryState(env, record!.id)?.attempts).toBe(1);
+  expect(await read(nested, "valuable.txt")).toBe("uncommitted inner work\n");
+  const snapshot = vi.spyOn(snapshotHost, "captureManagedWorktreeSnapshot");
+  const gitCommands = vi.spyOn(gitExec, "executeGitCommandBuffered");
+  const service = makeService(env);
+  const result = await service.remove({ id: record!.id, reason: "manual-delete" });
+  expect(result).toMatchObject({
+    removed: false,
+    preserved: {
+      state: "preserved",
+      reason: expect.stringContaining("nested-repository"),
+      attempts: 1,
+      nextAttemptAt: null,
+    },
+  });
+  expect(
+    await service.remove({ id: record!.id, reason: "manual-delete", allowSnapshotLoss: true }),
+  ).toEqual(result);
+  expect(snapshot).not.toHaveBeenCalled();
+  expect(gitCommands).not.toHaveBeenCalled();
+  expect((await service.list()).find((item) => item.id === record!.id)?.cleanup).toEqual(
+    result.preserved,
+  );
+  await expect(
+    service.remove({ id: record!.id, reason: "manual-delete", retryPreserved: true }),
+  ).rejects.toThrow("nested git repositories cannot be snapshotted losslessly");
+  expect(snapshot).toHaveBeenCalledOnce();
+  expect(retryState(env, record!.id)?.attempts).toBe(2);
+  expect(await read(nested, "valuable.txt")).toBe("uncommitted inner work\n");
+  const rescued = path.join(root, "rescued");
+  await fs.rename(nested, rescued);
+  expect(await service.removeIfLossless(record!.id)).toBe(false);
+  await expect(
+    service.remove({ id: record!.id, reason: "manual-delete", retryPreserved: true }),
+  ).resolves.toMatchObject({
+    removed: true,
+  });
+  expect(await read(rescued, "valuable.txt")).toBe("uncommitted inner work\n");
+});
+
+it("caps permission failures and preserves bytes until an explicit repaired retry", async () => {
+  const { env, materialize } = await fixture();
+  const [record] = await materialize(["permission-preserved"]);
+  await fs.writeFile(path.join(record!.path, "README.md"), "retained changes\n");
+  const execute = gitExec.executeGitCommandBytes;
+  let attempts = 0;
+  let fail = true;
+  vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
+    if (args.includes("write-tree")) {
+      attempts++;
+      if (fail) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+    }
+    return execute(cwd, args, options);
+  });
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await makeService(env).gc();
+    expect(retryState(env, record!.id)).toMatchObject({
+      stage: "permission-denied",
+      attempts: attempt,
+      retryAt: attempt === 3 ? null : expect.any(Number),
+    });
+    if (attempt < 3) {
+      await setRetryAt(env, record!.id, Date.now() - 1);
+    }
+  }
+  await closeOpenClawStateDatabaseAsync();
+  await makeService(env).gc();
+  expect(attempts).toBe(3);
+  expect(await read(record!.path)).toBe("retained changes\n");
+  fail = false;
+  expect((await makeService(env).gc({ retryDeferred: true })).removed).toEqual([record!.id]);
+  expect(await read((await makeService(env).restore({ id: record!.id })).path)).toBe(
+    "retained changes\n",
+  );
+});
+
+it("re-arms stopped scratch clones without an explicit retry and preserves live work", async () => {
+  const { repo, env, materialize } = await fixture();
+  await git(repo, "repack", "-ad");
+  const directory = path.join(repo, ".git/objects/pack");
+  const pack = path.join(
+    directory,
+    (await fs.readdir(directory)).find((name) => name.endsWith(".pack"))!,
+  );
+  const records = await materialize(["scratch-idle", "scratch-live"], { ownerId: "fixture-owner" });
+  for (const record of records) {
+    const clone = path.join(record.path, ".openclaw/tmp/landing/native");
+    await fs.mkdir(path.dirname(clone), { recursive: true });
+    await git(repo, "clone", "--local", repo, clone);
+    await deferWorktreeCleanup(env, {
+      observed: getRegistryWorktree(env, record.id)!,
+      reason: "Checkout preserved: nested-repository; automatic retries stopped",
+      retry: { stage: "nested-repository", attempts: 3, elapsedMs: 0, retryAt: null },
+    });
+  }
+  expect((await fs.stat(pack)).nlink).toBe(3);
+  const lease = await acquireWorktreeRunLease(records[1]!.id, { env });
+  try {
+    const pace = vi.fn(async () => {});
+    expect((await makeService(env).gc({ beforeRemoval: pace })).removed).toEqual([records[0]!.id]);
+    expect(pace).toHaveBeenCalledOnce();
+    expect((await fs.stat(pack)).nlink).toBe(2);
+    await fs.access(records[1]!.path);
+  } finally {
+    await lease.release();
+  }
+  expect((await makeService(env).gc({ readOwnerState: () => "idle" })).removed).toEqual([]);
+  await updateRegistryWorktree(env, records[1]!.id, { lastActiveAt: 1 });
+  expect((await makeService(env).gc()).removed).toEqual([records[1]!.id]);
+  expect((await fs.stat(pack)).nlink).toBe(1);
+});
+
 it.each([
-  "promised",
-  "promised-retry",
-  "unpromised",
-  "checksum",
-  "byte-limited",
-  "index-limited",
+  ["promised", 1],
+  ["promised-retry", 2],
+  ["unpromised", 1],
+  ["checksum", 1],
+  ["byte-limited", 1],
+  ["index-limited", 1],
 ] as const)(
   "consolidates healthy pack batches independently of missing snapshot objects (%s)",
-  async (damage) => {
+  async (damage, expectedFetches) => {
     const { root, source, repo, env, materialize } = await fixture("partial");
-    // Fixture materialization is an explicit checkout, not a Gateway inspection.
     await git(repo, "config", "gc.auto", "0");
     await git(repo, "config", "maintenance.auto", "false");
     const records = await materialize(["partial-a", "partial-b"], { stateDir: root });
     await editRecords(records);
     if (damage === "promised-retry") {
-      // Persist the snapshot failure before explicitly retrying with an offline remote.
+      // Persist a failed hydration before explicitly retrying with an offline remote.
+      await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable.git"));
       await makeService(env).gc();
     }
     const directory = path.join(repo, ".git", "objects", "pack");
@@ -221,9 +379,9 @@ it.each([
         const file = String(args[0]);
         if (stat && path.dirname(file) === directory) {
           if (damage === "byte-limited" && file.endsWith(".pack")) {
-            stat.size = 40 * 1024 * 1024;
+            stat.size = 1280 * 1024 * 1024;
           } else if (damage === "index-limited" && file.endsWith(".idx")) {
-            stat.size = 8 * 1024 * 1024;
+            stat.size = 32 * 1024 * 1024;
           }
         }
         return stat;
@@ -234,13 +392,15 @@ it.each([
         ? before.length - 11
         : damage === "index-limited"
           ? before.length - 3
-          : 1;
+          : 2; // The dominant history pack stays outside the small-pack batch.
     const missing = await git(repo, "rev-list", "--objects", "--all", "--missing=print");
     expect(missing).toContain("?");
     await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable.git"));
     const trace = path.join(root, "partial-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     const service = makeService(env);
+    // Retirement deadline behavior is covered separately in service.gc-performance.test.ts.
+    vi.spyOn(performance, "now").mockReturnValue(0);
     const result = await service.gc({ retryDeferred: damage === "promised-retry" });
     const suspended = damage === "checksum" || damage === "promised-retry";
     const after = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
@@ -271,9 +431,9 @@ it.each([
     }
     const traceOutput = await fs.readFile(trace, "utf8");
     expect(traceOutput).not.toContain('"fsck"');
-    if (damage !== "promised-retry") {
-      expect(traceOutput).not.toContain("upload-pack");
-    }
+    const fetches = traceOutput.match(/"name":"fetch"/g)?.length ?? 0;
+    // Git may detect checksum damage before hydration or after its single batch.
+    expect(damage === "checksum" ? [0, 1] : [expectedFetches]).toContain(fetches);
     if (damage === "unpromised") {
       await git(repo, "remote", "set-url", "origin", source);
       const repaired = await service.gc({ retryDeferred: true });
@@ -314,54 +474,431 @@ it("records an admitted deletion timeout after its caller cancels and loses sess
   expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
 });
 
-it("persists timeout backoff across restart and retries only when due or explicitly requested", async () => {
-  const { env, materialize } = await fixture();
-  const record = (await materialize(["timed-out"]))[0]!;
-  await fs.writeFile(path.join(record.path, "README.md"), "retained changes\n");
-  let attempts = 0;
-  let fail = true;
-  const execute = gitExec.executeGitCommandBytes;
-  vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
-    if (args.includes("write-tree")) {
-      attempts++;
-      if (fail) {
-        return { ...timedOut(Buffer.alloc(0), 120_000), windowsEncoding: null };
+it.each(["idle", "retired"] as const)(
+  "persists timeout backoff for %s owners across restart and retries only when due or explicitly requested",
+  async (ownerState) => {
+    const { env, materialize } = await fixture();
+    const record = (await materialize(["timed-out"], { ownerId: "fixture-owner" }))[0]!;
+    await fs.writeFile(path.join(record.path, "README.md"), "retained changes\n");
+    let attempts = 0;
+    let fail = true;
+    const execute = gitExec.executeGitCommandBytes;
+    vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
+      if (args.includes("write-tree")) {
+        attempts++;
+        if (fail) {
+          return { ...timedOut(Buffer.alloc(0), 120_000), windowsEncoding: null };
+        }
+      }
+      return await execute(cwd, args, options);
+    });
+    const gc = (retryDeferred = false) =>
+      makeService(env).gc({ retryDeferred, readOwnerState: () => ownerState });
+    const attemptStarted = Date.now();
+    expect((await gc()).outcome).toBe("partial");
+    const first = retryState(env, record.id);
+    expect(first).toEqual({
+      stage: "snapshot",
+      elapsedMs: expect.any(Number),
+      attempts: 1,
+      retryAt: expect.any(Number),
+    });
+    expect(await read(record.path)).toBe("retained changes\n");
+    if (ownerState === "retired") {
+      expect(getRegistryWorktree(env, record.id)?.runEndCleanup?.outcome).toBe("failed");
+    }
+
+    expect(first?.retryAt).toBeGreaterThanOrEqual(attemptStarted + 2 * hour);
+    expect(first?.retryAt).toBeLessThanOrEqual(Date.now() + 2 * hour);
+    const delayed = await setRetryAt(env, record.id, Date.now() + hour);
+    await closeOpenClawStateDatabaseAsync();
+    expect((await gc()).outcome).toBe("deferred");
+    expect(attempts).toBe(1);
+    expect(retryState(env, record.id)).toEqual(delayed);
+
+    await setRetryAt(env, record.id, Date.now() - 1);
+    const secondStarted = Date.now();
+    expect((await gc()).outcome).toBe("partial");
+    expect(attempts).toBe(2);
+    expect(retryState(env, record.id)).toMatchObject({ attempts: 2, retryAt: expect.any(Number) });
+    expect(retryState(env, record.id)?.retryAt).toBeGreaterThanOrEqual(secondStarted + 4 * hour);
+    expect(retryState(env, record.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
+    const observed = getRegistryWorktree(env, record.id)!;
+    await deferWorktreeCleanup(env, {
+      observed,
+      reason: observed.gcProtection!,
+      retry: { ...observed.gcRetry!, attempts: 5, retryAt: Date.now() - 6 * 7 * 24 * hour },
+    });
+    fail = false;
+    const retried = await gc();
+    expect(retried.removed).toEqual([record.id]);
+    expect(attempts).toBe(3);
+    expect(retryState(env, record.id)).toBeUndefined();
+    const restored = await makeService(env).restore({ id: record.id });
+    expect(await read(restored.path)).toBe("retained changes\n");
+  },
+);
+
+describe("nested eviction", () => {
+  let root: string;
+  let repoRoot: string;
+  let env: NodeJS.ProcessEnv;
+  let service: ManagedWorktreeService;
+  let config: { worktreeMaxCount: number; worktreeAcceleration: boolean };
+  beforeEach(async () => {
+    ({ root, repo: repoRoot, env } = await fixture());
+    config = { worktreeMaxCount: 2, worktreeAcceleration: false };
+    service = new ManagedWorktreeService({ env, getConfig: () => config });
+  });
+  const create = (name: string, source = repoRoot, target = service) =>
+    target.create({ repoRoot: source, name, baseRef: "HEAD" });
+  const registry = (id: string) => getRegistryWorktree(env, id);
+  const head = (checkout: string) => requireGit(checkout, ["rev-parse", "--verify", "HEAD"]);
+  async function expectExternalLive(record: { id: string; path: string }, contents: string) {
+    expect(registry(record.id)?.removedAt).toBeUndefined();
+    expect(await head(record.path)).toBeTruthy();
+    expect(await read(record.path, "unsaved.txt")).toBe(contents);
+  }
+  const liveIds = async () =>
+    (await service.listRegistryRecords())
+      .filter((record) => record.removedAt === undefined)
+      .map((record) => record.id);
+  async function withRunLease(id: string, run: () => Promise<void>) {
+    const lease = await acquireWorktreeRunLease(id, { env });
+    try {
+      await run();
+    } finally {
+      await lease.release();
+    }
+  }
+  async function externalFixture() {
+    const outer = await create("outer");
+    const source = await initializeRepository(path.join(root, "external-source"));
+    const external = await create("external", source);
+    return { outer, source, external };
+  }
+  function onSnapshot(checkoutPath: string, effect: () => Promise<void>) {
+    const execute = gitExec.executeGitCommandBuffered;
+    vi.spyOn(gitExec, "executeGitCommandBuffered").mockImplementation(
+      async (cwd, args, options) => {
+        if (
+          cwd === checkoutPath &&
+          args.includes("ls-files") &&
+          args.includes("--stage") &&
+          options?.operation === "worktree.snapshot"
+        ) {
+          await effect();
+        }
+        return execute(cwd, args, options);
+      },
+    );
+  }
+
+  it("cannot evict an ancestor of a live checkout and retires idle children individually", async () => {
+    const outer = await create("outer");
+    const nested = new ManagedWorktreeService({
+      env,
+      getConfig: () => ({ ...config, worktreeRoot: path.join(outer.path, "children") }),
+    });
+    const child = await create("child", repoRoot, nested);
+    await write(child.path, "unsaved.txt", "child data\n");
+    await withRunLease(child.id, async () => {
+      await expect(create("replacement")).rejects.toThrow(/cap 2.*live owners/);
+      expect(await read(child.path, "unsaved.txt")).toBe("child data\n");
+      expect(registry(outer.id)?.removedAt).toBeUndefined();
+      expect(registry(child.id)?.removedAt).toBeUndefined();
+    });
+    config.worktreeMaxCount = 1;
+    await create("replacement");
+    expect(registry(outer.id)?.removedAt).toEqual(expect.any(Number));
+    expect(registry(child.id)?.snapshotRef).toBeTruthy();
+    expect(registry(child.id)?.removedAt).toEqual(expect.any(Number));
+    expect(await liveIds()).toHaveLength(1);
+  });
+
+  it("preserves a live dependent's chained object lookup at the cap", async () => {
+    const outer = await create("donor-owner");
+    const donor = await initializeRepository(path.join(root, "donor"));
+    const source = path.join(root, "shared-source");
+    const filename = "borrowed-only.txt";
+    const contents = "unique shared-clone object bytes for live dependent\n";
+    await write(donor, filename, contents);
+    await requireGit(donor, ["add", filename]);
+    await requireGit(donor, ["commit", "-m", "unique shared-clone donor for live dependent"]);
+    const commit = await requireGit(donor, ["rev-parse", "HEAD"]);
+    const blob = await requireGit(donor, ["rev-parse", `HEAD:${filename}`]);
+    await requireGit(root, ["clone", "--shared", "--", donor, source]);
+    const alternatesFile = path.join(source, ".git", "objects", "info", "alternates");
+    const alternates = (await fs.readFile(alternatesFile, "utf8")).trim();
+    const lookup = path.join(outer.path, "odb-link");
+    await linkDirectory(alternates, lookup);
+    const declaredLookup = path.join(root, "object-alias");
+    await linkDirectory(lookup, declaredLookup);
+    await fs.writeFile(alternatesFile, `${declaredLookup}\n`);
+    const dependent = await create("dependent", source);
+    await withRunLease(dependent.id, async () => {
+      await expect(create("replacement")).rejects.toThrow(/cap 2/);
+      expect(registry(outer.id)?.removedAt).toBeUndefined();
+      expect((await liveIds()).toSorted()).toEqual([outer.id, dependent.id].toSorted());
+      expect(await read(donor, filename)).toBe(contents);
+      for (const repository of [source, dependent.path]) {
+        expect(await requireGit(repository, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
+        expect(await requireGit(repository, ["cat-file", "blob", blob])).toBe(contents.trim());
+      }
+      expect(hasLiveWorktreeRunLease(env, dependent.id)).toBe(true);
+    });
+  });
+
+  it("refuses a late live owner of unresolved shared metadata before deleting its container", async () => {
+    const { outer, source, external } = await externalFixture();
+    const commonDir = await gitCommonDirectory(source);
+    const unavailableGit = path.join(outer.path, "unavailable-source-git");
+    await write(external.path, "unsaved.txt", "live dependency bytes\n");
+    const { id, path: checkoutPath, lastActiveAt } = registry(outer.id)!;
+    let lease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
+    let unavailable = false;
+    onSnapshot(outer.path, async () => {
+      if (!unavailable) {
+        lease = await acquireWorktreeRunLease(external.id, { env });
+        await fs.rename(commonDir, unavailableGit);
+        unavailable = true;
+      }
+    });
+    const logFile = path.join(root, "evict.log");
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logFile });
+    try {
+      await expect(create("replacement")).rejects.toThrow(/cap 2.*live owners/);
+      expect(unavailable).toBe(true);
+      expect(lease).toBeDefined();
+      await flushLogger();
+      const fileLog = await fs.readFile(logFile, "utf8");
+      expect(fileLog.split("\n").filter((line) => line.includes(external.id))).toContainEqual(
+        expect.stringContaining(`Worktree eviction live-refused: ${outer.id}`),
+      );
+      expect(registry(outer.id)).toMatchObject({ id, path: checkoutPath, lastActiveAt });
+      expect(registry(outer.id)?.removedAt).toBeUndefined();
+      await fs.rename(unavailableGit, commonDir);
+      unavailable = false;
+      await expectExternalLive(external, "live dependency bytes\n");
+    } finally {
+      try {
+        if (unavailable) {
+          await fs.rename(unavailableGit, commonDir);
+        }
+      } finally {
+        await lease?.release();
+        setLoggerOverride(null);
+        resetLogger();
       }
     }
-    return await execute(cwd, args, options);
   });
-  const gc = () => makeService(env).gc();
-  const attemptStarted = Date.now();
-  expect((await gc()).outcome).toBe("partial");
-  const first = retryState(env, record.id);
-  expect(first).toEqual({
-    stage: "snapshot",
-    elapsedMs: expect.any(Number),
-    attempts: 1,
-    retryAt: expect.any(Number),
+
+  it.each([
+    "checkpoint",
+    "snapshot",
+    "snapshot with replaced source",
+    "snapshot with private metadata",
+  ] as const)(
+    "rechecks relocated backing metadata after the %s await before purging",
+    async (phase) => {
+      const { outer, source, external } = await externalFixture();
+      await write(external.path, "unsaved.txt", "relocated live data\n");
+      let relocated = false;
+      let originalSource: string | undefined;
+      let lease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
+      let privateMetadata: Awaited<ReturnType<typeof relocatePrivateGitDirectory>> | undefined;
+      const relocate = async () => {
+        if (relocated) {
+          return;
+        }
+        relocated = true;
+        if (phase === "snapshot with private metadata") {
+          privateMetadata = await relocatePrivateGitDirectory(
+            external.path,
+            path.join(outer.path, "private-git"),
+          );
+          expect(privateMetadata.commonDirectory.startsWith(`${outer.path}${path.sep}`)).toBe(
+            false,
+          );
+        } else {
+          const relocatedGit = path.join(outer.path, "relocated-git");
+          await requireGit(source, ["init", "--separate-git-dir", relocatedGit]);
+          await requireGit(source, ["worktree", "repair", external.path]);
+        }
+        lease = await acquireWorktreeRunLease(external.id, { env });
+        if (phase === "snapshot with replaced source") {
+          await fs.rename(source, `${source}-original`);
+          originalSource = `${source}-original`;
+          await initializeRepository(path.dirname(source));
+        }
+      };
+      if (phase !== "checkpoint") {
+        onSnapshot(outer.path, relocate);
+      }
+      config.worktreeMaxCount = 1;
+      try {
+        const checkpoint = phase === "checkpoint" ? relocate : undefined;
+        const result = await service.gc({ checkpoint });
+        expect(lease).toBeDefined();
+        expect(result).toMatchObject({
+          removed: [],
+          limitsSatisfied: false,
+          issues: expect.arrayContaining([
+            expect.objectContaining({
+              id: outer.id,
+              reason: expect.stringContaining(`repository dependency: ${external.id}`),
+            }),
+          ]),
+        });
+        expect(registry(outer.id)?.removedAt).toBeUndefined();
+        expect(await read(outer.path, "README.md")).toBe("base\n");
+        await expectExternalLive(external, "relocated live data\n");
+        if (phase === "snapshot with private metadata") {
+          await expectPrivateMetadata(privateMetadata!);
+        }
+      } finally {
+        if (originalSource) {
+          await fs.rm(source, { recursive: true, force: true });
+          await fs.rename(originalSource, source);
+        }
+        await lease?.release();
+      }
+    },
+  );
+
+  it.each([
+    ["source repository", "checkout", false],
+    ["source repository", "native administration", true],
+    ["private Git directory", "symlinked native administration", false],
+  ] as const)(
+    "preserves an external live checkout backed by %s in %s",
+    async (layout, surface, missingCheckout) => {
+      const outer = await create("outer");
+      let storageRoot = outer.path;
+      if (surface !== "checkout") {
+        storageRoot = await gitDirectory(outer.path);
+        if (surface === "symlinked native administration") {
+          storageRoot = (
+            await relocatePrivateGitDirectory(outer.path, path.join(root, "relocated-outer-admin"))
+          ).directory;
+        }
+      }
+      const source = await initializeRepository(
+        path.join(layout === "source repository" ? storageRoot : root, "nested-source"),
+      );
+      const external = await create("external", source);
+      const privateMetadata =
+        layout === "private Git directory"
+          ? await relocatePrivateGitDirectory(external.path, path.join(storageRoot, "private-git"))
+          : undefined;
+      await write(external.path, "unsaved.txt", "external checkout data\n");
+      const original = registry(outer.id);
+      await withRunLease(external.id, async () => {
+        if (missingCheckout) {
+          await fs.rm(outer.path, { recursive: true });
+        }
+        await expect(create("replacement")).rejects.toThrow(/cap 2.*live owners/);
+        expect(registry(outer.id)?.removedAt).toBeUndefined();
+        if (surface === "checkout") {
+          expect(registry(outer.id)).toEqual(original);
+        }
+        expect(hasLiveWorktreeRunLease(env, external.id)).toBe(true);
+        await expectExternalLive(external, "external checkout data\n");
+        expect(await requireGit(source, ["cat-file", "-e", "HEAD^{commit}"])).toBe("");
+        if (privateMetadata) {
+          await expectPrivateMetadata(privateMetadata);
+        }
+      });
+      if (surface !== "checkout") {
+        return;
+      }
+      const replacement = await create("replacement");
+      expect(registry(outer.id)).toEqual(original);
+      const retired = registry(external.id)!;
+      expect(retired.removedAt).toEqual(expect.any(Number));
+      expect(await requireGit(source, ["show", `${retired.snapshotRef}:unsaved.txt`])).toBe(
+        "external checkout data",
+      );
+      config.worktreeMaxCount = 1;
+      const result = await service.gc();
+      expect(result).toMatchObject({
+        removed: [replacement.id],
+        outcome: "partial",
+        limitsSatisfied: true,
+        issues: [
+          { id: outer.id, reason: expect.stringContaining("cannot be snapshotted losslessly") },
+        ],
+      });
+      expect(registry(outer.id)?.removedAt).toBeUndefined();
+      expect(registry(outer.id)?.gcRetry).toMatchObject({
+        stage: "nested-repository",
+        retryAt: null,
+      });
+      expect(await liveIds()).toEqual([outer.id]);
+      expect(await requireGit(source, ["show", `${retired.snapshotRef}:unsaved.txt`])).toBe(
+        "external checkout data",
+      );
+    },
+  );
+
+  it.each(["native administration", "control file"] as const)(
+    "preserves an incoming linked source with storage in the victim %s",
+    async (layout) => {
+      config.worktreeMaxCount = 1;
+      const outer = await create("outer");
+      const sourceBase = await initializeRepository(path.join(root, "source-base"));
+      const source = path.join(root, "incoming-source");
+      await requireGit(sourceBase, ["worktree", "add", "-b", "incoming", source, "HEAD"]);
+      await write(source, "staged-source.txt", "incoming staged bytes\n");
+      await requireGit(source, ["add", "staged-source.txt"]);
+      const originalHead = await head(source);
+      let directory = await gitDirectory(source);
+      const index = await fs.readFile(path.join(directory, "index"));
+      if (layout === "control file") {
+        const pointer = path.join(outer.path, "incoming.gitfile");
+        await fs.rename(path.join(source, ".git"), pointer);
+        await fs.symlink(pointer, path.join(source, ".git"), "file");
+      } else {
+        const storageRoot = await gitDirectory(outer.path);
+        directory = (
+          await relocatePrivateGitDirectory(source, path.join(storageRoot, "incoming-private"))
+        ).directory;
+      }
+      await expect(create("replacement", source)).rejects.toThrow(/cap 1/);
+      expect(registry(outer.id)?.removedAt).toBeUndefined();
+      expect(await liveIds()).toEqual([outer.id]);
+      expect(await read(outer.path, "README.md")).toBe("base\n");
+      expect(await fs.readFile(path.join(directory, "index"))).toEqual(index);
+      expect(await head(source)).toBe(originalHead);
+      expect(await requireGit(source, ["show", ":staged-source.txt"])).toBe(
+        "incoming staged bytes",
+      );
+    },
+  );
+});
+
+it("cleans up active owners without ref mutations when there are no packs", async () => {
+  const { repo, env, materialize } = await fixture();
+  const records = await materialize(["first", "second", "third", "fourth", "fifth"], {
+    ownerId: "active-owner",
   });
-  expect(await read(record.path)).toBe("retained changes\n");
+  const refs = await requireGit(repo, ["show-ref"]);
+  const mutations = vi.spyOn(gitExec, "enqueueGitRefMutation");
 
-  expect(first?.retryAt).toBeGreaterThanOrEqual(attemptStarted + 2 * hour);
-  expect(first?.retryAt).toBeLessThanOrEqual(Date.now() + 2 * hour);
-  const delayed = await setRetryAt(env, record.id, Date.now() + hour);
-  await closeOpenClawStateDatabaseAsync();
-  expect((await gc()).outcome).toBe("deferred");
-  expect(attempts).toBe(1);
-  expect(retryState(env, record.id)).toEqual(delayed);
+  const result = await new ManagedWorktreeService({ env, getConfig: () => ({}) }).gc({
+    readOwnerState: () => "active",
+  });
 
-  await setRetryAt(env, record.id, Date.now() - 1);
-  const secondStarted = Date.now();
-  expect((await gc()).outcome).toBe("partial");
-  expect(attempts).toBe(2);
-  expect(retryState(env, record.id)).toMatchObject({ attempts: 2, retryAt: expect.any(Number) });
-  expect(retryState(env, record.id)?.retryAt).toBeGreaterThanOrEqual(secondStarted + 4 * hour);
-  expect(retryState(env, record.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
-  fail = false;
-  const retried = await makeService(env).gc({ retryDeferred: true });
-  expect(retried.removed).toEqual([record.id]);
-  expect(attempts).toBe(3);
-  expect(retryState(env, record.id)).toBeUndefined();
-  const restored = await makeService(env).restore({ id: record.id });
-  expect(await read(restored.path)).toBe("retained changes\n");
+  expect(result).toMatchObject({
+    removed: [],
+    orphansDeleted: 0,
+    orphansRetired: 0,
+    snapshotsPruned: 0,
+    eligibleCount: 0,
+    protectedCount: records.length,
+    protectionReasons: { "owner is active": records.length },
+    gitMaintenance: { stage: "completed", packsBefore: 0, packsAfter: 0 },
+  });
+  expect(mutations).not.toHaveBeenCalled();
+  expect(await requireGit(repo, ["show-ref"])).toBe(refs);
 });

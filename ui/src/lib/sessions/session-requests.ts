@@ -34,6 +34,17 @@ export const DEFAULT_SESSION_LIST_QUERY = {
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const satisfies SessionListOptions;
 
+/** User-facing session pickers (command palette, section editor) list the same sessions. */
+export const SESSION_SEARCH_SCOPE = {
+  includeGlobal: false,
+  includeUnknown: false,
+  configuredAgentsOnly: true,
+  excludeSubagents: true,
+  excludeCron: true,
+  excludeSystem: true,
+  excludeDock: true,
+} as const satisfies SessionListOptions;
+
 export function dashboardSessionListQuery(agentId?: string | null): SessionListOptions {
   const normalizedAgentId = agentId?.trim();
   return {
@@ -42,21 +53,6 @@ export function dashboardSessionListQuery(agentId?: string | null): SessionListO
     source: "dashboard",
     excludeDock: true,
     hasBoard: true,
-    archivedFilter: "all",
-    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
-  };
-}
-
-/** Progress cards resolve an explicit cross-session target independently of
- *  dashboard gallery membership: the Gateway filters hasBoard against each
- *  session's own board inventory, so a running target without its own board
- *  would disappear from a gallery-filtered roster and render as paused. */
-export function sessionProgressTargetQuery(agentId?: string | null): SessionListOptions {
-  const normalizedAgentId = agentId?.trim();
-  return {
-    ...DEFAULT_SESSION_LIST_QUERY,
-    source: "dashboard",
-    excludeDock: false,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
   };
@@ -111,6 +107,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
     "includeOwnerSessionCounts",
     "ownerFirst",
     "involvingMe",
+    "searchTitlesOnly",
   ] as const) {
     if (options[key] === true) {
       params[key] = true;
@@ -160,9 +157,15 @@ export function normalizeManagedSessionListQuery(
   });
 }
 
-export function sessionListQueryKey(options: SessionListOptions): string {
-  const { source: _source, ...query } = normalizeManagedSessionListQuery(options);
+export function sessionListRequestKey(
+  params: Readonly<SessionsListParams & { pageSize?: number }>,
+): string {
+  const { source: _source, ...query } = params;
   return JSON.stringify(query);
+}
+
+export function sessionListQueryKey(options: SessionListOptions): string {
+  return sessionListRequestKey(normalizeManagedSessionListQuery(options));
 }
 
 export async function requestSessionList(
@@ -180,16 +183,31 @@ const sessionWireRows = new WeakMap<
   Map<string, { revision: string; sessions: SessionsListResult["sessions"] }>
 >();
 
+/** Earliest valid cutoff of any page, measured against the latest actual Gateway sample. */
+export type SessionWindowExpiry = { at: number; sampledAt: number };
+
 export async function requestSessionListParams(
+  ...args: Parameters<typeof requestSessionListWindow>
+): Promise<SessionsListResult | null> {
+  return (await requestSessionListWindow(...args))?.result ?? null;
+}
+
+export async function requestSessionListWindow(
   client: SessionRequestClient,
   query: Readonly<SessionsListParams & { pageSize?: number }>,
   isCurrent: () => boolean,
   options?: GatewayProtocolRequestOptions,
-): Promise<SessionsListResult | null> {
+): Promise<{ result: SessionsListResult; expiry?: SessionWindowExpiry } | null> {
   const { pageSize, ...params } = query;
+  let earliestExpiry = Infinity;
+  let sampledAt = -Infinity;
+  const window = (result: SessionsListResult | null) =>
+    result && {
+      result,
+      ...(earliestExpiry !== Infinity ? { expiry: { at: earliestExpiry, sampledAt } } : {}),
+    };
   const read = async (request: SessionsListParams) => {
-    const { source: _source, ...membership } = request;
-    const key = JSON.stringify(membership);
+    const key = sessionListRequestKey(request);
     const cache = sessionWireRows.get(client);
     const conditional = request.rowMode !== undefined;
     const previous = conditional ? cache?.get(key) : undefined;
@@ -237,10 +255,17 @@ export async function requestSessionListParams(
       }
       sessionWireRows.set(client, retained);
     }
+    if (Number.isSafeInteger(list.ts)) {
+      sampledAt = Math.max(sampledAt, list.ts);
+      const at = list.activityExpiresAt;
+      if (at !== undefined && Number.isSafeInteger(at) && at >= list.ts) {
+        earliestExpiry = Math.min(earliestExpiry, at);
+      }
+    }
     return { ...list, sessions };
   };
   if (!pageSize || !params.limit || params.limit <= pageSize) {
-    return read(params);
+    return window(await read(params));
   }
   // The Gateway enriches only a bounded prefix per response. Page the requested
   // window here so initial loads and retained-window refreshes keep the same fields.
@@ -268,7 +293,16 @@ export async function requestSessionListParams(
     }
     offset = nextOffset;
   }
-  return result;
+  if (result && earliestExpiry !== Infinity) {
+    // A crossed cutoff is evidence for one prefix repair, not a valid deadline
+    // on the last page. Never stamp an earlier page's time onto newer rows.
+    result = {
+      ...result,
+      ts: sampledAt,
+      activityExpiresAt: earliestExpiry >= sampledAt ? earliestExpiry : undefined,
+    };
+  }
+  return window(result);
 }
 
 export function requestSessionPatch(

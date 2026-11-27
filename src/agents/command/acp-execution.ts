@@ -188,7 +188,7 @@ export async function runAcpAgentCommand(params: {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
         params.opts.abortSignal?.throwIfAborted();
         if (!getAdmittedRunDelegatedAuthority(admittedRunContext)) {
-          throw new Error("ACP run authority is no longer active");
+          throw new Error("This agent run is no longer active. Start a new turn to retry.");
         }
       },
       onLifecycle: (event) => {

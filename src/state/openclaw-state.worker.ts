@@ -1,5 +1,5 @@
 import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
-import { isClawAddStateCommand } from "../claws/add-state-worker-contract.js";
+import { restartLifecycleOperations } from "../infra/restart-lifecycle.worker.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
@@ -23,6 +23,8 @@ import {
   isPluginStateWorkerCommand,
   pluginStateWorkerOperations,
 } from "../plugin-state/plugin-state-worker-contract.js";
+import { isTemplateAddStateCommand } from "../templates/add-state-worker-contract.js";
+import { executeAgentDatabaseCleanupCommand } from "./openclaw-agent-execution-cleanup.worker.js";
 import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
@@ -60,10 +62,8 @@ const commandRegistry = createWorkerOperationRegistry<
     >,
   WorkerWriteOperationContext
 >({
-  restartLifecycle: () =>
-    import("../infra/restart-lifecycle.worker.js").then(
-      (loaded) => loaded.restartLifecycleOperations,
-    ),
+  // SIGTERM reads restart intent here after an update may have replaced the chunks on disk.
+  restartLifecycle: async () => restartLifecycleOperations,
   worktrees: async () => {
     const [templates, reserveCapacity, recoverPending] = await Promise.all([
       import("../agents/worktrees/template-registry.worker.js").then(
@@ -84,8 +84,7 @@ const commandRegistry = createWorkerOperationRegistry<
   },
 });
 
-let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") | undefined;
-let clawAddState: typeof import("../claws/add-state.worker.js") | undefined;
+let templateAddState: typeof import("../templates/add-state.worker.js") | undefined;
 let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undefined;
 let capture: typeof import("../proxy-capture/store.worker.js") | undefined;
 let cron: typeof import("../cron/store/dispatch.worker.js") | undefined;
@@ -295,17 +294,18 @@ function createSharedStateWorkerBackend(
           updater = loaded;
         });
       }
-      if (isClawAddStateCommand({ type: commandType })) {
-        if (clawAddState) {
+      if (isTemplateAddStateCommand({ type: commandType })) {
+        if (templateAddState) {
           return undefined;
         }
-        return import("../claws/add-state.worker.js").then((loaded) => {
-          clawAddState = loaded;
+        return import("../templates/add-state.worker.js").then((loaded) => {
+          templateAddState = loaded;
         });
       }
       if (
         commandType === "githubPublication.sourceFacts" ||
-        commandType.startsWith("githubPublications.")
+        (commandType.startsWith("githubPublications.") &&
+          commandType !== "githubPublications.personalRestart")
       ) {
         const sourcePreparation = publicationSource
           ? undefined
@@ -337,14 +337,6 @@ function createSharedStateWorkerBackend(
           capture = loaded;
         });
       }
-      if (commandType === "agentDatabases.releaseExitedLease") {
-        if (agentCleanup) {
-          return undefined;
-        }
-        return import("./openclaw-agent-execution-cleanup.worker.js").then((loaded) => {
-          agentCleanup = loaded;
-        });
-      }
       if (Object.hasOwn(pluginStateWorkerOperations, commandType)) {
         if (pluginState) {
           return undefined;
@@ -369,11 +361,11 @@ function createSharedStateWorkerBackend(
       if (closed) {
         throw new Error("Shared-state worker is closed");
       }
-      if (isClawAddStateCommand(command)) {
-        if (!clawAddState) {
-          throw new Error("Claw Add state runtime is not prepared");
+      if (isTemplateAddStateCommand(command)) {
+        if (!templateAddState) {
+          throw new Error("Template Add state runtime is not prepared");
         }
-        return clawAddState.executeClawAddStateCommand(command, operationContext);
+        return templateAddState.executeTemplateAddStateCommand(command, operationContext);
       }
       if (command.type === "githubPublication.sourceFacts") {
         if (!publicationSourceReader) {
@@ -404,10 +396,8 @@ function createSharedStateWorkerBackend(
         return capture.executeCaptureCommand(command, open());
       }
       if (command.type === "agentDatabases.releaseExitedLease") {
-        if (!agentCleanup) {
-          throw new Error("Agent database cleanup runtime is not prepared");
-        }
-        return agentCleanup.executeAgentDatabaseCleanupCommand(
+        // Lease cleanup can run during shutdown after an in-place update replaced chunks.
+        return executeAgentDatabaseCleanupCommand(
           command,
           open(),
           getSqliteWorkerStateContext().environment,

@@ -59,14 +59,18 @@ as schedules or read `HEARTBEAT.md`.
 ### Monitoring policies
 
 Use job-level policies for periodic checks that should respect quiet hours and
-foreground work. They apply through ordinary scheduler and session admission;
+agent-wide activity. They apply through ordinary scheduler and session admission;
 no separate heartbeat runner is involved.
 
 | Field                                    | Behavior                                                                                                               |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `activeHours: { start, end, timezone? }` | Restricts execution to a timezone-aware window. Start is inclusive; end is exclusive. Overnight windows are supported. |
-| `idleOnly: true`                         | Gives foreground work priority without occupying a running slot while waiting.                                         |
+| `idleOnly: true`                         | Waits for agent-wide quiet, including other cron jobs and foreground sessions, without occupying a running slot.       |
 | `payload.skipIfScratchEmpty: true`       | Skips an agent turn with explicitly empty scratch. Missing scratch still runs.                                         |
+
+`idleOnly: true` checks the whole agent, not just the target session. On busy
+shared agents, continuations may defer indefinitely. Set `idleOnly: false` or
+leave it unset to use normal admission.
 
 Omitting these fields keeps ordinary automation defaults. A manual force-run
 bypasses cadence, but still respects active hours, authorization, lifecycle, and
@@ -99,8 +103,8 @@ openclaw automations add \
 
 The same flags work with `automations edit`. Supply both window endpoints when
 adding a window; edits can change one field of an existing window. Use
-`--clear-active-hours` to remove the window, `--no-idle-only` to turn off idle
-priority, or `--clear-idle-only` to remove that stored policy.
+`--clear-active-hours` to remove the window, `--no-idle-only` to turn off the
+idle-only policy, or `--clear-idle-only` to remove that stored policy.
 
 Keep instructions explicit: name the sources or checklist, do not infer old
 tasks from past chats, and report changes that need attention. A human check-in
@@ -183,6 +187,8 @@ Before downgrading, stop and settle sandbox streams on the current version. Olde
 
 Set `cron.triggers.enabled: false` to disable streams together with condition-trigger scripts and script payloads. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with the scheduler's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
 
+On Linux, a separate native process owner retains the stream's descendants if its command anchor crashes. It stops and reaps those descendants before the stream can restart, including children that detached into another process group. Losing that final cleanup owner still leaves the stream in an error state: re-enabling does not override unconfirmed cleanup. Inspect and stop the original workload through its service or container manager before restarting the Gateway and re-enabling it.
+
 ```bash
 openclaw automations add \
   --name "Build event stream" \
@@ -231,7 +237,7 @@ The Control UI preserves pacing bounds when duplicating a recurring job. Changin
 
 During an agent-turn run, a paced job can call the `automations` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds. A future paced deadline remains the next scheduled check after a Gateway restart.
 
-Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence. Manually forcing a recurring job is out-of-band and preserves its pending natural or paced slot. For condition-triggered jobs, the built-in minimum interval remains a lower bound even when a proposal requests an earlier check.
+Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard any new proposal. A failed paced check retains its pending occurrence and retries with the existing error backoff, including after a Gateway restart; it does not fall back to the normal schedule until a check succeeds or the job is disabled. Manually forcing a recurring job is out-of-band and preserves its pending natural or paced slot. For condition-triggered jobs, the built-in minimum interval remains a lower bound even when a proposal requests an earlier check.
 
 ### `/loop` chat shortcut
 
@@ -264,7 +270,9 @@ const pr = 123;
 async function readJson(command) {
   const response = await exec({ command });
   if (response.status !== "completed" || response.exitCode !== 0) {
-    throw new Error("CI observation failed; inspect this automation's run diagnostics.");
+    // A failed evaluation records only this message, so say what failed in it.
+    const output = String(response.message || response.aggregated || "").slice(-200);
+    throw new Error("CI observation failed (exit " + response.exitCode + "): " + output);
   }
   return JSON.parse(response.aggregated);
 }
@@ -308,12 +316,19 @@ A new head, a rerun with a new check identity, or a check/status transition fire
 the payload even when the aggregate status is unchanged. An unchanged observation
 returns `fire: false`, so no model turn or visible update is produced. Observation
 errors throw and remain actionable scheduler failures; do not convert them to
-`fire: false`. Keep this example within the 16 KiB state limit by scoping large
+`fire: false`. A failed evaluation records the thrown message as the run's error
+and keeps no command output, so the message must carry what you need to diagnose
+it. A trigger's `exec` always waits for its command to finish within the
+trigger's time limit and returns `status: "completed"` or `"failed"`, never a
+running process; `yieldMs` and `background` have no effect there. A successful
+command's `aggregated` is exactly what the command wrote. When a command leaves a
+process running (`gh`, for example, can start a helper that outlives it),
+OpenClaw reports that in `response.warningText`, not in the output. Keep this example within the 16 KiB state limit by scoping large
 repositories to the checks the watcher owns. Do not use a change-only gate for an
 explicitly requested recurring report or digest: that job should deliver at its
 requested cadence even if the observations are unchanged.
 
-Forced manual runs bypass this gate: `openclaw automations run <job-id>` (forced by default) and the `automations` tool with `action: "run", runMode: "force"` skip `trigger.script` and execute the payload directly. An `agentTurn` payload wakes the model even if the script would return `fire: false`. To test the gate, wait for a scheduled evaluation or use `openclaw automations run <job-id> --due` when the job is due. The tool's default `runMode: "due"` also honors the gate; neither due mode makes a job due early.
+Manual runs evaluate this gate like a scheduled run: `openclaw automations run <job-id>` and the `automations` tool with `action: "run"` run `trigger.script` first and execute the payload only when it returns `fire: true`. A quiet result is recorded as a skipped run (`trigger condition not met`). `runMode: "force"` runs the check now; the default `runMode: "due"` runs it only when the job is due.
 
 `openclaw doctor --fix` converts persisted trigger scripts that call `tools.call('exec', args)` and read the `.result.details` envelope. Doctor leaves custom or ambiguous scripts unchanged and identifies each affected job for manual conversion; standalone script payloads are not converted.
 
@@ -325,6 +340,24 @@ restart. The completed payload still retains its run history. An unchanged
 watcher keeps its usual `once` behavior; renaming it does not reset its condition.
 
 `fire: false` persists evaluation state and counters, then reschedules without creating run history. These quiet evaluations count as completed occurrences during restart catch-up. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a built-in minimum interval of 30 seconds, preserved through maintenance and Gateway restarts. Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
+
+Up to three conditions evaluate at once. Further checks stay queued, earliest due
+time first, and start as soon as a running check finishes or its condition fires.
+A queued check is not deferred or retried later, holds no run slot, spends none of
+its time budget, and keeps its occurrence across a Gateway restart.
+
+A scheduled check does not use one of the scheduler's run slots, so checks keep running
+while every run slot holds a long run. Only the payload of a fired condition needs a run
+slot. If a condition fires while every slot is busy, the run waits for a free slot and
+then runs its payload on the result of that one check; the wait does not count against
+the run's time budget. A cron config change keeps the wait; a Gateway stop or restart
+ends it without running the payload. Freed slots go to waiting payloads and queued runs in due-time
+order, so a run due before the condition's check still starts first. A check started by a manual or stream
+run, and the check of a job with a script payload, takes a run slot first.
+
+Cold runtime preparation can continue after an evaluation times out, so a later
+tick can reuse it. Preparation is limited to two minutes, or the script payload's
+budget when longer; cancelling the evaluation that started it still cancels preparation.
 
 Scripts call configured MCP server tools through the same `MCP.<server>.<tool>({ ...input })` namespace that interactive Code Mode uses. MCP is opt-in per server: a script can reach only the servers its job's `toolsAllow` (`--tools`) names with a server prefix, either an exact tool such as `wispr-flow__search_meetings` or a server-scoped glob such as `wispr-flow__*`. A wildcard `*`, a missing `toolsAllow`, or a glob without a server prefix gives the script no `MCP` namespace and starts no server, because evaluations can run every 30 seconds. A script whose source never mentions `MCP` also starts no server, even when `toolsAllow` names one for the payload. Within a named server, the owning agent's tool policy still applies, as in an interactive run. MCP calls go through the same before-tool-call hooks and approvals and return the same untrusted-content results. Each evaluation starts its own runtime for the named servers only and retires it when the evaluation ends; a slow server shutdown finishes in the background after a 1-second grace. Connecting and listing tools count toward the 30-second budget, and each MCP call counts toward the 5-call limit. A named server that fails to start is absent from `MCP`; if the script then fails, the run error ends with `MCP server "<name>" is unavailable: <reason>`.
 

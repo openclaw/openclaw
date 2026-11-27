@@ -6,7 +6,28 @@ on:
       target_sha:
         type: string
         required: true
+      client_sha:
+        description: Optional frozen stable-release client source SHA
+        type: string
+        default: ""
+      client_release_tag:
+        description: Published stable repository release identifying client_sha
+        type: string
+        default: ""
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Optional exact candidate Gateway SHA (defaults to dispatch ref)
+        type: string
+        default: ""
+      client_sha:
+        description: Optional frozen stable-release client source SHA (paired with client_release_tag)
+        type: string
+        default: ""
+      client_release_tag:
+        description: Published stable repository release identifying client_sha
+        type: string
+        default: ""
 
 permissions:
   actions: read
@@ -17,10 +38,14 @@ env:
 
 jobs:
   qualify:
+    # Composite cache-off inputs do not revoke the runner cache token.
+    cache-mode: none
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       TARGET_SHA: ${{ inputs.target_sha || github.sha }}
+      CLIENT_SHA: ${{ inputs.client_sha }}
+      CLIENT_RELEASE_TAG: ${{ inputs.client_release_tag }}
     steps:
       - name: Initialize failure proof and validate target
         shell: bash
@@ -38,7 +63,12 @@ jobs:
                          "errors": ["workflow-setup-incomplete"]}, out)
           PY
           [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
-          [[ "$TARGET_SHA" == "$GITHUB_SHA" ]]
+          if [[ -n "$CLIENT_SHA" || -n "$CLIENT_RELEASE_TAG" ]]; then
+            [[ -n "$CLIENT_SHA" && -n "$CLIENT_RELEASE_TAG" ]] || exit 1
+          fi
+          if [[ -z "$CLIENT_SHA" ]]; then
+            [[ "$TARGET_SHA" == "$GITHUB_SHA" ]] || exit 1
+          fi
 
       - name: Checkout exact qualification target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,85 +80,62 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           test -f scripts/android-release-e2e.ts
           test -f scripts/ios-release-gateway.ts
 
-      - name: Find this run's stable Gateway selection
-        id: gateway-selection
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            const name = `android-release-gateway-selection-${context.runId}`;
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              ...context.repo,
-              run_id: context.runId,
-              name,
-              per_page: 100,
-            });
-            const matches = artifacts.filter((artifact) => artifact.name === name);
-            if (matches.length > 1) {
-              throw new Error('Multiple stable Gateway selections exist for this run.');
-            }
-            if (matches.length === 0) {
-              if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) {
-                throw new Error('This rerun has no saved stable Gateway selection. Start a new workflow run.');
-              }
-              core.setOutput('create', 'true');
-              core.setOutput('artifact-id', '');
-              return;
-            }
-            const artifact = matches[0];
-            if (artifact.expired || artifact.workflow_run?.id !== context.runId ||
-                artifact.workflow_run?.head_sha !== process.env.TARGET_SHA) {
-              throw new Error('The saved stable Gateway selection is expired or belongs to another source/run. Start a new workflow run.');
-            }
-            core.setOutput('create', 'false');
-            core.setOutput('artifact-id', String(artifact.id));
+      - name: Verify frozen published client before execution
+        id: stable-client
+        if: inputs.client_sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/stable-release-source.mjs --verify-client
 
-      - name: Restore this run's stable Gateway selection
-        if: steps.gateway-selection.outputs.artifact-id != ''
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          artifact-ids: ${{ steps.gateway-selection.outputs.artifact-id }}
-          github-token: ${{ github.token }}
-          run-id: ${{ github.run_id }}
-          path: ${{ env.GATEWAY_SELECTION_DIR }}
-          digest-mismatch: error
-
-      - name: Setup Node environment
+      - name: Prepare candidate Gateway toolchain
+        if: inputs.client_sha != ''
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "24.22.1"
           install-bun: "false"
           cache-mode: "off"
 
-      - name: Prepare stable Gateway selection
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RESTORED_SELECTION: ${{ steps.gateway-selection.outputs.artifact-id != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "$RESTORED_SELECTION" == true ]]; then
-            test -f "$GATEWAY_SELECTION_DIR/selection.json"
-            test -f "$GATEWAY_SELECTION_DIR/package.json"
-            test -f "$GATEWAY_SELECTION_DIR/package-lock.json"
-          fi
-          node --import ./scripts/tsx.mjs scripts/ios-release-gateway.ts \
-            --target-sha "$TARGET_SHA" --selection-dir "$GATEWAY_SELECTION_DIR"
+      - name: Probe candidate install/build/runtime isolation
+        if: inputs.client_sha != ''
+        run: python3 scripts/probe-native-candidate-isolation.py
 
-      - name: Save this run's stable Gateway selection
-        if: steps.gateway-selection.outputs.create == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - name: Checkout independent candidate Gateway
+        if: inputs.client_sha != '' && inputs.target_sha != '' && inputs.target_sha != github.sha
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: android-release-gateway-selection-${{ github.run_id }}
-          path: |
-            ${{ env.GATEWAY_SELECTION_DIR }}/selection.json
-            ${{ env.GATEWAY_SELECTION_DIR }}/package.json
-            ${{ env.GATEWAY_SELECTION_DIR }}/package-lock.json
-          if-no-files-found: error
-          retention-days: 30
+          ref: ${{ inputs.target_sha }}
+          path: .openclaw/tmp/candidate-gateway
+          persist-credentials: false
+
+      - name: Checkout frozen stable client source
+        if: inputs.client_sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.stable-client.outputs.sha }}
+          fetch-tags: true
+          path: .openclaw/tmp/stable-client
+          persist-credentials: false
+
+      - name: Verify checked-out stable client
+        if: inputs.client_sha != ''
+        run: test "$(git -C .openclaw/tmp/stable-client rev-parse HEAD)" = "$CLIENT_SHA"
+
+      - name: Build qualification harness and prepare stable client dependencies
+        if: inputs.client_sha != ''
+        run: |
+          pnpm build:runtime
+          pnpm --dir .openclaw/tmp/stable-client install --frozen-lockfile
+
+      - name: Prepare stable Gateway selection
+        if: inputs.client_sha == ''
+        id: gateway-preparation
+        uses: ./.github/actions/prepare-mobile-release-gateway
+        with:
+          artifact-name: android-release-gateway-selection-${{ github.run_id }}
 
       - name: Setup Android toolchain and standard emulator images
         id: android-toolchain
@@ -141,10 +148,18 @@ jobs:
         env:
           OPENCLAW_GRADLE_JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
         run: |
+          client_args=()
+          if [[ -n "$CLIENT_SHA" ]]; then
+            client_args=(--client-root "$GITHUB_WORKSPACE/.openclaw/tmp/stable-client" --client-sha "$CLIENT_SHA" --client-release-tag "$CLIENT_RELEASE_TAG")
+            client_args+=(--harness-sha "$GITHUB_SHA")
+            if [[ "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
+              client_args+=(--candidate-root "$GITHUB_WORKSPACE/.openclaw/tmp/candidate-gateway")
+            fi
+          fi
           pnpm android:release:validate -- \
             --target-sha "$TARGET_SHA" --output "$PROOF_PATH" \
             --selection-dir "$GATEWAY_SELECTION_DIR" \
-            --artifacts-dir "$RUNNER_TEMP/android-release-e2e"
+            --artifacts-dir "$RUNNER_TEMP/android-release-e2e" "${client_args[@]}"
 
       - name: Retain sanitized qualification evidence
         if: always()

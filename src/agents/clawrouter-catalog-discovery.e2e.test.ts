@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -21,6 +21,7 @@ import { catalogProvider } from "./clawrouter-catalog.test-support.js";
 import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
+import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import type {
   PreparedModelCatalogWorkerTask,
@@ -163,11 +164,14 @@ describe("ClawRouter cold prepared catalog", () => {
     });
     const result = await pool.run(
       {
+        context: prepareModelCatalogWorkerContext(value),
         value,
         request: {
           kind: "catalog",
           syntheticAuth: [],
-          clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: state.env }),
+          templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({
+            env: state.env,
+          }),
         },
       },
       { timeoutMs: 30_000 },

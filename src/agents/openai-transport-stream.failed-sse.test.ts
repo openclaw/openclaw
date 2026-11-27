@@ -4,6 +4,10 @@ import {
 } from "@openclaw/ai/transports";
 import { describe, expect, it } from "vitest";
 import { collect } from "../../test/helpers/async-iterable.js";
+import {
+  COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
+  expectOpenAITransportRequestPolicy,
+} from "../../test/helpers/openai-transport-request-policy.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../llm/utils/retry.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { makeResponsesModel } from "./openai-transport-stream.test-harness.js";
@@ -65,7 +69,24 @@ async function withResponsesSse(
   );
 }
 
-describe("failed Responses loopback SSE", () => {
+describe("Responses loopback HTTP", () => {
+  it.each([
+    {
+      api: "openai-responses" as const,
+      provider: "custom-openai",
+      createStream: createOpenAIResponsesTransportStreamFn,
+    },
+    {
+      api: "azure-openai-responses" as const,
+      provider: "azure-openai-responses-devdiv",
+      createStream: createAzureOpenAIResponsesTransportStreamFn,
+    },
+  ])(
+    "honors turn timeout and zero retries over real $api HTTP",
+    expectOpenAITransportRequestPolicy,
+    COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
+  );
+
   it.each(
     responsesTransports.flatMap((transport) =>
       [false, true].map((hostedTools) => ({ transport, hostedTools })),

@@ -7,6 +7,10 @@ import type {
   ChatHistoryPageParams,
   ChatHistoryResponsePage,
 } from "../config/sessions/session-history-types.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
+import { isNormalizedMessageChannel } from "../utils/message-channel-core.js";
+import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   buildOversizedHistoryPlaceholder,
@@ -42,8 +46,7 @@ export function enrichChatHistoryCompactionMarkers(
     return messages;
   }
   const checkpointByEntryId = new Map(metrics.map((metric) => [metric.entryId, metric]));
-  let changed = false;
-  const enriched = messages.map((message) => {
+  return mapChatDisplayMessages(messages, (message) => {
     const record = asOptionalRecord(message);
     const metadata = asOptionalRecord(record?.["__openclaw"]);
     if (metadata?.kind !== "compaction" || typeof metadata.id !== "string") {
@@ -58,7 +61,6 @@ export function enrichChatHistoryCompactionMarkers(
     if (tokensBefore === undefined && tokensAfter === undefined) {
       return message;
     }
-    changed = true;
     return {
       ...record,
       __openclaw: {
@@ -68,7 +70,6 @@ export function enrichChatHistoryCompactionMarkers(
       },
     };
   });
-  return changed ? enriched : messages;
 }
 
 function resolveChatHistoryMessageGroup(
@@ -76,27 +77,33 @@ function resolveChatHistoryMessageGroup(
   index: number,
   messageCost: (message: unknown) => number,
   messageSequences?: MessageSequences,
-): { start: number; end: number; cost: number } {
-  const sequence = (message: unknown) => readPageMessageSequence(message, messageSequences);
-  const seq = sequence(messages[index]);
+  maxCost = Infinity,
+) {
+  const seq = readPageMessageSequence(messages[index], messageSequences);
   let start = index;
   let end = index + 1;
   let cost = messageCost(messages[index]);
-  if (seq === undefined) {
-    return { start, end, cost };
+  if (seq !== undefined) {
+    while (start > 0 && readPageMessageSequence(messages[start - 1], messageSequences) === seq) {
+      start -= 1;
+      if (cost <= maxCost) {
+        cost += messageCost(messages[start]);
+      }
+    }
+    while (
+      end < messages.length &&
+      readPageMessageSequence(messages[end], messageSequences) === seq
+    ) {
+      if (cost <= maxCost) {
+        cost += messageCost(messages[end]);
+      }
+      end += 1;
+    }
   }
-  while (start > 0 && sequence(messages[start - 1]) === seq) {
-    start -= 1;
-    cost += messageCost(messages[start]);
-  }
-  while (end < messages.length && sequence(messages[end]) === seq) {
-    cost += messageCost(messages[end]);
-    end += 1;
-  }
-  return { start, end, cost };
+  return { start, end, cost, messages, sourceStart: start, sourceEnd: end };
 }
 
-export function prepareChatHistoryResponsePage(
+function selectChatHistoryResponsePage(
   historyPage: ChatHistoryPage,
   {
     entry: historyEntry,
@@ -110,105 +117,192 @@ export function prepareChatHistoryResponsePage(
   >,
   messageSequences: MessageSequences | undefined = historyPage.pagination?.messageSequences ??
     historyPage.anchor?.messageSequences,
-): ChatHistoryResponsePage {
+  measureJsonBytes = jsonUtf8Bytes,
+) {
   const normalized = enrichChatHistoryCompactionMarkers(
     historyPage.messages,
     historyEntry,
     compactionMetrics,
   );
   const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
-  const byteCounter = createChatHistoryByteCounter(activity);
+  const byteCounter = createChatHistoryByteCounter(activity, measureJsonBytes);
   const framingCost = 1 + byteCounter.framingBytes(normalized);
   const maxCost = responseHistoryBytes - framingCost;
   const messageCost = (message: unknown) => byteCounter.messageBytes(message) + 1;
-  const groups: unknown[] = [];
-  for (let index = 0; index < normalized.length;) {
-    const group = resolveChatHistoryMessageGroup(normalized, index, messageCost, messageSequences);
-    // A source row is the fetchable unit; replacing its display siblings keeps
-    // numeric offsets lossless without letting one row escape the page budget.
-    groups.push(
-      ...(group.cost > maxCost
-        ? [
-            buildOversizedHistoryPlaceholder(
-              normalized
-                .slice(group.start, group.end)
-                .find((message) => readChatHistoryMessageId(message) === messageId) ??
-                normalized[group.end - 1],
-            ),
-          ]
-        : normalized.slice(group.start, group.end)),
+  const maxSingleMessageBytes = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxCost - 1);
+  const prepareGroup = (index: number) => {
+    const group = resolveChatHistoryMessageGroup(
+      normalized,
+      index,
+      messageCost,
+      messageSequences,
+      maxCost,
     );
-    index = group.end;
-  }
-  const replaced = replaceOversizedChatHistoryMessages({
-    byteCounter,
-    messages: groups,
-    maxSingleMessageBytes: Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxCost - 1),
-  });
-  const messages = replaced.messages;
-  function capChatHistoryTail(): unknown[] {
-    let start = messages.length;
-    let cost = 0;
-    while (start > 0) {
-      const group = resolveChatHistoryMessageGroup(
+    let messages = normalized;
+    // A source row is indivisible, including when its display siblings become a reference.
+    if (group.cost > maxCost) {
+      messages = [
+        buildOversizedHistoryPlaceholder(
+          normalized
+            .slice(group.start, group.end)
+            .find((message) => readChatHistoryMessageId(message) === messageId) ??
+            normalized[group.end - 1],
+        ),
+      ];
+    } else if (group.cost - 1 > maxSingleMessageBytes) {
+      messages = normalized.slice(group.start, group.end);
+    }
+    if (messages !== normalized) {
+      messages = replaceOversizedChatHistoryMessages({
+        byteCounter,
         messages,
-        start - 1,
-        messageCost,
-        messageSequences,
-      );
-      if (cost + group.cost > maxCost) {
-        break;
+        maxSingleMessageBytes,
+      }).messages;
+    }
+    group.messages = messages;
+    if (messages !== normalized) {
+      group.start = 0;
+      group.end = messages.length;
+    }
+    return group;
+  };
+  // A metadata-free unavailable sentinel can split a source group. Walk the same
+  // post-replacement groups as the eager path, but prepare only visited source rows.
+  const walk = (
+    initialSource: ReturnType<typeof prepareGroup>,
+    initialIndex: number,
+    direction: -1 | 1,
+  ) => {
+    let source = initialSource;
+    let index = initialIndex;
+    return () => {
+      if (index < source.start || index >= source.end) {
+        const next = direction === -1 ? source.sourceStart - 1 : source.sourceEnd;
+        if (next < 0 || next >= normalized.length) {
+          return undefined;
+        }
+        source = prepareGroup(next);
+        index = direction === -1 ? source.end - 1 : source.start;
       }
-      start = group.start;
-      cost += group.cost;
-    }
-    return start > 0 ? messages.slice(start) : messages;
-  }
-
-  function capChatHistoryAroundMessage(anchorMessageId: string): unknown[] {
-    const anchorIndex = messages.findIndex(
-      (message) => readChatHistoryMessageId(message) === anchorMessageId,
-    );
-    if (anchorIndex === -1) {
-      return [];
-    }
-    const groupAt = (index: number) =>
-      resolveChatHistoryMessageGroup(messages, index, messageCost, messageSequences);
-    const anchorGroup = groupAt(anchorIndex);
-    if (!(anchorGroup.cost <= maxCost)) {
-      return [messages[anchorIndex]];
-    }
-
-    let { start, end, cost } = anchorGroup;
-    const grow = (index: number) => {
-      const group = groupAt(index);
-      if (!(cost + group.cost <= maxCost)) {
-        return false;
-      }
-      start = Math.min(start, group.start);
-      end = Math.max(end, group.end);
-      cost += group.cost;
-      return true;
+      const group =
+        source.messages === normalized
+          ? source
+          : resolveChatHistoryMessageGroup(source.messages, index, messageCost, messageSequences);
+      index = direction === -1 ? group.start - 1 : group.end;
+      return group;
     };
-    let canGrowOlder = start > 0;
-    let canGrowNewer = end < messages.length;
-    while (canGrowOlder || canGrowNewer) {
-      canGrowOlder &&= grow(start - 1) && start > 0;
-      canGrowNewer &&= grow(end) && end < messages.length;
+  };
+  const older: unknown[] = [];
+  const newer: unknown[] = [];
+  let cost = 0;
+  let byteLimited = false;
+  const direction = messageId && historyPage.anchor?.direction;
+  const index = direction
+    ? direction === "newer"
+      ? 0
+      : normalized.length - 1
+    : messageId
+      ? normalized.findIndex((message) => readChatHistoryMessageId(message) === messageId)
+      : normalized.length - 1;
+  if (index >= 0 && index < normalized.length) {
+    let source = prepareGroup(index);
+    let anchorIndex = -1;
+    if (messageId) {
+      const anchorId = direction
+        ? (readChatHistoryMessageId(
+            direction === "newer" ? source.messages[source.start] : source.messages[source.end - 1],
+          ) ?? messageId)
+        : messageId;
+      if (direction && anchorId === messageId) {
+        const fallback = normalized.findIndex(
+          (message) => readChatHistoryMessageId(message) === messageId,
+        );
+        if (fallback >= 0 && (fallback < source.sourceStart || fallback >= source.sourceEnd)) {
+          source = prepareGroup(fallback);
+        }
+      }
+      anchorIndex = source.messages.findIndex(
+        (message) => readChatHistoryMessageId(message) === anchorId,
+      );
     }
-    return messages.slice(start, end);
+    const anchor =
+      anchorIndex < 0
+        ? undefined
+        : resolveChatHistoryMessageGroup(
+            source.messages,
+            anchorIndex,
+            messageCost,
+            messageSequences,
+          );
+    if (messageId && !anchor) {
+      byteLimited = true;
+    } else if (anchor && !(anchor.cost <= maxCost)) {
+      newer.push(source.messages[anchorIndex]);
+      byteLimited =
+        source.sourceStart > 0 ||
+        source.sourceEnd < normalized.length ||
+        source.end - source.start > 1;
+    } else {
+      if (anchor) {
+        for (let cursor = anchor.start; cursor < anchor.end; cursor++) {
+          newer.push(source.messages[cursor]);
+        }
+        cost = anchor.cost;
+      }
+      const before = walk(source, anchor ? anchor.start - 1 : source.end - 1, -1);
+      const after = anchor ? walk(source, anchor.end, 1) : undefined;
+      const grow = (iterator: ReturnType<typeof walk>, target: unknown[], reverse: boolean) => {
+        const group = iterator();
+        if (!group) {
+          return false;
+        }
+        if (!(cost + group.cost <= maxCost)) {
+          byteLimited = true;
+          return false;
+        }
+        for (let cursor = group.start; cursor < group.end; cursor++) {
+          target.push(group.messages[reverse ? group.end - 1 - (cursor - group.start) : cursor]);
+        }
+        cost += group.cost;
+        return true;
+      };
+      let canGrowOlder = true;
+      let canGrowNewer = Boolean(after);
+      while (canGrowOlder || canGrowNewer) {
+        canGrowOlder &&= grow(before, older, true);
+        canGrowNewer &&= Boolean(after && grow(after, newer, false));
+      }
+    }
+  } else {
+    byteLimited = normalized.length > 0;
   }
-  const capped = messageId
-    ? capChatHistoryAroundMessage(
-        historyPage.anchor?.direction
-          ? (readChatHistoryMessageId(
-              historyPage.anchor.direction === "newer"
-                ? replaced.messages[0]
-                : replaced.messages.at(-1),
-            ) ?? messageId)
-          : messageId,
-      )
-    : capChatHistoryTail();
+  const capped =
+    older.length + newer.length === normalized.length &&
+    older.every((message, i) => message === normalized[older.length - 1 - i]) &&
+    newer.every((message, i) => message === normalized[older.length + i])
+      ? normalized
+      : older.toReversed().concat(newer);
+  return { normalized, activity, byteCounter, byteLimited, capped, responseHistoryBytes };
+}
+
+/** Scanning consumes the selection decision without composing a discarded wire response. */
+export function isChatHistoryResponsePageByteLimited(
+  ...args: Parameters<typeof selectChatHistoryResponsePage>
+): boolean {
+  const { normalized, byteLimited, capped } = selectChatHistoryResponsePage(...args);
+  if (!byteLimited) {
+    return false;
+  }
+  const survivors = new Set(capped);
+  return normalized.some((message) => !survivors.has(message));
+}
+
+export function prepareChatHistoryResponsePage(
+  ...args: Parameters<typeof selectChatHistoryResponsePage>
+): ChatHistoryResponsePage {
+  const [historyPage] = args;
+  const { normalized, activity, byteCounter, byteLimited, capped, responseHistoryBytes } =
+    selectChatHistoryResponsePage(...args);
   const pagination = historyPage.pagination;
   let candidateNextOffset: number | undefined;
   if (pagination !== undefined) {
@@ -225,9 +319,13 @@ export function prepareChatHistoryResponsePage(
         ? pagination.offset + pagination.rawPageMessages
         : Math.max(pagination.offset + 1, pagination.totalMessages - oldestSeq + 1);
   }
+  const cursors = resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized);
+  // Numeric pages may have no encodable IDs. Honor reader exhaustion unless
+  // response budgeting dropped older source rows from this page.
   const hasMore =
     pagination !== undefined && candidateNextOffset !== undefined
-      ? candidateNextOffset < pagination.totalMessages
+      ? candidateNextOffset < pagination.totalMessages &&
+        (!historyPage.anchor || historyPage.anchor.hasOlder || byteLimited)
       : undefined;
   const survivors = new Set(capped);
   const omittedCount = normalized.reduce<number>(
@@ -244,13 +342,12 @@ export function prepareChatHistoryResponsePage(
       ? {
           omission: {
             omittedCount,
-            normalizedBytes: byteCounter.messagesBytes(normalized),
-            ...(capped.length < replaced.messages.length ? { byteLimited: true as const } : {}),
+            ...(byteLimited ? { byteLimited: true as const } : {}),
           },
         }
       : {}),
     responseHistoryBytes,
-    ...resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized),
+    ...cursors,
     ...(hasMore ? { nextOffset: candidateNextOffset } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),
     ...(pagination !== undefined ? { totalMessages: pagination.totalMessages } : {}),
@@ -264,8 +361,75 @@ export function encodeChatHistoryResponsePage(
   if (!params.encodeResponse) {
     return page;
   }
-  const response = prepareChatHistoryResponsePage(page, params);
-  const messages = new TextEncoder().encode(JSON.stringify(response.messages));
+  // Bundled display adapters can exist without a running channel account.
+  // Keep webchat on the worker-encoded fast path; channel views are viewer-bound.
+  if (
+    params.deferChannelUserDisplay &&
+    page.messages.some((value) => {
+      const message = asOptionalRecord(value);
+      const transport = asOptionalRecord(asOptionalRecord(message?.["__openclaw"])?.transport);
+      return (
+        message?.role === "user" &&
+        typeof transport?.channel === "string" &&
+        typeof transport.accountId === "string" &&
+        isNormalizedMessageChannel(transport.channel)
+      );
+    })
+  ) {
+    return page;
+  }
+  // Budgeting and transport consume the same synchronous plain-data projection.
+  // Keep its JSON only until this response is encoded, never across requests.
+  const serialized = new Map<unknown, string | undefined>();
+  const serialize = (value: unknown) => {
+    if (!serialized.has(value)) {
+      serialized.set(value, JSON.stringify(value));
+    }
+    return serialized.get(value);
+  };
+  const response = prepareChatHistoryResponsePage(page, params, undefined, (value) => {
+    try {
+      return Buffer.byteLength(serialize(value) ?? String(value), "utf8");
+    } catch {
+      return Buffer.byteLength(String(value), "utf8");
+    }
+  });
+  const encoder = new TextEncoder();
+  let modelRangeCount = 0;
+  const encodeArray = (values: unknown[], modelRanges?: number[]) => {
+    const parts = values.map((value) => serialize(value) ?? "null");
+    const bytes = new Uint8Array(
+      2 +
+        Math.max(0, parts.length - 1) +
+        parts.reduce((size, part) => size + Buffer.byteLength(part), 0),
+    );
+    bytes[0] = 0x5b;
+    let offset = 1;
+    for (const [index, part] of parts.entries()) {
+      if (index > 0) {
+        bytes[offset++] = 0x2c;
+      }
+      const start = offset;
+      offset += encoder.encodeInto(part, bytes.subarray(offset)).written;
+      const row = modelRanges && asOptionalRecord(values[index]);
+      if (
+        modelRanges &&
+        row?.role === "assistant" &&
+        (row.provider != null || row.model != null) &&
+        !isTranscriptOnlyOpenClawAssistantModel(row.provider, row.model)
+      ) {
+        modelRanges[modelRangeCount++] = start;
+        modelRanges[modelRangeCount++] = offset;
+      }
+    }
+    bytes[offset] = 0x5d;
+    return bytes;
+  };
+  const ranges: number[] = [];
+  ranges.length = response.messages.length * 2;
+  const messages = encodeArray(response.messages, ranges);
+  ranges.length = modelRangeCount;
+  const activity = response.activity ? encodeArray(response.activity) : undefined;
   return {
     ...page,
     messages: [],
@@ -280,9 +444,15 @@ export function encodeChatHistoryResponsePage(
             deflateRawSync(messages, { level: 1, finishFlush: zlibConstants.Z_SYNC_FLUSH }),
           )
         : undefined,
+    messageModelIndex: {
+      byteLength: messages.byteLength,
+      rowCount: response.messages.length,
+      ranges,
+    },
     encodedResponse: {
       ...response,
       messages,
+      activity,
     },
   };
 }

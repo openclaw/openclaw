@@ -34,10 +34,10 @@ suite.define(() => {
         await gateway.setOnline(false);
         await page.clock.runFor(2_001);
         await gateway.closeLatest(1006, "synthetic failed attempt");
-        const status = page.locator(".sidebar-shell__footer .gateway-status");
+        const status = page.locator(".sidebar-shell__connection .gateway-status");
         const spinnerLocator = status.locator(".session-run-spinner");
         const labelLocator = status.locator(".gateway-status__label");
-        await status.getByText("Reconnecting…", { exact: true }).waitFor();
+        await status.getByText("Reconnecting", { exact: true }).waitFor();
 
         expect(await status.getByRole("button").count()).toBe(0);
         expect(await spinnerLocator.count()).toBe(1);
@@ -121,6 +121,7 @@ suite.define(() => {
         await page.clock.resume();
         await waitForControlUiGatewayReady(page);
         await status.waitFor({ state: "detached" });
+        await spinnerLocator.waitFor({ state: "detached" });
       },
     ),
   );

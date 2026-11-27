@@ -10,6 +10,7 @@ import {
   resolveUpdateStateTargetVersion,
 } from "../../infra/update-candidate-state.versions.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import {
   getUpdateRun,
   recordUpdateRunDiagnostics,
@@ -43,6 +44,7 @@ import {
   verifyPreviousGatewayForUpdate,
 } from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { resolveGatewayRecoverySchemaPaths } from "./update-command-recovery-schema-paths.js";
 import {
   GatewayRestartHealthError,
   restartRetainedUpdateGatewayService,
@@ -145,7 +147,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     signal: params.updateRun?.deadline?.signal,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
-    requirePluginHealth: false,
     requireChannelHealth: false,
     env: params.env,
     onObservation: params.onProgress
@@ -249,6 +250,7 @@ export async function admitInstalledGatewayRecovery(
       params.opts.run?.env ??
       process.env;
     const sharedPath = resolveOpenClawStateSqlitePath(env);
+    const schemaPaths = resolveGatewayRecoverySchemaPaths(env);
     const inspect = async () => {
       const databases = await readUpdateStateSchemaVersions({
         stateDir: resolveStateDir(env),
@@ -257,9 +259,17 @@ export async function admitInstalledGatewayRecovery(
         root,
         nodeRunner: params.packageUpdateNodeRunner,
         timeoutMs: params.updateStepTimeoutMs,
+        onInventory: (files) => {
+          for (const pathname of resolveGatewayRecoverySchemaPaths(env, files)) {
+            schemaPaths.add(pathname);
+          }
+        },
       });
       assertCurrent();
       return databases.flatMap((database) => {
+        if (!schemaPaths.has(database.path)) {
+          return [];
+        }
         const observed = resolveUpdateStateContentVersion(database);
         const expected = resolveUpdateStateTargetVersion(database.path, {
           sharedPath,
@@ -497,6 +507,16 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       await before.windowsTaskAutoStartRecovery?.restore(true, checkOriginal, assertOriginal);
       await checkOriginal();
     } else {
+      // Final recovery may be the first admitted activation after verification
+      // failed. Restore the task under the same ownership guard before /Run.
+      await before.windowsTaskAutoStartRecovery?.restore(
+        true,
+        async () => {
+          await readCurrentService();
+        },
+        assertCurrent,
+      );
+      assertCurrent();
       await runUpdatedInstallGatewayCommand(
         {
           onGatewayStartAttempted: params.onGatewayStartAttempted,
@@ -629,14 +649,7 @@ export async function compensateOriginalManagedService(
   return {
     result: {
       ...result,
-      recovery: {
-        ...result.recovery,
-        serviceRestartSafe: false,
-        reason:
-          result.recovery?.serviceRestartSafe === false
-            ? result.recovery.reason
-            : "runtime-verification-failed",
-      },
+      recovery: unsafeUpdateRecovery(result.recovery),
       steps: [
         ...result.steps,
         {

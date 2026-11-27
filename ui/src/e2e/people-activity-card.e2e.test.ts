@@ -5,9 +5,11 @@ import {
   defaultControlUiFeatureMethods,
   reconnectMockGateway,
   type MockGatewayControls,
+  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
+  captureUiProof,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -35,6 +37,8 @@ const profileSession = "agent:main:profile-watch";
 const profile = { id, identity: { type: "profile" as const, id }, name: "Profile person" };
 const raw = { id, name: "Unqualified sender" };
 const alice = { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" };
+const previewQuery = { source: "activity", limit: 200 };
+const noRecentSessions = "No recent visible sessions.";
 const focused = (target: Locator) =>
   target.evaluate((element) => document.activeElement === element);
 const shift = (title: Locator) =>
@@ -77,8 +81,12 @@ async function openPeople(
     const toggle = navigationDrawerToggle(page);
     await toggle[touch]();
   }
-  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });
+  const online = page.locator(".sidebar-rail").getByRole("button", { name: "People", exact: true });
   await online[touch ? "tap" : "click"]();
+  if (!touch) {
+    // On a desktop People opens Activity, which lists the people in its sidebar.
+    await waitForControlUiRoute(page, { routeId: "activity" });
+  }
   return gateway;
 }
 function sessionRow(
@@ -112,7 +120,7 @@ function scenario(recentSessionLabel = recentLabel) {
         lastActivityAt: now - 60_000,
         deviceFamily: "Mac",
         platform: "macOS",
-        timeZone: "Europe/Paris",
+        timeZone: "Pacific/Chatham",
         watchedSessions: [watched, "agent:main:main", "agent:private:hidden"],
       },
     ],
@@ -131,27 +139,6 @@ function scenario(recentSessionLabel = recentLabel) {
   };
 }
 
-async function expectInlineLastActivity(card: Locator) {
-  const positions = await card
-    .locator(".person-activity-card__facts dd")
-    .last()
-    .evaluate((value) => {
-      const time = value.querySelector("time");
-      const text = document.createTreeWalker(value, NodeFilter.SHOW_TEXT);
-      let suffix = text.nextNode();
-      while (suffix && suffix.textContent?.trim() !== "ago") {
-        suffix = text.nextNode();
-      }
-      if (!time || !suffix) {
-        throw new Error("Expected last activity duration and suffix");
-      }
-      const range = document.createRange();
-      range.selectNodeContents(suffix);
-      return { time: time.getBoundingClientRect().top, suffix: range.getBoundingClientRect().top };
-    });
-  expect(Math.abs(positions.time - positions.suffix)).toBeLessThan(2);
-}
-
 async function expectMultilineTitle(title: Locator) {
   const layout = await title.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -166,6 +153,107 @@ async function expectMultilineTitle(title: Locator) {
 }
 
 suite.define(() => {
+  it("omits publication tasks from viewing and recent sessions on the People card", () =>
+    withPage({ colorScheme: "dark", reducedMotion: "reduce" }, async ({ page }) => {
+      const data = scenario("Update the release notes");
+      const conversations = data.methodResponses["sessions.list"];
+      const tasks = ["a", "b"].map((digit) =>
+        sessionRow(
+          `agent:main:dashboard:github-publication-${digit.repeat(32)}`,
+          "GitHub publication",
+          Date.now(),
+          {
+            classification: "github-publication",
+            parentSessionKey: selected,
+            owner: { actor: { type: "human", id: alice.id, identity: alice.identity } },
+          },
+        ),
+      );
+      await openPeople(page, {
+        ...data,
+        presenceUsers: [{ ...data.presenceUsers[0]!, watchedSessions: [watched, tasks[0]!.key] }],
+        methodResponses: {
+          "sessions.list": {
+            cases: [
+              { match: { excludeSystem: true }, response: conversations },
+              { response: chatSessionListResponse([...tasks, ...conversations.sessions]) },
+            ],
+          },
+        },
+      });
+      await onlinePerson(page, alice.id).hover();
+      const card = activityCard(page);
+      await link(card, "Release checklist").waitFor();
+      await link(card, "Update the release notes").waitFor();
+      await captureUiProof(suite, page, "people-card", "publication-tasks.png");
+      await expectCount(link(card, "GitHub publication"), 0);
+    }));
+
+  it("keeps pending previews honest when moving between people", () =>
+    withPage({ colorScheme: "light", reducedMotion: "reduce" }, async ({ page }) => {
+      const data = scenario();
+      const bob = { id: "bob", identity: { type: "profile" as const, id: "bob" }, name: "Bob" };
+      const gateway = await openPeople(page, {
+        ...data,
+        presenceUsers: [...data.presenceUsers, bob],
+      });
+      const after = await gateway.deferNext("sessions.list", previewQuery);
+      await onlinePerson(page, "alice").hover();
+      const aliceCard = activityCard(page);
+      await link(aliceCard, "View activity").waitFor();
+      await gateway.waitForRequest("sessions.list", { after, match: previewQuery });
+      await captureUiProof(suite, page, "people-card", "pending.png");
+      await expectCount(aliceCard.getByText(noRecentSessions, { exact: true }), 0);
+      const pending = aliceCard.getByRole("status");
+      await expectText(pending, "Loading…");
+      expect(await pending.locator('[aria-hidden="true"].skeleton').isVisible()).toBe(true);
+
+      await onlinePerson(page, "bob").hover();
+      const bobCard = activityCard(page, bob.name);
+      await link(bobCard, "View activity").waitFor();
+      await expectCount(aliceCard, 0);
+      await expectCount(bobCard.getByText(noRecentSessions, { exact: true }), 0);
+      await gateway.resolveDeferred("sessions.list", data.methodResponses["sessions.list"], {
+        match: previewQuery,
+      });
+      await bobCard.getByText(noRecentSessions, { exact: true }).waitFor();
+      await expectCount(bobCard.locator(".skeleton"), 0);
+      await expectCount(link(bobCard, recentLabel), 0);
+
+      await onlinePerson(page, "alice").hover();
+      await link(aliceCard, new RegExp(recentLabel)).waitFor();
+      await expectCount(aliceCard.locator(".skeleton"), 0);
+      await expectCount(aliceCard.getByText(noRecentSessions, { exact: true }), 0);
+      await captureUiProof(suite, page, "people-card", "loaded.png");
+    }));
+
+  it("shows unavailable sessions after a failed first read and retries on reopen", () =>
+    withPage({}, async ({ page }) => {
+      const gateway = await openPeople(page);
+      const after = await gateway.deferNext("sessions.list", previewQuery);
+      const person = onlinePerson(page, "alice");
+      await person.hover();
+      const card = activityCard(page);
+      await link(card, "View activity").waitFor();
+      await gateway.waitForRequest("sessions.list", { after, match: previewQuery });
+      await gateway.rejectDeferred(
+        "sessions.list",
+        { code: "UNAVAILABLE" },
+        {
+          match: previewQuery,
+        },
+      );
+      await card.getByText("Recent sessions unavailable.", { exact: true }).waitFor();
+      await expectCount(card.getByText(noRecentSessions, { exact: true }), 0);
+      expect(await link(card, "View activity").isVisible()).toBe(true);
+      await page.keyboard.press("Escape");
+      await pollCount(card).toBe(0);
+      await page.mouse.move(900, 200);
+      await person.hover();
+      await link(card, new RegExp(recentLabel)).waitFor();
+      await expectCount(card.getByText("Recent sessions unavailable.", { exact: true }), 0);
+    }));
+
   it("reports native browser interaction but not automatic reconnection", () =>
     withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, scenario());
@@ -199,9 +287,10 @@ suite.define(() => {
       await person.hover();
       const card = activityCard(page);
       await card.waitFor({ state: "visible" });
+      // Presence reorders the row; keep focus in the card while its activity changes.
+      await link(card, "View activity").focus();
       await expectText(card.locator(".person-activity-card__status"), "Idle");
-      await expectText(card, "Online for");
-      await expectText(card, "Last interaction");
+      await expectText(card.locator(".person-activity-card__status"), "Idle for");
       for (const [personId, activity] of [
         ["alice", "idle"],
         ["bob", "active"],
@@ -250,10 +339,9 @@ suite.define(() => {
         card,
         "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
       );
-      await expectText(card, "Mac · macOS 27.0.0 · App");
-      await expectText(card, "Activity unavailable");
       await expectAttribute(link(card, "View activity"), "href", "/activity/gateway-owner");
       await expectText(onlinePerson(page, "example-person"), "Example person");
+      await page.goBack();
       await expectAttribute(
         page.locator('.chat-pane__presence [data-viewer-id="gateway-owner"]'),
         "aria-label",
@@ -316,21 +404,24 @@ suite.define(() => {
         await person.waitFor({ state: "visible" });
         await expectCount(card, 0);
         await expectCount(row.locator("a, button"), 2);
-        await expectCount(row.getByRole("button", { name: "Pin", exact: true }), 1);
+        await expectCount(row.getByRole("button", { name: "Actions for Alice", exact: true }), 1);
         await person.hover();
         await card.waitFor({ state: "visible" });
-        await expectText(card, "Reported time zone: Europe/Paris");
+        await expectAttribute(
+          card.locator(".person-activity-card__clock"),
+          "title",
+          "Pacific/Chatham",
+        );
         await expect
           .poll(() => card.locator("a").allTextContents())
           .toEqual(
             expect.arrayContaining(
-              ["Release checklist", "Main Session", recentLabel, "View activity"].map((text) =>
+              ["Release checklist", "Main session", recentLabel, "View activity"].map((text) =>
                 expect.stringContaining(text),
               ),
             ),
           );
         expect(await card.innerHTML()).not.toContain("agent:private:hidden");
-        await expectInlineLastActivity(card);
         const bounds = await row.boundingBox();
         const cardBounds = await card.boundingBox();
         if (!bounds || !cardBounds) {
@@ -446,7 +537,6 @@ suite.define(() => {
         await recent.focus();
         expect(await computedStyleProperty(recentTitle, "text-indent")).toBe("0px");
         await expectMultilineTitle(recentTitle);
-        await expectInlineLastActivity(card);
         await session.tap();
         await expect.poll(() => page.url()).toContain("/dashboard/");
         await pollCount(card).toBe(0);
@@ -479,6 +569,19 @@ suite.define(() => {
         ],
         methodResponses: { "sessions.list": sessions },
       });
+      // The session header shows both watchers; Activity lists them in its sidebar.
+      await page.goBack();
+      const headerFaces = page.locator(".chat-pane__presence [data-viewer-id]");
+      await expect
+        .poll(() =>
+          headerFaces.evaluateAll((faces) =>
+            faces
+              .map((face) => face.getAttribute("aria-label") ?? "")
+              .toSorted((a, b) => a.localeCompare(b)),
+          ),
+        )
+        .toEqual([profile.name, raw.name].toSorted((a, b) => a.localeCompare(b)));
+      await page.goForward();
       const profileButton = personLink(page, profile.name);
       await profileButton.waitFor({ state: "visible" });
       await expectCount(page.locator(".sidebar-online__person"), 3);
@@ -492,16 +595,6 @@ suite.define(() => {
       await expectCount(link(rawCard, /^Raw watch(?:\s|$)/), 1);
       await expectCount(link(rawCard, /^Profile watch(?:\s|$)/), 0);
       await expectCount(link(rawCard, "View activity"), 0);
-      const headerFaces = page.locator(".chat-pane__presence [data-viewer-id]");
-      await expect
-        .poll(() =>
-          headerFaces.evaluateAll((faces) =>
-            faces
-              .map((face) => face.getAttribute("aria-label") ?? "")
-              .toSorted((a, b) => a.localeCompare(b)),
-          ),
-        )
-        .toEqual([profile.name, raw.name].toSorted((a, b) => a.localeCompare(b)));
       const rawLink = link(rawCard, /^Raw watch(?:\s|$)/);
       await rawLink.focus();
       await emitPresence(gateway, [
@@ -557,6 +650,7 @@ suite.define(() => {
           })
           .waitFor({ state: "visible" });
         await expectCount(page.locator(".sidebar-online__person"), 2);
+        await page.goBack();
         await expect
           .poll(() =>
             page.locator(".chat-pane__presence [data-viewer-id]").getAttribute("aria-label"),

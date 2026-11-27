@@ -12,13 +12,19 @@ import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { initialWizardValue, type ModelSetupWizardState } from "../pages/model-setup/state.ts";
+import {
+  type ModelSetupWizardDraft,
+  type ModelSetupWizardState,
+  updateModelSetupWizardDraft,
+} from "../pages/model-setup/state.ts";
 import {
   ModelSetupWizardRunner,
   type ModelSetupWizardCompletion,
+  type WizardRunnerOptions,
 } from "../pages/model-setup/wizard-runner.ts";
 import { ModelSetupWizard, type WizardViewProps } from "../pages/model-setup/wizard-view-solid.tsx";
 import "../styles/model-setup.css";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 
 registerModelSetupEnglish();
 registerEnglishCatalog(registerSettingsEnglish);
@@ -27,20 +33,24 @@ export function createWizardLogin(options: {
   getClient: () => GatewayBrowserClient | null;
   getAgentId: () => string | null;
   onClose: () => void;
+  onCancelled?: () => void;
+  onSessionMissing?: () => void;
+  readLostSession?: WizardRunnerOptions["readLostSession"];
   requestFailedMessage: () => string;
   sessionExpiredMessage: () => string;
   finishingMessage?: () => string;
   onAnswer?: (value: unknown, includeValue?: boolean) => void;
   onPresentationChange?: () => void;
   onBackgroundCompletion?: (completion: ModelSetupWizardCompletion) => Promise<void>;
+  onStart?: WizardRunnerOptions["onStart"];
+  recovery?: WizardViewProps["recovery"];
 }) {
   const [state, setState] = createSignal<ModelSetupWizardState>({ phase: "idle" });
-  const [draft, setValue] = createSignal<unknown>();
+  const [draft, setDraft] = createSignal<ModelSetupWizardDraft>({ stepId: null, value: undefined });
   const [cancelling, setCancelling] = createOptimistic(false);
   const [cancellationAttempt, setCancellationAttempt] =
     createSignal<Promise<"cancelled" | "running" | void>>();
   const cancellationOutcome = createMemo(() => cancellationAttempt(), { loadingValue: undefined });
-  let stepId: string | null = null;
   let generation = 0;
   let cancellation: number | undefined;
   let retireCancellation: (() => void) | undefined;
@@ -60,12 +70,8 @@ export function createWizardLogin(options: {
         retireCancellation = undefined;
         setCancellationAttempt(undefined);
       }
-      if (next.phase === "step" && next.step.id !== stepId) {
-        setValue(() => initialWizardValue(next.step));
-      } else if (next.phase !== "step") {
-        setValue(undefined);
-      }
-      stepId = next.phase === "step" ? next.step.id : null;
+      // A suspended sign-in passes through "starting" and keeps the typed value.
+      setDraft((current) => updateModelSetupWizardDraft(current, next));
       setState(next);
       if (next.phase === "starting" || next.phase === "step") {
         options.onPresentationChange?.();
@@ -111,14 +117,15 @@ export function createWizardLogin(options: {
       doneDescription: viewOptions.doneDescription,
       doneAction: viewOptions.doneAction,
       cancellationFeedback,
-      value: draft(),
+      value: draft().value,
       onValueChange: (value) => {
-        setValue(() => value);
+        setDraft((previous) => ({ ...previous, value }));
       },
       onAnswer:
         options.onAnswer ?? ((value, includeValue) => void runner.answer(value, includeValue)),
       onCancel: cancel,
       onClose: options.onClose,
+      recovery: options.recovery,
     };
   }
 
@@ -143,6 +150,7 @@ export function createWizardLogin(options: {
       .requestCancellation()
       .then((outcome) => {
         if (currentGeneration === generation && outcome === "cancelled") {
+          options.onCancelled?.();
           options.onClose();
         }
         return outcome;
@@ -164,17 +172,17 @@ export function createWizardLogin(options: {
       <Show when={!cancelling()}>
         <Errored
           fallback={(error) => (
-            <div class="callout warning" role="alert">
+            <InlineAlert tone="warning" role="alert">
               {t("modelSetup.wizard.cancelFailed", {
                 error: formatUiError(error(), options.requestFailedMessage()),
               })}
-            </div>
+            </InlineAlert>
           )}
         >
           <Show when={cancellationOutcome() === "running"}>
-            <div class="callout warning" role="alert">
+            <InlineAlert tone="warning" role="alert">
               {options.finishingMessage?.() ?? t("modelProviders.login.finishing")}
-            </div>
+            </InlineAlert>
           </Show>
         </Errored>
       </Show>
@@ -202,11 +210,12 @@ export function WizardLogin(props: {
   controller: WizardLoginState;
   busy?: boolean;
   options?: Parameters<WizardLoginState["viewProps"]>[0];
+  signInIcon?: WizardViewProps["signInIcon"];
 }) {
   const view = createMemo(() => props.controller.viewProps(props.options));
   return (
     <div onModal-cancel={(event: Event) => event.preventDefault()}>
-      <ModelSetupWizard {...view()} busy={props.busy} />
+      <ModelSetupWizard {...view()} busy={props.busy} signInIcon={props.signInIcon} />
     </div>
   );
 }

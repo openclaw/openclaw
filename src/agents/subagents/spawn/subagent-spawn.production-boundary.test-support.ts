@@ -31,12 +31,12 @@ import { captureSessionTarget } from "../../../sessions/session-controller.lifec
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import {
-  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
   type AdmittedRunOperatorAuthority,
 } from "../../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { RequesterOrigin } from "../../requester-origin.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
@@ -46,7 +46,7 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
@@ -102,14 +102,13 @@ export function createSpawnOperatorSource(
       throw new Error("operator source has no live owner");
     }
   };
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId,
     scopes,
     ...policy,
     gatewayAccessGrant: null,
     source: {},
     signal: revocation.signal,
-    assertCurrent,
     retain: () => {
       assertCurrent();
       holds += 1;
@@ -268,6 +267,7 @@ export function createBoundSpawnInvocation(
     expectsCompletionMessage?: boolean;
     completionTarget?: "parent";
     thinking?: string;
+    cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red" | null;
   },
   requesterModel?: { provider: string; model: string },
   senderIsOwner?: boolean,
@@ -309,7 +309,7 @@ export function createBoundSpawnInvocation(
     sessionKey: parentSessionKey,
     requesterOrigin: bound.requesterOrigin,
   });
-  return (toolCallId = "spawn-production-boundary", signal?: AbortSignal) =>
+  return (toolCallId = "spawn-production-boundary", signal?: AbortSignal, input?: unknown) =>
     withPluginRuntimeGatewayRequestScope(
       {
         context: bound.context as unknown as GatewayRequestContext,
@@ -317,7 +317,7 @@ export function createBoundSpawnInvocation(
       },
       () =>
         withGatewayToolCallerIdentity(caller, () =>
-          tool.execute!(toolCallId, { task: "bounded child", ...request }, signal),
+          tool.execute!(toolCallId, input ?? { task: "bounded child", ...request }, signal),
         ),
     );
 }

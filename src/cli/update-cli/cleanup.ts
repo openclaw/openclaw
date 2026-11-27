@@ -1,7 +1,7 @@
 /** Local recovery retirement. This handler never invokes update or Doctor repair. */
 import { confirm } from "@clack/prompts";
 import {
-  collectUpdateCleanupInventory,
+  collectUpdateCleanupInventoryAsync,
   inspectSessionSqliteRecovery,
   type RecoveryCleanupReport,
 } from "../../commands/doctor-session-sqlite-recovery-inventory.js";
@@ -10,6 +10,7 @@ import { selectUnmanifestedRecovery } from "../../commands/update-cleanup-unmani
 import { readConfigFileSnapshot, readSourceConfigBestEffort } from "../../config/io.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
 import { defaultRuntime, ExitError, writeRuntimeJson } from "../../runtime.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 import { updateMaintenanceError } from "./update-maintenance-error.js";
 
 function renderCleanup(report: RecoveryCleanupReport): void {
@@ -80,7 +81,11 @@ export async function updateCleanupCommand(options: {
       : readSourceConfigBestEffort;
     const cfg = await readConfig();
     if (options.includeUnmanifested?.length) {
-      const inventory = collectUpdateCleanupInventory({ cfg, env: process.env });
+      const inventory = await collectUpdateCleanupInventoryAsync({
+        cfg,
+        env: process.env,
+        current: true,
+      });
       selectUnmanifestedRecovery({
         inventory,
         cfg,
@@ -89,7 +94,7 @@ export async function updateCleanupCommand(options: {
       });
       report = inventory.report;
     } else {
-      report = inspectSessionSqliteRecovery({ cfg, env: process.env });
+      report = await inspectSessionSqliteRecovery({ cfg, env: process.env });
     }
     if (!options.dryRun) {
       if (report.artifacts.length === 0 && !options.yes) {
@@ -154,7 +159,11 @@ export async function updateCleanupCommand(options: {
     }
     const message = String(updateMaintenanceError(error));
     if (options.json) {
-      writeRuntimeJson(defaultRuntime, { ...report, status: "blocked", error: message });
+      writeRuntimeJson(defaultRuntime, {
+        ...report,
+        ...formatCliJsonFailure(message),
+        status: "blocked",
+      });
     } else {
       defaultRuntime.error(message);
     }

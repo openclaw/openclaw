@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { resolveVitestNodeArgs } from "../../../scripts/lib/vitest-process-env.mts";
+import { resolveNodeCompilerArgs } from "../../../scripts/lib/vitest-node-args.mts";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import {
   assertManagedHandoffTestConsumer,
@@ -14,6 +14,7 @@ import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtim
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { getUpdateRun, type createUpdateRun } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { updateExecutorNativeEntrypoints as native } from "./update-command-executor-native-runtime.test-support.js";
@@ -131,7 +132,7 @@ it.skipIf(process.platform === "win32").for([
     const { runCliWithExitFinalization } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.oneShotExit).href)});
     const opts = {};
     if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
-    const run = await admitUpdateCommandRun({opts, root:installRoot});
+    const run = await admitUpdateCommandRun({ env: process.env,opts, root:installRoot});
     const currentOptions = {...opts, run};
     let executorDatabasePath;
     const enter = async (executor) => {
@@ -276,7 +277,7 @@ it.skipIf(process.platform === "win32").for([
         const child = spawn(
           resolveTestNodeExecPath(),
           [
-            ...resolveVitestNodeArgs(),
+            ...resolveNodeCompilerArgs(),
             ...(mode.endsWith("-compensation") ? ["--experimental-test-module-mocks"] : []),
             ...sourceImportArgs,
             binding.nodeOption,
@@ -429,9 +430,15 @@ it.skipIf(process.platform === "win32").for([
                 expect.objectContaining({ step: "activating", termination: "signal", signal }),
               ]),
             });
-            const report = read(stateDir, "update-reports", `${message.runId}.md`);
-            expect(report).toContain(`interrupted by ${signal} during activating`);
-            expect(report).toContain("Bounded diagnostic JSON:");
+            expect(readRun(message.runId)?.steps).toContainEqual(
+              expect.objectContaining({
+                step: "activating",
+                stderrTail: expect.stringContaining(`interrupted by ${signal} during activating`),
+              }),
+            );
+            expect(renderUpdateRunSummary(readRun(message.runId)!)).toContain(
+              `interrupted by ${signal} during activating`,
+            );
             expect(stderr).toContain("openclaw update repair");
             return;
           }

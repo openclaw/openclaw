@@ -170,12 +170,12 @@ it.each(["planning", "materialization", "worker", "archived entry"] as const)(
               }
               return run({
                 ...params,
-                withWriteAdmission: async (operation, admission) => {
+                withWriteAdmission: async (operation, admission, retained) => {
                   admissionCount++;
                   if ((stage === "worker" || stage === "archived entry") && !protectionChanged) {
                     releasePressure();
                   }
-                  return params.withWriteAdmission(operation, admission);
+                  return params.withWriteAdmission(operation, admission, retained);
                 },
               });
             });

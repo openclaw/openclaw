@@ -1,12 +1,16 @@
 import { render as renderSolid } from "@solidjs/web";
 import { createComponent } from "solid-js";
 import { vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { BoardProvider } from "../../lib/board/provider.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { createChatPaneView } from "./chat-pane-runtime-view.tsx";
 import { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type PaneRuntimeConstructor<R extends ChatPaneRuntime> = new (
   element: HTMLElement,
@@ -171,4 +175,59 @@ export function connectPaneTestView(pane: { element: HTMLElement }) {
   if (typeof connect === "function") {
     connect.call(pane.element);
   }
+}
+
+export function configureGatewayBoardPane<
+  TPane extends { state: ChatPageHost; context: ApplicationContext },
+>(
+  pane: TPane,
+  params: {
+    sessionKey: string;
+    methods?: readonly string[];
+    scopes?: readonly string[];
+    capabilities?: readonly string[];
+    lifecycleConnected?: boolean;
+    sharingRole?: GatewaySessionRow["sharingRole"];
+  },
+) {
+  const snapshot = { sessionKey: params.sessionKey, revision: 1, tabs: [], widgets: [] };
+  const removeListener = vi.fn();
+  const request = vi.fn<
+    (
+      method: string,
+      params: { sessionKey: string; agentId?: string },
+    ) => Promise<BoardProvider["snapshot$"]["value"]>
+  >(async () => snapshot);
+  const addEventListener = vi.fn(() => removeListener);
+  const client = { request, addEventListener } as unknown as GatewayBrowserClient;
+  pane.state.sessionKey = params.sessionKey;
+  pane.state.client = client;
+  if (params.sharingRole) {
+    pane.state.sessionsResult = {
+      ts: 1,
+      path: "test",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: params.sessionKey, kind: "direct", sharingRole: params.sharingRole }],
+    };
+  }
+  Reflect.set(pane, "boardProviderLifecycleConnected", params.lifecycleConnected ?? true);
+  pane.context = {
+    ...pane.context,
+    gateway: {
+      snapshot: {
+        client,
+        phase: "connected",
+        hello: {
+          ...(params.scopes ? { auth: { role: "operator", scopes: params.scopes } } : {}),
+          features: {
+            methods: params.methods ?? ["board.get"],
+            ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+          },
+        },
+      },
+    },
+  } as unknown as ApplicationContext;
+  pane.context.connectionBootstrap.synchronize({ client, connected: true });
+  return { pane, snapshot, client, request, addEventListener, removeListener };
 }

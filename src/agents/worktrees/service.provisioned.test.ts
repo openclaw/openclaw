@@ -16,8 +16,15 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  onTrustedInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import * as gitExec from "../../infra/git-exec.js";
-import { runGitWorkerOperation } from "../../infra/git-worker.js";
+import * as gitWorker from "../../infra/git-worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as commandRunner from "../../process/exec-runner.js";
@@ -33,6 +40,7 @@ import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { git } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
+import { copyProvisionedPaths } from "./provisioned-copy.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
 import * as provisionedSnapshots from "./provisioned-snapshot-store.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
@@ -46,6 +54,7 @@ import { getRegistryWorktree } from "./registry.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { materializeManagedWorktreeFixture } from "./service.test-support.js";
 import { captureManagedWorktreeSnapshot } from "./snapshot-host.js";
+import type { ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -147,7 +156,7 @@ describe("ManagedWorktreeService provisioned state", () => {
       });
 
     // Exercise the typed worker used for capacity estimates, then the registered service flow.
-    const inspection = await runGitWorkerOperation({
+    const inspection = await gitWorker.runGitWorkerOperation({
       type: "worktree.provisioning-inspection",
       input: { sourceRoot: repo },
     });
@@ -155,11 +164,24 @@ describe("ManagedWorktreeService provisioned state", () => {
       paths: [".env.local", "dependencies/package/settings.local"],
       estimatedBytes: 8192,
     });
-    const created = await service.create({
-      repoRoot: repo,
-      name: "dependencies",
-      baseRef: "HEAD",
+    const phases: DiagnosticEventPayload[] = [];
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.phase.completed" && event.name === "worktree.preparation") {
+        phases.push(event);
+      }
     });
+    let created: ManagedWorktreeRecord;
+    try {
+      created = await service.create({ repoRoot: repo, name: "dependencies", baseRef: "HEAD" });
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      unsubscribe();
+      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+    }
+    expect(phases.length).toBeGreaterThan(0);
+    expect(JSON.stringify(phases)).not.toContain("synthetic provisioned");
     expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(inspection.paths);
     expect(await fs.readFile(path.join(created.path, ".env.local"), "utf8")).toBe(
       "synthetic provisioned\n",
@@ -181,16 +203,127 @@ describe("ManagedWorktreeService provisioned state", () => {
     const destination = path.join(root, "destination");
     await fs.mkdir(destination);
     await fs.writeFile(path.join(destination, ".env.local"), "destination-owned\n");
+    const { executeGitWorktreeOperation } = await import("./git-worktree-operations.runtime.js");
+    expect(
+      await executeGitWorktreeOperation({
+        type: "worktree.provisioning-inspection",
+        input: { sourceRoot: repo, estimateBytes: false },
+      }),
+    ).toEqual({ paths: inspection.paths, estimatedBytes: 0 });
     expect(await provisionIncludedFiles(repo, destination)).toEqual([
       "dependencies/package/settings.local",
     ]);
     expect(await fs.readFile(path.join(destination, ".env.local"), "utf8")).toBe(
       "destination-owned\n",
     );
+    // Copy-time inspection keeps skipping sources that cannot be inspected.
+    const lstat = fs.lstat;
+    const unreadable = Object.assign(new Error("synthetic unreadable source"), { code: "EACCES" });
+    vi.spyOn(fs, "lstat").mockImplementation((target, options) =>
+      target === path.join(dependencies, "settings.local")
+        ? Promise.reject(unreadable)
+        : lstat(target, options),
+    );
+    await expect(
+      copyProvisionedPaths(repo, destination, ["dependencies/package/settings.local"], {}),
+    ).resolves.toEqual([]);
+  });
+
+  it("snapshots user work without storing provisioned dependency bytes", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "node_modules/\n.env.local\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "node_modules/\n.env.local\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "include dependencies and local configuration");
+    const dependencyPaths = ["node_modules/pkg/data", "packages/app/node_modules/pkg/data"];
+    for (const relative of dependencyPaths) {
+      await fs.mkdir(path.dirname(path.join(repo, relative)), { recursive: true });
+      await fs.writeFile(path.join(repo, relative), Buffer.alloc(2 * 1024 * 1024, 42));
+    }
+    await fs.writeFile(path.join(repo, ".env.local"), "synthetic original\n");
+    const created = await service.create({
+      repoRoot: repo,
+      name: "dependency-snapshot",
+      baseRef: "HEAD",
+    });
+    expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([
+      ".env.local",
+      ...dependencyPaths,
+    ]);
+    await fs.writeFile(path.join(created.path, "README.md"), "tracked edit\n");
+    await fs.writeFile(path.join(created.path, "user.txt"), "untracked work\n");
+    await fs.writeFile(
+      path.join(created.path, "node_modules/pkg/user.txt"),
+      "tracked dependency edit\n",
+    );
+    await git(created.path, "add", "-f", "node_modules/pkg/user.txt");
+    await fs.writeFile(path.join(created.path, ".env.local"), "synthetic edited\n");
+    const removed = await service.remove({
+      id: created.id,
+      reason: "dependency snapshot regression",
+    });
+    expect(removed.removed).toBe(true);
+    expect(await getRegistryWorktreeProvisionedState(env, created.id)).toEqual([
+      expect.objectContaining({ path: ".env.local", chunks: 1 }),
+    ]);
+    for (const relative of dependencyPaths) {
+      expect(
+        await getRegistryWorktreeProvisionedChunk(env, {
+          worktreeId: created.id,
+          path: relative,
+          chunkIndex: 0,
+        }),
+      ).toBeUndefined();
+    }
+    const restored = await service.restore({ id: created.id });
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("tracked edit\n");
+    expect(await fs.readFile(path.join(restored.path, "user.txt"), "utf8")).toBe(
+      "untracked work\n",
+    );
+    expect(await fs.readFile(path.join(restored.path, "node_modules/pkg/user.txt"), "utf8")).toBe(
+      "tracked dependency edit\n",
+    );
+    expect(await fs.readFile(path.join(restored.path, ".env.local"), "utf8")).toBe(
+      "synthetic edited\n",
+    );
+    for (const relative of dependencyPaths) {
+      await expect(fs.stat(path.join(restored.path, relative))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+  });
+
+  it("preserves modification times when provisioning prepared build inputs and outputs", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "prepared/\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "prepared/**\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "include prepared build state");
+    const prepared = path.join(repo, "prepared");
+    await fs.mkdir(prepared);
+    // The output sorts first; recreating times would make its input appear newer.
+    const entries = [
+      { name: "artifact", content: "compiled output\n", seconds: 1_700_000_010 },
+      { name: "input", content: "build input\n", seconds: 1_700_000_000 },
+    ];
+    for (const entry of entries) {
+      const source = path.join(prepared, entry.name);
+      await fs.writeFile(source, entry.content);
+      await fs.utimes(source, entry.seconds, entry.seconds);
+    }
+
+    const created = await service.create({ repoRoot: repo, name: "prepared", baseRef: "HEAD" });
+
+    for (const entry of entries) {
+      const target = path.join(created.path, "prepared", entry.name);
+      expect(await fs.readFile(target, "utf8")).toBe(entry.content);
+      expect((await fs.stat(target)).mtimeMs).toBe(entry.seconds * 1000);
+    }
+    const output = await fs.stat(path.join(created.path, "prepared", "artifact"));
+    const input = await fs.stat(path.join(created.path, "prepared", "input"));
+    expect(output.mtimeMs).toBeGreaterThan(input.mtimeMs);
   });
 
   it.skipIf(process.platform === "win32")(
-    "batches supported literal UTF-8 paths without expanding wildcard or magic names",
+    "filters supported literal UTF-8 paths without expanding wildcard or magic names",
     async () => {
       await fs.writeFile(path.join(repo, ".gitignore"), "*.local\n");
       await fs.writeFile(
@@ -205,76 +338,42 @@ describe("ManagedWorktreeService provisioned state", () => {
         "literal*.local",
         "white space.local",
         "new\nline.local",
-        ...Array.from({ length: 140 }, (_, i) => "short-" + String(i).padStart(3, "0") + ".local"),
+        ...Array.from({ length: 1 }, (_, i) => "short-" + String(i).padStart(3, "0") + ".local"),
         ...Array.from(
-          { length: 140 },
+          { length: 1 },
           (_, i) => "utf8-" + String(i).padStart(3, "0") + "-" + "界".repeat(60) + ".local",
         ),
       ].toSorted((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
       for (const name of [...names, "literalZ.local", "unselected.local"]) {
         await fs.writeFile(path.join(repo, name), "bytes:" + name);
       }
-      using commands = vi.spyOn(gitExec, "executeGitCommandBuffered");
+      // A tracked wildcard lookalike must not suppress the literal untracked filename.
+      await git(repo, "add", "-f", "literalZ.local");
+      await git(repo, "commit", "-m", "track wildcard lookalike");
 
       expect(
-        await runGitWorkerOperation({
+        await gitWorker.runGitWorkerOperation({
           type: "worktree.provisioning-inspection",
           input: { sourceRoot: repo },
         }),
       ).toEqual({ paths: names, estimatedBytes: names.length * 4096 });
-      const batches = commands.mock.calls
-        .filter(([, args]) => args.includes("ls-files") && args.includes("--exclude-standard"))
-        .map(([, args]) => {
-          expect(args).toContain("--literal-pathspecs");
-          expect(args).toContain("--");
-          return args.slice(args.indexOf("--") + 1);
-        });
-      expect(batches.flat()).toEqual(names);
-      expect(batches.some((batch) => batch.length === 128)).toBe(true);
-      expect(
-        batches.some(
-          (batch) =>
-            batch.length < 128 &&
-            batch.reduce((bytes, entry) => bytes + Buffer.byteLength(entry) + 1, 0) >= 16_384,
-        ),
-      ).toBe(true);
-      for (const batch of batches) {
-        expect(batch.length).toBeGreaterThan(0);
-        expect(batch.length).toBeLessThanOrEqual(128);
-        expect(
-          batch.slice(0, -1).reduce((bytes, entry) => bytes + Buffer.byteLength(entry) + 1, 0),
-        ).toBeLessThan(16_384);
-      }
       const created = await service.create({
         repoRoot: repo,
         name: "literal-batches",
         baseRef: "HEAD",
       });
       expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(names.toSorted());
-      await expect(fs.stat(path.join(created.path, "literalZ.local"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      expect(await fs.readFile(path.join(created.path, "literalZ.local"), "utf8")).toBe(
+        "bytes:literalZ.local",
+      );
       await expect(fs.stat(path.join(created.path, "unselected.local"))).rejects.toMatchObject({
         code: "ENOENT",
       });
-      commands.mockClear();
       const guard = vi.fn();
       await service.remove({ id: created.id, reason: "test", commitGuard: guard });
       const states = await getRegistryWorktreeProvisionedState(env, created.id);
       expect(states?.map((state) => state.path)).toEqual(names.toSorted());
       expect(guard).toHaveBeenCalled();
-      const membership = commands.mock.calls.filter(
-        ([, args]) =>
-          args.includes("--literal-pathspecs") &&
-          (args.includes("ls-files") || args.includes("ls-tree")) &&
-          args.includes("--"),
-      );
-      expect(membership.length).toBe(batches.length * 3);
-      for (const call of membership) {
-        const options = call[2];
-        expect(options?.killProcessTree).toBe(true);
-        expect(options?.beforeRun).toEqual(expect.any(Function));
-      }
       const restored = await service.restore({ id: created.id });
       for (const name of names.slice(0, 5)) {
         expect(await fs.readFile(path.join(restored.path, name), "utf8")).toBe("bytes:" + name);

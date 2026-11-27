@@ -10,11 +10,13 @@ import type { FollowupRequest } from "../subagents/completion/session-followup-c
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   prepareGatewayToolCallerAssertion,
 } from "./gateway-caller-context.js";
-import { runWithGatewayToolCleanupContext } from "./in-process-gateway.js";
+import {
+  getInProcessGatewayToolContext,
+  runWithGatewayToolCleanupContext,
+} from "./in-process-gateway.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 import {
@@ -49,12 +51,13 @@ export async function startSessionsSendFollowup(
         targetAgentId: request.targetAgentId,
         requesterAgentId: request.requesterAgentId,
         requesterSessionKey: request.requesterSessionKey,
-        replyMode: "one-way",
+        replyMode: replyContext.replyMode === "peer" ? "peer" : "one-way",
         notifyRequesterOnWaitFailure: true,
       });
       return {
         start: {
           ...start,
+          selfHeld: undefined,
           result: jsonResult({
             ...start.result.details,
             sentBeforeError: true,
@@ -74,7 +77,30 @@ export async function startSessionsSendFollowup(
   return { start, completion };
 }
 
-/** Accepted child followups belong to the same completion owner as spawned work. */
+/**
+ * The target run keeps its dispatch assertion for as long as it lives. A closed admission can only
+ * refuse, so it drops the sender's checks instead of keeping the sending turn reachable.
+ */
+function openChildFollowupAdmission(assertCurrent: () => void, assertDispatchCurrent?: () => void) {
+  let checks: { assertCurrent: () => void; assertDispatchCurrent?: () => void } | undefined = {
+    assertCurrent,
+    assertDispatchCurrent,
+  };
+  return {
+    assertDispatchCurrent: () => {
+      if (!checks) {
+        throw new Error("Child followup admission was closed.");
+      }
+      checks.assertCurrent();
+      checks.assertDispatchCurrent?.();
+    },
+    close: () => {
+      checks = undefined;
+    },
+  };
+}
+
+/** Eligible followups retain their accepted result through the existing completion owner. */
 export async function dispatchSessionsSendFollowup(
   params: Parameters<typeof startSessionsSendAgentRun>[0],
   replyContext: Parameters<typeof startSessionsSendFollowup>[2],
@@ -87,12 +113,12 @@ export async function dispatchSessionsSendFollowup(
     requesterSessionKey: string;
     requesterAgentId: string;
     requesterTurnRunId?: string;
-    targetSession?: AgentStepSession;
+    targetSession?: AgentStepSession & { label?: string };
     withRequesterAuthority?: <T>(run: () => T) => T;
   },
 ) {
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
+  const caller = getGatewayToolCallerIdentity();
+  const instance = caller?.operationalRunInstance;
   const completionChild = options.watch
     ? getLatestLiveSubagentRunByChildSessionKey(
         params.sessionStoreTarget.canonicalKey,
@@ -121,9 +147,18 @@ export async function dispatchSessionsSendFollowup(
       ? requesterTurn
       : undefined;
   const completionTurn = isCronRequester ? undefined : registryTurn;
+  // A queued self-send has no separate recipient to observe it with operator.write.
+  // Keep the original run's result, without registering the session as its own child.
+  const ownSessionCompletion =
+    replyContext.replyMode === "peer" &&
+    options.requesterSessionKey === params.sessionStoreTarget.canonicalKey &&
+    options.requesterAgentId === params.sendParams.agentId &&
+    getInProcessGatewayToolContext()?.lifecycleRuntime !== undefined;
   const request =
     !("ok" in active) &&
-    (registryTurn || (replyContext.replyMode === "one-way" && options.ownChild)) &&
+    (registryTurn ||
+      ownSessionCompletion ||
+      (replyContext.replyMode === "one-way" && options.ownChild)) &&
     sameRequester
       ? await prepareSessionsSendFollowup({
           runId: params.runId,
@@ -135,11 +170,10 @@ export async function dispatchSessionsSendFollowup(
           targetSessionKey: params.sessionStoreTarget.canonicalKey,
         })
       : undefined;
-  let admissionOpen = true;
-  const assertCurrent = () => {
-    assertCallerCurrent?.();
-    request?.custody.assertCurrent();
-  };
+  const assertCurrent = () => request?.custody.assertCurrent();
+  const admission = registryTurn
+    ? openChildFollowupAdmission(assertCurrent, params.assertDispatchCurrent)
+    : undefined;
   const { start, completion } =
     "ok" in active
       ? { start: active, completion: undefined }
@@ -148,17 +182,8 @@ export async function dispatchSessionsSendFollowup(
           {
             ...params,
             ...active,
-            ...(registryTurn
-              ? {
-                  retainAcceptance: true,
-                  assertDispatchCurrent: () => {
-                    if (!admissionOpen) {
-                      throw new Error("Child followup admission was closed.");
-                    }
-                    assertCurrent();
-                    params.assertDispatchCurrent?.();
-                  },
-                }
+            ...(admission
+              ? { retainAcceptance: true, assertDispatchCurrent: admission.assertDispatchCurrent }
               : {}),
           },
           replyContext,
@@ -167,11 +192,9 @@ export async function dispatchSessionsSendFollowup(
     if (start.ok && registryTurn) {
       const { registerSubagentRun, adoptSubagentRunForRequesterTurn } =
         await import("../subagents/registry/subagent-registry.js");
-      // Acceptance already owns the input; retained custody owns recording its result obligation.
-      const assertCompletionCurrent = () =>
-        request ? request.custody.assertCurrent() : assertCurrent();
       const claim = async () => {
-        assertCompletionCurrent();
+        // Acceptance already owns the input; retained custody owns recording its result obligation.
+        assertCurrent();
         const childSessionKey = start.a2aSessionKey ?? params.sessionStoreTarget.canonicalKey;
         let accepted: AcceptedSessionSpawn | undefined;
         if (start.targetDisposition === "steered") {
@@ -188,7 +211,8 @@ export async function dispatchSessionsSendFollowup(
               requesterSessionKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
               requesterTurnRunId: registryTurn,
-              assertCurrent: assertCompletionCurrent,
+              requesterRunInstance: instance,
+              assertCurrent,
             });
           }
           if (!accepted) {
@@ -200,6 +224,7 @@ export async function dispatchSessionsSendFollowup(
           await registerSubagentRun(
             {
               runId: start.runId,
+              gatewayContextResolver: caller?.gatewayContextResolver,
               childSessionKey,
               sessionEntry: options.targetSession,
               childAgentId: params.sessionStoreTarget.agentId,
@@ -209,6 +234,8 @@ export async function dispatchSessionsSendFollowup(
               requesterTurnRunId: registryTurn,
               requesterOrigin: replyContext.requesterOrigin,
               task: options.message,
+              // The completion receipt names the child as its session does.
+              label: options.targetSession?.label,
               cleanup: "keep",
               spawnMode: "session",
               expectsCompletionMessage: Boolean(completionTurn),
@@ -218,9 +245,10 @@ export async function dispatchSessionsSendFollowup(
                 replyContext.requesterSession?.lifecycleRevision,
             },
             {
-              assertCurrent: assertCompletionCurrent,
+              assertCurrent,
               assertPublicationCurrent: () => request?.custody.assertCurrent(),
               acceptedRunReplay: true,
+              requesterRunInstance: instance,
             },
           );
           accepted = {
@@ -239,7 +267,7 @@ export async function dispatchSessionsSendFollowup(
         }
         return accepted;
       };
-      const accepted = await (request ? request.custody.run(claim) : claim());
+      const accepted = await (request ? request.custody.runWithRequester(claim) : claim());
       assertCurrent();
       if (instance) {
         mergeAcceptedSessionSpawnsForRun(instance, [accepted]);
@@ -272,6 +300,8 @@ export async function dispatchSessionsSendFollowup(
     return {
       start: {
         ok: false as const,
+        // Only an accepted start reaches this catch, so it is never a retainable refusal.
+        selfHeld: undefined,
         result: jsonResult({
           runId: start.ok ? start.runId : params.runId,
           status: "error",
@@ -285,7 +315,7 @@ export async function dispatchSessionsSendFollowup(
       watchField: {},
     };
   } finally {
-    admissionOpen = false;
+    admission?.close();
     if (registryTurn) {
       request?.custody.release();
     }

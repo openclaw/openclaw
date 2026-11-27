@@ -15,10 +15,10 @@ import {
   rewriteTranscriptEventRowsExact,
   withTranscriptWriteSequence,
 } from "./session-accessor.sqlite-transcript-write.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
-  withSessionActorStorage,
 } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
@@ -26,7 +26,7 @@ import { executeSessionMessageRewriteOperation } from "./session-message-rewrite
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import type { SessionTranscriptCorrectionCommitted } from "./session-transcript-mutation.types.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWriterFence,
@@ -228,6 +228,7 @@ async function runPreparedTranscriptCorrection<T>(
         }),
         async run(worker, commit) {
           const hydration = await source.owner.readTranscript({
+            caller: "correction",
             target: source.scope,
             resolvedScope: resolved,
             expectedIdentity: source.expectedIdentity,
@@ -275,6 +276,6 @@ async function runPreparedTranscriptCorrection<T>(
       return result.value;
     },
     undefined,
-    targetDiscoveryLane,
+    sessionStoreLane,
   );
 }

@@ -8,12 +8,16 @@ import {
   emitAgentRunOutputTokens,
 } from "../infra/agent-events.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
-import type { AssistantMessage, Usage } from "../llm/types.js";
+import type { AssistantHistoryMessage, HistoryUsage, Usage } from "../llm/types.js";
 import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
   toNormalizedUsage,
 } from "./embedded-agent-runner/usage-accumulator.js";
+import {
+  snapshotAssistantMessage,
+  type AssistantSnapshotReasoning,
+} from "./embedded-agent-subscribe.assistant-snapshot.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { isSubscribeTranscriptOnlyOpenClawAssistantMessage } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
@@ -27,7 +31,10 @@ import {
   type NormalizedUsage,
 } from "./usage.js";
 
-function preserveAssistantUsage(message: AssistantMessage, pending: NormalizedUsage | undefined) {
+function preserveAssistantUsage(
+  message: AssistantHistoryMessage,
+  pending: NormalizedUsage | undefined,
+) {
   if (!pending || message.usage.usageReport?.state === "unavailable") {
     return;
   }
@@ -51,7 +58,7 @@ function preserveAssistantUsage(message: AssistantMessage, pending: NormalizedUs
   const output = pending.output ?? 0;
   const cacheRead = pending.cacheRead ?? 0;
   const cacheWrite = pending.cacheWrite ?? 0;
-  message.usage = {
+  const usage = {
     ...makeZeroUsageSnapshot(),
     input,
     output,
@@ -64,7 +71,8 @@ function preserveAssistantUsage(message: AssistantMessage, pending: NormalizedUs
     totalTokens: pending.total ?? input + output + cacheRead + cacheWrite,
     ...(pending.reasoningTokens !== undefined ? { reasoningTokens: pending.reasoningTokens } : {}),
   };
-  Object.assign(message.usage.cost, pending.cost);
+  message.usage = usage;
+  Object.assign(usage.cost, pending.cost);
 }
 
 /** Owns model facts at event ingress, independently of queued reply delivery. */
@@ -76,12 +84,12 @@ export function createEmbeddedModelState(
   let pending: NormalizedUsage | undefined;
   let lastUsage: NormalizedUsage | undefined;
   let retryUsage: NormalizedUsage | undefined;
-  let completed: AssistantMessage | undefined;
+  let completed: AssistantHistoryMessage | undefined;
   let successfulModelResponse = false;
   let publishedMessageModel: string | undefined;
   const runContext = getAgentRunContext(params.runId);
 
-  const publishMessageModel = (message: AssistantMessage, reset: boolean) => {
+  const publishMessageModel = (message: AssistantHistoryMessage, reset: boolean) => {
     if (reset) {
       publishedMessageModel = undefined;
     }
@@ -108,7 +116,7 @@ export function createEmbeddedModelState(
     publishedMessageModel = identity;
   };
 
-  const recordPendingUsage = (raw: Usage) => {
+  const recordPendingUsage = (raw: HistoryUsage) => {
     const usage = normalizeUsage(raw);
     if (!hasObservedModelUsage(usage)) {
       return;
@@ -149,7 +157,7 @@ export function createEmbeddedModelState(
       });
     }
   };
-  const recordContextAccounting = (message: AssistantMessage, successful: boolean) =>
+  const recordContextAccounting = (message: AssistantHistoryMessage, successful: boolean) =>
     params.onContextAccountingEvent?.({
       kind: "model",
       contextTokens: deriveSessionTotalTokens({ lastCallUsage: normalizeUsage(message.usage) }),
@@ -157,7 +165,7 @@ export function createEmbeddedModelState(
     });
 
   return {
-    captureModelEvent: (evt: AgentSessionEvent): void => {
+    captureModelEvent: (evt: AgentSessionEvent): AssistantSnapshotReasoning | undefined => {
       if (evt.type === "compaction_end") {
         if (evt.outcome.status === "completed" && evt.outcome.willRetry) {
           // Retain the prior call only until the retry completes or reports its own usage.
@@ -165,7 +173,7 @@ export function createEmbeddedModelState(
           retryUsage = lastUsage ?? retryUsage;
           lastUsage = undefined;
         }
-        return;
+        return undefined;
       }
       if (
         evt.type !== "message_start" &&
@@ -173,14 +181,14 @@ export function createEmbeddedModelState(
         evt.type !== "message_end" &&
         evt.type !== "turn_end"
       ) {
-        return;
+        return undefined;
       }
       const message = evt.message;
       if (
         message.role !== "assistant" ||
         isSubscribeTranscriptOnlyOpenClawAssistantMessage(message)
       ) {
-        return;
+        return undefined;
       }
       publishMessageModel(message, evt.type === "message_start");
       switch (evt.type) {
@@ -194,16 +202,16 @@ export function createEmbeddedModelState(
             successfulModelResponse = true;
             recordContextAccounting(message, true);
           }
-          return;
+          return undefined;
         case "message_start":
           pending = undefined;
-          return;
+          return undefined;
         case "message_update":
           // Capture the prepared message; core consumes done/error before message_end.
           if (evt.assistantMessageEvent.type === "text_end") {
             recordPendingUsage(message.usage);
           }
-          return;
+          return undefined;
         case "message_end": {
           recordPendingUsage(message.usage);
           preserveAssistantUsage(message, pending);
@@ -222,7 +230,8 @@ export function createEmbeddedModelState(
           });
           pending = undefined;
           // Context-engine projection can later mutate transcript objects; retain this run's result.
-          completed = applyAssistantDeliveryDirectives(structuredClone(message));
+          const { snapshot, reasoning } = snapshotAssistantMessage(message);
+          completed = applyAssistantDeliveryDirectives(snapshot);
           const sourceReceipt = readAgentAssistantSource(message);
           if (sourceReceipt) {
             bindAgentAssistantSource(completed, sourceReceipt);
@@ -238,8 +247,10 @@ export function createEmbeddedModelState(
           lastUsage ??= message.stopReason === "error" ? retryUsage : undefined;
           retryUsage = undefined;
           recordContextAccounting(message, false);
+          return reasoning;
         }
       }
+      return undefined;
     },
     recordAuxiliaryUsage: (usage: Usage) => recordModelUsage(normalizeUsage(usage)),
     getUsageTotals: () => toNormalizedUsage(totals),

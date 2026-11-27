@@ -79,6 +79,7 @@ export function createChatState<TState extends ChatPageHost>(
     publishStateEffects();
   };
   let attachmentReadsValue = new ChatAttachmentReadLifecycle(attachmentChanged);
+  let attachmentDestination: ReturnType<typeof captureAttachmentDestination> | undefined;
   let publishedDraft: ReturnType<typeof composerDraft.read> | undefined;
   let publishedAttachmentReads: ChatAttachmentReadLifecycle | undefined;
   const composerPersistence = new ChatComposerPersistence(
@@ -125,6 +126,7 @@ export function createChatState<TState extends ChatPageHost>(
       composerPersistence.stop();
       stopChatEffects();
       stateValue = undefined;
+      attachmentDestination = undefined;
       previousTranscriptSources = [];
     },
 
@@ -164,25 +166,22 @@ export function createChatState<TState extends ChatPageHost>(
     attachmentInputProps(state: TState) {
       const reads = attachmentReadsValue;
       const readSignal = reads.readSignal;
+      // File transfers compare destination callbacks before the next Solid frame commits.
+      if (
+        attachmentDestination?.state !== state ||
+        attachmentDestination.reads !== reads ||
+        attachmentDestination.readSignal !== readSignal
+      ) {
+        attachmentDestination = captureAttachmentDestination(state, reads, readSignal);
+      }
       return {
         uploadConfig: state.uploadConfig,
         attachmentReads: reads,
         attachments: state.chatAttachments,
         attachmentLimits: resolveChatAttachmentLimits(state.hello?.policy),
-        getAttachments: () => state.chatAttachments,
+        ...attachmentDestination.callbacks,
         pendingAttachmentReads: reads.pendingReads,
-        getPendingAttachmentReads: () => reads.pendingReads,
         readSignal,
-        onPendingReadsChange: (delta: 1 | -1) => {
-          if (delta === 1 && readSignal === reads.readSignal) {
-            markChatComposerEdit(state);
-          }
-          reads.updatePending(readSignal, delta);
-        },
-        onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
-          state.chatAttachments = next;
-          attachmentChanged();
-        },
       };
     },
 
@@ -269,6 +268,8 @@ export function createChatState<TState extends ChatPageHost>(
           () => {
             if (!state.chatQueuedEdit && hasPrivateDraft(state)) {
               showToast({
+                severity: "error",
+                actionPrimary: true,
                 message: t("chat.privateDraftReload.blocked"),
                 actionLabel: t("chat.privateDraftReload.review"),
                 onAction: () => void reviewPrivateDraft(state),
@@ -278,6 +279,8 @@ export function createChatState<TState extends ChatPageHost>(
             const edit = state.chatQueuedEdit;
             const client = state.client;
             showToast({
+              severity: "error",
+              actionPrimary: true,
               message: t("chat.queue.reloadBlocked"),
               actionLabel: state.reviewQueuedMessageEdit ? t("chat.queue.reviewEdit") : undefined,
               onAction: () => {
@@ -331,8 +334,7 @@ export function createChatState<TState extends ChatPageHost>(
     publishPendingRunState() {
       const state = stateValue;
       if (state?.chatStreamRenderFrame != null) {
-        chatRunPresentation(state).cancelFrame();
-        chatRunPresentation(state).publish();
+        chatRunPresentation(state).publish("immediate", false);
       }
     },
 
@@ -340,6 +342,32 @@ export function createChatState<TState extends ChatPageHost>(
     captureRenderChanges: captureRenderLifecycleChanges,
   };
   return api;
+
+  function captureAttachmentDestination(
+    state: TState,
+    reads: ChatAttachmentReadLifecycle,
+    readSignal: AbortSignal,
+  ) {
+    return {
+      state,
+      reads,
+      readSignal,
+      callbacks: {
+        getAttachments: () => state.chatAttachments,
+        getPendingAttachmentReads: () => reads.pendingReads,
+        onPendingReadsChange: (delta: 1 | -1) => {
+          if (delta === 1 && readSignal === reads.readSignal) {
+            markChatComposerEdit(state);
+          }
+          reads.updatePending(readSignal, delta);
+        },
+        onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
+          state.chatAttachments = next;
+          attachmentChanged();
+        },
+      },
+    };
+  }
 
   function publishComposerDraft() {
     publishedDraft = composerDraft.read();
@@ -456,7 +484,7 @@ export function createChatState<TState extends ChatPageHost>(
       await retryReload?.();
     } catch {
       if (review.isCurrent()) {
-        showToast({ message: t("chat.privateDraftReload.unavailable") });
+        showToast({ severity: "error", message: t("chat.privateDraftReload.unavailable") });
       }
     } finally {
       if (privateDraftReview === review) {
@@ -470,6 +498,8 @@ export function createChatState<TState extends ChatPageHost>(
         hasPrivateDraft(state)
       ) {
         showToast({
+          severity: "error",
+          actionPrimary: true,
           message: t("chat.privateDraftReload.changed"),
           actionLabel: t("chat.privateDraftReload.review"),
           onAction: () => void reviewPrivateDraft(state),
@@ -644,6 +674,7 @@ export function createChatState<TState extends ChatPageHost>(
     }
     const state = stateValue;
     if (state) {
+      state.accessPreferences?.disconnect();
       disposeSelectedSessionMessageSubscription(state);
       releaseChatMediaResourceOwner(state);
       chatRunPresentation(state).cancelFrame();

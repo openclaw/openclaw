@@ -1,12 +1,17 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   assertRequiredWorkerDispatch,
   RequiredWorkerProfileError,
 } from "../../config/required-worker-profile.js";
+import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
+import { getRepositoryIntegration } from "../../plugins/repository-integration-runtime.js";
+import { workerWorkspaceDurabilitySchema } from "../../plugins/worker-retention.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { sessionLog } from "../session-log.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import type { WorkerNodePlacementAuthority } from "./device-placement-eligibility.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { composePlacementAuthorization } from "./placement-authorization.js";
 import {
   createPlacementFailureActions,
@@ -36,10 +41,7 @@ import {
   type WorkerPlacementReclaimOptions,
 } from "./placement-reclaim.js";
 import { reportPlacementTransition } from "./placement-record.js";
-import type {
-  PlacementRecoveryDeps,
-  WorkerPlacementRecoveryBarrier,
-} from "./placement-recovery-contract.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import {
   isFailedWorkerPlacementEnvironmentGone,
   matchesWorkerPlacementTarget,
@@ -54,6 +56,10 @@ import type {
   WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
+import {
+  requireInheritedWorkerProfileAuthorization,
+  snapshotWorkerAllocationProfile,
+} from "./service-validation.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
@@ -68,6 +74,37 @@ type WorkerLocalDispatchBarrier = (params: {
   startDispatch: () => Promise<WorkerDispatchPlacement>;
 }) => Promise<WorkerDispatchPlacement>;
 
+function resolvePairedDeviceDispatch(request: WorkerPlacementDispatchRequest) {
+  if (request.deviceId) {
+    return request;
+  }
+  const profiles = getRuntimeConfig().cloudWorkers?.profiles;
+  const configured =
+    profiles && Object.hasOwn(profiles, request.profileId)
+      ? profiles[request.profileId]
+      : undefined;
+  const inheritedProfile =
+    request.inheritedProfile ??
+    (configured && normalizeCapabilityProviderId(configured.provider) === DEVICE_WORKER_PROVIDER_ID
+      ? {
+          providerId: DEVICE_WORKER_PROVIDER_ID,
+          profileSnapshot: structuredClone(snapshotWorkerAllocationProfile(configured)),
+        }
+      : undefined);
+  const settings = inheritedProfile?.profileSnapshot.settings;
+  if (
+    inheritedProfile?.providerId !== DEVICE_WORKER_PROVIDER_ID ||
+    !isRecord(settings) ||
+    typeof settings.device !== "string" ||
+    !settings.device.trim()
+  ) {
+    return request;
+  }
+  // Internal callers also select named profiles. Keep their configured identity and
+  // inference settings while admitting the same paired-device route as explicit selection.
+  return { ...request, deviceId: settings.device.trim(), inheritedProfile };
+}
+
 type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
   WorkerPlacementReclaimOptions &
   Pick<
@@ -81,7 +118,6 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
     isShuttingDown?: () => boolean;
     runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
     runLocalBarrier: WorkerLocalDispatchBarrier;
-    runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
     runActivationBarrier: WorkerActivationBarrier;
     runMoveBarrier: WorkerPlacementMoveBarrier;
     resolveMoveDestination: (
@@ -101,10 +137,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const { environments, placements } = options;
   const failure = createPlacementFailureActions({ environments, placements });
 
-  const startup = createWorkerPlacementDispatchStartup({
-    ...options,
-    failure,
-  });
+  const startup = createWorkerPlacementDispatchStartup(options);
 
   // Background recovery observes previously requested cleanup; explicit Stop and
   // Move retain their retry contract. Pending-result recovery must inherit this too.
@@ -121,24 +154,44 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   );
 
   const dispatch = async (
-    request: WorkerPlacementDispatchRequest,
+    selection: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
     awaitRequestedHandoff?: (signal?: AbortSignal) => Promise<void>,
   ): Promise<WorkerActiveDispatchPlacement> => {
+    const request = resolvePairedDeviceDispatch(selection);
     using diagnostics = startSlowRequestDiagnostics<string>(
       sessionLog,
       "slow placement dispatch",
       "sessions.dispatch",
       "admission",
     );
+    let dispatchActive = true;
     const assertCurrent = composePlacementAuthorization(authorize, () => {
+      if (!dispatchActive) {
+        throw new Error("Repository dispatch was released");
+      }
       signal?.throwIfAborted();
-      assertRequiredWorkerDispatch(getRuntimeConfig(), request);
+      const config = getRuntimeConfig();
+      assertRequiredWorkerDispatch(config, request);
+      if (request.inheritedProfile?.providerId === DEVICE_WORKER_PROVIDER_ID) {
+        requireInheritedWorkerProfileAuthorization(
+          request.profileId,
+          request.inheritedProfile.providerId,
+          request.inheritedProfile.profileSnapshot.settings,
+          config.cloudWorkers?.profiles?.[request.profileId]?.provider,
+        );
+      }
     });
     assertCurrent();
     let placement: WorkerDispatchPlacement | undefined;
+    const credentialCleanups = new Set<() => Promise<void>>();
+    const retainCredentialCleanup = (revoke: () => Promise<void>) => {
+      credentialCleanups.add(revoke);
+    };
+    // Source owners compose dispatch liveness with the original reader's admission and policy guard.
+    const readNativeCredential = request.readNativeCredential;
     try {
       signal?.throwIfAborted();
       placement = await options.runLocalBarrier({
@@ -190,6 +243,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       }
       diagnostics?.mark("workspacePreparation");
       const workspace = await options.resolveWorkspace(request);
+      if (workspace.kind === "repository" && workspace.repository.diskAuthority) {
+        throw new Error(
+          "Repository disk is already authoritative; resume the original resource instead of allocating a replacement",
+        );
+      }
       if (
         workspace.kind === "device-folder" &&
         (request.deviceId !== workspace.deviceId || request.executionMode !== "worker-turn")
@@ -210,6 +268,28 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           "Repository cloud sessions require a managed-node cloud provider or paired node. Choose one and retry dispatch.",
         );
       }
+      const repositoryIntegration =
+        workspace.kind === "repository" && !request.deviceId
+          ? getRepositoryIntegration()
+          : undefined;
+      if (repositoryIntegration && !readNativeCredential) {
+        throw new Error("Repository worker startup requires current GitHub dispatch admission");
+      }
+      const durability = workerWorkspaceDurabilitySchema
+        .optional()
+        .parse(
+          request.inheritedProfile
+            ? request.inheritedProfile.profileSnapshot.workspaceDurability
+            : getRuntimeConfig().cloudWorkers?.profiles?.[request.profileId]?.workspaceDurability,
+        );
+      if (
+        durability?.mode === "retained-disk" &&
+        (workspace.kind !== "repository" || request.deviceId)
+      ) {
+        throw new Error("Retained disk durability requires a managed cloud repository workspace");
+      }
+      const imageReserve =
+        durability?.mode !== "retained-disk" && repositoryIntegration?.preparedCapacity === "image";
       const projectPath = workspace.kind === "local" ? workspace.path : undefined;
       // Workspace preparation yields; fence the current paired node again before durable provision.
       await startup.validateDevicePlacement(request);
@@ -218,37 +298,52 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         ? await environments.prepareProjectIntent(request.profileId, {
             machineClass: request.machineClass,
             executionMode: request.executionMode,
-            projectPath,
-            ...(workspace.kind === "repository"
-              ? {
-                  repository: {
-                    agentId: request.agentId,
-                    url: workspace.repository.url,
-                    ref: workspace.repository.requestedRef ?? undefined,
-                    baseCommit: workspace.repository.baseCommit ?? undefined,
-                  },
-                }
-              : {}),
+            assertCurrent,
             inherited: request.inheritedProfile,
             signal,
             os: request.os,
-            runSetupScript:
-              workspace.kind === "repository"
-                ? workspace.repository.runSetupScript && request.runSetupScript !== false
-                : request.runSetupScript,
-            setupAuthorized: request.runSetupScript !== undefined,
+            ...(imageReserve
+              ? { imageReserve: true }
+              : {
+                  projectPath,
+                  readNativeCredential,
+                  retainCredentialCleanup,
+                  ...(workspace.kind === "repository"
+                    ? {
+                        repository: {
+                          agentId: request.agentId,
+                          workspaceId: workspace.repository.workspaceId,
+                          url: workspace.repository.url,
+                          ref: workspace.repository.requestedRef ?? undefined,
+                          baseCommit: workspace.repository.baseCommit ?? undefined,
+                        },
+                      }
+                    : {}),
+                  runSetupScript:
+                    workspace.kind === "repository"
+                      ? workspace.repository.runSetupScript && request.runSetupScript !== false
+                      : request.runSetupScript,
+                  setupAuthorized: request.runSetupScript !== undefined,
+                }),
           })
         : undefined;
       assertCurrent();
       diagnostics?.mark("reserveClaim");
-      const prepared = preparedIntent
-        ? await startup.bindPreparedPlacement({
-            request,
-            placement,
-            intent: preparedIntent,
-            assertCurrent,
-          })
-        : undefined;
+      const prepared =
+        preparedIntent && !preparedIntent.retainedPolicy
+          ? await startup.bindPreparedPlacement({
+              request,
+              placement,
+              intent: preparedIntent,
+              assertCurrent,
+              signal,
+              markPhase: diagnostics?.mark,
+              retainCredentialCleanup,
+              onFallback: (replacement) => {
+                placement = replacement;
+              },
+            })
+          : undefined;
       assertCurrent();
       const idempotencyKey =
         request.idempotencyKey ?? `session-dispatch:${request.sessionId}:${placement.generation}`;
@@ -285,11 +380,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             os: request.os,
             runSetupScript: request.runSetupScript,
             admittedIntent: preparedIntent,
+            retainedPolicy: preparedIntent?.retainedPolicy,
             inheritedProfile: request.inheritedProfile,
+            beforeProvision: assertCurrent,
           });
       return await startup.continueProvisionedDispatch({
         markPhase: diagnostics?.mark,
-        request,
+        request: { ...request, readNativeCredential },
+        retainCredentialCleanup,
         placement,
         environment,
         expectedEnvironmentId,
@@ -305,9 +403,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         throw error;
       }
       try {
-        if (placement && (await startup.retainInterruptedProvisioning(placement, error))) {
-          throw error;
-        }
         const current = placement ? await placements.getAsync(request.sessionId) : undefined;
         if (current && current.state !== "local" && current.state !== "reclaimed") {
           if (current.state === "active") {
@@ -335,6 +430,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         }
       }
       throw error;
+    } finally {
+      dispatchActive = false;
+      const cleanup = await Promise.allSettled([...credentialCleanups].map((revoke) => revoke()));
+      if (cleanup.some((result) => result.status === "rejected")) {
+        sessionLog.warn(
+          "Repository dispatch credential cleanup failed; retry GitHub credential cleanup before reusing the worker.",
+        );
+      }
     }
   };
 
@@ -474,12 +577,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     pendingOperations?: WorkerPlacementPendingOperations,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
+    authorize?.();
+    if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
+      throw new RequiredWorkerProfileError(
+        "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
+      );
+    }
     const assertGatewayRecoverySource = (captured?: WorkerDispatchPlacement) => {
-      if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
-        throw new RequiredWorkerProfileError(
-          "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
-        );
-      }
       if (!request.recoverToGateway) {
         return;
       }
@@ -504,7 +608,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       }
     };
     const initial = await placements.getAsync(request.sessionId);
-    authorize?.();
     beforeDrain?.();
     assertGatewayRecoverySource(initial);
     if (initial) {
@@ -519,7 +622,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     );
     return await options.runReclaimPreparation({
       ...request,
-      authorize,
+      authorize: authorize?.assertWorkerLifetime ?? authorize,
       beforeDrain: checkSource,
       pendingOperations,
       run: (reauthorize) =>
@@ -544,7 +647,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     runMoveBarrier: options.runMoveBarrier,
     dispatch,
     reclaimSource: (request, intent, authorize, onTransition) =>
-      reclaimOnce(request, intent, authorize, undefined, onTransition),
+      reclaimOnce(
+        request,
+        intent,
+        authorize?.assertWorkerLifetime ?? authorize,
+        undefined,
+        onTransition,
+      ),
     validateAbandonSource: abandonment.validateAbandonSource,
     abandonSource: abandonment.abandonSource,
     resolveDestination: options.resolveMoveDestination,
@@ -576,8 +685,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     subscribeOrphanWorkspaceChanges: recovery.subscribeOrphanWorkspaceChanges,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
-    isInterruptedTurn: recovery.isInterruptedTurn,
-    resumeProvisioning: startup.resumeProvisioning,
   };
 }
 

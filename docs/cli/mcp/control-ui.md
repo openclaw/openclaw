@@ -18,10 +18,24 @@ For a shorter setup walkthrough covering Settings, the composer path (**+** → 
 Use the page for operator edits and quick inventory. Use `openclaw mcp doctor --probe` or `openclaw mcp probe` when you need live server proof.
 
 Enabled plugin detail pages show **Accounts** for their declared HTTP MCP servers
-with `auth: "oauth"`. Choose **Connect**, complete the provider's sign-in and consent,
+with `auth: "oauth"`. Choose **Sign in**, complete the provider's sign-in and consent,
 then return to OpenClaw. The page refreshes its saved status and shows **Connected**
 after authorization is saved. **Edit** opens the MCP settings page. Sign-in requires
 an administrator connection.
+
+For shared OAuth, an owner can also ask the agent to connect in a direct chat, or
+run `openclaw mcp login <name>` while the Gateway runs. After approval, the next
+turn can use the account without restarting the Gateway. See
+[OAuth workflow](/cli/mcp/transports#oauth-workflow) for public-origin, loopback,
+and pasted-redirect instructions.
+
+If sign-in fails, the dialog distinguishes an expired attempt, provider refusal,
+an unverifiable provider, rejected connection settings, and network failures.
+Close the dialog and follow its recovery message before starting sign-in again.
+Provider-supplied error descriptions, callback codes, and tokens are not shown.
+If credentials were saved before cleanup failed, the dialog says so; check the
+account status before repeating sign-in. Gateway logs record a bounded failure
+category without copying the provider's response into the message.
 
 Plugin declarations work directly after installation and enablement; no duplicate
 `mcp.servers` entry is needed. An explicit `mcp.servers.<name>` entry overrides the
@@ -54,4 +68,4 @@ Notes:
 - command snippets quote server names so unusual names remain copyable in a shell
 - displayed URL-like values are redacted before rendering when they contain embedded credentials
 - the page does not start MCP transports by itself
-- active runtimes may need `openclaw mcp reload`, Gateway config publish, or process restart depending on which process owns the MCP clients
+- OAuth credentials saved by the running Gateway are available on the next agent turn without a reload or restart; other MCP config changes follow their runtime's normal publication lifecycle

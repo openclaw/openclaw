@@ -33,11 +33,11 @@ import {
   retainPluginInstallTransaction,
   withPluginInstallTransactions,
 } from "./install-transaction.js";
-import { isUnavailableNpmTarget } from "./install-types.js";
 import { installPluginFromNpmSpec } from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { listStaleLocalBundledPluginInstallRecords } from "./stale-local-bundled-plugin-install-records.js";
 import { formatClawHubInstallFailure, formatNpmInstallFailure } from "./update-attempt.js";
 import {
   buildLoadPathHelpers,
@@ -86,12 +86,7 @@ export async function syncPluginsForUpdateChannel(params: {
 }): Promise<PluginChannelSyncResult> {
   return await withPluginLifecycleLease(
     { env: params.env, assertCurrent: params.beforePersistentEffect },
-    (lease) =>
-      withPluginInstallTransactions(
-        params,
-        () => lease.assertOwned(),
-        syncPluginsForUpdateChannelWithLease,
-      ),
+    (lease) => withPluginInstallTransactions(params, lease, syncPluginsForUpdateChannelWithLease),
   );
 }
 
@@ -145,36 +140,58 @@ async function syncPluginsForUpdateChannelWithLease(
     logger.warn?.(warning);
   }
 
-  if (params.channel === "dev") {
-    for (const [pluginId, record] of Object.entries(installs)) {
-      const bundledInfo = bundled.get(pluginId);
-      if (!bundledInfo || retainedLinks.has(pluginId) || params.skipIds?.has(pluginId)) {
-        continue;
-      }
-
-      addBundledLoadPath(bundledInfo.localPath);
-
-      const alreadyBundled =
-        record.source === "path" && userPathsEqual(record.sourcePath, bundledInfo.localPath, env);
-      if (alreadyBundled) {
-        continue;
-      }
-
-      next = recordPluginInstall(next, {
-        pluginId,
-        source: "path",
-        sourcePath: bundledInfo.localPath,
-        installPath: bundledInfo.localPath,
-        ...(bundledInfo.contextEngineIds
-          ? { contextEngineIdsByPlugin: { [pluginId]: [...bundledInfo.contextEngineIds] } }
-          : {}),
-        spec: record.spec ?? bundledInfo.npmSpec,
-        version: record.version,
-      });
-      summary.switchedToBundled.push(pluginId);
-      changed = true;
+  const retired = new Set(
+    listStaleLocalBundledPluginInstallRecords({ installRecords: installs, bundled, env }).map(
+      ({ pluginId }) => pluginId,
+    ),
+  );
+  for (const [pluginId, record] of Object.entries(installs)) {
+    if (retainedLinks.has(pluginId) || params.skipIds?.has(pluginId)) {
+      retired.delete(pluginId);
+      continue;
     }
-  } else {
+    const bundledInfo = bundled.get(pluginId);
+    if (params.channel !== "dev" || !bundledInfo) {
+      continue;
+    }
+    if (buildBundledPluginLoadPathAliases(bundledInfo.localPath).length > 0) {
+      // Packaged bundles belong to the release, not a second path installation.
+      retired.add(pluginId);
+      summary.switchedToBundled.push(pluginId);
+      continue;
+    }
+    if (retired.has(pluginId)) {
+      continue;
+    }
+    addBundledLoadPath(bundledInfo.localPath);
+    const alreadyBundled =
+      record.source === "path" && userPathsEqual(record.sourcePath, bundledInfo.localPath, env);
+    if (alreadyBundled) {
+      continue;
+    }
+    next = recordPluginInstall(next, {
+      pluginId,
+      source: "path",
+      sourcePath: bundledInfo.localPath,
+      installPath: bundledInfo.localPath,
+      ...(bundledInfo.contextEngineIds
+        ? { contextEngineIdsByPlugin: { [pluginId]: [...bundledInfo.contextEngineIds] } }
+        : {}),
+      spec: record.spec ?? bundledInfo.npmSpec,
+      version: record.version,
+    });
+    summary.switchedToBundled.push(pluginId);
+    changed = true;
+  }
+  installs = next.plugins?.installs ?? installs;
+  if (retired.size > 0) {
+    installs = Object.fromEntries(
+      Object.entries(installs).filter(([pluginId]) => !retired.has(pluginId)),
+    );
+    next = { ...next, plugins: { ...next.plugins, installs } };
+    changed = true;
+  }
+  if (params.channel !== "dev") {
     const bridges = params.externalizedBundledPluginBridges ?? [];
     for (const bridge of bridges) {
       const targetPluginId = getExternalizedBundledPluginTargetId(bridge);
@@ -269,8 +286,7 @@ async function syncPluginsForUpdateChannelWithLease(
         logger.warn?.(warning);
       };
       const install = async (source: "npm" | "clawhub", spec: string) => {
-        // A catalog digest authenticates only its original npm target, including
-        // a return to that target after a beta miss, never another source/version.
+        // A catalog digest authenticates only its original npm target, never another source/version.
         const expectedIntegrity =
           source === "npm" && spec === npmSpec ? bridge.expectedIntegrity?.trim() : undefined;
         // Each source attempt owns its staged review; a registry fallback cannot inherit approval.
@@ -336,18 +352,16 @@ async function syncPluginsForUpdateChannelWithLease(
       } = await installWithSourceFallback({
         sources,
         install: (source) =>
-          installWithChannelFallback({
-            installSpec: source.spec,
-            fallbackSpec: (source.source === "npm" ? channelNpmSpecs : channelClawHubSpecs)
-              ?.fallbackSpec,
-            install: (spec) => install(source.source, spec),
-            isRetryable: (attempt) =>
-              !attempt.result.ok &&
-              (source.source === "npm"
-                ? isUnavailableNpmTarget(attempt.result)
-                : isUnavailableClawHubTarget(attempt.result)),
-            onFallback,
-          }),
+          source.source === "npm"
+            ? install("npm", source.spec)
+            : installWithChannelFallback({
+                installSpec: source.spec,
+                fallbackSpec: channelClawHubSpecs?.fallbackSpec,
+                install: (spec) => install("clawhub", spec),
+                isRetryable: (attempt) =>
+                  !attempt.result.ok && isUnavailableClawHubTarget(attempt.result),
+                onFallback,
+              }),
         result: (attempt) => attempt.result,
         onFallback,
       });

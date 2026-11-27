@@ -16,6 +16,8 @@ import os from "node:os";
 import { GCProfiler } from "node:v8";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { toTrajectoryToolDefinitions } from "../../src/trajectory/runtime.js";
+import { summarizeGcByKind } from "../lib/gc-profile-summary.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const mode = process.argv[2] ?? "timing";
 const iterations = Number(process.argv[3] ?? 1000);
@@ -48,12 +50,7 @@ for (let iteration = 0; iteration < 100; iteration++) {
 global.gc();
 const inspector = new Session();
 if (mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const gc = new GCProfiler();
 gc.start();
@@ -87,17 +84,7 @@ console.log(
     mainThreadCpuMs: (cpu.user + cpu.system) / 1000,
     sampledBytes,
     samples,
-    gc: [...new Set(collections.map((entry) => entry.gcType))].map((kind) => {
-      const pauses = collections
-        .filter((entry) => entry.gcType === kind)
-        .map((entry) => entry.cost / 1000);
-      return {
-        kind,
-        count: pauses.length,
-        totalMs: pauses.reduce((sum, ms) => sum + ms, 0),
-        maxMs: Math.max(0, ...pauses),
-      };
-    }),
+    gc: summarizeGcByKind(collections),
     loadBefore,
     loadAfter: os.loadavg(),
     memory: process.memoryUsage(),

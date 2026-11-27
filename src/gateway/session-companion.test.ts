@@ -26,6 +26,7 @@ import { trimSessionCompanionExchanges } from "./session-companion-state.js";
 import { createSessionCompanion } from "./session-companion.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
+import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 const runLoop = vi.hoisted(() =>
   vi.fn<
@@ -57,7 +58,8 @@ beforeEach(async () => {
   settleCleanup = observeCompanionCleanup();
 });
 
-const target = { agentId: "main", sessionKey: "agent:main:main" };
+const target = { agentId: "main", sessionKey: "agent:main:main", ownerId: "profile:alice" };
+const shared = { ownerId: "shared" };
 const answer = "Evidence says the build is green.";
 type Companion = ReturnType<typeof createSessionCompanion>;
 function readyContext(text: string | null = "seed question", sessionId = "session-1") {
@@ -316,11 +318,31 @@ it("discards an answer when the backing session identity changes", async () => {
   expect(harness.readContext).toHaveBeenCalledTimes(2);
 });
 
+it("keeps each requester's thread private and clears only the caller's thread", async () => {
+  const harness = createHarness();
+  const alice = target;
+  const bob = { ...target, ownerId: "profile:bob" };
+  await harness.ask("Alice?");
+  await harness.service.ask({ ...bob, question: "Bob?", connId: "conn-bob" });
+
+  expectSaved(harness.service, "Alice?");
+  expect(harness.service.state(bob).exchanges).toEqual([savedExchange("Bob?")]);
+  expectHistory(harness.seededHistory[1], "seed question");
+  expect(JSON.stringify(harness.seededHistory[1])).not.toContain("Alice?");
+
+  harness.service.reset(bob);
+  expect(harness.service.state(bob).exchanges).toEqual([]);
+  expectSaved(harness.service, "Alice?");
+
+  notifyGatewaySessionReset(alice.sessionKey, alice.agentId);
+  expectEmpty(harness.service);
+});
+
 it("deletion preserves qualified ownership despite a different publisher agent", async () => {
   const sessionKey = "agent:work:selected";
   const harness = createHarness();
-  const selected = { agentId: "work", sessionKey };
-  const other = { agentId: "main", sessionKey: "global" };
+  const selected = { agentId: "work", sessionKey, ownerId: "profile:alice" };
+  const other = { agentId: "main", sessionKey: "global", ownerId: "profile:alice" };
   const databaseIdentity = Symbol("session-companion-database");
   await harness.service.ask({ ...selected, question: "Work?", connId: "conn-work" });
   await harness.service.ask({ ...other, question: "Main?", connId: "conn-main" });
@@ -378,6 +400,27 @@ it("builds context once and advances observer note deltas across asks", async ()
   expect(secondHistory.map((message) => message.role)).toEqual(["assistant", "user", "assistant"]);
   expect(harness.run.mock.calls[1]?.[1].runParams.prompt).toBe("Second?");
   expectHistory(secondHistory[0], "second note", "third note");
+});
+
+it("returns and restores every link in a long side answer", async () => {
+  const links = Array.from(
+    { length: 28 },
+    (_, i) => "https://github.com/example/project/pull/" + (100000 + i),
+  ).join("\n");
+  expect(links.length).toBeGreaterThan(1200);
+  const harness = createHarness({ run: async () => links });
+  await expectAnswer(harness.ask("All the links?"), links);
+  expectSaved(harness.service, "All the links?", links);
+});
+
+it("marks an oversized answer without keeping part of the next URL", async () => {
+  const first = "🦞".repeat(12_000);
+  const harness = createHarness({
+    run: async () => first + "\nhttps://example.test/" + "x".repeat(2000),
+  });
+  const { answer: shortened } = await harness.ask("All links?");
+  expect(shortened).toBe(first + "\n\nSide chat shortened this answer. Ask for a smaller section.");
+  expectSaved(harness.service, "All links?", shortened);
 });
 
 it("caps replay by exchange count and UTF-8 bytes", () => {
@@ -443,6 +486,26 @@ it("times out a pending context read and fences it from a replacement ask", asyn
   }
 });
 
+it("delivers an answer after the old one-minute deadline and keeps runner stalls retryable", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const harness = createHarness();
+  harness.run.mockImplementationOnce(async () => {
+    await vi.advanceTimersByTimeAsync(75_000);
+    return { meta: { durationMs: 75_000, finalAssistantVisibleText: answer } };
+  });
+  try {
+    await expectAnswer(harness.ask("Which pull requests?"));
+    expectSaved(harness.service, "Which pull requests?");
+  } finally {
+    vi.useRealTimers();
+  }
+  harness.run.mockResolvedValueOnce({
+    meta: { durationMs: 1, modelFallbackStopReason: "idle_timeout_circuit_breaker" },
+  });
+  await expectFailure(harness.ask("Another?"), "timeout");
+  expectSaved(harness.service, "Which pull requests?");
+});
+
 it("keeps the RPC source and busy slot through timed-out execution cleanup, then permits retry", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const harness = createHarness();
@@ -456,8 +519,12 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
   const respond = vi.fn();
   const pending = Promise.resolve(
     sessionCompanionHandlers["sessions.companion.ask"]!({
-      params: { ...target, question: "Will this time out?" },
-      client: { connId: "conn-1" },
+      params: {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        question: "Will this time out?",
+      },
+      client: { ...sharingPolicyClient({ scopes: [] }), connId: "conn-1" },
       context: { sessionCompanion: harness.service, getRuntimeConfig: () => cfg },
       respond,
     } as never),
@@ -472,11 +539,15 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
     const internalTarget = { agentId, sessionId, sessionKey, storePath };
     expect(loadExactSessionEntry(internalTarget)).toBeDefined();
     await vi.advanceTimersByTimeAsync(60_000);
+    // An executing answer crosses the old wall-clock limit; the runner monitors stalls.
+    expect(run.abortSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
     expect(run.abortSignal?.aborted).toBe(true);
     // A deadline cancels execution, but must not retire its source facts before settlement.
     expect(() => run.preparedRunAdmission?.assertSourceCurrent()).not.toThrow();
     expect(respond).not.toHaveBeenCalled();
-    await expectFailure(harness.ask("Too early?"), "busy");
+    // An unauthenticated RPC client owns the shared thread.
+    await expectFailure(harness.ask("Too early?", shared), "busy");
     finish.resolve();
     await pending;
     expect(respond).toHaveBeenCalledExactlyOnceWith(
@@ -490,17 +561,19 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
       }),
     );
     expect(loadExactSessionEntry(internalTarget)).toBeUndefined();
-    expectEmpty(harness.service);
+    expect(harness.service.state({ ...target, ...shared }).exchanges).toEqual([]);
     vi.useRealTimers();
-    await expectAnswer(harness.ask("Retry?"));
-    expectSaved(harness.service, "Retry?");
+    await expectAnswer(harness.ask("Retry?", shared));
+    expect(harness.service.state({ ...target, ...shared }).exchanges).toEqual([
+      savedExchange("Retry?"),
+    ]);
   } finally {
     finish.resolve();
     await pending;
   }
 });
 
-it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
+it.each(["stop", "reset", "backing-reset", "disposal", "request-abort"] as const)(
   "%s cancels an active ask without committing its late result",
   async (cause) => {
     const pending = createDeferredCore<string>();
@@ -519,6 +592,7 @@ it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
     await harness.ask("What is already known?");
     const active = harness.ask("Will a disconnected request commit?", {
       signal: controller.signal,
+      askId: "active-ask",
     });
     await awaitGateBeforeSettlement(
       started.promise,
@@ -527,7 +601,12 @@ it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
     );
     expect(harness.run).toHaveBeenCalledTimes(2);
 
-    if (cause === "reset") {
+    if (cause === "stop") {
+      harness.service.reset({ ...target, cancelAskId: "old-ask" });
+      expect(harness.run.mock.calls[1]?.[1].runParams.abortSignal?.aborted).toBe(false);
+      harness.service.reset({ ...target, cancelAskId: "active-ask" });
+      expect(harness.run.mock.calls[1]?.[1].runParams.abortSignal?.aborted).toBe(true);
+    } else if (cause === "reset") {
       harness.service.reset(target);
     } else if (cause === "backing-reset") {
       notifyGatewaySessionReset(target.sessionKey, target.agentId);
@@ -538,8 +617,15 @@ it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
     }
     pending.resolve("late answer");
 
-    await expectFailure(active, cause === "backing-reset" ? "context-unavailable" : "unavailable");
-    if (cause === "request-abort") {
+    await expectFailure(
+      active,
+      cause === "backing-reset"
+        ? "context-unavailable"
+        : cause === "stop"
+          ? "stopped"
+          : "unavailable",
+    );
+    if (cause === "request-abort" || cause === "stop") {
       expectSaved(harness.service, "What is already known?", "existing answer");
     } else {
       expectEmpty(harness.service);

@@ -1,4 +1,5 @@
 import type {
+  ChannelIngressContextBinding,
   ChannelIngressDecision,
   ChannelIngressEventInput,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -13,6 +14,9 @@ import type { MattermostChannel } from "./client.js";
 import { mattermostIngressIdentity, normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 import { isDangerousNameMatchingEnabled, resolveAllowlistMatchSimple } from "./runtime-api.js";
+
+export const MATTERMOST_PAIRING_QUEUE_FULL_TEXT =
+  "DM pairing is full, so no pairing request was saved. Ask the bot owner to approve or dismiss pending requests in Settings → Channels → DM access requests, then try again.";
 
 export function normalizeMattermostAllowList(entries: Array<string | number>): string[] {
   const normalized = entries
@@ -79,6 +83,7 @@ export async function resolveMattermostMonitorInboundAccess(params: {
   senderId: string;
   senderName: string;
   channelId: string;
+  threadId?: string;
   kind: "direct" | "group" | "channel";
   groupPolicy: "allowlist" | "open" | "disabled";
   storeAllowFrom?: Array<string | number> | null;
@@ -87,6 +92,7 @@ export async function resolveMattermostMonitorInboundAccess(params: {
   hasControlCommand: boolean;
   eventKind?: ChannelIngressEventInput["kind"];
   mayPair?: boolean;
+  contextBinding?: ChannelIngressContextBinding;
 }) {
   const {
     account,
@@ -110,6 +116,7 @@ export async function resolveMattermostMonitorInboundAccess(params: {
   return await getMattermostRuntime().channel.inbound.ingress.resolveStable({
     channelId: "mattermost",
     accountId: account.accountId,
+    contextBinding: params.contextBinding,
     identity: mattermostIngressIdentity,
     cfg,
     ...(readStoreAllowFrom ? { readStoreAllowFrom } : {}),
@@ -121,6 +128,7 @@ export async function resolveMattermostMonitorInboundAccess(params: {
     conversation: {
       kind,
       id: channelId,
+      threadId: params.threadId,
     },
     event: {
       kind: params.eventKind ?? "message",

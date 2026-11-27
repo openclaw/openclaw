@@ -14,9 +14,11 @@ import {
   GatewayThinkingLevelOptionSchema,
 } from "./model-runtime-options.js";
 import { NonEmptyString, Sha256String } from "./primitives.js";
+import { RecommendedPromptsSchema } from "./recommended-prompts.js";
 import { GitHubSetupHandleSchema } from "./secrets.js";
 import { SessionPermissionModeSchema } from "./sessions-row.js";
 import { SkillsDetailResultSchema } from "./skill-detail.js";
+import { SkillWorkshopDraftSchema } from "./skill-workshop-drafts.js";
 
 export {
   AgentsAvatarGenerateParamsSchema,
@@ -36,10 +38,12 @@ export {
 } from "./agents-create.js";
 export { AgentsListParamsSchema, type AgentsListParams } from "./agents-list-session-placement.js";
 
-export { SkillsSearchParamsSchema, SkillsSearchResultSchema } from "./skills-search.js";
-export type { SkillsSearchParams, SkillsSearchResult } from "./skills-search.js";
+export * from "./skills-search.js";
+export { SkillWorkshopDraftSchema } from "./skill-workshop-drafts.js";
+export type { SkillWorkshopDraft } from "./skill-workshop-drafts.js";
 
 export {
+  ProviderPresentationSchema,
   ModelChoiceSchema,
   ModelRuntimeChoiceSchema,
   ModelCatalogProviderOutcomeSchema,
@@ -47,6 +51,7 @@ export {
   ModelsListResultSchema,
 } from "./model-catalog.js";
 export type {
+  ProviderPresentation,
   ModelChoice,
   ModelRuntimeChoice,
   ModelCatalogProviderOutcome,
@@ -75,6 +80,8 @@ export const AgentSummarySchema = closedObject({
   creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
   name: Type.Optional(NonEmptyString),
+  description: Type.Optional(NonEmptyString),
+  recommendedPrompts: Type.Optional(RecommendedPromptsSchema),
   identity: Type.Optional(
     closedObject({
       name: Type.Optional(NonEmptyString),
@@ -96,8 +103,12 @@ export const AgentSummarySchema = closedObject({
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
   thinkingDefault: Type.Optional(NonEmptyString),
+  /** Only with an agent-level thinkingDefault: the level clearing it would resolve to. */
+  thinkingInheritedDefault: Type.Optional(NonEmptyString),
   // Configured posture for display only, never an authorization decision.
   defaultPermissionMode: Type.Optional(SessionPermissionModeSchema),
+  /** Explicit default for new attended sessions; existing-session Default keeps tool policy. */
+  newSessionPermissionMode: Type.Optional(SessionPermissionModeSchema),
 });
 
 export const AgentsListResultSchema = closedObject({
@@ -156,52 +167,6 @@ export const AgentsDeleteResultSchema = closedObject({
     ),
   ),
   purgeFailed: Type.Optional(Type.Literal(true)),
-});
-
-/** Reads model-provider credential health for one configured agent. */
-export const ModelsAuthStatusParamsSchema = closedObject({
-  refresh: Type.Optional(Type.Boolean()),
-  /** Await cold or stale provider usage using prepared credentials, without refreshing auth. */
-  refreshUsage: Type.Optional(Type.Boolean()),
-  agentId: Type.Optional(Type.String()),
-});
-
-/** Rebuilds Gateway auth state after a credential or selection mutation. */
-export const ModelsAuthRefreshParamsSchema = closedObject({
-  operation: Type.Union([Type.Literal("login"), Type.Literal("logout"), Type.Literal("update")]),
-  agentId: Type.Optional(Type.String()),
-});
-
-/** Saves a model-provider API key without changing model selection. */
-export const ModelsAuthSetApiKeyParamsSchema = Type.Object(
-  {
-    provider: Type.String({ pattern: "\\S" }),
-    apiKey: Type.String({ pattern: "\\S" }),
-    agentId: Type.Optional(Type.String()),
-  },
-  // Existing wire clients may send extra fields; the handler ignores them.
-  { additionalProperties: true },
-);
-
-export const ModelsAuthSetApiKeyResultSchema = closedObject({
-  provider: NonEmptyString,
-  profileId: NonEmptyString,
-  warning: Type.Optional(Type.String()),
-});
-
-/** Removes saved model-provider credentials from one configured agent. */
-export const ModelsAuthLogoutParamsSchema = closedObject({
-  provider: NonEmptyString,
-  profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
-  credentialType: Type.Optional(Type.Literal("api_key")),
-  agentId: Type.Optional(Type.String()),
-});
-
-/** Sets or clears the preferred auth-profile order for one provider and agent. */
-export const ModelsAuthOrderSetParamsSchema = closedObject({
-  provider: NonEmptyString,
-  profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, uniqueItems: true })),
-  agentId: Type.Optional(Type.String()),
 });
 
 /** Runs a bounded live credential probe for one model provider. */
@@ -481,10 +446,12 @@ export const SkillsWorkshopListParamsSchema = closedObject({
 
 export const SkillsWorkshopListResultSchema = closedObject({
   agentId: NonEmptyString,
-  mode: Type.Union([Type.Literal("off"), Type.Literal("auto")]),
+  mode: Type.Union([Type.Literal("off"), Type.Literal("propose"), Type.Literal("auto")]),
   root: NonEmptyString,
   skills: Type.Array(SkillWorkshopSkillSummarySchema),
   archived: Type.Array(SkillWorkshopArchivedSkillSchema),
+  /** Absent from Gateways that predate drafts. */
+  drafts: Type.Optional(Type.Array(SkillWorkshopDraftSchema)),
 });
 
 /** Pages the Workshop change feed newest first. */
@@ -498,12 +465,17 @@ export const SkillsWorkshopChangesResultSchema = closedObject({
   changes: Type.Array(SkillWorkshopChangeSchema),
 });
 
-/** Reads one file of a live Workshop skill, or of a saved version when `versionId` is set. */
+/**
+ * Reads one file of a live Workshop skill, of a saved version when `versionId` is set, or of a
+ * waiting draft when `draftId` is set. `skills.workshop.applyDraft` and `discardDraft` take the
+ * same params with `draftId` required, and answer `SkillsWorkshopChangesResult`.
+ */
 export const SkillsWorkshopReadParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   name: NonEmptyString,
   filePath: Type.Optional(NonEmptyString),
   versionId: Type.Optional(NonEmptyString),
+  draftId: Type.Optional(NonEmptyString),
 });
 
 export const SkillsWorkshopReadResultSchema = closedObject({
@@ -518,6 +490,8 @@ export const SkillsWorkshopArchiveParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   name: NonEmptyString,
   reason: Type.Optional(Type.String({ minLength: 1, maxLength: 1_000 })),
+  /** Undo this restore of an archived skill while preserving its previous default version. */
+  undoRestoreChangeId: Type.Optional(NonEmptyString),
 });
 
 /** Restores a saved version (newest when omitted); the current live copy is versioned first. */
@@ -772,12 +746,6 @@ export type AgentsUpdateResult = Static<typeof AgentsUpdateResultSchema>;
 export type AgentsDeleteParams = Static<typeof AgentsDeleteParamsSchema>;
 export type AgentsDeleteResult = Static<typeof AgentsDeleteResultSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
-export type ModelsAuthSetApiKeyParams = Static<typeof ModelsAuthSetApiKeyParamsSchema>;
-export type ModelsAuthSetApiKeyResult = Static<typeof ModelsAuthSetApiKeyResultSchema>;
-export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
-export type ModelsAuthLogoutParams = Static<typeof ModelsAuthLogoutParamsSchema>;
-export type ModelsAuthOrderSetParams = Static<typeof ModelsAuthOrderSetParamsSchema>;
-export type ModelsAuthRefreshParams = Static<typeof ModelsAuthRefreshParamsSchema>;
 export type AuthProbeStatus = Static<typeof AuthProbeStatusSchema>;
 export type ModelsProbeParams = Static<typeof ModelsProbeParamsSchema>;
 export type ModelsProbeTargetResult = Static<typeof ModelsProbeTargetResultSchema>;

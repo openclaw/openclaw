@@ -7,16 +7,19 @@ import {
 } from "../cli/gateway-cli/pre-bootstrap.js";
 import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { ExitError } from "../runtime.js";
-import { deleteConfigMachineState } from "../state/config-machine-state-write.js";
+import {
+  deleteConfigMachineState,
+  writeConfigMachineState,
+} from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import {
   runStartupConfigPreflight,
@@ -71,7 +74,7 @@ async function expectLeaseReleased(
   heartbeat?.mockClear();
   await vi.advanceTimersByTimeAsync(60_000);
   expect(heartbeat).not.toHaveBeenCalled();
-  expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+  expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
 }
 
 afterEach(() => {
@@ -142,7 +145,7 @@ it.each(["current", "webhook-repair"] as const)(
         await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({ code: 1 });
         expect(await fs.readFile(configPath, "utf8")).toBe(replacement);
       }
-      expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+      expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
     });
   },
 );
@@ -168,6 +171,24 @@ it("records no-pin completion with a read-only included config and skips it on r
   });
 });
 
+it("skips a channel startup completed after Doctor left it pending", async () => {
+  await withPreflightHome(async (_home, _stateDir, configPath) => {
+    const doctorRecord = { telegram: [], feishu: [], "nextcloud-talk": [] };
+    const original = JSON.stringify({
+      gateway: { mode: "local" },
+      plugins: { enabled: false },
+      meta: { migrations: { webhookListeners: doctorRecord } },
+    });
+    await fs.writeFile(configPath, original);
+    writeConfigMachineState(`webhookListeners:${configPath}`, { ...doctorRecord, msteams: [] });
+    const registry = await import("../plugins/doctor-contract-registry.js");
+    const migrations = vi.spyOn(registry, "applyPluginDoctorCompatibilityMigrations");
+    expect((await runStartupConfigPreflight({ gateway: true })).snapshot.valid).toBe(true);
+    expect(migrations).not.toHaveBeenCalled();
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  });
+});
+
 it("keeps startup available when saving no-pin completion fails", async () => {
   await withPreflightHome(async (_home, _stateDir, configPath) => {
     const original = JSON.stringify(localConfig);
@@ -186,38 +207,23 @@ it.each([
   ["localhost", "loopback"],
   ["0.0.0.0", "lan"],
 ] as const)(
-  "leaves legacy bind %s untouched until Doctor repairs it",
+  "repairs supported legacy bind %s during startup and preserves its authored backup",
   async (legacy, canonical) => {
-    await withPreflightHome(async (home, stateDir, configPath) => {
-      const original = JSON.stringify({
-        gateway: { mode: "local", bind: legacy },
-        plugins: { enabled: false },
-      });
+    await withPreflightHome(async (_home, _stateDir, configPath) => {
+      const original = Buffer.from(
+        JSON.stringify({
+          gateway: { mode: "local", bind: legacy },
+          plugins: { enabled: false },
+        }),
+      );
       await fs.writeFile(configPath, original);
 
-      const blocked = await runStartupConfigPreflight({ gateway: true, observe: false });
-
-      expect(blocked.snapshot.valid).toBe(false);
-      expect(blocked.snapshot.legacyIssues).toContainEqual(
-        expect.objectContaining({ path: "gateway.bind" }),
-      );
-      expect(await fs.readFile(configPath, "utf8")).toBe(original);
-      expect(
-        (await fs.readdir(stateDir)).filter((name) => name.startsWith("openclaw.json.")),
-      ).toEqual([]);
-
-      await runDoctorConfigPreflight({
-        observe: false,
-        migrateState: false,
-        migrateLegacyConfig: false,
-        repairPrefixedConfig: true,
-        invalidConfigNote: false,
-      });
-      const ready = await runStartupConfigPreflight({ gateway: true });
+      const ready = await runStartupConfigPreflight({ gateway: true, observe: false });
 
       expect(ready.snapshot.valid).toBe(true);
       expect(ready.snapshot.config.gateway?.bind).toBe(canonical);
       expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.bind).toBe(canonical);
+      expect(await fs.readFile(`${configPath}.bak`)).toEqual(original);
     });
   },
 );
@@ -261,7 +267,7 @@ it("restores the admitted backup after database readiness exceeds the lease TTL"
     expect(delayed).toBe(true);
     expect(result.snapshot.valid).toBe(true);
     expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(backupConfig);
-    expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+    expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
     const completedHeartbeats = heartbeats;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(heartbeats).toBe(completedHeartbeats);

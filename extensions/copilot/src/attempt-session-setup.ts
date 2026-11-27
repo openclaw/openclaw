@@ -4,11 +4,10 @@ import {
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildHarnessVisibleReplyGuidance,
-  buildSkillWorkshopPromptSection,
+  listToolPromptGuidance,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveMainSessionDelegationMode,
   runAgentHarnessLlmInputHook,
-  SKILL_WORKSHOP_TOOL_NAME,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   normalizeUniqueStringEntries,
@@ -23,6 +22,7 @@ import {
 } from "./attempt-types.js";
 import type { AttemptParamsLike, CopilotAgentEndHookParams, ModelRef } from "./attempt-types.js";
 import { createHooksBridge } from "./hooks-bridge.js";
+import { resolveCopilotSessionModel } from "./model-selection.js";
 import { createPermissionBridge, rejectAllPolicy } from "./permission-bridge.js";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
 import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
@@ -127,9 +127,7 @@ export async function createCopilotSessionSetup(params: {
           const sections = [
             COPILOT_HARNESS_IDENTITY,
             promptPolicyResult.toolSchemaDirectoryPrompt,
-            callableTools.has(SKILL_WORKSHOP_TOOL_NAME)
-              ? buildSkillWorkshopPromptSection().join("\n")
-              : undefined,
+            listToolPromptGuidance(callableTools).join("\n\n"),
             delegationGuidance,
             buildHarnessVisibleReplyGuidance({
               sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
@@ -224,7 +222,7 @@ export async function createCopilotSessionSetup(params: {
       availableTools.push(...COPILOT_ASK_USER_AVAILABLE_TOOLS);
     }
     return {
-      model: modelRef.id,
+      ...resolveCopilotSessionModel(modelRef, attemptInput),
       onPermissionRequest: createPermissionBridge(permissionPolicy),
       ...(onUserInputRequest ? { onUserInputRequest } : {}),
       ...(provider.provider ? { provider: provider.provider } : {}),

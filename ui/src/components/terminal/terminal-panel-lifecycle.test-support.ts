@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { preserveDocumentStyle } from "../../test-helpers/preserve-document-style.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalPanelToggleDetail } from "../panel-toggle-contract.ts";
@@ -13,20 +14,18 @@ import {
 } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
-export function panelFixture(timers = false, afterUnmount = () => {}, autoCreate = true) {
+export function panelFixture() {
   const create: CreateGhosttyTerminalMock = vi.fn();
   const tag = defineTestTerminalPanelElement(create);
   const terminals: ReturnType<typeof createTerminalController>[] = [];
-  panelTestStorage(create, timers, afterUnmount);
+  panelTestStorage(create, true);
   beforeEach(() => {
     terminals.length = 0;
-    if (autoCreate) {
-      create.mockImplementation(async () => {
-        const terminal = createTerminalController();
-        terminals.push(terminal);
-        return terminal;
-      });
-    }
+    create.mockImplementation(async () => {
+      const terminal = createTerminalController();
+      terminals.push(terminal);
+      return terminal;
+    });
   });
   return {
     create,
@@ -49,10 +48,9 @@ export function panelTestStorage(
   afterUnmount: () => void | Promise<void> = () => {},
   beforeUnmount = () => {},
 ) {
-  beforeAll(async () => {
-    await import("@openclaw/libterminal/browser");
-  });
+  beforeAll(async () => void (await import("@openclaw/libterminal/browser")));
   beforeEach(async () => {
+    preserveDocumentStyle();
     if (timers) {
       vi.useFakeTimers();
     }
@@ -64,10 +62,7 @@ export function panelTestStorage(
     beforeUnmount();
     document.body.replaceChildren();
     await Promise.resolve();
-    const cleanup = afterUnmount();
-    if (cleanup) {
-      await cleanup;
-    }
+    await afterUnmount();
     create.mockReset();
     vi.unstubAllGlobals();
     if (timers) {

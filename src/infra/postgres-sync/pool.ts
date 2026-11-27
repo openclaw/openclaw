@@ -6,10 +6,8 @@ import {
   type MessagePort,
   Worker,
   threadId,
-  workerData,
 } from "node:worker_threads";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   getDatabaseEngineSelection,
   type DatabaseEngineSelection,
@@ -18,13 +16,15 @@ import { resolveRuntimeProcessEntrypointUrl } from "../runtime-process-url.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import { recordPostgresPoolSelfRoot, trackNativeWorkerForCpu } from "../worker-cpu.js";
 import { workerScriptName } from "../worker-diagnostic-script.js";
+import {
+  closePostgresPool,
+  postgresPoolState as state,
+  type PostgresPoolEndpoint,
+  type PostgresPoolEndpoints,
+} from "./pool-state.js";
 
-export type PostgresPoolEndpoint = { port: MessagePort; signal: SharedArrayBuffer };
-export type PostgresPoolEndpoints = {
-  services: PostgresPoolEndpoint[];
-  allocation: SharedArrayBuffer;
-  nextStep?: string;
-};
+export { closePostgresPool } from "./pool-state.js";
+
 export type PostgresPoolSetup =
   | { host: MessagePort }
   | { connection: import("./protocol.js").BridgeWorkerData };
@@ -34,14 +34,6 @@ export type PostgresPoolWorkerData = {
   peers: PostgresPoolEndpoint[];
 };
 
-type PoolState = {
-  endpoints?: PostgresPoolEndpoints;
-  workers?: Worker[];
-  nextStep?: string;
-  ready: Promise<void>[];
-  refresh?: () => void;
-  failure?: Error;
-};
 type PoolService = {
   channel: MessageChannel;
   signal: SharedArrayBuffer;
@@ -49,40 +41,6 @@ type PoolService = {
 };
 
 const selfRootDiagnostic = createDiagnosticChannel("openclaw.postgres.pool.self-root");
-const inherited: { postgresPool?: PostgresPoolEndpoints } | null = workerData;
-const state = resolveGlobalSingleton<PoolState>(Symbol.for("openclaw.postgresIoPool"), () => ({
-  endpoints: inherited?.postgresPool,
-  workers: undefined,
-  nextStep: undefined,
-  ready: [],
-  refresh: undefined,
-  failure: undefined,
-}));
-
-/** A failed service invalidates this SQL host; its existing task owner retires it. */
-export function recordPostgresPoolFailure(error: Error): void {
-  if (!state.nextStep && !state.endpoints?.nextStep) {
-    state.failure ??= error;
-  }
-}
-
-export function postgresPoolWorkerFailure(): Error | undefined {
-  return state.failure;
-}
-
-export function bindPostgresPool(endpoints: PostgresPoolEndpoints): void {
-  if (state.endpoints) {
-    // Reused carriers keep their original hosts and the connections owned by them.
-    if (state.endpoints === endpoints) {
-      return;
-    }
-    for (const { port } of endpoints.services) {
-      port.close();
-    }
-    return;
-  }
-  state.endpoints = endpoints;
-}
 
 function startPool(): PostgresPoolEndpoints {
   if (!isMainThread && recordPostgresPoolSelfRoot()) {
@@ -259,18 +217,4 @@ export async function preparePostgresPoolForUpdate(nextStep: string): Promise<vo
       workers.forEach((worker) => worker.unref());
     }
   }
-}
-
-/** Executable cleanup calls this after SQL hosts and native backend-close settlement. */
-export async function closePostgresPool(): Promise<void> {
-  const workers = state.workers;
-  state.workers = undefined;
-  for (const { port } of state.endpoints?.services ?? []) {
-    port.close();
-  }
-  state.endpoints = undefined;
-  state.ready = [];
-  state.refresh = undefined;
-  state.failure = undefined;
-  await Promise.all(workers?.map((worker) => worker.terminate()) ?? []);
 }

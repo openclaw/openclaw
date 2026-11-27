@@ -95,6 +95,7 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
   );
   const sources: string[] = [
     workflowPath,
+    ".github/workflows/ci-build-artifacts-testbox.yml",
     ...checkout.with["sparse-checkout"]
       .trim()
       .split(/\r?\n/u)

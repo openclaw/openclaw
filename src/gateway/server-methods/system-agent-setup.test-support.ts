@@ -18,6 +18,7 @@ export function makeContext() {
   return {
     wizardSessions,
     context: {
+      getRuntimeConfig: () => ({}),
       wizardSessions,
       findRunningWizard: () => undefined,
       purgeWizardSession: (id: string) => wizardSessions.delete(id),

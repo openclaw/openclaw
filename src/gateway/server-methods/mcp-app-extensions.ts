@@ -3,8 +3,8 @@ import { ResourceLinkSchema } from "@modelcontextprotocol/core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { McpCatalogTool } from "../../agents/agent-bundle-mcp-catalog.types.js";
 import { runWithSessionMcpRequestSignal } from "../../agents/agent-bundle-mcp-request-context.js";
-import type { McpCatalogTool } from "../../agents/agent-bundle-mcp-types.js";
 import { readMcpAppSettings } from "../../agents/mcp-app-extension-metadata.js";
 import {
   buildMcpAppCanvasPayload,

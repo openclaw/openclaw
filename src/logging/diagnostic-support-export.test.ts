@@ -713,4 +713,56 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain(fakeToken);
     expect(combined).toContain("Attach this zip to the bug report");
   });
+
+  // Windows normalizes trailing whitespace in both directory and file names.
+  it.skipIf(process.platform === "win32")(
+    "preserves a quoted output directory name instead of trimming its whitespace",
+    async () => {
+      const quotedDir = path.join(tempDir, " quoted dir ");
+      fs.mkdirSync(quotedDir);
+      const result = await writeDiagnosticSupportExport({ outputPath: quotedDir });
+
+      // beforeEach freezes the clock at 2026-04-22T12:00:01.000Z.
+      const expectedName = `openclaw-diagnostics-2026-04-22T12-00-01-000Z-${process.pid}.zip`;
+      expect(result.path).toBe(path.join(quotedDir, expectedName));
+      expect(fs.existsSync(path.join(quotedDir, expectedName))).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, " quoted dir"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves leading and trailing whitespace in an explicit output file path",
+    async () => {
+      const literalPath = path.join(tempDir, "spaced bundle ");
+      const result = await writeDiagnosticSupportExport({ outputPath: literalPath });
+
+      expect(result.path).toBe(literalPath);
+      expect(fs.existsSync(literalPath)).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, "spaced bundle"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "writes where a symlinked parent's `..` leads, not to the lexical neighbor",
+    async () => {
+      const physical = path.join(tempDir, "physical");
+      fs.mkdirSync(path.join(physical, "nested"), { recursive: true });
+      fs.symlinkSync(path.join(physical, "nested"), path.join(tempDir, "selected"));
+      const result = await writeDiagnosticSupportExport({
+        outputPath: `${tempDir}/selected/../bundle.zip`,
+      });
+
+      expect(result.path).toBe(path.join(fs.realpathSync(physical), "bundle.zip"));
+      expect(fs.existsSync(result.path)).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, "bundle.zip"))).toBe(false);
+    },
+  );
+
+  it("treats a blank output path as omitted and writes to the default support directory", async () => {
+    const result = await writeDiagnosticSupportExport({ outputPath: "   " });
+
+    const expectedName = `openclaw-diagnostics-2026-04-22T12-00-01-000Z-${process.pid}.zip`;
+    expect(result.path).toBe(path.join(tempDir, "logs", "support", expectedName));
+    expect(fs.existsSync(result.path)).toBe(true);
+  });
 });

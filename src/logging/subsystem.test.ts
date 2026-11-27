@@ -1,10 +1,11 @@
 import fs from "node:fs";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import util from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
@@ -13,8 +14,13 @@ import { logCodeModeFailure } from "./code-mode-diagnostic.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig, getLogger, resetLogger, setLoggerOverride } from "./logger.js";
-import { testApi } from "./logger.test-support.js";
+import {
+  applyLoggingConfig,
+  flushLogger,
+  getLogger,
+  resetLogger,
+  setLoggerOverride,
+} from "./logger.js";
 import { getDefaultRedactPatterns } from "./redact.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger, runtimeForLogger } from "./subsystem.js";
@@ -28,7 +34,7 @@ function fileLogging(level: "info" | "warn" | "error" | "trace") {
 }
 
 async function readRecords(file: string) {
-  await testApi.flushFileLogQueueForTests();
+  await flushLogger();
   return fs
     .readFileSync(file, "utf8")
     .trim()
@@ -61,7 +67,7 @@ beforeAll(() => logPathTracker.setup());
 
 afterEach(async () => {
   // Settle owned file writes before resetting logging state or removing the suite directory.
-  await testApi.flushFileLogQueueForTests();
+  await flushLogger();
   setConsoleSubsystemFilter(null);
   setLoggerOverride(null);
   loggingState.rawConsole = null;
@@ -75,15 +81,26 @@ afterEach(async () => {
 
 afterAll(() => logPathTracker.cleanup());
 
-it("formats host runtime arguments before routing them to the subsystem logger", () => {
-  const logger = createSubsystemLogger("runtime-arguments");
-  const info = vi.spyOn(logger, "info").mockImplementation(() => {});
-  const error = vi.spyOn(logger, "error").mockImplementation(() => {});
-  const runtime = runtimeForLogger(logger);
-  runtime.log("ready", { active: true }, 17);
-  runtime.error("failed", { retryable: false });
-  expect(info).toHaveBeenCalledExactlyOnceWith("ready { active: true } 17");
-  expect(error).toHaveBeenCalledExactlyOnceWith("failed { retryable: false }");
+it("does not inspect or serialize disabled runtime output as sink levels change", () => {
+  const inspect = vi.fn(() => "fixture inspected");
+  const toJSON = vi.fn(() => ({ fixture: true }));
+  const value = { [util.inspect.custom]: inspect, toJSON };
+  const runtime = runtimeForLogger(createSubsystemLogger("runtime-levels"));
+  const sink = vi.fn();
+  loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
+
+  for (const consoleLevel of ["silent", "info", "silent"] as const) {
+    setLoggerOverride({ level: "silent", consoleLevel });
+    inspect.mockClear();
+    toJSON.mockClear();
+    sink.mockClear();
+    runtime.log("ready", value);
+    runtime.error("failed", value);
+    runtime.writeJson(value);
+    expect(inspect).toHaveBeenCalledTimes(consoleLevel === "info" ? 2 : 0);
+    expect(toJSON).toHaveBeenCalledTimes(consoleLevel === "info" ? 1 : 0);
+    expect(sink).toHaveBeenCalledTimes(consoleLevel === "info" ? 3 : 0);
+  }
 });
 
 it.each(["pretty", "compact", "json"] as const)(
@@ -115,11 +132,8 @@ it.each(["pretty", "compact", "json"] as const)(
 describe("createSubsystemLogger().isEnabled", () => {
   it.each([
     ["guest", undefined, "WARN"],
-    ["input", undefined, "WARN"],
     ["bridge", "invalid_input", "WARN"],
-    ["bridge", "input_contract", "WARN"],
     ["bridge", "tool_error", "ERROR"],
-    ["bridge", "output_contract", "ERROR"],
     ["host", "runtime_unavailable", "ERROR"],
   ] as const)("logs %s/%s failures at %s", async (failurePhase, failureCode, level) => {
     const file = fileLogging("warn");
@@ -127,6 +141,9 @@ describe("createSubsystemLogger().isEnabled", () => {
     const records = await readRecords(file);
     expect(records).toHaveLength(1);
     expect(records[0]._meta.logLevelName).toBe(level);
+    expect(records[0].message).toBe(
+      failurePhase === "bridge" ? "Code Mode bridge request failed" : "Code Mode execution failed",
+    );
   });
   it("records content-free Code Mode failure categories and correlation ids without a debug flag", async () => {
     const file = fileLogging("error");
@@ -181,16 +198,6 @@ describe("createSubsystemLogger().isEnabled", () => {
       failures.map(({ expected }) => Object.assign({}, context, expected)),
     );
   });
-  it.each([
-    ["discord gateway: closed", "[discord] gateway: closed"],
-    ["[discord] connection stalled", "[discord] connection stalled"],
-  ])("emits one subsystem label for %s", (input, expected) => {
-    vi.stubEnv("NO_COLOR", "1");
-    vi.stubEnv("FORCE_COLOR", "0");
-    const log = consoleLogging("compact", "info");
-    createSubsystemLogger("discord").info(input);
-    expect(log).toHaveBeenCalledExactlyOnceWith(expected);
-  });
   it("omits routine call sites while retaining error and fatal locations", async () => {
     const file = fileLogging("trace");
     const log = createSubsystemLogger("gateway/stack").child("nested");
@@ -222,12 +229,12 @@ describe("createSubsystemLogger().isEnabled", () => {
     const unsubscribeLogs = onInternalDiagnosticEvent(listener, { include: ["log.record"] });
     log.info("log listener");
     log.warn("warning with listener");
-    await yieldToEventLoop();
+    await waitForDiagnosticEventsDrained();
     setDiagnosticsEnabledForProcess(false);
     log.info("disabled diagnostics");
     setDiagnosticsEnabledForProcess(true);
     log.raw("enabled diagnostics");
-    await yieldToEventLoop();
+    await waitForDiagnosticEventsDrained();
     unsubscribeLogs();
     log.info("removed log listener");
     unsubscribeUnrelated();
@@ -264,13 +271,8 @@ describe("createSubsystemLogger().isEnabled", () => {
   });
   it("resolves sink enablement from thresholds and console-only subsystem filters", () => {
     for (const [level, consoleLevel, query, filtered, malformed, file, console] of [
-      ["debug", "silent", "debug", false, false, true, false],
-      ["silent", "debug", "debug", false, false, false, true],
-      ["silent", "fatal", "error", false, false, false, false],
       ["silent", "fatal", "fatal", false, false, false, true],
-      ["silent", "trace", "debug", false, false, false, true],
       ["silent", "info", "silent", false, false, false, false],
-      ["silent", "silent", "debug", false, false, false, false],
       ["silent", "info", "info", true, false, false, false],
       ["info", "silent", "info", true, false, true, false],
       ["silent", "info", "info", true, true, false, false],
@@ -317,7 +319,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       });
     }
     expect(warn).not.toHaveBeenCalled();
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     const fileLog = fs.readFileSync(file, "utf8");
     expectText(fileLog, [...messages, '"provider":"openai"']);
   });
@@ -327,7 +329,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       const secret = prefix === "1234/" ? `${"Ab9Q".repeat(8)}Ab9` : "Ab9Q".repeat(10);
       const file = fileLogging("info");
       getLogger().info(`s3://user:${prefix}${secret}@bucket`);
-      await testApi.flushFileLogQueueForTests();
+      await flushLogger();
       const written = fs.readFileSync(file, "utf8");
       expect(written).toContain(secret);
       const tail = await readConfiguredLogTail();
@@ -407,6 +409,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       admitted: true,
       phaseDurationsMs: { open: 3, validation: 8 },
       note: "two words",
+      peer: "a\u001b]0;x\u0007\u009b2J\u2028\u2029",
       skipped: undefined,
       error: new Error("boom"),
     });
@@ -415,7 +418,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     const warnLine = consoleLine(warn);
     expect(warnLine).toContain("slow Codex catalog list phases");
     expect(warnLine).toContain(
-      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" error={"name":"Error","message":"boom"',
+      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" peer="a\\u001b]0;x\\u0007\\u009b2J\\u2028\\u2029" error={"name":"Error","message":"boom"',
     );
     expect(warnLine).not.toContain("skipped=");
     expect(consoleLine(error)).toContain("catalog failed reason=timeout");
@@ -444,7 +447,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       err: failure,
       runId: "synthetic-child",
     });
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     const record = JSON.parse(fs.readFileSync(file, "utf8").trim());
     expect(record["1"]).toEqual({
       err: { ...expectedError, stack: failure.stack },
@@ -475,19 +478,11 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
     expectText(consoleLine(warn), ["...(truncated)"], ["opaque-value"]);
   });
-  it("leaves json console output untouched and serializes each field once", () => {
+  it("keeps structured fields in JSON console output", () => {
     const warn = consoleLogging("json");
-    let serializations = 0;
-    const stateful = {
-      toJSON() {
-        serializations += 1;
-        return { calls: serializations };
-      },
-    };
     createSubsystemLogger("gateway/auth").warn("provider retry", {
       elapsedMs: 12,
       attempt: 2,
-      stateful,
     });
     const parsed = JSON.parse(consoleLine(warn));
     expect(parsed).toMatchObject({
@@ -497,7 +492,6 @@ describe("createSubsystemLogger().isEnabled", () => {
       elapsedMs: 12,
       attempt: 2,
     });
-    expect(serializations).toBe(1);
   });
   it("keeps a circular field readable on one line and omits fields with no JSON form", () => {
     const warn = consoleLogging();

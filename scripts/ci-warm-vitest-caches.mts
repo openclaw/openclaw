@@ -3,13 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildChildEnv } from "./ci-run-node-test-shard.mts";
 import { createVitestCacheWarmGroups } from "./lib/ci-node-test-plan.mts";
-import { BUN_UI_TEST_ENV } from "./lib/ci-test-runtime.mts";
+import { BUN_UI_TEST_ENV, resolveCiTestRuntimePolicy } from "./lib/ci-test-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
 // Consumer entrypoints choose their own reusable cache leaves; the planner owns
-// membership for both backend-local protected seeds. Publish both runtimes over
-// that bounded inventory regardless of the consumer workflow's runtime policy.
+// membership for both backend-local protected seeds. Ordinary warming follows
+// ordinary CI; explicit full validation also primes every Node collection.
 const hosted = process.env.CACHE_WARM_PLATFORM === "linux-hosted";
+const runtimePolicy = resolveCiTestRuntimePolicy({
+  OPENCLAW_CI_TEST_RUNTIME_POLICY: process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "bun-all",
+});
 const groups = createVitestCacheWarmGroups(hosted ? "hybrid-hosted" : "full");
 const ui = groups.find((group) => group.shard_name === "cache-warm:ui-package");
 if (!ui?.includePatterns) {
@@ -86,7 +89,7 @@ try {
   } else {
     await collect(process.execPath, ["--import", "tsx", "scripts/ci-run-node-test-shard.mts"], {
       ...baseEnv,
-      OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all",
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy,
       OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(groups.filter((group) => group !== ui)),
     });
   }

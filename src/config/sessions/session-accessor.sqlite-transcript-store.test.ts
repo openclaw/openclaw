@@ -14,6 +14,7 @@ import {
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
 import {
+  readTranscriptEventAtSeqInTransaction,
   readTranscriptEventRows,
   readTranscriptStatsSync,
   readTranscriptStorageRows,
@@ -39,7 +40,7 @@ import {
 } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.worker.js";
 import { messageEvent, timedMessageEvent } from "./transcript-message.test-support.js";
 
 const mediaMessage = (id: string, content: string) =>
@@ -67,7 +68,24 @@ it("captures the replacement's stored rows after media normalization and duplica
     });
     expect(JSON.parse(rows[0]!.eventJson).message).not.toHaveProperty("MediaPaths");
     expect(JSON.parse(rows[1]!.eventJson)).toEqual(unicode);
+    using reads = observeSql(db, ["payload"], (sql) =>
+      /^select .* from "transcript_events" /i.test(sql) ? "payload" : null,
+    );
     expect(rows).toEqual(readTranscriptEventRows(database, scope.sessionId));
+    expect(
+      readTranscriptStorageRows(database, scope.sessionId).map(({ eventJson, seq }) => ({
+        eventJson,
+        seq,
+      })),
+    ).toEqual(rows);
+    expect(readTranscriptEventAtSeqInTransaction(database, scope.sessionId, 0)).toEqual({
+      event: JSON.parse(rows[0]!.eventJson),
+      seq: 0,
+    });
+    // Expanded compressed text stays in JavaScript; only the small identity row crosses SQLite.
+    expect(reads.textBytes.payload).toBe(Buffer.byteLength(rows[1]!.eventJson) * 2);
+    expect(reads.blobBytes.payload).toBeGreaterThan(0);
+    reads.restore();
     using work = observeSql(db, ["identityDeletes"], (sql) =>
       /^delete from "transcript_event_identities" /i.test(sql) ? "identityDeletes" : null,
     );
@@ -228,6 +246,25 @@ function createRewriteFixture(state: OpenClawTestState, events: readonly unknown
   return { db, snapshot, rewrite, scope, write, setKeyOwner };
 }
 
+it("preserves admission for the first exact native identity of an accepted steer", async () => {
+  await withRewriteFixture(({ snapshot, rewrite }) => {
+    const before = snapshot().generation;
+    const metadata = {
+      steerTargetRunId: "active-run",
+      importedFrom: "claude-cli",
+      cliSessionId: "native-session",
+      externalId: "input-1",
+    };
+    const message = { ...rewriteEvents[1].message, __openclaw: metadata };
+    rewrite(rewriteMessage(1, message));
+    expect(snapshot().generation).toBe(before);
+    rewrite(
+      rewriteMessage(1, { ...message, __openclaw: { ...metadata, externalId: "different" } }),
+    );
+    expect(snapshot().generation).not.toBe(before);
+  });
+});
+
 it("preserves the generation when initially recording identical model prompt text", async () => {
   await withRewriteFixture(({ snapshot, rewrite }) => {
     const before = snapshot();
@@ -253,6 +290,7 @@ it.each([
   { name: "content", message: { content: "changed" } },
   { name: "provenance", message: { provenance: { kind: "internal_system" } } },
   { name: "sender authority", metadata: { senderIsOwner: true } },
+  { name: "incomplete native identity", metadata: { externalId: "input-1" } },
   {
     name: "model projection",
     metadata: { modelPromptProjection: { version: 1, text: "changed" } },
@@ -354,7 +392,7 @@ it("keeps oversized metadata current but hides changed text until the real worke
     expect(searchSessionTranscripts({ ...scope, query: "changed" }).hits).toMatchObject([
       { messageId: "user" },
     ]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
+    expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
   });
 });
 

@@ -34,6 +34,9 @@ export function projectCanonicalSessionEntryShape(
       | "sessionFile"
       | "transcriptPath"
       | "conversationLink"
+      | "mainRestartRecovery"
+      | "resumeAfterRestart"
+      | "titleRefinement"
       | "owner"
       | "participants"
       | "participantCount",
@@ -51,11 +54,35 @@ export function projectCanonicalSessionEntryShape(
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
     conversationLink: _retiredConversationLink,
+    titleRefinement: _retiredTitleRefinement,
     owner: _projectedOwner,
     participants: _projectedParticipants,
     participantCount: _projectedParticipantCount,
     ...canonicalValue
   } = value;
+  // Keep only the cycle for startup's upgrade bridge; never restore execution snapshots.
+  // Remove once stable includes the graceful-restart redesign (#185730).
+  const recovery = canonicalValue.mainRestartRecovery;
+  if (
+    isRecord(recovery) &&
+    typeof recovery.cycleId === "string" &&
+    recovery.cycleId.length > 0 &&
+    !recovery.tombstone
+  ) {
+    canonicalValue.mainRestartRecovery = { cycleId: recovery.cycleId };
+  } else {
+    delete canonicalValue.mainRestartRecovery;
+  }
+  // Retired execution-recovery metadata is inert on existing installs.
+  for (const key of Object.keys(canonicalValue)) {
+    if (
+      key === "pendingExecNotifications" ||
+      key === "subagentRecovery" ||
+      key.startsWith("restartRecovery")
+    ) {
+      Reflect.deleteProperty(canonicalValue, key);
+    }
+  }
   const setOptionalField = (key: keyof typeof canonicalValue, normalized: unknown) => {
     if (normalized) {
       canonicalValue[key] = normalized;

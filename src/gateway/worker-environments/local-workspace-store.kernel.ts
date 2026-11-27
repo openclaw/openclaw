@@ -1,15 +1,20 @@
 import { assertWorktreePersistentExecutionCurrentInDatabase } from "../../agents/worktrees/run-lease-store.kernel.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
+import { localWorkspaceDigestBytes } from "./local-workspace-cas.js";
+import {
+  currentLocalWorkspaceSweepEpoch,
+  readLocalWorkspaceSourcePaths,
+  readLocalWorkspaceSweepCandidates,
+} from "./local-workspace-cas.kernel.js";
+import { localWorkspaceFingerprintPatch } from "./local-workspace-publication.js";
 import type {
+  LocalWorkspaceCheckpointReceipt,
+  LocalWorkspaceManifestCheckpoint,
   LocalWorkspaceMutation,
   LocalWorkspaceProjection,
 } from "./local-workspace-store.types.js";
@@ -19,13 +24,45 @@ const nodes = "local_workspace_manifest_nodes";
 const query = (db: EngineConnection) =>
   getNodeSqliteKysely<Pick<DB, typeof table | typeof nodes>>(db);
 
-export function readLocalWorkspaceProjectionInDatabase(db: EngineConnection, id: string) {
-  return tableExists(db, table)
+export function readLocalWorkspaceProjectionInDatabase(
+  db: EngineConnection,
+  id: string,
+): LocalWorkspaceProjection | undefined {
+  const row = tableExists(db, table)
     ? executeSqliteQueryTakeFirstSync(
         db,
         query(db).selectFrom(table).selectAll().where("worktree_id", "=", id),
       )
     : undefined;
+  if (!row) {
+    return undefined;
+  }
+  // This owner writes the rejection envelope in this order; ordinary checkpoints
+  // retain their bytes without decoding the full inventory on every read.
+  let receipt: Extract<LocalWorkspaceCheckpointReceipt, { kind: "rejected" }> | undefined;
+  if (row.checkpoint_json?.startsWith('{"kind":"rejected",')) {
+    // SAFETY: The projection writer owns this rejection envelope and its preserved checkpoint.
+    receipt = JSON.parse(row.checkpoint_json) as Extract<
+      LocalWorkspaceCheckpointReceipt,
+      { kind: "rejected" }
+    >;
+  }
+  return {
+    ...row,
+    ...(row.source_paths_digest
+      ? { source_paths_json: readLocalWorkspaceSourcePaths(db, row.source_paths_digest) }
+      : {}),
+    ...(receipt
+      ? {
+          checkpoint_json: receipt.checkpoint,
+          rejectedResult: {
+            ref: receipt.ref,
+            reason: receipt.reason,
+            manifestRef: receipt.manifestRef,
+          },
+        }
+      : {}),
+  };
 }
 
 export function hasLocalWorkspaceProjectionInDatabase(db: EngineConnection, id: string): boolean {
@@ -42,14 +79,31 @@ export function mutateLocalWorkspaceProjection(
   db: EngineConnection,
   id: string,
   mutation: LocalWorkspaceMutation,
+  preparationEpoch?: number,
 ) {
-  // Mutation admission must not materialize manifests or recovery packs.
+  // A stalled preparation can be collected before its root is published. Reject
+  // before any row change; the next reconciliation prepares the live files again.
+  if (
+    preparationEpoch !== undefined &&
+    preparationEpoch < currentLocalWorkspaceSweepEpoch(db) - 1
+  ) {
+    throw new Error(
+      "Local workspace preparation expired during cleanup; retry the session. Both workspaces were preserved.",
+    );
+  }
+  // Read only the header and, when referenced, its saved checkpoint; never load tree packs.
   const current = tableExists(db, table)
     ? executeSqliteQueryTakeFirstSync(
         db,
         query(db)
           .selectFrom(table)
           .select(["revision", "baseline_ref"])
+          .$if(
+            mutation.kind === "update" &&
+              (mutation.rejectedResult !== undefined ||
+                mutation.manifest?.fingerprintsFromCheckpoint === true),
+            (builder) => builder.select("checkpoint_json"),
+          )
           .$if(mutation.kind === "delete", (builder) =>
             builder.select((eb) =>
               eb
@@ -83,7 +137,11 @@ export function mutateLocalWorkspaceProjection(
       db,
       query(db)
         .insertInto(table)
-        .values({ ...mutation.row, revision: 0 })
+        .values({
+          ...mutation.row,
+          ...(mutation.row.source_paths_digest ? { source_paths_json: "[]" } : {}),
+          revision: 0,
+        })
         .returning(["worktree_id", "revision"]),
     );
   }
@@ -101,41 +159,32 @@ export function mutateLocalWorkspaceProjection(
     return undefined;
   }
   if (mutation.manifest) {
-    const { records, removed, previousRoot, replace } = mutation.manifest;
+    const { previousRoot, treeRoot } = mutation.manifest;
+    if (mutation.manifest.fingerprintsFromCheckpoint) {
+      const receipt = current.checkpoint_json
+        ? (JSON.parse(current.checkpoint_json) as LocalWorkspaceCheckpointReceipt) // SAFETY: Owner-written checkpoint, selected under the mutation revision.
+        : undefined;
+      const checkpoint =
+        receipt?.kind === "rejected"
+          ? receipt.checkpoint
+            ? (JSON.parse(receipt.checkpoint) as LocalWorkspaceManifestCheckpoint) // SAFETY: The rejection owner preserves the original checkpoint bytes.
+            : undefined
+          : receipt;
+      if (
+        checkpoint?.kind !== "scan" ||
+        checkpoint.previousRoot !== previousRoot ||
+        checkpoint.resultingRoot !== mutation.manifest.resultingRoot ||
+        checkpoint.treeRoot !== treeRoot
+      ) {
+        throw new Error("Local workspace checkpoint changed before acceptance");
+      }
+      mutation.manifest.fingerprints = checkpoint.fingerprints;
+    }
     if (current.baseline_ref !== previousRoot) {
       throw new Error("Local workspace manifest baseline changed");
     }
-    if (replace) {
-      executeSqliteQuerySync(db, query(db).deleteFrom(nodes).where("worktree_id", "=", id));
-    } else {
-      for (let offset = 0; offset < removed.length; offset += 500) {
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .deleteFrom(nodes)
-            .where("worktree_id", "=", id)
-            .where("path", "in", removed.slice(offset, offset + 500)),
-        );
-      }
-    }
-    for (let offset = 0; offset < records.length; offset += 500) {
-      executeSqliteQuerySync(
-        db,
-        query(db)
-          .insertInto(nodes)
-          .values(
-            records.slice(offset, offset + 500).map((record) => ({
-              worktree_id: id,
-              path: record.node.path,
-              node_json: JSON.stringify(record),
-            })),
-          )
-          .onConflict((conflict) =>
-            conflict.columns(["worktree_id", "path"]).doUpdateSet((eb) => ({
-              node_json: eb.ref("excluded.node_json"),
-            })),
-          ),
-      );
+    if (!treeRoot) {
+      throw new Error("Local workspace tree must be prepared before acceptance");
     }
   }
   return executeSqliteQueryTakeFirstSync(
@@ -144,9 +193,24 @@ export function mutateLocalWorkspaceProjection(
       .updateTable(table)
       .set({
         ...mutation.patch,
-        ...(mutation.manifest
-          ? { baseline_ref: mutation.manifest.resultingRoot, baseline_json: null }
+        ...(mutation.rejectedResult
+          ? {
+              checkpoint_json: JSON.stringify({
+                kind: "rejected",
+                ...mutation.rejectedResult,
+                checkpoint: current.checkpoint_json ?? null,
+              } satisfies Extract<LocalWorkspaceCheckpointReceipt, { kind: "rejected" }>),
+            }
           : {}),
+        ...(mutation.manifest
+          ? {
+              baseline_ref: mutation.manifest.resultingRoot,
+              baseline_json: null,
+              tree_root_digest: localWorkspaceDigestBytes(mutation.manifest.treeRoot!),
+              ...localWorkspaceFingerprintPatch(mutation.manifest.fingerprints),
+            }
+          : {}),
+        ...(mutation.patch.source_paths_digest ? { source_paths_json: "[]" } : {}),
         worktree_id: id,
         revision: current.revision + 1,
       })
@@ -158,7 +222,7 @@ export function mutateLocalWorkspaceProjection(
 export function readLocalWorkspaceProjectionByPathInDatabase(
   db: EngineConnection,
   projectionPath: string,
-): LocalWorkspaceProjection | null {
+) {
   if (!getAdmittedSqlSchemaFacts(db)) {
     throw new Error("Local workspace lookup requires admitted schema facts.");
   }
@@ -168,7 +232,10 @@ export function readLocalWorkspaceProjectionByPathInDatabase(
   return (
     executeSqliteQueryTakeFirstSync(
       db,
-      query(db).selectFrom(table).selectAll().where("projection_path", "=", projectionPath),
+      query(db)
+        .selectFrom(table)
+        .select(["worktree_id", "agent_id", "session_key", "session_id", "lifecycle_revision"])
+        .where("projection_path", "=", projectionPath),
     ) ?? null
   );
 }
@@ -200,6 +267,22 @@ export function assertLocalWorkspacePersistentExecutionCurrentInDatabase(
 }
 
 export const localWorkspaceReadOperations = {
+  "localWorkspace.readBacking": (input: { id: string }, db: EngineConnection) => ({
+    type: "localWorkspace.readBacking" as const,
+    row: tableExists(db, table)
+      ? executeSqliteQueryTakeFirstSync(
+          db,
+          query(db)
+            .selectFrom(table)
+            .select(["session_key", "projection_path", "baseline_ref"])
+            .where("worktree_id", "=", input.id),
+        )
+      : undefined,
+  }),
+  "localWorkspace.sweepCandidates": (input: { epoch: number }, db: EngineConnection) => ({
+    type: "localWorkspace.sweepCandidates" as const,
+    candidates: readLocalWorkspaceSweepCandidates(db, input.epoch),
+  }),
   "localWorkspace.reviewBase": (input: { id: string }, db: EngineConnection) => ({
     type: "localWorkspace.reviewBase" as const,
     row: tableExists(db, table)

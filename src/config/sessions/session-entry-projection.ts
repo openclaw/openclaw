@@ -14,22 +14,24 @@ type RetiredSessionMetadata = {
 };
 
 export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
+  localWorkspaceHandoff: undefined,
   activeWriterRunId: undefined,
   lastRunId: undefined,
   lifecycleRunId: undefined,
+  lifecycleRestartScope: undefined,
+  resumeAfterRestart: undefined,
+  pendingShellCalls: undefined,
   mainRestartRecovery: undefined,
-  pendingExecNotifications: undefined,
-  restartRecoveryOperatorSource: undefined,
-  restartRecoveryRequesterSource: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
   priorWorkspace: undefined,
-  titleRefinement: undefined,
+  scheduledMemoryParent: undefined,
   sessionDiffBaselineCapture: undefined,
   transcriptByteCompactionLatch: undefined,
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
+  "localWorkspaceHandoff",
   "inheritedGitContributorProfileIds",
   "profileInvolvement",
   "cliHistoryBoundary",
@@ -37,14 +39,15 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "activeWriterRunId",
   "lastRunId",
   "lifecycleRunId",
+  "lifecycleRestartScope",
+  "resumeAfterRestart",
+  "pendingShellCalls",
+  "operatorSources",
   "mainRestartRecovery",
-  "pendingExecNotifications",
-  "restartRecoveryOperatorSource",
-  "restartRecoveryRequesterSource",
   "pendingProjectGitUrl",
   "pendingWorktree",
   "priorWorkspace",
-  "titleRefinement",
+  "scheduledMemoryParent",
   "sessionDiffBaselineCapture",
   "transcriptByteCompactionLatch",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
@@ -65,8 +68,21 @@ function stripPrivateSessionEntryFields(
   for (const key of PRIVATE_SESSION_ENTRY_KEYS) {
     delete projected[key];
   }
-  if (identity === "public" && projected.createdActor) {
-    projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
+  // Existing databases may retain retired execution-recovery snapshots. Never expose them.
+  for (const key of Object.keys(projected)) {
+    if (
+      key === "pendingExecNotifications" ||
+      key === "subagentRecovery" ||
+      key.startsWith("restartRecovery")
+    ) {
+      Reflect.deleteProperty(projected, key);
+    }
+  }
+  if (identity === "public") {
+    delete projected.delegatedOperatorSource;
+    if (projected.createdActor) {
+      projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
+    }
   }
   delete projected.thinkingLevelSelection;
   delete projected.compactionCheckpoints;

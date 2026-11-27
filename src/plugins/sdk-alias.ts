@@ -25,6 +25,7 @@ import {
 } from "./plugin-cache-files.js";
 import type { PluginDirectoryEntry } from "./plugin-cache-files.types.js";
 import {
+  cachePluginSdkAliases,
   getPluginSdkAliasFacts,
   getPluginSdkHostFacts,
   type PluginRuntimeModuleResolution,
@@ -386,7 +387,6 @@ const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
   "agent-runtime-test-contracts",
   "channel-contract-testing",
   "channel-ingress-test-runtime",
-  "channel-target-testing",
   "channel-test-helpers",
   "compiled-subprocess-testing",
   "plugin-test-api",
@@ -947,8 +947,7 @@ export function preparePluginLoaderAliases(
       });
     },
   };
-  cache.sdk.contexts.set(cacheKey, prepared);
-  return prepared;
+  return cachePluginSdkAliases(cache.sdk, prepared);
 }
 
 // SDK and workspace namespaces are canonical above. Bundled package names are

@@ -1,8 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExecutionDecisionWork } from "../../../audit/execution-decision-work.types.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { loadSubagentSpawnModuleForTest } from "./subagent-spawn.test-helpers.js";
@@ -25,13 +24,15 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let createSessionsSpawnTool: typeof import("../../tools/sessions-spawn-tool.js").createSessionsSpawnTool;
   let createAgentsWaitTool: typeof import("../../tools/agents-wait-tool.js").createAgentsWaitTool;
   let finalizeAgentToolAvailability: typeof import("../../agent-tool-availability.js").finalizeAgentToolAvailability;
-  let decisionWork: typeof import("../../../audit/execution-decision-work.js");
   let identityAdmission: typeof import("../../../audit/execution-identity-admission.js");
   let callerContext: typeof import("../../tools/gateway-caller-context.js");
   let observeSwarmSchedulerWork: typeof import("../swarm/swarm-scheduler.lifecycle.test-support.js").observeSwarmSchedulerWork;
   let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
   let restoreUpsert: () => void;
   let forkedEntry: SessionEntry | undefined;
+  let initialForkVisibility: string | undefined;
+  let visibilityDuringFork: "shared" | undefined;
+  let disableDraftsDuringFork: boolean;
   const registerSubagentRun = vi.fn();
   const startQueuedSubagentRun = vi.fn();
   const prepareSubagentSpawn = vi.fn();
@@ -52,7 +53,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     sessions.upsertSessionEntryCore(parentScope(), {
       totalTokens,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
   const expectNotLaunched = () => {
     expect(registerSubagentRun).not.toHaveBeenCalled();
@@ -75,6 +76,17 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   }
   const fork = vi.fn(async (input: unknown) => {
     const params = input as Parameters<ForkSession>[0];
+    if (read()?.visibility === "draft") {
+      initialForkVisibility = read(params.sessionKey)?.visibility ?? "shared";
+    }
+    if (visibilityDuringFork) {
+      await sessions.upsertSessionEntryCore(scope(params.sessionKey), {
+        visibility: visibilityDuringFork,
+      });
+    }
+    if (disableDraftsDuringFork) {
+      config = { ...config, session: { ...config.session, sharing: { drafts: false } } };
+    }
     const result = await forkSession(params);
     if (result.status === "forked") {
       forkedEntry = result.sessionEntry;
@@ -131,7 +143,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     ({ createSessionsSpawnTool } = await import("../../tools/sessions-spawn-tool.js"));
     ({ createAgentsWaitTool } = await import("../../tools/agents-wait-tool.js"));
     ({ finalizeAgentToolAvailability } = await import("../../agent-tool-availability.js"));
-    decisionWork = await import("../../../audit/execution-decision-work.js");
     identityAdmission = await import("../../../audit/execution-identity-admission.js");
     callerContext = await import("../../tools/gateway-caller-context.js");
   });
@@ -149,6 +160,9 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     };
     threadBindingAvailable = false;
     forkedEntry = undefined;
+    initialForkVisibility = undefined;
+    visibilityDuringFork = undefined;
+    disableDraftsDuringFork = false;
     fork.mockClear();
     registerSubagentRun.mockReset().mockResolvedValue(undefined);
     startQueuedSubagentRun.mockReset().mockResolvedValue(false);
@@ -212,6 +226,27 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     vi.doUnmock("./subagent-depth.js");
     vi.doUnmock("../registry/subagent-registry.js");
     vi.doUnmock("../../provider-model-normalization.runtime.js");
+  });
+
+  it("refuses a Draft child after the prepared request's policy is replaced", async () => {
+    await sessions.upsertSessionEntryCore(parentScope(), { visibility: "draft" });
+    const before = children();
+    const expectParentUnchanged = await snapshotParent();
+    const disableDrafts = vi.fn(() => {
+      config = { ...config, session: { ...config.session, sharing: { drafts: false } } };
+    });
+    const result = await spawnSubagentDirect(
+      { task: "Keep this delegated work private", context: "isolated" },
+      { agentSessionKey: parentKey, onSpawnEffectsStart: disableDrafts },
+    );
+    expect(disableDrafts).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("session visibility is disabled: draft"),
+    });
+    expect(children()).toEqual(before);
+    expectNotLaunched();
+    await expectParentUnchanged();
   });
 
   it("cleans up the provisional child when fork parent lookup rejects", async () => {
@@ -306,18 +341,39 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       args: { thread: true },
       parentTokens: undefined,
       preparedMode: "fork",
-      operation: "fork",
+      changedChildVisibility: undefined,
+      disableDrafts: false,
     },
     {
       scenario: "a queued oversized fork starts isolated",
       args: { context: "fork", collect: true, groupId: "receipt-collectors" },
       parentTokens: 150_000,
       preparedMode: "isolated",
-      operation: "create",
+      changedChildVisibility: undefined,
+      disableDrafts: false,
+    },
+    {
+      scenario: "the child is explicitly shared during fork preparation",
+      args: { context: "fork" },
+      parentTokens: undefined,
+      preparedMode: "fork",
+      changedChildVisibility: "shared",
+      disableDrafts: false,
+    },
+    {
+      scenario: "Draft creation is disabled after the child exists",
+      args: { context: "fork" },
+      parentTokens: undefined,
+      preparedMode: "fork",
+      changedChildVisibility: undefined,
+      disableDrafts: true,
     },
   ] as const)(
     "records the committed context when $scenario",
-    async ({ args, parentTokens, preparedMode, operation }) => {
+    async ({ args, parentTokens, preparedMode, changedChildVisibility, disableDrafts }) => {
+      await sessions.upsertSessionEntryCore(parentScope(), { visibility: "draft" });
+      visibilityDuringFork = changedChildVisibility;
+      disableDraftsDuringFork = disableDrafts;
       prepareSubagentSpawn.mockResolvedValue(undefined);
       startQueuedSubagentRun.mockResolvedValue(true);
       threadBindingAvailable = true;
@@ -326,7 +382,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         await setParentTokens(parentTokens);
       }
       const expectParentUnchanged = await snapshotParent();
-      const work: ExecutionDecisionWork[] = [];
       const token = identityAdmission.createExecutionIdentityAdmissionToken("receipt-parent-run", {
         contextId: "receipt-parent-context",
         executionId: "receipt-parent-execution",
@@ -340,72 +395,47 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       });
       const wait = createAgentsWaitTool({ config, agentSessionKey: parentKey, agentId: "main" });
       finalizeAgentToolAvailability([tool, wait]);
-      const clearSink = decisionWork.configureExecutionDecisionWorkSink((item) => {
-        work.push(decisionWork.parseExecutionDecisionWork(item));
-        return true;
-      });
-      try {
-        const result = await callerContext.withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: parentKey,
-            executionIdentityToken: token,
-            receiptAuthority: () => true,
-          },
-          () => tool.execute("spawn-context-receipt", { task: "inspect parent history", ...args }),
-        );
+      const result = await callerContext.withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: parentKey,
+          executionIdentityToken: token,
+          receiptAuthority: () => true,
+        },
+        () => tool.execute("spawn-context-receipt", { task: "inspect parent history", ...args }),
+      );
 
-        expect(result.details).toMatchObject({ status: "accepted", context: preparedMode });
-        if ("collect" in args) {
-          await vi.waitFor(() => expect(startQueuedSubagentRun).toHaveBeenCalled());
-        }
-        const childSessionKey = expectDefined(
-          (result.details as { childSessionKey?: string }).childSessionKey,
-          "accepted child key",
-        );
-        const child = expectDefined(read(childSessionKey), "accepted child entry");
-        expect(prepareSubagentSpawn).toHaveBeenCalledWith(
-          expect.objectContaining({
-            contextMode: preparedMode,
-            childSessionKey,
-          }),
-        );
-        const childHistory = await history(childSessionKey, child.sessionId);
-        if (preparedMode === "fork") {
-          expect(child.forkedFromParent).toBe(true);
-          expectCopiedHistory(childHistory);
-        } else {
-          expect(forkedEntry).toBeUndefined();
-          expect(childHistory).toEqual([]);
-          expect(result.details).toMatchObject({
-            note: expect.stringContaining("Parent context is too large to fork"),
-          });
-        }
-        await expectParentUnchanged();
-        expect(JSON.stringify(result.details)).not.toContain("receipt-parent-context");
-        expect(work).toHaveLength(1);
-        expect(work[0]).toMatchObject({
-          token,
-          receipt: {
-            action: { family: "session", operation },
-            decision: { outcome: "allowed", reasonCode: `session_${operation}_committed` },
-            enforcement: { coverageState: "attribution-only" },
-            source: { owner: "session-action", decisionBoundary: "session-tool.result" },
-          },
-          refs: {
-            target: { namespace: "session", value: JSON.stringify(["main", childSessionKey]) },
-          },
-        });
-      } finally {
-        clearSink();
+      expect(result.details).toMatchObject({ status: "accepted", context: preparedMode });
+      if ("collect" in args) {
+        await vi.waitFor(() => expect(startQueuedSubagentRun).toHaveBeenCalled());
       }
+      const childSessionKey = expectDefined(
+        (result.details as { childSessionKey?: string }).childSessionKey,
+        "accepted child key",
+      );
+      const child = expectDefined(read(childSessionKey), "accepted child entry");
+      expect(initialForkVisibility).toBe("draft");
+      expect(child.visibility).toBe(changedChildVisibility ?? "draft");
+      const childHistory = await history(childSessionKey, child.sessionId);
+      if (preparedMode === "fork") {
+        expect(child.forkedFromParent).toBe(true);
+        expectCopiedHistory(childHistory);
+      } else {
+        expect(forkedEntry).toBeUndefined();
+        expect(childHistory).toEqual([]);
+        expect(result.details).toMatchObject({
+          note: expect.stringContaining("Parent context is too large to fork"),
+        });
+      }
+      await expectParentUnchanged();
+      expect(JSON.stringify(result.details)).not.toContain("receipt-parent-context");
     },
   );
 
   it.each(["no replacement", "session id", "lifecycle revision"] as const)(
-    "cleans up the committed fork after source closure with %s",
+    "cleans up the committed fork after cancellation with %s",
     async (replacement) => {
-      let active = true;
+      const cancellation = new AbortController();
       let childKey: string | undefined;
       let successor: SessionEntry | undefined;
       let successorHistory: Awaited<ReturnType<typeof sessions.loadTranscriptEvents>> = [];
@@ -431,20 +461,20 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
             successor = read(childSessionKey);
             successorHistory = await sessions.loadTranscriptEvents(successorScope);
           }
-          active = false;
+          cancellation.abort(new Error("fork spawn cancelled"));
           return { rollback };
         },
       );
       const tool = createSessionsSpawnTool({ config, agentSessionKey: parentKey });
-      const result = await callerContext.withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey: parentKey, receiptAuthority: () => active },
-        () =>
-          tool.execute("closed-fork-source", { task: "inspect parent history", context: "fork" }),
+      const result = await tool.execute(
+        "cancelled-fork-source",
+        { task: "inspect parent history", context: "fork" },
+        cancellation.signal,
       );
 
       expect(result.details).toMatchObject({
         status: "error",
-        error: "tool invocation authority is no longer active",
+        error: "fork spawn cancelled",
       });
       expectNotLaunched();
       expect(rollback).toHaveBeenCalledOnce();

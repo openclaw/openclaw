@@ -47,6 +47,7 @@ type ActionRun = {
 };
 type Remote = {
   latest: string | null;
+  publicManifests?: Record<string, string>;
   releases: Record<string, Release>;
   calls: string[][];
   uploads: number;
@@ -210,7 +211,8 @@ function fixture(initial: Partial<Remote> = {}, mutate?: (state: Remote) => void
   writeFileSync(
     join(bin, "gh"),
     `#!/usr/bin/env node
-const fs = require('node:fs');
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 const args = process.argv.slice(2);
 const file = process.env.GH_MOCK_STATE;
 const state = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -225,7 +227,7 @@ const metadata = (tag, entry) => ({databaseId: 42, tagName: tag, isDraft: entry.
     .map(name => {
       const bytes = name === 'latest.json' ? entry.manifest : name === 'SHA256SUMS.linux-app.txt' ? entry.checksums :
         name.endsWith('-linux.json') ? entry.immutable : undefined;
-      return {name, digest: entry.digests?.[name] ?? (bytes === undefined ? undefined : 'sha256:' + require('node:crypto').createHash('sha256').update(bytes).digest('hex')),
+      return {name, digest: entry.digests?.[name] ?? (bytes === undefined ? undefined : 'sha256:' + createHash('sha256').update(bytes).digest('hex')),
         state: entry.assetState ?? 'uploaded', size: entry.assetSize ?? (bytes === undefined ? 1024 : Buffer.byteLength(bytes))};
     })});
 if (args[0] === 'api') {
@@ -307,6 +309,20 @@ if (args[0] === 'api') {
 } else {
   fail('Unexpected command: ' + args.join(' '));
 }
+`,
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    join(bin, "curl"),
+    `#!/usr/bin/env node
+import fs from 'node:fs';
+const state = JSON.parse(fs.readFileSync(process.env.GH_MOCK_STATE, 'utf8'));
+const url = new URL(process.argv.at(-1));
+const parts = url.pathname.split('/');
+const tag = parts[4] === 'latest' ? state.latest : parts[5];
+const bytes = state.publicManifests?.[url.pathname] ?? state.releases[tag]?.manifest;
+if (url.origin !== 'https://github.com' || !bytes) process.exit(22);
+process.stdout.write(bytes);
 `,
     { mode: 0o755 },
   );
@@ -641,6 +657,24 @@ it.each(["current", "missing", "older", "replaced-release", "replaced-asset"])(
     );
     expect(remote.read().uploads).toBe(0);
     expect(remote.read().requests ?? []).toHaveLength(kind === "current" ? 0 : 1);
+  },
+);
+
+it.each(["releases/latest/download/latest.json", `releases/download/${sourceTag}/latest.json`])(
+  "does not report Linux complete when only the public %s is stale",
+  (path) => {
+    const remote = fixture(
+      { publicManifests: { [`/${repository}/${path}`]: manifest("2026.9.3") } },
+      (state) => {
+        const source = publishedRelease();
+        source.manifest = source.immutable;
+        publishFixture(state, source);
+      },
+    );
+    const dispatch = remote.dispatch();
+    expect(dispatch.status, dispatch.stderr).toBe(0);
+    expect(dispatch.evidence.state).toBe("request-dispatched");
+    expect(dispatch.stderr).toContain(path);
   },
 );
 

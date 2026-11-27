@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { createRoot } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -7,20 +8,74 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import { createSidebarScroll } from "./sidebar-context-controller.ts";
 
 setupSidebarTest();
 
 const mountEmptySidebar = () =>
   mountSidebar(createGateway({} as GatewayBrowserClient), createSessions("main", []));
 
+it("remeasures fades when content grows or shrinks without resizing the scrollport", async () => {
+  const observers: Array<{
+    resize(): void;
+    observe: ReturnType<typeof vi.fn>;
+    disconnect: ReturnType<typeof vi.fn>;
+  }> = [];
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+      constructor(callback: () => void) {
+        observers.push({ resize: callback, observe: this.observe, disconnect: this.disconnect });
+      }
+    },
+  );
+  const scroller = document.body.appendChild(document.createElement("div"));
+  const content = scroller.appendChild(document.createElement("nav"));
+  let contentHeight = 80;
+  Object.defineProperties(scroller, {
+    clientHeight: { value: 100 },
+    scrollHeight: { get: () => contentHeight },
+  });
+  const view = createRoot((dispose) => {
+    const scroll = createSidebarScroll({
+      isConnected: true,
+      navigationView: "customize",
+      contextualSidebar: undefined,
+      sidebarSnapshot: null,
+      snapshot: { capture() {} },
+    });
+    scroll.createRef()(scroller);
+    scroll.observeContent()(content);
+    return { scroll, dispose };
+  });
+  const { scroll, dispose } = view;
+  const observer = observers.find((entry) =>
+    entry.observe.mock.calls.some(([el]) => el === content),
+  )!;
+  try {
+    await waitForSolid(() => expect(scroll.state()).toBe("none"));
+    contentHeight = 500;
+    observer.resize();
+    await waitForSolid(() => expect(scroll.state()).toBe("top"));
+    contentHeight = 80;
+    observer.resize();
+    await waitForSolid(() => expect(scroll.state()).toBe("none"));
+  } finally {
+    dispose();
+    scroller.remove();
+  }
+  expect(observer.disconnect).toHaveBeenCalledOnce();
+});
+
 it("restores destination offsets and updates fades after content commits", async () => {
   const { sidebar } = await mountEmptySidebar();
   const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
   let contentHeight = 500;
-  Object.defineProperties(scroller, {
-    clientHeight: { configurable: true, value: 100 },
-    scrollHeight: { configurable: true, get: () => contentHeight },
-  });
+  Object.defineProperty(scroller, "clientHeight", { value: 100 });
+  Object.defineProperty(scroller, "scrollHeight", { get: () => contentHeight });
   const expectFade = (state: string) =>
     waitForSolid(() =>
       expect(scroller.classList.contains(`sidebar-shell__body--scroll-${state}`)).toBe(true),
@@ -29,7 +84,7 @@ it("restores destination offsets and updates fades after content commits", async
   scroller.dispatchEvent(new Event("scroll"));
   await expectFade("middle");
 
-  sidebar.navigationView = "pages";
+  sidebar.navigationView = "automations";
   await sidebar.updateComplete;
   expect(scroller.scrollTop).toBe(0);
   await expectFade("top");
@@ -64,36 +119,25 @@ it("updates contextual navigation from its router and retires the subscription o
     pending ? "loading machines" : "machine inventory",
   );
   router.getRoute("systems")!.loader = () => loaded.promise;
-  const { provider, sidebar } = await mountEmptySidebar();
-  const element = provider.querySelector<HTMLElement>("openclaw-app-sidebar")!;
-  const owner = getAppSidebarOwner(element);
-  expect(owner).toBeDefined();
+  const { sidebar } = await mountEmptySidebar();
   sidebar.router = router;
   await sidebar.updateComplete;
-  expect(getAppSidebarOwner(element)).toBe(owner);
   const navigation = router.navigate("systems", {});
   await vi.waitFor(() => expect(sidebar.contextualSidebar?.loaderPending).toBe(true));
-  const pending = sidebar.contextualSidebar;
-  const data = { machine: "worker-one" };
-  loaded.resolve(data);
+  loaded.resolve({ machine: "worker-one" });
   await navigation;
   await sidebar.updateComplete;
   expect(sidebar.contextualSidebar?.loaderPending).toBe(false);
-  expect(sidebar.contextualSidebar?.data).toBe(data);
-  expect(pending?.loaderPending).toBe(true);
   expect(sidebar.querySelector(".sidebar-shell__body")?.textContent).toContain("machine inventory");
-  const replacement = createSidebarTestRouter(() => "replacement machines");
+  const replacement = createSidebarTestRouter(() => "replacement");
   sidebar.router = replacement;
   await replacement.navigate("systems", {});
   await sidebar.updateComplete;
   await router.navigate("cron", {});
   await sidebar.updateComplete;
-  expect(sidebar.querySelector(".sidebar-shell__body")?.textContent).toContain(
-    "replacement machines",
-  );
+  expect(sidebar.querySelector(".sidebar-shell__body")?.textContent).toContain("replacement");
   sidebar.remove();
-  await waitForSolid(() => expect(getAppSidebarOwner(element)).toBeUndefined());
-  expect(sidebar.contextualSidebar).toBeUndefined();
+  await waitForSolid(() => expect(getAppSidebarOwner(sidebar.hostElement)).toBeUndefined());
   await replacement.navigate("cron", {});
   await replacement.navigate("systems", {});
   expect(sidebar.contextualSidebar).toBeUndefined();

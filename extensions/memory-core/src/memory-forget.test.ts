@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -89,14 +92,20 @@ describe("memory forget", () => {
       const observedRequest = { ...request, forgetReadObservation: counters.buffer };
       return plan(observedRequest);
     });
-    const allSpy = vi.spyOn(StatementSync.prototype, "all");
-    const iterateSpy = vi.spyOn(StatementSync.prototype, "iterate");
-    const hostPlannerReads = () =>
-      [...allSpy.mock.contexts, ...iterateSpy.mock.contexts].filter(
-        (statement) =>
-          statement instanceof StatementSync &&
-          statement.sourceSQL.includes('left join "memory_index_chunk_provenance"'),
-      ).length;
+    let hostPlannerReads = 0;
+    const readSpies = (["all", "iterate"] as const).map((method) => {
+      const original = StatementSync.prototype[method];
+      return vi.spyOn(StatementSync.prototype, method).mockImplementation(
+        new Proxy(original, {
+          apply(target, statement: StatementSync, args) {
+            if (statement.sourceSQL.includes('left join "memory_index_chunk_provenance"')) {
+              hostPlannerReads++;
+            }
+            return Reflect.apply(target, statement, args);
+          },
+        }),
+      );
+    });
     try {
       // Warm the worker, then measure only preview and apply.
       for (let pass = 0; pass < 2; pass++) {
@@ -106,13 +115,11 @@ describe("memory forget", () => {
       const calibration = db.prepare(
         'select chunk.id from memory_index_chunks as chunk left join "memory_index_chunk_provenance" as provenance on provenance.chunk_id = chunk.id where 0',
       );
-      allSpy.mockClear();
-      iterateSpy.mockClear();
+      hostPlannerReads = 0;
       expect(calibration.all()).toEqual([]);
       expect([...calibration.iterate()]).toEqual([]);
-      expect(hostPlannerReads()).toBe(2);
-      allSpy.mockClear();
-      iterateSpy.mockClear();
+      expect(hostPlannerReads).toBe(2);
+      hostPlannerReads = 0;
       for (let slot = 2; slot < counters.length; slot++) {
         Atomics.store(counters, slot, 0);
       }
@@ -136,10 +143,9 @@ describe("memory forget", () => {
       expect(fetchedRows).toBe(68);
       expect(fetchedBytes).toBeLessThan(16_384);
       expect([Atomics.load(counters, 4), Atomics.load(counters, 5)]).toEqual([2, 2]);
-      expect(hostPlannerReads()).toBe(0);
+      expect(hostPlannerReads).toBe(0);
     } finally {
-      allSpy.mockRestore();
-      iterateSpy.mockRestore();
+      readSpies.forEach((spy) => spy.mockRestore());
       dispatch.mockRestore();
     }
   });
@@ -290,7 +296,16 @@ describe("memory forget", () => {
     const content = `${retainedMemory}- Candidate: ${quotation}\r\n`;
     const retainedCorpus = "[main/sessions/main/survivor#L1] User: Keep this unrelated fact.\n";
     await fs.mkdir(corpusDir, { recursive: true });
-    await fs.writeFile(memoryPath, content);
+    const write = createOpenClawCodingTools({
+      workspaceDir: h.workspaceDir,
+      config: h.cfg,
+      senderIsOwner: true,
+      isTurnTainted: () => true,
+    }).find((tool) => tool.name === "write");
+    await expectDefined(write, "write tool").execute("tainted-write", {
+      path: "MEMORY.md",
+      content,
+    });
     await fs.writeFile(
       corpusPath,
       `[main/sessions/main/target#L1] ${quotation}\r\n${retainedCorpus}`,
@@ -309,6 +324,10 @@ describe("memory forget", () => {
     const report = await forget("target");
     expect(report).toEqual({ ...preview, dryRun: false });
     expect(await readText(memoryPath)).toBe(retainedMemory);
+    // The scrub publishes new bytes but must not lift MEMORY.md quarantine.
+    await expect(
+      readMemoryArtifactProvenance({ workspaceDir: h.workspaceDir, relativePath: "MEMORY.md" }),
+    ).resolves.toMatchObject({ originClass: "untrusted" });
     expect(await readText(corpusPath)).toBe(retainedCorpus);
     expect(await h.readEntries(DREAMING_MEMORY_BACKUP_NAMESPACE)).toEqual([backup(retainedMemory)]);
   });

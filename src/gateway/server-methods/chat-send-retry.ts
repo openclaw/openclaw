@@ -37,13 +37,6 @@ export function classifyAcceptedChatSendFailure(params: {
   return params.phase === "post-ack" ? "retry" : "client-retry";
 }
 
-/** Preserve same-ID recovery unless execution may already have produced side effects. */
-export function shouldRetainAcceptedChatSendRetryIdentity(
-  disposition: AcceptedChatSendFailureDisposition,
-): boolean {
-  return disposition !== "reconcile";
-}
-
 /** Wait for the exact failed projection before another accepted-send dispatch attempt. */
 export async function waitForAcceptedChatSendRetry(
   scope: Omit<SessionTranscriptReadScope, "sessionId">,

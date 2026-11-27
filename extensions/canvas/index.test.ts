@@ -1,4 +1,4 @@
-import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import canvasPlugin from "./index.js";
@@ -34,77 +34,52 @@ function registerCanvas(config: OpenClawPluginApi["config"] = {}) {
     registerNodeCliFeature: vi.fn<OpenClawPluginApi["registerNodeCliFeature"]>(),
     registerNodeInvokePolicy: vi.fn<OpenClawPluginApi["registerNodeInvokePolicy"]>(),
   };
-  canvasPlugin.register?.(
-    createTestPluginApi({ id: "canvas", name: "Canvas", config, ...registrations }),
-  );
+  canvasPlugin.register?.(createTestPluginApi({ config, ...registrations }));
   return registrations;
 }
 
 describe("Canvas plugin entry", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("registers the macOS-only presenter surface and command policy", () => {
-    const api = registerCanvas();
-    const [policy] = api.registerNodeInvokePolicy.mock.calls;
-    assert(policy);
-    expect(policy[0]).toMatchObject({
-      commands: ["canvas.present", "canvas.hide", "canvas.navigate"],
-      defaultPlatforms: ["macos"],
-    });
-    expect(api.registerHttpRoute).not.toHaveBeenCalled();
-    expect(api.registerService).not.toHaveBeenCalled();
-    expect(api.registerWidgetPresenter).toHaveBeenCalledExactlyOnceWith(
+  it.each([undefined, false])("gates the presenter with host.enabled=%s", (enabled) => {
+    const api = registerCanvas(
+      enabled === undefined
+        ? {}
+        : { plugins: { entries: { canvas: { config: { host: { enabled } } } } } },
+    );
+    expect(api.registerNodeInvokePolicy).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        target: "node_panel",
-        description: "Show on a connected device panel",
-        availability: expect.any(Function),
-        present: expect.any(Function),
+        commands: ["canvas.present", "canvas.hide", "canvas.navigate"],
+        defaultPlatforms: ["macos"],
       }),
     );
-  });
-
-  it("uses host.enabled as the presenter gate", () => {
-    const api = registerCanvas({
-      plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
-    });
     expect(api.registerHttpRoute).not.toHaveBeenCalled();
-    expect(api.registerWidgetPresenter).not.toHaveBeenCalled();
+    expect(api.registerService).not.toHaveBeenCalled();
+    expect(api.registerWidgetPresenter.mock.calls.map(([presenter]) => presenter.target)).toEqual(
+      enabled === false ? [] : ["node_panel"],
+    );
   });
 
   it("defers Canvas CLI and tool implementations until use", async () => {
     const api = registerCanvas();
-    expect(api.registerTool).toHaveBeenCalledTimes(1);
-    const [toolRegistration] = api.registerTool.mock.calls;
-    assert(toolRegistration);
-    const [toolFactory, opts] = toolRegistration;
-    expect(opts?.name).toBeUndefined();
-    expect(api.registerNodeCliFeature).toHaveBeenCalledTimes(1);
+    const toolFactory = api.registerTool.mock.calls[0]?.[0];
+    assert(typeof toolFactory === "function");
     expect(mocks.registerNodesCanvasCommands).not.toHaveBeenCalled();
     expect(mocks.createCanvasTool).not.toHaveBeenCalled();
-    const [cliRegistration] = api.registerNodeCliFeature.mock.calls;
-    assert(cliRegistration);
-    await cliRegistration[0]({
+    const registerCli = api.registerNodeCliFeature.mock.calls[0]?.[0];
+    assert(registerCli);
+    await registerCli({
       program: {} as never,
       parentPath: ["nodes"],
       config: {},
-      workspaceDir: undefined,
       logger: { info() {}, warn() {}, error() {}, debug() {} },
     });
     expect(mocks.registerNodesCanvasCommands).toHaveBeenCalledTimes(1);
-    if (typeof toolFactory !== "function") {
-      throw new Error("expected legacy canvas factory");
-    }
-    const tool = toolFactory({
-      config: {},
-      workspaceDir: "/tmp/workspace",
-      sessionKey: "agent:main:canvas",
-      sessionId: "session-1",
-      agentId: "agent-1",
-    });
-    expect(Array.isArray(tool)).toBe(false);
+    const tool = toolFactory({ sessionKey: "agent:main:canvas" });
+    assert(tool && !Array.isArray(tool));
     expect(tool).toMatchObject({ name: "canvas", resultContentSource: "network" });
     expect(mocks.createCanvasTool).not.toHaveBeenCalled();
-    await (tool as AnyAgentTool).execute("tool-call", { action: "hide" });
+    await tool.execute("tool-call", { action: "hide" });
     expect(mocks.createCanvasTool).toHaveBeenCalledWith({ agentSessionKey: "agent:main:canvas" });
     expect(mocks.toolExecute).toHaveBeenCalledWith("tool-call", { action: "hide" });
   });

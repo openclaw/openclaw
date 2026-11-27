@@ -9,6 +9,7 @@ import type { PluginRecord } from "../plugins/registry.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import * as cli from "./plugins-cli-test-helpers.js";
+import { expectInstallRecordsWrittenWithLease } from "./plugins-cli.update.test-support.js";
 
 const {
   applyPluginUninstallDirectoryRemovalMock: removeDirectoryMock,
@@ -57,17 +58,6 @@ function configureNamedPlugins(plugins: Array<{ id: string; name: string }>) {
 
 function expectRuntimeLogIncludes(fragment: string) {
   expect(cli.pluginsCliRuntimeLogs.join("\n")).toContain(fragment);
-}
-
-function expectRecords(records: unknown, config: unknown) {
-  expect(writeRecordsMock).toHaveBeenCalledWith(
-    records,
-    expect.objectContaining({
-      config,
-      filePath: expect.any(String),
-      lease: expect.anything(),
-    }),
-  );
 }
 
 function configureAlphaInstall() {
@@ -179,7 +169,15 @@ it("keeps files with the deprecated alias and retains an inherited lease through
     expect(cli.pluginCliConfigMock()).toEqual(nextConfig);
     expect(writeRecordsMock).toHaveBeenCalledWith(
       {},
-      expect.objectContaining({ lease, config: nextConfig }),
+      expect.objectContaining({
+        lease: {
+          databasePath,
+          stateLease: expect.toSatisfy((stateLease: unknown) => stateLease === lease.stateLease),
+          assertCurrent: expect.any(Function),
+          assertOwned: expect.any(Function),
+        },
+        config: nextConfig,
+      }),
     );
     expect(cli.refreshPluginRegistryMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -214,7 +212,7 @@ it("uninstalls the exact plugin id when an earlier plugin uses it as a display n
   ]);
   await uninstall("calendar", "--force", "--keep-files");
 
-  expectRecords(
+  expectInstallRecordsWrittenWithLease(
     {
       "unrelated-plugin": { source: "npm", spec: "unrelated-plugin@1.0.0" },
     },
@@ -233,7 +231,9 @@ it("rejects an ambiguous display name before planning or mutating installed plug
   ]);
   await expect(uninstall("calendar", "--force")).rejects.toThrow("__exit__:1");
 
-  expect(cli.runtimeErrors.at(-1)).toContain('Plugin uninstall target "calendar" is ambiguous');
+  expect(cli.runtimeErrors.at(-1)).toContain(
+    'Plugin uninstall target "calendar" is ambiguous; matches: calendar-one, calendar-two. Use an exact plugin id.',
+  );
 
   expectNoCalls(
     cli.promptYesNoMock,
@@ -295,7 +295,7 @@ it("restores install records when the config write rejects during uninstall", as
 
   await expect(uninstall("alpha", "--force", "--keep-files")).rejects.toThrow("config changed");
 
-  expectRecords({}, { plugins: { entries: { alpha: { enabled: false } } } });
+  expectInstallRecordsWrittenWithLease({}, { plugins: { entries: { alpha: { enabled: false } } } });
   expect(restoreIndexMock).toHaveBeenCalledWith(
     previousPersistedIndex,
     expect.any(Number),
@@ -425,7 +425,7 @@ it("removes owned aliases before deletion and preserves later edits on retry", a
   expect(currentConfig.plugins?.entries?.alpha).toEqual({ enabled: false });
   expect((await fs.stat(sourcePath)).isDirectory()).toBe(true);
   await expect(fs.stat(installPath)).rejects.toMatchObject({ code: "ENOENT" });
-  expectRecords({}, currentConfig);
+  expectInstallRecordsWrittenWithLease({}, currentConfig);
 });
 
 it.each(["orphan with another channel owner", "disabled singleton with namesake channel"])(
@@ -463,7 +463,7 @@ it.each(["orphan with another channel owner", "disabled singleton with namesake 
     );
     await uninstall(pluginId, "--force", "--keep-files");
     expect(indexSpy).toHaveBeenCalled();
-    expectRecords(
+    expectInstallRecordsWrittenWithLease(
       {},
       {
         channels: orphan ? channels : { [pluginId]: { enabled: true } },

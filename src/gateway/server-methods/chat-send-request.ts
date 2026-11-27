@@ -1,8 +1,11 @@
 import { createHmac } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { Static } from "typebox";
+import type { ChatAppContextAttachment } from "../../../packages/gateway-protocol/src/chat-app-context.js";
 import {
   GATEWAY_CLIENT_CAPS,
+  isNativeAppUiClient,
   hasGatewayClientCap,
   type GatewayClientInfo,
 } from "../../../packages/gateway-protocol/src/client-info.js";
@@ -15,8 +18,6 @@ import type {
   ChatSendParamsSchema,
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { createOperatorInputRecoverySource } from "../../agents/operator-run-recovery-source.js";
-import { hasCommandSyntax } from "../../auto-reply/command-detection.js";
 import { isAbortRequestText } from "../../auto-reply/reply/abort-primitives.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import {
@@ -25,7 +26,7 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
-import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
+import { captureSessionWorkTarget } from "../../config/sessions/session-work-start.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -36,15 +37,16 @@ import {
   readProviderReviewAcknowledgment,
   type ProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../utils/message-channel.js";
 import type { ChatAttachment } from "../chat-attachments.js";
-import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeChatHumanMentions } from "./chat-human-mentions.js";
 import {
@@ -66,13 +68,16 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
-  restartResume?: SessionRestartResume;
+  activeSteer?: { runId: string; profileId: string };
+  participating?: true;
+  normalizeThinkingLevelOverride?: boolean;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
   clientInfo?: GatewayClientInfo;
   supportsTaskSuggestions: boolean;
   p: ChatSendRequestParams;
+  targetPrecondition?: ReturnType<typeof captureSessionWorkTarget>;
   explicitOrigin?: ChatSendExplicitOrigin;
   inboundMessage: string;
   systemInputProvenance?: InputProvenance;
@@ -86,21 +91,69 @@ export type NormalizedChatSendRequest = {
   /** Submitted annotation identity is immutable even when profile aliases later merge. */
   requestIdentity?: string;
   mentions?: HumanMention[];
+  /** Selected people are the recipients; the agent records the message without a turn. */
+  humanAddressed?: true;
+  appContext?: ChatAppContextAttachment[];
   workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
 };
 
+/** Talk settings are machine preferences, not user commands for a particular model. */
+function shouldNormalizeTalkThinking(
+  request: Pick<NormalizedChatSendRequest, "p" | "systemInputProvenance">,
+): boolean {
+  return (
+    request.p.thinking !== undefined &&
+    request.systemInputProvenance?.kind === "internal_system" &&
+    request.systemInputProvenance.sourceTool === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+  );
+}
+
 type NormalizeChatSendRequestResult =
   | { ok: true; value: NormalizedChatSendRequest }
   | { ok: false; error: string; reason?: string };
+
+/** Attach host-admitted participation after wire normalization, before session preparation. */
+export function applyChatSendParticipation(
+  request: NormalizedChatSendRequest,
+): NormalizeChatSendRequestResult {
+  const { p } = request;
+  if (
+    request.goalOperation ||
+    p.intent ||
+    request.providerReviewAcknowledgment ||
+    p.deliver === true ||
+    request.explicitOrigin ||
+    p.originatingChannel !== undefined ||
+    p.originatingTo !== undefined ||
+    p.originatingAccountId !== undefined ||
+    p.originatingThreadId !== undefined ||
+    request.toolBindings ||
+    p.toolBindings ||
+    p.thinking !== undefined ||
+    p.fastMode !== undefined ||
+    p.fastAutoOnSeconds !== undefined
+  ) {
+    return {
+      ok: false,
+      error:
+        "Participating inputs cannot change goals, delivery routes, tool bindings, or runtime settings.",
+    };
+  }
+  request.participating = true;
+  request.suppressCommandInterpretation = true;
+  request.stopCommand = false;
+  request.turnKind = "main";
+  return { ok: true, value: request };
+}
 
 /** Validate and normalize the wire request before session or lifecycle work begins. */
 export function normalizeChatSendRequest(params: {
   params: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
+  activeSteer?: { runId: string; profileId: string };
   goalResume?: SessionGoalOperation & { action: "resume" };
-  restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
   const chatSendReceivedAtMs = performance.now();
@@ -108,11 +161,11 @@ export function normalizeChatSendRequest(params: {
   const client = params.client;
   const recoveredInput =
     typeof params.params.idempotencyKey === "string"
-      ? readChatInputRecoveryAdmission(params.params.idempotencyKey)
+      ? readQueuedChatInputAdmission(params.params.idempotencyKey)
       : undefined;
   const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
-    isOperatorUiClient(clientInfo) &&
+    (isOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo)) &&
     params.client?.connect?.scopes?.includes("operator.admin") === true &&
     hasGatewayClientCap(params.client?.connect?.caps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
   const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params.params, clientInfo);
@@ -136,6 +189,7 @@ export function normalizeChatSendRequest(params: {
       p.queueMode ||
       p.toolBindings ||
       p.workContext ||
+      p.appContext ||
       p.systemInputProvenance ||
       p.systemProvenanceReceipt ||
       p.suppressCommandInterpretation !== undefined ||
@@ -158,7 +212,8 @@ export function normalizeChatSendRequest(params: {
   if (
     (p.systemInputProvenance ||
       p.systemProvenanceReceipt ||
-      suppressCommandInterpretation ||
+      (suppressCommandInterpretation &&
+        recoveredInput?.target.message["__openclaw"]?.suppressCommandInterpretation !== true) ||
       explicitOriginResult.value) &&
     !params.trustedSystemInput &&
     !hasGatewayAdminScope(params.client)
@@ -197,8 +252,7 @@ export function normalizeChatSendRequest(params: {
       p.thinking !== undefined ||
       p.fastMode !== undefined ||
       p.fastAutoOnSeconds !== undefined ||
-      p.timeoutMs !== undefined ||
-      controlUiReconnectResume.resumeRequested)
+      p.timeoutMs !== undefined)
   ) {
     // Recovery reads the persisted input and session settings, not transient run overrides.
     return reject(
@@ -213,9 +267,9 @@ export function normalizeChatSendRequest(params: {
   const hasGoalOperation = params.goalResume !== undefined || p.intent !== undefined;
   const commandInterpretationSuppressed =
     suppressCommandInterpretation ||
-    recoveredInput?.suppressCommandInterpretation === true ||
     hasGoalOperation ||
-    providerReview !== undefined;
+    providerReview !== undefined ||
+    params.activeSteer !== undefined;
   // This text comes from the current provider review, not a browser-supplied command.
   const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
   const systemInputProvenance = params.goalResume
@@ -270,7 +324,7 @@ export function normalizeChatSendRequest(params: {
     !rawMessage.startsWith("!");
   if (
     mentions.value &&
-    (!isBrowserOperatorUiClient(clientInfo) ||
+    (!(isBrowserOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo)) ||
       !client?.authenticatedUserProfile ||
       client.internal?.syntheticClient ||
       client.internal?.senderAttribution ||
@@ -281,8 +335,11 @@ export function normalizeChatSendRequest(params: {
       !ordinaryChat)
   ) {
     return reject(
-      "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
+      "Human mentions require a signed-in chat in the OpenClaw app. Remove the selected mentions to use this mode.",
     );
+  }
+  if (p.appContext && !ordinaryChat) {
+    return reject("App context is only supported for ordinary chat messages.");
   }
   if (p.workContext && !ordinaryChat) {
     return reject("Working context is only supported for ordinary chat messages.");
@@ -296,27 +353,36 @@ export function normalizeChatSendRequest(params: {
   const modelMessage = workContext
     ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
     : rawMessage;
+  const targetPrecondition = captureSessionWorkTarget(p);
   const requestInput = JSON.stringify([
     p.message,
+    ...(params.activeSteer
+      ? [{ operation: "active-steer", sessionId: p.sessionId, ...params.activeSteer }]
+      : []),
     p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
     ...(workContext ? [workContext.snapshot] : []),
+    ...(p.appContext ? [{ appContext: stableStringify(p.appContext) }] : []),
     ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
+    ...(targetPrecondition ? [targetPrecondition.requestIdentity] : []),
   ]);
 
   const value: NormalizedChatSendRequest = {
+    ...(params.activeSteer ? { activeSteer: params.activeSteer } : {}),
     chatSendReceivedAtMs,
     clientInfo,
     supportsTaskSuggestions,
     p,
+    targetPrecondition,
     ...(params.providerReviewAcknowledgment
       ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
       : {}),
     ...(params.goalResume ? { goalOperation: params.goalResume } : {}),
-    ...(params.restartResume ? { restartResume: params.restartResume } : {}),
     explicitOrigin: explicitOriginResult.value,
     inboundMessage: modelMessage,
     ...(workContext ? { workContext } : {}),
+    ...(p.appContext ? { appContext: p.appContext } : {}),
     systemInputProvenance,
+    normalizeThinkingLevelOverride: shouldNormalizeTalkThinking({ p, systemInputProvenance }),
     systemProvenanceReceipt,
     suppressCommandInterpretation: commandInterpretationSuppressed,
     toolBindings: p.toolBindings,
@@ -327,7 +393,13 @@ export function normalizeChatSendRequest(params: {
     ...(mentions.value ? { mentions: mentions.value } : {}),
     reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
   };
-  if (stopCommand) {
+  if (recoveredInput?.operatorAuthority?.participationCeiling) {
+    const attached = applyChatSendParticipation(value);
+    if (!attached.ok) {
+      return attached;
+    }
+  }
+  if (value.stopCommand) {
     return { ok: true, value };
   }
   if (recoveredInput) {
@@ -359,47 +431,4 @@ export function normalizeChatSendRequest(params: {
     }
     return { ok: true as const, value: request };
   });
-}
-
-/** Keep only execution options; approved text and media live in the input itself. */
-export function createChatInputRecovery(params: {
-  request: NormalizedChatSendRequest;
-  source: ReturnType<typeof createOperatorInputRecoverySource>;
-}) {
-  const { request, source } = params;
-  // Process-local capabilities cannot be re-created after restart.
-  if (
-    !source ||
-    request.toolBindings ||
-    request.providerReviewAcknowledgment ||
-    request.goalOperation ||
-    request.turnKind !== "main" ||
-    (request.systemInputProvenance && request.systemInputProvenance.kind !== "external_user")
-  ) {
-    return undefined;
-  }
-  const p = request.p;
-  return {
-    version: 1 as const,
-    source,
-    clientInfo: request.clientInfo,
-    suppressCommandInterpretation:
-      request.suppressCommandInterpretation || !hasCommandSyntax(request.inboundMessage),
-    request: {
-      ...(request.reconnectResumeRequested ? { __controlUiReconnectResume: true } : {}),
-      thinking: p.thinking,
-      fastMode: p.fastMode,
-      fastAutoOnSeconds: p.fastAutoOnSeconds,
-      timeoutMs: p.timeoutMs,
-      deliver: p.deliver,
-      queueMode: p.queueMode,
-      replyToId: p.replyToId,
-      originatingChannel: p.originatingChannel,
-      originatingTo: p.originatingTo,
-      originatingAccountId: p.originatingAccountId,
-      originatingThreadId: p.originatingThreadId,
-      systemInputProvenance: request.systemInputProvenance,
-      systemProvenanceReceipt: request.systemProvenanceReceipt,
-    },
-  };
 }

@@ -40,7 +40,7 @@ import {
 import {
   buildMediaGenerateToolExecutionResult,
   buildMediaGenerationDurationDetails,
-  buildMediaGenerationGeometryDetails,
+  buildVideoGenerationGeometryDetails,
   buildSavedMediaAttachment,
 } from "./media-generate-result-shared.js";
 import { createMediaGenerateExecute } from "./media-generate-tool-actions-shared.js";
@@ -221,9 +221,7 @@ export function createVideoGenerateTool(
   }
   const { cfg, preparedProviders, sandboxConfig, taskOptions } = context;
   const includeAudioReferences = (() => {
-    const agentDir = options?.agentDir;
     const authStore = options?.authProfileStore;
-    const authProfileStoreSource = options?.authProfileStoreSource;
     const workspaceDir = options?.workspaceDir;
     const snapshot = loadCapabilityMetadataSnapshot({
       config: cfg,
@@ -301,9 +299,7 @@ export function createVideoGenerateTool(
           provider: providerId,
           cfg,
           workspaceDir,
-          agentDir,
           authStore,
-          authProfileStoreSource,
         })
       ) {
         return true;
@@ -336,7 +332,6 @@ export function createVideoGenerateTool(
           model,
           options,
           signal,
-          findDuplicate: createVideoGenerateDuplicateGuardResult,
           acquire: async (config) =>
             options?.preparedModelRuntime?.acquireMediaCapabilityProviders
               ? acquireMediaGenerationToolProviders("videoGenerationProviders", {
@@ -505,6 +500,8 @@ export function createVideoGenerateTool(
                   videoGenerationTaskLifecycle.recordTaskProgress({
                     handle: taskHandle,
                     progressSummary: "Saving generated video",
+                    provider: result.provider,
+                    model: result.model,
                   });
                   const remoteAttachment = (url: string, video: GeneratedVideoAsset) =>
                     ({
@@ -575,8 +572,7 @@ export function createVideoGenerateTool(
                             typeof entry === "number" && Number.isFinite(entry),
                         )
                       : undefined);
-                  const geometryDetails = buildMediaGenerationGeometryDetails(
-                    "video",
+                  const geometryDetails = buildVideoGenerationGeometryDetails(
                     result,
                     { size, aspectRatio, resolution },
                     ignoredOverrideKeys,

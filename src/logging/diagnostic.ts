@@ -24,7 +24,6 @@ import {
   type DiagnosticLivenessSample,
 } from "./diagnostic-liveness.js";
 import {
-  emitDiagnosticMemorySample,
   createDiagnosticMemorySampler,
   type EmitDiagnosticMemorySample,
 } from "./diagnostic-memory.js";
@@ -34,7 +33,6 @@ import {
   getDiagnosticSessionActivitySnapshot,
   startDiagnosticRunActivityTracking,
   stopDiagnosticRunActivityTracking,
-  type DiagnosticSessionActivitySnapshot,
 } from "./diagnostic-run-activity.js";
 import {
   diagnosticLogger as diag,
@@ -44,6 +42,7 @@ import {
 } from "./diagnostic-runtime.js";
 import {
   classifySessionAttention,
+  formatSessionActivityLogFields,
   isTerminalDiagnosticProgressReason,
   type SessionAttentionClassification,
 } from "./diagnostic-session-attention.js";
@@ -90,6 +89,7 @@ const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 5 * 60_000;
 const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 3;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
 const DIAGNOSTIC_HEARTBEAT_INTERVAL_MS = 30_000;
+const MEMORY_PRESSURE_INTERVAL_MS = 1_000;
 const loadStuckSessionRecoveryRuntime = createLazyRuntimeModule(
   () => import("./diagnostic-stuck-session-recovery.runtime.js"),
 );
@@ -467,35 +467,8 @@ export function markDiagnosticSessionProgress(params: SessionRef) {
   markActivity();
 }
 
-function formatSessionActivityLogFields(activity: DiagnosticSessionActivitySnapshot): string {
-  const fields: string[] = [];
-  if (activity.lastProgressReason) {
-    fields.push(`lastProgress=${activity.lastProgressReason}`);
-  }
-  if (activity.lastProgressAgeMs !== undefined) {
-    fields.push(`lastProgressAge=${Math.round(activity.lastProgressAgeMs / 1000)}s`);
-  }
-  if (activity.activeToolName) {
-    fields.push(`activeTool=${activity.activeToolName}`);
-  }
-  if (activity.activeToolCallId) {
-    fields.push(`activeToolCallId=${activity.activeToolCallId}`);
-  }
-  if (activity.activeToolAgeMs !== undefined) {
-    fields.push(`activeToolAge=${Math.round(activity.activeToolAgeMs / 1000)}s`);
-  }
-  if (activity.repeatedRequestNoProgressAgeMs !== undefined) {
-    fields.push(
-      `repeatedRequestNoProgressAge=${Math.round(activity.repeatedRequestNoProgressAgeMs / 1000)}s`,
-    );
-  }
-  if (isTerminalDiagnosticProgressReason(activity.lastProgressReason)) {
-    fields.push("terminalProgressStale=true");
-  }
-  return fields.join(" ");
-}
-
 let heartbeatJob: GatewayScheduledJob | undefined;
+let memoryPressureJob: GatewayScheduledJob | undefined;
 let detachHeartbeatOwner: (() => void) | undefined;
 let lastDiagnosticHeartbeatTickAt: number | undefined;
 let updateHeartbeatOptions:
@@ -569,7 +542,7 @@ export function startGatewayDiagnosticHeartbeat(
     reconcileObservations();
   };
   reconcileObservations();
-  const sampleMemory = createDiagnosticMemorySampler(
+  const { sampleMemory, checkPressure } = createDiagnosticMemorySampler(
     () => !scheduler.signal.aborted && heartbeatJob === job && observing,
   );
   const tick = () => {
@@ -577,8 +550,6 @@ export function startGatewayDiagnosticHeartbeat(
       return;
     }
     if (!reconcileObservations()) {
-      // Critical pressure still retires idle Workers without diagnostic collection or callbacks.
-      emitDiagnosticMemorySample(undefined, false);
       return;
     }
     emitChildProcessSpawnSample();
@@ -730,13 +701,13 @@ export function startGatewayDiagnosticHeartbeat(
             }
             state[warningAgeField] = attentionAgeMs;
           }
+          // Stalls are reported only by the `session.stalled` event; the controller owns recovery.
           const label =
-            classification.eventType === "session.stuck"
-              ? "stuck session"
-              : classification.eventType === "session.stalled"
-                ? "stalled session"
-                : "long-running session";
-          if (!isIncognitoDiagnosticSession(state)) {
+            classification.eventType === "session.stuck" ? "stuck session" : "long-running session";
+          if (
+            classification.eventType !== "session.stalled" &&
+            !isIncognitoDiagnosticSession(state)
+          ) {
             void logWithSessionDiagnosticContext({
               level:
                 classification.eventType === "session.long_running" && queueDepth <= 0
@@ -840,6 +811,17 @@ export function startGatewayDiagnosticHeartbeat(
     run: tick,
   });
   heartbeatJob = job;
+  // Startup can exhaust memory before the first diagnostic heartbeat.
+  memoryPressureJob = scheduler.schedule({
+    id: "diagnostic-memory-pressure",
+    atMs: scheduler.now() + MEMORY_PRESSURE_INTERVAL_MS,
+    everyMs: MEMORY_PRESSURE_INTERVAL_MS,
+    run: () => {
+      if (!scheduler.signal.aborted && heartbeatJob === job) {
+        checkPressure();
+      }
+    },
+  });
   const stopOwnedHeartbeat = () => {
     if (heartbeatJob === job) {
       stopGatewayDiagnosticHeartbeat();
@@ -857,6 +839,8 @@ export function stopGatewayDiagnosticHeartbeat() {
   detachHeartbeatOwner = undefined;
   heartbeatJob?.cancel();
   heartbeatJob = undefined;
+  memoryPressureJob?.cancel();
+  memoryPressureJob = undefined;
   updateHeartbeatOptions = undefined;
   stopDiagnosticObservations();
 }

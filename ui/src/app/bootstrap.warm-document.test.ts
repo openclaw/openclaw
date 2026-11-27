@@ -1,5 +1,6 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import * as browserGateway from "../api/gateway.ts";
 import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -94,6 +95,100 @@ function reject(opts: GatewayBrowserClientOptions, message: string) {
     error: { code: "PAIRING_REQUIRED", message },
   });
 }
+
+it.each([false, true])("handles peer boot retirement with Loader transport=%s", (loader) => {
+  const root = document.documentElement;
+  const attributes = ["data-openclaw-id-enabled", "data-openclaw-control-ui-base-path"] as const;
+  const previous = attributes.map((name) => ({ name, value: root.getAttribute(name) }));
+  root.setAttribute(attributes[0], "true");
+  root.setAttribute(attributes[1], "");
+  if (loader) {
+    vi.stubGlobal("__openclawTransport", { createWebSocket: () => undefined });
+  }
+  try {
+    persistSessionToken(loadSettings().gatewayUrl, "");
+    bytes = JSON.stringify({ ...mainRecord(), authMethod: "trusted-proxy", credential: "" });
+    localStorage.setItem(key, bytes);
+    const { runtime, opts } = open("/chat/main");
+    expect(root.getAttribute("data-openclaw-remote-ingress")).toBeNull();
+    expect(runtime.warmBoot).toBe(!loader);
+    expect(opts.offlineRecoveryScope).toBe(loader ? undefined : "main-device");
+    expect(runtime.context.sessions.state.groupSettings).toEqual(
+      loader ? [] : [{ name: "Main private group", position: 0 }],
+    );
+    window.dispatchEvent(new StorageEvent("storage", { key, oldValue: bytes, newValue: null }));
+    expect(runtime.context.gateway.snapshot.phase).toBe(loader ? "connecting" : "stopped");
+    if (loader) {
+      admit(opts, "returning-owner-device", undefined, { authMode: "token" });
+      expect(runtime.context.gateway.snapshot.phase).toBe("connected");
+    }
+  } finally {
+    previous.forEach(({ name, value }) => {
+      if (value === null) {
+        root.removeAttribute(name);
+      } else {
+        root.setAttribute(name, value);
+      }
+    });
+  }
+});
+
+it.each(["pagehide", "hidden"])(
+  "preserves a peer's sidebar profile while self discovery is pending at %s",
+  async (boundary) => {
+    const self = createDeferred<unknown>();
+    replies.set("users.self", () => self.promise);
+    try {
+      const { runtime, opts } = open("/chat/main");
+      opts.onHello?.({
+        type: "hello-ok",
+        protocol: 1,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          method: "token",
+          recoveryScope: "main-device",
+        },
+        snapshot: { authMode: "token", presence: [] },
+      });
+      await runtime.context.agents.ensureList();
+      await runtime.context.sessions.groupsLoad();
+      expect(runtime.context.gateway.snapshot.selfUser).toBeUndefined();
+      if (boundary === "pagehide") {
+        window.dispatchEvent(new Event("pagehide"));
+      } else {
+        vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+      expect(localStorage.getItem(key)).toBe(bytes);
+
+      const loaded = runtime.context.gateway.loadSelfProfile();
+      self.resolve({
+        profile: {
+          id: "same-profile",
+          displayName: "Riley",
+          emails: [],
+          avatarMime: null,
+          hasAvatar: false,
+          githubIdentity: null,
+          mergedInto: null,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      });
+      await loaded;
+      window.dispatchEvent(new Event("pagehide"));
+      expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({
+        recoveryScope: "main-device",
+        profileId: "same-profile",
+        groups: [],
+      });
+    } finally {
+      self.resolve({});
+      replies.delete("users.self");
+    }
+  },
+);
 
 it.each(["/focus/terminal", "/approve/exec%3A1", "/ask/question-1"])(
   "keeps shellless %s out of main admission reads, publication, and retirement",

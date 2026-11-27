@@ -1,4 +1,4 @@
-import type { AgentSideConnection, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
+import type { AgentContext, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
 import { THINKING_LEVELS_HELP } from "../auto-reply/thinking.shared.js";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { createPendingPromiseTracker } from "../shared/pending-promises.js";
@@ -54,7 +54,7 @@ type AcpTranslatorLedgerSessionRef = AcpTranslatorSessionRef & {
 };
 
 type AcpTranslatorSessionUpdatesOptions = {
-  connection: Pick<AgentSideConnection, "sessionUpdate">;
+  connection: Pick<AgentContext, "notify">;
   eventLedger: AcpEventLedger;
   log: (message: string) => void;
 };
@@ -101,6 +101,18 @@ export class AcpTranslatorSessionUpdates {
       this.options.log(
         `event ledger session start failed for ${session.sessionId}: ${String(err)}`,
       );
+    }
+  }
+
+  async readLedgerSessionKey(sessionId: string): Promise<string | undefined> {
+    if (this.stopped) {
+      return undefined;
+    }
+    try {
+      return await this.track(this.options.eventLedger.readSessionKey({ sessionId }));
+    } catch (err) {
+      this.options.log(`event ledger session-key lookup failed for ${sessionId}: ${String(err)}`);
+      return undefined;
     }
   }
 
@@ -171,7 +183,7 @@ export class AcpTranslatorSessionUpdates {
       return;
     }
     const delivery = this.track(
-      this.options.connection.sessionUpdate({
+      this.options.connection.notify("session/update", {
         sessionId: params.sessionId,
         update: params.update,
       }),

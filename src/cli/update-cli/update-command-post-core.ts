@@ -17,13 +17,14 @@ import { ignoreMissingPath } from "../../infra/errno.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
+import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
+import { mergeProcessEnv } from "../../infra/process-env.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
-import { compareSemverStrings } from "../../infra/update-check.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   readControlPlaneUpdateSentinelMeta,
@@ -38,7 +39,8 @@ import {
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { supportsPostCoreExecutor } from "../../infra/update-post-core-capability.js";
 import {
-  buildPostCoreHandoffEnv,
+  POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
+  POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
   POST_CORE_UPDATE_ENV,
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_RESULT_PATH_ENV,
@@ -70,7 +72,6 @@ import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type { UpdatePostCoreInput } from "./update-command-migrated-types.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-import { releaseLegacySourceLock } from "./update-command-runtime.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
@@ -327,6 +328,10 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       params.opts.fullIntegrityCheck && options.has("--full-integrity-check"),
     );
   }
+  // The fresh process runs Doctor repair and cannot copy itself. Once it will launch, and
+  // before its tentative plugin index, copy the originals (a no-op if this run already did).
+  await params.opts.run?.captureOriginal?.();
+  authority.assertCurrent();
 
   const argv = [
     entryPath,
@@ -394,12 +399,16 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     const jsonMode = params.opts.json === true;
     // Windows descendants must not retain console handles after the updater exits (#78445).
     const childStdio = process.platform === "win32" || jsonMode ? "pipe" : "inherit";
-    const handoffEnv = buildPostCoreHandoffEnv({
+    const handoffEnv = mergeProcessEnv([
       baseEnv,
-      compatHostVersion: postCoreHostVersion,
-      requestedChannel: params.requestedChannel,
-      sourceConfigPath: params.preUpdateConfig ? sourceConfigPath : undefined,
-    });
+      {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: postCoreHostVersion || undefined,
+        [POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]: params.requestedChannel || undefined,
+        [POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV]: params.preUpdateConfig
+          ? sourceConfigPath
+          : undefined,
+      },
+    ]);
     const sentinelMeta = await readControlPlaneUpdateSentinelMeta(baseEnv);
     authority.assertCurrent();
     if (sentinelMeta?.root) {
@@ -414,7 +423,6 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       handoffEnv[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV] = sentinelPath;
     }
     authority.assertCurrent();
-    await releaseLegacySourceLock(params.root, params.opts.run?.sourceArtifactLock);
     const childEnv = {
       ...handoffEnv,
       OPENCLAW_UPDATE_IN_PROGRESS: "1",

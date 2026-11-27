@@ -4,7 +4,6 @@ import {
 } from "../../../infra/agent-events.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
@@ -21,7 +20,6 @@ import {
   type SubagentKillSession,
 } from "./subagent-control-session.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import {
@@ -38,7 +36,9 @@ import {
 import { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 
@@ -123,7 +123,7 @@ class SubagentRunManager extends SubagentLaunchManager {
           !isSameSubagentRunOwner(entry, claimParams.expected) ||
           entry.killReconciliation ||
           entry.killIntent ||
-          (typeof entry.execution.endedAt === "number" && entry.pauseReason !== "sessions_yield")
+          (typeof entry.execution.endedAt === "number" && !isSubagentPausedByYield(entry))
         ) {
           return { value: undefined };
         }
@@ -180,6 +180,8 @@ class SubagentRunManager extends SubagentLaunchManager {
     /** A withdrawn queued input never owned the session's active execution metadata. */
     suppressSessionEffects?: boolean;
     session?: SubagentKillSession;
+    /** An acknowledged kill targets its recorded row even after the session rotates. */
+    killClaim?: NonNullable<SubagentRunRecord["killIntent"]>;
     withdrawQueuedReservation?: () => void;
     assertCurrent?: () => void;
     assertPublicationCurrent?: () => void;
@@ -218,7 +220,7 @@ class SubagentRunManager extends SubagentLaunchManager {
     const assertSelectedCurrent = (requireSession = true) => {
       assertSubagentRegistryWriteSourceCurrent(context);
       assertSubagentRegistryWriteOutcomeKnown([...runIds], context.admission);
-      if (requireSession) {
+      if (requireSession && !markParams.killClaim) {
         markParams.session?.assertCurrent();
       }
       if (
@@ -244,6 +246,7 @@ class SubagentRunManager extends SubagentLaunchManager {
       }
     };
     const sessions = new Map<string, SubagentKillSession>();
+    const acquiredSessions: SubagentKillSession[] = [];
     const holds = new Map<string, NonNullable<ReturnType<typeof holdQueuedSwarmRun>>>();
     for (const entry of selected.values()) {
       if (
@@ -266,7 +269,12 @@ class SubagentRunManager extends SubagentLaunchManager {
       }
       for (const entry of selected.values()) {
         if (markParams.runId === entry.runId && markParams.session) {
-          sessions.set(entry.runId, markParams.session);
+          sessions.set(
+            entry.runId,
+            markParams.killClaim
+              ? { ...markParams.session, assertCurrent: () => assertSelectedCurrent(false) }
+              : markParams.session,
+          );
         } else if (
           entry.collect &&
           entry.execution.status === "queued" &&
@@ -280,6 +288,7 @@ class SubagentRunManager extends SubagentLaunchManager {
             entry.childAgentId,
             entry.childSessionIdentity,
           );
+          acquiredSessions.push(session);
           sessions.set(entry.runId, session);
         }
       }
@@ -307,12 +316,22 @@ class SubagentRunManager extends SubagentLaunchManager {
                 entry.killReconciliation !== undefined;
               const existingKillReconciliation = entry.killReconciliation;
               const existingKillIntent = entry.killIntent;
+              if (
+                markParams.killClaim &&
+                !matchesSubagentKillIntent(existingKillIntent, markParams.killClaim) &&
+                !(
+                  existingKillReconciliation?.killedAt === markParams.killClaim.requestedAt &&
+                  existingKillReconciliation.taskCancellationAccepted === true
+                )
+              ) {
+                continue;
+              }
               const currentKillLifecycle =
                 existingKillIntent?.lifecycleGeneration !== undefined &&
                 isAgentEventLifecycleGenerationCurrent(existingKillIntent.lifecycleGeneration);
               if (
                 typeof entry.execution.endedAt === "number" &&
-                entry.pauseReason !== "sessions_yield" &&
+                !isSubagentPausedByYield(entry) &&
                 !wasKilledLifecycle
               ) {
                 // An abort lifecycle event can mark the run killed before this shared
@@ -320,7 +339,7 @@ class SubagentRunManager extends SubagentLaunchManager {
                 // it receives the same reconciliation tombstone as a direct kill.
                 continue;
               }
-              const wasYielded = entry.pauseReason === "sessions_yield";
+              const wasYielded = isSubagentPausedByYield(entry);
               const wasQueuedCollector = entry.collect && entry.execution.status === "queued";
               const collectorLaunchInFlight =
                 wasQueuedCollector &&
@@ -341,7 +360,6 @@ class SubagentRunManager extends SubagentLaunchManager {
                   existingKillIntent && currentKillLifecycle
                     ? existingKillIntent.lifecycleGeneration
                     : entry.execution.lifecycleGeneration,
-                restartRecovery: undefined,
                 suppressSessionEffects:
                   markParams.suppressSessionEffects ||
                   resolveSubagentChildAuthority(entry).status === "legacy-unverified"
@@ -443,34 +461,31 @@ class SubagentRunManager extends SubagentLaunchManager {
         const reconciliation = entry.killReconciliation;
         const ownsSessionEffects = () =>
           this.currentRunOwnsSession(entry) &&
-          !shouldSuppressSubagentRecoverySessionEffects(
-            this.options.runs.get(entry.runId) ?? entry,
-          );
+          !shouldSuppressSubagentSessionEffects(this.options.runs.get(entry.runId) ?? entry);
         const warnCleanupFailure = (message: string, err: unknown) => {
           if (hasSqliteWorkerOutcomeUnknown(err)) {
             throw err;
           }
           log.warn(message, { err, runId: entry.runId, childSessionKey: entry.childSessionKey });
         };
-        await runWithGatewayIndependentRootWorkAdmission(async () => {
-          await Promise.all([
-            persistSubagentSessionTiming(entry, {
-              session: sessions.get(entry.runId),
-              isCurrentGeneration: ownsSessionEffects,
-              assertCommitAllowed: () => {
-                assertCurrent();
-                if (!ownsSessionEffects()) {
-                  throw new Error("killed subagent session owner retired before timing commit");
-                }
-              },
-            }).catch((err: unknown) =>
-              warnCleanupFailure("failed to persist killed subagent session timing", err),
-            ),
-            shouldRemoveSubagentAttachments(entry)
-              ? safeRemoveAttachmentsDir(entry)
-              : Promise.resolve(),
-          ]);
-        }, "subagents:session-finalize").catch((err: unknown) =>
+        // The termination caller joins this cleanup, including after shutdown closes admission.
+        await Promise.all([
+          persistSubagentSessionTiming(entry, {
+            session: sessions.get(entry.runId),
+            isCurrentGeneration: ownsSessionEffects,
+            assertCommitAllowed: () => {
+              assertCurrent();
+              if (!ownsSessionEffects()) {
+                throw new Error("killed subagent session owner retired before timing commit");
+              }
+            },
+          }).catch((err: unknown) =>
+            warnCleanupFailure("failed to persist killed subagent session timing", err),
+          ),
+          shouldRemoveSubagentAttachments(entry)
+            ? safeRemoveAttachmentsDir(entry)
+            : Promise.resolve(),
+        ]).catch((err: unknown) =>
           warnCleanupFailure("failed to run killed subagent cleanup tail", err),
         );
         await this.options.completeCleanupBookkeeping({
@@ -520,10 +535,8 @@ class SubagentRunManager extends SubagentLaunchManager {
       return updated;
     } finally {
       releaseTerminalState();
-      for (const session of sessions.values()) {
-        if (session !== markParams.session) {
-          await session.release();
-        }
+      for (const session of acquiredSessions) {
+        await session.release();
       }
       await Promise.all([...holds.values()].map((hold) => hold.release()));
     }

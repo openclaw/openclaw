@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
@@ -63,7 +63,7 @@ function writeFixture(
   return file;
 }
 
-function runHotpathCandidate(consentSupported: boolean) {
+function runHotpathCandidate(consentSupported: boolean, candidateVersion?: string) {
   const root = mkTempRoot();
   const hotpath = script.slice(
     script.indexOf('if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]'),
@@ -95,6 +95,8 @@ ${hotpath}`,
         ARGV_LOG: path.join(root, "argv.log"),
         CONSENT_SUPPORTED: consentSupported ? "1" : "0",
         FIXTURE_ROOT: root,
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: candidateVersion ? root : "",
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: candidateVersion ?? "",
       },
     },
   );
@@ -106,6 +108,47 @@ it("keeps bounded installation and redacted runtime logging", () => {
     /"\$timeout_bin" (?:--kill-after=\S+ )?"\$npm_install_timeout" npm install/u,
   );
   expect(script).not.toContain('cat "$run_log"');
+});
+
+it("prints redacted hotpath failures outside the failed command's log", () => {
+  const root = mkTempRoot();
+  const log = path.join(root, "openclaw-npm-telegram-codex-install.log");
+  const redactor = writeFixture(
+    root,
+    "redactor.mjs",
+    'export const redactSensitiveText = (text) => text.replaceAll("fixture-secret", "***");',
+  );
+  const diagnostics = script
+    .slice(
+      script.search(/\ndump_(?:hotpath_logs|debug_logs)\(\) \{/u),
+      script.indexOf('\ntest -x "$sut_command"'),
+    )
+    .replaceAll("/tmp/openclaw-npm-telegram-", `${root}/openclaw-npm-telegram-`);
+  const result = spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      `set -Eeuo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
+${diagnostics}
+openclaw_e2e_run_command /bin/sh -c 'echo "actionable failure fixture-secret"; exit 42' >"$FAILURE_LOG" 2>&1`,
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FAILURE_LOG: log,
+        OPENCLAW_E2E_COMMAND_TIMEOUT: "0",
+        OPENCLAW_E2E_REDACTOR_MODULE: redactor,
+      },
+    },
+  );
+  expect(result.status).toBe(42);
+  expect(result.stderr).toContain("hot path failed with exit code 42");
+  expect(result.stderr).toContain("actionable failure ***");
+  expect(result.stderr).not.toContain("fixture-secret");
+  expect(read(log)).toBe("actionable failure fixture-secret\n");
 });
 
 it("uses unique direct-run output dirs by default", () => {
@@ -163,6 +206,13 @@ it.each([false, true])(
     expect(calls.some((call) => call.startsWith("onboard "))).toBe(true);
   },
 );
+
+it("installs the exact sealed Codex companion for mounted candidates", () => {
+  const calls = runHotpathCandidate(true, "2026.11.10");
+  expect(
+    calls.filter((call) => call.startsWith("plugins install ") && !call.endsWith(" --help")),
+  ).toEqual(["plugins install npm:@openclaw/codex@2026.11.10 --pin --accept-capabilities"]);
+});
 
 it("adds loadable private SDK exports without replacing existing harness exports", () => {
   const root = mkTempRoot();
@@ -545,7 +595,14 @@ function captureDocker(env: NodeJS.ProcessEnv = {}) {
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === 'run' && args.includes('-i')) fs.readFileSync(0);
+if (args[0] === 'run' && args.includes('-i') && process.env.CHECK_WRITABLE_PREFIX === '1') {
+  const mount = args.find(arg => arg.endsWith(':/npm-global'));
+  const mode = fs.statSync(mount.slice(0, -':/npm-global'.length)).mode & 0o007;
+  if (mode !== 0o007) throw new Error('npm prefix is inaccessible to the container user: ' + mode);
+}
 fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
+if (args.includes('--cidfile')) process.exit(Number(process.env.SUITE_EXIT_CODE || 0));
+if (args.includes('/output')) process.exit(Number(process.env.ARTIFACT_EXIT_CODE || 0));
 `,
   );
   const result = run({
@@ -571,6 +628,11 @@ fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
   return { root, candidate, result, runs };
 }
 
+it("makes the disposable npm prefix writable to the container user", () => {
+  const { result } = captureDocker({ CHECK_WRITABLE_PREFIX: "1" });
+  expect(result.status, result.stderr).toBe(0);
+});
+
 it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", (upgrade) => {
   const { root, candidate, result, runs } = captureDocker({
     OPENCLAW_NPM_TELEGRAM_SCENARIOS: upgrade ? scenario : "",
@@ -590,8 +652,10 @@ it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", 
       `${path.join(root, "output")}:/app/.artifacts/qa-e2e/npm-telegram-live-output`,
       `${repoRoot}/node_modules:/trusted-harness/node_modules:ro`,
     ]),
+    expect.arrayContaining(["--network", "none", `${path.join(root, "output")}:/output`]),
   ]);
   expect(runs[0]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
+  expect(runs[2]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
   expect(runs[1]?.includes(`${candidate}:${candidatePath}:ro`)).toBe(upgrade);
   expect(runs[0]?.includes("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")).toBe(false);
   expect(runs[1]?.includes("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")).toBe(upgrade);
@@ -607,4 +671,69 @@ it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", 
   expect(readFileSync(path.join(root, "output/run-metadata.txt"), "utf8")).toBe(
     "schema=1\nexit_code=0\nlive_output=job_log\n",
   );
+});
+
+it.each([0, 7])("reports artifact handoff failure without masking suite exit %s", (suiteExit) => {
+  const { root, result } = captureDocker({
+    SUITE_EXIT_CODE: String(suiteExit),
+    ARTIFACT_EXIT_CODE: "23",
+  });
+  const expectedExit = suiteExit || 1;
+  expect(result.status, result.stderr).toBe(expectedExit);
+  expect(result.stderr).toContain("Could not return Telegram artifacts to the host user.");
+  expect(readFileSync(path.join(root, "output/run-metadata.txt"), "utf8")).toContain(
+    `exit_code=${expectedExit}\n`,
+  );
+});
+
+it("loads tool validation from the mounted Telegram source harness", () => {
+  const { result, runs } = captureDocker();
+  expect(result.status, result.stderr).toBe(0);
+  const mountedRoot = mkTempRoot();
+  writeFixture(mountedRoot, "package.json", { type: "module" });
+  const mounts = runs[1]!.flatMap((arg, index, args) =>
+    arg === "-v" ? [args[index + 1]!.split(":")] : [],
+  );
+  for (const [source, target] of mounts) {
+    if (
+      source &&
+      target &&
+      target !== "/app/package.json" &&
+      path.posix.dirname(target) === "/app" &&
+      [".mjs", ".json"].includes(path.posix.extname(target))
+    ) {
+      cpSync(source, path.join(mountedRoot, path.posix.basename(target)));
+    }
+    if (target === "/app/packages") {
+      // Copy source rather than symlink it: relative imports must stay inside the mount layout.
+      for (const name of ["llm-core", "normalization-core"]) {
+        const packageRoot = path.join(mountedRoot, "packages", name);
+        cpSync(path.join(source!, name, "src"), path.join(packageRoot, "src"), { recursive: true });
+        cpSync(path.join(source!, name, "package.json"), path.join(packageRoot, "package.json"));
+      }
+    }
+  }
+  symlinkSync(
+    path.join(repoRoot, "node_modules"),
+    path.join(mountedRoot, "node_modules"),
+    "junction",
+  );
+  const loaded = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      `import assert from "node:assert/strict";
+import { validateToolArguments } from "./packages/llm-core/src/validation.ts";
+const tool = {
+  name: "count",
+  parameters: { type: "object", properties: { count: { type: "integer" } }, required: ["count"] },
+};
+assert.deepEqual(validateToolArguments(tool, { name: "count", arguments: { count: "2" } }), { count: 2 });`,
+    ],
+    { cwd: mountedRoot, encoding: "utf8", timeout: 30_000 },
+  );
+  expect(loaded.status, loaded.stderr).toBe(0);
 });

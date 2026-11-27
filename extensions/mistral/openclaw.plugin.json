@@ -94,6 +94,19 @@
             "reasoning": true,
             "contextWindow": 262144,
             "maxTokens": 8192,
+            "thinkingLevelMap": {
+                "off": "none",
+                "minimal": "none",
+                "low": "high",
+                "medium": "high",
+                "high": "high",
+                "xhigh": "high",
+                "max": "high"
+            },
+            "compat": {
+              "defaultThinkingLevel": "off",
+              "adaptiveThinking": true
+            },
             "cost": {
               "input": 1.5,
               "output": 7.5,
@@ -108,6 +121,19 @@
             "reasoning": true,
             "contextWindow": 262144,
             "maxTokens": 16384,
+            "thinkingLevelMap": {
+                "off": "none",
+                "minimal": "none",
+                "low": "high",
+                "medium": "high",
+                "high": "high",
+                "xhigh": "high",
+                "max": "high"
+            },
+            "compat": {
+              "defaultThinkingLevel": "off",
+              "adaptiveThinking": true
+            },
             "cost": {
               "input": 0.15,
               "output": 0.6,
@@ -122,6 +148,19 @@
             "reasoning": true,
             "contextWindow": 262144,
             "maxTokens": 16384,
+            "thinkingLevelMap": {
+                "off": "none",
+                "minimal": "none",
+                "low": "high",
+                "medium": "high",
+                "high": "high",
+                "xhigh": "high",
+                "max": "high"
+            },
+            "compat": {
+              "defaultThinkingLevel": "off",
+              "adaptiveThinking": true
+            },
             "cost": {
               "input": 0.15,
               "output": 0.6,

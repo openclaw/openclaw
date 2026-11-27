@@ -90,6 +90,12 @@ not overwrite the existing skill.
 
 ## Flags
 
+Local non-interactive onboarding migrates legacy credential JSON before applying
+an auth choice. It uses Doctor's verified SQLite import and archives the original
+files. Migration warnings name any recovery still needed. Deployment wrappers
+should pass credentials through supported onboarding or model-auth commands
+instead of writing `auth-profiles.json` or modifying SQLite directly.
+
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.
 - `--agent-name <name>`: names the first agent when no roster exists. Interactive
@@ -444,7 +450,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 ### Z.AI endpoint choices
 
 <Note>
-`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint and model for your key: Coding Plan endpoints prefer `zai/glm-5.3`, falling back to `glm-5.1` and then `glm-4.7` when the key does not expose them; general API endpoints use the Z.AI provider default, `zai/glm-5.2`. To force a Coding Plan endpoint, pick `zai-coding-global` or `zai-coding-cn` directly.
+`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint and model for your key. Coding Plan endpoints prefer `zai/glm-5.4` and fall back to `glm-5.1` and then `glm-4.7` based on availability. General API endpoints use the Z.AI provider default, `zai/glm-5.2`. To force a Coding Plan endpoint, pick `zai-coding-global` or `zai-coding-cn` directly.
 </Note>
 
 ```bash
@@ -492,7 +498,7 @@ Token-based model auth (used with `--auth-choice token`):
 
 Cloudflare AI Gateway: `--cloudflare-ai-gateway-account-id <id>`, `--cloudflare-ai-gateway-gateway-id <id>`.
 
-Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 
 Skills: `--node-manager <npm|pnpm|bun>` (default `npm`), `--skip-skills`.
 

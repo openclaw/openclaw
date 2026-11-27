@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type {
   SessionActor,
   SessionActorAuthority,
+  SessionActorAuthorityFacts,
   SessionActorCommandContext,
   SessionActorCommitObserver,
   SessionActorHotState,
@@ -27,6 +28,7 @@ export type SessionActorExecutorGuards = {
 export type SessionActorExecutor = {
   storage?: SessionActorStorage;
   snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
+  snapshotEntry(authority: SessionActorAuthority): SessionActorAuthorityFacts | undefined;
   read(authority: SessionActorAuthority): Promise<SessionActorHotState>;
   command<Phase extends SessionActorPhase>(
     phase: Phase,
@@ -52,7 +54,7 @@ export function createSessionActorWithExecutor(params: {
   lifetime: SessionActorLifetime;
   createExecutor(guards: SessionActorExecutorGuards): SessionActorExecutor;
 }): SessionActor {
-  const target = freezeJsonSnapshot(structuredClone(params.target));
+  const target = freezeTrustedJsonSnapshot(structuredClone(params.target));
   const accepted = new Set<Promise<unknown>>();
   let closing = false;
   let release: Promise<void> | undefined;
@@ -113,12 +115,20 @@ export function createSessionActorWithExecutor(params: {
       throw new Error("Session actor command belongs to another phase");
     }
     return retain(async () => {
-      const reducers = phase?.reducers.splice(0) ?? [];
-      captured.reducers = [...reducers, ...(captured.reducers ?? [])];
+      const reducers = phase?.reducers.length ? phase.reducers.splice(0) : undefined;
+      if (reducers) {
+        captured.reducers = captured.reducers?.length
+          ? reducers.concat(captured.reducers)
+          : reducers;
+      }
       const outcome = await executor.command(name, captured, authority, observer);
       if (phase && outcome.kind === "unknown") {
         phase.uncertain ??= outcome.error;
-      } else if (phase && (outcome.kind === "rolled-back" || outcome.kind === "stale-version")) {
+      } else if (
+        phase &&
+        reducers &&
+        (outcome.kind === "rolled-back" || outcome.kind === "stale-version")
+      ) {
         phase.reducers.unshift(...reducers);
       }
       return outcome;
@@ -161,6 +171,7 @@ export function createSessionActorWithExecutor(params: {
     assertCurrent,
     assertReadable,
     snapshot: (authority) => executor.snapshot(authority),
+    snapshotEntry: (authority) => executor.snapshotEntry(authority),
     release: releaseActor,
     read: (authority) => retain(() => executor.read(authority), phase),
     acceptInput: (input, authority, observer) =>
@@ -173,8 +184,6 @@ export function createSessionActorWithExecutor(params: {
       command("appendTranscriptEvent", input, authority, observer, phase),
     completeTurn: (input, authority, observer) =>
       command("completeTurn", input, authority, observer, phase),
-    deliveryPending: (input, authority, observer) =>
-      command("deliveryPending", input, authority, observer, phase),
     deliverySettled: (input, authority, observer) =>
       command("deliverySettled", input, authority, observer, phase),
     patch: (input, authority, observer) => command("patch", input, authority, observer, phase),

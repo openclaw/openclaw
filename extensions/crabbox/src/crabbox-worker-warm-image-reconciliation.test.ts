@@ -73,7 +73,10 @@ it.each([
       info,
     );
     const image = warmImage("chk_validated", { lastDemandAtMs: Date.now() });
-    register(s, found ? { image } : {});
+    register(s, {
+      ...(found ? { image } : {}),
+      allocations: { [leaseId]: warmAllocation() },
+    });
     await s.provider.maintain!(context());
 
     expect(s.store.lookup("profile")).toEqual(found ? warmRecord({ image }) : undefined);

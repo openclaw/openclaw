@@ -17,7 +17,7 @@ import {
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import type { ChatHistoryPageParams } from "./session-history-types.js";
 import { withTranscriptDatabase } from "./session-transcript-fixture.test-support.js";
 import type {
@@ -38,11 +38,13 @@ const worker = vi.hoisted(() => ({
   heap: undefined as { used_heap_size: number; heap_size_limit: number } | undefined,
 }));
 vi.mock("node:v8", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:v8")>();
-  return {
-    ...actual,
+  const actual = await importOriginal<
+    typeof import("node:v8") & { default: typeof import("node:v8") }
+  >();
+  const overrides = {
     getHeapStatistics: () => ({ ...actual.getHeapStatistics(), ...worker.heap }),
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
@@ -119,8 +121,16 @@ it("borrows canonical writer proof without a native reader and still fences fore
     const { sessionKey } = scope;
     const retained = getOpenClawAgentDatabaseValidationForTransfer(database);
     assert(retained);
-    const { agentId, identity, birthtime, receiptId, valid, canonicalReady } = retained;
-    const validation = { agentId, identity, birthtime, receiptId, valid, canonicalReady };
+    const { agentId, identity, birthtime, receiptId, valid, revokedBy, canonicalReady } = retained;
+    const validation = {
+      agentId,
+      identity,
+      birthtime,
+      receiptId,
+      valid,
+      revokedBy,
+      canonicalReady,
+    };
     await closeOpenClawAgentDatabaseByPathAsync(database.path);
     // A reader worker starts without the writer's process-local validation metadata.
     releaseOpenClawAgentDatabaseReadValidation([{ path: database.path }]);
@@ -225,7 +235,15 @@ it.for([
           message: {
             role: "assistant",
             timestamp: 1_800_000_000_000 + index,
-            content: [{ type: "text", text: `Synthetic 漢字🦞\\"\n${"x".repeat(length)}` }],
+            content: [
+              { type: "text", text: `Synthetic 漢字🦞\\"\n${"x".repeat(length)}` },
+              {
+                type: "toolCall",
+                id: `tool-${index}`,
+                name: "read",
+                arguments: { path: "synthetic.txt" },
+              },
+            ],
           },
         });
       }
@@ -269,6 +287,13 @@ it.for([
       assert(body);
       expect(body.byteLength).toBeLessThanOrEqual(params.maxHistoryBytes);
       expect(JSON.parse(new TextDecoder().decode(body))).toEqual(expected.messages);
+      const activity = page.encodedResponse?.activity;
+      if (expected.activity) {
+        expect(activity).toBeInstanceOf(Uint8Array);
+        expect(new TextDecoder().decode(activity)).toBe(JSON.stringify(expected.activity));
+      } else {
+        expect(activity).toBeUndefined();
+      }
       expect([page.pagination, page.anchor]).toEqual([undefined, undefined]);
       expect(Object.hasOwn(page, "activeLeafEntryId")).toBe(offset === 0);
       expect(page.encodedResponse?.totalMessages).toBe(2);
@@ -285,6 +310,9 @@ it.for([
       }
       const received = structuredClone(reply, { transfer: worker.transfers(reply) });
       expect(body.byteLength).toBe(0);
+      if (activity) {
+        expect(activity.byteLength).toBe(0);
+      }
       if (deflated) {
         expect(deflated.byteLength).toBe(0);
       }

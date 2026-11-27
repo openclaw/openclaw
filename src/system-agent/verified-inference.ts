@@ -17,6 +17,7 @@ import {
   type AgentExecutionAuthBinding,
   type OpaqueRuntimeOwnerKind,
 } from "../agents/execution-auth-binding.js";
+import { resolveAvailableAgentHarnessPolicy } from "../agents/harness/availability.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import type {
   AgentHarnessRuntimeArtifactBinding,
@@ -26,6 +27,7 @@ import { resolveAgentHarnessOwnerPluginIds } from "../agents/harness/runtime-plu
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
@@ -289,16 +291,23 @@ function resolveRouteHarnessOwnerPluginIds(
   config: OpenClawConfig,
   route: SystemAgentConfiguredRoute,
 ): string[] {
-  if (
-    route.runner !== "embedded" ||
-    !route.agentHarnessRuntimeOverride ||
-    route.agentHarnessRuntimeOverride === "openclaw"
-  ) {
+  if (route.runner !== "embedded") {
+    return [];
+  }
+  const runtime =
+    route.agentHarnessRuntimeOverride ??
+    resolveAvailableAgentHarnessPolicy({
+      config,
+      provider: route.provider,
+      modelId: route.model,
+      agentId: route.agentId,
+    }).runtime;
+  if (runtime === "openclaw") {
     return [];
   }
   const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId, process.env);
   return resolveAgentHarnessOwnerPluginIds({
-    runtime: route.agentHarnessRuntimeOverride,
+    runtime,
     provider: route.provider,
     config,
     workspaceDir,
@@ -398,22 +407,6 @@ async function resolveExecutionAuthFingerprint(
     if (kind !== "aws-sdk") {
       return undefined;
     }
-    const auth = await resolveApiKeyForProviderCore({
-      provider: route.provider,
-      cfg: route.runConfig,
-      agentDir: route.agentDir,
-      workspaceDir: resolveAgentWorkspaceDir(route.runConfig, route.agentId, process.env),
-      ...(authProfileId ? { profileId: authProfileId, lockedProfile: true as const } : {}),
-      secretSentinels: true,
-    });
-    if (authProfileId && auth.profileId !== authProfileId) {
-      return undefined;
-    }
-    return fingerprintAwsSdkRuntimeOwner({
-      provider: route.provider,
-      backendId: route.agentHarnessRuntimeOverride,
-      auth,
-    });
   }
   const { modelId, modelApi } = authBinding;
   if (route.runner === "cli") {
@@ -455,7 +448,7 @@ async function resolveExecutionAuthFingerprint(
   let materializedProfile:
     | { profileId: string; credential: AuthProfileStore["profiles"][string] }
     | undefined;
-  if (authProfileId) {
+  if (authProfileId && proofKind !== "runtime-owner") {
     store = await loadRouteAuthProfileStore(route);
     const credential = store.profiles[authProfileId];
     if (!credential) {
@@ -486,8 +479,8 @@ async function resolveExecutionAuthFingerprint(
       };
     }
   }
-  // Credential selection is transport-sensitive. Reuse the facts from the
-  // successful run so this authority hot path cannot pick a different owner.
+  // SDK and credential selection are transport-sensitive. Reuse the successful
+  // run's facts and profile selection so revalidation cannot pick another owner.
   if (!modelId || !modelApi) {
     return undefined;
   }
@@ -507,6 +500,13 @@ async function resolveExecutionAuthFingerprint(
   if (authProfileId && auth.profileId !== authProfileId) {
     return undefined;
   }
+  if (proofKind === "runtime-owner") {
+    return fingerprintAwsSdkRuntimeOwner({
+      provider: route.provider,
+      backendId: route.agentHarnessRuntimeOverride,
+      auth,
+    });
+  }
   if (materializedProfile) {
     return auth.apiKey
       ? fingerprintResolvedAuthProfileCredential({ ...materializedProfile, resolvedAuth: auth })
@@ -520,11 +520,10 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
   executionRoute: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
-  const runConfig = cloneConfigWithResolutionFacts(params.executionRoute.runConfig);
   const configuredExecution = {
     ...params.executionRoute,
     sourceConfig: cloneConfigWithResolutionFacts(params.executionRoute.sourceConfig),
-    runConfig,
+    runConfig: captureRuntimeConfig(params.executionRoute.runConfig),
   } as SystemAgentConfiguredRoute;
   const authProfileId = params.auth.authProfileId ?? configuredExecution.authProfileId;
   const modelId = params.auth.modelId?.trim();

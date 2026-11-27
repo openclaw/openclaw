@@ -3,6 +3,32 @@ import {
   admitCanonicalSessionEntry,
   parseCanonicalSqliteSessionEntry,
 } from "./session-entry-json.js";
+import { projectPublicSessionEntry } from "./session-entry-projection.js";
+import { preserveGenerationPrivateFields } from "./session-entry-public-patch.js";
+import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
+
+describe("persisted delegated operator sources", () => {
+  const read = (delegatedOperatorSource: unknown) =>
+    parseCanonicalSqliteSessionEntry({
+      entry_json: JSON.stringify({ sessionId: "child", updatedAt: 1, delegatedOperatorSource }),
+    });
+  it.each([
+    null,
+    {},
+    { kind: "gateway" },
+    { kind: "unavailable", extra: true },
+    { kind: "unavailable", reason: "invalid" },
+  ])("rejects malformed bindings before typed metadata (%#)", (value) => {
+    expect(() => read(value)).toThrow(/operator recovery source/);
+  });
+  it("retains explicit unavailable bindings and leaves ordinary entries unbound", () => {
+    expect(read({ kind: "unavailable", reason: "no-source" })?.delegatedOperatorSource).toEqual({
+      kind: "unavailable",
+      reason: "no-source",
+    });
+    expect(read(undefined)).not.toHaveProperty("delegatedOperatorSource");
+  });
+});
 
 describe("canonical session numeric metadata", () => {
   it.each([
@@ -38,6 +64,11 @@ describe("canonical session numeric metadata", () => {
         spawnDepth: 2,
         inputTokens: 0,
         sessionFile: "retired.jsonl",
+        titleRefinement: {
+          sessionId: "session",
+          generatedName: "Release planning",
+          remainingMessages: 1,
+        },
         extension: { untouched: true },
       }),
     });
@@ -85,5 +116,63 @@ describe("canonical session numeric metadata", () => {
     expect(projected).not.toHaveProperty("snoozedUntil");
     expect(projected).not.toHaveProperty("snoozedAt");
     expect((projected.spawnDepth ?? 0) + 1).toBe(3);
+  });
+
+  it("keeps a graceful resume marker private and scoped to its current incarnation", () => {
+    const resumeAfterRestart = {};
+    const entry = admitCanonicalSessionEntry({
+      sessionId: "session",
+      lifecycleRevision: "incarnation",
+      updatedAt: 1,
+      resumeAfterRestart,
+      lifecycleRestartScope: "token-a",
+      mainRestartRecovery: { cycleId: "upgrade", revision: 1, executionIdentity: "retired" },
+      restartRecoveryOperatorSource: { snapshot: { obsolete: true } },
+      pendingExecNotifications: { obsolete: {} },
+    });
+    expect(entry).toEqual({
+      sessionId: "session",
+      lifecycleRevision: "incarnation",
+      updatedAt: 1,
+      resumeAfterRestart,
+      lifecycleRestartScope: "token-a",
+      mainRestartRecovery: { cycleId: "upgrade" },
+    });
+    const publicEntry = projectPublicSessionEntry(entry);
+    expect(publicEntry).not.toHaveProperty("resumeAfterRestart");
+    expect(publicEntry).not.toHaveProperty("lifecycleRestartScope");
+    expect(publicEntry).not.toHaveProperty("mainRestartRecovery");
+    expect(preserveGenerationPrivateFields(entry, { label: "Renamed" })).toMatchObject({
+      label: "Renamed",
+      resumeAfterRestart,
+      lifecycleRestartScope: "token-a",
+    });
+    for (const next of [
+      publicEntry,
+      { ...publicEntry, resumeAfterRestart: undefined },
+      { ...entry, sessionId: "replacement" },
+      { ...entry, lifecycleRevision: "replacement" },
+      { ...entry, archivedAt: 2 },
+    ]) {
+      const written = applySessionEntryWritePolicy(
+        "main",
+        "agent:main:session",
+        next,
+        { ...next },
+        entry,
+        {},
+      ).entry;
+      expect(written.mainRestartRecovery).toBeUndefined();
+      expect(written.lifecycleRestartScope).toBe(
+        next.sessionId === entry.sessionId &&
+          next.lifecycleRevision === entry.lifecycleRevision &&
+          !("archivedAt" in next)
+          ? "token-a"
+          : undefined,
+      );
+      expect(written.resumeAfterRestart).toEqual(
+        next === publicEntry ? resumeAfterRestart : undefined,
+      );
+    }
   });
 });

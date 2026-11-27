@@ -1,16 +1,23 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { requesterMcpOAuthStoreKeyPrefix } from "../agents/mcp-oauth-identity.js";
+import {
+  operatorMcpOAuthIdentity,
+  requesterMcpOAuthStoreKeyPrefix,
+} from "../agents/mcp-oauth-identity.js";
+import { MCP_OAUTH_LINK_CALLBACK_PATH } from "../agents/mcp-oauth-link.js";
 import { readMcpOAuthPendingAuthorization, readMcpOAuthStore } from "../agents/mcp-oauth-store.js";
 import { completeOAuthCallback } from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { OAUTH_PAGE_CSP } from "../infra/oauth-page-csp.js";
+import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
+import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { resolveOperatorMcpOAuthConnection } from "../plugins/mcp-auth-status.js";
 import { renderOAuthPage } from "../shared/oauth-page.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 
-const MCP_OAUTH_CALLBACK_PATH = "/oauth/mcp/callback";
+const MCP_OAUTH_CALLBACK_PATH = MCP_OAUTH_LINK_CALLBACK_PATH;
 const MCP_OAUTH_CALLBACK_MAX_URL_BYTES = 8 * 1024;
 const CONNECTED_HTML = renderOAuthPage({
   title: "Account connected",
@@ -43,7 +50,7 @@ function isPerRequesterServer(server: Record<string, unknown>): boolean {
   return server.enabled !== false && server.auth === "oauth" && oauth?.identity === "per-requester";
 }
 
-/** Completes one requester MCP OAuth redirect using durable state correlation. */
+/** Completes requester and shared link redirects using durable state correlation. */
 export async function handleMcpOAuthCallback(
   req: IncomingMessage,
   res: ServerResponse,
@@ -68,7 +75,25 @@ export async function handleMcpOAuthCallback(
         ? [{ serverName, resolved }]
         : [];
     });
-  if (configuredServers.length === 0) {
+  const metadata = getGatewayPluginMetadataSnapshot();
+  const bundled = metadata
+    ? loadEnabledBundleMcpConfig({
+        cfg: params.config,
+        workspaceDir: metadata.workspaceDir ?? "",
+        manifestRegistry: metadata.manifestRegistry,
+      }).config.mcpServers
+    : {};
+  const sharedServers = [
+    ...new Set([...Object.keys(params.config.mcp?.servers ?? {}), ...Object.keys(bundled)]),
+  ].flatMap((serverName) => {
+    const connection = resolveOperatorMcpOAuthConnection({
+      config: params.config,
+      metadata,
+      serverName,
+    });
+    return connection ? [{ serverName, resolved: connection.config }] : [];
+  });
+  if (configuredServers.length === 0 && sharedServers.length === 0) {
     return false;
   }
   if (Buffer.byteLength(rawUrl, "utf8") > MCP_OAUTH_CALLBACK_MAX_URL_BYTES) {
@@ -91,9 +116,18 @@ export async function handleMcpOAuthCallback(
     return true;
   }
 
-  const configuredServer = configuredServers.find(({ serverName, resolved }) =>
+  const requesterServer = configuredServers.find(({ serverName, resolved }) =>
     storeKey.startsWith(requesterMcpOAuthStoreKeyPrefix(serverName, resolved.url)),
   );
+  // Settings attempts stay browser-bound to /oauth/provider/callback.
+  const sharedServer =
+    URL.parse(pending?.redirectUrl ?? "")?.pathname === MCP_OAUTH_LINK_CALLBACK_PATH
+      ? sharedServers.find(
+          ({ serverName, resolved }) =>
+            storeKey === operatorMcpOAuthIdentity(serverName, resolved.url).storeKey,
+        )
+      : undefined;
+  const configuredServer = requesterServer ?? sharedServer;
   if (!configuredServer) {
     respondHtml(res, 404, EXPIRED_HTML);
     return true;
@@ -103,21 +137,22 @@ export async function handleMcpOAuthCallback(
     return true;
   }
   const code = url.searchParams.get("code")?.trim();
-  if (!code) {
+  if (!code || url.searchParams.getAll("iss").length > 1) {
     respondHtml(res, 400, RETRY_HTML);
     return true;
   }
 
+  const iss = url.searchParams.get("iss");
   try {
     const result = await completeOAuthCallback(
       {
         storeKey,
-        principal: "requester",
+        principal: requesterServer ? "requester" : "operator",
         serverName: configuredServer.serverName,
         serverUrl: configuredServer.resolved.url,
       },
       configuredServer.resolved,
-      { code, state },
+      { code, state, ...(iss === null ? {} : { iss }) },
       undefined,
       context,
     );

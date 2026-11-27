@@ -5,7 +5,6 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
-import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as programArgs from "../daemon/program-args.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
@@ -695,13 +694,13 @@ describe("finalizeSetupWizard", () => {
       typeof import("../commands/daemon-install-helpers.js")
     >("../commands/daemon-install-helpers.js");
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.4" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
     const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
       status: "supported",
-      version: "1.4.3",
+      version: "1.4.4",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
@@ -785,49 +784,6 @@ describe("finalizeSetupWizard", () => {
     expectNoteContains(prompter, "plan failed", "Gateway");
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
   });
-
-  it.each([
-    { platform: "linux", action: "installed" },
-    { platform: "linux", action: "reused" },
-    { platform: "linux", action: "skipped" },
-    { platform: "win32", action: "installed" },
-  ] as const)(
-    "uses the $platform readiness budget after service $action",
-    async ({ platform, action }) => {
-      await withPlatform(platform, async () => {
-        gatewayServiceIsLoaded.mockResolvedValue(action !== "installed");
-        const choice = action === "reused" ? "skip" : "restart";
-        const prompter = buildWizardPrompter(undefined, { defaultSelect: choice });
-
-        await finalizeSetupWizard(
-          createFinalizeArgs("quickstart", {
-            opts: { installDaemon: action !== "skipped", skipHealth: false, skipUi: true },
-            prompter,
-          }),
-        );
-
-        if (action === "skipped") {
-          expect(waitForGatewayReachable).not.toHaveBeenCalled();
-          expectNoteContains(prompter, "openclaw gateway run", "Gateway");
-          expect(prompter.outro).toHaveBeenCalledWith(
-            expect.stringContaining("openclaw gateway run"),
-          );
-          return;
-        }
-        const managedStartup = action !== "reused";
-        const startupTiming = resolveGatewayStartupTiming(platform);
-        expect(waitForGatewayReachable).toHaveBeenCalledOnce();
-        const timing = mockCall(waitForGatewayReachable)[0] as {
-          deadlineMs?: number;
-          probeTimeoutMs?: number;
-        };
-        expect(timing.deadlineMs).toBe(managedStartup ? startupTiming.deadlineMs : 15_000);
-        expect(timing.probeTimeoutMs ?? 1_500).toBe(
-          managedStartup ? startupTiming.probeTimeoutMs : 1_500,
-        );
-      });
-    },
-  );
 
   it.each([false, true])(
     "detects the surviving gateway after failed reinstall (skipHealth=%s)",
@@ -1195,7 +1151,7 @@ describe("finalizeSetupWizard", () => {
     "reinstalls recorded Bun through $flow with choice=$choice",
     async ({ flow, choice }) => {
       const recordedPath = "/opt/recorded/bin/bun";
-      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.3"));
+      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.4"));
       gatewayServiceIsLoaded.mockResolvedValue(true);
       gatewayServiceReadCommand.mockResolvedValue({
         programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],

@@ -107,10 +107,9 @@ it("restarts the recorded service and warns without repairing from invalid confi
 
   await expect(
     runServiceRestart({
-      ...createServiceRunArgs(),
+      ...createServiceRunArgs(() => ({ config: loadConfig(), command: null })),
       repairLoadedService,
       postRestartCheck,
-      checkTokenDrift: true,
     }),
   ).resolves.toBe(true);
 

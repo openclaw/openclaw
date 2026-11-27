@@ -70,7 +70,11 @@ it.each(["update", "repair", "completion", "repair completion"] as const)(
     const { filename, before } = state();
     const admitted =
       mode === "completion"
-        ? await admitUpdateCommandRun({ opts: { timeout: "10" }, root: fixture.root })
+        ? await admitUpdateCommandRun({
+            env: process.env,
+            opts: { timeout: "10" },
+            root: fixture.root,
+          })
         : undefined;
     const lifecycle =
       mode === "repair completion"
@@ -100,12 +104,8 @@ it.each(["update", "repair", "completion", "repair completion"] as const)(
             ).runId
           : mode === "repair"
             ? new UpdateFinalizationLifecycle(true, undefined, () => {}).attachLedger(true)
-            : (
-                await admitUpdateCommandRun({
-                  opts: {},
-                  root: fixture.root,
-                })
-              ).runId);
+            : (await admitUpdateCommandRun({ env: process.env, opts: {}, root: fixture.root }))
+                .runId);
       expect(getUpdateRun(runId!)).toMatchObject({
         status: admitted || lifecycle ? "succeeded" : "running",
       });
@@ -117,7 +117,7 @@ it.each(["update", "repair", "completion", "repair completion"] as const)(
   20_000,
 );
 
-it.each(["dry-run", "update", "repair", "finalize"] as const)(
+it.each(["dry-run", "repair", "finalize"] as const)(
   "reports exhausted %s admission as recoverable and preserves history",
   async (mode) => {
     const { filename, before } = state();

@@ -19,7 +19,7 @@ import {
   readTranscriptContextVersionInTransaction as readVersion,
 } from "./session-accessor.sqlite-transcript-state.js";
 import { runTranscriptWriteSnapshotSync as writeSnapshot } from "./session-accessor.sqlite-transcript-write-snapshot.js";
-import { appendTranscriptMessageSnapshotSync as appendSnapshot } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSnapshotSync as appendSnapshot } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { readSessionPendingInputAuthorityFacts as readAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { readTranscriptAppendPostimage as readPostimage } from "./session-transcript-append-postimage.js";

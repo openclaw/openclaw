@@ -176,13 +176,17 @@ it("keeps foreign-destination remediation visible until a later successful updat
     reason: "global-install-foreign-destination",
     target: { kind: "package", version: "2026.9.4" },
     before: { version: "2026.7.1-2" },
+    origin: {
+      nextAction:
+        "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
+    },
     steps: [{ step: "global-install-foreign-destination", status: "failed" }],
   });
   listRuns.mockImplementation(async (input) => (input?.active ? [] : [latest]));
   readCandidate.mockResolvedValue(latest);
   await noteStaleUpdateRuns({});
   expect(note).toHaveBeenCalledOnce();
-  expectHistoryNote("OpenClaw update failed: global-install-foreign-destination.");
+  expectHistoryNote("(global-install-foreign-destination).");
   expectHistoryNote(
     "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
   );
@@ -275,3 +279,33 @@ it("stops replaying resolved state migration warnings without erasing history", 
     expect(getUpdateRun(later.runId)).toEqual(laterHistory);
   });
 });
+
+it.each(["completed", "skipped", undefined] as const)(
+  "uses the selected historical run's model retirement receipt (%s)",
+  async (status) => {
+    await withOpenClawTestState({ label: "model-retirement-history" }, async () => {
+      const warning = "Model retirement deferred until configured plugin installation converges.";
+      const run = createUpdateRun({ trigger: "cli" });
+      recordWarning(run.runId, warning);
+      recordWarning(run.runId, "Unrelated update warning", 2, ":unrelated");
+      if (status) {
+        recordUpdateRunStep(run.runId, { step: "finalize:doctor:model-retirement", status });
+      }
+      const history = finishUpdateRun(run.runId, { status: "succeeded" });
+      // Another run's completion must not settle the selected history's warning.
+      const active = createUpdateRun({ trigger: "cli" });
+      recordUpdateRunStep(active.runId, {
+        step: "finalize:doctor:model-retirement",
+        status: "completed",
+      });
+      listRuns.mockImplementation(async (input) => (input?.active ? [active] : [history!]));
+
+      await noteStaleUpdateRuns({ migrateState: false });
+
+      const output = noteMock.mock.calls.map(([message]) => message).join("\n");
+      expect(output.includes(warning)).toBe(status !== "completed");
+      expect(output).toContain("Unrelated update warning");
+      expect(getUpdateRun(run.runId)).toEqual(history);
+    });
+  },
+);

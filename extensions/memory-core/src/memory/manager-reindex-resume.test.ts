@@ -53,7 +53,7 @@ describe("background reindex resumption", () => {
     "settles a background reindex interrupted by a foreground turn: %s",
     { timeout: 30_000 },
     async (resume, { signal }) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       onTestFinished(() => {
         vi.useRealTimers();
       });

@@ -18,6 +18,7 @@ import {
   settleWorkspaceRuns,
   successfulSessionRequest as request,
 } from "./server.sessions.create.projects.test-support.js";
+import { sessionTitleRequests } from "./session-title-state.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -49,26 +50,46 @@ const readEntry = (storePath: string, sessionKey: string) =>
   loadSessionEntry({ agentId: "main", sessionKey, storePath });
 const adminClient = { client: { connect: { scopes: ["operator.admin"] } } as never };
 
-test("preserves generated-title provenance at session creation without treating manual names as generated", async () => {
+test("keeps an automatic title through seven follow-ups and accepts an explicit rename", async () => {
   const { storePath } = await createSessionStoreDir();
-  for (const generated of [true, false]) {
-    const result = await request<{ key: string }>(
-      "sessions.create",
-      { agentId: "main", displayName: "Release planning", displayNameGenerated: generated },
-      controlUiClient,
+  const context = { dedupe: new Map() };
+  const options = { ...controlUiClient, context };
+  dispatchInboundMessageMock.mockResolvedValue({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  });
+  const titleStarted = createDeferredCore();
+  titleMocks.generate.mockImplementation(() => {
+    titleStarted.resolve();
+    return "Release planning";
+  });
+  const { key, sessionId } = await request<{ key: string; sessionId: string }>(
+    "sessions.create",
+    { agentId: "main", message: "Help me plan the release" },
+    options,
+  );
+  await settleWorkspaceRuns(context, storePath, key);
+  await titleStarted.promise;
+  await sessionTitleRequests.get({ storePath, sessionKey: key, sessionId });
+  expect(readEntry(storePath, key)?.displayName).toBe("Release planning");
+  titleMocks.generate.mockResolvedValue("Land PR and archive");
+  for (let index = 0; index < 7; index++) {
+    await request(
+      "chat.send",
+      {
+        sessionKey: key,
+        message: "Land the PR and archive it",
+        idempotencyKey: `follow-up-${index}`,
+      },
+      options,
     );
-    const entry = readEntry(storePath, result.key);
-    expect(entry?.displayName).toBe("Release planning");
-    if (generated) {
-      expect(entry?.titleRefinement).toMatchObject({
-        sessionId: entry?.sessionId,
-        generatedName: "Release planning",
-        remainingMessages: 7,
-      });
-    } else {
-      expect(entry?.titleRefinement).toBeUndefined();
-    }
+    await settleWorkspaceRuns(context, storePath, key);
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   }
+  expect(readEntry(storePath, key)?.displayName).toBe("Release planning");
+  expect(titleMocks.generate).toHaveBeenCalledOnce();
+  await request("sessions.patch", { key, label: "My release" }, options);
+  expect(readEntry(storePath, key)?.label).toBe("My release");
 });
 
 async function workspaceFixture(prefix: string) {
@@ -320,7 +341,7 @@ test.each(["generator error", "delayed title"])(
       await waitForPreparation(dispatchStarted.promise);
       await waitForPreparation(titleStarted.promise);
       const branch = loadSessionEntry(target)?.worktree?.branch;
-      expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+$/);
+      expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+-[0-9a-f]{6}$/);
       expect(titleMocks.generate).toHaveBeenCalledOnce();
       dispatchFinished.resolve();
       await settleWorkspaceRuns(context, storePath, key);
@@ -367,11 +388,18 @@ test("creates a two-word worktree name before an initial turn can generate its t
     key = created.key;
     await settleWorkspaceRuns(context, storePath, key);
     const branch = (await managedWorktrees.findLiveByOwner("session", key))?.branch;
-    expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+$/);
+    expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+-[0-9a-f]{6}$/);
     const entry = readEntry(storePath, key);
     expect(entry?.worktree?.branch).toBe(branch);
   } finally {
-    await cleanupWorktree(context, storePath, key);
+    try {
+      // Creation replies before optional naming releases its independent root.
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
+        timeout: 30_000,
+      });
+    } finally {
+      await cleanupWorktree(context, storePath, key);
+    }
   }
 });
 

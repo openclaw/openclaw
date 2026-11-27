@@ -1,5 +1,15 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  sendDurableMessageBatch,
+  verifyDurableFinalCapabilityProofs,
+} from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
@@ -22,6 +32,7 @@ const posted = (text: string, ids: string[], parent = "501") => ({
 });
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  resetPluginRuntimeStateForTest();
   vi.restoreAllMocks();
 });
 
@@ -146,6 +157,170 @@ it("uploads a gallery once and attaches it only to the first caption chunk", asy
   ]);
   expect(result.receipt?.parts.map((part) => part.kind)).toEqual(["media", "text"]);
 });
+
+type MediaFixture = Awaited<ReturnType<typeof mediaFixture>>;
+const images = async (test: MediaFixture, count: number) =>
+  [
+    test.file,
+    ...(await Promise.all(
+      Array.from({ length: Math.max(count - 1, 0) }, (_, i) =>
+        test.write(`${i + 2}.png`, test.bytes),
+      ),
+    )),
+  ].slice(0, count);
+const sendThroughCore = (
+  test: MediaFixture,
+  payload: { text: string; mediaUrls?: string[] },
+  onPlatformSendDispatch?: () => Promise<void>,
+) => {
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "x", plugin: xPlugin, source: "test" }]));
+  return sendDurableMessageBatch({
+    cfg: config,
+    channel: "x",
+    to: "x:501",
+    payloads: [payload],
+    mediaAccess: test.context.mediaAccess,
+    skipQueue: true,
+    ...(onPlatformSendDispatch ? { onPlatformSendDispatch } : {}),
+  });
+};
+
+it.each([
+  ["text", 0, [{ text: "Proof.", reply: { in_reply_to_tweet_id: "501" } }]],
+  ["one image", 1, [posted("Proof.", ["701"])]],
+  ["two images", 2, [posted("Proof.", ["701", "702"])]],
+] as const)("sends a core-routed reply with %s as one post", async (_kind, count, expected) => {
+  const test = await mediaFixture();
+  const mediaUrls = await images(test, count);
+  const result = await sendThroughCore(test, { text: "Proof.", ...(count ? { mediaUrls } : {}) });
+  expect(result.status).toBe("sent");
+  expect(test.posts()).toEqual(expected);
+});
+
+it.each([
+  ["five images", (test: MediaFixture) => images(test, 5), /up to four images/],
+  [
+    "an image and a video",
+    async (test: MediaFixture) => [test.file, await test.write("proof.mp4", videoBytes)],
+    /do not mix them with images/,
+  ],
+] as const)(
+  "refuses a core-routed reply with %s before any upload or post",
+  async (_kind, media, error) => {
+    const test = await mediaFixture();
+    const result = await sendThroughCore(test, { text: "Proof.", mediaUrls: await media(test) });
+    expect(result).toMatchObject({
+      status: "failed",
+      error: expect.objectContaining({ message: expect.stringMatching(error) }),
+      payloadOutcomes: [{ status: "failed", sentBeforeError: false }],
+    });
+    expect(test.requests).toEqual([]);
+  },
+);
+
+it("covers the declared durable payload capability with a core-routed gallery", async () => {
+  const test = await mediaFixture();
+  const mediaUrls = await images(test, 2);
+  const proofs = await verifyDurableFinalCapabilityProofs({
+    adapterName: "x",
+    capabilities: xPlugin.outbound?.deliveryCapabilities?.durableFinal,
+    proofs: {
+      payload: async () => {
+        await sendThroughCore(test, { text: "Proof.", mediaUrls });
+        expect(test.posts()).toEqual([posted("Proof.", ["701", "702"])]);
+      },
+    },
+  });
+  expect(proofs.filter(({ status }) => status === "verified")).toEqual([
+    { capability: "payload", status: "verified" },
+  ]);
+});
+
+const plainError = () => new Error("delivery custody lost");
+const notDispatchedError = () =>
+  new PlatformMessageNotDispatchedError("delivery custody lost", {
+    cause: undefined,
+    retryable: true,
+  });
+it.each([
+  ["gallery", "a plain error", 2, plainError, posted("a".repeat(280), ["701", "702"])],
+  [
+    "gallery",
+    "a not-dispatched error",
+    2,
+    notDispatchedError,
+    posted("a".repeat(280), ["701", "702"]),
+  ],
+  [
+    "text",
+    "a not-dispatched error",
+    0,
+    notDispatchedError,
+    { text: "a".repeat(280), reply: { in_reply_to_tweet_id: "501" } },
+  ],
+] as const)(
+  "reports the first %s post when custody is lost after it with %s",
+  async (_kind, _error, count, custodyError, expected) => {
+    const test = await mediaFixture();
+    const mediaUrls = await images(test, count);
+    const result = await sendThroughCore(
+      test,
+      { text: "a".repeat(300), ...(count ? { mediaUrls } : {}) },
+      async () => {
+        if (test.posts().length > 0) {
+          throw custodyError();
+        }
+      },
+    );
+    expect(test.posts()).toEqual([expected]);
+    expect(result).toMatchObject({
+      status: "partial_failed",
+      sentBeforeError: true,
+      receipt: { platformMessageIds: ["901"] },
+      payloadOutcomes: [{ status: "failed", sentBeforeError: true }],
+    });
+  },
+);
+
+it.each(["gallery", "text"] as const)(
+  "re-checks delivery custody before each visible %s post",
+  async (kind) => {
+    const test = await mediaFixture();
+    const mediaUrls = kind === "gallery" ? await images(test, 2) : [];
+    const text = "a".repeat(300);
+    const send = (onPlatformSendDispatch: () => Promise<void>) =>
+      kind === "gallery"
+        ? xPlugin.outbound!.sendPayload!({
+            ...test.context,
+            text,
+            payload: { text, mediaUrls },
+            onPlatformSendDispatch,
+          })
+        : xPlugin.outbound!.sendText!({ ...test.context, text, onPlatformSendDispatch });
+    await send(async () => {
+      test.requests.push({ path: "dispatch", body: undefined });
+    });
+    const upload = (id: string) => [
+      "/2/media/upload/initialize",
+      `/2/media/upload/${id}/append`,
+      `/2/media/upload/${id}/finalize`,
+    ];
+    expect(test.requests.map((request) => request.path)).toEqual([
+      ...(kind === "gallery" ? [...upload("701"), ...upload("702")] : []),
+      "dispatch",
+      "/2/tweets",
+      "dispatch",
+      "/2/tweets",
+    ]);
+    test.requests.length = 0;
+    await expect(
+      send(async () => {
+        throw new Error("delivery custody lost");
+      }),
+    ).rejects.toThrow("delivery custody lost");
+    expect(test.posts()).toEqual([]);
+  },
+);
 
 it.each(["outside roots", "unsupported", "many", "mixed", "oversized", "processing failed"])(
   "rejects %s without creating a Post",

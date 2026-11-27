@@ -1,4 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseInspectionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
+import type { AgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
+import { createAgentDatabaseStartupObservation } from "../state/agent-database-startup-observation.js";
+import type { PendingAgentDatabaseRecovery } from "../state/agent-database-startup.types.js";
 import {
   buildControlUiSessionEntryUrl as entryUrl,
   parseControlUiSessionReturnPath as parseReturn,
@@ -6,6 +21,7 @@ import {
 import { serveControlUiSessionEntry } from "./control-ui-session-entry.js";
 import { AUTH_TOKEN, createRequest, createResponse } from "./server-http.test-harness.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 const { authenticate, resolveSession, current } = vi.hoisted(() => ({
   authenticate: vi.fn(),
@@ -14,8 +30,7 @@ const { authenticate, resolveSession, current } = vi.hoisted(() => ({
 }));
 vi.mock(import("./http-auth-utils.js"), async (importOriginal) => ({
   ...(await importOriginal()),
-  checkGatewayHttpRequestAuth: authenticate,
-  resolveSharedSecretHttpOperatorScopes: () => ["operator.read"],
+  authorizeControlUiReadRequestOrReply: authenticate,
 }));
 vi.mock(import("./control-ui-session-path-resolve.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -28,16 +43,21 @@ const projection = {} as SessionRowProjection;
 beforeEach(() => {
   current.mockReset().mockReturnValue(true);
   authenticate.mockReset().mockResolvedValue({
-    ok: true,
-    requestAuth: { authenticatedUserProfile: profile, hasCurrentClientAuthority: current },
+    authenticatedUserProfile: profile,
+    hasCurrentClientAuthority: current,
+    operatorScopes: ["operator.read"],
+    revalidate: async () => {},
   });
   resolveSession
     .mockReset()
     .mockResolvedValue({ key: "agent:main:topic", agentId: "main", isCurrent: current });
 });
+afterEach(() => recordAgentDatabaseAdmissions([], { source: "startup" }));
 async function request(
   path = entry,
   mode: "token" | "password" | "trusted-proxy" = "trusted-proxy",
+  startup?: AgentDatabasePreparation,
+  rows = projection,
 ) {
   const response = createResponse();
   const serveApp = vi.fn<Parameters<typeof serveControlUiSessionEntry>[0]["serveApp"]>(
@@ -47,13 +67,112 @@ async function request(
     req: createRequest({ path, host: "localhost" }),
     res: response.res,
     basePath: "/control",
-    projection,
+    projection: rows,
     auth: { ...AUTH_TOKEN, mode },
     serveApp,
+    ...(startup ? { agentDatabaseStartup: startup } : {}),
   });
   return { ...response, serveApp };
 }
 describe("protected canonical session handoff", () => {
+  function preparingSource() {
+    const entered = createDeferred();
+    const readReady = createDeferred();
+    const completion = createDeferred();
+    // The physical source can differ from the logical agent in the URL.
+    const refusal = createAgentDatabaseInspectionRefusal({
+      agentId: "shared-store",
+      paths: [],
+      reason: "Source inspection is pending",
+      pending: true,
+    });
+    recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+    const pending: PendingAgentDatabaseRecovery = {
+      refusal,
+      completion: completion.promise,
+      readReady: readReady.promise,
+      startedAt: 0,
+      phase: "inspection",
+      phaseStartedAt: 0,
+      phaseDurationsMs: {},
+    };
+    const startup = createAgentDatabaseStartupObservation(
+      new Map([[refusal.agentId, pending]]),
+      new AbortController().signal,
+    );
+    resolveSession.mockImplementation(() => {
+      entered.resolve();
+      throw new AgentDatabaseAdmissionError(refusal);
+    });
+    return {
+      startup,
+      entered: entered.promise,
+      readable() {
+        resolveSession.mockResolvedValue({
+          key: "agent:main:topic",
+          agentId: "main",
+          isCurrent: current,
+        });
+        pending.readReady = undefined;
+        readReady.resolve();
+      },
+      finish() {
+        completion.resolve();
+        readReady.resolve();
+      },
+    };
+  }
+
+  it.each([false, true])(
+    "holds protected entry for its source's read readiness (probe=%s)",
+    async (probe) => {
+      const preparation = preparingSource();
+      let settled = false;
+      const response = request(
+        probe ? `${entry}&probe=1` : entry,
+        "trusted-proxy",
+        preparation.startup,
+      ).then((value) => {
+        settled = true;
+        return value;
+      });
+      void response.catch(() => {});
+      try {
+        await preparation.entered;
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        preparation.readable();
+        const result = await response;
+        expect(result.res.statusCode).toBe(probe ? 204 : 200);
+        expect(result.serveApp).toHaveBeenCalledTimes(probe ? 0 : 1);
+        expect(result.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+        // Full writable preparation is deliberately still pending.
+        expect(preparation.startup.hasPendingAgents).toBe(true);
+      } finally {
+        preparation.finish();
+      }
+    },
+  );
+
+  it("cancels a closed request without cancelling source preparation", async () => {
+    const preparation = preparingSource();
+    const work = new AsyncWorkScope();
+    const response = work.run(() => request(entry, "trusted-proxy", preparation.startup));
+    void response.catch(() => {});
+    try {
+      await preparation.entered;
+      const closed = new Error("Request closed");
+      work.beginClose(closed);
+      await expect(response).rejects.toMatchObject({ name: "AbortError", cause: closed });
+      preparation.readable();
+      expect(
+        (await request(`${entry}&probe=1`, "trusted-proxy", preparation.startup)).res.statusCode,
+      ).toBe(204);
+    } finally {
+      preparation.finish();
+    }
+  });
+
   it.each([
     ["dashboard=expanded", "dashboard=expanded"],
     ["draft=Follow+up&dashboard=expanded&openclaw_mount_recovery=1791731984160", "draft=second"],
@@ -66,12 +185,24 @@ describe("protected canonical session handoff", () => {
 
   it.each([
     "__openclawSessionFacePreference=1",
+    "__openclawSessionKey=agent%3Aother%3Adashboard%3A11111111-2222-3333-4444-555555555555",
     "__openclawSessionKey=agent%3Amain%3Adashboard%3A11111111-2222-3333-4444-555555555555&__openclawComposerFocus=1",
   ])("preserves navigation hints %s without changing the authenticated target", async (query) => {
     const path = `${canonical}?${query}`;
     const opened = await request(entryUrl(path, "/control"));
     expect(opened.serveApp).toHaveBeenCalledWith(path, expect.any(Function));
-    expect(parseReturn(path, "/control")).toEqual(parseReturn(canonical, "/control"));
+    expect(resolveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: {
+          namespace: "chat",
+          kind: "short",
+          agentId: "main",
+          shortId: "12345678aaaa40008000000000000001",
+          slugHint: "launch",
+          literalSessionKey: "agent:main:launch-12345678aaaa40008000000000000001",
+        },
+      }),
+    );
   });
 
   it("uses the authenticated profile and grants only exact accessible sessions", async () => {
@@ -98,10 +229,46 @@ describe("protected canonical session handoff", () => {
     expect(opened.getBody()).toContain("Session unavailable");
     expect(opened.setHeader).not.toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
   });
+  it("opens the main route before its first message, as with a present main", async () => {
+    const actual = await vi.importActual<typeof import("./control-ui-session-path-resolve.js")>(
+      "./control-ui-session-path-resolve.js",
+    );
+    resolveSession.mockImplementation(actual.resolveControlUiSessionPath);
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const rows = createSessionRowProjectionFixture({ cfg, store: {} });
+    try {
+      const main = "/control/chat/main";
+      const mainEntry = entryUrl(main, "/control");
+      const openMain = async () => {
+        const probe = await request(`${mainEntry}&probe=1`, undefined, undefined, rows);
+        expect(probe.res.statusCode).toBe(204);
+        const opened = await request(mainEntry, undefined, undefined, rows);
+        expect(opened.serveApp).toHaveBeenCalledWith(main, expect.any(Function));
+        expect(opened.setHeader).toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
+        return opened.serveApp.mock.calls[0]?.[1];
+      };
+      const beforeFirstMessage = await openMain();
+      rows.setEntry("agent:main:main", { sessionId: "first", updatedAt: 1 });
+      // The row appearing keeps an app document that was opened without one.
+      expect(beforeFirstMessage?.()).toBe(true);
+      await openMain();
+      // Any other missing session still ends the handoff.
+      const missing = await request(entry, undefined, undefined, rows);
+      expect(missing.res.statusCode).toBe(403);
+      expect(missing.getBody()).toContain("Session unavailable");
+    } finally {
+      rows.dispose();
+      clearRuntimeConfigSnapshot();
+    }
+  });
   it("keeps explicit password login on the existing app login gate", async () => {
-    authenticate.mockResolvedValue({
-      ok: false,
-      authResult: { ok: false, reason: "token_missing" },
+    authenticate.mockImplementation(async ({ res, replyOnFailure }) => {
+      if (replyOnFailure) {
+        res.statusCode = 401;
+        res.end();
+      }
+      return null;
     });
     const opened = await request(entry, "password");
     expect(opened.serveApp).toHaveBeenCalledWith(canonical);
@@ -124,6 +291,10 @@ describe("protected canonical session handoff", () => {
     "/control/chat/main?__openclawSessionFacePreference=1&__openclawSessionFacePreference=1",
     "/control/chat/main?__openclawSessionKey=first&__openclawSessionKey=second",
     "/control/chat/main?__openclawSessionKey=",
+    "/control/chat/main?__openclawSessionKey=+%20",
+    "/control/chat/main?__openclawSessionKey=agent%3Amain%3Aa%00",
+    "/control/chat/main?__openclawSessionKey=agent%3Amain%3Aa%7F",
+    "/control/chat/main?__openclawSessionKey=agent%3Amain%3Aa&unknown=value",
     "/control/chat/main?__openclawComposerFocus=1&__openclawComposerFocus=1",
     "/control/chat/main?__openclawComposerFocus=0",
     "/control/chat/main?__openclawComposerFocus=",

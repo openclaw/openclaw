@@ -54,6 +54,10 @@ const metadata = createPluginMetadataSnapshotFixture({
   plugins: [{ id: "codex", providers: ["codex"], syntheticAuthRefs: ["codex"] }],
 });
 type DecisionParams = Parameters<typeof createModelCatalogDecisions>[0];
+type Evaluation = ReturnType<ReturnType<typeof createModelCatalogDecisions>["evaluateEntry"]>;
+function expectAvailable(evaluation: Evaluation, selectedProfileId: string) {
+  expect(evaluation).toMatchObject({ availability: true, selectedProfileId });
+}
 const emptyAuth = authStore();
 const tokenStore = (...ids: string[]) =>
   authStore(Object.fromEntries(ids.map((id) => [id, token(`synthetic-${id}`)])));
@@ -211,10 +215,7 @@ describe("captured model decisions", () => {
     expect(prepared.snapshot.providerOutcomes?.[0]?.modelServiceTiers?.[0]?.serviceTiers).toEqual([
       "ultrafast",
     ]);
-    expect(prepared.evaluateEntry(entry, undefined, "codex")).toMatchObject({
-      selectedProfileId: "openai:selected",
-      availability: true,
-    });
+    expectAvailable(prepared.evaluateEntry(entry, undefined, "codex"), "openai:selected");
   });
 
   it("does not publish a selected-account result after its generation expires", async () => {
@@ -251,10 +252,17 @@ describe("captured model decisions", () => {
     vi.useRealTimers();
   });
 
-  it("preserves provider auth for an authenticated non-CLI harness", async () => {
+  it("offers an authenticated non-CLI harness alongside the configured host runtime", async () => {
     const copilotEntry = model("github-copilot", "fixture-model");
     const owner = decisions({
-      cfg: { plugins: { entries: { copilot: { enabled: true } } } },
+      cfg: {
+        plugins: { entries: { copilot: { enabled: true } } },
+        agents: {
+          defaults: {
+            models: { "github-copilot/fixture-model": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+      },
       agentDir: "/tmp/copilot-agent",
       workspaceDir: "/tmp/copilot-workspace",
       snapshot: catalogSnapshot([copilotEntry]),
@@ -273,10 +281,7 @@ describe("captured model decisions", () => {
       isCurrent: () => true,
     });
     const choices = owner.runtimeChoices(copilotEntry);
-    expect(owner.evaluateEntry(copilotEntry, undefined, "copilot")).toMatchObject({
-      availability: true,
-      selectedProfileId: "github-copilot:work",
-    });
+    expectAvailable(owner.evaluateEntry(copilotEntry, undefined, "copilot"), "github-copilot:work");
     expect(choices).toContain("copilot");
   });
 
@@ -353,9 +358,10 @@ describe("captured model decisions", () => {
         "openai:platform": apiKey("openai"),
       }),
     });
-    expect(
+    expectAvailable(
       owner.evaluateEntry({ provider: entry.provider, id: entry.id }, undefined, "openclaw"),
-    ).toMatchObject({ availability: true, selectedProfileId: "openai:platform" });
+      "openai:platform",
+    );
     expect(
       owner.evaluateEntry(
         { ...entry, api: subscriptionRoute.api, baseUrl: subscriptionRoute.baseUrl },
@@ -376,10 +382,15 @@ describe("captured model decisions", () => {
       status: "ready",
       listedModelIds,
     });
-    const evaluate = (
+    const accountDecisions = (
       outcomes: readonly Outcome[],
-      id: string,
-      options: { profileIds?: readonly string[]; withApiKey?: boolean; pin?: string } = {},
+      options: {
+        profileIds?: readonly string[];
+        withApiKey?: boolean;
+        pin?: string;
+        accountCatalog?: DecisionParams["accountCatalog"];
+        entries?: ModelCatalogEntry[];
+      } = {},
     ) => {
       mockRouteResolverFactory(
         routeResolverFactory({
@@ -389,7 +400,8 @@ describe("captured model decisions", () => {
       );
       return decisions({
         pinnedProfileId: options.pin,
-        snapshot: catalogSnapshot([], {
+        accountCatalog: options.accountCatalog,
+        snapshot: catalogSnapshot(options.entries, {
           providerOutcomes: outcomes.map((outcome) => ({ provider: "openai", ...outcome })),
         }),
         preparedAuthStore: authStore({
@@ -398,20 +410,83 @@ describe("captured model decisions", () => {
           ),
           ...(options.withApiKey ? { "openai:platform": platformKey } : {}),
         }),
-      }).evaluateEntry({ provider: "openai", id }, undefined, "codex");
+      });
     };
+    const evaluate = (
+      outcomes: readonly Outcome[],
+      id: string,
+      options?: Parameters<typeof accountDecisions>[1],
+    ) =>
+      accountDecisions(outcomes, options).evaluateEntry(
+        { provider: "openai", id },
+        undefined,
+        "codex",
+      );
     // The listing returned gpt-5.5 as a hidden row and did not return gpt-5.4-pro.
     const ready = listing("openai:chatgpt", "gpt-6-sol", "gpt-5.5");
+
+    it("indexes a ready account listing once across distinct models and decision owners", () => {
+      const ids = Array.from({ length: 64 }, (_, index) => `fixture-${index}`);
+      const listedModelIds = ids.map((id) => id.toUpperCase());
+      // Each complete listing traversal reads its first ID, regardless of the iteration method.
+      const firstId = vi.fn(() => " FIXTURE-0 ");
+      Object.defineProperty(listedModelIds, 0, { get: firstId });
+      for (const profileId of ["openai:work", "openai:personal"]) {
+        const owner = accountDecisions([{ profileId, status: "ready", listedModelIds }], {
+          profileIds: [profileId],
+          pin: profileId,
+        });
+        for (const id of ids) {
+          expectAvailable(
+            owner.evaluateEntry({ provider: "openai", id }, undefined, "codex"),
+            profileId,
+          );
+        }
+      }
+      expect(firstId).toHaveBeenCalledTimes(1);
+    });
+
+    it("replaces cached model decisions when the selected account publishes an empty listing", async () => {
+      const profileId = "openai:chatgpt";
+      const accountCatalog = createPreparedAccountCatalogAccess(() => true);
+      await accountCatalog.acquire({
+        profileId,
+        credential: chatgpt,
+        allowDiscovery: true,
+        load: async () => [{ provider: "openai", profileId, status: "ready", listedModelIds: [] }],
+      });
+      const row = model("openai", "gpt-5.5");
+      const sibling = model("other", "fixture");
+      const owner = accountDecisions([ready], {
+        pin: profileId,
+        entries: [row, sibling],
+        accountCatalog,
+      });
+      const evaluateRow = (catalogRow: ModelCatalogEntry) =>
+        owner.evaluateEntry(catalogRow, undefined, "codex");
+      expectAvailable(evaluateRow(row), profileId);
+      const siblingDecision = evaluateRow(sibling);
+      const initial = await owner.projectCatalog();
+      await owner.prepareSelectedAccountCatalog(() => {}, {});
+      expect(owner.isCurrent()).toBe(true);
+      expect(evaluateRow(row).availability).toBe(false);
+      expect(evaluateRow(sibling)).toBe(siblingDecision);
+      const updated = await owner.projectCatalog();
+      expect(updated).not.toBe(initial);
+      await owner.prepareSelectedAccountCatalog(() => {}, {});
+      expect(await owner.projectCatalog()).toBe(updated);
+    });
 
     it("does not offer an unlisted dual-route model to a ChatGPT-only account", () => {
       const unlisted = evaluate([ready], "gpt-5.4-pro");
       expect(unlisted).toMatchObject({ availability: false });
       // The account is signed in; a missing-auth reason would render sign-in guidance.
       expect(unlisted.unavailableReason).toBeUndefined();
-      expect(evaluate([ready], "gpt-5.5")).toMatchObject({
-        availability: true,
-        selectedProfileId: "openai:chatgpt",
-      });
+      expectAvailable(evaluate([ready], "gpt-5.5"), "openai:chatgpt");
+      expectAvailable(
+        evaluate([ready, listing("openai:chatgpt", "gpt-5.4-pro")], "gpt-5.4-pro"),
+        "openai:chatgpt",
+      );
     });
 
     it.each([
@@ -467,10 +542,7 @@ describe("captured model decisions", () => {
         "openai:chosen": apiKey("openai"),
       }),
     });
-    expect(owner.evaluateEntry(entry, [entry], "openclaw")).toMatchObject({
-      availability: true,
-      selectedProfileId: "openai:chosen",
-    });
+    expectAvailable(owner.evaluateEntry(entry, [entry], "openclaw"), "openai:chosen");
   });
 
   it("retains native provenance and mode without blessing a same-name bearer credential", () => {
@@ -709,7 +781,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       const account = menu(true);
       const mythos = { provider: "anthropic", id: "claude-mythos-5" };
       const host = account.evaluateEntry(mythos);
-      expect(host).toMatchObject({ availability: true, selectedProfileId: "anthropic:work" });
+      expectAvailable(host, "anthropic:work");
       expect(
         account.evaluateNative({ ...mythos, name: "Claude Mythos 5" }, host).availability,
       ).toBe(true);

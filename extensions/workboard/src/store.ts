@@ -40,6 +40,7 @@ import type {
 import { capText, normalizeBoardId, normalizeTimestamp } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
 import { readCards } from "./store-read.js";
+import { finishRun } from "./store-status-write.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
 export { WorkboardCardConflictError } from "./store-core.js";
@@ -316,7 +317,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
           shouldSyncWorkboardLifecycleStatus(card, input.targetStatus)
         ) {
           patch.status = input.targetStatus;
-          metadata = { lifecycleStatusSourceUpdatedAt: input.sourceUpdatedAt };
+          metadata = {
+            lifecycleStatusSourceUpdatedAt: input.sourceUpdatedAt,
+            // A failed worker can no longer heartbeat or release its claim. Release it with
+            // the run, or the card and its owner's slot stay held until the claim expires.
+            ...(input.targetStatus === "blocked" ? { claim: null } : {}),
+          };
         }
         const acceptedLaunch = input.association
           ? acceptedLaunchForAssociation(card, input.association)
@@ -457,7 +463,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
             const reason = timedOut
               ? "Run exceeded the card max runtime."
               : "Claim expired without a recent heartbeat.";
-            const finished = this.finishRun(latest, "blocked", now, reason);
+            const finished = finishRun(latest, "blocked", now, reason);
             latest = await this.updateCard(latest, {
               ...finished,
               metadata: {
@@ -609,11 +615,13 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return (await this.readWithWorkerContext(id)).workerContext;
   }
 
-  async readWithWorkerContext(id: string): Promise<{
-    card: WorkboardCard;
-    workerContext: string;
-  }> {
-    const card = await this.requireCard(id);
+  async readWithWorkerContext(
+    id: string,
+    options?: { allowPrefix?: boolean },
+  ): Promise<{ card: WorkboardCard; workerContext: string }> {
+    const card = options?.allowPrefix
+      ? await this.requireCardByIdOrPrefix(id)
+      : await this.requireCard(id);
     const parentIds = cardParentIds(card);
     const relatedCards =
       parentIds.length > 0 || card.agentId

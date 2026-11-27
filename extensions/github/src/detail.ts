@@ -7,13 +7,12 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchPullChecks } from "./detail-checks.js";
 import {
   ControlUiGitHubError,
-  fetchGitHubApi,
+  fetchGitHubJsonPage,
   GITHUB_API_ORIGIN,
   githubRestApiPath,
   githubApiCredentialCacheScope,
   isRecord,
   optionalNumber,
-  readGitHubJsonResponse,
   readOptionalGitHubString,
   requiredString,
   withOptionalGitHubAuth,
@@ -21,6 +20,7 @@ import {
 import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import {
   assertPublicGitHubRepository,
+  fetchAvatarDataUrl,
   isPublicGitHubRepository,
   parseControlUiGitHubPreviewResponse,
 } from "./preview.js";
@@ -55,12 +55,14 @@ const COMMENT_MAX_CHARS = 4 * 1024;
 const FILE_LIMIT = 30;
 const PATCH_MAX_CHARS = 16 * 1024;
 const PATCH_TOTAL_MAX_CHARS = 96 * 1024;
+// The author's picture decorates the header; a slow avatar host must not hold the document.
+const AVATAR_BUDGET_MS = 500;
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const PARTIAL_CACHE_MS = 30_000;
 const CACHE_LIMIT = 32;
 type CachedDocument = {
   document: ControlUiLinkReaderDocument;
-  itemPage: Awaited<ReturnType<ReadDetailPage>>;
+  itemPage?: Awaited<ReturnType<ReadDetailPage>>;
   repositoryId?: number;
   repositoryUrls: string[];
 };
@@ -93,21 +95,13 @@ async function readPublicRepository(
   identity: ControlUiGitHubPreviewIdentity | undefined,
   expectedId?: number,
 ): Promise<number> {
-  const repository = await readGitHubJsonResponse(
-    await fetchGitHubApi(
-      url,
-      fetchImpl,
-      identity?.token,
-      async (redirect) => {
-        redirectedRepositoryUrl(redirect, "");
-      },
-      identity,
-      undefined,
-      undefined,
-      undefined,
-      GITHUB_API_ORIGIN,
-    ),
-  );
+  const { value: repository } = await fetchGitHubJsonPage(url, fetchImpl, identity?.token, {
+    beforeRedirect: async (redirect) => {
+      redirectedRepositoryUrl(redirect, "");
+    },
+    identity,
+    apiBaseUrl: GITHUB_API_ORIGIN,
+  });
   const id = isRecord(repository) ? optionalNumber(repository, "id") : undefined;
   if (
     !isPublicGitHubRepository(repository) ||
@@ -289,7 +283,6 @@ async function loadGitHubDetailWithIdentity(
   if (!parsed) {
     throw new ControlUiGitHubError(400, "Invalid GitHub detail target");
   }
-  await identity?.revalidate();
   identity?.assertSelected();
   const id = parsed.kind === "commit" ? parsed.sha : parsed.number;
   const sourceKey = `${apiBaseUrl}\0${parsed.kind}:${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}#${id}\0${identity?.cacheScope ?? "anonymous"}\0${githubApiCredentialCacheScope(identity?.token)}\0`;
@@ -304,7 +297,7 @@ async function loadGitHubDetailWithIdentity(
     identity?.assertSelected();
   };
   const cached = detailCache.get(key);
-  if (!refresh && cached && cached.expiresAt > Date.now() && (!identity || cached.settled)) {
+  if (!refresh && cached && cached.expiresAt > performance.now() && (!identity || cached.settled)) {
     detailCache.delete(key);
     detailCache.set(key, cached);
     const result = await cached.promise;
@@ -326,7 +319,9 @@ async function loadGitHubDetailWithIdentity(
       ? detailCache.get(sourceKey + "overview")
       : undefined;
   const source =
-    overview?.settled && overview.expiresAt > Date.now() ? await overview.promise : undefined;
+    overview?.settled && overview.expiresAt > performance.now()
+      ? await overview.promise
+      : undefined;
   const load = async (): Promise<CachedDocument> => {
     const repositoryUrl = `${apiBaseUrl}/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}`;
     const repositoryUrls = new Set([repositoryUrl, ...(source?.repositoryUrls ?? [])]);
@@ -340,11 +335,8 @@ async function loadGitHubDetailWithIdentity(
     }
     const readPage: ReadDetailPage = async (url) => {
       const suffix = new URL(url).pathname.slice(new URL(repositoryUrl).pathname.length);
-      const response = await fetchGitHubApi(
-        url,
-        fetchImpl,
-        identity?.token,
-        session
+      const page = await fetchGitHubJsonPage(url, fetchImpl, identity?.token, {
+        beforeRedirect: session
           ? rejectSessionGitHubRedirect
           : identity?.token
             ? async (redirect) => {
@@ -354,14 +346,12 @@ async function loadGitHubDetailWithIdentity(
               }
             : undefined,
         identity,
-        undefined,
-        undefined,
-        undefined,
         apiBaseUrl,
-      );
+        maxBytes: DETAIL_JSON_MAX_BYTES,
+      });
       return {
-        hasNextPage: /;\s*rel="next"/u.test(response.headers.get("link") ?? ""),
-        value: await readGitHubJsonResponse(response, DETAIL_JSON_MAX_BYTES),
+        hasNextPage: /;\s*rel="next"/u.test(page.link ?? ""),
+        value: page.value,
       };
     };
     const collection =
@@ -435,7 +425,12 @@ async function loadGitHubDetailWithIdentity(
         };
       }
 
-      const { preview } = parseControlUiGitHubPreviewResponse(parsed, value);
+      const { preview, avatarUrl } = parseControlUiGitHubPreviewResponse(parsed, value);
+      // The header belongs to the overview; its picture loads beside the content reads.
+      const avatar =
+        section === undefined || section === "overview"
+          ? fetchAvatarDataUrl(avatarUrl, fetchImpl, AbortSignal.timeout(AVATAR_BUDGET_MS))
+          : undefined;
       const content = markdownBody(value.body, BODY_MAX_CHARS);
       const discussionCount = includeDiscussion ? requiredCount(value, "comments") : 0;
       const reviewCount =
@@ -488,13 +483,9 @@ async function loadGitHubDetailWithIdentity(
         parsed.kind === "pull" && includeChecks
           ? await fetchPullChecks(repositoryUrl, head.sha, url + "/checks", readPage)
           : undefined;
-      const view = githubPreviewView(preview, host);
-      const metadata = githubChangeMetadata(
-        preview.additions,
-        preview.deletions,
-        preview.changedFiles,
-        preview.comments,
-      );
+      const avatarDataUrl = await avatar;
+      const view = githubPreviewView(avatarDataUrl ? { ...preview, avatarDataUrl } : preview, host);
+      const metadata = githubChangeMetadata(preview.additions, preview.deletions);
       const headRef = readOptionalGitHubString(head, "ref")?.slice(0, 256);
       const baseRef = readOptionalGitHubString(base, "ref")?.slice(0, 256);
       return {
@@ -509,8 +500,19 @@ async function loadGitHubDetailWithIdentity(
         ...(section === "overview" ? { deferredSections } : {}),
         ...content,
         ...(checks ? { checks } : {}),
-        ...(includeDiscussion ? { comments, commentsTotal, commentsTruncated } : {}),
-        ...(includeFiles ? { files, filesTotal, filesTruncated } : {}),
+        // Section counts are known up front, so navigation shows them before a section loads.
+        ...(includeDiscussion
+          ? { comments, commentsTotal, commentsTruncated }
+          : {
+              commentsTotal:
+                requiredCount(value, "comments") +
+                (parsed.kind === "pull" ? requiredCount(value, "review_comments") : 0),
+            }),
+        ...(includeFiles
+          ? { files, filesTotal, filesTruncated }
+          : parsed.kind === "pull"
+            ? { filesTotal }
+            : {}),
         partial:
           content.bodyTruncated ||
           commentsTruncated ||
@@ -535,21 +537,21 @@ async function loadGitHubDetailWithIdentity(
         throw new ControlUiGitHubError(409, "GitHub pull request changed; refresh the reader");
       }
     }
-    const result = { document, itemPage, repositoryId, repositoryUrls: [...repositoryUrls] };
+    const result = { document, repositoryId, repositoryUrls: [...repositoryUrls] };
     // Public-only delivery is checked after all awaited content reads, including
     // optional comments/files; a failed authority check cannot become partial data.
     await assertDelivery(result);
-    return result;
+    return section === "overview" && parsed.kind !== "issue" ? { ...result, itemPage } : result;
   };
   const entry = {
-    expiresAt: Date.now() + SUCCESS_CACHE_MS,
+    expiresAt: performance.now() + SUCCESS_CACHE_MS,
     settled: false,
     promise: load()
       .then((result) => {
         entry.settled = true;
         // PR checks and heads change independently of the body.
         if (parsed.kind === "pull" || result.document.partial) {
-          entry.expiresAt = Date.now() + PARTIAL_CACHE_MS;
+          entry.expiresAt = performance.now() + PARTIAL_CACHE_MS;
         }
         return result;
       })
@@ -557,7 +559,7 @@ async function loadGitHubDetailWithIdentity(
         // Caller-lifetime failures must not poison another reader's cache.
         if (error instanceof ControlUiGitHubError && error.statusCode !== 409) {
           entry.settled = true;
-          entry.expiresAt = Date.now() + PARTIAL_CACHE_MS;
+          entry.expiresAt = performance.now() + PARTIAL_CACHE_MS;
         } else if (detailCache.get(key) === entry) {
           detailCache.delete(key);
         }

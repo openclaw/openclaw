@@ -7,6 +7,8 @@ prepare_diagnostics_capture() {
       "$ARTIFACT_DIR/update.json" "$ARTIFACT_DIR/repair.json" "$ARTIFACT_DIR/recovery-update.json" \
       "$ARTIFACT_DIR"/update-noop.{json,err} \
       "$ARTIFACT_DIR/candidate-cohort.json" \
+      "$ARTIFACT_DIR"/deferred-schema-private.json{,.after} \
+      "$ARTIFACT_DIR"/deferred-schema-doctor-private.{json,err} "$ARTIFACT_DIR/deferred-schema-doctor.json" \
       "$ARTIFACT_DIR"/native-assignment-{eligibility,baseline,first-hop,proof,ready,phase}.json \
       "$ARTIFACT_DIR"/native-assignment-inventory-{after-first-hop,before-recovery,after-recovery,live-final}.json \
       "$ARTIFACT_DIR/native-assignment-messages.jsonl" "$ARTIFACT_DIR/native-assignment-server.log" \
@@ -24,7 +26,7 @@ prepare_diagnostics_capture() {
       "$ARTIFACT_DIR"/legacy-operator-{post-update,candidate}-transcript-{0,1}{,-earlier}.{out,err} \
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway.log" \
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway-convergence-refusal.log" \
-      "$ARTIFACT_DIR/sibling-registrations.jsonl" "$ARTIFACT_DIR/sibling-source.json" "$ARTIFACT_DIR/sibling-canary.json" \
+      "$ARTIFACT_DIR/sibling-registrations.jsonl" "$ARTIFACT_DIR/sibling-source.json" "$ARTIFACT_DIR/sibling-update-imports.json" \
       "$ARTIFACT_DIR/sibling-refusal.armed" "$ARTIFACT_DIR/sibling-refusal-preload.mjs" \
       "$ARTIFACT_DIR"/sibling-refusal-{update,status}.{json,err} \
       "$ARTIFACT_DIR"/sibling-refusal-{baseline,worker,child,cleanup}.json \

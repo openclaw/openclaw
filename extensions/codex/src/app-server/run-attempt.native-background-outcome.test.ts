@@ -2,6 +2,7 @@ import path from "node:path";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import {
   isCodexAppServerLiveThreadProtected,
@@ -26,6 +27,7 @@ import {
   tempDir,
   threadStartResult,
 } from "./run-attempt-test-harness.js";
+import { isCodexTurnContextHandoff } from "./test-support.js";
 import { writeNativeCatalogFixture } from "./thread-lifecycle.test-fixtures.js";
 
 setupRunAttemptTestHooks();
@@ -104,8 +106,12 @@ describe("Codex app-server skill catalog delivery", () => {
     const sessionKey = "agent:main:dashboard:incognito-skill-restore-failure";
     await seedRunSessionOwnerForTest("session-1", sessionKey);
     let failNextInject = false;
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "thread/inject_items" && failNextInject) {
+    const harness = createStartedThreadHarness(async (method, request) => {
+      if (
+        method === "thread/inject_items" &&
+        !isCodexTurnContextHandoff(request) &&
+        failNextInject
+      ) {
         failNextInject = false;
         throw new Error("inject_items unavailable");
       }
@@ -114,7 +120,10 @@ describe("Codex app-server skill catalog delivery", () => {
     const sessionFile = path.join(tempDir, "incognito-restore-failure-session.jsonl");
     const workspaceDir = path.join(tempDir, "incognito-restore-failure-workspace");
     const injectCount = () =>
-      harness.requests.filter(({ method }) => method === "thread/inject_items").length;
+      harness.requests.filter(
+        ({ method, params }) =>
+          method === "thread/inject_items" && !isCodexTurnContextHandoff(params),
+      ).length;
     const runTurn = async (runId: string, catalog: string, options: { compact?: boolean } = {}) => {
       const params = createParams(sessionFile, workspaceDir, { sessionKey, runId });
       // Allow the real before_compaction history worker to start.
@@ -145,7 +154,10 @@ describe("Codex app-server skill catalog delivery", () => {
     expect(injectCount()).toBe(2);
 
     await runTurn("run-4", SECOND_CATALOG);
-    const injected = harness.requests.filter(({ method }) => method === "thread/inject_items");
+    const injected = harness.requests.filter(
+      ({ method, params }) =>
+        method === "thread/inject_items" && !isCodexTurnContextHandoff(params),
+    );
     expect(injected).toHaveLength(3);
     expect(JSON.stringify(injected[2]?.params)).toContain(SECOND_CATALOG);
   });
@@ -236,9 +248,11 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
     }
     expect(received[1]).not.toContain("Synthetic first-turn recall");
     systemPrompt = "Changed persistent thread policy";
-    await expect(runCodexAppServerAttempt(paramsFor("changed-policy"))).rejects.toThrow(
-      "Codex thread thread-1 is claimed by active work; stop it first.",
-    );
+    await expect(runCodexAppServerAttempt(paramsFor("changed-policy"))).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      message:
+        "Codex thread thread-1 still has background work after waiting for cleanup; stop its running work and retry.",
+    });
     expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
     expect(harness.requests).not.toContainEqual(unsubscribe);
     expect(
@@ -262,6 +276,7 @@ it.each([
   ["revoked during inventory", "52627"],
   ["inventory unavailable", "52627"],
   ["retained", null],
+  ["silent retained", "52627"],
 ] as const)("native background outcome: %s (%s)", async (scenario, startProcessId) => {
   const abort = new AbortController();
   const params = createTestParams();
@@ -317,11 +332,13 @@ it.each([
   try {
     await run.waitForTurnAccepted();
     await harness.notify(itemNotification("item/started", command));
-    await harness.notify(answerCompleted("Retained handle 52627."));
-    const tool = (await run).messagesSnapshot.find(
+    await harness.notify(answerCompleted(scenario.startsWith("silent") ? "NO_REPLY" : "Retained."));
+    const result = await run;
+    const tool = result.messagesSnapshot.find(
       (message) => message.role === "toolResult" && message.toolCallId === command.id,
     );
-    if (scenario === "retained") {
+    if (scenario.endsWith("retained")) {
+      expect(readAttemptTerminal(result).promptError).toBeNull();
       expect(tool).toMatchObject({
         isError: false,
         content: [{ type: "text", text: expect.stringContaining("still running") }],

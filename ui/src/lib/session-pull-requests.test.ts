@@ -195,6 +195,26 @@ describe("session pull request snapshot store", () => {
       taskPullRequests: [retained],
       taskPullRequestCount: 1,
     });
+    // Passive state chips keep richer retained details until the verified state changes.
+    const chip = (state: string) => ({ ...task(1), pullRequest: { ...task(1), state } });
+    for (const [state, expected] of [
+      ["open", retained],
+      ["merged", chip("merged")],
+    ] as const) {
+      harness.emit({
+        sessions: {
+          [key]: {
+            branchRead: false,
+            pullRequests: [],
+            taskPullRequests: [chip(state)],
+            taskPullRequestCount: 1,
+            rateLimited: false,
+            status: "ready",
+          },
+        },
+      });
+      expect(store.get(key)?.taskPullRequests).toEqual([expected]);
+    }
     const calls = harness.request.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(harness.request).toHaveBeenCalledTimes(calls);

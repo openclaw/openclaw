@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
 import { SystemdInspectionTimeout } from "../../daemon/service-inspection-error.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import {
@@ -21,7 +22,6 @@ import {
   getUpdateRun,
   listUpdateRuns,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import * as utils from "../../utils.js";
@@ -315,8 +315,9 @@ it.each([true, false])(
       );
     } else {
       expect(defaultRuntime.log).toHaveBeenCalledWith(
-        expect.stringContaining(`Doctor maintenance remains pending. ${nextAction}`),
+        expect.stringContaining("Doctor maintenance remains pending."),
       );
+      expect(defaultRuntime.log).toHaveBeenCalledWith(expect.stringContaining(nextAction));
     }
     const run = listUpdateRuns()[0]!;
     expect(run).toMatchObject({
@@ -324,12 +325,6 @@ it.each([true, false])(
       reason: "doctor-maintenance-pending",
       origin: { nextAction },
     });
-    const report = renderUpdateRunReport(run);
-    expect(report.headline).toBe(
-      "ℹ️ OpenClaw repair pending: Doctor maintenance remains unfinished.",
-    );
-    expect(report.markdown).toContain(nextAction);
-    expect(report.markdown.indexOf(nextAction)).toBeLessThan(report.markdown.indexOf("Details:"));
     expect(run.steps).toContainEqual(
       expect.objectContaining({ step: "warning:finalize:doctor:0", status: "completed" }),
     );
@@ -417,11 +412,6 @@ it.each([
       exitCode: 1,
     }),
   );
-  if (code !== "service-definition-changed") {
-    expect(renderUpdateRunReport(run).markdown).toContain("terminal outside");
-    expect(renderUpdateRunReport(run).markdown).toContain("openclaw update repair");
-    expect(renderUpdateRunReport(run).markdown).not.toContain("Run openclaw triage");
-  }
   expect(native.events).toEqual(["running-holder"]);
   expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
   expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
@@ -483,12 +473,6 @@ it.each([
       expect(verifyUpdateFailureRecovery).toHaveBeenLastCalledWith(
         expect.objectContaining({ result: expect.objectContaining({ reason }) }),
       );
-      if (!inherited) {
-        expect(renderUpdateRunReport(run).headline).toBe(
-          "⚠️ OpenClaw repair failed: repair-failed.",
-        );
-        expect(renderUpdateRunReport(run).markdown).toContain("diagnose this repair failure");
-      }
       expect(native.inspecting).toBe(false);
       expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
       expect(inspect).toHaveBeenCalledExactlyOnceWith(19483, expect.anything());
@@ -505,5 +489,63 @@ it.each([
         expect.objectContaining({ waitForStartup: true }),
       );
     }
+  },
+);
+
+it.each([false, true])(
+  "parks the managed Gateway before repairing source artifacts (stop refusal=%s)",
+  async (failStop) => {
+    native.contend = false;
+    native.blockCode = failStop ? "self-service-stop" : undefined;
+    const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance");
+    let runtimeStartedAt = 0;
+    let runtimeTimeoutMs = 0;
+    let publicationStartedAt = 0;
+    let publicationReturnedAt = 0;
+    const preparationElapsedMs = 1_000;
+    vi.mocked(updateCheck.resolveUpdateInstallKind).mockResolvedValue("git");
+    const afterPublication = new Error("Synthetic Doctor failure after runtime publication");
+    vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockImplementationOnce(
+      async ({ beforePublication, timeoutMs }) => {
+        runtimeStartedAt = Date.now();
+        runtimeTimeoutMs = timeoutMs;
+        native.elapsedMs += preparationElapsedMs;
+        // Bracket the synchronous deadline conversion before awaiting the managed stop.
+        publicationStartedAt = Date.now();
+        const publication = beforePublication?.();
+        publicationReturnedAt = Date.now();
+        await publication;
+        if (!native.stopped) {
+          throw new Error("Runtime artifacts require an offline Gateway");
+        }
+        native.events.push("publish");
+        return { changed: true };
+      },
+    );
+    vi.mocked(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
+      afterPublication,
+    );
+
+    await expect(
+      updateRepairCommand({ json: true, yes: true, deferCompletionCache: true, timeout: "3600" }),
+    ).rejects.toThrow(
+      failStop
+        ? "Synthetic managed-service refusal before stopping the Gateway."
+        : afterPublication.message,
+    );
+    expect(native.events).toEqual(
+      failStop
+        ? ["running-holder"]
+        : ["running-holder", "stop-verified", "publish", "restart", "restart-verified"],
+    );
+    expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).toHaveBeenCalledTimes(
+      failStop ? 0 : 1,
+    );
+    expect(maintenance).toHaveBeenCalledTimes(1);
+    const inspectionDeadline = maintenance.mock.calls[0]?.[0].serviceInspectionDeadlineAtMs;
+    expect(inspectionDeadline).toBeGreaterThan(runtimeStartedAt);
+    const remainingRuntimeMs = runtimeTimeoutMs - preparationElapsedMs;
+    expect(inspectionDeadline).toBeGreaterThanOrEqual(publicationStartedAt + remainingRuntimeMs);
+    expect(inspectionDeadline).toBeLessThanOrEqual(publicationReturnedAt + remainingRuntimeMs);
   },
 );

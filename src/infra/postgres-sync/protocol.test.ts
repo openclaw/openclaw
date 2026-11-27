@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isSqliteLockError } from "../sqlite-error-diagnostics.js";
 import {
   decodePostgresError,
   decodePostgresRows,
@@ -42,18 +43,9 @@ describe("PostgreSQL SQL boundary", () => {
   });
 
   it("accepts SQLite scalar and binary bindings", () => {
+    const views = [new Uint8Array([1, 2]), new DataView(new ArrayBuffer(2)), new Int32Array([7])];
     expect(() =>
-      validatePostgresBindings([
-        null,
-        1,
-        Number.NaN,
-        Infinity,
-        1n,
-        "text",
-        new Uint8Array([1, 2]),
-        new DataView(new ArrayBuffer(2)),
-        new Int32Array([7]),
-      ]),
+      validatePostgresBindings([null, 1, Number.NaN, Infinity, 1n, "text", ...views]),
     ).not.toThrow();
   });
 
@@ -63,40 +55,23 @@ describe("PostgreSQL SQL boundary", () => {
 
   it("decodes safe int8, bytea, nulls, and scalar results", () => {
     const fields = { count: 20, bytes: 17, empty: 20, text: 25, truth: 16 };
+    const bytes = () => new Uint8Array([0, 255]);
     const result = {
-      rows: [
-        {
-          bytes: new Uint8Array([0, 255]),
-          empty: null,
-          text: "hi",
-          count: "9007199254740991",
-          truth: true,
-        },
-      ],
+      rows: [{ bytes: bytes(), empty: null, text: "hi", count: "9007199254740991", truth: true }],
       fields: Object.entries(fields).map(([name, dataTypeID]) => ({ name, dataTypeID })),
     };
     expect(decodePostgresRows(result, false)).toEqual([
-      {
-        bytes: new Uint8Array([0, 255]),
-        empty: null,
-        text: "hi",
-        count: Number.MAX_SAFE_INTEGER,
-        truth: 1,
-      },
+      { bytes: bytes(), empty: null, text: "hi", count: Number.MAX_SAFE_INTEGER, truth: 1 },
     ]);
   });
 
   it("rejects unsafe int8 numbers unless the statement opts into bigints", () => {
     const result = {
       rows: [{ count: "9007199254740992" }],
-      rowCount: 1,
       fields: [{ name: "count", dataTypeID: 20 }],
     };
     expect(() => decodePostgresRows(result, false)).toThrow(RangeError);
     expect(decodePostgresRows(result, true)).toEqual([{ count: 9007199254740992n }]);
-    expect(decodePostgresRows({ ...result, rows: [{ count: "1" }] }, true)).toEqual([
-      { count: 1n },
-    ]);
   });
 
   it("preserves SQLite CHECK constraint handling for SQLSTATE 23514", () => {
@@ -109,13 +84,20 @@ describe("PostgreSQL SQL boundary", () => {
     });
   });
 
-  it.each([
-    ["operator cancellation", "canceling statement due to user request"],
-    ["statement timeout", "canceling statement due to statement timeout"],
-  ])("identifies %s independently of connection loss", (_scenario, message) => {
-    const error = decodePostgresError({ name: "error", message, code: "57014" });
+  it("identifies cancellation independently of connection loss", () => {
+    const error = decodePostgresError({ name: "error", message: "canceled", code: "57014" });
     expect(error).toMatchObject({ name: "PostgresQueryCanceledError", code: "57014" });
     expect(isPostgresConnectionError("57014")).toBe(false);
+    expect(isSqliteLockError(error)).toBe(false);
+  });
+
+  it.each(["55P03", "40P01", "40001"])("classifies SQLSTATE %s as retryable contention", (code) => {
+    const error = decodePostgresError({ name: "error", message: "contended transaction", code });
+    expect(isSqliteLockError(error)).toBe(true);
+    expect(error).toMatchObject({
+      message: "contended transaction",
+      cause: { code },
+    });
   });
 
   it("retains unrelated PostgreSQL errors and their SQLSTATE", () => {

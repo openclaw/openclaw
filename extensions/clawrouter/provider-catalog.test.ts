@@ -22,10 +22,11 @@ function catalogProvider(
   displayName: string,
   upstream: string,
   capabilities: string[],
-  routes: Array<[string, string]> = [],
+  routes: Array<[string, string, string?]> = [],
   model: {
     id?: string;
     input?: unknown;
+    nativeCapabilities?: unknown;
     supportedReasoningEfforts?: string[];
     pricing?: typeof PRICING;
   } = {},
@@ -35,7 +36,12 @@ function catalogProvider(
     displayName,
     openaiCompatible: id === "openai" || id === "deepseek",
     nativeBaseUrl: `/v1/native/${id}`,
-    routes: routes.map(([path, requestFormat]) => ({ path, requestFormat, methods: ["POST"] })),
+    routes: routes.map(([path, requestFormat, endpoint]) => ({
+      path,
+      requestFormat,
+      endpoint,
+      methods: ["POST"],
+    })),
     models: [{ id: `${id}/${upstream}`, upstream, capabilities, ...model }],
   };
 }
@@ -95,6 +101,9 @@ function buildFetchGuard() {
 describe("ClawRouter provider catalog", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
+    // These fixtures check catalog mapping and cache identity, not discovery timing.
+    // Keep the monotonic budget independent of runner stalls; cache TTL uses Date.now().
+    vi.spyOn(performance, "now").mockReturnValue(0);
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -159,6 +168,8 @@ describe("ClawRouter provider catalog", () => {
 
   it("retains known native image inputs without granting unknown OpenAI models", async () => {
     const upstreamIds = [
+      "gpt-6.2-sol",
+      "gpt-6.2-astra",
       "gpt-6.1-sol",
       "gpt-6-sol",
       "gpt-6-astra",
@@ -179,6 +190,8 @@ describe("ClawRouter provider catalog", () => {
     }));
     const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
     expect(Object.fromEntries(provider.models.map((model) => [model.id, model.input]))).toEqual({
+      "openai/gpt-6.2-sol": ["text", "image"],
+      "openai/gpt-6.2-astra": ["text", "image"],
       "openai/gpt-6.1-sol": ["text", "image"],
       "openai/gpt-6-sol": ["text", "image"],
       "openai/gpt-6-astra": ["text", "image"],
@@ -223,6 +236,108 @@ describe("ClawRouter provider catalog", () => {
       "object-modality": ["text"],
       "null-modality": ["text"],
     });
+  });
+
+  it("projects only the selected endpoint's modalities and limits", async () => {
+    const facts = {
+      input: ["text", "image", "audio"],
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxOutputTokens: 128_000,
+    };
+    const rows = [
+      catalogProvider("openai", "OpenAI", "gpt-6.1-terra", ["llm.responses", "llm.chat"], [], {
+        input: ["text"],
+        pricing: PRICING,
+        nativeCapabilities: {
+          version: "clawrouter.native-capabilities.v1",
+          endpoints: {
+            responses: facts,
+            chat_completions: { input: ["text"], contextWindow: 8192 },
+          },
+        },
+      }),
+      catalogProvider("deepseek", "DeepSeek", "deepseek-v4-flash", ["llm.chat"], [], {
+        nativeCapabilities: {
+          version: "clawrouter.native-capabilities.v1",
+          endpoints: { chat_completions: { ...facts, maxOutputTokens: 4096 } },
+        },
+      }),
+      catalogProvider(
+        "google-gemini",
+        "Google",
+        "gemini-test",
+        ["llm.stream"],
+        [
+          [
+            "/v1beta/models/${model}:streamGenerateContent",
+            "google.generate_content",
+            "stream_generate_content",
+          ],
+        ],
+        {
+          nativeCapabilities: {
+            version: "clawrouter.native-capabilities.v1",
+            endpoints: {
+              stream_generate_content: { input: ["text"], contextWindow: 8192 },
+              generate_content: facts,
+            },
+          },
+        },
+      ),
+    ];
+    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
+      response: Response.json({ providers: rows }),
+      finalUrl: "https://clawrouter.example/v1/catalog",
+      release: async () => undefined,
+    });
+    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
+    expect(provider.models.find((model) => model.id === "openai/gpt-6.1-terra")).toMatchObject({
+      input: ["text", "image"],
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 64_000,
+    });
+    expect(
+      provider.models.find((model) => model.id === "deepseek/deepseek-v4-flash"),
+    ).toMatchObject({
+      input: ["text", "image"],
+      contextWindow: 1_050_000,
+      maxTokens: 4096,
+    });
+    const google = provider.models.find((model) => model.id === "google-gemini/gemini-test");
+    expect(google).toMatchObject({ input: ["text"], contextWindow: 8192 });
+    expect(google).not.toHaveProperty("contextTokens");
+  });
+
+  it("rejects malformed endpoint input and ignores unknown capability versions", async () => {
+    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
+      response: Response.json({
+        providers: [
+          catalogProvider("openai", "OpenAI", "gpt-6.1-sol", ["llm.responses"], [], {
+            input: ["text", "image"],
+            nativeCapabilities: {
+              version: "clawrouter.native-capabilities.v1",
+              endpoints: {
+                responses: { input: ["image", "future"], contextWindow: -1, maxOutputTokens: 0 },
+              },
+            },
+          }),
+          catalogProvider("deepseek", "DeepSeek", "unknown", ["llm.chat"], [], {
+            nativeCapabilities: {
+              version: "future",
+              endpoints: { chat_completions: { input: ["text", "image"], contextWindow: 999 } },
+            },
+          }),
+        ],
+      }),
+      finalUrl: "https://clawrouter.example/v1/catalog",
+      release: async () => undefined,
+    });
+    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
+    for (const model of provider.models) {
+      expect(model).toMatchObject({ input: ["text"], contextWindow: 200_000, maxTokens: 32_768 });
+    }
   });
 
   it("rewrites only native protocol model ids at the request boundary", async () => {
@@ -331,7 +446,16 @@ describe("ClawRouter provider catalog", () => {
       expect(await buildClawRouterProviderConfig(params)).toEqual(first);
       expect(fetchGuard).toHaveBeenCalledOnce();
 
-      await buildClawRouterProviderConfig({ ...params, discoveryApiKey: "catalog-key-b" });
+      fetchGuard.mockResolvedValueOnce({
+        response: Response.json({ providers: [] }),
+        finalUrl: "https://clawrouter.example/v1/catalog",
+        release: async () => undefined,
+      });
+      const otherScope = await buildClawRouterProviderConfig({
+        ...params,
+        discoveryApiKey: "catalog-key-b",
+      });
+      expect(otherScope.models).toEqual([]);
       await buildClawRouterProviderConfig({ ...params, baseUrl: "https://other.example" });
       expect(fetchGuard).toHaveBeenCalledTimes(3);
       const headers = fetchGuard.mock.calls[1]?.[0].init?.headers;

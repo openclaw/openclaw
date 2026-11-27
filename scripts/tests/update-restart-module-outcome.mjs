@@ -16,7 +16,10 @@ import {
 } from "../../packages/normalization-core/src/error-coercion.ts";
 import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import { MAX_TIMER_TIMEOUT_MS } from "../../packages/normalization-core/src/number-coercion.ts";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../packages/normalization-core/src/string-coerce.ts";
 import {
   sliceUtf16Safe,
   truncateUtf16Safe,
@@ -145,6 +148,7 @@ async function fixture({
   const values = {
     theme: new Proxy({}, { get: () => (value) => value }),
     normalizeOptionalString,
+    normalizeLowercaseStringOrEmpty,
     expectDefined,
     resolveServiceRefreshEnv: (env) => env,
     resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
@@ -179,6 +183,8 @@ async function fixture({
       return { verification: { ...observed.verification, recovery: observed.recovery } };
     },
     recordUpdateRunStep: () => {},
+    // No earlier run owes a step. Recording or settling one would be an unexpected call.
+    readOwedUpdateSteps: () => [],
     async runUpdatedInstallGatewayCommand(activation, command) {
       commandCalls++;
       events.push("command:" + command);
@@ -212,6 +218,8 @@ async function fixture({
       return verification;
     },
     withOwnedManagedUpdateEnv: async (_env, action) => action(),
+    // No shared-state handles exist in this fixture; the restart runs unchanged.
+    withUpdateStateReleasedAcrossRestart: async (_run, restart) => restart(),
     acquireWithWait: ({ acquire }) => acquire(),
     readConfigFileSnapshot: async () => ({}),
     prepareUpdateRestart: async () => restartContext,
@@ -227,6 +235,12 @@ async function fixture({
     // real owner/filesystem coverage in update-automatic-cleanup.test.ts; these
     // cases prove the separate package transaction's retirement authorization.
     automaticallyCleanUpdateRecovery: async () => undefined,
+    // Cohort settlement has native ledger coverage; this VM owns only package retirement.
+    commitVerifiedUpdatePluginCohort: async () => {},
+    assertUpdatePluginCohortReportingContinuation: () => {},
+    assertUpdatePluginCohortReportingAdmission: async () => {},
+    // Every case here fails after the swap, so none retires its own capture.
+    failedUpdateCanCleanUp: () => false,
     prepareResult: async (value) => () => printed.push(value),
     printResult: (value) => printed.push(value),
     writeControlPlaneUpdateRestartSentinel: async () => {},
@@ -245,6 +259,7 @@ async function fixture({
     sliceUtf16Safe,
     truncateUtf16Safe,
     withCommandProcessScope: async (action) => action(),
+    getCliPluginInvocationResources: () => undefined,
     readPackageVersion: async (packageRoot) => {
       assert.equal(packageRoot, installRoot);
       return "2026.9.4";
@@ -256,7 +271,7 @@ async function fixture({
     readGatewayOwnerLease: async () => undefined,
   };
   const context = vm.createContext({
-    process: { env: {}, stdin: { isTTY: false }, platform: "linux" },
+    process: { env: {}, stdin: { isTTY: false }, platform: "linux", execPath: process.execPath },
     Date,
     Error,
     AggregateError,
@@ -284,6 +299,8 @@ async function fixture({
     "../../plugins/clawhub-error-codes",
     "../../plugins/install-types",
     "../../logging/diagnostic-support-redaction",
+    "../../logging/diagnostic-support-causes",
+    "../../infra/sqlite-snapshot-diagnostics",
     "../../logging/diagnostic-support-key-check",
     "../../logging/redact",
     "../../logging/redact-linear-matchers",
@@ -304,6 +321,8 @@ async function fixture({
     "../daemon-cli/restart-health-probe",
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
+    "update-command-owed",
+    "../../infra/update-run-owed-step",
     "../../infra/update-candidate-predecessor-stop",
     // Recovery and reporting stay real; only their I/O uses finite fixture facts.
     "update-command-failure-recovery",
@@ -312,9 +331,12 @@ async function fixture({
     "../../process/exec-result",
     "../../shared/null-writer",
     "../../shared/state-lease-loss",
+    "../../shared/state-lease-loss-format",
     "../../shared/update-outcome",
     "../../state/openclaw-state-lease-error",
     "../../infra/update-run-report",
+    "../../infra/update-run-notice",
+    "../quote-cli-arg",
     "../../infra/update-run-record",
     "../../infra/update-run-limits",
     // Post-update state reads and Doctor facts use their production owners,
@@ -324,6 +346,11 @@ async function fixture({
     "../../logging/redact-performance",
     "../../logging/redact-prefilter",
     "../../logging/redact-bounded",
+    "../../../packages/net-policy/src/redact-sensitive-url",
+    "../../logging/redact-mask",
+    "../../logging/redact-edit-composition",
+    "../../logging/redact-json",
+    "../../logging/redact-json-tokens",
     "../../logging/secret-redaction-registry",
     "../../shared/global-singleton",
     "../../shared/regexp",
@@ -356,6 +383,7 @@ async function fixture({
     }).code;
     const mod = new vm.SourceTextModule(code, { context, identifier: filename });
     modules.set(path.basename(name) + ".js", mod);
+    modules.set(path.basename(name), mod);
     const imports = new Map();
     for (const match of code.matchAll(
       /(?:import|export)\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/gs,
@@ -422,6 +450,7 @@ async function fixture({
   values.recordFailedUpdateGatewayState =
     verificationOwner.namespace.recordFailedUpdateGatewayState;
   values.readFailedUpdateGatewayState = verificationOwner.namespace.readFailedUpdateGatewayState;
+  values.releaseLaunchedState = verificationOwner.namespace.releaseLaunchedState;
   const entry = modules.get("update-command-post-update.js");
   await entry.link(link);
   await entry.evaluate();

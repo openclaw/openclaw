@@ -1,11 +1,13 @@
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
-import { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
+import {
+  acquireTranscriptLease,
+  type TranscriptLease,
+} from "../../../config/sessions/transcript-lease.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { getRpcSourceForGateway } from "../../../sessions/session-controller.rpc-sources.js";
+import { chatRef } from "../../../sessions/chat-ref.js";
 import type { SessionControllerStopCapture } from "../../../sessions/session-controller.stop.js";
 import { retireAcceptedSessionSpawnCompletionForRun } from "../../accepted-session-spawn.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
@@ -34,8 +36,11 @@ import type {
   SubagentAdminKillResult,
 } from "./subagent-control.types.js";
 import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
-import { captureSubagentExecution } from "./subagent-registry-execution-cleanup.js";
-import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import {
+  assertCapturedSubagentExecutionCurrent,
+  captureSubagentExecution,
+} from "./subagent-registry-execution-cleanup.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { withSubagentKillOwner } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -85,25 +90,8 @@ async function settleSubagentKill(
       settlement = await settleSubagentKillSources({ cleanup, execution });
     }
   }
-  if (!stopAcceptance.accepted) {
-    params.cancellationControl.assertCurrent();
-  }
   if (captured) {
-    const input = captured.execution.input;
-    // Async cleanup keeps a consumed input resident until its settlement receipt completes.
-    const cleanupSettled = input.phase === "consumed" && !input.mailbox.entries.includes(input);
-    if (!cleanupSettled) {
-      const entry = getCurrentSubagentRunOwner(subagentRuns, params.entry) ?? captured.entry;
-      const target = input.target;
-      const rpcSource =
-        target && getRpcSourceForGateway(captured.runId, getGatewayContextResolver(input), target);
-      if (
-        entry.runId !== captured.runId ||
-        (rpcSource !== undefined && rpcSource !== captured.execution)
-      ) {
-        throw new Error("Subagent execution owner changed during cancellation");
-      }
-    }
+    assertCapturedSubagentExecutionCurrent(captured, params.entry);
   }
   if (settlement?.failure) {
     const error =
@@ -127,6 +115,7 @@ async function killLatestSubagentRun(params: {
   commands?: ReturnType<typeof captureSubagentCommands>;
   onKilled?: (entry: SubagentRunRecord) => void;
   onContinuationRetired?: () => void;
+  onCancelled?: (entry: SubagentRunRecord) => void;
 }): Promise<{
   entry: SubagentRunRecord;
   session?: SubagentKillSession;
@@ -181,8 +170,7 @@ async function killLatestSubagentRun(params: {
         requiredSessionId: params.requiredSessionId,
         stateContext: scope.stateContext,
         cancellationControl,
-        isCurrent: (candidate, requirePreparedSession) =>
-          tree.isCurrent(candidate, requirePreparedSession) && matchesExpected(candidate),
+        isCurrent: (candidate) => tree.isCurrent(candidate) && matchesExpected(candidate),
         withdrawQueuedReservation: () => tree.dispatchHold?.withdraw(),
         refreshDescendants: scope.refresh,
       })
@@ -208,25 +196,26 @@ async function killLatestSubagentRun(params: {
     // Later command or ownership failures cannot erase the committed native outcome.
     params.onKilled?.(tree.entry);
   }
+  if (result.killed || result.continuationRetired) {
+    params.onCancelled?.(entry);
+  }
   if (commands && !result.superseded && !result.declined && !result.error) {
+    // The admitted kill finishes its own commands; only the selected row stays checked.
     for (
       let pending = cancellationControl.prepareRead();
       pending;
       pending = cancellationControl.prepareRead()
     ) {
       await pending;
-      cancellationControl.assertCurrent();
     }
-    cancellationControl.assertCurrent();
-    if (!tree.canTraverse() || !matchesExpected(tree.entry)) {
+    if (!(result.killed ? tree.ownsRun() : tree.canTraverse()) || !matchesExpected(tree.entry)) {
       return { entry: tree.entry, session, result: { ...result, superseded: true } };
     }
     // A terminal model result can retain ordinary commands after its run signal
     // is gone. Drain that exact request without replacing the completed task receipt.
     commands.observe(tree.entry);
     commands.cancel(() => {
-      cancellationControl.assertCurrent();
-      if (!tree.canTraverse() || !matchesExpected(tree.entry)) {
+      if (!(result.killed ? tree.ownsRun() : tree.canTraverse()) || !matchesExpected(tree.entry)) {
         throw new Error("Subagent ownership changed during command cancellation.");
       }
     });
@@ -264,6 +253,7 @@ type KillTraversal = {
   /** A requester-wide Stop or reset cancels the tree; that requester needs no report. */
   suppressTaskDelivery?: boolean;
   stopRequestCommands?: boolean;
+  onCancelled?: (entry: SubagentRunRecord) => void;
 };
 
 async function visitAll(work: Promise<void>[]): Promise<void> {
@@ -449,6 +439,8 @@ export async function killAllControlledSubagentRuns(params: {
   requestSelection?: ReturnType<typeof captureExecRequestSubagentSelection>;
   assertCurrent?: () => void;
   suppressTaskDelivery?: boolean;
+  /** Reports an accepted kill or retirement of this exact captured owner's wake. */
+  onCancelled?: (entry: SubagentRunRecord) => void;
   /** False declines traversal; the scope still releases every reservation hold. */
   beforeKill?: (sealRootSelection: () => void) => boolean | Promise<boolean>;
 }): Promise<
@@ -486,7 +478,7 @@ export async function killAllControlledSubagentRuns(params: {
   if (!params.requestSelection?.sessionGeneration && !params.requestSelection?.prepare) {
     return killSelectedSubagentRuns(selection);
   }
-  let generation: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
+  let generation: TranscriptLease | undefined;
   const assertCurrent = () => {
     params.assertCurrent?.();
     generation?.assertCurrent();
@@ -503,7 +495,7 @@ export async function killAllControlledSubagentRuns(params: {
       }
       const origin = params.requestSelection?.sessionGeneration;
       if (origin) {
-        generation = await prepareSessionGenerationFacts(origin);
+        generation = await acquireTranscriptLease(chatRef(origin), origin);
       }
       prepared = true;
     })());
@@ -541,6 +533,7 @@ async function killSelectedSubagentRuns(
   params: KillSelection & {
     preparationErrors?: string[];
     suppressTaskDelivery?: boolean;
+    onCancelled?: (entry: SubagentRunRecord) => void;
     beforeKill?: (sealRootSelection: () => void) => boolean | Promise<boolean>;
   },
 ) {
@@ -554,6 +547,7 @@ async function killSelectedSubagentRuns(
     // The bulk signal was consumed above; never forward caller hooks into child kills.
     const stopped = await killSubagentRunTree({
       suppressTaskDelivery: params.suppressTaskDelivery,
+      onCancelled: params.onCancelled,
       stopRequestCommands: true,
       trees: acceptedTrees,
       scope,
@@ -638,6 +632,7 @@ export async function killSubagentRunAdmin(
   }
 
   let rootStopSuperseded = false;
+  let rootKilled = false;
   return withSubagentKillScope<SubagentAdminKillResult>(
     {
       cfg: params.cfg,
@@ -672,6 +667,7 @@ export async function killSubagentRunAdmin(
       });
       const { result: stopResult, cascade } = stopped;
       rootStopSuperseded = stopResult.superseded === true;
+      rootKilled = stopResult.killed;
       // Descendant cleanup can yield long enough for the target run to finish.
       // Return the freshest registry state so task cancellation cannot make a stale kill sticky.
       const targetState = resolveSubagentKillTargetState(tree.entry) ?? stopResult.targetState;
@@ -706,9 +702,9 @@ export async function killSubagentRunAdmin(
       if (!result.found || !tree) {
         return result;
       }
-      // Completion can commit during the awaited handoff. Fence both the retained
-      // run and its session incarnation before any synchronous result publication.
-      const ownsOutcome = !rootStopSuperseded && tree.ownsRun() && tree.canTraverse();
+      // The claimed row keeps its outcome when a successor session appears during cleanup.
+      const ownsOutcome =
+        !rootStopSuperseded && tree.ownsRun() && (rootKilled || tree.canTraverse());
       if (!ownsOutcome) {
         tree.errors.add("Subagent ownership changed during cancellation; retry.");
       }

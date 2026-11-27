@@ -1,24 +1,44 @@
 import { action, createMemo, createOptimisticStore, createSignal, onSettled } from "solid-js";
 import type { ChannelsPairingListResult, ChannelsPairingRequest } from "../../api/types.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { showConfirmChoiceDialog } from "../../components/confirm-dialog.ts";
 import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
-import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
+import {
+  createChannelCapability,
+  resolveChannelConfigValue,
+  resolveChannelPairingAuthSignature,
+  type ChannelConfigEdit,
+} from "../../lib/channels/index.ts";
+import {
+  currentConfigConnectionEpoch,
+  isCurrentConfigConnection,
+  resolveEditableSnapshotConfig,
+} from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectChannels, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { showToast } from "../../lib/toast.ts";
+import {
+  buildChannelConfigPatch,
+  dropConflictingChannelConfigEdits,
+  editChannelField,
+  findChannelConfigConflicts,
+  keptChannelEdits,
+  rebaseChannelConfigEdits,
+} from "./channel-config-draft.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
-import { ChannelsView, resolveChannelOrder } from "./view.tsx";
-import type { ChannelPairingPrompt, ChannelsProps } from "./view.types.ts";
+import { ChannelsView, resolveChannelLabel, resolveChannelOrder } from "./view.tsx";
+import type { ChannelPairingPrompt, ChannelSaveFeedback, ChannelsProps } from "./view.types.ts";
 import { createChannelSetup } from "./wizard-setup.ts";
 
 registerRouteSubtitlesEnglish();
@@ -28,7 +48,15 @@ const CHANNELS_DOCS_URL = "https://docs.openclaw.ai/channels";
 
 export function ChannelsPage() {
   const context = useApplication();
-  const [selectedChannel, setSelectedChannel] = createSignal<string | null>(null);
+  const channelCapability = context.acquireChannels(createChannelCapability);
+  channelCapability.syncConfigEditsScope(gatewayPresentationScope(context.gateway).key);
+  const [selectedChannel, setSelectedChannel] = createSignal<string | null>(
+    channelCapability.takeConfigReview(),
+  );
+  const [savingChannel, setSavingChannel] = createSignal<string | null>(null);
+  const [savedChannel, setSavedChannel] = createSignal<string | null>(null);
+  const [saveFeedback, setSaveFeedback] = createSignal<ChannelSaveFeedback | null>(null);
+  let interruptedSave: { channelId: string; edits: readonly ChannelConfigEdit[] } | null = null;
   const [pairingChannelFilter, setPairingChannelFilter] = createSignal<string | null>(null);
   const [pairingAccountFilter, setPairingAccountFilter] = createSignal<string | null>(null);
   const [pairingNotice, setPairingNotice] = createSignal<string | null>(null);
@@ -47,7 +75,7 @@ export function ChannelsPage() {
   const pairingPoll = useVisiblePoll(CHANNEL_PAIRING_POLL_INTERVAL_MS, pollPairing);
   let pairingRoot: HTMLElement | undefined;
   const gatewayProjection = projectGateway(context.gateway);
-  const channelsProjection = projectChannels(context.channels);
+  const channelsProjection = projectChannels(channelCapability);
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
   const settings = projectSource(context.theme, {
     read: () => loadSettings().showAdvancedSettings === true,
@@ -66,7 +94,8 @@ export function ChannelsPage() {
 
   const wizardHost = createChannelSetup({
     getContext: () => context,
-    clearSelection: () => setSelectedChannel(null),
+    channels: channelCapability,
+    clearSelection: () => clearChannelDetail(),
     presentWizard: (pending) => runMutation("wizard", pending),
     retire: () => {
       retireMutation("wizard");
@@ -122,7 +151,7 @@ export function ChannelsPage() {
       yield Promise.race([pending, retired]);
     } catch (error) {
       if (isCurrent(view)) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   });
@@ -146,6 +175,7 @@ export function ChannelsPage() {
 
   function handleGatewaySnapshot(change: GatewayPageChange) {
     const { snapshot, initial, identityChanged } = change;
+    channelCapability.syncConfigEditsScope(gatewayPresentationScope(context.gateway).key);
     const transportChanged = change.clientChanged || change.connectionChanged;
     if (identityChanged || transportChanged) {
       retireMutation();
@@ -188,15 +218,16 @@ export function ChannelsPage() {
       if (!initial) {
         ensureInitialData();
       }
+      void confirmInterruptedSave();
       if (!initial && (identityChanged || transportChanged)) {
-        void context.channels.refresh(false);
+        void channelCapability.refresh(false);
       }
       if (
         !initial &&
         (identityChanged || transportChanged || pairingAuthChanged) &&
         pairingAccess
       ) {
-        void context.channels.refreshPairing();
+        void channelCapability.refreshPairing();
       }
     } else {
       schemaLoadStarted = false;
@@ -212,17 +243,17 @@ export function ChannelsPage() {
 
     pluginPresentation.ensure(client);
 
-    const channels = context.channels.state;
+    const channels = channelCapability.state;
     const config = context.runtimeConfig.state;
     if (!channels.channelsSnapshot && !channels.channelsLoading) {
-      void context.channels.refresh(false);
+      void channelCapability.refresh(false);
     }
     if (
       hasOperatorPairingAccess(gateway.hello?.auth ?? null) &&
       !channels.pairingSnapshot &&
       !channels.pairingLoading
     ) {
-      void context.channels.refreshPairing();
+      void channelCapability.refreshPairing();
     }
     if (!config.configSnapshot && !config.configLoading) {
       void context.runtimeConfig.ensureLoaded();
@@ -240,7 +271,7 @@ export function ChannelsPage() {
       snapshot.phase === "connected" &&
       hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
     ) {
-      void context.channels.refreshPairing();
+      void channelCapability.refreshPairing();
     }
   }
 
@@ -249,15 +280,246 @@ export function ChannelsPage() {
     context.theme.refresh();
   }
 
-  async function saveChannelConfig() {
-    if (await context.runtimeConfig.save()) {
-      await context.channels.refresh(true);
+  function hasUnsavedConfig(channelId: string) {
+    return Boolean(channelCapability.state.configEdits[channelId]);
+  }
+
+  /** The one place these edits reach the config. Returns whether nothing is left unsaved. */
+  async function saveChannelConfig(channelId: string, retry = true): Promise<boolean> {
+    const edits = channelCapability.state.configEdits[channelId];
+    if (!edits) {
+      return true;
+    }
+    const bases = channelCapability.state.configEditBases[channelId] ?? [];
+    const config = context.runtimeConfig.state;
+    const client = config.client;
+    const configEpoch = currentConfigConnectionEpoch(config);
+    let conflicts: Array<Array<string | number>> = [];
+    let sent = false;
+    interruptedSave = null;
+    setSaveFeedback(null);
+    setSavingChannel(channelId);
+    const patched = await context.runtimeConfig
+      .patchFromSnapshot((snapshot) => {
+        conflicts = findChannelConfigConflicts(bases, snapshot);
+        if (conflicts.length > 0) {
+          // Lists go out whole and removed keys as deletions, so writing over a field that
+          // changed elsewhere would silently drop that change. Nothing is written.
+          return { options: { raw: {}, note: "", canDispatch: () => false } };
+        }
+        const built = buildChannelConfigPatch({
+          base: resolveChannelConfigValue(snapshot, channelId),
+          channelId,
+          // A reference that arrived while editing is never written over, nor a secret emptied.
+          edits: keptChannelEdits(config, channelId, snapshot, edits),
+          schema: config.configSchema,
+        });
+        return {
+          options: {
+            raw: built?.patch ?? {},
+            replacePaths: built?.replacePaths,
+            note: `channels: update ${channelId}`,
+            canDispatch: () => {
+              sent = true;
+              return true;
+            },
+          },
+        };
+      })
+      .finally(() => setSavingChannel(null));
+    if (patched) {
+      await finishChannelSave(channelId, edits);
+      return true;
+    }
+    if (conflicts.length > 0) {
+      setSaveFeedback({ channelId, kind: "conflict", paths: conflicts });
+      return false;
+    }
+    if (client && !isCurrentConfigConnection(config, client, configEpoch)) {
+      // A dropped connection settles the request without an answer; only a fresh read says
+      // whether the write landed.
+      if (sent) {
+        interruptedSave = { channelId, edits };
+        setSaveFeedback({ channelId, kind: "interrupted" });
+        void confirmInterruptedSave();
+      } else {
+        setSaveFeedback({ channelId, kind: "notSaved" });
+      }
+      return false;
+    }
+    if (retry && config.configAutoSaveStatus === "conflict" && !config.configFormDirty) {
+      // The file moved on before this page heard of it. Re-read it; Save goes ahead only if
+      // none of the edited fields changed.
+      await context.runtimeConfig.discardDraft({ reloadOnly: true });
+      return saveChannelConfig(channelId, false);
+    }
+    if (sent && config.lastError) {
+      setSaveFeedback({ channelId, kind: "error", message: config.lastError });
+    }
+    return false;
+  }
+
+  async function finishChannelSave(channelId: string, edits: readonly ChannelConfigEdit[]) {
+    if (channelCapability.state.configEdits[channelId] === edits) {
+      channelCapability.discardConfigEdits(channelId);
+      setSavedChannel(channelId);
+    }
+    await channelCapability.refresh(true);
+  }
+
+  /** Once reconnected, a fresh read decides how an interrupted Save ended. */
+  async function confirmInterruptedSave() {
+    const pending = interruptedSave;
+    if (!pending || !active || context.gateway.snapshot.phase !== "connected") {
+      return;
+    }
+    interruptedSave = null;
+    const { channelId, edits } = pending;
+    const config = context.runtimeConfig.state;
+    const previous = config.configSnapshot;
+    await context.runtimeConfig.refresh();
+    if (config.configSnapshot === previous || !config.connected) {
+      // The read failed; the next reconnect tries again.
+      interruptedSave ??= pending;
+      return;
+    }
+    const saved = resolveEditableSnapshotConfig(config.configSnapshot);
+    // Edited or discarded meanwhile: a later Save or Discard reports instead.
+    if (!active || !saved || channelCapability.state.configEdits[channelId] !== edits) {
+      return;
+    }
+    const landed =
+      buildChannelConfigPatch({
+        base: resolveChannelConfigValue(saved, channelId),
+        channelId,
+        edits: keptChannelEdits(config, channelId, saved, edits),
+        schema: config.configSchema,
+      }) === null;
+    setSaveFeedback(landed ? null : { channelId, kind: "notSaved" });
+    if (landed) {
+      await finishChannelSave(channelId, edits);
     }
   }
 
-  async function reloadChannelConfig() {
-    await context.runtimeConfig.discardDraft({ reloadOnly: true });
-    await context.channels.refresh(true);
+  /** Overwrite keeps the edits to fields changed elsewhere; Reload takes the newer values. */
+  function resolveConfigConflict(channelId: string, choice: "keep" | "latest") {
+    const edits = channelCapability.state.configEdits[channelId] ?? [];
+    const bases = channelCapability.state.configEditBases[channelId] ?? [];
+    const saved = resolveEditableSnapshotConfig(context.runtimeConfig.state.configSnapshot);
+    if (!saved) {
+      return;
+    }
+    if (choice === "keep") {
+      channelCapability.replaceConfigEdits(
+        channelId,
+        edits,
+        rebaseChannelConfigEdits(bases, saved),
+      );
+    } else {
+      const kept = dropConflictingChannelConfigEdits(
+        edits,
+        bases,
+        findChannelConfigConflicts(bases, saved),
+      );
+      channelCapability.replaceConfigEdits(channelId, kept.edits, kept.bases);
+    }
+    setSaveFeedback(null);
+    if (channelCapability.state.configEdits[channelId]) {
+      void runMutation("config", saveChannelConfig(channelId));
+    }
+  }
+
+  async function discardChannelConfig(channelId: string) {
+    channelCapability.discardConfigEdits(channelId);
+    if (interruptedSave?.channelId === channelId) {
+      interruptedSave = null;
+    }
+    setSavedChannel(null);
+    setSaveFeedback(null);
+    // Config changes elsewhere already refresh the form; a re-read is only left to clear what a
+    // rejected Save reported. Other pages' unsaved edits in the shared draft would not survive it.
+    const config = context.runtimeConfig.state;
+    if (config.lastError && !config.configFormDirty) {
+      await context.runtimeConfig.discardDraft({ reloadOnly: true });
+    }
+  }
+
+  /** Resolves true once the channel has nothing unsaved; false keeps the user editing. */
+  async function resolveUnsavedConfig(channelId: string) {
+    const channel = resolveChannelLabel(viewProps(), channelId);
+    const choice = await showConfirmChoiceDialog({
+      title: t("channels.config.unsavedTitle", { channel }),
+      message: t("channels.config.unsavedMessage", { channel }),
+      confirmLabel: t("common.save"),
+      alternativeLabel: t("channels.config.discard"),
+      cancelLabel: t("channels.config.keepEditing"),
+    });
+    if (choice === "alternative") {
+      await discardChannelConfig(channelId);
+      return true;
+    }
+    return choice === "confirm" ? saveChannelConfig(channelId) : false;
+  }
+
+  function clearChannelDetail() {
+    retireMutation("config");
+    retireMutation("whatsapp");
+    setSavedChannel(null);
+    setSaveFeedback(null);
+    setSelectedChannel(null);
+  }
+
+  async function closeChannelDetail() {
+    const channelId = selectedChannel();
+    if (channelId && hasUnsavedConfig(channelId) && !(await resolveUnsavedConfig(channelId))) {
+      return;
+    }
+    clearChannelDetail();
+  }
+
+  /** Setup reloads the config when it finishes, so unsaved edits get the same choice as closing. */
+  async function startChannelSetup(channelId: string | null) {
+    const open = selectedChannel();
+    const edited = Object.keys(channelCapability.state.configEdits).toSorted(
+      (left, right) => Number(right === open) - Number(left === open),
+    );
+    for (const id of edited) {
+      if (hasUnsavedConfig(id) && !(await resolveUnsavedConfig(id))) {
+        return;
+      }
+    }
+    if (active && canAdmin && context.gateway.snapshot.phase === "connected") {
+      wizardHost.startSetup(channelId);
+    }
+  }
+
+  function noteUnsavedConfigOnLeave() {
+    const channelIds = Object.keys(channelCapability.state.configEdits);
+    if (channelIds.length === 0) {
+      return;
+    }
+    const props = viewProps();
+    const labels = channelIds.map((channelId) => resolveChannelLabel(props, channelId));
+    const [only] = channelIds.length === 1 ? channelIds : [];
+    showToast({
+      severity: "error",
+      actionPrimary: true,
+      message:
+        only !== undefined
+          ? t("channels.config.unsavedOnLeave", { channel: resolveChannelLabel(props, only) })
+          : t("channels.config.unsavedOnLeaveMany", {
+              channels: new Intl.ListFormat(getLocale(), { type: "conjunction" }).format(labels),
+            }),
+      actionLabel: t("channels.config.review"),
+      onAction: () => {
+        // One channel reopens with its edits; several return to the list, where each row says so.
+        if (only !== undefined) {
+          channelCapability.requestConfigReview(only);
+        }
+        void context.router.navigate("channels", context);
+      },
+      durationMs: 12_000,
+    });
   }
 
   function reconcilePairingFilter(snapshot: ChannelsPairingListResult | null) {
@@ -298,7 +560,7 @@ export function ChannelsPage() {
   }
 
   function openPairingPrompt(kind: ChannelPairingPrompt["kind"], request: ChannelsPairingRequest) {
-    if (context.channels.state.pairingBusyRequestId) {
+    if (channelCapability.state.pairingBusy) {
       return;
     }
     setPairingNotice(null);
@@ -332,7 +594,7 @@ export function ChannelsPage() {
       requestId: prompt.request.requestId,
     };
     if (prompt.kind === "dismiss") {
-      const dismissed = await context.channels.dismissPairing(target);
+      const dismissed = await channelCapability.dismissPairing(target);
       if (dismissed && operations.prompt === prompt) {
         updateOperations({ prompt: null });
         setPairingNotice(t("channels.pairing.dismissedNotice"));
@@ -340,7 +602,7 @@ export function ChannelsPage() {
       return;
     }
 
-    const result = await context.channels.approvePairing({
+    const result = await channelCapability.approvePairing({
       ...target,
       notify: prompt.notify,
       bootstrapCommandOwner: prompt.bootstrapCommandOwner,
@@ -373,7 +635,7 @@ export function ChannelsPage() {
   }
 
   function startWhatsApp(force: boolean, accountId = wizardHost.whatsappAccountId()) {
-    return presentWhatsApp(context.channels.startWhatsApp(force, accountId));
+    return presentWhatsApp(channelCapability.startWhatsApp(force, accountId));
   }
 
   function viewProps(): ChannelsProps {
@@ -384,6 +646,10 @@ export function ChannelsPage() {
     return {
       channels,
       config,
+      configEdits: channels.configEdits,
+      savingChannel: savingChannel(),
+      savedChannel: savedChannel(),
+      saveFeedback: saveFeedback(),
       presentation: pluginPresentation,
       wizardHost,
       pairingChannelFilter: pairingChannelFilter(),
@@ -402,18 +668,10 @@ export function ChannelsPage() {
         retireMutation("whatsapp");
         setSelectedChannel(channel);
       },
-      onCloseDetail: () => {
-        retireMutation("config");
-        retireMutation("whatsapp");
-        setSelectedChannel(null);
-      },
-      onStartSetup: (channelId) => {
-        if (canAdmin && context.gateway.snapshot.phase === "connected") {
-          wizardHost.startSetup(channelId);
-        }
-      },
-      onRefresh: (probe) => void context.channels.refresh(probe),
-      onPairingRefresh: () => void context.channels.refreshPairing(),
+      onCloseDetail: () => void closeChannelDetail(),
+      onStartSetup: (channelId) => void startChannelSetup(channelId),
+      onRefresh: (probe) => void channelCapability.refresh(probe),
+      onPairingRefresh: () => void channelCapability.refreshPairing(),
       onPairingFilterChange: setPairingFilter,
       onPairingReviewAccount: reviewPairingAccount,
       onPairingApprove: (request) => openPairingPrompt("approve", request),
@@ -426,12 +684,19 @@ export function ChannelsPage() {
       onPairingPromptConfirm: () => void runMutation("pairing", confirmPairingPrompt()),
       onWhatsAppStart: startWhatsApp,
       onWhatsAppWait: () =>
-        presentWhatsApp(context.channels.waitWhatsApp(wizardHost.whatsappAccountId())),
-      onWhatsAppLogout: (accountId) => presentWhatsApp(context.channels.logoutWhatsApp(accountId)),
+        presentWhatsApp(channelCapability.waitWhatsApp(wizardHost.whatsappAccountId())),
+      onWhatsAppLogout: (accountId) => presentWhatsApp(channelCapability.logoutWhatsApp(accountId)),
       onShowAdvancedSettings: setShowAdvancedSettings,
-      onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
-      onConfigSave: () => void runMutation("config", saveChannelConfig()),
-      onConfigReload: () => void reloadChannelConfig(),
+      onConfigPatch: (channelId, path, value) => {
+        setSavedChannel(null);
+        editChannelField(channelCapability, context.runtimeConfig.state, channelId, {
+          path,
+          value,
+        });
+      },
+      onConfigSave: (channelId) => void runMutation("config", saveChannelConfig(channelId)),
+      onConfigDiscard: (channelId) => void discardChannelConfig(channelId),
+      onConfigConflict: resolveConfigConflict,
     };
   }
   // The application owns these services for this mounted page's lifetime.
@@ -440,8 +705,12 @@ export function ChannelsPage() {
     connection.connect();
     void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     const applyChannels = () => {
+      const review = channelCapability.takeConfigReview();
+      if (review) {
+        setSelectedChannel(review);
+      }
       pluginPresentation.details.sync();
-      reconcilePairingFilter(context.channels.state.pairingSnapshot);
+      reconcilePairingFilter(channelCapability.state.pairingSnapshot);
       pluginPresentation.ensure(context.gateway.snapshot.client);
     };
     // Channel receipts reconcile pairing selections and start presentation loads as channel identities arrive.
@@ -463,6 +732,7 @@ export function ChannelsPage() {
       }
     });
     return () => {
+      noteUnsavedConfigOnLeave();
       active = false;
       retireMutation();
       stopNavigation();
@@ -478,7 +748,7 @@ export function ChannelsPage() {
         title={t("tabs.channels")}
         subtitle={
           <>
-            {t("subtitles.channels")} <LearnMoreLink url={CHANNELS_DOCS_URL} />
+            <LearnMoreLink url={CHANNELS_DOCS_URL} />
           </>
         }
       />

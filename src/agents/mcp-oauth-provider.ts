@@ -30,6 +30,13 @@ export type McpOAuthLoginLifecycle = {
   onTokensSaved: () => void;
 };
 
+export class McpOAuthCredentialsRetainedError extends Error {
+  constructor() {
+    super("Existing authentication was retained. Use the CLI sign-in flow.");
+    this.name = "McpOAuthCredentialsRetainedError";
+  }
+}
+
 function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
   const expiresIn = tokens.expires_in;
   return typeof expiresIn === "number" && Number.isFinite(expiresIn)
@@ -55,7 +62,8 @@ function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = 
   );
 }
 
-function hasRegisteredOAuthRedirect(redirectUris: string[], redirectUrl: string): boolean {
+/** Whether a dynamically registered client accepts this redirect (RFC 8252 loopback ports). */
+export function hasRegisteredOAuthRedirect(redirectUris: string[], redirectUrl: string): boolean {
   if (redirectUris.includes(redirectUrl)) {
     return true;
   }
@@ -303,7 +311,7 @@ export async function createMcpOAuthClientProvider(params: {
       params.login?.assertCurrent();
       params.refreshBoundary?.assertCanInvalidate();
       if (params.login) {
-        throw new Error("Existing authentication was retained. Use the CLI sign-in flow.");
+        throw new McpOAuthCredentialsRetainedError();
       }
       await updateStore({
         kind: "invalidate",

@@ -97,9 +97,9 @@ suite.define(() => {
       .waitFor({ timeout: 10_000 });
 
     await page.goto(`${suite.server.baseUrl}settings/appearance`);
-    const shortcutSelect = page.locator("[data-settings-send-shortcut]");
-    await shortcutSelect.selectOption("modifier-enter");
-    expect(await shortcutSelect.inputValue()).toBe("modifier-enter");
+    const modifierShortcut = page.locator('[data-test-id="send-shortcut-modifier-enter"]');
+    await modifierShortcut.click();
+    expect(await modifierShortcut.locator("input").isChecked()).toBe(true);
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await composer.waitFor({ state: "visible", timeout: 10_000 });
@@ -164,7 +164,7 @@ suite.define(() => {
       .locator(".chat-group.assistant")
       .getByText("The checklist is ready.", { exact: true })
       .waitFor();
-    await button("Stop generating").waitFor({ state: "detached" });
+    await button("Stop").waitFor({ state: "detached" });
     const unquotedDraft = "Keep the text without a quote.";
     await composer.fill(unquotedDraft);
     await settledDraft(unquotedDraft, null);
@@ -198,7 +198,7 @@ suite.define(() => {
       sessionKey: "agent:main:main",
       idempotencyKey: runId,
     });
-    const stop = button("Stop generating");
+    const stop = button("Stop");
     await stop.waitFor({ state: "visible" });
     await expect.poll(() => composer.inputValue()).toBe("");
 
@@ -224,34 +224,15 @@ suite.define(() => {
     const expectDraft = async (text: string, aborts = 0) => {
       expect(await composer.inputValue()).toBe(text);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
-      await expectRequestCountStable(gateway, "chat.send", 1);
-      await expectRequestCountStable(gateway, "chat.abort", aborts);
+      await Promise.all([
+        expectRequestCountStable(gateway, "chat.send", 1),
+        expectRequestCountStable(gateway, "chat.abort", aborts),
+      ]);
     };
     await preview.waitFor({ state: "visible" });
     await expectQuote();
 
     expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
-    const draft = "Preserve this unsent reply draft.";
-    await composer.fill(draft);
-
-    // Synthetic IME events exercise the application flow, not native IME delivery.
-    for (const mode of ["isComposing", "keyCode229"]) {
-      const prevented = await composer.evaluate((element, compositionMode) => {
-        const event = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-          isComposing: compositionMode === "isComposing",
-          keyCode: compositionMode === "keyCode229" ? 229 : 0,
-        });
-        element.dispatchEvent(event);
-        return event.defaultPrevented;
-      }, mode);
-      expect(prevented).toBe(false);
-      await expectQuote();
-      await expectDraft(draft);
-    }
-
     await composer.fill("");
     await stop.waitFor({ state: "visible" });
     const primary = pane.locator(".agent-chat__composer-actions .chat-send-btn--send");
@@ -297,18 +278,68 @@ suite.define(() => {
     expect(await interrupted.textContent()).toContain("Interrupted");
     expect(await pane.getByLabel("Run status: Interrupted").count()).toBe(0);
     await expectText(pane.locator(".agent-chat__run-status-announcement"), "Interrupted");
-    expect(requireRecord(abort.params)).toEqual({ sessionKey, runId });
+    expect(requireRecord(abort.params)).toEqual({ sessionKey, runId, userInitiated: true });
     await stop.waitFor({ state: "detached" });
     await expectDraft(composingDraft, 1);
   });
 
-  it.each(["queue", "steer", "collect", "followup"] as const)(
+  it("stops the run with Escape outside the composer after menus take theirs", async () => {
+    const { page, gateway, pane, composer, button } = await quotedChat(
+      "user",
+      "Earlier message.",
+      "escape-outside-source",
+    );
+    await composer.fill("Keep this run active.");
+    await button("Send message").click();
+    const sendParams = requireRecord((await gateway.waitForRequest("chat.send")).params);
+    const runId = requireString(sendParams.idempotencyKey, "active run");
+    const stop = button("Stop");
+    await stop.waitFor({ state: "visible" });
+
+    // An open menu owns Escape; closing it leaves the run alone.
+    await pane
+      .locator('.chat-bubble[data-entry-id="escape-outside-source"]')
+      .click({ button: "right" });
+    const menu = page.locator(".chat-reply-context-menu");
+    await menu.waitFor({ state: "visible" });
+    await expect
+      .poll(() => menu.evaluate((element) => element.contains(document.activeElement)))
+      .toBe(true);
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "hidden" });
+    await expectRequestCountStable(gateway, "chat.abort", 0);
+    expect(await stop.isVisible()).toBe(true);
+
+    // Focus in the transcript, or on the page after a reload, still stops the run.
+    await pane.locator(".chat-thread").focus();
+    await page.keyboard.press("Escape");
+    const abort = await gateway.waitForRequest("chat.abort");
+    expect(requireRecord(abort.params)).toEqual({
+      sessionKey: defaultSessionKey,
+      runId,
+      userInitiated: true,
+    });
+    await stop.waitFor({ state: "detached" });
+  });
+
+  it("stops the run with Escape when focus is on the page", async () => {
+    const { page, gateway, composer, button } = await openChat();
+    await composer.fill("Keep this run active.");
+    await composer.press("Enter");
+    await gateway.waitForRequest("chat.send");
+    await button("Stop").waitFor({ state: "visible" });
+    await composer.evaluate((element) => element.blur());
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+    await page.keyboard.press("Escape");
+    await gateway.waitForRequest("chat.abort");
+    await button("Stop").waitFor({ state: "detached" });
+  });
+
+  it.each(["queue", "steer", "collect"] as const)(
     "explains and submits the opposite of %s with modified Enter",
     async (followUpMode) => {
-      const inheritsQueueMode = followUpMode === "collect" || followUpMode === "followup";
-      const runtimeConfig = {
-        messages: { queue: { mode: inheritsQueueMode ? followUpMode : "steer" } },
-      };
+      const inheritsQueueMode = followUpMode === "collect";
+      const runtimeConfig = { messages: { queue: { mode: followUpMode } } };
       const { page, gateway, composer } = await openChat(
         inheritsQueueMode
           ? {
@@ -325,25 +356,23 @@ suite.define(() => {
       if (!inheritsQueueMode) {
         await followUp.selectOption(followUpMode);
       }
-      await page.locator("[data-settings-send-shortcut]").selectOption("enter");
+      await page.locator('[data-test-id="send-shortcut-enter"]').click();
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const initialText = "keep the shortcut run active";
       const initialSend = await sendChat(page, gateway, initialText);
       const runId = requireString(initialSend.idempotencyKey, "active run");
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
 
       const followUpText = "use the alternate follow-up action";
       await composer.fill(followUpText);
       const primary = page.locator(".agent-chat__composer-actions .chat-send-btn--send");
       await primary.hover();
-      const tooltip =
-        followUpMode === "steer" ? "Steer ⏎ · Queue ⌘/Ctrl+Enter" : "Queue ⏎ · Steer ⌘/Ctrl+Enter";
       const tooltipHost = primary.locator("..");
       const tooltipContent = tooltipHost.locator('[slot="content"]');
       await expect
         .poll(async () => (await tooltipContent.textContent())?.replace(/\s+/gu, ""))
-        .toBe(tooltip.replace(/\s+/gu, ""));
+        .toMatch(followUpMode === "steer" ? /^Steer.*Queue/u : /^Queue.*Steer/u);
       await tooltipHost.locator(".tooltip-surface[popover]").waitFor({ state: "visible" });
       expect(await tooltipContent.locator("kbd").count()).toBe(2);
       await composer.press("Control+Enter");

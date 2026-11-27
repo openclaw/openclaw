@@ -7,11 +7,11 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
-import type { ProviderFastModePolicyContext } from "../plugin-sdk/provider-model-types.js";
 import type {
   OAuthCredentials as SessionOAuthCredentials,
   OAuthLoginCallbacks,
-} from "../plugin-sdk/provider-oauth-runtime.js";
+} from "../llm/utils/oauth/types.js";
+import type { ProviderFastModePolicyContext } from "../plugin-sdk/provider-model-types.js";
 import type { PluginTextTransforms } from "./cli-backend.types.js";
 import type {
   ProviderAuthMethod,
@@ -60,6 +60,7 @@ import type {
   ProviderNormalizeModelIdContext,
   ProviderNormalizeTransportContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
   ProviderPreparedRuntimeAuth,
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
@@ -392,6 +393,10 @@ export type ProviderPlugin = {
   prepareRuntimeAuth?: (
     ctx: ProviderPrepareRuntimeAuthContext,
   ) => Promise<ProviderPreparedRuntimeAuth | null | undefined>;
+  /** Preferred exchange for chat and Decision inference; takes precedence over the legacy hook. */
+  prepareRuntimeAuthV2?: (
+    ctx: ProviderPrepareRuntimeAuthContextV2,
+  ) => Promise<ProviderPreparedRuntimeAuth | null | undefined>;
   /**
    * Usage/billing auth resolution hook.
    *
@@ -431,6 +436,11 @@ export type ProviderPlugin = {
    * raw error shape. Return undefined to fall back to generic classification.
    */
   classifyFailoverReason?: (ctx: ProviderFailoverErrorContext) => FailoverReason | null | undefined;
+  /**
+   * Return safe, user-facing copy for a recognized provider error.
+   * Return undefined to use OpenClaw's default copy. Never return a raw error body.
+   */
+  formatUserFacingError?: (ctx: ProviderFailoverErrorContext) => string | undefined;
   /**
    * Provider-owned cache TTL eligibility.
    *

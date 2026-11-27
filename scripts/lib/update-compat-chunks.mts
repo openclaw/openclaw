@@ -3,6 +3,7 @@ import path from "node:path";
 import * as ts from "typescript/ast";
 import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
 import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
+import { bundledModuleRegions } from "./bundled-module-regions.mjs";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { controlUiBuildSiblingPid } from "./output-root-guard.mjs";
 import { isRecord as object } from "./record-shared.mjs";
@@ -15,11 +16,16 @@ import {
   isUpdateCompatibilityChunk,
   UPDATE_COMPATIBILITY_CHUNK_HEADER,
 } from "./update-compat-contract.mjs";
-import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-module-graph.mts";
+import {
+  ModuleGraph,
+  moduleSourceRegions,
+  type UpdateCompatibilityOrigin,
+} from "./update-compat-module-graph.mts";
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
-const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
+const POST_SWAP_OWNER =
+  /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$|infra\/deferred-plugin-migrations\.ts$)/;
 const STANDALONE_CHUNK_PREFIXES = Object.keys(standaloneRuntimeProcessBuildEntries).flatMap(
   (name) => {
     const { chunkFileNames } = getStandaloneRuntimeProcessOutputOptions(name);
@@ -133,13 +139,16 @@ function moduleFiles(root: string): string[] {
   return files.toSorted();
 }
 
-function ownerAt(source: string, offset: number): string | undefined {
+function ownerAt(
+  regions: ReturnType<typeof moduleSourceRegions>,
+  offset: number,
+): string | undefined {
   let owner: string | undefined;
-  for (const match of source.matchAll(/^\/\/#region (.+)$/gm)) {
+  for (const match of regions) {
     if (match.index > offset) {
       break;
     }
-    owner = match[1];
+    owner = match.owner;
   }
   return owner;
 }
@@ -307,15 +316,17 @@ export function recordUpdateCompatibilityRelease(params: {
     const source = fs.readFileSync(file, "utf8");
     if (
       !source.includes("import(") ||
-      ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
+      ![...bundledModuleRegions(source)].some(
         ([, owner]) => owner !== undefined && POST_SWAP_OWNER.test(owner),
       )
     ) {
       continue;
     }
+    const sourceFile = parser.parseSourceFile(file, source);
+    const regions = moduleSourceRegions(sourceFile);
     const visit = (node: ts.Node) => {
       if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-        const owner = ownerAt(source, node.getStart());
+        const owner = ownerAt(regions, node.getStart());
         if (owner && POST_SWAP_OWNER.test(owner) && isPostSwapImport(owner, node)) {
           const specifier = node.arguments[0];
           if (!specifier || !ts.isStringLiteralLikeNode(specifier)) {
@@ -362,7 +373,7 @@ export function recordUpdateCompatibilityRelease(params: {
       }
       node.forEachChild(visit);
     };
-    visit(parser.parseSourceFile(file, source));
+    visit(sourceFile);
   }
   return {
     version: packageJson.version,
@@ -527,6 +538,22 @@ function collectRequiredCompatibilityChunks(
   return [...requiredByPath.values()];
 }
 
+// Older updaters import these after package activation, while their module cache still
+// holds the older release's dependency instances. Their bridges run the current export
+// in a worker so current code never links against those cached modules.
+const ISOLATED_COMPATIBILITY_ORIGINS = new Set([
+  "src/cli/update-cli/update-command-fresh-doctor.ts:runUpdateFinalizationDoctorInFreshProcess",
+  "src/cli/update-cli/update-command-failure-recovery.ts:verifyUpdateFailureRecovery",
+  "src/infra/update-triage.ts:prepareUpdateFailureTriage",
+]);
+// Released recovery paths load these owners' imports after activation; keep them isolated.
+const POST_ACTIVATION_RECOVERY_OWNERS = new Set([
+  "src/cli/update-cli/update-command-service-recovery.ts",
+  "src/cli/update-cli/update-command-triage.ts",
+  "src/cli/update-cli/update-finalization-lifecycle.ts",
+]);
+export const ISOLATED_COMPATIBILITY_BRIDGE = "update-compat-isolated-bridge.mjs";
+
 const STABLE_10_1_CLEANUP_FACADE = "runtime-cleanup-DlrF_x2c.mjs";
 const STABLE_10_1_CLEANUP_OWNER = "runtime-cleanup-Dowg583v.mjs";
 
@@ -545,8 +572,19 @@ export function listUpdateCompatibilityChunkPaths(
   ].toSorted();
 }
 
+/** The 2026.9.37 immutable updater predates leased handoffs and always denied authority.
+ * This export is emitted inline, not imported from the current runtime. Remove it when
+ * 2026.9.37 leaves the supported first-hop upgrade window.
+ */
+export function isInlineUpdateCompatibilityExport(origin: UpdateCompatibilityOrigin): boolean {
+  return (
+    origin.module === "src/infra/update-managed-service-handoff-current.ts" &&
+    origin.symbol === "isImmutableManagedServiceUpdateHandoffProcess"
+  );
+}
+
 /** Follow the old owner's current lexical binding when its implementation moves. */
-function currentOrigin(
+export function resolveUpdateCompatibilityOrigin(
   origin: UpdateCompatibilityOrigin,
   sourceDir: string,
   graph: ModuleGraph,
@@ -563,6 +601,18 @@ function currentOrigin(
   if (info.imports.has(origin.symbol) || info.exports.has(origin.symbol)) {
     throw new Error(`Cannot resolve current source binding ${origin.module}:${origin.symbol}`);
   }
+  // The published 9.36 dispatcher moved in 5b4fdfcb22cf without a runtime
+  // re-export, keeping storage independent of dispatch. Remove this relocation
+  // when 9.36 leaves the supported first-hop inventory.
+  if (
+    origin.module === "src/state/openclaw-state-lease-worker-storage.ts" &&
+    origin.symbol === "runWithOpenClawStateLeaseWorker"
+  ) {
+    const operation = path.join(sourceDir, "src/state/openclaw-state-lease-worker-operation.ts");
+    if (fs.existsSync(operation)) {
+      return graph.origin(operation, origin.symbol) ?? origin;
+    }
+  }
   return origin;
 }
 
@@ -571,6 +621,7 @@ export function writeUpdateCompatibilityChunks(params: {
   distDir: string;
   sourceDir: string;
   inventory: UpdateCompatibilityInventory;
+  dryRun?: boolean;
 }): string[] {
   const distDir = path.resolve(params.distDir);
   using parser = createNativeTypeScriptParser({ cwd: params.sourceDir });
@@ -580,8 +631,29 @@ export function writeUpdateCompatibilityChunks(params: {
   const origins = new Map<string, UpdateCompatibilityOrigin>();
   for (const chunk of required) {
     for (const entry of chunk.exports) {
-      const origin = currentOrigin(entry.origin, params.sourceDir, sourceGraph);
+      const origin = resolveUpdateCompatibilityOrigin(entry.origin, params.sourceDir, sourceGraph);
       origins.set(`${entry.origin.module}:${entry.origin.symbol}`, origin);
+    }
+  }
+  const isolated = (origin: UpdateCompatibilityOrigin) => {
+    const current = origins.get(`${origin.module}:${origin.symbol}`)!;
+    return ISOLATED_COMPATIBILITY_ORIGINS.has(`${current.module}:${current.symbol}`);
+  };
+  for (const release of params.inventory.releases) {
+    for (const chunk of release.chunks) {
+      for (const imported of chunk.imports) {
+        if (!POST_ACTIVATION_RECOVERY_OWNERS.has(imported.owner)) {
+          continue;
+        }
+        for (const name of imported.exports) {
+          const entry = chunk.exports.find((candidate) => candidate.exported === name);
+          if (entry && !isolated(entry.origin)) {
+            throw new Error(
+              `${release.version} recovery import ${chunk.path}:${name} from ${imported.owner} must run isolated; add ${entry.origin.module}:${entry.origin.symbol} to ISOLATED_COMPATIBILITY_ORIGINS`,
+            );
+          }
+        }
+      }
     }
   }
   const ownerModules = new Set([...origins.values()].map((origin) => origin.module));
@@ -591,7 +663,7 @@ export function writeUpdateCompatibilityChunks(params: {
     const source = fs.readFileSync(file, "utf8");
     if (
       isUpdateCompatibilityChunk(source) ||
-      ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
+      ![...bundledModuleRegions(source)].some(
         ([, owner]) => owner !== undefined && ownerModules.has(owner),
       )
     ) {
@@ -646,7 +718,30 @@ export function writeUpdateCompatibilityChunks(params: {
       );
     }
     const lines = [UPDATE_COMPATIBILITY_CHUNK_HEADER];
+    const isolatedCount = chunk.exports.filter((entry) => isolated(entry.origin)).length;
+    if (isolatedCount > 0 && isolatedCount !== chunk.exports.length) {
+      throw new Error(
+        `Cannot bridge ${chunk.path}: isolated and in-process exports cannot share one module`,
+      );
+    }
+    if (isolatedCount > 0) {
+      let bridge = portable(
+        path.relative(path.dirname(destination), path.join(distDir, ISOLATED_COMPATIBILITY_BRIDGE)),
+      );
+      if (!bridge.startsWith(".")) {
+        bridge = `./${bridge}`;
+      }
+      lines.push(`import { isolatedUpdateCompatExport } from ${JSON.stringify(bridge)};`);
+      outputs.set(
+        ISOLATED_COMPATIBILITY_BRIDGE,
+        `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\n${fs.readFileSync(new URL("./update-compat-isolated-bridge.mjs", import.meta.url), "utf8")}`,
+      );
+    }
     for (const entry of chunk.exports) {
+      if (isInlineUpdateCompatibilityExport(entry.origin)) {
+        lines.push(`export async function ${entry.exported}() { return false; }`);
+        continue;
+      }
       const origin = origins.get(`${entry.origin.module}:${entry.origin.symbol}`)!;
       const matches = [...(candidates.get(`${origin.module}:${origin.symbol}`)?.values() ?? [])];
       const match = matches[0];
@@ -680,6 +775,10 @@ export function writeUpdateCompatibilityChunks(params: {
           "// 10.1's already-loaded owner must drain its original pending disposer queue.",
           `export { i as runCliDisposerAfterPending } from "./${STABLE_10_1_CLEANUP_OWNER}";`,
         );
+      } else if (isolatedCount > 0) {
+        lines.push(
+          `export const ${entry.exported} = isolatedUpdateCompatExport(import.meta.url, ${JSON.stringify(specifier)}, ${JSON.stringify(match.exported)});`,
+        );
       } else {
         lines.push(
           `export { ${match.exported} as ${entry.exported} } from ${JSON.stringify(specifier)};`,
@@ -690,6 +789,9 @@ export function writeUpdateCompatibilityChunks(params: {
     outputs.set(chunk.path, contents);
   }
   // Finish all mappings before writing any compatibility output.
+  if (params.dryRun) {
+    return [...outputs.keys()].toSorted();
+  }
   for (const [relative, contents] of outputs) {
     const destination = path.join(distDir, relative);
     fs.mkdirSync(path.dirname(destination), { recursive: true });

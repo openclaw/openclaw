@@ -4,7 +4,6 @@ import { isPolicyValueAtLeastAsStrict } from "./strictness.js";
 
 function compare(path: string) {
   const rule = POLICY_RULE_METADATA.find((entry) => entry.policyPath.join(".") === path);
-  expect(rule).toBeDefined();
   return (candidate: unknown, baseline: unknown, expected: boolean) => {
     expect(isPolicyValueAtLeastAsStrict(rule!, candidate, baseline)).toBe(expected);
   };
@@ -15,32 +14,17 @@ const prod = { pattern: "deploy", argPattern: "^--prod$" };
 describe("policy doctor strictness", () => {
   it.each<[string, unknown, unknown, boolean]>([
     ["normalizes string and object requirements", [" deploy "], [{ pattern: "deploy" }], true],
-    [
-      "trims argument constraints",
-      [{ pattern: " deploy ", argPattern: " ^--prod$ " }],
-      [prod],
-      true,
-    ],
+    ["trims arguments", [{ pattern: " deploy ", argPattern: " ^--prod$ " }], [prod], true],
     ["treats blank optional arguments as absent", [{ ...prod, argPattern: " " }], ["deploy"], true],
     ["ignores list order", ["status", "deploy", "deploy"], ["deploy", "status", "deploy"], true],
     ["preserves duplicate cardinality", ["deploy", "deploy"], ["deploy"], false],
     ["rejects a removed argument constraint", ["deploy"], [prod], false],
     ["preserves pattern case", ["Deploy"], ["deploy"], false],
-    [
-      "preserves argument pattern case",
-      [{ pattern: "deploy", argPattern: "^--PROD$" }],
-      [prod],
-      false,
-    ],
+    ["preserves argument case", [{ ...prod, argPattern: "^--PROD$" }], [prod], false],
     ["accepts matching empty requirements", [], [], true],
     ["keeps empty requirements meaningful", [], ["deploy"], false],
     ["rejects blank entries instead of dropping them", ["deploy", " "], ["deploy"], false],
-    [
-      "rejects unsupported requirement keys",
-      [{ pattern: "deploy", argpattern: "^--prod$" }],
-      ["deploy"],
-      false,
-    ],
+    ["rejects unknown keys", [{ pattern: "deploy", argpattern: "x" }], ["deploy"], false],
     ["rejects null argument constraints", [{ ...prod, argPattern: null }], ["deploy"], false],
     ["rejects missing patterns", [{ argPattern: "^--prod$" }], [], false],
     ["rejects non-array requirements", {}, [], false],
@@ -97,20 +81,19 @@ describe("policy doctor strictness", () => {
         teamId: "family",
       },
     };
+    const withRoute = (route: typeof scopedBaselineProbe.route & { accountId?: string }) => [
+      { ...scopedBaselineProbe, route },
+    ];
     routingProbes(
-      [
-        {
-          ...scopedBaselineProbe,
-          route: {
-            channel: " IMESSAGE ",
-            accountId: " DEFAULT ",
-            peer: { kind: "direct", id: " private " },
-            parentPeer: { kind: "group", id: " family-thread " },
-            guildId: " home ",
-            teamId: " family ",
-          },
-        },
-      ],
+      withRoute({
+        ...scopedBaselineProbe.route,
+        channel: " IMESSAGE ",
+        accountId: " DEFAULT ",
+        peer: { kind: "direct", id: " private " },
+        parentPeer: { kind: "group", id: " family-thread " },
+        guildId: " home ",
+        teamId: " family ",
+      }),
       [scopedBaselineProbe],
       true,
     );
@@ -119,9 +102,8 @@ describe("policy doctor strictness", () => {
       [baselineProbe],
       true,
     );
-    const differentGuild = { ...scopedBaselineProbe.route, guildId: "other" };
     routingProbes(
-      [{ ...scopedBaselineProbe, route: differentGuild }],
+      withRoute({ ...scopedBaselineProbe.route, guildId: "other" }),
       [scopedBaselineProbe],
       false,
     );

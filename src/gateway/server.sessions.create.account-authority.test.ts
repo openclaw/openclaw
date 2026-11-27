@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import * as modelCatalogRuntime from "../agents/model-catalog.runtime.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -8,15 +7,12 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as profileAuthority from "../state/user-channel-identity-operations.js";
 import { connectUserModelAccount, listUserProfileAuthLinks } from "../state/user-model-accounts.js";
-import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createMentionInbox } from "./mention-inbox.js";
 import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
@@ -26,6 +22,7 @@ import {
   prepareSessionModelAccountAccess,
   prepareUserModelAccountAction,
 } from "./server-methods/users-model-account-access.js";
+import * as sessionCreationOwner from "./session-create-service.js";
 import { testState } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -162,7 +159,7 @@ test.each(["during preparation", "after preparation"] as const)(
 );
 
 async function createFixture(
-  scope: "operator.sessions.write" | "operator.write",
+  scope: "operator.sessions.write" | "operator.write" | "operator.admin",
   personalAccount: boolean,
   origin: "human" | "agent" = "human",
 ) {
@@ -210,7 +207,7 @@ async function createFixture(
   await initializeSessionReadContext(context);
   if (origin === "agent") {
     const captured = expectDefined(
-      await captureGatewayOperatorRunAuthority({ client: { ...client }, context }),
+      await prepareGatewayOperatorRunAuthority({ client: { ...client }, context }),
       "admitted operator authority",
     );
     onTestFinished(captured.release);
@@ -251,12 +248,20 @@ test.each([
   (row) =>
     withFixture([row.scope, row.selection !== "none", row.origin], async (fixture) => {
       const links = listUserProfileAuthLinks(fixture.owner.id);
+      if (row.selection === "none") {
+        vi.mocked(fixture.context.loadGatewayModelCatalogSnapshot)
+          .mockImplementation(() => new Promise(() => {}))
+          .mockClear();
+      }
       await fixture.create(
         row.selection === "explicit"
           ? `${model}@${expectDefined(fixture.authProfileId, "owned account")}`
           : undefined,
         row.idempotent,
       );
+      if (row.selection === "none") {
+        expect(fixture.context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+      }
 
       expect(fixture.respond.mock.calls[0]?.slice(0, 2)).toEqual([
         true,
@@ -274,13 +279,7 @@ test.each([
     }),
 );
 
-test.each([
-  "disconnect",
-  "role scope",
-  "connection scope",
-  "profile",
-  "explicit disconnect",
-] as const)(
+test.each(["disconnect", "explicit disconnect"] as const)(
   "sessions.create rechecks its account capture after %s changes during preparation",
   (change) =>
     withFixture(
@@ -297,14 +296,6 @@ test.each([
           expect(fixture.respond).not.toHaveBeenCalled();
           if (change === "disconnect" || change === "explicit disconnect") {
             fixture.clients.delete(fixture.client);
-          } else if (change === "role scope") {
-            fixture.role.scopes = ["operator.sessions.read"];
-          } else if (change === "connection scope") {
-            fixture.client.connect.scopes = ["operator.sessions.read"];
-          } else {
-            fixture.client.authenticatedUserProfile = identifiedClient(
-              ensureProfileForEmail("replacement-creator@example.test").id,
-            ).authenticatedUserProfile;
           }
         } finally {
           release.resolve();
@@ -321,62 +312,6 @@ test("session-only creation does not authorize an explicit personal account sele
     fixture.expectRejected();
   }));
 
-test("sessions.create rejects a session-only creator revoked after initial mention validation", () =>
-  withFixture(["operator.sessions.write", false], async (fixture) => {
-    const recipientProfile = ensureProfileForEmail("creation-recipient@example.test");
-    const recipient = { ...identifiedClient(recipientProfile.id), connId: "creation-recipient" };
-    fixture.clients.add(recipient);
-    Object.assign(fixture.roles.definitions, {
-      administrator: {
-        agents: "*",
-        scopes: ["operator.admin"],
-        sessions: { others: "write" },
-      },
-      disabled: { agents: [], scopes: [], sessions: { others: "none" } },
-    } satisfies Record<string, GatewayOperatorRoleDefinition>);
-    setUserProfileRole(fixture.owner.id, "creator");
-    setUserProfileRole(recipientProfile.id, "administrator");
-    const inbox = createMentionInbox({
-      scheduler: createTestGatewayScheduler(),
-      gatewayInstanceId: "revoked-initial-mention",
-      getRuntimeConfig: fixture.context.getRuntimeConfig,
-      getClients: () => [...fixture.clients],
-      broadcastToConnIds: vi.fn(),
-    });
-    fixture.context.mentionInbox = inbox;
-    const validateRecipients = inbox.validateRecipientsAsync.bind(inbox);
-    const validation = vi
-      .spyOn(inbox, "validateRecipientsAsync")
-      .mockImplementationOnce(async (...args) => {
-        const result = await validateRecipients(...args);
-        expect(result).toMatchObject({ ok: true });
-        setUserProfileRole(fixture.owner.id, "disabled");
-        return result;
-      });
-    try {
-      await fixture.send(
-        {
-          message: "@Recipient review this",
-          mentions: [{ profileId: recipientProfile.id, start: 0, end: 10 }],
-        },
-        true,
-      );
-      expect(validation).toHaveBeenCalledOnce();
-      fixture.expectRejected();
-      const history = await directSessionReq<{ messages: unknown[] }>(
-        "chat.history",
-        { sessionKey: fixture.key },
-        { client: recipient, context: directContext(fixture.context) },
-      );
-      expect(history).toMatchObject({ ok: true, payload: { messages: [] } });
-      await inbox.listAsync(recipient, (result) => {
-        expect(result).toMatchObject({ ok: true, value: { items: [] } });
-      });
-    } finally {
-      await inbox.dispose();
-    }
-  }));
-
 test("raw session-write scopes do not replace recorded session-create admission", () =>
   withFixture(["operator.sessions.write", false], async (fixture) => {
     const result = await directSessionReq(
@@ -391,26 +326,15 @@ test("raw session-write scopes do not replace recorded session-create admission"
     expect(fixture.entry()).toBeUndefined();
   }));
 
-async function createCatalogFixture(withCapturedAuthority = false) {
+async function createCatalogFixture() {
   const { storePath } = await createSessionStoreDir();
   const owner = ensureProfileForEmail("catalog-wait@example.test");
   const connection = new AbortController();
-  const revocation = new AbortController();
   const client: GatewayClient & { connId: string } = {
     ...identifiedClient(owner.id),
     connId: "catalog-wait",
     connectionSignal: connection.signal,
   };
-  if (withCapturedAuthority) {
-    client.internal = {
-      operatorRunAuthority: createAdmittedRunOperatorAuthority({
-        profileId: owner.id,
-        scopes: client.connect.scopes ?? [],
-        signal: revocation.signal,
-        assertCurrent: () => revocation.signal.throwIfAborted(),
-      }),
-    };
-  }
   const config = await getGatewayConfigModule();
   config.clearRuntimeConfigSnapshot();
   const cfg = config.getRuntimeConfig();
@@ -434,13 +358,13 @@ async function createCatalogFixture(withCapturedAuthority = false) {
   const request = sessionCreation(client, context, key, storePath, "catalog-wait");
   const create = (selectedModel?: string, idempotencyKey = "catalog-wait") =>
     request.create(selectedModel, idempotencyKey);
-  return { storePath, connection, revocation, catalog, context, key, ...request, create };
+  return { storePath, connection, catalog, context, key, ...request, create };
 }
 
-test.each(["deadline", "disconnect", "authority revocation"])(
+test.each(["deadline", "disconnect"])(
   "sessions.create ends a stalled catalog wait on %s without a late commit",
   async (reason) => {
-    const fixture = await createCatalogFixture(reason === "authority revocation");
+    const fixture = await createCatalogFixture();
     const { entered, release } = holdCatalog(fixture.context);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const creating = fixture.create(model);
@@ -449,9 +373,6 @@ test.each(["deadline", "disconnect", "authority revocation"])(
       expect(fixture.respond).not.toHaveBeenCalled();
       if (reason === "disconnect") {
         fixture.connection.abort();
-      } else if (reason === "authority revocation") {
-        fixture.revocation.abort(new Error("Operator authority revoked"));
-        expect(fixture.connection.signal.aborted).toBe(false);
       }
       await vi.advanceTimersByTimeAsync(reason === "deadline" ? 20_000 : 0);
       fixture.expectRejected("UNAVAILABLE", {
@@ -476,47 +397,18 @@ test.each(["deadline", "disconnect", "authority revocation"])(
   },
 );
 
-test("sessions.create without catalog-dependent fields never waits on catalog publication", async () => {
-  const fixture = await createCatalogFixture();
-  vi.mocked(fixture.context.loadGatewayModelCatalogSnapshot).mockImplementation(
-    () => new Promise(() => {}),
-  );
-  await fixture.create();
-  expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
-  expect(fixture.context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-  expect(fixture.entry()).toBeDefined();
-});
-
-test("sessions.create does not await unused thinking catalog hydration", async () => {
-  const fixture = await createCatalogFixture();
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const hydration = vi
-    .spyOn(modelCatalogRuntime, "loadProviderScopedThinkingCatalog")
-    .mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return [];
-    });
-  const creating = fixture.create(model);
-  try {
-    expect(
-      await Promise.race([creating.then(() => "created"), entered.promise.then(() => "hydrating")]),
-    ).toBe("created");
-    expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
-    expect(fixture.entry()).toBeDefined();
-  } finally {
-    release.resolve();
-    await creating;
-    hydration.mockRestore();
-  }
-});
-
 test.each([-3_600_000, 3_600_000])(
   "sessions.create shares its catalog deadline across reads despite a %s ms clock step",
   async (clockStep) => {
     const fixture = await createCatalogFixture();
+    const thinking = vi
+      .spyOn(modelCatalogRuntime, "loadProviderScopedThinkingCatalog")
+      .mockResolvedValueOnce([]);
+    onTestFinished(() => thinking.mockRestore());
     await fixture.create(model, "seed");
+    expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
+    expect(fixture.entry()).toBeDefined();
+    expect(thinking).not.toHaveBeenCalled();
     const before = fixture.entry();
     const gates = [holdCatalog(fixture.context), holdCatalog(fixture.context)];
     fixture.respond.mockClear();
@@ -548,25 +440,16 @@ test.each([-3_600_000, 3_600_000])(
   },
 );
 
-test("ordinary tool default authority retains role revocation without main-thread SQL", () =>
+test("ordinary tool defaults keep admitted role policy without main-thread SQL", () =>
   withFixture(["operator.write", true, "agent"], async (fixture) => {
     const { personalAccountDefaults } = await accountAccess(fixture);
     const action = expectDefined(personalAccountDefaults, "operator default authority");
     expect(action.owner).toBe(fixture.owner.id);
-    const sql = observeMainThreadSql();
-    try {
-      for (let index = 0; index < 100; index++) {
-        action.assertCurrent();
-      }
-      sql.expectIdle();
-      fixture.role.scopes = ["operator.read"];
-      expect(action.assertCurrent).toThrow(ModelAccountConnectAuthorityError);
-      // Restoring a role cannot revive the original revoked source capability.
-      fixture.role.scopes = ["operator.write"];
-      expect(action.assertCurrent).toThrow(ModelAccountConnectAuthorityError);
-    } finally {
-      sql.restore();
-    }
+    action.assertCurrent();
+    fixture.role.scopes = ["operator.read"];
+    expect(action.assertCurrent).not.toThrow();
+    fixture.role.scopes = ["operator.write"];
+    expect(action.assertCurrent).not.toThrow();
   }));
 
 test.each(["copied capability", "unadmitted session scope"] as const)(
@@ -639,4 +522,112 @@ test.each(["human", "agent"] as const)(
         }
       },
     ),
+);
+
+test.each([
+  { configured: "workspace", explicit: undefined, origin: "human", expected: "workspace" },
+  { configured: "full", explicit: "guarded", origin: "human", expected: "guarded" },
+  { configured: "full", explicit: undefined, origin: "human", expected: "workspace" },
+  { configured: "full", explicit: "full", origin: "human", expected: "forbidden" },
+  { configured: "full", explicit: undefined, origin: "agent", expected: undefined },
+] as const)("attended permission default $configured ($origin, explicit=$explicit)", (row) =>
+  withFixture(["operator.write", false, row.origin], async (fixture) => {
+    const cfg = fixture.context.getRuntimeConfig();
+    cfg.agents = { ...cfg.agents, entries: { main: { newSessionPermissionMode: row.configured } } };
+    await fixture.send(row.explicit ? { permissionMode: row.explicit } : {});
+    if (row.expected === "forbidden") {
+      fixture.expectRejected("FORBIDDEN", { message: "missing scope: operator.admin" });
+    } else {
+      expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
+      expect(fixture.entry()).toBeDefined();
+      expect(fixture.entry()?.permissionMode).toBe(row.expected);
+    }
+  }),
+);
+
+test("configured Full does not grant Workspace to a nonwriter or persist a session", () =>
+  withFixture(["operator.sessions.write", false], async (fixture) => {
+    const cfg = fixture.context.getRuntimeConfig();
+    cfg.agents = { ...cfg.agents, entries: { main: { newSessionPermissionMode: "full" } } };
+    await fixture.send({});
+    fixture.expectRejected("FORBIDDEN", { message: "missing scope: operator.admin" });
+  }));
+
+test.each([
+  ["operator.admin", "authorized"],
+  ["operator.admin", "default replaced"],
+  ["operator.write", "authorized"],
+] as const)("configured Full checks final persistence after preparation: %s, %s", (scope, change) =>
+  withFixture([scope, true], async (fixture) => {
+    const cfg = fixture.context.getRuntimeConfig();
+    cfg.agents = { ...cfg.agents, entries: { main: { newSessionPermissionMode: "full" } } };
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const create = sessionCreationOwner.createGatewaySession;
+    let finalWriteReached = false;
+    using observed = vi
+      .spyOn(sessionCreationOwner, "createGatewaySession")
+      .mockImplementationOnce((params) =>
+        create({
+          ...params,
+          prepareLifecycle: async () => ({
+            ok: true,
+            value: {
+              // Hold the production writer after model/account/runtime selection has finished.
+              withCommit: async (run) => {
+                finalWriteReached = true;
+                entered.resolve();
+                await release.promise;
+                return run(() => {});
+              },
+            },
+          }),
+        }),
+      );
+    const creating = fixture.send({});
+    try {
+      await Promise.race([entered.promise, creating]);
+      expect(observed).toHaveBeenCalledOnce();
+      expect(finalWriteReached).toBe(true);
+      expect(fixture.entry()).toBeUndefined();
+      expect(fixture.respond).not.toHaveBeenCalled();
+      if (change === "default replaced") {
+        cfg.agents.entries!.main!.newSessionPermissionMode = "guarded";
+      }
+    } finally {
+      release.resolve();
+      await creating;
+    }
+    if (change === "authorized") {
+      expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
+      expect(fixture.entry()).toMatchObject({
+        permissionMode: scope === "operator.admin" ? "full" : "workspace",
+        authProfileOverride: fixture.authProfileId,
+      });
+    } else {
+      expect(fixture.respond.mock.calls[0]?.[0]).toBe(false);
+      expect(fixture.respond.mock.calls[0]?.[2]?.message).toMatch(/permission default changed/i);
+      expect(fixture.entry()).toBeUndefined();
+    }
+  }),
+);
+
+test.each([undefined, "guarded", "workspace", "full", "read-only"] as const)(
+  "attended default preserves an existing stored mode: %s",
+  (mode) =>
+    withFixture(["operator.admin", false], async (fixture) => {
+      await fixture.send(mode ? { permissionMode: mode } : {});
+      expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
+      const original = fixture.entry();
+      expect(original).toBeDefined();
+      const cfg = fixture.context.getRuntimeConfig();
+      cfg.agents = { ...cfg.agents, entries: { main: { newSessionPermissionMode: "full" } } };
+      fixture.role.scopes = ["operator.write"];
+      fixture.client.connect.scopes = ["operator.write"];
+      fixture.respond.mockClear();
+      await fixture.send({});
+      expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
+      expect(fixture.entry()).toStrictEqual({ ...original, updatedAt: expect.any(Number) });
+      expect(fixture.entry()?.updatedAt).toBeGreaterThanOrEqual(original!.updatedAt);
+    }),
 );

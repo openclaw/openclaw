@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
@@ -30,7 +31,18 @@ function fixture() {
     const context = captureOpenClawStateWorkerContext({ env });
     const lifetime = new AgentDatabaseExecutionLifetime().state;
     const noop = () => {};
-    const native = createNative("main", path, context, lifetime, noop, noop, identity, noop, noop);
+    const native = createNative(
+      "main",
+      path,
+      context,
+      captureGatewayStateOwner(context.admission.databasePath),
+      lifetime,
+      noop,
+      noop,
+      identity,
+      noop,
+      noop,
+    );
     return Object.assign(native, { [Symbol.asyncDispose]: () => native.close() });
   };
   return { env, options, path, generation };
@@ -115,7 +127,7 @@ it("rejects malformed native schema receipts without replaying caller work", asy
 it("admits schema and integrity once, then warm turns request only their writes", async () => {
   const { path, generation: createGeneration } = fixture();
   // Force cold verification; warm turns must reuse it (#166253).
-  invalidateOpenClawAgentDatabaseValidation(path);
+  invalidateOpenClawAgentDatabaseValidation(path, "a maintenance write");
   await using generation = createGeneration();
   const requests: string[] = [];
   const source = createSource((request) => {
@@ -137,6 +149,8 @@ it("admits schema and integrity once, then warm turns request only their writes"
   expect(requests).toEqual(
     expect.arrayContaining(["open", "prepare:agent-validation-start", "commit"]),
   );
+  // Cold opening needs three grants, without another refresh of its admitted schema.
+  expect(requests.filter((request) => request === "open")).toHaveLength(3);
   requests.length = 0;
   await turn("second-turn");
   await turn("third-turn");

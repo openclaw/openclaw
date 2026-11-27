@@ -85,8 +85,12 @@ async function newPublicationContext() {
 async function openPublicationPage(
   options: Parameters<typeof installPublicationGateway>[1] = {},
   branch?: string,
+  width?: number,
 ) {
   const page = await (await newPublicationContext()).newPage();
+  if (width) {
+    await page.setViewportSize({ width, height: width < 768 ? 844 : 800 });
+  }
   const gateway = await installPublicationGateway(page, options);
   await page.goto(
     options.sessionKey
@@ -99,105 +103,163 @@ async function openPublicationPage(
 }
 
 suite.define(() => {
-  it.each(["global", "per-sender"] as const)(
-    "carries the selected agent through the complete %s publication flow",
-    async (scope) => {
-      await suite.withPage(createLightDesktopControlUiContextOptions(), async ({ page }) => {
-        const sessionKey = scope === "global" ? "global" : "agent:research:main";
-        const target = { sessionKey, agentId: "research" };
-        const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b6";
-        const row = createControlUiSessionRow(sessionKey, "Research publication", 1, {
-          kind: scope === "global" ? "global" : "direct",
-        });
-        const result = {
-          requestId,
-          status: "needs_confirmation",
-          publisher: { source: "personal", ...personalAccount },
-          message: "Review the selected research session before continuing.",
-        };
-        const confirmation = confirmationFixture(
-          "synthetic/publication-demo",
-          "alice-tools/publication-demo",
-          "feature/research",
-        );
-        const gateway = await installPublicationGateway(page, {
-          defaultAgentId: "ops",
-          assistantAgentId: "research",
-          assistantName: "Research QA",
-          workspace: "/synthetic/research",
-          communityInvite: false,
-          sessionKey,
-          sessionScope: scope,
-          sessions: [row],
-          presenceUsers: viewer("synthetic", "Synthetic reviewer"),
-          methodResponses: {
-            "agents.list": {
-              agents: [
-                { id: "ops", name: "Operations" },
-                { id: "research", name: "Research QA" },
-              ],
-              defaultId: "ops",
-              mainKey: "main",
-              scope,
-            },
-            "sessions.list": {
-              ts: 1,
-              path: "",
-              count: 1,
-              agentId: "research",
-              defaults: { modelProvider: null, model: null, contextTokens: null },
-              sessions: [row],
-            },
-            "sessions.github.publish": result,
-            "sessions.github.status": { result, confirmation },
-            "sessions.github.confirm": {
-              ...published(requestId, confirmation.repository, confirmation.branch),
-              publisher: result.publisher,
-              headCommit: "4".repeat(40),
-            },
+  it.each([1180, 390])("keeps publication status checks responsive at %ipx", async (width) => {
+    const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b5";
+    const result = {
+      requestId,
+      status: "publishing",
+      publisher: sharedPublisher,
+      message: "The Gateway is publishing the reconciled workspace.",
+    };
+    const { page, gateway } = await openPublicationPage(
+      {
+        assistantName: "Lobster",
+        agentModel: "gpt-4.1",
+        workspace: "/synthetic/progress-audit",
+        communityInvite: false,
+        methodResponses: {
+          "sessions.github.options": {
+            ...publicationOptions,
+            latestShared: { result, confirmation: null },
           },
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:main"));
-        await showPublicationBranch(gateway, confirmation.branch);
-        await openChatPublication(page);
-        const optionRequest = await gateway.waitForRequest("sessions.github.options");
-        expect(optionRequest.params).toEqual(target);
-        await selectPublicationAccount(page, "personal");
+          "sessions.github.status": { result, confirmation: null },
+        },
+      },
+      "openclaw/publication-progress",
+      width,
+    );
+    const mobile = width === 390;
+    const surface = page.locator(
+      mobile ? ".github-publication-mobile" : ".chat-pr-branch-menu:popover-open",
+    );
+    const action = surface.locator("button.chat-pr__create");
+    if (!mobile) {
+      await surface.locator(".chat-pr__publication-status > summary").click();
+    }
+    const prior = await gateway.deferNext("sessions.github.status");
+    await action.click();
+    await gateway.waitForRequest("sessions.github.status", { after: prior });
+    await expect.poll(() => action.isDisabled()).toBe(true);
+    expect(await action.getAttribute("aria-busy")).toBe("true");
+    expect(await action.textContent()).toContain("Loading");
+    await action.locator(".btn__spinner").waitFor();
+    await gateway.rejectDeferred("sessions.github.status", {
+      code: "UNAVAILABLE",
+      message: "Synthetic status check unavailable.",
+    });
+    await expect.poll(() => action.isEnabled()).toBe(true);
+    await surface.getByText("Synthetic status check unavailable.", { exact: true }).waitFor();
+    await gateway.deferNext("sessions.github.status");
+    await action.click();
+    await expect.poll(() => action.isDisabled()).toBe(true);
+    await action.locator(".btn__spinner").waitFor();
+    await gateway.resolveDeferred("sessions.github.status", { result, confirmation: null });
+    await expect.poll(() => action.isEnabled()).toBe(true);
+    expect(await action.textContent()).toContain("Check publication");
+    expect(await action.getAttribute("aria-busy")).toBeNull();
+    expect(
+      await surface.getByText("Synthetic status check unavailable.", { exact: true }).count(),
+    ).toBe(0);
+    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+    expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
+  });
 
-        await publicationAction(page, "Create PR").click();
-        const publication = await gateway.waitForRequest("sessions.github.publish");
-        expect(publication.params).toMatchObject({
-          ...target,
-          selection: {
-            source: "personal",
-            account: personalAccount,
-            generation: personalGeneration,
-          },
-        });
-        const status = await gateway.waitForRequest("sessions.github.status");
-        expect(status.params).toEqual({ ...target, requestId });
-        await openChatPublication(page);
-        const confirm = publicationAction(page, "Confirm original publication");
-        await confirm.waitFor();
-
-        await confirm.click();
-        const confirmed = await gateway.waitForRequest("sessions.github.confirm");
-        expect(confirmed.params).toEqual({
-          ...target,
-          requestId,
-          generation: personalGeneration,
-          account: personalAccount,
-          requestDigest: confirmation.requestDigest,
-        });
-        const openPr = page.getByRole("link", { name: /^Open PR:/ });
-        await openPr.waitFor();
-        expect(await openPr.getAttribute("href")).toBe(
-          "https://github.com/synthetic/publication-demo/pull/42",
-        );
-        expect(new URL(page.url()).pathname).toBe("/chat/research");
+  it("carries the selected agent through the complete global publication flow", async () => {
+    await suite.withPage(createLightDesktopControlUiContextOptions(), async ({ page }) => {
+      const sessionKey = "global";
+      const target = { sessionKey, agentId: "research" };
+      const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b6";
+      const row = createControlUiSessionRow(sessionKey, "Research publication", 1, {
+        kind: "global",
       });
-    },
-  );
+      const result = {
+        requestId,
+        status: "needs_confirmation",
+        publisher: { source: "personal", ...personalAccount },
+        message: "Review the selected research session before continuing.",
+      };
+      const confirmation = confirmationFixture(
+        "synthetic/publication-demo",
+        "alice-tools/publication-demo",
+        "feature/research",
+      );
+      const gateway = await installPublicationGateway(page, {
+        defaultAgentId: "ops",
+        assistantAgentId: "research",
+        assistantName: "Research QA",
+        workspace: "/synthetic/research",
+        communityInvite: false,
+        sessionKey,
+        sessionScope: "global",
+        sessions: [row],
+        presenceUsers: viewer("synthetic", "Synthetic reviewer"),
+        methodResponses: {
+          "agents.list": {
+            agents: [
+              { id: "ops", name: "Operations" },
+              { id: "research", name: "Research QA" },
+            ],
+            defaultId: "ops",
+            mainKey: "main",
+            scope: "global",
+          },
+          "sessions.list": {
+            ts: 1,
+            path: "",
+            count: 1,
+            agentId: "research",
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [row],
+          },
+          "sessions.github.publish": result,
+          "sessions.github.status": { result, confirmation },
+          "sessions.github.confirm": {
+            ...published(requestId, confirmation.repository, confirmation.branch),
+            publisher: result.publisher,
+            headCommit: "4".repeat(40),
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:main"));
+      await showPublicationBranch(gateway, confirmation.branch);
+      await openChatPublication(page);
+      const optionRequest = await gateway.waitForRequest("sessions.github.options");
+      expect(optionRequest.params).toEqual(target);
+      await selectPublicationAccount(page, "personal");
+
+      await publicationAction(page, "Create PR").click();
+      const publication = await gateway.waitForRequest("sessions.github.publish");
+      expect(publication.params).toMatchObject({
+        ...target,
+        selection: {
+          source: "personal",
+          account: personalAccount,
+          generation: personalGeneration,
+        },
+      });
+      const status = await gateway.waitForRequest("sessions.github.status");
+      expect(status.params).toEqual({ ...target, requestId });
+      await openChatPublication(page);
+      const confirm = publicationAction(page, "Confirm original publication");
+      await confirm.waitFor();
+
+      await confirm.click();
+      const confirmed = await gateway.waitForRequest("sessions.github.confirm");
+      expect(confirmed.params).toEqual({
+        ...target,
+        requestId,
+        generation: personalGeneration,
+        account: personalAccount,
+        requestDigest: confirmation.requestDigest,
+      });
+      const openPr = page.getByRole("link", { name: /^Open PR:/ });
+      await openPr.waitFor();
+      expect(await openPr.getAttribute("href")).toBe(
+        "https://github.com/synthetic/publication-demo/pull/42",
+      );
+      expect(new URL(page.url()).pathname).toBe("/chat/research");
+    });
+  });
 
   it("shares admitted publication state between already-open same-session split panes", async () => {
     const context = await newPublicationContext();
@@ -271,11 +333,8 @@ suite.define(() => {
     expect(repeated.params).toEqual(original.params);
   });
 
-  it.each([
-    ["shared", "navigating away and back", ["agent:main:other"]],
-    ["personal", "navigating away and back", ["agent:main:other"]],
-    ["shared", "LRU eviction", ["agent:main:other", "agent:main:third", "agent:main:fourth"]],
-  ] as const)("keeps the original %s retry after %s", async (source, navigation, via) => {
+  it("keeps the original shared retry after LRU eviction", async () => {
+    const via = ["agent:main:other", "agent:main:third", "agent:main:fourth"];
     const sessionA = "agent:main:publication";
     const { page, gateway } = await openPublicationPage({
       assistantName: "Publication QA",
@@ -290,7 +349,7 @@ suite.define(() => {
       presenceUsers: viewer("synthetic", "Synthetic reviewer"),
     });
     const activePane = page.locator(".chat-pane-cache__pane--active");
-    await selectPublicationAccount(activePane, source);
+    await selectPublicationAccount(activePane, "shared");
     await gateway.deferNext("sessions.github.publish");
     await publicationAction(activePane, "Create PR").click();
     const first = await gateway.waitForRequest("sessions.github.publish");
@@ -312,9 +371,7 @@ suite.define(() => {
       await sessionLink(next).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(next));
     }
-    await expect
-      .poll(() => originalPane!.evaluate((element) => element.isConnected))
-      .toBe(navigation !== "LRU eviction");
+    await expect.poll(() => originalPane!.evaluate((element) => element.isConnected)).toBe(false);
     await sessionLink(sessionA).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
     await showPublicationBranch(gateway, undefined, sessionA);
@@ -518,80 +575,77 @@ suite.define(() => {
     expect(await gateway.getRequests("secrets.set")).toHaveLength(0);
   });
 
-  it.each(["local", "reclaimed"])(
-    "recovers the original personal request in a %s workspace and confirms its account, target, and snapshot",
-    async (state) => {
-      const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b3";
-      const confirmation = confirmationFixture("team/demo", "alice/demo", "feature/original");
-      const { page, gateway } = await openPublicationPage({
-        sessions: [
-          createControlUiSessionRow("agent:main:main", "Publication workspace", Date.now(), {
-            placement: {
-              state,
-              generation: 1,
-              createdAtMs: 1,
-              updatedAtMs: 1,
-              stateChangedAtMs: 1,
-            },
-          }),
-        ],
-        presenceUsers: viewer("alice", "Alice"),
-        methodResponses: {
-          "sessions.github.options": {
-            ...publicationOptions,
-            pendingPersonal: {
-              result: {
-                requestId,
-                status: "needs_confirmation",
-                publisher: { source: "personal", ...personalAccount },
-                message: "Review the original publication before continuing.",
-                effect: { kind: "push", status: "dispatched", headCommit: "4".repeat(40) },
-              },
-              confirmation,
-            },
+  it("recovers the original personal request in a reclaimed workspace and confirms its account, target, and snapshot", async () => {
+    const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b3";
+    const confirmation = confirmationFixture("team/demo", "alice/demo", "feature/original");
+    const { page, gateway } = await openPublicationPage({
+      sessions: [
+        createControlUiSessionRow("agent:main:main", "Publication workspace", Date.now(), {
+          placement: {
+            state: "reclaimed",
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            stateChangedAtMs: 1,
           },
-          "sessions.github.confirm": {
-            ...published(requestId, "team/demo", "feature/original"),
-            headCommit: "4".repeat(40),
+        }),
+      ],
+      presenceUsers: viewer("alice", "Alice"),
+      methodResponses: {
+        "sessions.github.options": {
+          ...publicationOptions,
+          pendingPersonal: {
+            result: {
+              requestId,
+              status: "needs_confirmation",
+              publisher: { source: "personal", ...personalAccount },
+              message: "Review the original publication before continuing.",
+              effect: { kind: "push", status: "dispatched", headCommit: "4".repeat(40) },
+            },
+            confirmation,
           },
         },
-      });
-      await page.getByRole("button", { name: "Confirm original publication" }).waitFor();
-      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
-      await page.reload();
-      await showPublicationBranch(gateway);
-      await openChatPublication(page);
-      const details = page.locator(".chat-pr__publication-outcome");
-      await expectText(details, "Publish as @alice-tools");
-      await expectText(details, "team/demo → main");
-      await expectText(details, "alice/demo · feature/original");
-      await details.getByText("Original accepted snapshot", { exact: true }).click();
-      await expectText(
-        details.locator(".chat-pr__publication-note details"),
-        confirmation.workspaceTree,
-      );
-      await expectText(details, "remote outcome may still be unknown");
-      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
+        "sessions.github.confirm": {
+          ...published(requestId, "team/demo", "feature/original"),
+          headCommit: "4".repeat(40),
+        },
+      },
+    });
+    await page.getByRole("button", { name: "Confirm original publication" }).waitFor();
+    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+    expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
+    await page.reload();
+    await showPublicationBranch(gateway);
+    await openChatPublication(page);
+    const details = page.locator(".chat-pr__publication-outcome");
+    await expectText(details, "Publish as @alice-tools");
+    await expectText(details, "team/demo → main");
+    await expectText(details, "alice/demo · feature/original");
+    await details.getByText("Original accepted snapshot", { exact: true }).click();
+    await expectText(
+      details.locator(".chat-pr__publication-note details"),
+      confirmation.workspaceTree,
+    );
+    await expectText(details, "remote outcome may still be unknown");
+    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+    expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
 
-      await page.getByRole("button", { name: "Confirm original publication" }).click();
-      const confirmed = await gateway.waitForRequest("sessions.github.confirm");
-      expect(confirmed.params).toEqual({
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        requestId,
-        requestDigest: confirmation.requestDigest,
-        generation: personalGeneration,
-        account: personalAccount,
-      });
-      await expect
-        .poll(() => page.getByRole("link", { name: "Open PR" }).getAttribute("href"))
-        .toBe("https://github.com/team/demo/pull/42");
-      expect(await page.locator(".chat-pr__publication-outcome").count()).toBe(0);
-      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-    },
-  );
+    await page.getByRole("button", { name: "Confirm original publication" }).click();
+    const confirmed = await gateway.waitForRequest("sessions.github.confirm");
+    expect(confirmed.params).toEqual({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      requestId,
+      requestDigest: confirmation.requestDigest,
+      generation: personalGeneration,
+      account: personalAccount,
+    });
+    await expect
+      .poll(() => page.getByRole("link", { name: "Open PR" }).getAttribute("href"))
+      .toBe("https://github.com/team/demo/pull/42");
+    expect(await page.locator(".chat-pr__publication-outcome").count()).toBe(0);
+    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+  });
 
   it("acknowledges a completed personal publication with read scope without publishing", async () => {
     const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b5";

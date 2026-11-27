@@ -28,12 +28,12 @@ const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
   const gatewayClient = client ?? null;
   const prepared = createAgentTurnService({ context, isWebchatConnect }).prepareWaitForTurn(params);
   let profiles: ReturnType<typeof prepareSessionSharingProfiles> | undefined;
-  const authorizeWait = async (
+  const canReadRun = async (
     run: Readonly<AgentJobSession> | undefined,
-    respondWithResult?: () => void,
+    options: { restored?: boolean; publish?: () => void },
   ) => {
     if (!gatewayClient?.authenticatedUserProfile || isGatewayAdmin(gatewayClient)) {
-      respondWithResult?.();
+      options.publish?.();
       return true;
     }
     const preparedProfiles = await (profiles ??= prepareSessionSharingProfiles(gatewayClient));
@@ -44,16 +44,12 @@ const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
       profiles: preparedProfiles,
       isMember: () => false,
     });
-    if (sharing.policy?.sessions.others !== "none") {
-      respondWithResult?.();
+    if (!options.restored && sharing.sessionCap !== "none" && sharing.sessionCap !== "invited") {
+      options.publish?.();
       return true;
     }
-    const deny = () => {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agent run was not found"));
-      return false;
-    };
     if (!run?.sessionKey) {
-      return deny();
+      return false;
     }
     return withSessionSharingTarget(
       { cfg, sessionKey: run.sessionKey, agentId: run.agentId },
@@ -69,17 +65,21 @@ const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
           !target ||
           run.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
           (run.sessionId !== undefined && target.entry.sessionId !== run.sessionId) ||
-          currentSharing.entryFilter?.(target.storeKey, target.entry) === false
+          !currentSharing.canReadTarget(target)
         ) {
-          return deny();
+          return false;
         }
-        respondWithResult?.();
+        options.publish?.();
         return true;
       },
     );
   };
-  const observation = await prepared.wait();
-  await authorizeWait(observation.session, () => respond(true, observation.result));
+  const observation = await prepared.wait((session) => canReadRun(session, { restored: true }));
+  if (
+    !(await canReadRun(observation.session, { publish: () => respond(true, observation.result) }))
+  ) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agent run was not found"));
+  }
 };
 
 export const agentHandlers: GatewayRequestHandlers = {

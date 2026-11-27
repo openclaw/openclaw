@@ -7,6 +7,7 @@ import type {
 } from "../../api/gateway.ts";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ChannelsState } from "../../lib/channels/index.ts";
 import {
   createApplicationGateway,
   createApplicationGatewaySnapshot,
@@ -90,7 +91,7 @@ export function createContext(
     },
   });
   const agentListeners = new Set<() => void>();
-  const channelListeners = new Set<(state: ApplicationContext["channels"]["state"]) => void>();
+  const channelListeners = new Set<(state: ChannelsState) => void>();
   const channelState = createChannelsState(options.channelsSnapshot ?? null, null, {
     client,
     channelsLastSuccess: options.channelsSnapshot ? Date.now() : null,
@@ -144,6 +145,14 @@ export function createContext(
       return () => overlayListeners.delete(listener);
     },
   } satisfies Pick<ApplicationContext["overlays"], "snapshot" | "subscribe">;
+  const channels = {
+    state: channelState,
+    refresh: refreshChannels,
+    subscribe: (listener: (state: ChannelsState) => void) => {
+      channelListeners.add(listener);
+      return () => channelListeners.delete(listener);
+    },
+  };
   const context = {
     gateway,
     runtimeConfig: {
@@ -175,14 +184,7 @@ export function createContext(
       refreshList: vi.fn(),
     },
     agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
-    channels: {
-      state: channelState,
-      refresh: refreshChannels,
-      subscribe: (listener: (state: ApplicationContext["channels"]["state"]) => void) => {
-        channelListeners.add(listener);
-        return () => channelListeners.delete(listener);
-      },
-    },
+    acquireChannels: () => channels,
     overlays,
     basePath: "",
     navigate: vi.fn(),

@@ -1,13 +1,24 @@
 import { expect } from "vitest";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/schema/frames.js";
+import type { SessionsFilesPreviewResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  linkCanonicalOpenClawIdUserProfile,
+} from "../state/user-profile-writes.js";
+import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import { setOpenClawIdMemberAccountLookup } from "./openclaw-id/tunnel-principal.js";
 export const TRUSTED_PROXY = {
   userHeader: "cf-access-authenticated-user-email",
   requiredHeaders: ["cf-access-jwt-assertion"],
@@ -45,6 +56,9 @@ export type IngressFrame = {
   event?: string;
   ok?: boolean;
   payload?: {
+    features?: { capabilities?: string[] };
+    status?: SessionsFilesPreviewResult["status"];
+    sandboxPath?: SessionsFilesPreviewResult["sandboxPath"];
     nonce?: string;
     controlUiUrl?: string;
     auth?: { method: string; role: string; scopes: string[]; deviceToken?: string };
@@ -71,6 +85,7 @@ type ConnectOptions = {
   scopes?: string[];
   owner?: boolean;
   profileId?: string;
+  caps?: string[];
   tamperSignature?: boolean;
 };
 
@@ -130,6 +145,7 @@ export async function connect(peer: Peer, options: ConnectOptions): Promise<Ingr
     role,
     scopes: options.scopes,
     auth: options.auth,
+    caps: options.caps,
     ...(device ? { device } : {}),
   });
   if (hello.ok && !options.owner) {
@@ -174,4 +190,78 @@ export async function expectReadWriteWithoutAdmin(peer: Peer, trigger: string) {
     ok: false,
     error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
   });
+}
+
+export async function expectStatus(response: Promise<Response>, status: number) {
+  const result = await response;
+  expect(result.status).toBe(status);
+  await result.body?.cancel();
+}
+
+export async function expectNegotiatedIngressArchive(peer: Peer, scopes: readonly string[]) {
+  const id = "ingress-archive";
+  const key = `agent:main:${id}`;
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey: key },
+    {
+      sessionId: id,
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: "gateway-owner" },
+    },
+  );
+  const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-archive-browser" });
+  const hello = await connect(peer, {
+    identity,
+    scopes: [...scopes],
+    caps: ["personal-session-pins"],
+  });
+  expectHello(hello, "remote-ingress", scopes);
+  const caps = hello.payload?.features?.capabilities;
+  expect(caps).toContain("personal-session-pins");
+  const undo = caps?.includes("session-archive-undo-v1");
+  const archive = await request(peer, "sessions.patch", {
+    key,
+    expectedSessionId: id,
+    archived: true,
+    ...(undo ? { requestArchiveUndo: true } : {}),
+  });
+  expect(archive, archive.error?.message).toMatchObject({
+    ok: true,
+    payload: { entry: { sessionId: id, archivedAt: expect.any(Number) } },
+  });
+  expect(archive.payload).not.toHaveProperty("archiveUndoToken");
+  expect(undo).toBe(false);
+}
+
+export function heldReadBarrier() {
+  return { entered: createDeferred(), release: createDeferred() };
+}
+export function heldMutationBarrier(count: number) {
+  return { ...heldReadBarrier(), remaining: count, unsettled: count, settled: createDeferred() };
+}
+
+/** Signed membership and its canonical profile join, independent of a live tunnel. */
+export async function prepareIngressMember(
+  config: OpenClawConfig,
+  configure: (config: OpenClawConfig) => Promise<void>,
+) {
+  const claw = await linkedClaw();
+  const profile = await ensureCanonicalUserProfileForEmail("id-member@ingress.example.test");
+  const peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(172));
+  const accountId = "ingress-id-member";
+  await linkCanonicalOpenClawIdUserProfile({ profileId: profile.id, accountId, email: null });
+  await configure({ ...config, gateway: { ...config.gateway, openclawId: { enabled: true } } });
+  setOpenClawIdMemberAccountLookup((id) =>
+    Boolean(claw.authority.current()?.authority?.members[id]),
+  );
+  return {
+    claw,
+    profile,
+    peerKey,
+    accountId,
+    release: async () => {
+      setOpenClawIdMemberAccountLookup(undefined);
+      await configure(config);
+    },
+  };
 }

@@ -9,6 +9,7 @@ import { loadNewSessionPreference } from "./preferences.ts";
 type Fixture = ReturnType<typeof createDraftFixture>;
 export const browserPreference = () => loadNewSessionPreference("ws://gateway.example", "main");
 export const acceptedNameWarning = {
+  severity: "error",
   message:
     "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
 };

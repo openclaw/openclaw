@@ -1,5 +1,6 @@
 import type { ChatAccountSelection } from "@openclaw/gateway-protocol";
 import type {
+  CyberAccessProgram,
   FastMode,
   GatewayAgentRow,
   ModelCatalogEntry,
@@ -9,6 +10,7 @@ import type {
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { resolveDaybreakAccessProgram } from "../../lib/chat/daybreak-access-program.ts";
 import {
   buildQualifiedChatModelValue,
   normalizeChatModelProviderId,
@@ -25,17 +27,14 @@ import {
   type ChatThinkingTarget,
 } from "../../lib/chat/thinking.ts";
 import type { ChatModelCatalogState } from "../../lib/model-catalog-store.ts";
-import {
-  resolveModelRuntimeEntry,
-  type ModelRuntimeEntry,
-} from "../../lib/model-runtime-choice.ts";
+import { resolveModelRuntimeEntry } from "../../lib/model-runtime-choice.ts";
 import { draftCloudProfileSupportsExecutionMode, type DraftCloudProfile } from "./discovery.ts";
 
 registerNewSessionSetupEnglish();
 registerModelControlsEnglish();
 
 type DraftModelTarget = {
-  entry?: ModelRuntimeEntry;
+  entry?: ModelCatalogEntry;
   model: string;
   provider: string | null;
 };
@@ -69,6 +68,22 @@ export function resolveDraftDefaultModelTarget(params: {
     policy?.restricted || agent?.model?.primary ? undefined : defaults?.modelProvider,
     catalog,
   );
+}
+
+export function resolveDraftAccessProgram(
+  params: Parameters<typeof resolveDraftDefaultModelTarget>[0] & {
+    model: string;
+    agentRuntime?: string;
+    requested?: CyberAccessProgram;
+  },
+) {
+  const target =
+    resolveDraftModelTarget(params.model, undefined, params.catalog, params.agentRuntime) ??
+    resolveDraftDefaultModelTarget(params);
+  const selected = params.requested ?? target?.entry?.cyberAccessProgramDefault;
+  const programs = target?.entry?.availableAccessPrograms?.cyber;
+  const { on, program, visible } = resolveDaybreakAccessProgram(programs, selected);
+  return programs && !visible && selected !== "standard" ? undefined : on ? program : selected;
 }
 
 export function resolveDraftModelControls(params: {
@@ -194,12 +209,9 @@ export function resolveDraftModelTarget(
   };
 }
 
-function resolveDraftModelUnavailableReason(params: {
-  model: string;
-  agentRuntime?: string;
-  metadata: NewSessionModelMetadata;
-  agent?: GatewayAgentRow;
-}): ModelRuntimeEntry["unavailableReason"] {
+function resolveDraftModelUnavailableReason(
+  params: Parameters<typeof resolveDraftModelSelectionBlockedReason>[0],
+): ModelCatalogEntry["unavailableReason"] {
   const { metadata, agent } = params;
   if (!metadata.hasSnapshot || metadata.status === "offline") {
     return undefined;
@@ -244,11 +256,7 @@ export function resolveDraftModelSelectionBlockedReason(params: {
     params.initialModelPending ||
     (!metadata.hasSnapshot && Boolean(model || agentRuntime))
   ) {
-    return t(
-      metadata.status === "error"
-        ? "chat.modelControls.modelsUnavailable"
-        : "chat.modelControls.loadingModels",
-    );
+    return t("chat.modelControls.modelsUnavailable");
   }
   if (
     metadata.modelSelectionPolicy?.restricted &&
@@ -287,7 +295,7 @@ export function resolveDraftModelSelectionBlockedReason(params: {
       return t("chat.modelControls.modelsUnavailable");
     }
     if (params.metadataPending || !metadata.hasSnapshot) {
-      return t("chat.modelControls.loadingModels");
+      return t("chat.modelControls.modelsUnavailable");
     }
     if (!params.accountReady) {
       return unavailable ?? t("chat.modelControls.modelsUnavailable");
@@ -304,13 +312,13 @@ export function resolveDraftAgentRuntime(params: {
   catalog: ModelCatalogEntry[];
   modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
   retired?: boolean;
-}): ModelRuntimeEntry["agentRuntime"] {
+}): ModelCatalogEntry["agentRuntime"] {
   if (params.retired) {
     return undefined;
   }
   const policy = params.modelSelectionPolicy;
   const model = params.model || (policy?.restricted ? (policy.defaultModel ?? "") : "");
-  let runtime: ModelRuntimeEntry["agentRuntime"];
+  let runtime: ModelCatalogEntry["agentRuntime"];
   if (model) {
     // Explicit models without runtime metadata cannot borrow their agent's default runtime.
     runtime = resolveDraftModelTarget(model, undefined, params.catalog, params.agentRuntime)?.entry

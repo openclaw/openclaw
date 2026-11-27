@@ -2,14 +2,17 @@ import type { JSX } from "@solidjs/web";
 import {
   createMemo,
   createSignal,
+  Errored,
   isPending,
   latest,
+  lazy,
   Loading,
   mapArray,
   merge,
   onSettled,
   Show,
 } from "solid-js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import type { SessionVisibility } from "../../../api/types.ts";
 import { PersonAvatarLink, PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
@@ -24,21 +27,29 @@ import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-sk
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
+import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatSessionSharingError } from "./chat-session-sharing-error.tsx";
+import { CHAT_SESSION_SHARING_DESCRIPTION_KEYS } from "./chat-session-sharing-modes.tsx";
+import {
+  createChatSessionSharingPresentation,
+  projectChatSessionSharingRoster,
+  chatSessionPermissionLabel,
+} from "./chat-session-sharing-presentation.ts";
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
-  CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
-  createChatSessionSharingPresentation,
   ChatSessionSharingModeIcon,
-  ChatSessionSharingError,
-  projectChatSessionSharingRoster,
-  chatSessionPermissionLabel,
 } from "./chat-session-sharing-shared.tsx";
 import type { ChatSessionSharingContentProps } from "./chat-session-sharing.solid.tsx";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionSharingEnglish);
+
+// Loaded only once a public link is shown, so the encoder stays out of the menu chunk.
+const ChatSessionPublicQr = lazy(() => import("./chat-session-public-qr.tsx"), {
+  export: "ChatSessionPublicQr",
+});
 
 function SharingModeContent(props: { visibility: SessionVisibility }) {
   return (
@@ -111,11 +122,13 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   const creator = () => result()?.owner;
   const people = createMemo(() => projectChatSessionSharingRoster(props));
   const matches = createMemo(() => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = foldSearchCase(query().trim().toLocaleLowerCase()).normalize("NFC").split(/\s+/u);
     return people().filter(({ identity }) =>
       terms.every((term) =>
-        `${identity.label ?? ""} ${identity.id} ${identity.type}`
-          .toLocaleLowerCase()
+        foldSearchCase(
+          `${identity.label ?? ""} ${identity.id} ${identity.type}`.toLocaleLowerCase(),
+        )
+          .normalize("NFC")
           .includes(term),
       ),
     );
@@ -258,7 +271,14 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
               };
             },
             get trigger() {
-              return row().controlLabel;
+              return (
+                <>
+                  {row().controlLabel}
+                  <span class="picker-select__chevron" aria-hidden="true">
+                    <Icon name="chevronDown" />
+                  </span>
+                </>
+              );
             },
             onBeforeShow(event) {
               if (busy()) {
@@ -266,13 +286,14 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
               }
             },
             get children() {
-              return row().options.map((level) => ({
+              const options: MenuEntry[] = row().options.map((level) => ({
                 id: `permission:${level}:${person().id}`,
                 label: chatSessionPermissionLabel(level),
                 type: "radio" as const,
                 checked: row().level === level,
                 closeOnSelect: false,
               }));
+              return options;
             },
           };
           return {
@@ -309,9 +330,10 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     { lazy: true },
   );
   const showPermissions = () =>
-    visibility() !== "shared" &&
-    visibility() !== "draft" &&
+    ((visibility() !== "shared" && visibility() !== "draft") ||
+      people().some((row) => row.invitedAccess)) &&
     props.membersAvailable !== false &&
+    (!props.state?.error || Boolean(result())) &&
     (!result() ||
       Boolean(props.state?.read) ||
       Boolean(props.state?.error) ||
@@ -414,9 +436,6 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                           : "chat.sessionSharing.noPeopleFound",
                       )}
                     </span>
-                    <Show when={people().length > 0 && query().trim()}>
-                      <span>{t("chat.sessionSharing.tryAnotherName")}</span>
-                    </Show>
                   </div>
                 }
               >
@@ -496,8 +515,8 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
             >
               <Icon name="globe" />
               <span>{t("chat.sessionSharing.anyoneWithLink")}</span>
-              <span class="settings-toggle chat-pane__sharing-switch" aria-hidden="true">
-                <span class="settings-toggle__control" />
+              <span class="chat-pane__sharing-switch">
+                <SwitchIndicator checked={Boolean(result()?.publicShare)} size="sm" />
               </span>
             </button>
             <div
@@ -508,11 +527,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
             >
               <div class="chat-pane__sharing-disclosure-body">
                 <p class="chat-pane__sharing-link-description">
-                  {t(
-                    visibility() === "draft"
-                      ? "chat.sessionSharing.publicDraftDescription"
-                      : "chat.sessionSharing.publicLinkDescription",
-                  )}
+                  {t("chat.sessionSharing.publicLinkDescription")}
                 </p>
                 <button
                   ref={controls.ref()}
@@ -540,6 +555,16 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                     </div>
                   )}
                 </ChatSessionSharingError>
+                <Show when={result()?.publicShare && props.state?.publicUrl}>
+                  {(url) => (
+                    // A failed load or an unencodable URL drops the code; copy still works.
+                    <Errored fallback={null}>
+                      <Loading>
+                        <ChatSessionPublicQr url={url()} />
+                      </Loading>
+                    </Errored>
+                  )}
+                </Show>
               </div>
             </div>
           </section>

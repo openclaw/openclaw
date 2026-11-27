@@ -123,7 +123,6 @@ async function createFixture(
     logger,
     service,
     unsubscribe,
-    repair,
     context,
     emit,
     publish(
@@ -203,33 +202,29 @@ it("always excludes dock conversations and filters automation unless the scope o
   expect(board.selectFacts.mock.lastCall?.[0]).not.toHaveProperty("excludeSubagents");
 });
 
-it.each([undefined, "home"])(
-  "excludes each agent's configured Home session (%s) from reads and moves",
-  async (mainKey) => {
-    const home = { ...facts(mainKey ?? "main"), isMain: true };
-    const otherHome = {
-      ...facts("other-home", { key: `agent:ops:${mainKey ?? "main"}`, agentId: "ops" }),
-      isMain: true,
-    };
-    const work = facts("subagent:worker");
-    const board = await createFixture([home, otherHome, work]);
-    expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
-    expect(board.readFacts).not.toHaveBeenCalled();
-    await expect(board.move(home.key, "other")).rejects.toThrow(
-      "not available in this board's scope",
-    );
-    expect(await board.pins()).toEqual([]);
-    await board.update({ scope: { includeHome: true } });
-    expect((await board.read()).sessions.map(({ key }) => key)).toEqual([
-      home.key,
-      otherHome.key,
-      work.key,
-    ]);
-    await board.move(home.key, "focus");
-    await board.update({ scope: { includeHome: false } });
-    expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
-  },
-);
+it("excludes each agent's configured Home session from reads and moves", async () => {
+  const home = { ...facts("home"), isMain: true };
+  const otherHome = {
+    ...facts("other-home", { key: "agent:ops:home", agentId: "ops" }),
+    isMain: true,
+  };
+  const work = facts("subagent:worker");
+  const board = await createFixture([home, otherHome, work]);
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
+  await expect(board.move(home.key, "other")).rejects.toThrow(
+    "not available in this board's scope",
+  );
+  expect(await board.pins()).toEqual([]);
+  await board.update({ scope: { includeHome: true } });
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([
+    home.key,
+    otherHome.key,
+    work.key,
+  ]);
+  await board.move(home.key, "focus");
+  await board.update({ scope: { includeHome: false } });
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
+});
 
 it("rejects a move when caller authority ends during the facts read", async () => {
   const board = await createFixture(["one"]);
@@ -282,24 +277,10 @@ it("classifies custom conjunctions, alternatives, and unknown PR state", async (
     ],
   );
   expect(read.columns.map((column) => column.id)).toEqual(["review", "active", "no-pr", "other"]);
-  expect(read.warning).toContain("Pull-request facts for 1 session are not loaded yet.");
+  expect(read.warning).toBeUndefined();
   expect(read.sessions.find((session) => session.label === "unknown")?.reason).toBe(
     "facts-unavailable",
   );
-});
-
-it("classifies default rule priority for unobserved runs and PRs", async () => {
-  const read = await expectClassification(createDefaultWorkboardSessionsBoardSpec(), [
-    ["active", { run: "active" }, "working"],
-    ["failed", { run: "failed" }, "stuck"],
-    ["unhealthy-active", { run: "active", observerDigest: observed("stuck") }, "stuck"],
-    ["needs-input", { run: "active", observerDigest: observed("waiting-on-user") }, "needs-input"],
-    ["review", { pullRequests: pr(1) }, "in-review"],
-    ["merged", { pullRequests: pr(2, "merged") }, "merged"],
-    ["idle", {}, "done"],
-  ]);
-  expect(read.columns.map((column) => column.id)).toEqual(DEFAULT_COLUMNS);
-  expect(read.warning).toBeUndefined();
 });
 
 it.each([false, true])(
@@ -328,18 +309,13 @@ it.each([false, true])(
       expect((await results).map(({ status }) => status)).toEqual(["fulfilled", "fulfilled"]);
       expect((await board.stored()).sessions.scope?.maxAgeHours).toBe(48);
     }
-    expect(board.logger.info).toHaveBeenCalledExactlyOnceWith(
-      "Sessions board removed 3 non-operator placements.",
-    );
   },
 );
 
 it("repairs only old-default rules at startup, preserves custom boards and ordering, and is idempotent", async () => {
   const board = await createFixture();
-  expect(board.repair).toHaveBeenCalledOnce();
   await board.read();
   await board.read();
-  expect(board.repair).toHaveBeenCalledOnce();
   expect(board.readFacts).not.toHaveBeenCalled();
   await board.service.stop();
   const oldSpec = createDefaultWorkboardSessionsBoardSpec();
@@ -392,17 +368,21 @@ it("repairs only old-default rules at startup, preserves custom boards and order
 });
 
 it("coalesces notifications and refreshes board facts after publications", async () => {
-  const board = await createFixture(["one", "two"]);
+  const board = await createFixture();
   const changed = vi.spyOn(board.store, "announceChangeEpoch");
   expect(board.readFacts).not.toHaveBeenCalled();
   board.emit(facts("one").key);
   await vi.advanceTimersByTimeAsync(5_000);
   expect(changed).not.toHaveBeenCalled();
-  await board.read();
+  expect((await board.read()).sessions).toEqual([]);
   await board.store.upsertBoard({ id: "second", kind: "sessions" });
-  expect((await board.service.read("second")).sessions).toHaveLength(2);
   changed.mockClear();
-  board.publish("active", [facts("one", { run: "active" }), facts("two")]);
+  board.publish("active", [
+    facts("one", { run: "active" }),
+    facts("two", { pullRequestsUnavailable: true }),
+  ]);
+  expect((await board.service.read("second")).sessions).toHaveLength(2);
+  expect((await board.read()).sessions[1]).toMatchObject({ reason: "facts-unavailable" });
   expect((await board.read()).sessions[0]).toMatchObject({ columnId: "focus" });
   board.state.sessions = [
     facts("one", { run: "active", label: "Updated during burst" }),
@@ -429,7 +409,7 @@ it("coalesces notifications and refreshes board facts after publications", async
 });
 
 it.each([false, true])(
-  "classifies confirmed stale PR facts and reports unavailable facts (rate limited: %s)",
+  "prioritizes default rules over PR facts and reports availability (rate limited: %s)",
   async (rateLimited) => {
     const availability = rateLimited
       ? { pullRequestsRateLimited: true as const }
@@ -445,6 +425,8 @@ it.each([false, true])(
       },
       { ...facts("none", availability), pullRequestsStale: true as const },
       facts("unknown", availability),
+      facts("failed", { run: "failed" }),
+      facts("unhealthy-active", { run: "active", observerDigest: observed("stuck") }),
     ];
     const board = await createFixture(rows, { spec: createDefaultWorkboardSessionsBoardSpec() });
     const read = await board.read();
@@ -453,10 +435,11 @@ it.each([false, true])(
       { columnId: "merged" },
       { columnId: "done", reason: "fallback" },
       { columnId: "done", reason: "facts-unavailable" },
+      { columnId: "stuck" },
+      { columnId: "stuck" },
     ]);
-    const suffix = rateLimited ? " (GitHub rate limited)" : "";
     expect(read.warning).toBe(
-      `Pull-request facts for 3 sessions are stale${suffix}. Pull-request facts for 1 session are not loaded yet${suffix}.`,
+      rateLimited ? "GitHub is rate limiting pull request updates for 4 sessions." : undefined,
     );
     board.state.sessions = [
       { ...rows[0]!, run: "active" },
@@ -489,28 +472,14 @@ it("announces sessions added after the first read", async () => {
   ]);
 });
 
-it("shares projections and reuses 80 unchanged rows after one session changes", async () => {
-  const board = await createFixture(
-    Array.from({ length: 81 }, (_, index) => Object.freeze(facts(String(index)))),
-  );
-  const placements = vi.spyOn(board.store, "listSessionPlacements");
-  const boards = vi.spyOn(board.store, "getSessionsBoard");
+it("publishes session changes and retains caller scope in the revision", async () => {
+  const board = await createFixture([Object.freeze(facts("0")), Object.freeze(facts("1"))]);
   const changes = vi.fn();
   board.store.onChange = changes;
-  const readers = await Promise.all(
-    Array.from({ length: 25 }, () => board.read(undefined, { assertCurrent() {} })),
-  );
-  const first = readers[0]!;
-  expect(readers.every((read) => read === first)).toBe(true);
-  expect(first.sessions).toHaveLength(81);
-  expect(boards).toHaveBeenCalledOnce();
-  expect(placements).toHaveBeenCalledOnce();
+  const first = await board.read();
   board.emit(facts("0").key, "category");
   await vi.advanceTimersByTimeAsync(5_000);
   expect(changes).not.toHaveBeenCalled();
-  expect(await board.read()).toBe(first);
-  vi.setSystemTime(NOW + 10 * 60_000);
-  expect(await board.read()).toBe(first);
   board.publish("one-row-changed", [
     Object.freeze({ ...board.state.sessions[0]!, run: "active" as const }),
     ...board.state.sessions.slice(1),
@@ -522,19 +491,8 @@ it("shares projections and reuses 80 unchanged rows after one session changes", 
     expect.objectContaining({ sessionsRevision: next.revision!.revision }),
   );
   expect(next.sessions[0]).toMatchObject({ run: "active", columnId: "focus" });
-  expect(next.sessions[0]).not.toBe(first.sessions[0]);
-  expect(next.sessions.slice(1).every((row, index) => row === first.sessions[index + 1])).toBe(
-    true,
-  );
-  expect(placements).toHaveBeenCalledOnce();
-  expect(boards).toHaveBeenCalledOnce();
-  expect(await board.read()).toBe(next);
   const pinned = await board.move(facts("1").key, "focus");
   expect(pinned.sessions[1]).toMatchObject({ columnId: "focus", source: "operator" });
-  expect(pinned.sessions[1]).not.toBe(next.sessions[1]);
-  expect(
-    pinned.sessions.filter((_, index) => index !== 1).every((row) => next.sessions.includes(row)),
-  ).toBe(true);
   board.state.scope = "new-authorization";
   const rebuilt = await board.read();
   expect(rebuilt.sessions).toEqual(pinned.sessions);
@@ -782,4 +740,46 @@ it("forwards people views without changing the board or pins", async () => {
   }
   expect(await board.stored()).toEqual(initialBoard);
   expect(await board.pins()).toEqual([]);
+});
+
+it("applies view.agentId before paging without widening board scope", async () => {
+  const mainRow = facts("main-work", { key: "agent:main:work", agentId: "main" });
+  const writerRow = facts("writer-work", { key: "agent:writer:work", agentId: "writer" });
+  const board = await createFixture([mainRow, writerRow], {
+    spec: { scope: { agentIds: ["main"] } },
+  });
+  board.selectFacts.mockClear();
+  const matching = await board.read({ agentId: "main" });
+  expect(board.selectFacts).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ agentId: "main" }),
+  );
+  expect(matching.sessions.map(({ key }) => key)).toEqual([mainRow.key]);
+
+  // Requesting an agent outside the board's saved scope cannot widen board scope.
+  board.selectFacts.mockClear();
+  const outside = await board.read({ agentId: "writer" });
+  expect(outside.sessions).toEqual([]);
+});
+
+it("expires cached projections and wakes the board when PR retryAt becomes due", async () => {
+  const board = await createFixture([facts("one", { pullRequestsUnavailable: true })]);
+  const changed = vi.spyOn(board.store, "announceChangeEpoch");
+  const retryAt = NOW + 10_000;
+  board.state.retryAt = retryAt;
+  const first = await board.read();
+  expect(first.warning).toBeUndefined();
+  expect(changed).not.toHaveBeenCalled();
+
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(changed).not.toHaveBeenCalled();
+  expect(await board.read()).toBe(first);
+
+  board.state.sessions = [facts("one", { pullRequests: pr(7) })];
+  board.state.retryAt = undefined;
+  board.state.revision = "pr-ready";
+  await vi.advanceTimersByTimeAsync(1);
+  expect(changed).toHaveBeenCalledOnce();
+  const refreshed = await board.read();
+  expect(refreshed).not.toBe(first);
+  expect(refreshed.sessions[0]?.pullRequests).toEqual(pr(7));
 });

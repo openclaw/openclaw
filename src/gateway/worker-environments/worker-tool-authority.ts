@@ -1,4 +1,3 @@
-import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -7,7 +6,7 @@ import {
   resolvePreparedExecDefaultsAsync,
 } from "../../agents/exec-defaults.js";
 import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
-import { resolveExecToolConfig } from "../../agents/lazy-exec-tool.js";
+import { resolveExecToolConfig, resolveModelExecCeilings } from "../../agents/lazy-exec-tool.js";
 import { supportsModelTools } from "../../agents/model-tool-support.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
@@ -20,6 +19,7 @@ import {
 } from "../../agents/tool-surface-plan.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { loadExecApprovalsReadOnlyAsync } from "../../infra/exec-approvals-store.js";
+import { normalizePathPrepend } from "../../infra/path-prepend.js";
 import { logWarn } from "../../logger.js";
 import type { WorkerToolAuthority } from "../../worker/launch-descriptor.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
@@ -33,10 +33,6 @@ export async function resolveWorkerToolAuthority(params: {
   computerAvailable?: boolean;
 }) {
   const turn = params.turn;
-  const authSourceAgentDir = turn.agentDir?.trim();
-  const authProfileStoreSource = authSourceAgentDir
-    ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
-    : false;
   params.assertCurrent();
   turn.abortSignal?.throwIfAborted();
   const sandboxSessionKey =
@@ -101,16 +97,30 @@ export async function resolveWorkerToolAuthority(params: {
         base: { ...defaults, host: defaults.effectiveHost },
         permissionPolicy: turn.permissionMode ? { mode: turn.permissionMode } : undefined,
         scheduledExecTarget: turn.scheduledToolPolicy?.execTarget,
+        modelExecCeilings: resolveModelExecCeilings({
+          cfg: turn.config,
+          agentId: capabilityProfile.policy.agentId,
+          modelProvider: params.modelRef.provider,
+          modelId: params.modelRef.model,
+        }),
       });
       // Node/sandbox execution remains outside the worker-local exec transport.
       const execUnavailable =
         turn.scheduledToolPolicy?.execTarget !== undefined && defaults.effectiveHost !== "gateway";
       const { effectiveHost: host, security, node: configuredNode } = defaults;
       const node = configuredNode?.trim();
-      const strictInlineEval = resolveExecToolConfig({
-        cfg: turn.config,
-        agentId: params.placement.agentId,
-      }).strictInlineEval;
+      const { strictInlineEval, backgroundMs, timeoutSec, cleanupMs, configuredPathPrepend } =
+        resolveExecToolConfig({
+          cfg: turn.config,
+          agentId: params.placement.agentId,
+        });
+      const pathPrepend = normalizePathPrepend(configuredPathPrepend);
+      const execDefaults = {
+        ...(backgroundMs !== undefined ? { backgroundMs } : {}),
+        ...(timeoutSec !== undefined ? { timeoutSec } : {}),
+        ...(cleanupMs !== undefined ? { cleanupMs } : {}),
+        ...(pathPrepend.length ? { pathPrepend } : {}),
+      };
       const exec: NonNullable<WorkerToolAuthority["exec"]> = {
         ...(policy.mode !== undefined ? { mode: policy.mode } : {}),
         ...(strictInlineEval !== undefined ? { strictInlineEval } : {}),
@@ -134,12 +144,12 @@ export async function resolveWorkerToolAuthority(params: {
         toolsEnabled: supportsModelTools(params.model ?? {}),
         forceDirectMessageTool: messageToolOwnsVisibleReply(turn),
         isRawModelRun: turn.modelRun === true || turn.promptMode === "none",
-        forceCodeModeControls: turn.forceCodeModeTools,
       });
       const installedSkills = prepareInstalledSkillCatalog({
         snapshot: turn.skillsSnapshot,
         workspaceDir: turn.bootstrapWorkspaceDir ?? turn.workspaceDir,
         assertCurrent: params.assertCurrent,
+        instructionDelivery: "forwarded",
       });
       presentation.skills = installedSkills.map(({ name, description, location }) => ({
         name,
@@ -147,9 +157,8 @@ export async function resolveWorkerToolAuthority(params: {
         location,
       }));
       return {
-        authProfileStoreSource,
         capabilityProfile,
-        policy: corePolicy,
+        policy: Object.keys(execDefaults).length ? { ...corePolicy, execDefaults } : corePolicy,
         exec,
         execUnavailable,
         presentation,

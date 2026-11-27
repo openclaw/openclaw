@@ -1,6 +1,7 @@
 // Gateway WebSocket connect admission validates protocol, role, and browser origin.
 import type { IncomingMessage } from "node:http";
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_IDS,
@@ -26,6 +27,7 @@ import {
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
+import type { GatewayOperatorRoleDefinition } from "../../../config/types.gateway.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
@@ -38,20 +40,31 @@ import {
   getRemoteControlUiIngressContext,
   hasCurrentRemoteControlUiIngress,
 } from "../../ingress-attribution.js";
+import { isOpenClawIdTunnelPrincipalCurrent } from "../../openclaw-id/tunnel-principal.js";
 import { resolveIdentityOperatorScopes } from "../../operator-identity-scopes.js";
 import type { OperatorScope } from "../../operator-scopes.js";
 import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
-import { formatForLog } from "../../ws-log.js";
+import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type {
   AuthenticatedGatewayConnect,
+  DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
 
 export function isStartupNodeConnect(connectParams: ConnectParams): boolean {
   return connectParams.role === "node" && connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
+}
+
+export function claimsWorkerConnectionIdentity(value: unknown): boolean {
+  const connect = asOptionalObjectRecord(value);
+  if (connect?.role === "worker") {
+    return true;
+  }
+  const client = asOptionalObjectRecord(connect?.client);
+  return client?.id === GATEWAY_CLIENT_IDS.WORKER || client?.mode === GATEWAY_CLIENT_MODES.WORKER;
 }
 
 /** Exact first-connect shape emitted by `openclaw connect` for a setup-code node. */
@@ -127,6 +140,26 @@ export function applyConnectionScopeCap(params: {
     : params.scopes.filter((scope) => declaredScopes.includes(scope));
 }
 
+/**
+ * Caps connection scopes by the person's role. `roleCappedScopes` keeps what the role took
+ * away so a later role change that would grant more can reconnect the client.
+ */
+export function capConnectionScopesByRole(
+  effectiveScopes: string[],
+  rolePolicy: Pick<GatewayOperatorRoleDefinition, "scopes"> | undefined,
+): { scopes: string[]; roleCappedScopes?: readonly string[] } {
+  if (!rolePolicy) {
+    return { scopes: effectiveScopes };
+  }
+  const scopes = intersectOperatorScopes(effectiveScopes, rolePolicy.scopes);
+  // Capping can swap in narrower implied scopes, so compare grants rather than list lengths.
+  const capped = effectiveScopes.some(
+    (scope) =>
+      !roleScopesAllow({ role: "operator", requestedScopes: [scope], allowedScopes: scopes }),
+  );
+  return capped ? { scopes, roleCappedScopes: Object.freeze([...effectiveScopes]) } : { scopes };
+}
+
 export function resolveEffectiveConnectionScopes(params: {
   role: string;
   deviceScopes: string[];
@@ -166,8 +199,16 @@ export function rejectGatewayConnectOrigin(
 /** Recheck live authority after awaited work, before granting credentials or registering a client. */
 export function resolveGatewayConnectPolicyFailure(
   context: GatewayConnectPhaseContext,
-  state: AuthenticatedGatewayConnect,
+  state: AuthenticatedGatewayConnect &
+    Pick<DeviceAuthorizedGatewayConnect, "isDeviceTokenSubjectCurrent">,
 ): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
+  const principal = state.authResult.openclawId;
+  if (
+    (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) ||
+    state.isDeviceTokenSubjectCurrent?.() === false
+  ) {
+    return { kind: "auth" };
+  }
   if (context.browserOrigin) {
     const originCheck = checkGatewayWsBrowserOrigin(context.browserOrigin, getRuntimeConfig());
     if (!originCheck.ok) {
@@ -217,10 +258,10 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   } = context;
 
   const isNodeClient = isStartupNodeConnect(connectParams);
-  const startupPending = isStartupPending?.() === true;
-  // Node enrollment is an awaited startup dependency: authenticated node admission
-  // must complete while ordinary methods and other clients remain startup-gated.
-  if (startupPending && !isNodeClient) {
+  const startupPending = isNodeClient && isStartupPending?.() === true;
+  // Operator hello needs prepared auth and request snapshots, not autonomous recovery.
+  // Nodes retain their stricter startup enrollment policy until sidecars are ready.
+  if (context.handler.isConnectPending?.() && !isNodeClient) {
     await rejectGatewayStartupConnect(context);
     return undefined;
   }
@@ -247,7 +288,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
       minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
     });
     logWsControl.warn(
-      `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")}`,
+      `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatPeerTextForLog(clientLabel)} ${connectParams.client.mode} v${formatPeerTextForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatPeerTextForLog(connectParams.client.instanceId ?? "n/a")}`,
     );
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
       retryable: false,
@@ -288,19 +329,19 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   const remoteIngress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
   if (remoteIngress) {
     const denied = !hasCurrentRemoteControlUiIngress(remoteIngress)
-      ? "Remote Control UI ingress is no longer active; reconnect through the current grant."
+      ? "Remote web app ingress is no longer active; reconnect through the current grant."
       : role !== "operator"
-        ? "Remote Control UI ingress only admits the operator role."
+        ? "Remote web app ingress only admits the operator role."
         : !connectParams.device
-          ? "Remote Control UI ingress requires a signed device identity."
+          ? "Remote web app ingress requires a signed device identity."
           : Object.values(connectParams.auth ?? {}).some((credential) => credential !== undefined)
-            ? "Remote Control UI ingress requires a credential-free signed device; reconnect without stored credentials."
+            ? "Remote web app ingress requires a credential-free signed device; reconnect without stored credentials."
             : !roleScopesAllow({
                   role,
                   requestedScopes: scopes,
                   allowedScopes: remoteIngress.operatorScopeCeiling,
                 })
-              ? "Remote Control UI scopes must stay within this grant's operator scope ceiling."
+              ? "Remote web app scopes must stay within this grant's operator scope ceiling."
               : undefined;
     if (denied) {
       markHandshakeFailure("remote-control-ui-admission-denied");

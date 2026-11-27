@@ -1,18 +1,21 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { projectTranscriptNavigationFields } from "../config/sessions/transcript-navigation-fields.js";
-import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
-import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { sha256Base64Url } from "./crypto-digest.js";
+import {
+  selectBilledUsageEntries,
+  projectUsageScanFields,
+} from "./session-cost-usage-inherited.js";
 import {
   computeUsageTokenTotals,
   parseUsageCostTranscriptRecord,
   needsUsageCostEstimate,
   applyUsageCostEstimate,
+  usageCostEstimateUsesPricing,
 } from "./session-cost-usage-pricing.js";
 import {
   USAGE_COST_ROLLUP_VERSION,
+  USAGE_COST_UNPRICED_FINGERPRINT,
   type UsageCostJsonlCheckpoint,
   type UsageCostSqliteCheckpoint,
   type UsageCostRollupEntry,
@@ -26,6 +29,7 @@ import type {
   CostUsageTotals,
   ParsedTranscriptEntry,
   UsageCostTranscriptFile,
+  UsageRollupTiming,
 } from "./session-cost-usage.types.js";
 
 type UsageCostRollupScanInput = {
@@ -46,11 +50,23 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
   const rollup = previous?.rollup ?? createSessionUsageRollupData();
   let countedRecords = 0;
   let parsedRecords = 0;
+  // Catalog prices are inputs only for turns without a recorded cost.
+  let priced =
+    previous !== undefined && previous.pricingFingerprint !== USAGE_COST_UNPRICED_FINGERPRINT;
   return {
-    async addEntries(entries: Iterable<ParsedTranscriptEntry>): Promise<void> {
+    /**
+     * `timing` carries the canonical navigation facts of a full scan: each reply's
+     * own user turn and the active path's continuation cursor. Omitted for a flat
+     * transcript or an appended tail, which measure in file order.
+     */
+    async addEntries(
+      entries: Iterable<ParsedTranscriptEntry>,
+      timing?: UsageRollupTiming,
+    ): Promise<void> {
       let batch: ParsedTranscriptEntry[] = [];
       const flush = async () => {
         const estimated = batch.filter(needsUsageCostEstimate);
+        priced ||= estimated.some(usageCostEstimateUsesPricing);
         const costs = await params.resolveCosts(
           estimated.map(({ provider, model }) => ({ provider, model })),
         );
@@ -63,8 +79,10 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
             usageTotals = {
               ...emptyTotals(),
               ...computeUsageTokenTotals(entry.usage),
-              usageReport: entry.usage.usageReport,
             };
+            if (entry.usage.cacheTelemetry?.state === "unavailable") {
+              usageTotals.cacheUnmeasuredInput = usageTotals.input;
+            }
             const cost = entry.costBreakdown;
             if (cost?.total !== undefined) {
               usageTotals.totalCost += cost.total;
@@ -91,6 +109,8 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
             toolNames: entry.toolNames,
             toolResultCounts: entry.toolResultCounts,
             usageTotals,
+            navigated: timing !== undefined,
+            userTimestamp: timing?.userTimestamps.get(entry),
           });
           countedRecords += entry.usage && timestamp ? 1 : 0;
           parsedRecords += entry.usage ? 1 : 0;
@@ -106,11 +126,15 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
       if (batch.length > 0) {
         await flush();
       }
+      if (timing) {
+        // The cursor is a navigation fact, not a side effect of emission order.
+        rollup.lastUserTimestamp = timing.activeUserTimestamp;
+      }
     },
     finish(checkpoint: UsageCostJsonlCheckpoint | UsageCostSqliteCheckpoint): UsageCostRollupEntry {
       return {
         version: USAGE_COST_ROLLUP_VERSION,
-        pricingFingerprint: params.pricingFingerprint,
+        pricingFingerprint: priced ? params.pricingFingerprint : USAGE_COST_UNPRICED_FINGERPRINT,
         checkpoint,
         scannedAt: Date.now(),
         parsedRecords: (previous?.parsedRecords ?? 0) + parsedRecords,
@@ -139,17 +163,13 @@ export async function scanMemoryUsageCostRollup(params: {
     };
     if (isRecord(event)) {
       record.usageEntry = parseUsageCostTranscriptRecord(event);
-      projectTranscriptNavigationFields(event, record);
+      projectUsageScanFields(event, record);
     }
     return record;
   });
   const scan = createUsageRollupScan({ ...params, appendOnly: false });
-  await scan.addEntries(
-    selectVisibleTranscriptEvents(records).flatMap((record) =>
-      record.usageEntry ? [record.usageEntry] : [],
-    ),
-  );
-  const visibleLeafId = scanSessionTranscriptTree(records).leafId;
+  const { entries, timing, visibleLeafId } = selectBilledUsageEntries(records);
+  await scan.addEntries(entries, timing);
   return scan.finish({
     kind: "sqlite",
     maxSeq: params.file.maxSeq ?? 0,

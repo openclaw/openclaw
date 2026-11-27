@@ -6,18 +6,19 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createIrcIngressMonitor } from "./irc-ingress.js";
+import { setIrcRuntime } from "./runtime.js";
 
-type IrcIngressQueue = NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
-type IrcIngressPayload = Parameters<IrcIngressQueue["enqueue"]>[1];
+type IrcIngressQueue = ReturnType<typeof createChannelIngressQueueForTests>;
 type IrcIngressDispatch = Parameters<typeof createIrcIngressMonitor>[0]["dispatch"];
 
 const CHANNEL_LINE = ":alice!ident@example.org PRIVMSG #room :hello";
 
 function createQueue(stateDir: string): IrcIngressQueue {
-  return createChannelIngressQueueForTests<IrcIngressPayload>({
+  return createChannelIngressQueueForTests({
     channelId: "irc",
     accountId: "default",
     stateDir,
@@ -45,13 +46,19 @@ async function withQueue<T>(
   }
 }
 
-function startIngress(queue: IrcIngressQueue, dispatch: IrcIngressDispatch) {
-  const ingress = createIrcIngressMonitor({
+function createIngress(queue: IrcIngressQueue, dispatch: IrcIngressDispatch) {
+  const core = createPluginRuntimeMock();
+  vi.mocked(core.state.openChannelIngressQueue).mockReturnValue(queue);
+  setIrcRuntime(core);
+  return createIrcIngressMonitor({
     accountId: "default",
-    queue,
     dispatch,
     runtime: { error: vi.fn(), log: vi.fn() },
   });
+}
+
+function startIngress(queue: IrcIngressQueue, dispatch: IrcIngressDispatch) {
+  const ingress = createIngress(queue, dispatch);
   ingress.start();
   return ingress;
 }
@@ -84,12 +91,7 @@ describe("IRC durable ingress", () => {
   it("recovers a durable pre-dispatch append with a fresh drain exactly once", async () => {
     await withQueue(async (queue) => {
       const interruptedDispatch = vi.fn();
-      const interrupted = createIrcIngressMonitor({
-        accountId: "default",
-        queue,
-        dispatch: interruptedDispatch,
-        runtime: { error: vi.fn(), log: vi.fn() },
-      });
+      const interrupted = createIngress(queue, interruptedDispatch);
       await interrupted.openConnection("connection-restart").accept(CHANNEL_LINE, "receipt-bot");
       expect(await queue.listPending({ limit: "all" })).toEqual([
         expect.objectContaining({
@@ -211,7 +213,7 @@ describe("IRC durable ingress", () => {
       const ingress = start(queue, dispatch);
       await ingress.openConnection("connection-bad").accept("not an IRC message", "bot");
       await ingress.waitForIdle();
-      expect((await queue.enqueue(eventId, {} as IrcIngressPayload)).kind).toBe("failed");
+      expect((await queue.enqueue(eventId, {})).kind).toBe("failed");
       expect(dispatch).not.toHaveBeenCalled();
     });
   });

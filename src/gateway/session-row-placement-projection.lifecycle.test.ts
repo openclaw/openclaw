@@ -7,6 +7,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { create as createSessionRow, type Lookup } from "./session-row-projection-record.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import * as sessionStoreKeys from "./session-store-key.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
@@ -16,6 +17,7 @@ function placementReadView() {
     isCurrent(): boolean;
     getPolicyConfig(): SessionRowReadView["state"]["policyConfig"];
   } = {
+    ...createSessionRowProjectionFixture({ cfg: {}, store: {} }),
     physicalPaths: (locator) => [locator],
     state: {
       cfg: {},
@@ -70,7 +72,7 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
 }
 
 it.each(["gateway:rpc:sessions.list", "scheduler:maintenance:session-refresh"])(
-  "attributes prepared-row work after readiness waits to %s",
+  "attributes prepared-row work after readiness waits without relabeling roster consumers: %s",
   async (task) => {
     const { read, query } = placementReadView();
     let now = 0;
@@ -123,8 +125,8 @@ it.each(["gateway:rpc:sessions.list", "scheduler:maintenance:session-refresh"])(
         },
         {
           elapsedMs: 900,
-          task: `${task}:agent-roster`,
-          taskMs: 500,
+          task: `${task}:session-rows:consume`,
+          taskMs: 900,
           startedAt: 5_650,
           endedAt: 6_550,
         },

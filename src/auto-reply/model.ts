@@ -43,7 +43,7 @@ const ADDITIONAL_MODEL_SCOPE_PATTERN = new RegExp(
 /** Extract and remove a `/model` directive, including optional auth profile/runtime hints. */
 export function extractModelDirective(
   body?: string,
-  options?: { aliases?: string[] },
+  options?: { aliases?: string[]; isKnownInlineModel?: (raw: string) => boolean },
 ): {
   cleaned: string;
   rawModel?: string;
@@ -127,6 +127,27 @@ export function extractModelDirective(
   const cleaned = match
     ? removeDirectiveSpan(body, match.index, match.index + match[0].length)
     : body;
+  const scopeConflict = match
+    ? ADDITIONAL_MODEL_SCOPE_PATTERN.test(body.slice(match.index + match[0].length))
+    : false;
+  // A bare word in prose is ambiguous; explicit syntax retains command validation.
+  if (
+    modelMatch &&
+    rawModel &&
+    cleaned &&
+    !quotedModel &&
+    !/^\/model\s*:/i.test(modelMatch[0]) &&
+    !rawProfile &&
+    !rawRuntime &&
+    !scope &&
+    !scopeConflict &&
+    !/[/@]/.test(rawModel) &&
+    !/^\d+$/.test(rawModel) &&
+    options?.isKnownInlineModel &&
+    !options.isKnownInlineModel(rawModel)
+  ) {
+    return { cleaned: body, scopeConflict: false, hasDirective: false };
+  }
 
   return {
     cleaned,
@@ -134,9 +155,7 @@ export function extractModelDirective(
     rawProfile,
     rawRuntime,
     scope,
-    scopeConflict: match
-      ? ADDITIONAL_MODEL_SCOPE_PATTERN.test(body.slice(match.index + match[0].length))
-      : false,
+    scopeConflict,
     hasDirective: Boolean(match),
     ...(match ? { source: modelMatch ? ("model" as const) : ("alias" as const) } : {}),
   };

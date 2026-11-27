@@ -7,6 +7,7 @@ import {
   extractErrorCodeOrErrno,
 } from "@openclaw/normalization-core/error-coercion";
 import { requireExactTestResults } from "./lib/ios-test-results.mjs";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 
 export const IOS_RELEASE_TESTS = [
   "OpenClawUITests/OpenClawSnapshotUITests/testLiveGatewayPairChatAndRelaunch",
@@ -16,9 +17,10 @@ export const MODEL_REF = "openai/ios-e2e";
 const IOS_RELEASE_CHAT_FAILURE =
   /IOS_RELEASE_CHAT_FAILURE (first|second|relaunch) (submission|reply) draft=(true|false) keyboard=(true|false) reply=(true|false) writing=(true|false) jump=(true|false) foreground=(true|false) input=(true|false) transcript=(true|false) send=(true|false)/u;
 export const IOS_RELEASE_TEST_FAILURE_LOCATION =
-  /(?:^|\/)OpenClawSnapshotUITests\.swift:([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu;
+  /(?:^|\/)(OpenClawSnapshotUITests(?:\+(?:Chat|Helpers))?\.swift):([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu;
 const SAMPLE_INTERVAL_MS = 1_000;
 const MAX_SAMPLE_GAP_MS = 3_000;
+const MAX_MEASUREMENT_TIMINGS = 4_096;
 export type Mode = "stock" | "compare";
 export type Arm = "stock" | "simslim";
 export type TestIdentity = (typeof IOS_RELEASE_TESTS)[number];
@@ -38,6 +40,7 @@ export type Operation =
   | "simulator-create"
   | "simulator-boot"
   | "simulator-ready"
+  | "simulator-headroom"
   | "simulator-slim"
   | "simulator-delete"
   | "fixture-server"
@@ -119,11 +122,11 @@ export class OperationError extends Error {
         }
       }
       // Keep failure locations actionable without exporting assertion text, paths, or credentials.
-      const lines = [...output.matchAll(IOS_RELEASE_TEST_FAILURE_LOCATION)].map(
-        (match) => match[1],
+      const locations = [...output.matchAll(IOS_RELEASE_TEST_FAILURE_LOCATION)].map(
+        (match) => `${match[1]}:${match[2]}`,
       );
       this.diagnostic.context.push(
-        ...[...new Set(lines)].slice(0, 8).map((line) => `xctest-line:${line}`),
+        ...[...new Set(locations)].slice(0, 8).map((location) => `xctest-location:${location}`),
       );
     }
   }
@@ -247,6 +250,17 @@ export type Trial = {
   testMs: number;
   totalMs: number;
   measurement?: ReturnType<typeof summarizeMeasurements>;
+  timing?: {
+    measurements: {
+      scheduledAtMs: number;
+      startedAtMs: number;
+      endedAtMs: number;
+      outcome: "passed" | "failed";
+      code?: OperationCode;
+    }[];
+    droppedMeasurements: number;
+    tests: { test: TestIdentity; startedAtMs: number; endedAtMs: number }[];
+  };
 };
 export type TrialDependencies = {
   create: (arm: Arm, index: number) => Promise<TrialResources>;
@@ -295,19 +309,44 @@ export async function runTrials(mode: Mode, deps: TrialDependencies) {
       stage = "test";
       testStarted = deps.now();
       if (deps.measure) {
-        const measure = async () => {
+        const timing: NonNullable<Trial["timing"]> = {
+          measurements: [],
+          droppedMeasurements: 0,
+          tests: [],
+        };
+        trial.timing = timing;
+        const measure = async (scheduled: number) => {
+          const call: (typeof timing.measurements)[number] = {
+            scheduledAtMs: scheduled - testStarted!,
+            startedAtMs: deps.now() - testStarted!,
+            endedAtMs: 0,
+            outcome: "passed",
+          };
           try {
             const measurement = parseMeasurement(await resources!.measure());
-            samples.push({ ...measurement, atMs: deps.now() - testStarted! });
+            call.endedAtMs = deps.now() - testStarted!;
+            samples.push({ ...measurement, atMs: call.endedAtMs });
           } catch (error) {
+            call.endedAtMs = deps.now() - testStarted!;
+            call.outcome = "failed";
+            call.code =
+              error instanceof OperationError
+                ? error.diagnostic.code
+                : operationError("simulator-measure", error).diagnostic.code;
             measurementErrors++;
             if (error instanceof OperationError && trial.diagnostics.length < 8) {
               trial.diagnostics.push(error.diagnostic);
             }
+          } finally {
+            if (timing.measurements.length < MAX_MEASUREMENT_TIMINGS) {
+              timing.measurements.push(call);
+            } else {
+              timing.droppedMeasurements++;
+            }
           }
         };
         // Sample serially, only after preparation has completed.
-        await measure();
+        await measure(testStarted);
         collector = (async () => {
           let next = testStarted! + SAMPLE_INTERVAL_MS;
           while (!stopCollection.signal.aborted && !deps.signal.aborted) {
@@ -322,7 +361,7 @@ export async function runTrials(mode: Mode, deps: TrialDependencies) {
             if (stopCollection.signal.aborted || deps.signal.aborted) {
               break;
             }
-            await measure();
+            await measure(next);
             next += SAMPLE_INTERVAL_MS;
           }
         })();
@@ -331,12 +370,16 @@ export async function runTrials(mode: Mode, deps: TrialDependencies) {
         const testResult: Trial["tests"][number] = { test, status: "failed", ms: 0 };
         trial.tests.push(testResult);
         const caseStarted = deps.now();
+        const testTiming = { test, startedAtMs: caseStarted - testStarted, endedAtMs: 0 };
+        trial.timing?.tests.push(testTiming);
         try {
           deps.signal.throwIfAborted();
           requireExactTestResults(await resources.test(test), [test]);
           testResult.status = "passed";
         } finally {
-          testResult.ms = deps.now() - caseStarted;
+          const ended = deps.now();
+          testResult.ms = ended - caseStarted;
+          testTiming.endedAtMs = ended - testStarted;
         }
       }
     } catch (error) {
@@ -402,6 +445,11 @@ async function main() {
     options: {
       mode: { type: "string", default: "stock" },
       "target-sha": { type: "string" },
+      "candidate-root": { type: "string" },
+      "harness-sha": { type: "string" },
+      "client-root": { type: "string" },
+      "client-sha": { type: "string" },
+      "client-release-tag": { type: "string" },
       output: { type: "string" },
       "build-dir": { type: "string" },
       "build-only": { type: "boolean", default: false },
@@ -409,14 +457,31 @@ async function main() {
       "gateway-selection": { type: "string" },
     },
   });
+  const clientOptions = [values["client-root"], values["client-sha"], values["client-release-tag"]];
+  const compatibility = clientOptions.some((value) => value !== undefined);
+  const releaseTag = values["client-release-tag"];
+  const release = releaseTag?.startsWith("v") ? parseReleaseVersion(releaseTag.slice(1)) : null;
   if (
+    ((values["candidate-root"] !== undefined || values["harness-sha"] !== undefined) &&
+      (!compatibility ||
+        (values["candidate-root"] !== undefined && !values["candidate-root"].trim()) ||
+        (values["harness-sha"] !== undefined && !/^[a-f0-9]{40}$/u.test(values["harness-sha"])))) ||
+    (compatibility &&
+      (!values["client-root"]?.trim() ||
+        !/^[a-f0-9]{40}$/u.test(values["client-sha"] ?? "") ||
+        !release ||
+        release.channel !== "stable" ||
+        release.patch >= 33 ||
+        releaseTag !== `v${release.version}`)) ||
     (values.mode !== "stock" && values.mode !== "compare") ||
     !/^[a-f0-9]{40}$/u.test(values["target-sha"] ?? "") ||
     !values.output ||
     (values["build-only"] && !values["build-dir"]) ||
     (values["gateway-only"] && (values["build-only"] || values.mode !== "stock"))
   ) {
-    throw new Error("usage: --mode stock|compare --target-sha <full-sha> --output <proof.json>");
+    throw new Error(
+      "usage: --mode stock|compare --target-sha <full-sha> --output <proof.json> [--candidate-root <checkout> --harness-sha <full-sha>] [--client-root <checkout> --client-sha <full-sha> --client-release-tag <stable-tag>]",
+    );
   }
   const started = performance.now();
   const abort = new AbortController();
@@ -461,7 +526,19 @@ async function main() {
       buildDir: values["build-dir"],
       gatewayOnly: values["gateway-only"],
       buildOnly: values["build-only"],
-      gatewaySelectionDir: path.resolve(values["gateway-selection"] ?? `${values.output}.gateway`),
+      ...(compatibility
+        ? {
+            candidateRoot: path.resolve(values["candidate-root"] ?? process.cwd()),
+            harnessSha: values["harness-sha"] ?? values["target-sha"]!,
+            clientRoot: path.resolve(values["client-root"]!),
+            clientSha: values["client-sha"]!,
+            clientReleaseTag: values["client-release-tag"]!,
+          }
+        : {
+            gatewaySelectionDir: path.resolve(
+              values["gateway-selection"] ?? `${values.output}.gateway`,
+            ),
+          }),
       onProgress: writeProof,
     });
     cleanup = native.cleanup;

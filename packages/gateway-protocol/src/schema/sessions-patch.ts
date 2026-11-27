@@ -45,6 +45,7 @@ const SessionsPatchMutationProperties = {
   ),
   ttlMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
   archived: Type.Optional(Type.Boolean()),
+  requestArchiveUndo: Type.Optional(Type.Literal(true)),
   pinned: Type.Optional(Type.Boolean()),
   /** Independent sidebar placement without changing origin or execution ownership. */
   sidebarRoot: Type.Optional(Type.Boolean()),
@@ -123,10 +124,23 @@ const SessionOrganizationExpectations = {
   ),
 };
 
+/** Complete wire shape permitted by the target-bound permission-narrowing operation. */
+export const SessionPermissionNarrowingPatchFields = [
+  "key",
+  "agentId",
+  "expectedSessionId",
+  "expectedLifecycleRevision",
+  "expectedPermissionMode",
+  "permissionMode",
+] as const satisfies readonly (keyof Static<typeof SessionsPatchParamsSchema>)[];
+
 /** Mutable per-session preferences and routing metadata. */
 export const SessionsPatchParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  archiveUndoToken: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Ordinary single Restore may compare the archived occurrence before recreating a checkout. */
+  expectedArchivedAt: Type.Optional(Type.Integer({ minimum: 0 })),
   /** Reject the mutation if the session was reset or replaced before it commits. */
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),
@@ -151,6 +165,7 @@ export const SessionsPatchMutationSchema = Type.Object(SessionsPatchMutationProp
 
 export const SessionsPatchManyTargetSchema = closedObject({
   key: NonEmptyString,
+  expectedMarkedUnreadAt: ExpectedMarkedUnreadAt,
   ...SessionOrganizationExpectations,
   agentId: Type.Optional(NonEmptyString),
   expectedSessionId: Type.Optional(NonEmptyString),
@@ -178,6 +193,7 @@ export const SessionsPatchManyResultSchema = closedObject({
     Type.Union([
       closedObject({
         ok: Type.Literal(true),
+        archiveUndoToken: Type.Optional(NonEmptyString),
         ...SessionsPatchManyOutcomeIdentitySchema,
       }),
       closedObject({

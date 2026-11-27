@@ -2,10 +2,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { GatewayProbeServerSummary } from "../gateway/probe.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import { projectUpdateRunHistory } from "../infra/update-run-history-projection.js";
 import { getUpdateRun, getUpdateRunAsync } from "../infra/update-run-ledger.js";
+import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { isAcknowledgedAbandonedUpdateRun } from "../infra/update-run-record.js";
 import {
-  renderUpdateRunReport,
+  type UpdateRunReportInput,
   resolveUpdateRunIdentity,
   updateRunReportInputFromSentinel,
 } from "../infra/update-run-report.js";
@@ -20,12 +22,17 @@ type StatusReportOptions = {
   gatewayServer?: Pick<GatewayProbeServerSummary, "version" | "buildId">;
 };
 
-function renderStatusReport(
-  run: Parameters<typeof renderUpdateRunReport>[0],
-  opts: StatusReportOptions = {},
-) {
-  const report = renderUpdateRunReport(run);
+function renderStatusReport(run: UpdateRunReportInput, opts: StatusReportOptions = {}) {
+  const summary = renderUpdateRunSummary(run);
+  const report = { headline: summary, lines: summary.split("\n").slice(1).filter(Boolean) };
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
+  const history =
+    !reconciled && opts.localGatewayHealthy
+      ? projectUpdateRunHistory(run, opts.gatewayServer)
+      : null;
+  if (history) {
+    return { ...report, lines: [], reconciled, historicalFailure: true, headline: history };
+  }
   const rollbackAttempted =
     run.verification.recovery?.packageRollbackVerified === true ||
     run.verification.rollbackOutcome?.status === "succeeded" ||
@@ -68,54 +75,11 @@ function renderStatusReport(
     (!afterIdentityAvailable && targetVersion === afterVersion) ||
     (rollbackAttempted && (!previousVersion || targetVersion === previousVersion));
   const observedFailure = run.status === "failed" && !reconciled && opts.localGatewayHealthy;
-  const historicalFailure = Boolean(
-    observedFailure &&
-    targetVersion &&
-    servingVersion === targetVersion &&
-    !buildMismatch &&
-    !targetIdentityUnavailable,
-  );
-  // The installed package can already differ from a still-running Gateway.
-  // Only a saved serving observation establishes a change after a targetless failure.
-  const versionMovedOn = Boolean(
-    servingVersion && recordedServingVersion && servingVersion !== recordedServingVersion,
-  );
-  const supersededTargetless = Boolean(
-    observedFailure &&
-    run.verification.serviceRunning === true &&
-    !targetVersion &&
-    !normalizeOptionalString(run.target?.sha) &&
-    !normalizeOptionalString(run.target?.tag) &&
-    !rollbackAttempted &&
-    !afterVersion &&
-    !normalizeOptionalString(run.after.buildId) &&
-    !normalizeOptionalString(run.after.sha) &&
-    (versionMovedOn ||
-      (servingBuild && recordedServingBuild && servingBuild !== recordedServingBuild)),
-  );
-  const message =
-    run.status === "failed" && !reconciled
-      ? run.steps
-          .filter((step) => step.status === "failed")
-          .flatMap((step) => step.failureFacts ?? [])
-          .find((fact) => fact.message)?.message
-      : undefined;
-  let headline = message ? `${report.headline} ${message}` : report.headline;
+  let headline = report.headline;
   const label = (value: string) => sanitizeTerminalText(value).slice(0, 240);
   const servingLabel = label(servingVersion ?? "an unknown version");
   const targetLabel = label(targetVersion ?? "an unknown target");
-  const reasonLabel = label(run.reason?.trim() || "unknown reason");
-  if (historicalFailure) {
-    headline = `Last update run failed (${reasonLabel}) — Gateway is serving ${servingLabel}; run \`openclaw update\` to clear the record.`;
-  } else if (supersededTargetless) {
-    const [serving, recorded] = versionMovedOn
-      ? [servingLabel, label(recordedServingVersion ?? "")]
-      : [
-          `${servingLabel} (build ${label(servingBuild ?? "")})`,
-          `build ${label(recordedServingBuild ?? "")}`,
-        ];
-    headline = `Last update run failed (${reasonLabel}) — Gateway is now serving ${serving}; recorded serving identity was ${recorded}.`;
-  } else if (observedFailure) {
+  if (observedFailure) {
     const current =
       (buildMismatch || targetIdentityUnavailable) && servingBuild
         ? `${servingLabel} (build ${label(servingBuild)})`
@@ -134,7 +98,7 @@ function renderStatusReport(
   return {
     ...report,
     reconciled,
-    historicalFailure: historicalFailure || supersededTargetless,
+    historicalFailure: false,
     headline,
   };
 }
@@ -211,6 +175,7 @@ export async function buildStatusUpdateRows(
 
 export function formatUpdateRestartActionLines(
   payload: RestartSentinelPayload | null | undefined,
+  opts: StatusReportOptions = {},
 ): string[] {
-  return payload?.kind === "update" ? readReport(payload).lines : [];
+  return payload?.kind === "update" ? readReport(payload, opts).lines : [];
 }

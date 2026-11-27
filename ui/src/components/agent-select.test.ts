@@ -3,7 +3,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
-import { i18n, t } from "../i18n/index.ts";
+import { i18n } from "../i18n/index.ts";
+import { loadLazyLocaleTranslation } from "../i18n/lib/registry.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -104,6 +105,57 @@ it("renders named scope icons and restores the selected agent avatar", async () 
   expect(trigger.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
 });
 
+it("retains agent row content while selection and roster details change", async () => {
+  const element = await createAgentSelect({
+    options: [
+      { value: "alpha", label: "Alpha", agent: { id: "alpha", identity: { emoji: "🦉" } } },
+      { value: "beta", label: "Beta", agent: { id: "beta", identity: { emoji: "🦊" } } },
+    ],
+  });
+  expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(0);
+  element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await waitForSolid(() => expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(2));
+  const alpha = element.querySelector<HTMLElement>('[data-agent-option][value="alpha"]')!;
+  const beta = element.querySelector<HTMLElement>('[data-agent-option][value="beta"]')!;
+  const alphaAvatar = alpha.querySelector(".agent-select__avatar");
+  const betaAvatar = beta.querySelector(".agent-select__avatar");
+  expect(alphaAvatar).not.toBeNull();
+  expect(betaAvatar).not.toBeNull();
+  element.value = "beta";
+  await waitForSolid(() => {
+    expect(beta.getAttribute("aria-selected")).toBe("true");
+    expect(alpha.getAttribute("aria-selected")).toBe("false");
+    expect(alpha.querySelector(".agent-select__avatar")).toBe(alphaAvatar);
+    expect(beta.querySelector(".agent-select__avatar")).toBe(betaAvatar);
+  });
+
+  element.options = [
+    {
+      value: "beta",
+      label: "Research",
+      description: "Updated description",
+      badge: "Default",
+      agent: { id: "beta", identity: { emoji: "🐙" } },
+    },
+    { value: "alpha", label: "Alpha", agent: { id: "alpha", identity: { emoji: "🦉" } } },
+  ];
+  await waitForSolid(() => {
+    expect([...element.querySelectorAll("[data-agent-option]")]).toEqual([beta, alpha]);
+    expect(beta.querySelector(".agent-select__option-label")?.textContent).toBe("Research");
+    expect(beta.querySelector(".agent-select__option-description")?.textContent).toBe(
+      "Updated description",
+    );
+    expect(beta.querySelector(".agent-select__badge")?.textContent).toBe("Default");
+    expect(beta.getAttribute("aria-label")).toBe("Research, Updated description, Default");
+    expect(beta.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🐙");
+    expect(alpha.querySelector(".agent-select__avatar")).toBe(alphaAvatar);
+    expect(beta.querySelector(".agent-select__avatar")).toBe(betaAvatar);
+    expect(element.querySelector(".agent-select__label")?.textContent).toBe("Research");
+  });
+  element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await waitForSolid(() => expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(0));
+});
+
 it("keeps a failed avatar on its fallback until the image changes", async () => {
   const invalidAvatar = "data:image/gif;base64,bm90LWFuLWltYWdl";
   const replacementAvatar = "data:image/png;base64,cmVwbGFjZW1lbnQ=";
@@ -132,12 +184,15 @@ it("keeps a failed avatar on its fallback until the image changes", async () => 
   expect(avatarSrc(element)).toBe(replacementAvatar);
 });
 
-it("does not let a removed option's image error poison its replacement lease", async () => {
+it("retires a missing-option fallback without poisoning its replacement image", async () => {
   const avatar = "data:image/png;base64,cmV0YWluZWQ=";
   const element = await createAvatarSelect(avatar);
   const retired = avatarImage(element, "trigger")!;
   expect(retired.getAttribute("src")).toBe(avatar);
   element.options = options.filter((option) => option.value === "beta");
+  await element.updateComplete;
+  await waitForSolid(() => expect(avatarSrc(element, "trigger")).toBe(avatar));
+
   element.value = "beta";
   await element.updateComplete;
   await waitForSolid(() => expect(avatarImage(element, "trigger")).toBeNull());
@@ -151,7 +206,7 @@ it("does not let a removed option's image error poison its replacement lease", a
   await waitForSolid(() => expect(avatarSrc(element, "trigger")).toBe(avatar));
 });
 
-it("keeps both option routes and the selected avatar with token auth", async () => {
+it("loads only the selected avatar until opening, then retains both option routes", async () => {
   const { createObjectURL, revokeObjectURL } = stubAvatarUrls();
   createObjectURL.mockReturnValueOnce("blob:alpha").mockReturnValueOnce("blob:beta");
   const response = createDeferred<Response>();
@@ -178,9 +233,17 @@ it("keeps both option routes and the selected avatar with token auth", async () 
       });
       expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
         `${globalThis.location.origin}/avatar/alpha`,
-        `${globalThis.location.origin}/avatar/beta`,
       ]);
     });
+    expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(0);
+    element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+    await element.updateComplete;
+    await waitForFast(() =>
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        `${globalThis.location.origin}/avatar/alpha`,
+        `${globalThis.location.origin}/avatar/beta`,
+      ]),
+    );
 
     response.resolve(
       new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
@@ -375,7 +438,10 @@ it("keeps avatar text out of typeahead and announces option metadata", async () 
     ),
     value: "beta",
   });
+  element.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await element.updateComplete;
 
+  await waitForSolid(() => expect(element.querySelectorAll("[data-agent-option]")).toHaveLength(2));
   const items = Array.from(
     element.querySelectorAll<HTMLElement & { value: string }>("[data-agent-option]"),
   );
@@ -391,21 +457,19 @@ it("keeps avatar text out of typeahead and announces option metadata", async () 
 });
 
 it("refreshes translated labels when the locale changes while mounted", async () => {
+  const chinese = await loadLazyLocaleTranslation("zh-CN");
   await i18n.setLocale("en");
   const element = await createAgentSelect({ options: [], value: "" });
-
   try {
-    const label = element.querySelector(".agent-select__label");
-    const englishLabel = label?.textContent?.trim();
-
+    i18n.registerTranslation("zh-CN", { agents: { noAgents: "暂无测试智能体" } });
+    const label = () => element.querySelector(".agent-select__label")?.textContent?.trim();
+    expect(label()).toBe("No agents yet");
     await i18n.setLocale("zh-CN");
     await element.updateComplete;
-
-    const translatedLabel = element.querySelector(".agent-select__label");
-    expect(translatedLabel?.textContent?.trim()).toBe(t("agents.noAgents"));
-    expect(translatedLabel?.textContent?.trim()).not.toBe(englishLabel);
+    expect(label()).toBe("暂无测试智能体");
   } finally {
     element.remove();
+    i18n.registerTranslation("zh-CN", chinese ?? {});
     await i18n.setLocale("en");
   }
 });

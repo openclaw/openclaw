@@ -5,12 +5,12 @@ import type { Browser, Locator, Page } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
 import { WORKBOARD_STATUSES as statuses } from "../../../../packages/workboard-contract/src/index.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
-import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import {
-  installMockGateway,
-  type MockGatewayControls,
-  type MockGatewayRequest,
-} from "../../test-helpers/control-ui-e2e.ts";
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import type { MockGatewayControls, MockGatewayRequest } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import { button, createWorkboardProof, makeCard, moved } from "./workboard.e2e.test-support.ts";
 
@@ -61,9 +61,7 @@ function configSnapshot(hash: string) {
 
 async function newPage(options?: Parameters<Browser["newContext"]>[0]) {
   const context = await suite.browser.newContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
+    ...createControlUiE2eContextOptions(),
     ...options,
   });
   onTestFinished(() => context.close());
@@ -233,7 +231,7 @@ suite.define(() => {
       updatedAt: editedAt,
     };
     const page = await newPage();
-    const gateway = await installMockGateway(page, {
+    const gateway = await installNativePluginMockGateway(page, {
       ...workboardUi,
       methodResponses: {
         "config.get": configSnapshot("execution-linked-workboard-e2e-config"),
@@ -281,18 +279,13 @@ suite.define(() => {
   });
 
   it("persists edit/reopen fields and does not bounce a dragged linked card from stale lifecycle", async () => {
-    const proof = createWorkboardProof(
-      suite,
-      "workboard-status-persistence",
-      { height: 900, width: 1280 },
-      { parent: artifactParent },
-    );
+    const proof = createWorkboardProof("workboard-status-persistence", { parent: artifactParent });
     const page = await newPage({
       recordVideo: captureUiProofEnabled
         ? { dir: proof.directory, size: { height: 900, width: 1280 } }
         : undefined,
     });
-    const gateway = await installMockGateway(page, {
+    const gateway = await installNativePluginMockGateway(page, {
       ...workboardUi,
       methodResponses: {
         "config.get": configSnapshot("workboard-e2e-config"),

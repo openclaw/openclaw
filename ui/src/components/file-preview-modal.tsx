@@ -1,23 +1,22 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
-import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
+import { foldSearchCase } from "../../../src/shared/search-case.js";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
 import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { createScrollPosition } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { type FileKind, fileKindForPath } from "./file-kind.ts";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { FilePreviewDocument, filePreviewDocumentLink } from "./file-preview-document.tsx";
 import { CopyButton } from "./solid/copy-button.tsx";
-import { Icon, type IconName } from "./solid/icon.tsx";
+import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
-import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 import styles from "./file-preview-modal.styles.css?inline";
-import kbdStyles from "./kbd.css?inline";
 import "./modal-dialog.tsx";
+import kbdStyles from "./kbd.css?inline";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
@@ -68,30 +67,15 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
       );
   const activeItem = () => ordered("item").find((node) => node.classList.contains("is-active"));
   const filteredFiles = createMemo(() => {
-    const query = props.layout === "files" ? props.query.trim().toLowerCase() : "";
+    const query = props.layout === "files" ? foldSearchCase(props.query.trim()) : "";
     return query
-      ? props.files.filter((file) => `${file.path}\n${file.contents}`.toLowerCase().includes(query))
+      ? props.files.filter((file) =>
+          foldSearchCase(`${file.path}\n${file.contents}`).includes(query),
+        )
       : props.files;
   });
   const activeFile = createMemo(
     () => filteredFiles().find((file) => file.path === props.activePath) ?? filteredFiles()[0],
-  );
-  const codeSource = createMemo(() => activeFile()?.contents ?? "");
-  const codeChunks = createMemo(() => chunkFileContents(codeSource()));
-  const documentHtml = createMemo(() =>
-    toSanitizedMarkdownHtml(stripFrontmatterBlock(codeSource()), {
-      mode: "document",
-      remoteImages: false,
-      codeBlockChrome: "none",
-      fileLinks: false,
-    }),
-  );
-  const contentMode = createMemo(() =>
-    activeFile()?.message
-      ? "message"
-      : props.layout === "document" && /\.md$/iu.test(activeFile()?.path ?? "")
-        ? "markdown"
-        : "code",
   );
   // Sibling responses must not replace the settled leaf for the same request.
   const inventoryRequest = createMemo(() => ({ request: props.inventoryRequest() }), {
@@ -163,21 +147,7 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     }
   };
   const handleDocumentLink = (event: MouseEvent) => {
-    const anchor =
-      event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null;
-    const href = anchor?.getAttribute("href");
-    if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//iu.test(href)) {
-      return;
-    }
-    event.preventDefault();
-    const base = new URL(activeFile()?.path ?? "SKILL.md", "https://skill.invalid/");
-    const target = new URL(href, base);
-    let filePath: string;
-    try {
-      filePath = decodeURIComponent(target.pathname.slice(1));
-    } catch {
-      return;
-    }
+    const filePath = filePreviewDocumentLink(event, activeFile()?.path ?? "SKILL.md");
     const file = props.files.find((candidate) => candidate.path === filePath);
     if (file) {
       select(file.path);
@@ -216,9 +186,6 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
       onMouseDown={preventItemPointerFocus}
       onClick={() => select(file.path)}
     >
-      <span class="item-icon">
-        <Icon name={FILE_KIND_ICONS[fileKindForPath(file.path)]} />
-      </span>
       <span class="item-name" title={file.path}>
         {props.layout === "document" ? file.path.split("/").pop() : file.path}
       </span>
@@ -431,26 +398,13 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
                                 </div>
                               </Show>
                               <div ref={capture("body")} class="detail-body">
-                                {contentMode() === "message" ? (
-                                  <p role="status">{file().message}</p>
-                                ) : contentMode() === "markdown" ? (
-                                  <SanitizedHtml
-                                    tag="article"
-                                    class="markdown"
-                                    onClick={handleDocumentLink}
-                                    html={documentHtml()}
-                                  />
-                                ) : (
-                                  <div class="code-content">
-                                    <For each={codeChunks()}>
-                                      {(chunk, index) => (
-                                        <pre class="code-chunk" data-chunk={index()}>
-                                          {chunk}
-                                        </pre>
-                                      )}
-                                    </For>
-                                  </div>
-                                )}
+                                <FilePreviewDocument
+                                  path={file().path}
+                                  content={file().contents}
+                                  message={file().message}
+                                  markdown={props.layout === "document"}
+                                  onClick={handleDocumentLink}
+                                />
                               </div>
                             </section>
                           )}
@@ -464,9 +418,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
           </div>
           <Show when={props.layout === "files"}>
             <footer class="foot">
-              <span class="foot-group">
-                <Kbd keys={["↑", "↓"]} class="kbd" /> {t("filePreview.navigate")}
-              </span>
+              <Show when={keyboardHintsVisible()}>
+                <span class="foot-group">
+                  <Kbd keys={["↑", "↓"]} class="kbd" /> {t("filePreview.navigate")}
+                </span>
+              </Show>
               <openclaw-modal-actions>
                 <button ref={capture("button")} class="button" onClick={close}>
                   {t("common.close")} <Kbd keys="esc" class="kbd" />
@@ -506,14 +462,6 @@ export const FilePreviewModal = defineSolidBridge<FilePreviewModalProps>(
   },
 );
 
-function chunkFileContents(contents: string): string[] {
-  const lines = contents.split("\n");
-  const chunks: string[] = [];
-  for (let index = 0; index < lines.length; index += 64) {
-    chunks.push(lines.slice(index, index + 64).join("\n"));
-  }
-  return chunks;
-}
 function fileKind(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {
@@ -529,17 +477,6 @@ function fileKind(path: string): string {
   };
   return Object.hasOwn(map, ext) ? map[ext]! : ext ? ext.toUpperCase() : t("filePreview.kind.file");
 }
-const FILE_KIND_ICONS: Record<FileKind, IconName> = {
-  code: "fileCode",
-  component: "layoutGrid",
-  data: "braces",
-  file: "fileText",
-  image: "image",
-  markdown: "book",
-  package: "box",
-  shell: "terminal",
-  skill: "pencilSparkles",
-};
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-file-preview-modal": OpenClawFilePreviewModal;

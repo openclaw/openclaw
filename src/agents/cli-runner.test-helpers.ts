@@ -27,6 +27,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureEnv } from "../test-utils/env.js";
 import { drainSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -288,7 +289,7 @@ export function buildPreparedCliRunContext(
     systemPrompt: overrides.systemPrompt ?? "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     authEpochVersion: 2,
-    claudeSkillsPluginArgs: [],
+    claudeSkillsPlugin: { args: [] },
     ...(overrides.mcpDeliveryCapture ? { mcpDeliveryCapture: true } : {}),
   };
 }
@@ -380,8 +381,7 @@ export function createCliRunnerPrepareFixture(
   const lifetime = createFixtureLifetime();
   const admissions: PreparedAgentRunAdmission[] = [];
   const tempDirs = new Set<string>();
-  const hadStateDir = Object.hasOwn(process.env, "OPENCLAW_STATE_DIR");
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  const environment = captureEnv(["OPENCLAW_STATE_DIR"]);
   let defaultSession:
     | { dir: string; sessionFile: string; sessionTarget: SessionTranscriptRuntimeTarget }
     | undefined;
@@ -495,11 +495,7 @@ export function createCliRunnerPrepareFixture(
       }
       tempDirs.clear();
       defaultSession = undefined;
-      if (hadStateDir) {
-        process.env.OPENCLAW_STATE_DIR = originalStateDir;
-      } else {
-        delete process.env.OPENCLAW_STATE_DIR;
-      }
+      environment.restore();
     },
   };
 }

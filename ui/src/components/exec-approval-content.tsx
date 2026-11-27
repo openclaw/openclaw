@@ -1,14 +1,33 @@
 import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
-import { summarizeApprovalScopeLabel } from "../app/approval-presentation.ts";
-import type { ExecApprovalRequest, ExecApprovalRequestPayload } from "../app/exec-approval.ts";
+import { approvalHostLabel, summarizeApprovalScopeLabel } from "../app/approval-presentation.ts";
+import type {
+  ApprovalTurnActor,
+  ExecApprovalRequest,
+  ExecApprovalRequestPayload,
+} from "../app/exec-approval.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { shortenOpaqueIdRuns } from "../lib/session-display.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Popover } from "./solid/popover.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
+
+export function ApprovalTurnLabel(props: { actor?: ApprovalTurnActor; sidebar?: boolean }) {
+  return (
+    <Show when={props.actor}>
+      {(actor) => (
+        <div
+          class={props.sidebar ? "sidebar-approval-row__message" : "exec-approval-sub"}
+          role="note"
+        >
+          {t("execApproval.requestedDuringTurn", { name: actor().label })}
+        </div>
+      )}
+    </Show>
+  );
+}
 
 function ExecApprovalHost(props: {
   request: ExecApprovalRequestPayload;
@@ -19,14 +38,12 @@ function ExecApprovalHost(props: {
       class="exec-approval-host"
       title={props.request.host === "node" ? (props.request.nodeId ?? undefined) : undefined}
     >
-      {props.request.host === "sandbox"
-        ? t("execApproval.labels.sandbox")
-        : props.request.host === "node"
-          ? props.nodeDisplayName ||
-            (props.request.nodeId
-              ? shortenOpaqueIdRuns(props.request.nodeId)
-              : t("execApproval.labels.node"))
-          : props.request.host}
+      {props.request.host === "node"
+        ? props.nodeDisplayName ||
+          (props.request.nodeId
+            ? shortenOpaqueIdRuns(props.request.nodeId)
+            : approvalHostLabel(props.request.host))
+        : approvalHostLabel(props.request.host)}
     </span>
   );
 }
@@ -132,12 +149,14 @@ export function ExecApprovalBody(props: {
   lastError?: string;
 }) {
   const detailsId = createUniqueId();
+  const destination = () =>
+    props.request.host === "node" && (props.nodeDisplayName || props.request.nodeId);
   return (
     <div class="exec-approval-terminal">
       <div class="exec-approval-shell mono">
-        <Show when={(props.request.host && props.request.host !== "gateway") || props.request.cwd}>
+        <Show when={destination() || props.request.cwd}>
           <div class="exec-approval-prompt">
-            <Show when={props.request.host && props.request.host !== "gateway"}>
+            <Show when={destination()}>
               <span>
                 <span class="sr-only">{t("execApproval.labels.host")}: </span>
                 <ExecApprovalHost request={props.request} nodeDisplayName={props.nodeDisplayName} />
@@ -175,7 +194,7 @@ export function ExecApprovalBody(props: {
           triggerTitle={t("execApproval.requestDetails")}
           trigger={<Icon name="info" />}
           triggerClass={[
-            "btn btn--sm btn--icon btn--ghost exec-approval-info",
+            "oc-icon-button oc-icon-button--28 exec-approval-info",
             { "exec-approval-info--error": Boolean(props.lastError) },
           ]}
           class="exec-approval-details"

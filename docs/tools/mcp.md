@@ -41,6 +41,15 @@ openclaw mcp doctor <name> --probe
 
 Saving a definition proves nothing about reachability — the check does. With Gateway hot reload enabled, changed or removed servers retire immediately and the next turn's discovery uses the new definition. Unchanged servers keep their connections and cached tools, including for runs already in progress. Requester sign-in tools refresh on the next message after runtime replacement.
 
+For a server configuration and authentication scope already listed in this Gateway,
+a new session uses the last successfully listed catalog while its own connection
+refreshes in the background. Later turns receive the refreshed catalog. Only
+first-time discovery waits for listing, with the existing 10-second default
+catalog deadline (or the server’s explicit request timeout). If it fails, the
+turn receives a server-unavailable notice with a recovery step, and the tool
+inventory shows the diagnostic. Catalogs are bounded in memory and survive reload
+for unchanged server identities; Gateway restart clears them. They never grant execution access.
+
 If a connected server exits or its connection must be replaced, OpenClaw keeps
 its last successfully listed tools and utilities in the session's model-facing
 catalog while recovery runs in the background. Connection diagnostics and tool
@@ -58,7 +67,7 @@ warning and continues local cleanup. Once the local transport and client close,
 the next turn can replace the runtime. Failed local cleanup still blocks
 replacement. The remote server may retain the abandoned session until it expires it.
 
-When OpenClaw's built-in MCP client cannot start a server, it retries with exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. The first connection for a server configuration and requester still waits for bounded initialization and catalog listing. After a startup failure, turns never wait for retries: recovery runs in the background, and recovered tools become available at the next turn boundary. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory keeps one unavailable notice per server while the failure persists, with that runtime's next retry time and a reachability check as the next step; recovery removes the notice without adding chat or transcript messages. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
+When OpenClaw's built-in MCP client cannot start a server, it retries with exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. A server configuration and requester without a retained successful catalog still waits for bounded initialization and catalog listing. After a startup failure, turns never wait for retries: recovery runs in the background, and recovered tools become available at the next turn boundary. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory keeps one unavailable notice per server while the failure persists, with that runtime's next retry time and a reachability check as the next step; recovery removes the notice without adding chat or transcript messages. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
 
 Native OAuth authorization failures wait for a credential change instead of a
 timer. The Gateway remembers the failure across sessions, logs it once, and hides
@@ -103,7 +112,7 @@ openclaw mcp add docs \
 openclaw mcp doctor docs --probe
 ```
 
-Useful companions: `openclaw mcp status --verbose` for a config-only summary, `openclaw mcp probe <name>` for live capabilities, and `openclaw mcp login <name>` when an HTTP server uses OAuth. The [MCP CLI reference](/cli/mcp) documents every command, flag, and output shape, plus the separate `mcp serve` bridge.
+Useful companions: `openclaw mcp status --verbose` for a config-only summary, `openclaw mcp probe <name>` for live capabilities, and `openclaw mcp login <name>` when an HTTP server uses OAuth. Login works while the Gateway runs. You can also ask the agent to connect in a direct chat; it returns a sign-in link in the same turn. After approval, send another message to use the server. The [MCP CLI reference](/cli/mcp) documents every command, flag, and output shape, plus the separate `mcp serve` bridge.
 
 ## Configure a server directly
 
@@ -128,7 +137,7 @@ The same `docs` server, written straight into config:
 }
 ```
 
-An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
+An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). Config validation rejects definitions containing both, and writes reject new or edited mixed definitions. Existing mixed definitions keep their prior runtime behavior with a warning so upgrades can start. Doctor can normalize aliases but leaves the transport choice and authentication settings unchanged. For HTTP, remove the command, arguments, environment, and working directory; for stdio, remove the URL and HTTP transport, headers, OAuth, and TLS options. Updates can still record their channel before this explicit repair. The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
 Local `claude-cli` turns receive configured server tools through the Gateway's
 MCP bridge as `<server>__<tool>`, including when `tools.exec.host` is `"node"`.
@@ -205,16 +214,21 @@ Browser sign-in requires Settings on the Gateway's own HTTPS address (including 
 
 An unfinished CLI attempt can leave a client registration for the CLI callback. When no credentials have been saved, browser sign-in registers its own callback automatically. Registrations associated with saved credentials are retained so refresh tokens remain usable.
 
-If **Sign in** is unavailable, or existing credentials require the CLI callback, sign in from the terminal of the installation that owns the server. `openclaw mcp login` runs offline only, so stop the Gateway first and start it again afterward:
+You can also sign in from the terminal of the installation that owns the server. The running Gateway owns the shared sign-in; no stop or restart is needed:
 
 ```bash
-openclaw gateway stop
 openclaw mcp login <name>
 ```
 
-Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command when the browser cannot reach the callback listener.
+Follow the printed authorization URL. With a running Gateway, the provider redirects to `<gateway.publicOrigin>/oauth/mcp/callback`, or the Gateway's own loopback address without a public origin. If a browser on another device cannot load that address, paste the complete failed redirect URL into the direct chat that started sign-in, or run `openclaw mcp login <name> --callback-url '<url>'`. Keep `state` and any `iss` value intact.
 
-The CLI signs in only to servers defined under `mcp.servers`. A server that a plugin declares signs in from the plugin's page (**Accounts** → **Connect**); a failed browser sign-in for it points back to the plugin settings instead of a CLI command.
+Online CLI login supports both configured and plugin-declared shared OAuth servers. With the Gateway stopped, the CLI keeps its local loopback flow for `mcp.servers` entries; use its printed `--code` instructions if that callback cannot reach the terminal.
+
+To sign out of a plugin-declared server, open the plugin's page and select **Accounts** → **Sign out**. OpenClaw removes the saved credentials on the Gateway; the plugin's tools need a new sign-in before their next call. Uninstalling the plugin also removes the saved sign-ins for its servers, so a reinstall starts signed out. A server under `mcp.servers` with the same name and URL keeps its credentials.
+
+### A stdio server needs a new sign-in
+
+A server that manages its own credentials, such as a local stdio server, can ask for a new sign-in through MCP URL-mode elicitation. OpenClaw declares URL mode on every connection. When a tool call sends a URL request, or fails with a URL elicitation error (`-32042`), the owner sees a sign-in button for that address in a direct chat: **Sign in** on a card below the reply in the Control UI, with the destination domain shown on the card, or a `Connect <server>` button on the reply in other channels. OpenClaw never opens the address itself, and the address stays out of the model's text. The request is answered `cancel` at once because the button arrives with the reply. After signing in, ask again. Group chats, other senders, and turns that have handled untrusted content get no link. Form-mode requests still need the [MCP Apps host](/cli/mcp/apps).
 
 ### Changes do not reach an active agent
 

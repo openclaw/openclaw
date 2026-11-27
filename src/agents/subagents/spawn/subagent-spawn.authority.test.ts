@@ -24,7 +24,6 @@ import {
   beginSessionEffect,
   consumeSessionEffectHandoff,
 } from "../../../sessions/session-controller.lifecycle.js";
-import { observeSessionWorkAdmissionDrain } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
@@ -47,7 +46,8 @@ import {
   isSameSubagentRunOwner,
 } from "../registry/subagent-run-generation.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
@@ -231,23 +231,12 @@ describe("pending spawn invocation authority", () => {
         Array.from(subagentRuns.values()).some((entry) => entry.controllerSessionKey === key("b")),
       ).toBe(false);
       const entered = createDeferred();
-      const resume = createDeferred();
+      // Hold the real admission drain until the late descendant is registered.
       const slow = await beginSessionEffect({
         scope: storePath,
         identities: [key(slowId), `${slowId}-session`],
         assertAllowed: () => {},
-        onInterrupt: () => slow.release(),
-      });
-      const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
-        const matchesSlowTarget =
-          "target" in params
-            ? params.target.storeScope === storePath && params.target.aliases.includes(key(slowId))
-            : params.scope === storePath && Array.from(params.identities).includes(key(slowId));
-        if (matchesSlowTarget) {
-          expect(released).toBe(true);
-          entered.resolve();
-          await resume.promise;
-        }
+        onInterrupt: () => entered.resolve(),
       });
       const cancellation = abortParent(context);
       const freshAdmission = prepareSystemAgentRunAdmission(
@@ -269,7 +258,11 @@ describe("pending spawn invocation authority", () => {
       };
       try {
         // The sibling drain and B's delivery bookkeeping publish independently.
-        await entered.promise;
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          cancellation,
+          "Cancellation settled before interrupting the pending sibling admission",
+        );
         expectCompletedSibling();
         const admitted = await freshAdmission.admit("embedded");
         bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
@@ -298,7 +291,7 @@ describe("pending spawn invocation authority", () => {
           execution: { status: "queued" },
         });
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
-        resume.resolve();
+        slow.release();
         expect(await cancellation).toHaveBeenCalledWith(
           true,
           expect.objectContaining({ aborted: true }),
@@ -312,13 +305,11 @@ describe("pending spawn invocation authority", () => {
         await Promise.resolve();
         expect(dispatch).not.toHaveBeenCalled();
       } finally {
-        resume.resolve();
         slow.release();
         fresh?.release();
         try {
           await cancellation;
         } finally {
-          restoreDrain();
           releaseSwarmRun("late-spawn-blocker");
           freshAdmission.close();
           admission.close();
@@ -338,7 +329,7 @@ describe("pending spawn invocation authority", () => {
       if (
         !registrationAbortRequested &&
         [...subagentRuns.values()].some(
-          (run) => run.requesterTurnRunId === parentRunId && run.queuedLaunch !== undefined,
+          (run) => run.requesterTurnRunId === parentRunId && run.execution.status === "queued",
         )
       ) {
         registrationAbortRequested = true;
