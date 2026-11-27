@@ -771,13 +771,12 @@ it("finishes a ready update before plugin work can be aborted", async ({ signal 
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
   const release = path.join(state, "release");
   await fs.mkdir(release);
+  // Ref'd timers keep both fixture processes alive until the command scope stops them.
   await fs.writeFile(
     path.join(release, "openclaw.mjs"),
     `import { spawn } from "node:child_process";
-import { MessageChannel } from "node:worker_threads";
-spawn(process.execPath, ["-e", "const { port1 } = new (require('node:worker_threads').MessageChannel)(); port1.on('message', () => {});"], { stdio: "ignore" });
-const { port1 } = new MessageChannel();
-port1.on("message", () => {});
+spawn(process.execPath, ["-e", "setInterval(() => {}, 60_000);"], { stdio: "ignore" });
+setInterval(() => {}, 60_000);
 process.stdout.write("maintenance-ready\\n");`,
   );
   const actualExec = await vi.importActual<typeof ProcessExec>("../process/exec.js");

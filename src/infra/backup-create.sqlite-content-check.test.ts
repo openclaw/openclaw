@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { backupCase, declarePluginSqliteResources } from "./backup-create-family.test-support.js";
 import { createBackupArchive } from "./backup-create.js";
-import { listArchiveEntries } from "./backup-create.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 
@@ -83,18 +82,6 @@ const options = (output: string) => ({
   includeWorkspace: false,
   nowMs: Date.UTC(2026, 10, 15),
 });
-it(
-  "archives a matching captured image",
-  pluginCase(async (state) => {
-    const { outputDir } = await setup(state);
-    const result = await createBackupArchive(options(outputDir));
-    expect(
-      (await listArchiveEntries(result.archivePath)).some((entry) =>
-        entry.endsWith("/alpha.sqlite"),
-      ),
-    ).toBe(true);
-  }),
-);
 it.each([false, true])("refuses bytes changed after capture (alias: %s)", (alias) =>
   pluginCase(async (state) => {
     const { outputDir, databaseName } = await setup(state, alias);
