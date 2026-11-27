@@ -28,18 +28,14 @@ The potential benefit is more meaningful conversation and task context, fewer co
 
 ## Why This Change Was Made
 
-Two complementary working proofs of concept:
+Two complementary working proofs of concept form the basis of this proposal:
 
-1. [Transient Turn Context v0.1 plugin](https://github.com/Animeleague/openclaw/tree/bank/transient-turn-context-v0.1-2026-11-27/live-bank/2026-11-27-transient-turn-context-v0.1): uses the existing provider replay-policy hook to retain the current typed runtime-context carrier rather than replay historical carriers. No transcript deletion is required.
+1. [Transient Turn Context v0.1 plugin](https://github.com/Animeleague/openclaw/tree/bank/transient-turn-context-v0.1-2026-11-27/live-bank/2026-11-27-transient-turn-context-v0.1): prevents redundant historical runtime-context carriers from accumulating by retaining the current carrier through the existing provider replay-policy hook. No transcript deletion is required.
 2. [Prompt optimization V3.1](https://github.com/Animeleague/openclaw/blob/bank/prompt-optimisation-v3.1-2026-11-27/live-bank/2026-11-27-prompt-optimisation-v3.1/README.md): reduces redundant metadata at its source and separates stable policy from changing facts. This is a scoped, version-pinned runtime overlay.
 
-The objective is not to make agents remember less. It is to stop making them repeatedly read information they already have or cannot use. Preserve attribution, chronology, reply semantics, trust boundaries, actual execution permissions and checkpoint compatibility. Do not indiscriminately remove tool instructions or security policy.
+**We recommend installing and evaluating the plugin alongside V3.1 on a compatible test deployment, and ultimately integrating both optimizations into OpenClaw itself.** The plugin is an integral part of this work, not an optional reference. Follow its documented compatibility and installation precautions, including avoiding simultaneous installation with the original provider plugin.
 
-## Recommendation: integrate transient turn context upstream
-
-**The [Transient Turn Context v0.1 plugin](https://github.com/Animeleague/openclaw/tree/bank/transient-turn-context-v0.1-2026-11-27/live-bank/2026-11-27-transient-turn-context-v0.1) is an integral part of this work, not an optional reference.** We recommend installing and evaluating it on an isolated deployment matching the documented supported route, alongside the V3.1 metadata optimization. Follow the plugin's compatibility, backup and installation precautions; do not install the renamed derivative alongside the original provider plugin.
-
-Ideally, upstream should integrate the transient-context behavior into OpenClaw itself, with capability-aware replay policy and appropriate regression coverage, so users do not need a separate plugin to prevent redundant historical runtime context from accumulating. The existing plugin provides a concrete implementation to evaluate. The goal is to ship both complementary optimizations upstream once the applicable provider, security, replay and cache trade-offs have been validated.
+The objective is not to make agents remember less. It is to stop making them repeatedly read information they already have or cannot use, while preserving attribution, chronology, reply semantics, trust boundaries, execution permissions and checkpoint compatibility. Upstream integration should be capability-aware and validated across applicable providers, without indiscriminately removing tool instructions or security policy.
 
 ## Evidence and limitations
 
