@@ -1,10 +1,16 @@
 import type { RealtimeVoiceProviderCapabilities } from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Realtime voice uses browser or Gateway-owned WebRTC when the host owns delegation,
 // and the Platform-key direct WebSocket transport elsewhere.
 
-const OPENAI_GPT_LIVE_MODEL_PREFIX = "gpt-live";
+export const OPENAI_GPT_LIVE_MODEL_PREFIX = "gpt-live";
 
-export const OPENAI_GPT_LIVE_MODELS = ["gpt-live-1", "gpt-live-1-codex"] as const;
+const OPENAI_GPT_LIVE_OAUTH_ONLY_MODEL = "gpt-live-1.1-codex";
+const OPENAI_GPT_LIVE_CODEX_MODELS = [
+  "gpt-live-1-codex",
+  OPENAI_GPT_LIVE_OAUTH_ONLY_MODEL,
+] as const;
+export const OPENAI_GPT_LIVE_MODELS = ["gpt-live-1", ...OPENAI_GPT_LIVE_CODEX_MODELS] as const;
 const OPENAI_GPT_LIVE_API_VOICES = [
   "alloy",
   "ash",
@@ -51,7 +57,12 @@ export function isOpenAIGptLiveApiModel(model: string | undefined): boolean {
 }
 
 export function isOpenAIGptLiveSubscriptionModel(model: string | undefined): boolean {
-  return model?.trim().toLowerCase() === "gpt-live-1-codex";
+  const normalized = model?.trim().toLowerCase();
+  return OPENAI_GPT_LIVE_CODEX_MODELS.some((codexModel) => codexModel === normalized);
+}
+
+export function requiresOpenAIGptLiveSubscriptionAuth(model: string | undefined): boolean {
+  return model?.trim().toLowerCase() === OPENAI_GPT_LIVE_OAUTH_ONLY_MODEL;
 }
 
 export function isSupportedOpenAIGptLiveModel(model: string | undefined): boolean {
@@ -61,11 +72,8 @@ export function isSupportedOpenAIGptLiveModel(model: string | undefined): boolea
 export function resolveOpenAIQuicksilverVoice(model: string, value: unknown): OpenAIGptLiveVoice {
   const voices = resolveOpenAIQuicksilverVoices(model);
   const defaultVoice = isOpenAIGptLiveSubscriptionModel(model) ? "cove" : "marin";
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    return voices.find((voice) => voice === normalized) ?? defaultVoice;
-  }
-  return defaultVoice;
+  const normalized = normalizeOptionalLowercaseString(value);
+  return voices.find((voice) => voice === normalized) ?? defaultVoice;
 }
 
 function resolveOpenAIQuicksilverVoices(model: string): readonly OpenAIGptLiveVoice[] {

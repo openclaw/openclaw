@@ -23,7 +23,7 @@ export async function installNativeWebChrome(page: Page): Promise<void> {
     };
     const stamp = () => {
       document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-web-chrome");
-      document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "52px");
+      document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "40px");
       // The app also pads both desktop navigation surfaces past AppKit's
       // window controls (DashboardWindowController.installNativeChromeScript).
       const style = document.createElement("style");

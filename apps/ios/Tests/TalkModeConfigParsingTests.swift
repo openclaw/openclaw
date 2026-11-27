@@ -3,12 +3,62 @@ import Foundation
 import OpenClawChatUI
 import OpenClawKit
 import Testing
+import XCTest
 @testable import OpenClaw
+
+private actor TalkTurnGateway {
+    private(set) var runTimeoutMs: Int?
+
+    func receive(socket: GatewayTestWebSocketTask, message: URLSessionWebSocketTask.Message) throws {
+        let data: Data = switch message {
+        case let .data(value): value
+        case let .string(value): Data(value.utf8)
+        @unknown default: throw URLError(.cannotParseResponse)
+        }
+        let request = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let method = try #require(request["method"] as? String)
+        if method == "connect" { return }
+        let id = try #require(request["id"] as? String)
+        let params = request["params"] as? [String: Any] ?? [:]
+        var payload: [String: Any]
+        var finalEvent: Data?
+
+        switch method {
+        case "talk.config":
+            let config: [String: Any] = [
+                "talk": ["provider": "xiaomi", "resolved": [
+                    "provider": "xiaomi", "config": [String: String](),
+                ]],
+            ]
+            payload = ["config": config]
+        case "chat.send":
+            let runId = try #require(params["idempotencyKey"] as? String)
+            self.runTimeoutMs = params["timeoutMs"] as? Int
+            payload = ["runId": runId, "status": "started"]
+            let event: [String: Any] = [
+                "type": "event", "event": "chat", "seq": 1,
+                "payload": ["runId": runId, "state": "final", "message": [
+                    "role": "assistant",
+                    "content": [["type": "text", "text": "Spoken reply"]],
+                ]],
+            ]
+            finalEvent = try JSONSerialization.data(withJSONObject: event)
+        default:
+            payload = [:]
+        }
+
+        let response = try JSONSerialization.data(withJSONObject: [
+            "type": "res", "id": id, "ok": true, "payload": payload,
+        ])
+        socket.emitReceiveSuccess(.data(response))
+        if let finalEvent {
+            socket.emitReceiveSuccess(.data(finalEvent))
+        }
+    }
+}
 
 @MainActor
 struct TalkModeManagerTests {
-    private struct CloseError: Error {}
-
     @Test func `recording sessions preserve system keyboard feedback`() throws {
         let session = AVAudioSession.sharedInstance()
         let previousSetting = session.allowHapticsAndSystemSoundsDuringRecording
@@ -33,10 +83,6 @@ struct TalkModeManagerTests {
             defaultModelIdFallback: "eleven_v3",
             defaultRealtimeModelIdFallback: "gpt-realtime-2",
             defaultSilenceTimeoutMs: 900)
-    }
-
-    private static func resolve(_ parsed: TalkModeGatewayConfigState) -> TalkModeResolvedRouting {
-        TalkModeRoutingResolver.resolve(parsed: parsed, defaultProvider: "elevenlabs")
     }
 
     private static func parseRealtime(
@@ -159,19 +205,6 @@ struct TalkModeManagerTests {
         await gateway.disconnect()
     }
 
-    @Test func `retries realtime voice session close three times`() async throws {
-        var attempts = 0
-
-        try await TalkModeManager._test_retryRealtimeVoiceSessionClose {
-            attempts += 1
-            if attempts < 3 {
-                throw CloseError()
-            }
-        }
-
-        #expect(attempts == 3)
-    }
-
     @Test func `encodes transcript entry id as a decimal string`() throws {
         let params = TalkRealtimeTranscriptParams(
             sessionKey: "agent:main:main",
@@ -246,7 +279,7 @@ struct TalkModeManagerTests {
         let parsed = Self.parse(config)
 
         #expect(parsed.snapshot.activeProvider == "elevenlabs")
-        #expect(parsed.executionMode == .realtimeRelay)
+        #expect(parsed.route == .realtimeRelay)
         #expect(parsed.defaultModelId == "eleven_v3")
         #expect(parsed.defaultVoiceId == "eleven-voice")
         #expect(parsed.snapshot.realtime.provider == "openai")
@@ -260,22 +293,9 @@ struct TalkModeManagerTests {
             mode: "realtime",
             transport: "webrtc")
 
-        #expect(parsed.executionMode == .realtimeWebRTC)
+        #expect(parsed.route == .realtimeWebRTC)
         #expect(parsed.snapshot.realtime.provider == "openai")
         #expect(parsed.realtimeModelId == "gpt-realtime-2")
-    }
-
-    @Test func `formats generic realtime voice mode without native provider fallback`() {
-        let descriptor = TalkVoiceModeDescriptorBuilder.build(
-            providerId: "realtime",
-            providerLabel: "Realtime Voice",
-            modelId: "gpt-realtime-2",
-            voiceId: nil,
-            transport: "webrtc",
-            isRealtime: true)
-
-        #expect(descriptor.title == "Realtime Voice")
-        #expect(descriptor.subtitle == "Native WebRTC • gpt-realtime-2")
     }
 
     @Test func `defaults open AI realtime model when provider omits model`() {
@@ -284,7 +304,7 @@ struct TalkModeManagerTests {
             mode: "realtime",
             transport: "gateway-relay")
 
-        #expect(parsed.executionMode == .realtimeRelay)
+        #expect(parsed.route == .realtimeRelay)
         #expect(parsed.defaultModelId == "eleven_v3")
         #expect(parsed.realtimeModelId == "gpt-realtime-2")
         #expect(parsed.snapshot.realtime.voice == nil)
@@ -309,10 +329,10 @@ struct TalkModeManagerTests {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         manager._test_applyLoadedTalkConfig(parsed)
 
-        #expect(parsed.executionMode == .realtimeRelay)
+        #expect(parsed.route == .realtimeRelay)
         #expect(parsed.realtimeModelId == nil)
         #expect(manager._test_realtimeModelId() == nil)
-        #expect(manager._test_executionMode() == .realtimeRelay)
+        #expect(manager._test_runtimeRoute() == .realtimeRelay)
     }
 
     @Test func `preserves the released realtime model override`() {
@@ -329,60 +349,7 @@ struct TalkModeManagerTests {
         #expect(manager._test_realtimeModelId() == "gpt-live-1-codex")
     }
 
-    @Test func `formats open AI realtime voice mode`() {
-        let descriptor = TalkVoiceModeDescriptorBuilder.build(
-            providerId: "openai",
-            providerLabel: "OpenAI",
-            modelId: "gpt-realtime-2",
-            voiceId: "marin",
-            transport: "webrtc",
-            isRealtime: true)
-
-        #expect(descriptor.title == "GPT Realtime 2.0")
-        #expect(descriptor.subtitle == "Native WebRTC • Marin")
-        #expect(descriptor.accessibilityValue == "GPT Realtime 2.0, Native WebRTC • Marin")
-    }
-
-    @Test func `formats gateway relay realtime voice mode`() {
-        let descriptor = TalkVoiceModeDescriptorBuilder.build(
-            providerId: "google",
-            providerLabel: "Google Live Voice",
-            modelId: "gemini-live-2.5-flash-preview",
-            voiceId: nil,
-            transport: "gateway-relay",
-            isRealtime: true)
-
-        #expect(descriptor.title == "Google Live Voice")
-        #expect(descriptor.subtitle == "Gateway Relay • gemini-live-2.5-flash-preview")
-    }
-
-    @Test func `formats eleven labs voice mode`() {
-        let descriptor = TalkVoiceModeDescriptorBuilder.build(
-            providerId: "elevenlabs",
-            providerLabel: "ElevenLabs",
-            modelId: "eleven_v3",
-            voiceId: "voice-id",
-            transport: "native",
-            isRealtime: false)
-
-        #expect(descriptor.title == "ElevenLabs")
-        #expect(descriptor.subtitle == "Native • eleven_v3 • voice-id")
-    }
-
-    @Test func `formats system voice fallback mode`() {
-        let descriptor = TalkVoiceModeDescriptorBuilder.build(
-            providerId: "system",
-            providerLabel: "iOS System Voice",
-            modelId: nil,
-            voiceId: "en-US",
-            transport: "native",
-            isRealtime: false)
-
-        #expect(descriptor.title == "iOS System Voice")
-        #expect(descriptor.subtitle == "Native • en-US")
-    }
-
-    @Test func `stale device preferences cannot override gateway Talk provider or voice`() async throws {
+    @Test func `stale device preferences cannot override gateway Talk provider model or voice`() async throws {
         let defaults = UserDefaults.standard
         let providerKey = "talk.providerSelection"
         let voiceKey = "talk.realtime.voiceSelection"
@@ -393,20 +360,37 @@ struct TalkModeManagerTests {
             defaults.set(previousVoice, forKey: voiceKey)
         }
         defaults.set("cedar", forKey: voiceKey)
+        let createRequests = AsyncStream<Data>.makeStream()
+        defer { createRequests.continuation.finish() }
         let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
-            guard GatewayWebSocketTestSupport.requestMethod(from: message) == "talk.config" else { return }
+            let method = GatewayWebSocketTestSupport.requestMethod(from: message)
+            guard method == "talk.config" || method == "talk.client.create" else { return }
             let id = try #require(GatewayWebSocketTestSupport.requestID(from: message))
+            if method == "talk.client.create" {
+                let data: Data = switch message {
+                case let .data(data): data
+                case let .string(text): Data(text.utf8)
+                @unknown default: Data()
+                }
+                createRequests.continuation.yield(data)
+                try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
+                    id: id,
+                    code: "UNAVAILABLE",
+                    message: "Synthetic prefetch stops after request observation",
+                    details: [:])))
+                return
+            }
             let response = try JSONSerialization.data(withJSONObject: [
                 "type": "res", "id": id, "ok": true,
                 "payload": ["config": ["talk": [
-                    "provider": "google",
-                    "resolved": ["provider": "google", "config": [:]],
+                    "provider": "openai",
+                    "resolved": ["provider": "openai", "config": [:]],
                     "realtime": [
-                        "provider": "google",
+                        "provider": " OpenAI ",
                         "model": "gateway-live-model",
-                        "voice": "puck",
+                        "voice": "marin",
                         "mode": "realtime",
-                        "transport": "gateway-relay",
+                        "transport": "webrtc",
                         "brain": "agent-consult",
                     ],
                 ]]],
@@ -423,16 +407,24 @@ struct TalkModeManagerTests {
                 onConnected: {},
                 onDisconnected: { _ in },
                 onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
-            let manager = TalkModeManager(allowSimulatorCapture: true)
+            var requests = createRequests.stream.makeAsyncIterator()
             for obsoleteSelection in ["openai-realtime", "elevenlabs"] {
+                let manager = TalkModeManager(allowSimulatorCapture: true)
+                defer { manager.stop() }
+                manager.attachGateway(gateway)
+                manager.updateGatewayConnected(true)
                 defaults.set(obsoleteSelection, forKey: providerKey)
                 await manager.reloadConfig(gateway: gateway)
 
                 #expect(manager.gatewayTalkConfigLoaded)
-                #expect(manager._test_runtimeRoute() == .realtimeRelay)
-                #expect(manager._test_realtimeProvider() == "google")
-                #expect(manager._test_realtimeModelId() == "gateway-live-model")
-                #expect(manager.gatewayTalkRealtimeVoiceId == "puck")
+                #expect(manager._test_runtimeRoute() == .realtimeWebRTC)
+                await manager.prefetchRealtimeSessionIfReady()
+                let frame = try #require(await requests.next())
+                let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+                let params = try #require(request["params"] as? [String: Any])
+                #expect((params["provider"] as? String)?.lowercased() == "openai")
+                #expect(params["model"] as? String == "gateway-live-model")
+                #expect(params["voice"] as? String == "marin")
             }
         } catch {
             await gateway.disconnect()
@@ -441,33 +433,11 @@ struct TalkModeManagerTests {
         await gateway.disconnect()
     }
 
-    @Test func `preserves configured voice for case insensitive provider`() {
-        let manager = TalkModeManager(allowSimulatorCapture: true)
-        let parsed = Self.parseRealtime(
-            provider: " OpenAI ",
-            voice: "marin",
-            mode: "realtime",
-            transport: "webrtc",
-            brain: "agent-consult")
-
-        manager._test_applyLoadedTalkConfig(parsed)
-
-        #expect(manager._test_realtimeProvider()?.lowercased() == "openai")
-        #expect(manager.gatewayTalkRealtimeVoiceId == "marin")
-    }
-
     @Test func `builds generic realtime fallback issue for display`() {
-        let issue = TalkRuntimeIssue.realtimeUnavailable(
-            message: "OpenAI API key rejected with 401",
-            provider: "openai",
-            model: "gpt-realtime-2",
-            transport: "gateway-relay",
-            phase: "start")
+        let issue = TalkRuntimeIssue(message: "OpenAI API key rejected with 401")
 
         #expect(issue.code == .realtimeUnavailable)
         #expect(issue.displayMessage == "OpenAI API key rejected with 401")
-        #expect(issue.diagnosticSummary.contains("provider: openai"))
-        #expect(issue.diagnosticSummary.contains("model: gpt-realtime-2"))
         #expect(issue.fallbackStatusText == "Listening (iOS Speech fallback)")
     }
 
@@ -481,27 +451,17 @@ struct TalkModeManagerTests {
         #expect(codes == [.audioInputUnavailable, .realtimeOutputCancelFailed, .realtimeUnavailable])
     }
 
-    @Test func `native fallback keeps realtime issue visible`() {
+    @Test func `native fallback keeps its status visible`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
-        let issue = TalkRuntimeIssue(
-            code: .realtimeUnavailable,
-            message: "Realtime closed before it became ready.",
-            provider: "openai",
-            model: "gpt-realtime-2",
-            transport: "gateway-relay",
-            phase: "connect")
+        let issue = TalkRuntimeIssue(message: "Realtime closed before it became ready.")
 
         manager._test_markNativeFallbackActive(after: issue)
 
         #expect(manager.statusText == "Listening (iOS Speech fallback)")
-        #expect(manager._test_gatewayTalkActiveModeTitle() == "iOS Speech fallback")
-        #expect(manager._test_gatewayTalkActiveModeSubtitle() == "Realtime closed before it became ready.")
-        #expect(manager._test_gatewayTalkLastIssueText()?.contains("phase: connect") == true)
-        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == issue)
+        #expect(manager.phase == .listening)
     }
 
     @Test func `gateway talk issue details drive realtime failure display`() {
-        let manager = TalkModeManager(allowSimulatorCapture: true)
         let error = GatewayResponseError(
             method: "talk.session.create",
             code: "UNAVAILABLE",
@@ -517,37 +477,24 @@ struct TalkModeManagerTests {
                 ]),
             ])
 
-        let issue = manager._test_realtimeIssue(from: error, phase: "start")
+        let issue = TalkModeManager.runtimeIssue(from: error)
 
         #expect(issue.code == .realtimeUnavailable)
         #expect(issue.displayMessage == "OpenAI API key rejected with 401")
-        #expect(issue.provider == "openai")
-        #expect(issue.model == "gpt-realtime-2")
-        #expect(issue.transport == "gateway-relay")
-        #expect(issue.phase == "request")
     }
 
     @Test func `relay startup issue survives until ready status`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
-        let issue = TalkRuntimeIssue(
-            code: .realtimeUnavailable,
-            message: "OpenAI API key rejected with 401",
-            provider: "openai",
-            model: "gpt-realtime-2",
-            transport: "gateway-relay",
-            phase: "connect")
+        let issue = TalkRuntimeIssue(message: "OpenAI API key rejected with 401")
 
         manager._test_recordRealtimeIssue(issue)
         manager._test_handleRealtimeRelayStatus("Connecting realtime…")
-
-        #expect(manager._test_gatewayTalkActiveModeTitle() == "Realtime unavailable")
-        #expect(manager._test_gatewayTalkLastIssueText()?.contains("OpenAI API key rejected") == true)
+        #expect(manager._test_hasPendingRealtimeIssue())
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
 
         #expect(manager.statusText == "Listening (Realtime)")
-        #expect(manager._test_gatewayTalkLastIssueText() == nil)
-        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == nil)
+        #expect(!manager._test_hasPendingRealtimeIssue())
     }
 
     @Test func `relay close clears active realtime mode`() {
@@ -555,14 +502,13 @@ struct TalkModeManagerTests {
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
         #expect(manager.statusText == "Listening (Realtime)")
-        #expect(manager._test_gatewayTalkActiveModeTitle() != "Not active")
 
         manager._test_handleRealtimeRelayStatus("Ready")
         manager._test_handleRealtimeRelayTermination()
 
         #expect(manager.statusText == "Ready")
-        #expect(manager._test_gatewayTalkActiveModeTitle() == "Not active")
-        #expect(manager._test_gatewayTalkActiveModeSubtitle() == nil)
+        #expect(!manager.isListening)
+        #expect(!manager.isSpeaking)
     }
 
     @Test func `realtime failures remain visible on the watch`() {
@@ -583,6 +529,20 @@ struct TalkModeManagerTests {
         #expect(manager.watchPresentation == .phase)
     }
 
+    @Test func `realtime input loss notices keep the call listening`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Realtime audio input fell behind; repeat the last part")
+        #expect(manager.phase == .listening)
+        #expect(manager.isListening)
+        #expect(manager.watchPresentation == .localized("Realtime audio input fell behind; repeat the last part"))
+
+        manager._test_handleRealtimeRelayStatus("Microphone input recovered; repeat the last part")
+        #expect(manager.phase == .listening)
+        #expect(manager.isListening)
+        #expect(manager.watchPresentation == .localized("Microphone input recovered; repeat the last part"))
+    }
+
     @Test func `WebRTC progress remains semantic on the watch`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
 
@@ -598,9 +558,19 @@ struct TalkModeManagerTests {
     }
 
     @Test(arguments: [false, true])
-    func `relay close recovers disconnections but preserves explicit stop`(explicitStop: Bool) {
+    func `relay close recovers disconnections but preserves explicit stop`(explicitStop: Bool) async {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         manager._test_prepareEnabledRealtimeSessionForClose()
+        let restarted = XCTestExpectation(description: "Remote close admits the scheduled replacement start")
+        manager._test_setStartEntryHandler {
+            restarted.fulfill()
+            // Admission is the regression boundary; do not request permissions or contact a provider.
+            manager.stop()
+        }
+        defer {
+            manager._test_setStartEntryHandler(nil)
+            manager.stop()
+        }
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
         manager._test_handleRealtimeRelayStatus("Ready")
@@ -611,7 +581,10 @@ struct TalkModeManagerTests {
         #expect(manager.statusText == (explicitStop ? "Off" : "Reconnecting"))
         #expect(manager.isEnabled == !explicitStop)
         #expect(manager._test_rapidRealtimeRestartCount() == (explicitStop ? 0 : 1))
-        manager.isEnabled = false
+        if !explicitStop {
+            let result = await XCTWaiter.fulfillment(of: [restarted], timeout: 3)
+            #expect(result == .completed)
+        }
     }
 
     @Test func `recurring realtime ready status preserves push to talk capture`() {
@@ -620,26 +593,17 @@ struct TalkModeManagerTests {
         #expect(manager._test_realtimeStatusPreservesPushToTalkCapture())
     }
 
-    @Test func `relay retry clears stale fallback trigger but keeps last issue visible`() {
+    @Test func `relay retry clears stale fallback trigger`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
-        let issue = TalkRuntimeIssue(
-            code: .realtimeUnavailable,
-            message: "Realtime closed before it became ready.",
-            provider: "openai",
-            model: "gpt-realtime-2",
-            transport: "gateway-relay",
-            phase: "connect")
+        let issue = TalkRuntimeIssue(message: "Realtime closed before it became ready.")
 
         manager._test_recordRealtimeIssue(issue)
         manager._test_markNativeFallbackActive(after: issue)
         #expect(manager._test_hasPendingRealtimeIssue())
-        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == issue)
 
         manager._test_prepareRealtimeRelayStart()
 
         #expect(!manager._test_hasPendingRealtimeIssue())
-        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == nil)
-        #expect(manager._test_gatewayTalkLastIssueText()?.contains("Realtime closed before") == true)
     }
 
     @Test func `session switch invalidates an in flight realtime relay start`() {
@@ -684,10 +648,7 @@ struct TalkModeManagerTests {
             mode: "realtime",
             transport: "webrtc")
 
-        let routing = Self.resolve(parsed)
-
-        #expect(parsed.executionMode == .realtimeWebRTC)
-        #expect(routing.route == .realtimeWebRTC)
+        #expect(parsed.route == .realtimeWebRTC)
     }
 
     @Test func `routes forced agent consultation through gateway relay`() {
@@ -697,11 +658,7 @@ struct TalkModeManagerTests {
             brain: "agent-consult",
             consultRouting: "force-agent-consult")
 
-        let routing = Self.resolve(parsed)
-
-        #expect(parsed.requiresGatewayRealtimeTransport)
-        #expect(parsed.executionMode == .realtimeRelay)
-        #expect(routing.route == .realtimeRelay)
+        #expect(parsed.route == .realtimeRelay)
     }
 
     @Test func `keeps Azure open AI realtime on gateway relay`() {
@@ -715,10 +672,8 @@ struct TalkModeManagerTests {
                 mode: "realtime",
                 transport: "webrtc",
                 brain: "agent-consult")
-            let routing = Self.resolve(parsed)
 
-            #expect(parsed.executionMode == .realtimeRelay)
-            #expect(routing.route == .realtimeRelay)
+            #expect(parsed.route == .realtimeRelay)
         }
     }
 
@@ -739,30 +694,6 @@ struct TalkModeManagerTests {
             isEnabled: true,
             gatewayConnected: true,
             captureIsContinuous: false))
-
-        #expect(TalkModeManager._test_realtimeRestartAttempt(
-            previousRapidRestarts: 1,
-            activeDuration: 5) == 2)
-        #expect(TalkModeManager._test_realtimeRestartAttempt(
-            previousRapidRestarts: 2,
-            activeDuration: 31) == 1)
-        #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 1) == 500_000_000)
-        #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 2) == 2_000_000_000)
-        #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 3) == nil)
-    }
-
-    @Test @MainActor func `speech restart clears only the presentation revision it owns`() {
-        let manager = TalkModeManager(allowSimulatorCapture: true)
-        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
-        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
-        #expect(manager.statusText == String(localized: "Listening"))
-        #expect(manager.phase == .listening)
-
-        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
-        manager.statusText = "Neue Statusmeldung"
-        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
-        #expect(manager.statusText == "Neue Statusmeldung")
-        #expect(manager.phase == .idle)
     }
 
     @Test func `keeps provider web socket realtime transport on gateway relay`() {
@@ -772,7 +703,7 @@ struct TalkModeManagerTests {
             transport: "provider-websocket",
             brain: "agent-consult")
 
-        #expect(parsed.executionMode == .realtimeRelay)
+        #expect(parsed.route == .realtimeRelay)
     }
 
     @Test(arguments: ["direct-tools", "none"])
@@ -783,7 +714,7 @@ struct TalkModeManagerTests {
             transport: "gateway-relay",
             brain: brain)
 
-        #expect(parsed.executionMode == .native)
+        #expect(parsed.route == .localElevenLabs)
     }
 
     @Test func `keeps non open AI realtime default transport on gateway relay`() {
@@ -792,7 +723,7 @@ struct TalkModeManagerTests {
             mode: "realtime",
             brain: "agent-consult")
 
-        #expect(parsed.executionMode == .realtimeRelay)
+        #expect(parsed.route == .realtimeRelay)
     }
 
     @Test func `keeps non open AI web RTC transport on gateway relay`() {
@@ -803,7 +734,7 @@ struct TalkModeManagerTests {
             transport: "webrtc",
             brain: "agent-consult")
 
-        #expect(parsed.executionMode == .realtimeRelay)
+        #expect(parsed.route == .realtimeRelay)
     }
 
     @Test func `preserves explicit gateway owned transport`() {
@@ -813,11 +744,9 @@ struct TalkModeManagerTests {
                 mode: "realtime",
                 transport: transport,
                 brain: "agent-consult")
-            let routing = Self.resolve(parsed)
 
-            #expect(routing.realtimeProvider == "google")
-            #expect(routing.executionMode == .realtimeRelay)
-            #expect(routing.route == .realtimeRelay)
+            #expect(parsed.snapshot.realtime.provider == "google")
+            #expect(parsed.route == .realtimeRelay)
         }
     }
 
@@ -857,6 +786,8 @@ struct TalkModeManagerTests {
             #expect(!TalkAudioRoute.shouldForceSpeaker(
                 preferenceEnabled: true,
                 outputPortTypes: [output]))
+            // A mixed route (for example speaker plus AirPlay) keeps headset-style separate engines.
+            #expect(!TalkAudioRoute.isBuiltInOutput([.builtInSpeaker, output]))
         }
     }
 
@@ -866,7 +797,7 @@ struct TalkModeManagerTests {
             mode: "realtime",
             brain: "agent-consult")
 
-        #expect(parsed.executionMode == .realtimeWebRTC)
+        #expect(parsed.route == .realtimeWebRTC)
     }
 
     @Test func `parses redacted gateway realtime config`() {
@@ -905,7 +836,7 @@ struct TalkModeManagerTests {
         let parsed = Self.parse(config)
 
         #expect(parsed.snapshot.activeProvider == "elevenlabs")
-        #expect(parsed.executionMode == .realtimeWebRTC)
+        #expect(parsed.route == .realtimeWebRTC)
         #expect(parsed.snapshot.realtime.provider == "openai")
         #expect(parsed.realtimeModelId == "gpt-realtime-2")
         #expect(parsed.snapshot.realtime.voice == "cedar")
@@ -918,7 +849,7 @@ struct TalkModeManagerTests {
             mode: "realtime",
             transport: "managed-room")
 
-        #expect(parsed.executionMode == .native)
+        #expect(parsed.route == .localElevenLabs)
     }
 
     @Test func `detects PCM format rejection from eleven labs error`() {
@@ -948,8 +879,19 @@ struct TalkModeManagerTests {
             ],
             [
                 "role": "assistant",
-                "__openclaw": ["idempotencyKey": "current-run"],
+                "__openclaw": ["runId": "current-run", "idempotencyKey": "native-message-key"],
                 "content": [["type": "text", "text": "current answer"]],
+            ],
+            [
+                "role": "assistant",
+                "__openclaw": ["idempotencyKey": "legacy-run"],
+                "content": [["type": "text", "text": "legacy answer"]],
+            ],
+            [
+                "role": "assistant",
+                "idempotencyKey": "current-run",
+                "__openclaw": ["runId": "other-run"],
+                "content": [["type": "text", "text": "unrelated answer"]],
             ],
         ]
 
@@ -959,70 +901,146 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_latestAssistantText(
             messages: messages,
             runId: "missing-run") == nil)
+        #expect(TalkModeManager._test_latestAssistantText(
+            messages: messages,
+            runId: "legacy-run") == "legacy answer")
     }
 
-    @Test func `native Talk chat request inherits thinking policy`() {
-        let request = OpenClawChatGatewayRequests.sendMessage(
-            sessionKey: "agent:main:main",
-            agentID: nil,
-            expectedSessionRoutingContract: nil,
+    @Test func `native Talk chat request inherits Gateway run timeout and thinking policy`() {
+        let request = TalkModeManager.chatSendRequest(
             message: "hello",
-            thinking: TalkModeManager.chatThinkingOverride,
-            idempotencyKey: "talk-1",
-            attachments: [],
-            runTimeoutMs: 30000)
+            sessionKey: "agent:main:main",
+            idempotencyKey: "talk-1")
 
-        #expect(TalkModeManager.chatThinkingOverride == nil)
         #expect(request.method == "chat.send")
         #expect(request.params["message"]?.value as? String == "hello")
         #expect(request.params["sessionKey"]?.value as? String == "agent:main:main")
         #expect(request.params["idempotencyKey"]?.value as? String == "talk-1")
         #expect(request.params["thinking"] == nil)
-        #expect(request.params["timeoutMs"]?.value as? Int == 30000)
+        #expect(request.params["timeoutMs"] == nil)
+        #expect(request.timeoutMs == 30000)
     }
 
-    @Test func `subscribes before sending chat completion request`() throws {
-        let testsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        let sourceURL = testsURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/Voice/TalkModeManager.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let processingStart = try #require(source.range(of: "private func runTranscriptProcessing("))
-        let completionStart = try #require(
-            source.range(
-                of: "private func completeTranscriptResponse(",
-                range: processingStart.upperBound..<source.endIndex))
-        let waiterStart = try #require(
-            source.range(
-                of: "private func waitForChatCompletion(",
-                range: completionStart.upperBound..<source.endIndex))
-        let streamingStart = try #require(
-            source.range(
-                of: "private func streamAssistant(",
-                range: waiterStart.upperBound..<source.endIndex))
-        let streamingEnd = try #require(
-            source.range(
-                of: "private func updateIncrementalContextIfNeeded(",
-                range: streamingStart.upperBound..<source.endIndex))
-        let processing = source[processingStart.lowerBound..<completionStart.lowerBound]
-        let completion = source[completionStart.lowerBound..<waiterStart.lowerBound]
-        let streaming = source[streamingStart.lowerBound..<streamingEnd.lowerBound]
-        let subscription = try #require(
-            processing.range(of: "let completionSubscription = await gateway.makeServerEventSubscription"))
-        let cleanup = try #require(processing.range(of: "defer { completionSubscription.cancel() }"))
-        let retention = try #require(processing.range(of: "streamingOwner.completionEvents = completionEvents"))
-        let send = try #require(processing.range(of: "let acknowledgement = try await sendChat("))
+    @Test func `native Talk speaks a correlated reply without overriding the run deadline`() async throws {
+        let audio = Data([4, 5, 6])
+        let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
+            data: audio,
+            provider: "xiaomi",
+            outputFormat: "mp3"))
+        let player = RecordingBufferedAudioPlayer()
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            gatewaySpeechSynthesizer: synthesizer)
+        manager.bufferedPlayer = player
+        let gateway = GatewayNodeSession()
+        let fixture = TalkTurnGateway()
+        let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
+            try await fixture.receive(socket: socket, message: message)
+        })
 
-        #expect(subscription.lowerBound < cleanup.lowerBound)
-        #expect(cleanup.lowerBound < retention.lowerBound)
-        #expect(retention.lowerBound < send.lowerBound)
-        #expect(processing.contains("idempotencyKey: runId"))
-        #expect(completion.contains("guard let completionEvents = streamingOwner.completionEvents"))
-        #expect(completion.contains("stream: completionEvents"))
-        #expect(streaming.contains("as: OpenClawChatEventPayload.self"))
-        #expect(streaming.contains("OpenClawChatEventText.assistantText"))
-        #expect(streaming.contains(#"chatEvent.state == "delta" || chatEvent.state == "final""#))
-        #expect(!streaming.contains("OpenClawAgentEventPayload"))
+        do {
+            _ = try await connectTalkCleanupTestGateway(gateway, socket: socket)
+            manager.attachGateway(gateway)
+            manager.updateGatewayConnected(true)
+            manager.isEnabled = true
+            await manager.start()
+            try #require(manager.isListening)
+
+            await manager._test_handleTranscript(
+                "Say a short reply",
+                isFinal: true,
+                pttCaptureId: nil,
+                recognitionGeneration: manager._test_recognitionGeneration())
+            let runTimeoutMs = await fixture.runTimeoutMs
+            #expect(runTimeoutMs == nil)
+            #expect(synthesizer.requests.map(\.text) == ["Spoken reply"])
+            #expect(player.payloads == [audio])
+        } catch {
+            manager.stop()
+            await gateway.disconnect()
+            throw error
+        }
+        manager.stop()
+        await gateway.disconnect()
+    }
+
+    @Test(.testWaitLimit)
+    func `chat final published before the send reply completes the turn`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let gateway = GatewayNodeSession()
+        let turnOutcomes = AsyncStream<String>.makeStream()
+        let finishTurn: @MainActor @Sendable (String) -> Void = { request in
+            turnOutcomes.continuation.yield(request)
+            // Reply delivery is the boundary under test; stop before real speech output.
+            talkMode.stop()
+        }
+        defer { talkMode.stop() }
+        let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
+            let data: Data = switch message {
+            case let .data(value): value
+            case let .string(value): Data(value.utf8)
+            @unknown default: Data()
+            }
+            let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            guard let method = frame["method"] as? String, method != "connect" else { return }
+            let params = frame["params"] as? [String: Any] ?? [:]
+            var payload: [String: Any] = [:]
+            switch method {
+            case "talk.config":
+                let provider: [String: Any] = ["model": "speech-model"]
+                payload = ["config": ["talk": [
+                    "provider": "xiaomi",
+                    "providers": ["xiaomi": provider],
+                    "resolved": ["provider": "xiaomi", "config": provider],
+                ]]]
+            case "chat.send":
+                let runId = try #require(params["idempotencyKey"] as? String)
+                // A run that finishes at once can publish its final before chat.send returns.
+                try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
+                    "type": "event", "event": "chat",
+                    "payload": ["runId": runId, "state": "final", "message": "Fast reply"],
+                ])))
+                payload = ["runId": runId, "status": "started"]
+            case "talk.speak":
+                await finishTurn("talk.speak: \(params["text"] as? String ?? "")")
+            case "chat.history":
+                await finishTurn("chat.history")
+            default:
+                break
+            }
+            try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
+                "type": "res", "id": #require(frame["id"] as? String), "ok": true, "payload": payload,
+            ])))
+        }, receiveHook: { socket, index in
+            if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: socket.snapshotConnectRequestID() ?? "connect",
+                capabilities: [GatewayServerCapability.chatSendRoutingContract.rawValue]))
+        })
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        try await gateway.connect(
+            url: #require(URL(string: "ws://talk-fast-final-test.invalid")),
+            credentials: .init(),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+            onConnected: {},
+            // The fixture sends no ticks, so a turn stuck waiting for a lost final ends here.
+            onDisconnected: { _ in turnOutcomes.continuation.yield("gateway disconnected") },
+            onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+        talkMode.attachGateway(gateway)
+        talkMode.updateMainSessionKey("agent:main:fast-final-test")
+        talkMode.updateGatewayConnected(true)
+        let capture = try await talkMode.beginPushToTalk()
+        await talkMode._test_handlePushToTalkTranscript(
+            "What is the time?", isFinal: false, captureId: capture.captureId)
+        #expect(talkMode.endPushToTalk(captureId: capture.captureId).status == "queued")
+
+        var outcomes = turnOutcomes.stream.makeAsyncIterator()
+        let firstOutcome = await outcomes.next()
+        await gateway.disconnect()
+
+        #expect(firstOutcome == "talk.speak: Fast reply")
     }
 
     @Test func `late incremental final cannot reopen canceled speech ownership`() async {
@@ -1036,5 +1054,232 @@ struct TalkModeManagerTests {
 
         #expect(!completed)
         #expect(!manager._test_hasIncrementalSpeechOwnership())
+    }
+}
+
+@MainActor
+struct TalkConfigRefreshTests {
+    @Test func `talk start uses the provider and voice changed on the gateway since the last start`() async throws {
+        let served = ServedTalkConfig(Self.relayTalkConfig(provider: "xai", voice: "ara"))
+        let creates = AsyncStream<Data>.makeStream()
+        defer { creates.continuation.finish() }
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let socket = GatewayTestWebSocketTask(sendHook: { [weak manager] socket, message, _ in
+            let method = GatewayWebSocketTestSupport.requestMethod(from: message)
+            guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            if method == "talk.config" {
+                try await socket.emitReceiveSuccess(.data(served.response(id: id)))
+            } else if method == "talk.session.create" {
+                if case let .string(text) = message { creates.continuation.yield(Data(text.utf8)) }
+                if case let .data(data) = message { creates.continuation.yield(data) }
+                // Stop before replying so the start never opens a provider call.
+                await manager?.stop()
+                try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
+                    id: id, code: "UNAVAILABLE", message: "Synthetic stop", details: [:])))
+            }
+        })
+        let gateway = GatewayNodeSession()
+        defer { manager.stop() }
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://talk-config-refresh.invalid")),
+                credentials: .init(),
+                connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            manager.attachGateway(gateway)
+            manager.updateGatewayConnected(true)
+            await manager.reloadConfig(gateway: gateway)
+            var requests = creates.stream.makeAsyncIterator()
+            var observed: [[String?]] = []
+            for next in [nil, Self.relayTalkConfig(provider: "openai", voice: "ember")] {
+                if let next { await served.set(next) }
+                manager._test_prepareEnabledRealtimeSessionForClose()
+                await manager.start()
+                let frame = try #require(await requests.next())
+                let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+                let params = try #require(request["params"] as? [String: Any])
+                observed.append([params["provider"] as? String, params["voice"] as? String])
+            }
+
+            #expect(observed == [["xai", "ara"], ["openai", "ember"]])
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func `talk start keeps the last loaded provider when the config refresh fails`(
+        viaTalkToggle: Bool) async throws
+    {
+        let served = ServedTalkConfig(Self.relayTalkConfig(provider: "xai", voice: "ara"))
+        let creates = AsyncStream<Data>.makeStream()
+        defer { creates.continuation.finish() }
+        let previousTalkEnabled = UserDefaults.standard.object(forKey: "talk.enabled")
+        UserDefaults.standard.set(false, forKey: "talk.enabled")
+        defer { UserDefaults.standard.set(previousTalkEnabled, forKey: "talk.enabled") }
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        // The Talk toggle also reloads config beside the start's own refresh; both fail here.
+        let appModel = viaTalkToggle ? NodeAppModel(talkMode: manager) : nil
+        let socket = GatewayTestWebSocketTask(sendHook: { [weak manager] socket, message, _ in
+            let method = GatewayWebSocketTestSupport.requestMethod(from: message)
+            guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            if method == "talk.config" {
+                if await served.isFailing {
+                    try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
+                        id: id, code: "UNAVAILABLE", message: "Synthetic refresh failure", details: [:])))
+                } else {
+                    try await socket.emitReceiveSuccess(.data(served.response(id: id)))
+                }
+            } else if method == "talk.session.create" {
+                if case let .string(text) = message { creates.continuation.yield(Data(text.utf8)) }
+                if case let .data(data) = message { creates.continuation.yield(data) }
+                await manager?.stop()
+                try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
+                    id: id, code: "UNAVAILABLE", message: "Synthetic stop", details: [:])))
+            }
+        })
+        let gateway = GatewayNodeSession()
+        defer { manager.stop() }
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://talk-config-refresh-failure.invalid")),
+                credentials: .init(),
+                connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            manager.attachGateway(gateway)
+            manager.updateGatewayConnected(true)
+            await manager.reloadConfig(gateway: gateway)
+            await served.setFailing(true)
+            if let appModel {
+                appModel.setTalkEnabled(true)
+            } else {
+                manager._test_prepareEnabledRealtimeSessionForClose()
+                await manager.start()
+            }
+            var requests = creates.stream.makeAsyncIterator()
+            // Bounded wait: without the fix no create is sent; the watchdog ends the stream so the
+            // #require below fails the assertion instead of hanging.
+            let watchdog = Task {
+                try? await Task.sleep(for: .seconds(5))
+                creates.continuation.finish()
+            }
+            defer { watchdog.cancel() }
+            let frame = try #require(await requests.next())
+            let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+            let params = try #require(request["params"] as? [String: Any])
+
+            #expect([params["provider"] as? String, params["voice"] as? String] == ["xai", "ara"])
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
+    @Test func `config reload keeps the realtime prefetch until provider model or voice change`() async throws {
+        let served = ServedTalkConfig(Self.webRTCTalkConfig(voice: "marin"))
+        let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
+            let method = GatewayWebSocketTestSupport.requestMethod(from: message)
+            guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            switch method {
+            case "talk.config":
+                try await socket.emitReceiveSuccess(.data(served.response(id: id)))
+            case "talk.client.create":
+                try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
+                    "type": "res", "id": id, "ok": true, "payload": [
+                        "provider": "openai", "transport": "webrtc", "voiceSessionId": "voice-1",
+                        "clientSecret": "synthetic",
+                    ],
+                ])))
+            case "talk.client.close", "talk.session.close":
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            default:
+                return
+            }
+        })
+        let gateway = GatewayNodeSession()
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        defer { manager.stop() }
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://talk-config-prefetch.invalid")),
+                credentials: .init(),
+                connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            manager.attachGateway(gateway)
+            manager.updateGatewayConnected(true)
+            await manager.reloadConfig(gateway: gateway)
+            await manager.prefetchRealtimeSessionIfReady()
+            for _ in 0..<2000 where !manager._test_hasPrefetchedRealtimeSession() {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            #expect(manager._test_hasPrefetchedRealtimeSession())
+
+            await manager.reloadConfig(gateway: gateway)
+            #expect(manager._test_hasPrefetchedRealtimeSession(), "An unchanged config keeps the prefetch")
+
+            await served.set(Self.webRTCTalkConfig(voice: "ember"))
+            await manager.reloadConfig(gateway: gateway)
+            #expect(!manager._test_hasPrefetchedRealtimeSession(), "A voice change drops the prefetch")
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
+    private static func relayTalkConfig(provider: String, voice: String) -> Data {
+        self.json(["talk": ["realtime": [
+            "provider": provider, "mode": "realtime", "transport": "gateway-relay", "brain": "agent-consult",
+            "providers": [provider: ["voice": voice]],
+        ]]])
+    }
+
+    private static func webRTCTalkConfig(voice: String) -> Data {
+        self.json(["talk": ["realtime": [
+            "provider": "openai", "mode": "realtime", "transport": "webrtc", "brain": "agent-consult",
+            // speakerVoice stays fixed: iOS sends `voice`, so only `voice` may decide reuse.
+            "model": "gpt-realtime-2", "voice": voice, "speakerVoice": "marin",
+        ]]])
+    }
+
+    private static func json(_ object: [String: Any]) -> Data {
+        (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
+    }
+}
+
+/// The Gateway's current `talk.config`, changeable between requests like a web config edit.
+private actor ServedTalkConfig {
+    private var config: Data
+    private(set) var isFailing = false
+
+    init(_ config: Data) {
+        self.config = config
+    }
+
+    func set(_ config: Data) {
+        self.config = config
+    }
+
+    func setFailing(_ failing: Bool) {
+        self.isFailing = failing
+    }
+
+    func response(id: String) throws -> Data {
+        let config = try JSONSerialization.jsonObject(with: self.config)
+        return try JSONSerialization.data(withJSONObject: [
+            "type": "res", "id": id, "ok": true, "payload": ["config": config],
+        ])
     }
 }

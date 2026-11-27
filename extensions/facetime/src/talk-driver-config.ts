@@ -4,8 +4,7 @@ import {
   buildRealtimeVoiceAgentConsultPolicyInstructions,
   getRealtimeVoiceProvider,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
-  resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync,
   type RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
@@ -13,8 +12,8 @@ import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-i
 import type { FaceTimeConfig } from "./config.js";
 
 export const CONSULT_SYSTEM_PROMPT = [
-  "You are the configured OpenClaw agent receiving a delegated request from an authenticated owner in a private 1:1 FaceTime call.",
-  "The authenticated caller is the configured owner/user described by this agent's workspace context, including USER.md. When asked who is speaking, identify them from that workspace context without asking them to reconfirm.",
+  "You are the configured OpenClaw agent receiving a delegated request from an allowed caller in a private 1:1 FaceTime call.",
+  "Allowed callers are usually the configured owner/user described by this agent's workspace context, including USER.md. When asked who is speaking, identify them from that workspace context without asking them to reconfirm.",
   "Use the normal workspace, memory, tools, and approval policies for this agent.",
   "Prefer registered OpenClaw tools over exec.",
   "When a direct tool returns usable data that answers the caller, answer immediately from that result.",
@@ -39,14 +38,6 @@ export const FACETIME_END_CALL_TOOL: RealtimeVoiceTool = {
   },
 };
 
-export function assertAuthenticatedSenderConsultSupport(): void {
-  if (REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION !== 1) {
-    throw new Error(
-      "OpenClaw host does not support authenticated sender identity for realtime agent consults; update OpenClaw before enabling FaceTime",
-    );
-  }
-}
-
 export function agentIdFromSessionKey(sessionKey: string, config: OpenClawConfig): string {
   if (parseAgentSessionKey(sessionKey)) {
     return resolveAgentIdFromSessionKey(sessionKey);
@@ -70,7 +61,7 @@ export function buildRealtimeInstructions(params: {
       : [
           "Mode: OpenClaw agent proxy.",
           "You are the realtime voice surface for the same configured OpenClaw agent the owner can message directly.",
-          "The FaceTime caller is the authenticated owner/user described by the loaded workspace profile context. Recognize them from that context without asking them to reconfirm.",
+          "The FaceTime caller is an allowed caller, usually the owner/user described by the loaded workspace profile context. Recognize them from that context without asking them to reconfirm.",
           "Answer greetings, acknowledgements, and questions about your own identity or persona directly from the loaded realtime profile context.",
           "Do not mention a backend, supervisor, helper, or separate system. Present the result as your own work.",
           `Delegate actions, tool work, current facts, memory, workspace context not already loaded above, and user-specific context with ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME}.`,
@@ -133,7 +124,7 @@ export async function resolveFaceTimeRealtimeProvider(params: {
       }),
     ),
   );
-  return resolveConfiguredRealtimeVoiceProvider({
+  return resolveConfiguredRealtimeVoiceProviderAsync({
     configuredProviderId,
     providerConfigs: providers,
     providerConfigOverrides: params.config.realtime.voice

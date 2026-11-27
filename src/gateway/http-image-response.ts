@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
-import { fileTypeFromBuffer } from "file-type";
 import { isSelfContainedSvg } from "../../packages/gateway-protocol/src/svg-image.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 
@@ -25,11 +24,7 @@ const ALLOWED_HTTP_IMAGE_MIME_TYPES = new Set([
   ICO_MIME_TYPE,
 ]);
 
-export type HttpImageRepresentation = {
-  body: Buffer;
-  contentType: string;
-  etag: string;
-};
+export type HttpImageRepresentation = ReturnType<typeof createHttpImageRepresentation>;
 
 export function resolveHttpImageMimeType(value: string | undefined): string | undefined {
   const normalized = normalizeMimeType(value);
@@ -38,10 +33,7 @@ export function resolveHttpImageMimeType(value: string | undefined): string | un
 }
 
 /** Hash final, validated response bytes once when their cached representation is created. */
-export function createHttpImageRepresentation(
-  body: Buffer,
-  contentType: string,
-): HttpImageRepresentation {
+export function createHttpImageRepresentation(body: Buffer, contentType: string) {
   return {
     body,
     contentType,
@@ -64,6 +56,7 @@ export async function resolveHttpImageRepresentation(
         ? SVG_MIME_TYPE
         : undefined;
   } else {
+    const { fileTypeFromBuffer } = await import("file-type");
     contentType = resolveHttpImageMimeType((await fileTypeFromBuffer(body))?.mime);
   }
   if (!contentType) {

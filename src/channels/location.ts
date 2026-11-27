@@ -96,10 +96,6 @@ function formatAccuracy(accuracy?: number): string {
   return ` ±${Math.round(accuracy ?? 0)}m`;
 }
 
-function formatCoords(latitude: number, longitude: number): string {
-  return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-}
-
 /**
  * Formats the safe inline location body shown to the model.
  *
@@ -108,7 +104,7 @@ function formatCoords(latitude: number, longitude: number): string {
  */
 export function formatLocationText(location: NormalizedLocation): string {
   const resolved = resolveLocation(location);
-  const coords = formatCoords(resolved.latitude, resolved.longitude);
+  const coords = `${resolved.latitude.toFixed(6)}, ${resolved.longitude.toFixed(6)}`;
   const accuracy = formatAccuracy(resolved.accuracy);
 
   if (resolved.source === "live" || resolved.isLive) {

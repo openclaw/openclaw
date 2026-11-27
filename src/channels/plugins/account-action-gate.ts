@@ -1,6 +1,3 @@
-/**
- * Resolves whether an account-scoped action is enabled.
- */
 type ActionGate<T extends Record<string, boolean | undefined>> = (
   key: keyof T,
   defaultValue?: boolean,
@@ -13,16 +10,6 @@ export function createAccountActionGate<T extends Record<string, boolean | undef
   baseActions?: T;
   accountActions?: T;
 }): ActionGate<T> {
-  return (key, defaultValue = true) => {
-    const accountValue = params.accountActions?.[key];
-    if (accountValue !== undefined) {
-      return accountValue;
-    }
-    // Channel defaults apply only when the account did not explicitly set the action.
-    const baseValue = params.baseActions?.[key];
-    if (baseValue !== undefined) {
-      return baseValue;
-    }
-    return defaultValue;
-  };
+  return (key, defaultValue = true) =>
+    params.accountActions?.[key] ?? params.baseActions?.[key] ?? defaultValue;
 }

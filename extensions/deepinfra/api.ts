@@ -1,4 +1,3 @@
-// Deepinfra API module exposes the plugin public contract.
 export { buildDeepInfraProvider } from "./provider-catalog.js";
 export { applyDeepInfraConfig } from "./onboard.js";
 export {

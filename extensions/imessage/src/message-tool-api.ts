@@ -1,8 +1,8 @@
-// Imessage API module exposes the plugin public contract.
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
+  ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import { Type } from "typebox";
 import { resolveIMessageAccount } from "./accounts.js";
@@ -13,22 +13,6 @@ import {
 } from "./private-api-status.js";
 import { getCachedIMessageRemoteHost } from "./remote-host.js";
 import { inferIMessageTargetChatType } from "./targets.js";
-
-const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
-  "react",
-  "edit",
-  "unsend",
-  "reply",
-  "sendWithEffect",
-  "renameGroup",
-  "setGroupIcon",
-  "addParticipant",
-  "removeParticipant",
-  "leaveGroup",
-  "sendAttachment",
-  "poll",
-  "poll-vote",
-]);
 
 function isGroupTarget(
   raw?: string | null,
@@ -65,10 +49,10 @@ export function describeIMessageMessageTool({
   const actions = new Set<ChannelMessageActionName>();
   for (const action of IMESSAGE_ACTION_NAMES) {
     const spec = IMESSAGE_ACTIONS[action];
-    if (!spec?.gate || !gate(spec.gate)) {
+    if (!gate(spec.gate)) {
       continue;
     }
-    if (privateApiStatus?.available === false && PRIVATE_API_ACTIONS.has(action)) {
+    if (privateApiStatus?.available === false) {
       continue;
     }
     if (
@@ -119,41 +103,51 @@ export function describeIMessageMessageTool({
   if (actions.delete("sendAttachment")) {
     actions.add("upload-file");
   }
-  return {
-    actions: Array.from(actions),
-    ...(actions.has("poll-vote")
-      ? {
-          schema: {
-            properties: {
-              ...(remote
-                ? {
-                    pollOptionId: Type.Optional(
-                      Type.String({
-                        description:
-                          "Stable iMessage poll option id. Required for Remote Mac over SSH accounts; copy it from the inbound poll options.",
-                      }),
-                    ),
-                    pollOptionIndex: Type.Optional(
-                      Type.Integer({
-                        minimum: 1,
-                        description:
-                          "Local iMessage accounts only. Remote Mac accounts must use pollOptionId.",
-                      }),
-                    ),
-                  }
-                : {}),
-              pollOptionText: Type.Optional(
+  const schema: ChannelMessageToolSchemaContribution[] = [];
+  if (actions.has("sendWithEffect")) {
+    schema.push({
+      properties: {
+        effectId: Type.Optional(Type.String({ description: "sendWithEffect id/name." })),
+        effect: Type.Optional(Type.String({ description: "Alias for effectId." })),
+      },
+      actions: ["sendWithEffect"],
+      visibility: "all-configured",
+    });
+  }
+  if (actions.has("poll-vote")) {
+    schema.push({
+      properties: {
+        ...(remote
+          ? {
+              pollOptionId: Type.Optional(
                 Type.String({
-                  description: remote
-                    ? "Local iMessage accounts only. Remote Mac accounts must use pollOptionId."
-                    : "Exact iMessage poll option text.",
+                  description:
+                    "Stable iMessage poll option id. Required for Remote Mac over SSH accounts; copy it from the inbound poll options.",
                 }),
               ),
-            },
-            actions: ["poll-vote" as const],
-            visibility: "all-configured" as const,
-          },
-        }
-      : {}),
+              pollOptionIndex: Type.Optional(
+                Type.Integer({
+                  minimum: 1,
+                  description:
+                    "Local iMessage accounts only. Remote Mac accounts must use pollOptionId.",
+                }),
+              ),
+            }
+          : {}),
+        pollOptionText: Type.Optional(
+          Type.String({
+            description: remote
+              ? "Local iMessage accounts only. Remote Mac accounts must use pollOptionId."
+              : "Exact iMessage poll option text.",
+          }),
+        ),
+      },
+      actions: ["poll-vote"],
+      visibility: "all-configured",
+    });
+  }
+  return {
+    actions: Array.from(actions),
+    ...(schema.length > 0 ? { schema } : {}),
   };
 }

@@ -1,5 +1,7 @@
-export const agentWorkerStoreFixtureEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "openclaw-agent-worker-store.test-support",
-  distWorkerPath: "state/openclaw-agent-worker-store.test-support.js",
-} as const;
+import { createTestEntrypoint } from "../infra/runtime-entrypoint.test-support.ts";
+
+const entrypoint = createTestEntrypoint(import.meta.url, "state");
+
+export const agentWorkerStoreFixtureEntrypoint = entrypoint(
+  "openclaw-agent-worker-store.test-support",
+);

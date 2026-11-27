@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -46,7 +46,7 @@ export function buildTtsSupplementTranscriptMarker(
     payload.text?.trim() || supplement.spokenText.trim(),
   );
   return {
-    textSha256: createHash("sha256").update(visibleText).digest("hex"),
+    textSha256: sha256Hex(visibleText),
   };
 }
 

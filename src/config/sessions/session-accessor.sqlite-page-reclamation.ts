@@ -1,111 +1,416 @@
-import { publishSqliteWalCheckpointHealth } from "../../infra/sqlite-wal-checkpoint.js";
+import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-checkpoint.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  isIncognitoOpenClawAgentSqlitePath,
-  type OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
-import { runPreparedSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
-import { withSqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentity,
+  readDatabasePathIdentitySync,
+} from "../../infra/sqlite-worker-identity.js";
+import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
+import type {
+  AgentDatabaseExecutionFileIdentity,
+  AgentDatabaseOperations,
+} from "../../state/openclaw-agent-execution-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
+import {
+  captureOpenClawAgentDatabaseExecutionAsync,
+  supportsOpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution.js";
+import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
+import type { ReclamationDatabaseOptions } from "./session-accessor.sqlite-lifecycle-types.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import {
   runExclusiveSqliteSessionWrite,
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import {
+  ARCHIVE_RETENTION_BATCH_SIZE,
+  type SessionArchivePruningSnapshot,
+  type SessionArchivePruningOperations,
+  type SessionArchivePruningSource,
+} from "./session-history-archive-pruning.types.js";
+import {
+  sessionStoreLane,
+  prepareSessionStoreCandidatesInWorker,
+} from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 
 export type SqliteSessionPageReclaimer = (maxPages?: number) => Promise<SqliteWalReclamationResult>;
 
-/** Acquire the archive worker before the caller's writer, so retained work cannot deadlock it. */
-export async function withSqliteSessionPageReclamation<T>(
+/** Preview reads share the history reader without waiting for archive or writer admission. */
+export async function readSqliteSessionArchivePruning(
   input: OpenClawAgentDatabaseOptions,
-  run: (reclaim: SqliteSessionPageReclaimer) => Promise<T>,
-): Promise<T> {
+): Promise<SessionArchivePruningSnapshot | null> {
+  if (
+    captureSessionActorStorageOwner(
+      { ...input, storePath: input.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
+    return null;
+  }
   const options = resolveSessionReclamationDatabaseOptions(input);
-  if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
-    return run(async (maxPages) =>
-      withSqliteSessionDatabase(options, (database) =>
-        database.walMaintenance.reclaimFreePages({ maxPages }),
-      ),
+  if (!supportsOpenClawAgentDatabaseExecution(options)) {
+    const { readSessionArchivePruningInDatabase } =
+      await import("./session-history-archive-pruning.worker.js");
+    return withSqliteSessionDatabase(options, (database) =>
+      readSessionArchivePruningInDatabase(database),
     );
   }
-  return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent }) => {
-    const retained = await runExclusiveSqliteSessionWrite(
-      options,
-      async () => {
-        assertCurrent();
-        return retainOpenClawAgentDatabaseReadOnly(options);
-      },
-      "session.reclamation.retain",
-    );
-    if (!retained.found) {
-      throw new Error("SQLite page reclamation lost its prepared database");
+  return withSqliteMutationWorkerLifetime(options, async (lifetime) => {
+    const physical = await readDatabasePathIdentity(options.path);
+    lifetime.assertCurrent();
+    if (!physical.key.startsWith("file:")) {
+      return null;
     }
-    let { database, claim } = retained;
-    const physicalIdentity = claim.identity;
-    const databaseOptions = {
-      ...options,
-      path: readOpenClawAgentDatabaseIdentity(database).filename,
+    const databaseOptions = { ...options, path: physical.canonicalPath };
+    const expectedIdentity: AgentDatabaseExecutionFileIdentity = {
+      kind: "file",
+      physicalIdentity: physical.key.slice("file:".length),
+      nativeLocation: physical.canonicalPath,
     };
-    try {
-      return await withSqliteReclamationWorker(
-        databaseOptions,
-        claim,
-        (worker) =>
-          run((maxPages) =>
-            withSqliteMutationWorkerLifetime(databaseOptions, async (request) => {
-              const assertRequestCurrent = () => {
-                assertCurrent();
-                request.assertCurrent();
-              };
-              assertRequestCurrent();
-              if (!claim.isCurrent()) {
-                // Archive-file I/O may retire the borrowed host handle; keep the same physical store.
-                const reopened = retainOpenClawAgentDatabaseReadOnly(databaseOptions);
-                if (!reopened.found) {
-                  throw new Error("SQLite page reclamation lost its prepared database");
-                }
-                if (reopened.claim.identity !== physicalIdentity) {
-                  reopened.claim.release();
-                  throw new Error("SQLite page reclamation database path was replaced");
-                }
-                claim.release();
-                ({ database, claim } = reopened);
-              }
-              const result = await runPreparedSqliteSessionReclamation(
+    return withSessionHistoryWorkerDatabase(
+      {
+        ...databaseOptions,
+        requestedPaths: [options.path],
+        readCustody:
+          options.path === physical.canonicalPath
+            ? undefined
+            : [
                 {
-                  plan: {
-                    kind: "maintenance-pages",
-                    databaseOptions,
-                    materializedPlans: [],
+                  sourcePath: options.path,
+                  candidates: [
+                    {
+                      path: options.path,
+                      physicalPath: physical.canonicalPath,
+                      identity: physical,
+                    },
+                  ],
+                },
+              ],
+      },
+      async (reader) => {
+        const result = await reader.readArchivePruning({
+          env: databaseOptions.env,
+          expectedIdentity,
+        });
+        reader.assertCurrent();
+        lifetime.assertCurrent();
+        return result;
+      },
+    );
+  });
+}
+
+/** Retain source custody across the sweep; archive removals and page units admit separately. */
+export async function withSqliteSessionPageReclamation<T>(
+  input: OpenClawAgentDatabaseOptions,
+  run: (
+    reclaim: SqliteSessionPageReclaimer,
+    assertCurrent: () => void,
+    databaseOptions: ReclamationDatabaseOptions,
+    archives: SessionArchivePruningOperations,
+  ) => Promise<T>,
+  assertCallerCurrent?: () => void,
+  capturedSource?: SessionArchivePruningSource,
+): Promise<T> {
+  if (
+    captureSessionActorStorageOwner(
+      { ...input, storePath: input.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
+    throw new Error("Incognito sessions have no disk pages or archives to reclaim");
+  }
+  const options = resolveSessionReclamationDatabaseOptions(input);
+  const nativeOwner = !supportsOpenClawAgentDatabaseExecution(options);
+  // Explicit native maintenance retains its synchronous capture and effect guards.
+  const nativePhysical = nativeOwner
+    ? (capturedSource?.readIdentity ?? readDatabasePathIdentitySync(options.path))
+    : undefined;
+  if (nativePhysical && !nativePhysical.key.startsWith("file:")) {
+    throw new Error("SQLite archive pruning requires its existing database");
+  }
+  return withSqliteMutationWorkerLifetime(options, async (lifetime) => {
+    const { signal } = lifetime;
+    const assertCurrent = () => {
+      lifetime.assertCurrent();
+      assertCallerCurrent?.();
+    };
+    const withArchiveWriter = <Value>(
+      databaseOptions: ReclamationDatabaseOptions,
+      assertWriterCurrent: () => void,
+      operation: () => Promise<Value>,
+    ): Promise<Value> => {
+      const write = () =>
+        runExclusiveSqliteSessionWrite(
+          databaseOptions,
+          async () => {
+            assertWriterCurrent();
+            return operation();
+          },
+          "session.history.archive-prune",
+        );
+      // Cold restoration takes archive admission before its writer; pruning must keep that order.
+      return runExclusiveSqliteTranscriptArchiveWorker(write, signal);
+    };
+    if (nativePhysical) {
+      // Explicit Doctor/cleanup maintenance retains its native owner.
+      const {
+        readSessionArchivePruningInDatabase,
+        deletePublishedSessionArchiveInDatabase,
+        removeLegacySessionArchiveInDatabase,
+        pruneSessionArchivesByRetentionInDatabase,
+      } = await import("./session-history-archive-pruning.worker.js");
+      const databaseOptions = { ...options, path: nativePhysical.canonicalPath };
+      const assertNativeCurrent = () => {
+        assertCurrent();
+        assertExistingDatabaseIdentity(options.path, nativePhysical.key);
+        assertExistingDatabaseIdentity(databaseOptions.path, nativePhysical.key);
+      };
+      assertNativeCurrent();
+      return run(
+        (maxPages) =>
+          runExclusiveSqliteSessionWrite(
+            databaseOptions,
+            async () =>
+              withSqliteSessionDatabase(
+                databaseOptions,
+                (database) => {
+                  assertNativeCurrent();
+                  return database.walMaintenance.reclaimFreePages({
                     maxPages,
-                  },
+                    beforeMutation: assertNativeCurrent,
+                    onCommit: assertNativeCurrent,
+                  });
                 },
-                {
+                assertNativeCurrent,
+              ),
+            "session.history.free-pages",
+          ),
+        assertNativeCurrent,
+        databaseOptions,
+        {
+          revalidateSource: async () => assertNativeCurrent(),
+          withWriter: (operation) =>
+            withArchiveWriter(databaseOptions, assertNativeCurrent, operation),
+          read: async () =>
+            await withSqliteSessionDatabase(
+              databaseOptions,
+              (database) => {
+                assertNativeCurrent();
+                return readSessionArchivePruningInDatabase(database).archives[0] ?? null;
+              },
+              assertNativeCurrent,
+            ),
+          readRetentionCandidates: async (offset = 0) =>
+            withSqliteSessionDatabase(
+              databaseOptions,
+              (database) =>
+                readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE, offset)
+                  .archives,
+              assertNativeCurrent,
+            ),
+          pruneRetention: async (retention) =>
+            withSqliteSessionDatabase(
+              databaseOptions,
+              (database) =>
+                pruneSessionArchivesByRetentionInDatabase(
                   database,
-                  claim,
-                  worker,
-                  commitGate: request.commitGate,
-                  assertRequestCurrent,
-                },
+                  databaseOptions,
+                  retention,
+                  assertNativeCurrent,
+                ),
+              assertNativeCurrent,
+            ),
+          removeLegacy: async (filePath) =>
+            await withSqliteSessionDatabase(
+              databaseOptions,
+              (database) =>
+                removeLegacySessionArchiveInDatabase(
+                  database,
+                  databaseOptions,
+                  filePath,
+                  assertNativeCurrent,
+                ),
+              assertNativeCurrent,
+            ),
+          deletePublished: async (row) =>
+            await withSqliteSessionDatabase(
+              databaseOptions,
+              (database) => {
+                deletePublishedSessionArchiveInDatabase(
+                  database,
+                  databaseOptions,
+                  row,
+                  assertNativeCurrent,
+                );
+              },
+              assertNativeCurrent,
+            ),
+        },
+      );
+    }
+    const execution = await captureOpenClawAgentDatabaseExecutionAsync(
+      options,
+      capturedSource ? toAgentExecutionConstraints(capturedSource.readIdentity) : {},
+    );
+    try {
+      const physical = capturedSource?.readIdentity ?? execution.capturedIdentity;
+      if (!physical.key.startsWith("file:")) {
+        throw new Error("SQLite archive pruning requires its existing file owner");
+      }
+      const databaseOptions = { ...options, path: physical.canonicalPath };
+      const expectedIdentity: AgentDatabaseExecutionFileIdentity = {
+        kind: "file",
+        physicalIdentity: physical.key.slice("file:".length),
+        birthtime: physical.birthtime,
+        nativeLocation: physical.canonicalPath,
+      };
+      const readCustody =
+        capturedSource?.readCustody ??
+        (options.path === physical.canonicalPath
+          ? undefined
+          : [
+              {
+                sourcePath: options.path,
+                candidates: [
+                  { path: options.path, physicalPath: physical.canonicalPath, identity: physical },
+                ],
+              },
+            ]);
+      const assertPruningCurrent = () => {
+        assertCurrent();
+        execution.assertCurrent();
+      };
+      const source = createSessionWorkerExecutionSource(
+        assertPruningCurrent,
+        "SQLite archive pruning authority expired",
+        readCustody,
+      );
+      const write = async <Value>(
+        operation: (
+          worker: Pick<SqliteWorkerStore<AgentDatabaseOperations>, "execute">,
+        ) => Promise<Value>,
+        label: "session.history.free-pages" | "session.history.archive-prune",
+      ): Promise<Value> => {
+        const result = await runExclusiveSqliteSessionWrite(
+          databaseOptions,
+          async () => {
+            assertPruningCurrent();
+            return execution.runExisting(
+              source,
+              async (worker) => ({ value: await operation(worker) }),
+              {
+                retireNativeOnFailure: true,
+              },
+            );
+          },
+          label,
+          undefined,
+          "worker",
+        );
+        assertPruningCurrent();
+        if (!result) {
+          throw new Error("SQLite archive pruning lost its prepared database");
+        }
+        return result.value;
+      };
+      assertPruningCurrent();
+      return await withSessionHistoryWorkerDatabase(
+        { ...databaseOptions, requestedPaths: [options.path], readCustody },
+        async (reader) => {
+          assertPruningCurrent();
+          return run(
+            async (maxPages) => {
+              const result = await write(
+                (worker) =>
+                  worker.execute({
+                    type: "session.archivePruning.reclaimPages",
+                    input: { maxPages },
+                  }),
+                "session.history.free-pages",
               );
-              if (result.kind !== "maintenance-pages") {
-                throw new Error("SQLite page reclamation returned another operation's result");
-              }
-              if (result.value.checkpoint) {
-                result.value.checkpoint = publishSqliteWalCheckpointHealth(
+              if (result.checkpoint) {
+                result.checkpoint = publishSqliteWalCheckpointObservation(
                   databaseOptions.path,
-                  result.value.checkpoint,
+                  result.checkpoint,
                 );
               }
-              return result.value;
-            }),
-          ),
-        assertCurrent,
+              return result;
+            },
+            assertPruningCurrent,
+            databaseOptions,
+            {
+              async revalidateSource() {
+                await prepareSessionStoreCandidatesInWorker({
+                  validate: {
+                    readCustody,
+                    candidates: [],
+                    sources: [{ path: databaseOptions.path, identity: physical }],
+                  },
+                });
+                assertPruningCurrent();
+              },
+              withWriter: (operation) =>
+                withArchiveWriter(databaseOptions, assertPruningCurrent, operation),
+              read: async () => {
+                assertPruningCurrent();
+                const result = await reader.readArchivePruning({
+                  env: databaseOptions.env,
+                  expectedIdentity,
+                });
+                assertPruningCurrent();
+                return result.archives[0] ?? null;
+              },
+              readRetentionCandidates: async (offset = 0) => {
+                assertPruningCurrent();
+                const result = await reader.readArchivePruning({
+                  env: databaseOptions.env,
+                  expectedIdentity,
+                  limit: ARCHIVE_RETENTION_BATCH_SIZE,
+                  offset,
+                });
+                assertPruningCurrent();
+                return result.archives;
+              },
+              pruneRetention: (retention) =>
+                write(
+                  (worker) =>
+                    worker.execute({
+                      type: "session.archivePruning.pruneRetention",
+                      input: retention,
+                    }),
+                  "session.history.archive-prune",
+                ),
+              removeLegacy: (filePath) =>
+                write(
+                  (worker) =>
+                    worker.execute({
+                      type: "session.archivePruning.removeLegacy",
+                      input: { filePath },
+                    }),
+                  "session.history.archive-prune",
+                ),
+              deletePublished: (row) =>
+                write(
+                  (worker) =>
+                    worker.execute({
+                      type: "session.archivePruning.deletePublished",
+                      input: row,
+                    }),
+                  "session.history.archive-prune",
+                ),
+            },
+          );
+        },
+        sessionStoreLane,
       );
     } finally {
-      claim.release();
+      await execution.release();
     }
   });
 }

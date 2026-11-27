@@ -1,17 +1,39 @@
-/** Shared config mutations used by interactive and non-interactive onboarding. */
 import fs from "node:fs";
 import path from "node:path";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope-config.js";
+import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
-import { setConfigValueAtPath } from "../config/config-paths.js";
-import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolProfileId } from "../config/types.tools.js";
 import { resolveUserPath } from "../utils.js";
 
-/** Default tool profile selected during local onboarding. */
 const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "full";
+
+const TOOL_PROFILE_SUMMARIES: Record<ToolProfileId, string> = {
+  minimal:
+    "This profile allows status checks, session presence, and authorized Gateway maintenance.",
+  coding:
+    "This profile allows files, commands, the web, memory and sessions, but not channel messages.",
+  messaging: "This profile allows chat, messages and sessions, but not files, commands or the web.",
+  full: "This profile allows every tool, including files, commands, the web and plugins.",
+};
+
+type ToolPolicyKeys = {
+  allow?: string[];
+  alsoAllow?: string[];
+  deny?: string[];
+  byProvider?: Record<string, unknown>;
+};
+
+function listToolPolicyKeys(tools: ToolPolicyKeys | undefined, at: string | undefined): string[] {
+  if (!tools || !at) {
+    return [];
+  }
+  return (["allow", "alsoAllow", "deny", "byProvider"] as const)
+    .filter((key) => Object.keys(tools[key] ?? {}).length > 0)
+    .map((key) => `${at}.${key}`);
+}
 
 export type OnboardingWorkspaceConflict = {
   currentWorkspaceDir: string;
@@ -39,7 +61,6 @@ function hasExistingAgentState(env: NodeJS.ProcessEnv): boolean {
   });
 }
 
-/** Detects a workspace change that could remap an existing agent fleet. */
 export function resolveOnboardingWorkspaceConflict(
   baseConfig: OpenClawConfig,
   requestedWorkspaceDir: string,
@@ -65,7 +86,6 @@ export function resolveOnboardingWorkspaceConflict(
   };
 }
 
-/** Applies local gateway/workspace defaults without overwriting explicit user defaults. */
 // Deliberately writes no session.dmScope: the schema default "main" (one rolling
 // personal-agent session across channels) is the product default. Multi-user DM
 // isolation is opt-in; `openclaw security audit` nudges it when traffic warrants.
@@ -78,17 +98,12 @@ export function applyLocalSetupWorkspaceConfig(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): OpenClawConfig {
-  const workspaceConflict = resolveOnboardingWorkspaceConflict(
-    baseConfig,
-    workspaceDir,
-    options.env,
-  );
-  const hasRoster = listAgentEntries(baseConfig).length > 0;
   const shouldUpdateWorkspace =
     !options.preserveWorkspace &&
-    (options.allowWorkspaceChange || (!hasRoster && !workspaceConflict));
-  // Workspace/gateway copies still belong to the owner selected by the config reader.
-  return inheritLegacyDefaultAgentId(baseConfig, {
+    (options.allowWorkspaceChange ||
+      (listAgentEntries(baseConfig).length === 0 &&
+        !resolveOnboardingWorkspaceConflict(baseConfig, workspaceDir, options.env)));
+  return {
     ...baseConfig,
     ...(shouldUpdateWorkspace
       ? {
@@ -109,16 +124,49 @@ export function applyLocalSetupWorkspaceConfig(
       ...baseConfig.tools,
       profile: baseConfig.tools?.profile ?? ONBOARDING_DEFAULT_TOOLS_PROFILE,
     },
-  });
+  };
 }
 
-/** Marks default agents to skip bootstrap file creation. */
+/** Says which tool profile the agent ends setup with, what it allows, and how to widen it. */
+export function describeSetupToolProfile(
+  config: OpenClawConfig,
+  agentId: string,
+): string | undefined {
+  const policy = resolveEffectiveToolPolicy({ config, agentId });
+  const { profile, sources } = policy;
+  const profilePath = sources.profile?.path;
+  if (!profile || !profilePath) {
+    return undefined;
+  }
+  const parts = [`Tool profile: ${profile} (${profilePath}).`, TOOL_PROFILE_SUMMARIES[profile]];
+  // Setup keeps allow, alsoAllow, deny and provider policies; they change what the profile gives.
+  const agentTools = policy.agentId ? resolveAgentConfig(config, policy.agentId)?.tools : undefined;
+  const otherSettings = [
+    ...listToolPolicyKeys(config.tools, "tools"),
+    ...listToolPolicyKeys(agentTools, sources.agent?.path),
+  ];
+  if (otherSettings.length > 0) {
+    parts.push(
+      `These settings also change which tools the agent gets: ${otherSettings.join(", ")}.`,
+    );
+  }
+  if (profile !== "full") {
+    const alsoAllowPath = sources.profile?.alsoAllowPath;
+    parts.push(
+      alsoAllowPath
+        ? `To add one tool, list it in ${alsoAllowPath}, or set ${profilePath} to "full".`
+        : `To widen it, set ${profilePath} to "full".`,
+    );
+  }
+  return parts.join(" ");
+}
+
 export function applySkipBootstrapConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = structuredClone(cfg);
-  setConfigValueAtPath(
-    next as Record<string, unknown>,
-    ["agents", "defaults", "skipBootstrap"],
-    true,
-  );
-  return inheritLegacyDefaultAgentId(cfg, next);
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: { ...cfg.agents?.defaults, skipBootstrap: true },
+    },
+  };
 }

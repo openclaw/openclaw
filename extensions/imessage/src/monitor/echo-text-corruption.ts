@@ -1,8 +1,4 @@
-// Imessage plugin shared helper: strip leading attributedBody corruption markers from echo text.
-// The in-memory (echo-cache) and persisted (persisted-echo-cache) echo-dedupe paths must normalize
-// identically, so a reflected own-message echo whose attributedBody decoded with a leading
-// NUL/replacement marker still matches the clean stored send. Kept here (a leaf module with no
-// imports) so the persisted path can reuse it without an echo-cache <-> persisted-echo-cache cycle.
+// Both echo caches must match attributedBody corruption against the clean outbound text.
 
 function isLeadingEchoTextCorruptionMarker(code: number): boolean {
   return (
@@ -10,10 +6,17 @@ function isLeadingEchoTextCorruptionMarker(code: number): boolean {
   );
 }
 
-export function stripLeadingEchoTextCorruptionMarkers(text: string): string {
+export function normalizeIMessageEchoText(text: string | undefined): string | undefined {
+  if (!text) {
+    return undefined;
+  }
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
   let offset = 0;
-  while (offset < text.length && isLeadingEchoTextCorruptionMarker(text.charCodeAt(offset))) {
+  while (
+    offset < normalized.length &&
+    isLeadingEchoTextCorruptionMarker(normalized.charCodeAt(offset))
+  ) {
     offset += 1;
   }
-  return offset === 0 ? text : text.slice(offset);
+  return normalized.slice(offset).trim() || undefined;
 }

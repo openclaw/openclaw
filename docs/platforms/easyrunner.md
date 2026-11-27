@@ -54,26 +54,31 @@ volumes:
 
 Replace `openclaw.example.com` with your Gateway hostname. Store
 `OPENCLAW_GATEWAY_TOKEN` in EasyRunner's secret/environment manager instead of
-committing it to the app definition. The image binds to loopback by default,
-so the explicit `--bind lan --port 1455` in `command` is required for Caddy to
-reach the container.
+committing it to the app definition. With Tailscale off, the image's
+detected-container default is `auto`, which resolves to `0.0.0.0`; the explicit
+`--bind lan --port 1455` pins the listener that Caddy expects instead of
+depending on container detection.
 
 ## Configure OpenClaw
 
-Inside the persistent config volume, keep the Gateway reachable only through
-the proxy and require auth:
+Inside the persistent config volume, declare the external proxy origin and
+require auth:
 
 ```json5
 {
   gateway: {
     bind: "lan",
     port: 1455,
+    publicOrigin: "https://openclaw.example.com",
     auth: {
       token: "${OPENCLAW_GATEWAY_TOKEN}",
     },
   },
 }
 ```
+
+Use the same exact hostname in `publicOrigin` and the Caddy label. This supplies
+the browser-origin allowlist when `gateway.controlUi.allowedOrigins` is omitted.
 
 If Caddy terminates TLS for the Gateway, configure trusted-proxy settings for
 the exact proxy path rather than disabling auth checks globally. See

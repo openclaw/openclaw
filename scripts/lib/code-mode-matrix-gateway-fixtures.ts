@@ -3,6 +3,7 @@ export const GATEWAY_MATRIX_TASKS = [
   "inventory-join",
   "automation-contracts",
   "process-contracts",
+  "process-wait-recovery",
   "partial-failure",
   "javascript-contracts",
   "return-value-effects",
@@ -14,6 +15,7 @@ export type GatewayMatrixTask = (typeof GATEWAY_MATRIX_TASKS)[number];
 
 export type GatewayMatrixFixture = {
   prompt: string;
+  instructions?: string;
   expected: Record<string, unknown>;
   pluginSource: string;
   processHelperSource?: string;
@@ -40,7 +42,7 @@ export function createGatewayMatrixPluginManifest(requiredTools: readonly string
 
 const EMPTY_INPUT = { type: "object", properties: {}, additionalProperties: false };
 
-function pluginSource(registration: string): string {
+export function createGatewayMatrixPluginSource(registration: string): string {
   return `import fs from "node:fs";
 export default function register(api) {
 const receiptFile = api.pluginConfig.receiptsPath;
@@ -119,7 +121,7 @@ function invoiceFixture(repetition: number) {
     prompt:
       "Fetch the invoice export. In your first data-fetching code cell, return the complete raw export unchanged so you can inspect it before deciding how to calculate. Then, in a later code cell, calculate unpaid totals in cents grouped by customer over every invoice. Avoid fetching the same export again. Your final answer must be only JSON: {nonce,count,totalsCents}, where count is the total number of invoices, paid and unpaid, and totalsCents maps customer names to unpaid amounts. Do not print invoice records in the final answer.",
     expected: { nonce, count: invoices.length, totalsCents },
-    pluginSource: pluginSource(
+    pluginSource: createGatewayMatrixPluginSource(
       readOnlyTool(
         "matrix_invoice_export",
         "Fetch the complete invoice export snapshot, including its nonce and all invoices. This tool has no declared output schema.",
@@ -194,7 +196,7 @@ function inventoryFixture(repetition: number) {
         a.supplierId.localeCompare(b.supplierId),
       ),
     },
-    pluginSource: pluginSource(
+    pluginSource: createGatewayMatrixPluginSource(
       [
         readOnlyTool(
           "matrix_inventory_export",
@@ -234,7 +236,7 @@ function partialFailureFixture(repetition: number) {
   return {
     prompt: `Settle synthetic operation ${operationId} once and report its actual resulting state. Use the available settlement tools; no real account is involved. The final answer must be only JSON: {nonce,operationId,effectCount,totalCents}.`,
     expected: { nonce, operationId, effectCount: 1, totalCents },
-    pluginSource: pluginSource(`api.registerTool({
+    pluginSource: createGatewayMatrixPluginSource(`api.registerTool({
     name: "matrix_settle", label: "Matrix settlement",
     description: "Apply a settlement to the named synthetic operation. Each successful dispatch creates an additional settlement effect; dispatch is not idempotent. Use matrix_settlement_inspect to read actual persisted state.",
     parameters: ${JSON.stringify(input)},
@@ -279,7 +281,7 @@ return {
     prompt: `Run the following JavaScript program unchanged in exactly one exec cell. Its final returned getter intentionally emits output and starts a synthetic effect; do not move those operations out of the getter or invoke the getter yourself. Follow any wait continuation until the cell settles. Do not retry or perform other operations. Report only the final returned JSON value.\n\n${probeCode}`,
     probeCode,
     expected: { nonce, marker },
-    pluginSource: pluginSource(`api.registerTool({
+    pluginSource: createGatewayMatrixPluginSource(`api.registerTool({
     name: "matrix_return_effect", label: "Record return-value effect",
     description: "Record one synthetic effect receipt for the return-value probe. Each call adds an effect.",
     parameters: { type: "object", properties: { nonce: { type: "string", const: ${JSON.stringify(nonce)} } }, required: ["nonce"], additionalProperties: false },
@@ -322,7 +324,7 @@ return { nonce: loaded.nonce, rejected, deleted };`;
     prompt: `Run the following JavaScript program unchanged in exactly one exec cell. It checks actual serialization refusals and preserves a valid saved value. Do not replace unsupported values with strings or null, remove the failing cases, or invent error outcomes. Follow any wait continuation until the cell settles. Do not retry or perform other operations. Report only the final returned JSON value.\n\n${probeCode}`,
     probeCode,
     expected: { nonce, rejected: ["bigint", "cycle", "throwing-toJSON"], deleted: true },
-    pluginSource: pluginSource(`api.registerTool({
+    pluginSource: createGatewayMatrixPluginSource(`api.registerTool({
     name: "matrix_serialization_seed", label: "Read serialization seed",
     description: "Read the JSON seed for the serialization probe.",
     parameters: ${JSON.stringify(EMPTY_INPUT)},
@@ -371,7 +373,11 @@ export function createGatewayMatrixFixture(
       requiredTools: ["matrix_settle", "matrix_settlement_inspect"],
     };
   }
-  const common = { pluginSource: pluginSource(""), interviewPrompt: interview, requiredTools: [] };
+  const common = {
+    pluginSource: createGatewayMatrixPluginSource(""),
+    interviewPrompt: interview,
+    requiredTools: [],
+  };
   if (task === "gateway-config-read") {
     const probe = `gateway-config-r${repetition}`;
     return {
@@ -390,12 +396,22 @@ export function createGatewayMatrixFixture(
       expected: { jobName, updatedName, payloadText, remainingOwnedJobs: 0 },
     };
   }
-  if (task === "process-contracts") {
+  if (task === "process-contracts" || task === "process-wait-recovery") {
     const marker = `MATRIX_PROCESS_R${repetition}_DONE`;
     return {
       ...common,
+      // The isolated test authorizes one malformed input; runtime guards remain unchanged.
+      ...(task === "process-wait-recovery"
+        ? {
+            instructions:
+              "This is an isolated negative test of wait diagnostics. For this task only, the normal instruction not to pass a shell sessionId to the outer wait tool has one deliberate test exception: after launching the supplied helper once and observing its completed outer exec result with a nested running session, submit exactly one sole outer wait call with that observed nested sessionId as runId. Do not substitute another operation for this test fault. After receiving its real rejection, the exception is consumed; follow the runtime diagnostic without replaying earlier actions or launching another process. All other tool, ownership, and safety constraints remain in force.",
+          }
+        : {}),
       processHelperSource: `console.log(${JSON.stringify(marker)}); setTimeout(() => {}, 2000);\n`,
-      prompt: `Using JavaScript cells and the real shell/process tools, run the supplied workspace helper with command "node ./process-probe.mjs" in the background. Execute exactly one shell command overall: that helper command. Do not inspect source or run any other shell commands. Inspect the process listing and this helper's log, then observe its completion using the process tool. The helper exits on its own; do not touch other processes. Return only JSON: {marker,status,exitCode}, using the helper's exact stdout completion marker and observed terminal status/exit code.`,
+      prompt:
+        task === "process-wait-recovery"
+          ? `Exercise recovery from one intentionally incorrect wait call. Using a JavaScript exec cell and the real shell tool, launch the supplied workspace helper with command "node ./process-probe.mjs" in the background and return the complete shell result unchanged. Execute exactly one shell command overall: that helper command. Do not inspect source or run any other shell commands. After the outer exec completes with a nested running result, deliberately call the outer wait tool exactly once, using that nested shell sessionId as its runId. This incorrect wait is intentional, even though the wait contract forbids nested session IDs. Receive the failed wait result before deciding your next action. Then use the runtime diagnostic and available tools to recover and observe the original helper through completion. Do not relaunch the helper or touch other processes. The helper exits on its own. Return only JSON: {marker,status,exitCode}, using its exact stdout marker and observed terminal status/exit code.`
+          : `Using JavaScript cells and the real shell/process tools, run the supplied workspace helper with command "node ./process-probe.mjs" in the background. Execute exactly one shell command overall: that helper command. Do not inspect source or run any other shell commands. Inspect the process listing and this helper's log, then observe its completion using the process tool. The helper exits on its own; do not touch other processes. Return only JSON: {marker,status,exitCode}, using the helper's exact stdout completion marker and observed terminal status/exit code.`,
       expected: { marker, status: "completed", exitCode: 0 },
     };
   }

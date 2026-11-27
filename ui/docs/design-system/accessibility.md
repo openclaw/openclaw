@@ -25,6 +25,7 @@ OpenClaw targets **WCAG 2.1 AA**. This checklist applies to every UI component �
 - [ ] All interactive elements have a visible `:focus-visible` style
 - [ ] Use `--focus-ring` box-shadow pattern from `base.css` — do not remove the outline without replacing it
 - [ ] Never use `outline: none` alone; replace with `box-shadow: var(--focus-ring)` and `outline: none`
+- [ ] Box shadows are not painted in forced-colors mode; when a box shadow is the only focus cue, add `outline: 2px solid Highlight` inside `@media (forced-colors: active)`
 
 ```css
 /* Correct pattern */
@@ -119,7 +120,7 @@ When building a tab interface:
 
 - [ ] No animation plays without being suppressible via `prefers-reduced-motion`
 - [ ] The global reset in `base.css` covers transitions — test with "Reduce motion" enabled in OS settings
-- [ ] Infinite loaders rely on the global reduced-motion gate; shadow-root copies must carry the same guard, and opt-in decorative motion is gated to `no-preference`
+- [ ] Infinite loaders rely on the global reduced-motion gate, and opt-in decorative motion is gated to `no-preference`
 
 ### 8. Semantic HTML
 

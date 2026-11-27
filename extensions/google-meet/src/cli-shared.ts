@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   callGatewayFromCli,
   isGatewayClientRequestError,
@@ -13,8 +14,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
-import type { GoogleMeetCalendarLookupResult } from "./calendar.js";
-import type { GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
+import { parseGoogleMeetJoinRoute, parseGoogleMeetTransport } from "./join-options.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export type JoinOptions = {
@@ -27,6 +27,12 @@ export type JoinOptions = {
   dtmfSequence?: string;
 };
 
+export function readCliJoinOptions(options: JoinOptions) {
+  // An explicit empty CLI message suppresses the configured intro during local fallback.
+  const { message, dialInNumber, pin, dtmfSequence } = options;
+  return { ...parseGoogleMeetJoinRoute(options), message, dialInNumber, pin, dtmfSequence };
+}
+
 export type OAuthLoginOptions = {
   clientId?: string;
   clientSecret?: string;
@@ -35,17 +41,20 @@ export type OAuthLoginOptions = {
   timeoutSec?: string;
 };
 
-export type ResolveSpaceOptions = {
-  meeting?: string;
-  today?: boolean;
-  event?: string;
-  calendar?: string;
+type OAuthOptions = {
   accessToken?: string;
   refreshToken?: string;
   clientId?: string;
   clientSecret?: string;
   expiresAt?: string;
   json?: boolean;
+};
+
+export type ResolveSpaceOptions = OAuthOptions & {
+  meeting?: string;
+  today?: boolean;
+  event?: string;
+  calendar?: string;
 };
 
 export type MeetArtifactOptions = ResolveSpaceOptions & {
@@ -89,31 +98,6 @@ export type GoogleMeetExportWarning = {
   message: string;
 };
 
-export type GoogleMeetExportManifest = {
-  generatedAt: string;
-  request?: GoogleMeetExportRequest;
-  tokenSource?: "cached-access-token" | "refresh-token";
-  calendarEvent?: GoogleMeetCalendarLookupResult;
-  inputs: {
-    artifacts?: string;
-    attendance?: string;
-  };
-  counts: {
-    conferenceRecords: number;
-    artifacts: number;
-    attendanceRows: number;
-    recordings: number;
-    transcripts: number;
-    transcriptEntries: number;
-    smartNotes: number;
-    warnings: number;
-  };
-  conferenceRecords: string[];
-  files: string[];
-  zipFile?: string;
-  warnings: GoogleMeetExportWarning[];
-};
-
 export type SetupOptions = {
   json?: boolean;
   mode?: string;
@@ -130,21 +114,15 @@ type GoogleMeetGatewayMethod =
   | "googlemeet.testListen"
   | "googlemeet.testSpeech";
 
-type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
+type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false };
 
 const GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
-export type DoctorOptions = {
-  json?: boolean;
+export type DoctorOptions = OAuthOptions & {
   oauth?: boolean;
   meeting?: string;
   createSpace?: boolean;
-  accessToken?: string;
-  refreshToken?: string;
-  clientId?: string;
-  clientSecret?: string;
-  expiresAt?: string;
 };
 
 export type JsonOptions = {
@@ -155,45 +133,12 @@ export type RecoverTabOptions = JsonOptions & {
   transport?: string;
 };
 
-export type CreateOptions = {
-  accessToken?: string;
-  refreshToken?: string;
-  clientId?: string;
-  clientSecret?: string;
-  expiresAt?: string;
-  accessType?: string;
-  entryPointAccess?: string;
-  join?: boolean;
-  transport?: string;
-  mode?: string;
-  message?: string;
-  dialInNumber?: string;
-  pin?: string;
-  dtmfSequence?: string;
-  json?: boolean;
-};
-
-export function parseGoogleMeetMode(value: string | undefined): GoogleMeetModeInput | undefined {
-  if (
-    value === undefined ||
-    value === "agent" ||
-    value === "bidi" ||
-    value === "transcribe" ||
-    value === "realtime"
-  ) {
-    return value;
-  }
-  throw new Error(`mode must be agent, bidi, transcribe, or realtime; received ${value}`);
-}
-
-export function parseGoogleMeetTransport(
-  value: string | undefined,
-): GoogleMeetTransport | undefined {
-  if (value === undefined || value === "chrome" || value === "chrome-node" || value === "twilio") {
-    return value;
-  }
-  throw new Error(`transport must be chrome, chrome-node, or twilio; received ${value}`);
-}
+export type CreateOptions = OAuthOptions &
+  JoinOptions & {
+    accessType?: string;
+    entryPointAccess?: string;
+    join?: boolean;
+  };
 
 export function parseGoogleMeetBrowserTransport(
   value: string | undefined,
@@ -327,25 +272,29 @@ export function parsePositiveIntegerOption(
 }
 
 export async function callGoogleMeetGateway(params: {
-  callGateway: typeof callGatewayFromCli;
   method: GoogleMeetGatewayMethod;
   payload?: Record<string, unknown>;
   timeoutMs?: number;
 }): Promise<GoogleMeetGatewayCallResult> {
+  // Ctrl+C or SIGTERM cancels reads only; an interrupted read never falls back or prints.
+  const signal =
+    params.method === "googlemeet.status" || params.method === "googlemeet.transcript"
+      ? getAsyncWorkSignal()
+      : undefined;
   try {
     const timeoutMs = resolveGoogleMeetGatewayTimeoutMs(params.timeoutMs);
-    return {
-      ok: true,
-      payload: await params.callGateway(
-        params.method,
-        { json: true, timeout: String(timeoutMs) },
-        params.payload,
-        { progress: false },
-      ),
-    };
+    const payload = await callGatewayFromCli(
+      params.method,
+      { json: true, timeout: String(timeoutMs) },
+      params.payload,
+      { progress: false, ...(signal ? { signal } : {}) },
+    );
+    signal?.throwIfAborted();
+    return { ok: true, payload };
   } catch (err) {
+    signal?.throwIfAborted();
     if (isGatewayUnavailableForLocalFallback(err, params.method)) {
-      return { ok: false, error: err };
+      return { ok: false };
     }
     throw err;
   }

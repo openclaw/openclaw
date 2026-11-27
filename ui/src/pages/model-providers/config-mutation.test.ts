@@ -1,21 +1,259 @@
-// @vitest-environment node
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { describe, expect, it, vi } from "vitest";
+import { applyMergePatch } from "../../../../src/config/merge-patch.js";
+import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
-  buildDefaultsPatch,
-  DEFAULT_MODELS_REPLACE_PATHS,
+  runModelProviderDefaultsMutation,
   modelProviderErrorMessage,
+  modelProviderConfigMutationBlockedReason,
+  modelDefaultsActions,
+  readModelBehaviorConfig,
 } from "./config-mutation.ts";
+import { readModelProviderConfig, type DefaultsDraft } from "./data.ts";
+import { createHarness } from "./model-providers-page.test-support.tsx";
+
+async function submitDefaults(defaults: DefaultsDraft) {
+  const { context } = createHarness("main");
+  await context.runtimeConfig.ensureLoaded();
+  const gateway = new GatewayPageBinding(() => {}, { getGateway: () => context.gateway });
+  gateway.connect();
+  try {
+    await runModelProviderDefaultsMutation(context, gateway, {
+      defaults,
+      busy: false,
+      isCurrentAgent: () => true,
+      setBusy: () => {},
+      setMessage: () => {},
+    });
+    const raw = vi.mocked(context.runtimeConfig.patch).mock.calls[0]?.[0].raw;
+    if (!raw || typeof raw === "string") {
+      throw new Error("Expected the defaults operation to submit a structured patch");
+    }
+    return raw;
+  } finally {
+    gateway.dispose();
+  }
+}
 
 describe("model provider config patches", () => {
+  it("distinguishes disconnection, missing admin access, and unavailable config support", () => {
+    const harness = createHarness("main");
+    const context = harness.context;
+    Object.defineProperty(context.runtimeConfig, "canPatch", { value: false, configurable: true });
+    expect(modelProviderConfigMutationBlockedReason(context)).toBe(
+      "Couldn’t load model settings. Refresh and try again.",
+    );
+    context.gateway.snapshot.hello!.auth.scopes = ["operator.read"];
+    expect(modelProviderConfigMutationBlockedReason(context)).toBe(
+      "You can view Models, but only admins can change them.",
+    );
+    harness.publishPhase("offline");
+    expect(modelProviderConfigMutationBlockedReason(context)).toBe(
+      "Reconnect to change model settings.",
+    );
+  });
+  it.each([
+    "fixture/utility",
+    { primary: "fixture/utility", fallbacks: ["fixture/backup", "fixture/last"] },
+    { fallbacks: ["fixture/backup"] },
+    { primary: "fixture/utility", fallbacks: [] },
+  ])("preserves utility setting %j when another default changes", async (utilityModel) => {
+    const config = { agents: { defaults: { utilityModel } } };
+    const defaults = readModelProviderConfig(config).defaults;
+    const patch = await submitDefaults({
+      ...defaults,
+      ...readModelBehaviorConfig({}),
+      thinkingLevel: "high",
+      thinkingOverridden: true,
+    });
+    expect(applyMergePatch(config, patch)).toMatchObject({
+      agents: { defaults: { utilityModel } },
+    });
+  });
+
+  it.each(["primary", "fallback"] as const)(
+    "round-trips the %s model's harness and retains the way back",
+    async (field) => {
+      const model = field === "primary" ? "openai/first" : "openai/second";
+      const chain = { primary: "openai/first", fallbacks: ["openai/second", "fixture/last"] };
+      const original = {
+        model: chain,
+        models: {
+          [model]: {
+            alias: "Favorite",
+            agentRuntime: { id: "openclaw" },
+            pickerRuntimes: ["codex"],
+          },
+          "fixture/last": { streaming: false },
+        },
+      };
+      let config: Record<string, unknown> = { agents: { defaults: original } };
+      for (const [id, base] of [
+        ["codex", "openclaw"],
+        ["openclaw", "codex"],
+      ] as const) {
+        let draft: DefaultsDraft = {
+          ...readModelProviderConfig(config).defaults,
+          ...readModelBehaviorConfig({}),
+        };
+        const actions = modelDefaultsActions(
+          () => draft,
+          (patch) => {
+            draft = { ...draft, ...patch };
+          },
+        );
+        if (field === "primary") {
+          actions.onPrimaryChange(model, { id, base });
+        } else {
+          actions.onFallbackChange(model, { id, base });
+        }
+        const next = applyMergePatch(config, await submitDefaults(draft));
+        if (!isRecord(next)) {
+          throw new Error("Expected a merged configuration object");
+        }
+        config = next;
+        expect(config).toEqual({
+          agents: {
+            defaults: {
+              ...original,
+              models: {
+                ...original.models,
+                [model]: { alias: "Favorite", agentRuntime: { id }, pickerRuntimes: [base] },
+              },
+            },
+          },
+        });
+        expect(readModelProviderConfig(config).defaults.runtimes?.[model]?.id).toBe(id);
+      }
+    },
+  );
+
+  it("edits utility defaults without changing the regular model chain", () => {
+    let defaults = readModelProviderConfig({
+      agents: {
+        defaults: {
+          model: { primary: "fixture/chat", fallbacks: ["fixture/chat-backup"] },
+          utilityModel: {
+            primary: "fixture/utility",
+            fallbacks: ["fixture/backup", "fixture/last"],
+          },
+        },
+      },
+    }).defaults;
+    const actions = modelDefaultsActions(
+      () => defaults,
+      (patch) => {
+        defaults = { ...defaults, ...patch };
+      },
+    );
+    actions.onUtilityChange("fixture/next");
+    expect(defaults.utilityModel).toEqual({
+      primary: "fixture/next",
+      fallbacks: ["fixture/backup", "fixture/last"],
+    });
+    actions.onUtilityFallbackChange("fixture/new-backup");
+    expect(defaults.utilityModel).toEqual({
+      primary: "fixture/next",
+      fallbacks: ["fixture/new-backup", "fixture/last"],
+    });
+    actions.onUtilityChange(null);
+    expect(defaults.utilityModel).toEqual({ fallbacks: ["fixture/new-backup", "fixture/last"] });
+    actions.onUtilityFallbackChange(null);
+    expect(defaults.utilityModel).toEqual({ fallbacks: [] });
+    expect(defaults.primary).toBe("fixture/chat");
+    expect(defaults.fallbacks).toEqual(["fixture/chat-backup"]);
+    actions.onUtilityChange("");
+    expect(defaults.utilityModel).toEqual({ primary: "", fallbacks: [] });
+  });
+
+  it("restores automatic utility routing without losing its fallbacks through a merge patch", async () => {
+    const config = {
+      agents: {
+        defaults: { utilityModel: { primary: "fixture/utility", fallbacks: ["fixture/backup"] } },
+      },
+    };
+    let defaults = readModelProviderConfig(config).defaults;
+    modelDefaultsActions(
+      () => defaults,
+      (patch) => {
+        defaults = { ...defaults, ...patch };
+      },
+    ).onUtilityChange(null);
+    expect(
+      applyMergePatch(
+        config,
+        await submitDefaults({ ...defaults, ...readModelBehaviorConfig({}) }),
+      ),
+    ).toEqual({ agents: { defaults: { utilityModel: { fallbacks: ["fixture/backup"] } } } });
+  });
+
+  it("sets and clears the subagent model without touching its sibling settings", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          subagents: {
+            maxConcurrent: 4,
+            model: { primary: "fixture/runner", fallbacks: ["fixture/backup"] },
+          },
+        },
+      },
+    };
+    let defaults = readModelProviderConfig(config).defaults;
+    const actions = modelDefaultsActions(
+      () => defaults,
+      (patch) => {
+        defaults = { ...defaults, ...patch };
+      },
+    );
+    const saved = async () =>
+      applyMergePatch(
+        config,
+        await submitDefaults({ ...defaults, ...readModelBehaviorConfig({}) }),
+      );
+    // Promoting a saved fallback and switching back must not drop it from the chain.
+    actions.onSubagentChange("fixture/backup");
+    expect(await saved()).toEqual({
+      agents: {
+        defaults: {
+          subagents: {
+            maxConcurrent: 4,
+            model: { primary: "fixture/backup", fallbacks: ["fixture/backup"] },
+          },
+        },
+      },
+    });
+    actions.onSubagentChange("fixture/runner");
+    expect(await saved()).toEqual(config);
+    actions.onSubagentChange(null);
+    expect(await saved()).toEqual({
+      agents: {
+        defaults: { subagents: { maxConcurrent: 4, model: { fallbacks: ["fixture/backup"] } } },
+      },
+    });
+  });
+
+  it("preserves a configured Ultrafast preference when another default is saved", async () => {
+    const behavior = readModelBehaviorConfig({ fastModeDefault: "ultrafast" });
+    expect(behavior.fastMode).toBe("ultrafast");
+    expect(
+      await submitDefaults({
+        primary: "openai/model",
+        fallbacks: [],
+        utilityModel: null,
+        ...behavior,
+      }),
+    ).toMatchObject({ agents: { defaults: { fastModeDefault: "ultrafast" } } });
+  });
   it("redacts secrets in displayed mutation failures", () => {
     expect(modelProviderErrorMessage(new Error("OPENAI_API_KEY=sk-1234567890abcdef"))).toBe(
-      "OPENAI_API_KEY=sk-123...cdef",
+      "Couldn’t complete the request. Try again. OPENAI_API_KEY=sk-123...cdef",
     );
   });
 
-  it("batches model and behavior defaults into one patch", () => {
+  it("batches model and behavior defaults into one patch", async () => {
     expect(
-      buildDefaultsPatch({
+      await submitDefaults({
         primary: "openai/gpt-5",
         fallbacks: [],
         utilityModel: null,
@@ -35,7 +273,7 @@ describe("model provider config patches", () => {
       },
     });
     expect(
-      buildDefaultsPatch({
+      await submitDefaults({
         primary: "openai/gpt-5",
         fallbacks: ["anthropic/claude-sonnet-4-5"],
         utilityModel: "openai/gpt-5-mini",
@@ -59,15 +297,11 @@ describe("model provider config patches", () => {
     });
   });
 
-  it("confirms fallback-array shrinkage for the gateway destructive-array guard", () => {
-    expect(DEFAULT_MODELS_REPLACE_PATHS).toEqual(["agents.defaults.model.fallbacks"]);
-  });
-
   it.each(["openai/gpt-5-mini", "", null])(
     "persists utility setting %j without an explicit primary model",
-    (utilityModel) => {
+    async (utilityModel) => {
       expect(
-        buildDefaultsPatch({
+        await submitDefaults({
           primary: "",
           fallbacks: [],
           utilityModel,

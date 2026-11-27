@@ -15,15 +15,6 @@ import {
 
 type MatrixMonitorStatusSink = (patch: ChannelAccountSnapshot) => void;
 
-function cloneLastDisconnect(
-  value: ChannelAccountSnapshot["lastDisconnect"],
-): ChannelAccountSnapshot["lastDisconnect"] {
-  if (!value || typeof value === "string") {
-    return value ?? null;
-  }
-  return { ...value };
-}
-
 function formatSyncError(error: unknown): string | null {
   if (!error) {
     return null;
@@ -33,8 +24,6 @@ function formatSyncError(error: unknown): string | null {
   }
   return formatErrorMessage(error);
 }
-
-export type MatrixMonitorStatusController = ReturnType<typeof createMatrixMonitorStatusController>;
 
 export function createMatrixMonitorStatusController(params: {
   accountId: string;
@@ -53,13 +42,23 @@ export function createMatrixMonitorStatusController(params: {
   };
 
   const emit = () => {
-    params.statusSink?.({
-      ...status,
-      lastDisconnect: cloneLastDisconnect(status.lastDisconnect),
-    });
+    params.statusSink?.({ ...status });
   };
 
+  // Ready waits for markStartupComplete: hard-restart consumers act on ready, and startup
+  // maintenance plus crypto ownership must settle before they may interrupt the monitor.
+  let startupComplete = false;
+  let pendingReadyAt: number | null = null;
+  let pendingTransportActivity = false;
+
   const noteConnected = (at = Date.now(), options?: { transportActivity?: boolean }) => {
+    if (!startupComplete) {
+      pendingReadyAt = at;
+      pendingTransportActivity ||= options?.transportActivity === true;
+      status.lastEventAt = at;
+      emit();
+      return;
+    }
     const lastConnectedAt = status.connected === true ? (status.lastConnectedAt ?? at) : at;
     Object.assign(
       status,
@@ -82,6 +81,8 @@ export function createMatrixMonitorStatusController(params: {
     error?: unknown;
   }) => {
     const at = paramsLocal.at ?? Date.now();
+    pendingReadyAt = null;
+    pendingTransportActivity = false;
     const tokenInvalidated = isMatrixAccessTokenInvalidatedError(paramsLocal.error);
     if (status.lifecycle === "blocked" && status.terminalDisconnect === true && !tokenInvalidated) {
       // The invalidated-token diagnosis is authoritative until a ready sync proves recovery.
@@ -112,6 +113,16 @@ export function createMatrixMonitorStatusController(params: {
   emit();
 
   return {
+    markStartupComplete(at = Date.now()) {
+      startupComplete = true;
+      if (pendingReadyAt !== null) {
+        const readyAt = Math.max(pendingReadyAt, at);
+        const transportActivity = pendingTransportActivity;
+        pendingReadyAt = null;
+        pendingTransportActivity = false;
+        noteConnected(readyAt, { transportActivity });
+      }
+    },
     noteSyncState(state: MatrixSyncState, error?: unknown, at = Date.now()) {
       if (isMatrixReadySyncState(state)) {
         // matrix-js-sdk emits SYNCING after each successful /sync response.

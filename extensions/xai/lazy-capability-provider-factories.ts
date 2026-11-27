@@ -1,18 +1,14 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice-provider";
-import type {
-  SpeechProviderPlugin,
-  SpeechSynthesisStreamRequest,
-  SpeechTelephonySynthesisRequest,
-} from "openclaw/plugin-sdk/speech";
+import type { SpeechProviderPlugin } from "openclaw/plugin-sdk/speech";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import {
   createXaiImageGenerationProviderMetadata,
@@ -45,18 +41,16 @@ function createPendingTranscriptionAudioQueue(): {
   drain: () => Buffer[];
   enqueue: (audio: Buffer) => void;
 } {
-  let chunks: Array<Buffer | undefined> = [];
-  let head = 0;
+  let chunks: Buffer[] = [];
   let bytes = 0;
   const clear = () => {
     chunks = [];
-    head = 0;
     bytes = 0;
   };
   return {
     clear,
     drain: () => {
-      const pending = chunks.slice(head).filter((chunk): chunk is Buffer => chunk !== undefined);
+      const pending = chunks;
       clear();
       return pending;
     },
@@ -67,15 +61,9 @@ function createPendingTranscriptionAudioQueue(): {
       const chunk = Buffer.from(audio);
       chunks.push(chunk);
       bytes += chunk.byteLength;
-      while (bytes > MAX_LAZY_REALTIME_TRANSCRIPTION_AUDIO_BYTES && head < chunks.length) {
-        const dropped = chunks[head];
-        chunks[head] = undefined;
-        head += 1;
+      while (bytes > MAX_LAZY_REALTIME_TRANSCRIPTION_AUDIO_BYTES) {
+        const dropped = chunks.shift();
         bytes -= dropped?.byteLength ?? 0;
-      }
-      if (head > 256 && head * 2 >= chunks.length) {
-        chunks = chunks.slice(head);
-        head = 0;
       }
     },
   };
@@ -87,28 +75,11 @@ function createLazyXaiRealtimeTranscriptionSession(
 ): RealtimeTranscriptionSession {
   let session: RealtimeTranscriptionSession | undefined;
   let sessionPromise: Promise<RealtimeTranscriptionSession> | undefined;
-  let activeConnect:
-    | {
-        generation: number;
-        promise: Promise<void>;
-      }
-    | undefined;
-  let generation = 0;
-  let closedSessionGeneration: number | undefined;
+  let activeConnect: Promise<void> | undefined;
   let closed = false;
   let acceptsInput = false;
   const pendingAudio = createPendingTranscriptionAudioQueue();
 
-  const closeSession = (
-    closeGeneration: number,
-    loadedSession: RealtimeTranscriptionSession | undefined = session,
-  ) => {
-    if (!loadedSession || closedSessionGeneration === closeGeneration) {
-      return;
-    }
-    closedSessionGeneration = closeGeneration;
-    loadedSession.close();
-  };
   const loadSession = async () => {
     if (!sessionPromise) {
       sessionPromise = loadXaiRealtimeTranscriptionProvider().then((provider) =>
@@ -120,21 +91,15 @@ function createLazyXaiRealtimeTranscriptionSession(
   };
   return {
     connect: async () => {
-      if (closed) {
-        generation += 1;
-        closed = false;
-      }
-      const connectGeneration = generation;
-      if (activeConnect?.generation === connectGeneration) {
-        await activeConnect.promise;
+      closed = false;
+      if (activeConnect) {
+        await activeConnect;
         return;
       }
       const promise = (async () => {
         const loadedSession = await loadSession();
-        if (connectGeneration !== generation || closed) {
-          if (connectGeneration === generation && closed) {
-            closeSession(connectGeneration, loadedSession);
-          }
+        if (closed) {
+          loadedSession.close();
           return;
         }
         // connect() synchronously reopens a closed provider session. Starting it
@@ -145,16 +110,12 @@ function createLazyXaiRealtimeTranscriptionSession(
         }
         acceptsInput = true;
         await providerConnect;
-        if (connectGeneration === generation && closed) {
-          closeSession(connectGeneration, loadedSession);
-        }
       })();
-      const connectTask = { generation: connectGeneration, promise };
-      activeConnect = connectTask;
+      activeConnect = promise;
       try {
         await promise;
       } finally {
-        if (activeConnect === connectTask) {
+        if (activeConnect === promise) {
           activeConnect = undefined;
         }
       }
@@ -175,8 +136,9 @@ function createLazyXaiRealtimeTranscriptionSession(
       }
       closed = true;
       acceptsInput = false;
+      activeConnect = undefined;
       pendingAudio.clear();
-      closeSession(generation);
+      session?.close();
     },
     isConnected: () => !closed && (session?.isConnected() ?? false),
   };
@@ -192,18 +154,13 @@ export function createLazyXaiImageGenerationProvider(): ImageGenerationProvider 
 export function createLazyXaiMediaUnderstandingProvider(): MediaUnderstandingProvider {
   return {
     ...createXaiMediaUnderstandingProviderMetadata(),
-    transcribeAudio: async (req) => {
-      const provider = await loadXaiMediaUnderstandingProvider();
-      if (!provider.transcribeAudio) {
-        throw new Error("xAI media understanding provider missing transcribeAudio");
-      }
-      return await provider.transcribeAudio(req);
-    },
+    transcribeAudio: async (req) =>
+      (await loadXaiMediaUnderstandingProvider()).transcribeAudio(req),
   };
 }
 
 export function createLazyXaiVideoGenerationProvider(
-  context: Pick<PluginCapabilityCatalogContext, "isProviderApiKeyConfigured">,
+  context: Pick<PluginCapabilityCatalogHostContext, "isProviderApiKeyConfiguredAsync">,
 ): VideoGenerationProvider {
   return {
     ...createXaiVideoGenerationProviderMetadata(context),
@@ -212,39 +169,25 @@ export function createLazyXaiVideoGenerationProvider(
 }
 
 export function createLazyXaiSpeechProvider(
-  context: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured">,
+  context: Pick<
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync"
+  >,
 ): SpeechProviderPlugin {
   return {
     ...createXaiSpeechProviderMetadata(context),
-    listVoices: async (req) => {
-      const provider = await loadXaiSpeechProvider();
-      if (!provider.listVoices) {
-        throw new Error("xAI speech provider missing listVoices");
-      }
-      return await provider.listVoices(req);
-    },
+    listVoices: async (req) => (await loadXaiSpeechProvider()).listVoices(req),
     synthesize: async (req) => await (await loadXaiSpeechProvider()).synthesize(req),
-    streamSynthesize: async (req: SpeechSynthesisStreamRequest) => {
-      const provider = await loadXaiSpeechProvider();
-      if (!provider.streamSynthesize) {
-        throw new Error("xAI speech provider missing streamSynthesize");
-      }
-      return await provider.streamSynthesize(req);
-    },
-    synthesizeTelephony: async (req: SpeechTelephonySynthesisRequest) => {
-      const provider = await loadXaiSpeechProvider();
-      if (!provider.synthesizeTelephony) {
-        throw new Error("xAI speech provider missing synthesizeTelephony");
-      }
-      return await provider.synthesizeTelephony(req);
-    },
+    streamSynthesize: async (req) => (await loadXaiSpeechProvider()).streamSynthesize(req),
+    synthesizeTelephony: async (req) => (await loadXaiSpeechProvider()).synthesizeTelephony(req),
   };
 }
 
 export function createLazyXaiRealtimeTranscriptionProvider(
   context: Pick<
-    PluginCapabilityCatalogContext,
+    PluginCapabilityCatalogHostContext,
     | "isProviderAuthProfileConfigured"
+    | "isProviderAuthProfileConfiguredAsync"
     | "resolveApiKeyForProvider"
     | "createRealtimeTranscriptionWebSocketSession"
   >,
@@ -266,8 +209,8 @@ export function createLazyXaiRealtimeTranscriptionProvider(
 
 export function createLazyXaiRealtimeVoiceProvider(
   context: Pick<
-    PluginCapabilityCatalogContext,
-    "isProviderAuthProfileConfigured" | "resolveAgentDir"
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync" | "resolveAgentDir"
   >,
 ): RealtimeVoiceProviderPlugin {
   return {

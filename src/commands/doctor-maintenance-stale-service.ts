@@ -6,10 +6,9 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { readLegacyGatewayLockIdentity } from "../infra/gateway-lock-legacy.js";
 import { readPackageVersion } from "../infra/package-json.js";
 import { probePortUsage } from "../infra/ports-probe.js";
-import { UpdateDoctorError } from "../infra/update-doctor-result.js";
+import { DoctorMaintenanceRefusalError, UpdateDoctorError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
-import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 
 export type DoctorStaleGateway = {
   version: string;
@@ -29,20 +28,18 @@ export function doctorGatewayMaintenanceError(params: {
   const status = formatCliCommand("openclaw gateway status --deep", params.env);
   const doctor = formatCliCommand("openclaw doctor --fix", params.env);
   const next = `Run ${status}; resolve the reported failure, then ${doctor} and ${restart}.`;
-  return new UpdateDoctorError(
-    `Doctor ${params.phase} failed. ${params.detail} ${next}`,
-    [
-      createUpdateFailureFact(
-        { check: params.phase, code: params.code, message: params.detail },
-        params.env,
-      ),
-      createUpdateFailureFact(
-        { check: params.phase, code: "stale-gateway-recovery-command", message: next },
-        params.env,
-      ),
-    ],
-    { cause: params.cause },
-  );
+  const message = `Doctor ${params.phase} failed. ${params.detail} ${next}`;
+  const failureFacts = [
+    { code: params.code, message: params.detail },
+    { code: "stale-gateway-recovery-command", message: next },
+  ].map((fact) => createUpdateFailureFact({ check: params.phase, ...fact }, params.env));
+  return params.phase === "gateway-stop"
+    ? new DoctorMaintenanceRefusalError(
+        message,
+        { kind: "data-at-risk", reason: "gateway-state-unverified" },
+        { cause: params.cause, failureFacts },
+      )
+    : new UpdateDoctorError(message, failureFacts, { cause: params.cause });
 }
 
 /** Identify predecessor code without requiring startup before offline migrations. */
@@ -79,15 +76,13 @@ export async function inspectStaleDoctorGateway(params: {
         env: serviceEnv,
         expectedVersion: version,
         expectedBuildId: buildId,
-        openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-        requirePluginHealth: false,
       });
   params.assertCurrent?.();
   const stale =
     legacy ||
     health?.buildIdMismatch?.actual != null ||
     health?.versionMismatch ||
-    health?.probeError?.startsWith("gateway closed (1011): gateway message handler unavailable");
+    health?.staleConnection !== undefined;
   if (!stale) {
     return undefined;
   }
@@ -119,6 +114,8 @@ export async function inspectStaleDoctorGateway(params: {
 export async function assertStaleDoctorGatewayStopped(params: {
   stale: DoctorStaleGateway;
   env: NodeJS.ProcessEnv;
+  /** Why the stop was skipped rather than attempted, when it was. */
+  skipped?: string;
   assertCurrent?: () => void;
 }): Promise<void> {
   const runtime = await resolveGatewayService().readRuntime(params.env);
@@ -126,8 +123,16 @@ export async function assertStaleDoctorGatewayStopped(params: {
   const legacy = await readLegacyGatewayLockIdentity(params.env);
   params.assertCurrent?.();
   if (runtime.status !== "stopped" || (runtime.pid ?? 0) > 0 || port !== "free" || legacy) {
+    const observed = `service=${runtime.status}, PID=${runtime.pid ?? "none"}, port ${params.stale.port}=${port}, legacy lock owner=${legacy?.pid ?? "none"}`;
+    const stale = `Stale Gateway PID ${params.stale.pid ?? "unknown"}`;
+    // Only a running service, a busy port or a live lock shows the old Gateway still runs.
+    const stillRunning = runtime.status === "running" || port === "busy" || Boolean(legacy);
     throw new Error(
-      `Stale Gateway PID ${params.stale.pid ?? "unknown"} did not stop: service=${runtime.status}, PID=${runtime.pid ?? "none"}, port ${params.stale.port}=${port}, legacy lock owner=${legacy?.pid ?? "none"}.`,
+      params.skipped
+        ? `${stale} was not stopped: ${params.skipped} Observed: ${observed}.`
+        : stillRunning
+          ? `${stale} did not stop: ${observed}.`
+          : `${stale} could not be confirmed stopped: ${observed}.`,
     );
   }
 }

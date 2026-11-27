@@ -10,6 +10,7 @@ const GENERIC_PROVIDER_APIS = new Set<string>([
   "openai-responses",
   "anthropic-messages",
   "google-generative-ai",
+  "google-interactions",
 ]);
 
 export function resolveProviderPluginLookupKey(
@@ -24,11 +25,7 @@ export function resolveProviderPluginLookupKey(
   ) {
     return "google";
   }
-  // Runtime plugin data can be looser than ProviderConfig; guard before .some().
-  if (
-    Array.isArray(provider?.models) &&
-    provider.models.some((model) => normalizeOptionalString(model.api) === "google-generative-ai")
-  ) {
+  if (provider?.models?.some((model) => model.api === "google-generative-ai")) {
     return "google";
   }
   if (

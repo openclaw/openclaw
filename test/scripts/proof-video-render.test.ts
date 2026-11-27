@@ -1,25 +1,19 @@
 import { describe, expect, it } from "vitest";
-import {
-  planProofVideoRender,
-  type ProofVideoCue,
-  type ProofVideoCues,
-} from "../../scripts/lib/proof-video-render.ts";
+import { planProofVideoRender, type ProofVideoCue } from "../../scripts/lib/proof-video-render.ts";
 
-const document = (cues: ProofVideoCue[]): ProofVideoCues => ({
-  version: 1,
-  video: "raw.webm",
-  viewport: { width: 1280, height: 800 },
-  scale: 2,
-  captionHeight: 120,
-  cues,
-});
-const caption = {
-  kind: "caption",
-  start: 3,
-  end: 9,
-  text: "A caption",
-  image: "captions/0.png",
-} as const;
+const render = (cues: ProofVideoCue[]) =>
+  planProofVideoRender(
+    {
+      version: 1,
+      video: "raw.webm",
+      viewport: { width: 1280, height: 800 },
+      scale: 2,
+      captionHeight: 120,
+      cues,
+    },
+    { durationSeconds: 12, fps: 25 },
+  );
+const caption = { kind: "caption", start: 3, end: 9, text: "A caption", image: "c.png" } as const;
 const zoom = {
   kind: "zoom",
   start: 2,
@@ -28,23 +22,36 @@ const zoom = {
   ease: 2,
   rect: { x: 1100, y: 680, width: 100, height: 80 },
 } as const;
-const options = { durationSeconds: 12, fps: 25 };
 
 describe("planProofVideoRender", () => {
-  it("remaps captions spanning a speed segment and preserves the remaining timeline", () => {
-    const plan = planProofVideoRender(
-      document([caption, { kind: "speed", start: 4, end: 8, factor: 4 }]),
-      options,
+  it("keeps annotations attached through zoom and speed changes while captions stay in the viewport", () => {
+    const plan = render([
+      caption,
+      zoom,
+      { kind: "speed", start: 4, end: 8, factor: 4 },
+      {
+        kind: "annotation",
+        start: 3,
+        end: 9,
+        image: "annotations/0.png",
+        annotations: [{ kind: "outline", rect: zoom.rect }],
+      },
+    ]);
+    expect(plan.inputs).toEqual(["annotations/0.png", "c.png"]);
+    expect(plan.filterComplex).toContain(
+      "[timed][1:v]overlay=x=0:y=0:enable='gte(t,3)*lt(t,6)'[annotation1]",
     );
-    expect(plan.durationSeconds).toBe(9);
-    expect(plan.inputs).toEqual(["captions/0.png"]);
-    expect(plan.filterComplex).toContain("gte(t,3)*lt(t,6)");
+    expect(plan.filterComplex).toContain("[annotation1]zoompan");
+    expect(plan.filterComplex).toContain(
+      "[zoomed][2:v]overlay=x=0:y=680:enable='gte(t,3)*lt(t,6)'[caption2]",
+    );
     expect(plan.filterComplex).toContain("trim=start=4:end=8,setpts=(PTS-STARTPTS)/4");
     expect(plan.filterComplex).toContain("concat=n=3:v=1:a=0,fps=25");
+    expect(plan.durationSeconds).toBe(9);
   });
 
   it("uses per-frame eased zoom with raw-resolution centers clamped to the frame", () => {
-    const { filterComplex } = planProofVideoRender(document([zoom]), options);
+    const { filterComplex } = render([zoom]);
     expect(filterComplex).toContain("zoompan=z='");
     expect(filterComplex).toContain("(in/25)");
     expect(filterComplex).toContain("cos(PI*");
@@ -56,10 +63,7 @@ describe("planProofVideoRender", () => {
   });
 
   it("remaps ease boundaries when a zoom crosses a speed change", () => {
-    const plan = planProofVideoRender(
-      document([zoom, { kind: "speed", start: 3, end: 9, factor: 2 }]),
-      options,
-    );
+    const plan = render([zoom, { kind: "speed", start: 3, end: 9, factor: 2 }]);
     expect(plan.durationSeconds).toBe(9);
     // Raw [2,4,8,10] becomes [2,3.5,5.5,7], including both easing knees.
     expect(plan.filterComplex).toContain("gte((in/25),2)*lt((in/25),7)");
@@ -73,12 +77,10 @@ describe("planProofVideoRender", () => {
     "rejects overlapping %s cues but accepts adjacent ones",
     (kind) => {
       const first = kind === "zoom" ? zoom : { kind, start: 2, end: 10, factor: 2 };
-      expect(() =>
-        planProofVideoRender(document([first, { ...first, start: 9, end: 11 }]), options),
-      ).toThrow(`${kind} cues must not overlap`);
-      expect(() =>
-        planProofVideoRender(document([first, { ...first, start: 10, end: 11 }]), options),
-      ).not.toThrow();
+      expect(() => render([first, { ...first, start: 9, end: 11 }])).toThrow(
+        `${kind} cues must not overlap`,
+      );
+      expect(() => render([first, { ...first, start: 10, end: 11 }])).not.toThrow();
     },
   );
 
@@ -88,8 +90,6 @@ describe("planProofVideoRender", () => {
     { ...zoom, factor: Number.NaN },
     { ...zoom, rect: { x: 1270, y: 0, width: 20, height: 10 } },
   ])("rejects invalid authored cues: %j", (cue) => {
-    expect(() => planProofVideoRender(document([cue]), options)).toThrow(
-      "Invalid proof-video cues:",
-    );
+    expect(() => render([cue])).toThrow("Invalid proof-video cues:");
   });
 });

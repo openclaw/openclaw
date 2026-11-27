@@ -17,12 +17,15 @@ export {
 export type { ProviderPlugin } from "../provider-model-shared.js";
 
 /** Supplies manifest facts without cold runtime discovery in provider catalog tests. */
-export function useProviderCatalogMetadata(pluginRoot: URL): void {
-  const loaded = loadPluginManifest(fileURLToPath(pluginRoot));
-  if (!loaded.ok) {
-    throw new Error(loaded.error);
-  }
-  const snapshot = createPluginMetadataSnapshotFixture({ plugins: [loaded.manifest] });
+export function useProviderCatalogMetadata(pluginRoot: URL, ...additionalPluginRoots: URL[]): void {
+  const plugins = [pluginRoot, ...additionalPluginRoots].map((root) => {
+    const loaded = loadPluginManifest(fileURLToPath(root));
+    if (!loaded.ok) {
+      throw new Error(loaded.error);
+    }
+    return loaded.manifest;
+  });
+  const snapshot = createPluginMetadataSnapshotFixture({ plugins });
   beforeEach(() => {
     setCurrentPluginMetadataSnapshot(snapshot);
     const loader = vi.spyOn(jitiFactory, "createJiti").mockImplementation(() => {

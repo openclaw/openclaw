@@ -1,13 +1,14 @@
-// Probe script for plugin update E2E scenarios.
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { legacyPackageAcceptanceCompat } from "../package-compat.mjs";
+import { writeJson } from "../fixtures/common.mjs";
 import {
   readPluginInstallRecords,
   writePluginInstallIndexForE2E,
 } from "../plugin-index-sqlite.mjs";
+import { settlePluginUpdate } from "./activation.mjs";
 import { runConsentScenario } from "./consent-scenario.mjs";
 
 const home = os.homedir();
@@ -24,8 +25,7 @@ const readJson = (file) => {
 };
 
 const pluginRecordSnapshot = () => {
-  const config = readJson(openclawPath("openclaw.json"));
-  const records = readPluginInstallRecords({ fallbackRecords: config.plugins?.installs ?? {} });
+  const records = readPluginInstallRecords({ fallbackRecords: {} });
   const record = records["lossless-claw"] ?? records["@example/lossless-claw"];
   if (!record) {
     throw new Error("missing plugin install record");
@@ -36,11 +36,6 @@ const pluginRecordSnapshot = () => {
 
 function openclawPath(...parts) {
   return path.join(home, ".openclaw", ...parts);
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function seedInstallState() {
@@ -234,6 +229,38 @@ function assertCorruptTargetUnavailable(updateJsonPath, pluginId) {
   }
 }
 
+async function assertSettledCorruptUpdate(updateJsonPath, pluginId, entry, version, expectation) {
+  assert(["unavailable", "repaired"].includes(expectation));
+  const result = readJson(updateJsonPath);
+  if (result.phase === undefined) {
+    if (expectation === "unavailable") {
+      assertCorruptTargetUnavailable(updateJsonPath, pluginId);
+    } else {
+      assertCorruptUpdate(updateJsonPath, pluginId);
+    }
+    assert.equal(readJson(path.join(path.dirname(entry), "package.json")).version, version);
+    return;
+  }
+  const { receipt, pluginStep } = await settlePluginUpdate(
+    entry,
+    result,
+    version,
+    updateJsonPath + ".terminal.json",
+  );
+  if (expectation === "unavailable") {
+    assert.equal(receipt.status, "succeeded", "unavailable plugin must not block core activation");
+    assert(
+      pluginStep.detail
+        ?.split("\n")
+        .some((line) => line.includes(pluginId) && line.includes("openclaw ")),
+      "same-run plugin result must name the corrupt plugin and a repair command",
+    );
+  } else {
+    assert.equal(receipt.before?.version, version, "repair must start with the same core version");
+    assert.equal(pluginStep.status, "completed", pluginStep.detail);
+  }
+}
+
 function assertCorruptUpdate(updateJsonPath, pluginId) {
   const payload = readJson(updateJsonPath);
   if (payload.status !== "ok") {
@@ -243,11 +270,6 @@ function assertCorruptUpdate(updateJsonPath, pluginId) {
   if (!plugins) {
     throw new Error(`missing postUpdate.plugins in update output: ${JSON.stringify(payload)}`);
   }
-  assertCorruptPluginRestored(plugins, pluginId);
-}
-
-function assertCorruptPluginResult(pluginJsonPath, pluginId) {
-  const plugins = readJson(pluginJsonPath);
   assertCorruptPluginRestored(plugins, pluginId);
 }
 
@@ -303,10 +325,12 @@ function assertCorruptPluginPolicyPreserved(configPath, pluginId) {
   console.log(JSON.stringify({ allow, codexEnabled: false }));
 }
 
-const [command, arg, arg2] = process.argv.slice(2);
+const [command, arg, arg2, ...extra] = process.argv.slice(2);
 const commands = {
-  consent: () => runConsentScenario(arg, arg2),
-  "legacy-compat": () => console.log(legacyPackageAcceptanceCompat(arg || "") ? "1" : "0"),
+  consent: () =>
+    runConsentScenario(arg, arg2, {
+      coreUpdateConsent: process.env.OPENCLAW_E2E_CORE_UPDATE_CONSENT !== "0",
+    }),
   seed: seedInstallState,
   "wait-registry": waitRegistry,
   snapshot: () => process.stdout.write(JSON.stringify(pluginRecordSnapshot(), null, 2)),
@@ -314,13 +338,12 @@ const commands = {
   "assert-output": () => assertOutput(arg),
   "assert-corrupt-unavailable": () => assertCorruptTargetUnavailable(arg, arg2),
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
-  "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
+  "assert-corrupt-plugin-result": () => assertCorruptPluginRestored(readJson(arg), arg2),
   "assert-corrupt-policy-preserved": () => assertCorruptPluginPolicyPreserved(arg, arg2),
+  "assert-settled-corrupt-update": () => assertSettledCorruptUpdate(arg, arg2, ...extra),
 };
 const run = commands[command];
-await (
-  run ??
-  (() => {
-    throw new Error(`Unknown plugin update probe command: ${command || "(missing)"}`);
-  })
-)();
+if (!run) {
+  throw new Error(`Unknown plugin update probe command: ${command || "(missing)"}`);
+}
+await run();

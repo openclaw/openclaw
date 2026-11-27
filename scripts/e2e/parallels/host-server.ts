@@ -39,7 +39,6 @@ function resolveConfiguredSharedHostIp(): string {
     const result = run("prlsrvctl", ["net", "info", "Shared"], {
       check: false,
       env: { ...process.env, LC_ALL: "C" },
-      quiet: true,
     });
     return result.status === 0 ? parseSharedAdapterIpv4(result.stdout) : "";
   } catch {
@@ -49,7 +48,7 @@ function resolveConfiguredSharedHostIp(): string {
 
 function resolveInterfaceHostIp(): string {
   try {
-    const result = run("ifconfig", [], { check: false, quiet: true });
+    const result = run("ifconfig", [], { check: false });
     if (result.status !== 0) {
       return "";
     }
@@ -65,11 +64,15 @@ function resolveInterfaceHostIp(): string {
   return "";
 }
 
+export function detectParallelsHostIp(): string {
+  return resolveConfiguredSharedHostIp() || resolveInterfaceHostIp();
+}
+
 export function resolveHostIp(explicit = ""): string {
   if (explicit) {
     return explicit;
   }
-  const hostIp = resolveConfiguredSharedHostIp() || resolveInterfaceHostIp();
+  const hostIp = detectParallelsHostIp();
   if (!hostIp) {
     die("failed to detect Parallels host IP; pass --host-ip");
   }
@@ -78,14 +81,10 @@ export function resolveHostIp(explicit = ""): string {
 
 function allocateHostPort(): number {
   return Number(
-    run(
-      "python3",
-      [
-        "-c",
-        "import socket; s=socket.socket(); s.bind(('0.0.0.0', 0)); print(s.getsockname()[1]); s.close()",
-      ],
-      { quiet: true },
-    ).stdout.trim(),
+    run("python3", [
+      "-c",
+      "import socket; s=socket.socket(); s.bind(('0.0.0.0', 0)); print(s.getsockname()[1]); s.close()",
+    ]).stdout.trim(),
   );
 }
 

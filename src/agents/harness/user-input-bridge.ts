@@ -2,27 +2,15 @@ import { markReplyPayloadForSourceSuppressionDelivery } from "../../auto-reply/r
 import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-
-export type AgentHarnessUserInputOption = {
-  label: string;
-  description?: string;
-};
-
-export type AgentHarnessUserInputQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  /** External step to open without answering the question. */
-  url?: string;
-  multiSelect?: boolean;
-  isOther?: boolean;
-  isSecret?: boolean;
-  options?: readonly AgentHarnessUserInputOption[] | null;
-};
-
-export type AgentHarnessUserInputAnswers = {
-  answers: Record<string, { answers: string[] }>;
-};
+import type {
+  AgentHarnessQuestionGatewayCall,
+  AgentQuestionDispatcher,
+} from "./gateway-question-dispatch.js";
+import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import type {
+  AgentHarnessUserInputAnswers,
+  AgentHarnessUserInputQuestion,
+} from "./user-input-types.js";
 
 export type AgentHarnessUserInputPromptOptions = {
   intro?: string;
@@ -30,6 +18,21 @@ export type AgentHarnessUserInputPromptOptions = {
   secretWarning?: string;
   otherLabel?: string;
   presentation?: MessagePresentation;
+};
+
+export type RunAgentHarnessGatewayQuestionParams = {
+  questions: readonly AgentHarnessUserInputQuestion[];
+  sessionKey: string;
+  agentId?: string;
+  runId?: string;
+  timeoutMs: number;
+  gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
+  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> & {
+    hostCapabilities?: AgentHarnessHostCapabilities;
+  };
+  promptOptions?: AgentHarnessUserInputPromptOptions;
+  signal?: AbortSignal;
+  questionId?: string;
 };
 
 type AgentHarnessQuestionPromptPayload = {
@@ -54,11 +57,12 @@ export function formatAgentHarnessUserInputPrompt(
   const formatText = options.formatText ?? ((text: string) => text);
   const lines = [options.intro ?? "Agent needs input:"];
   questions.forEach((question, index) => {
-    if (questions.length > 1) {
-      lines.push("", `${index + 1}. ${formatText(question.header)}`, formatText(question.question));
-    } else {
-      lines.push("", formatText(question.header), formatText(question.question));
-    }
+    const prefix = questions.length > 1 ? `${index + 1}. ` : "";
+    lines.push(
+      "",
+      `${prefix}${formatText(question.header)}`,
+      formatQuestionText(question, formatText),
+    );
     if (question.isSecret) {
       lines.push(
         options.secretWarning ?? "This channel may show your reply to other participants.",
@@ -76,6 +80,22 @@ export function formatAgentHarnessUserInputPrompt(
     }
   });
   return lines.join("\n");
+}
+
+/**
+ * Display formatters escape one line of untrusted text. Text-only channels get
+ * the browser link only from this text, so the line holding exactly the
+ * question's own URL stays literal unless it carries markup or mention characters.
+ */
+function formatQuestionText(
+  question: AgentHarnessUserInputQuestion,
+  formatText: (text: string) => string,
+): string {
+  const literalUrl = /[\s<>@`[\]()*~|]/u.test(question.url ?? " ") ? undefined : question.url;
+  return question.question
+    .split("\n")
+    .map((line) => (line.trim() && line !== literalUrl ? formatText(line) : line))
+    .join("\n");
 }
 
 export async function deliverAgentHarnessUserInputPrompt(
@@ -122,7 +142,7 @@ function buildAgentHarnessQuestionPresentation(params: {
   ].join("\n");
   return {
     blocks: [
-      { type: "text", text: formatText(question.question) },
+      { type: "text", text: formatQuestionText(question, formatText) },
       { type: "text", text: optionGuidance },
       {
         type: "buttons",
@@ -136,7 +156,7 @@ function buildAgentHarnessQuestionPresentation(params: {
             action: {
               type: "question" as const,
               questionId: params.questionId,
-              optionValue: option.label,
+              optionValue: option.value ?? option.label,
             },
           })),
           ...(question.isOther
@@ -174,7 +194,7 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
   const [question] = params.questions;
   const candidateOptionValues =
     params.questions.length === 1 && question && !question.multiSelect && !question.isSecret
-      ? (question.options?.map((option) => option.label) ?? [])
+      ? (question.options?.map((option) => option.value ?? option.label) ?? [])
       : [];
   const normalizedOptionValues = candidateOptionValues.map((option) => option.trim().toLowerCase());
   const optionValues =
@@ -283,17 +303,17 @@ function normalizeAgentHarnessUserInputAnswers(
     return [declaredAnswer];
   }
   const normalized = answer
-    .split(/[,;\n]/u)
+    .split(question.answerFormat === "lines" ? /\r?\n/u : /[,;\n]/u)
     .map((part) => normalizeAgentHarnessUserInputAnswer(part, question))
     .filter((part): part is string => Boolean(part));
-  return [...new Set(normalized)];
+  return question.presentation === "form" ? normalized : [...new Set(normalized)];
 }
 
 export function normalizeAgentHarnessUserInputAnswer(
   answer: string,
   question: AgentHarnessUserInputQuestion,
 ): string | undefined {
-  const trimmed = answer.trim();
+  const trimmed = question.presentation === "form" ? answer : answer.trim();
   const declaredAnswer = normalizeAgentHarnessUserInputOption(trimmed, question);
   if (declaredAnswer) {
     return declaredAnswer;
@@ -314,14 +334,15 @@ function normalizeAgentHarnessUserInputOption(
   // Convert to zero-based only at the options-array boundary.
   const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
   const indexed = optionIndex >= 0 ? options[optionIndex] : undefined;
-  if (indexed) {
-    return indexed.label;
-  }
-  const exact = options.find((option) => option.label.toLowerCase() === trimmed.toLowerCase());
-  if (exact) {
-    return exact.label;
-  }
-  return undefined;
+  const selected =
+    indexed ||
+    options.find(
+      (option) =>
+        option.value === answer ||
+        ((!question.isOther || option.value === undefined) &&
+          option.label.toLowerCase() === trimmed.toLowerCase()),
+    );
+  return selected ? (selected.value ?? selected.label) : undefined;
 }
 
 function parseKeyedAnswers(inputText: string): Map<string, string> {

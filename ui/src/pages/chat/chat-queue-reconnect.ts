@@ -1,5 +1,5 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import type { SessionScopeHost } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -8,12 +8,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import {
-  isVolatileQueuedMessage,
-  updateQueuedMessage,
-  updateVolatileQueuedMessage,
-  type ChatQueueScopedSessionHost,
-} from "./chat-queue.ts";
+import { updateQueuedMessage, type ChatQueueScopedSessionHost } from "./chat-queue.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 
 export function markQueuedChatSendsWaitingForReconnect(host: ChatQueueScopedSessionHost) {
@@ -37,10 +32,10 @@ export function markQueuedChatSendsWaitingForReconnect(host: ChatQueueScopedSess
     ) {
       continue;
     }
-    if (isVolatileQueuedMessage(host, item.id)) {
-      updateVolatileQueuedMessage(host, item.id, (current) => ({
+    if (chatOutboxOwner(host).hasVolatile(host, item.id)) {
+      chatOutboxOwner(host).change(host, item.id, (current) => ({
         ...current,
-        sendState: "unconfirmed",
+        sendState: "waiting-reconnect",
       }));
       continue;
     }
@@ -58,16 +53,6 @@ type ChatIdleSessionReconciliationHost = SessionScopeHost & {
   sessionsResult?: SessionsListResult | null;
 };
 
-function isSelectedSessionKnownIdle(
-  sessionsResult: SessionsListResult,
-  sessionKey: string,
-): boolean {
-  const row = sessionsResult.sessions.find((session) =>
-    areUiSessionKeysEquivalent(session.key, sessionKey),
-  );
-  return Boolean(row && !isSessionRunActive(row));
-}
-
 function isHistorySessionInfoForRequestedSession(
   host: ChatIdleSessionReconciliationHost,
   historySessionKey: string | undefined,
@@ -83,32 +68,15 @@ function isHistorySessionInfoForRequestedSession(
   );
 }
 
-function findSelectedSessionRow(
-  host: ChatIdleSessionReconciliationHost,
-  sessionsResult: SessionsListResult | null | undefined,
-  sessionKey: string,
-  historySessionKey: string | undefined,
-): GatewaySessionRow | undefined {
-  const requestedGlobalAgentId =
-    historySessionKey && isUiGlobalSessionKey(historySessionKey)
-      ? resolveUiGlobalAliasAgentId(host, sessionKey)
-      : undefined;
-  return sessionsResult?.sessions.find((session) => {
-    if (areUiSessionKeysEquivalent(session.key, sessionKey)) {
-      return true;
-    }
-    return (
-      requestedGlobalAgentId != null &&
-      resolveUiGlobalAliasAgentId(host, session.key) === requestedGlobalAgentId
-    );
-  });
-}
-
 function historyIdleProofIsStaleForSelectedRow(
   historySessionInfo: GatewaySessionRow,
   selectedRow: GatewaySessionRow | undefined,
 ): boolean {
-  if (!selectedRow || !isSessionRunActive(selectedRow) || isSessionRunActive(historySessionInfo)) {
+  if (
+    !selectedRow ||
+    !isSessionRunStateActive(selectedRow) ||
+    isSessionRunStateActive(historySessionInfo)
+  ) {
     return false;
   }
   const historyUpdatedAt =
@@ -140,21 +108,32 @@ export function flushChatQueueAfterIdleSessionReconciliation(
       historyRefreshSettled.status === "fulfilled"
         ? historyRefreshSettled.value?.sessionInfo
         : null;
-    const selectedSessionRow = findSelectedSessionRow(
-      host,
-      freshSessionsResult,
-      sessionKey,
-      historySessionInfo?.key,
-    );
+    const historySessionKey = historySessionInfo?.key;
+    const requestedGlobalAgentId =
+      historySessionKey && isUiGlobalSessionKey(historySessionKey)
+        ? resolveUiGlobalAliasAgentId(host, sessionKey)
+        : undefined;
+    const selectedSessionRow = freshSessionsResult?.sessions.find((session) => {
+      if (areUiSessionKeysEquivalent(session.key, sessionKey)) {
+        return true;
+      }
+      return (
+        requestedGlobalAgentId != null &&
+        resolveUiGlobalAliasAgentId(host, session.key) === requestedGlobalAgentId
+      );
+    });
     const historySessionKnownIdle = Boolean(
       historySessionInfo &&
       isHistorySessionInfoForRequestedSession(host, historySessionInfo.key, sessionKey) &&
-      !isSessionRunActive(historySessionInfo) &&
+      !isSessionRunStateActive(historySessionInfo) &&
       !historyIdleProofIsStaleForSelectedRow(historySessionInfo, selectedSessionRow),
     );
-    const sessionsResultKnownIdle = freshSessionsResult
-      ? isSelectedSessionKnownIdle(freshSessionsResult, sessionKey)
-      : false;
+    const listedSessionRow = freshSessionsResult?.sessions.find((session) =>
+      areUiSessionKeysEquivalent(session.key, sessionKey),
+    );
+    const sessionsResultKnownIdle = Boolean(
+      listedSessionRow && !isSessionRunStateActive(listedSessionRow),
+    );
     if (
       sessionsRefreshSettled.status !== "fulfilled" ||
       host.chatQueue.length === 0 ||

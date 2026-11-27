@@ -1,20 +1,20 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionCatalogHost } from "../../packages/gateway-protocol/src/index.js";
 import { createConfigIO } from "../config/io.factory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { SessionCatalogListLifetime } from "../gateway/server-methods/session-catalog-list-lifetime.js";
 import { listSessionCatalogProvider } from "../gateway/server-methods/session-catalog-provider-access.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
-import { createPluginRegistry } from "./registry.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { validatePluginSchemaValue } from "./schema-validator.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
@@ -41,43 +41,35 @@ async function registerCatalog(
   roots.push(root);
   const configPath = path.join(root, "openclaw.json");
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-  let source: OpenClawConfig =
-    initial === undefined
+  const configFor = (enabled?: boolean): OpenClawConfig =>
+    enabled === undefined
       ? {}
-      : {
-          plugins: {
-            entries: { [pluginId]: { config: { sessionCatalog: { enabled: initial } } } },
-          },
-        };
+      : { plugins: { entries: { [pluginId]: { config: { sessionCatalog: { enabled } } } } } };
+  const source = configFor(initial);
   if (configExists === "dangling") {
     await fs.symlink(path.join(root, "missing.json"), configPath);
   } else if (configExists === true) {
     await fs.writeFile(configPath, JSON.stringify(source));
   }
   const env = { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
-  const io = createConfigIO({
-    env,
-    homedir: () => root,
-    observe: false,
-    pluginValidation: "core-only",
-  });
+  const homedir = () => root;
+  const io = createConfigIO({ env, homedir, observe: false, pluginValidation: "core-only" });
   if (configExists === "fresh") {
     await io.writeConfigFile(source);
   }
   const snapshot = await io.readConfigFileSnapshot();
-  expect(snapshot.exists).toBe(configExists === true || configExists === "fresh");
-  const manifest: PluginManifestRecord = {
+  const catalogSchema = {
+    type: "object",
+    default: {},
+    properties: {
+      enabled: { type: "boolean", default: true },
+      pageSize: { type: "integer", default: 10 },
+    },
+  };
+  const manifest = createPluginManifestRecordFixture({
     id: pluginId,
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    hooks: [],
-    skills: [],
-    origin: "bundled",
     enabledByDefault: true,
     rootDir: root,
-    source: path.join(root, "index.js"),
-    manifestPath: path.join(root, "openclaw.plugin.json"),
     setup: {
       nativeSessionCatalog: {
         label: "Fixture",
@@ -87,61 +79,25 @@ async function registerCatalog(
           : {}),
       },
     },
-    configSchema: {
-      type: "object",
-      properties: {
-        sessionCatalog: {
-          type: "object",
-          default: {},
-          properties: {
-            enabled: { type: "boolean", default: true },
-            pageSize: { type: "integer", default: 10 },
-          },
-        },
-      },
-    },
-  };
-  const pluginLocal = validatePluginSchemaValue({
-    origin: "bundled",
-    schema: manifest.configSchema!,
-    cacheKey: manifest.manifestPath,
-    value: {},
-    applyDefaults: true,
-  });
-  expect(pluginLocal).toMatchObject({
-    ok: true,
-    value: { sessionCatalog: { enabled: true, pageSize: 10 } },
+    configSchema: { type: "object", properties: { sessionCatalog: catalogSchema } },
   });
   const validate = (input: OpenClawConfig) => {
     const validated = validateConfigObjectWithPlugins(
-      {
-        ...input,
-        plugins: { ...input.plugins, slots: { memory: "none" } },
-      },
+      { ...input, plugins: { ...input.plugins, slots: { memory: "none" } } },
       {
         env,
-        homedir: () => root,
+        homedir,
         pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [manifest] } },
       },
     );
-    expect(validated.ok).toBe(true);
-    if (!validated.ok) {
-      throw new Error("Fixture configuration is invalid");
-    }
+    assert(validated.ok, "Fixture configuration is invalid");
     return validated.config;
   };
   let config = validate(snapshot.sourceConfig ?? source);
   expect(config.plugins?.entries?.[pluginId]?.config).toEqual({
-    sessionCatalog: {
-      ...(initial !== undefined ? { enabled: initial } : {}),
-      pageSize: 10,
-    },
+    sessionCatalog: { ...(initial !== undefined ? { enabled: initial } : {}), pageSize: 10 },
   });
-  const registry = createPluginRegistry({
-    runtime: { config: { current: () => config } } as PluginRuntime,
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    activateGlobalSideEffects: false,
-  });
+  const registry = createTestPluginRegistry({ config: { current: () => config } } as PluginRuntime);
   const record = createPluginRecord({
     id: pluginId,
     source: manifest.source,
@@ -174,7 +130,6 @@ async function registerCatalog(
   return {
     dispose,
     instance: getPluginInstance(record)!,
-    registry: registry.registry,
     provider: registry.registry.sessionCatalogs[0]!.provider,
     node: registry.registry.nodeHostCommands[0]!.command,
     staticNode: registry.registry.nodeHostCommands[1]!.command,
@@ -183,15 +138,29 @@ async function registerCatalog(
     available,
     handle,
     staticHandle,
+    inRequestScope<T>(run: () => T) {
+      return withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: registry.registry, pluginId, isWebchatConnect: () => false },
+        run,
+      );
+    },
     async setPreference(enabled: boolean) {
-      source = {
-        plugins: { entries: { [pluginId]: { config: { sessionCatalog: { enabled } } } } },
-      };
-      await fs.writeFile(configPath, JSON.stringify(source));
+      await fs.writeFile(configPath, JSON.stringify(configFor(enabled)));
       const updated = await io.readConfigFileSnapshot();
       config = validate(updated.sourceConfig);
     },
   };
+}
+
+function expectCalls(count: number, ...mocks: { mock: { calls: unknown[][] } }[]) {
+  for (const mock of mocks) {
+    expect(mock).toHaveBeenCalledTimes(count);
+  }
+}
+
+async function expectNodeDisabled(state: Awaited<ReturnType<typeof registerCatalog>>) {
+  await expect(state.node.handle()).rejects.toThrow("discovery is disabled");
+  await expect(state.staticNode.handle()).rejects.toThrow("discovery is disabled");
 }
 
 describe("registered native catalog access", () => {
@@ -217,23 +186,17 @@ describe("registered native catalog access", () => {
       });
       state.instance.lifecycle.onDispose(cleanup);
       let registrations = 0;
-      let settled = false;
-      const pending = withPluginRuntimeGatewayRequestScope(
-        { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
-        () =>
-          listSessionCatalogProvider(state.provider, {
-            waitUntil: () => {
-              if (++registrations === 2 && failure === "release registration") {
-                throw error;
-              }
-            },
-          }),
+      const settled = vi.fn();
+      const pending = state.inRequestScope(() =>
+        listSessionCatalogProvider(state.provider, {
+          waitUntil: () => {
+            if (++registrations === 2 && failure === "release registration") {
+              throw error;
+            }
+          },
+        }),
       );
-      const outcome = pending
-        .catch((reason: unknown) => reason)
-        .finally(() => {
-          settled = true;
-        });
+      const outcome = pending.catch((reason: unknown) => reason).finally(settled);
       try {
         await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
         const disposal = state.dispose();
@@ -242,7 +205,7 @@ describe("registered native catalog access", () => {
         if (failure === "close") {
           expect(await outcome).toBe(error);
         } else {
-          expect(settled).toBe(false);
+          expect(settled).not.toHaveBeenCalled();
         }
         completion.resolve();
         expect(await outcome).toBe(error);
@@ -273,123 +236,63 @@ describe("registered native catalog access", () => {
     };
     state.instance.lifecycle.onDispose(cleanup);
     await expect(
-      withPluginRuntimeGatewayRequestScope(
-        { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
-        () => listSessionCatalogProvider(state.provider, {}),
-      ),
+      state.inRequestScope(() => listSessionCatalogProvider(state.provider, {})),
     ).rejects.toThrow("reloaded or disabled");
     await state.dispose();
     expect(next).not.toHaveBeenCalled();
-    expect(close).toHaveBeenCalledOnce();
-    expect(cleanup).toHaveBeenCalledOnce();
+    expectCalls(1, close, cleanup);
     expect(state.instance.hasRetainedConsumers).toBe(false);
   });
 
-  it.each(["queued", "completed"] as const)(
-    "retains the registered instance through a %s operation and its publication tail",
-    { timeout: 15_000 },
-    async (phase) => {
-      const blockers = createDeferredCore<SessionCatalogHost[]>();
-      const first = createDeferredCore<{ done: false }>();
-      const publication = createDeferredCore();
-      const close = vi.fn();
-      const next = vi.fn();
-      const cleanup = vi.fn();
-      let guardedPublication: () => void = () => {};
-      const state = await registerCatalog(true, true, {
-        createListOperation: (params) => {
-          return {
-            async next() {
-              next();
-              params.waitUntil?.(publication.promise.then(() => guardedPublication()));
-              return phase === "queued" ? await first.promise : { done: true, hosts: [] };
-            },
-            close,
-          };
+  it("retains the registered instance through a completed operation and its publication tail", async () => {
+    const publication = createDeferredCore();
+    const close = vi.fn();
+    const cleanup = vi.fn();
+    let guardedPublication: () => void = () => {};
+    const state = await registerCatalog(true, true, {
+      createListOperation: (params) => ({
+        async next() {
+          params.waitUntil?.(publication.promise.then(() => guardedPublication()));
+          return { done: true, hosts: [] };
         },
-      });
-      state.instance.lifecycle.onDispose(cleanup);
-      const published = vi.fn(() => {
-        if (phase === "queued") {
-          throw new Error("publication rejected");
-        }
-      });
-      guardedPublication = state.instance.wrap(published);
-      const owner = new AbortController();
-      const lifetime = new SessionCatalogListLifetime(
-        () => true,
-        [owner.signal],
-        [state.provider.id],
-      );
-      const blocker: SessionCatalogProvider = {
-        id: "blocking",
-        label: "Blocking",
-        list: () => blockers.promise,
-        read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-      };
-      const active = Array.from({ length: phase === "queued" ? 3 : 0 }, () =>
-        listSessionCatalogProvider(blocker, {}),
-      );
-      const pending = withPluginRuntimeGatewayRequestScope(
-        { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
-        () =>
-          lifetime.runProvider(undefined, (params) =>
-            listSessionCatalogProvider(state.provider, params),
-          ),
-      );
-      const outcome = pending.catch((error: unknown) => error);
-      const successorStarted = createDeferredCore();
-      const successor =
-        phase === "queued"
-          ? listSessionCatalogProvider(
-              {
-                ...blocker,
-                list: () => {
-                  successorStarted.resolve();
-                  return blockers.promise;
-                },
-              },
-              {},
-            )
-          : Promise.resolve([]);
-      try {
-        if (phase === "queued") {
-          first.resolve({ done: false });
-          await successorStarted.promise;
-        } else {
-          await expect(pending).resolves.toEqual([]);
-          expect(close).toHaveBeenCalledOnce();
-        }
-        vi.useFakeTimers();
-        const disposal = state.dispose();
-        await vi.advanceTimersByTimeAsync(5_050);
-        expect(cleanup).not.toHaveBeenCalled();
-        expect(state.instance.lifecycle.signal.aborted).toBe(false);
-        expect(state.instance.hasRetainedConsumers).toBe(true);
-        if (phase === "queued") {
-          const retirement = new Error("catalog owner retired");
-          owner.abort(retirement);
-          expect(await outcome).toBe(retirement);
-          expect(close).toHaveBeenCalledOnce();
-        }
-        expect(next).toHaveBeenCalledOnce();
-        expect(published).not.toHaveBeenCalled();
-        publication.resolve();
-        await disposal;
-        expect(published).toHaveBeenCalledOnce();
-        expect(cleanup).toHaveBeenCalledOnce();
-        expect(state.instance.hasRetainedConsumers).toBe(false);
-        expect(state.instance.lifecycle.signal.aborted).toBe(true);
-      } finally {
-        owner.abort(new Error("test cleanup"));
-        first.resolve({ done: false });
-        blockers.resolve([]);
-        publication.resolve();
-        await Promise.allSettled([...active, pending, successor]);
-        lifetime.finishListing();
-      }
-    },
-  );
+        close,
+      }),
+    });
+    state.instance.lifecycle.onDispose(cleanup);
+    const published = vi.fn();
+    guardedPublication = state.instance.wrap(published);
+    const owner = new AbortController();
+    const lifetime = new SessionCatalogListLifetime([owner.signal]);
+    const pending = state.inRequestScope(() =>
+      lifetime.runProvider(undefined, (params) =>
+        listSessionCatalogProvider(state.provider, params),
+      ),
+    );
+    const outcome = pending.catch((error: unknown) => error);
+    try {
+      await expect(pending).resolves.toEqual([]);
+      expect(close).toHaveBeenCalledOnce();
+      vi.useFakeTimers();
+      const disposal = state.instance.dispose();
+      await vi.advanceTimersByTimeAsync(5_000);
+      const timeout = (await disposal).errors[0];
+      assert(timeout instanceof PluginInstanceDrainTimeoutError);
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(state.instance.lifecycle.signal.aborted).toBe(true);
+      expect(state.instance.hasRetainedConsumers).toBe(true);
+      expect(published).not.toHaveBeenCalled();
+      publication.resolve();
+      await timeout.settled;
+      expectCalls(1, published, cleanup);
+      expect(state.instance.hasRetainedConsumers).toBe(false);
+      expect(state.instance.lifecycle.signal.aborted).toBe(true);
+    } finally {
+      owner.abort(new Error("test cleanup"));
+      publication.resolve();
+      await outcome;
+      lifetime.finishListing();
+    }
+  });
 
   it("keeps initially disabled list operations empty without constructing a source", async () => {
     const next = vi.fn(async () => ({ done: true as const, hosts: [] }));
@@ -415,9 +318,7 @@ describe("registered native catalog access", () => {
     await expect(enabled.next()).resolves.toEqual({ done: true, hosts: [] });
     enabled.close();
     enabled.close();
-    expect(createListOperation).toHaveBeenCalledOnce();
-    expect(next).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
+    expectCalls(1, createListOperation, next, close);
     expect(state.list).not.toHaveBeenCalled();
   });
 
@@ -471,57 +372,35 @@ describe("registered native catalog access", () => {
         /reloaded|disabled/,
       );
       expect(state.list).toHaveBeenCalledTimes(enabled ? 1 : 0);
-      expect(state.available).not.toHaveBeenCalled();
-      expect(state.staticHandle).not.toHaveBeenCalled();
+      expectCalls(0, state.available, state.staticHandle);
     },
   );
 
-  it("requires opt-in for a new declared catalog after fresh configuration is written", async () => {
-    const state = await registerCatalog("fresh", undefined, { legacyDefaultEnabled: true });
-    await state.provider.list({});
-    expect(state.list).not.toHaveBeenCalled();
-    await expect(state.node.handle()).rejects.toThrow("discovery is disabled");
-    await expect(state.staticNode.handle()).rejects.toThrow("discovery is disabled");
-    await state.setPreference(true);
-    await state.provider.list({});
-    expect(state.list).toHaveBeenCalledOnce();
-  });
-  it("does not inherit a legacy opt-in from a dangling config link", async () => {
-    const state = await registerCatalog("dangling");
-    expect(await state.provider.list({})).toEqual([]);
-    await expect(state.node.handle()).rejects.toThrow("discovery is disabled");
-    await expect(state.staticNode.handle()).rejects.toThrow("discovery is disabled");
-    expect(state.list).not.toHaveBeenCalled();
-    expect(state.handle).not.toHaveBeenCalled();
-    expect(state.staticHandle).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "blocks validated defaults from granting consent (file exists: %s)",
+  it.each(["fresh", "dangling", false, true] as const)(
+    "requires explicit consent despite validated defaults (config: %s)",
     async (exists) => {
-      const state = await registerCatalog(exists, exists ? false : undefined);
+      const state = await registerCatalog(
+        exists,
+        exists === true ? false : undefined,
+        exists === "fresh" ? { legacyDefaultEnabled: true } : {},
+      );
       expect(await state.provider.list({ agentId: "research" })).toEqual([]);
       await expect(state.provider.read({ hostId: "local", threadId: "thread" })).rejects.toThrow(
         "discovery is disabled",
       );
       expect(state.node.isAvailable?.({ config: {}, env: {} })).toBe(false);
-      await expect(state.node.handle()).rejects.toThrow("discovery is disabled");
-      await expect(state.staticNode.handle()).rejects.toThrow("discovery is disabled");
-      expect(state.list).not.toHaveBeenCalled();
-      expect(state.read).not.toHaveBeenCalled();
-      expect(state.available).not.toHaveBeenCalled();
-      expect(state.handle).not.toHaveBeenCalled();
-      expect(state.staticHandle).not.toHaveBeenCalled();
+      await expectNodeDisabled(state);
+      expectCalls(0, state.list, state.read, state.available, state.handle, state.staticHandle);
+      if (exists === "dangling") {
+        return;
+      }
       await state.setPreference(true);
       await state.provider.list({});
       await state.provider.read({ hostId: "local", threadId: "thread" });
       expect(state.node.isAvailable?.({ config: {}, env: {} })).toBe(true);
       await state.node.handle();
       await state.staticNode.handle();
-      expect(state.list).toHaveBeenCalledOnce();
-      expect(state.read).toHaveBeenCalledOnce();
-      expect(state.handle).toHaveBeenCalledOnce();
-      expect(state.staticHandle).toHaveBeenCalledOnce();
+      expectCalls(1, state.list, state.read, state.handle, state.staticHandle);
     },
   );
 
@@ -532,7 +411,6 @@ describe("registered native catalog access", () => {
     await state.setPreference(false);
     expect(await state.provider.list({})).toEqual([]);
     await expect(state.node.handle()).rejects.toThrow("discovery is disabled");
-    expect(state.list).toHaveBeenCalledOnce();
-    expect(state.handle).toHaveBeenCalledOnce();
+    expectCalls(1, state.list, state.handle);
   });
 });

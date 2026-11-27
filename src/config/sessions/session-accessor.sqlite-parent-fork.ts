@@ -1,11 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isPendingBackgroundResultMessage,
+  projectPlacedBackgroundResultMessage,
+  readBackgroundResultPlacement,
+} from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import { stripCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER } from "../../shared/transcript-only-openclaw-assistant.js";
 import type {
   SessionParentForkDecision,
+  ForkSessionFromParentTranscriptParams,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { findSessionTranscriptHeader, isIndexedSessionEntry } from "./session-entry-codec.js";
@@ -32,34 +39,19 @@ export type ParentForkSourceTranscript = {
   preserveLeafControl: boolean;
 };
 
-type SqliteTranscriptParentTokenEstimate = {
-  kind: "exact-context" | "legacy-or-bytes";
-  tokens: number;
-};
-
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
-
-function formatParentForkTooLargeMessage(params: {
-  parentTokens: number;
-  maxTokens: number;
-}): string {
-  return (
-    `Parent context is too large to fork (${params.parentTokens}/${params.maxTokens} tokens); ` +
-    "starting with isolated context instead."
-  );
-}
 
 export function planParentForkDecision(
   parentEntry: SessionEntry,
-  transcriptEstimate?: SqliteTranscriptParentTokenEstimate,
+  transcriptEstimate?: number,
   options: { maxTokens?: number; preferTranscriptEstimate?: boolean } = {},
 ): SessionParentForkDecision {
   const maxTokens =
     normalizePositiveTokenCount(options.maxTokens) ?? DEFAULT_PARENT_FORK_MAX_TOKENS;
   const parentTokens = options.preferTranscriptEstimate
-    ? transcriptEstimate?.tokens
+    ? transcriptEstimate
     : normalizePositiveTokenCount(
-        Math.max(resolveFreshSessionTotalTokens(parentEntry) ?? 0, transcriptEstimate?.tokens ?? 0),
+        Math.max(resolveFreshSessionTotalTokens(parentEntry) ?? 0, transcriptEstimate ?? 0),
       );
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
@@ -67,7 +59,9 @@ export function planParentForkDecision(
       reason: "parent-too-large",
       maxTokens,
       parentTokens,
-      message: formatParentForkTooLargeMessage({ parentTokens, maxTokens }),
+      message:
+        `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); ` +
+        "starting with isolated context instead.",
     };
   }
   return {
@@ -79,15 +73,18 @@ export function planParentForkDecision(
 
 export function estimateParentForkPromptTokens(
   source: ParentForkSourceTranscript | null,
-): SqliteTranscriptParentTokenEstimate | undefined {
+  readEvent: (event: TranscriptEvent) => TranscriptEvent = (event) => event,
+): number | undefined {
   if (!source) {
     return undefined;
   }
   let byteEstimate = 0;
   let latestUsageEstimate: number | undefined;
-  let latestUsageEstimateIsExactContext = false;
   let trailingBytes = 0;
-  for (const { event, context } of selectParentForkTokenEstimateEvents(source.branchEntries)) {
+  for (const { event, context, placed } of selectParentForkTokenEstimateEvents(
+    source.branchEntries,
+    readEvent,
+  )) {
     if (
       context !== "reset-retained" &&
       isRecord(event) &&
@@ -110,7 +107,7 @@ export function estimateParentForkPromptTokens(
     const serializedBytes = Buffer.byteLength(JSON.stringify(contextEvent)) + 1;
     byteEstimate += serializedBytes;
     // Retained messages carry usage from before the latest compaction or reset.
-    if (context !== "current" || !isRecord(event)) {
+    if (placed || context !== "current" || !isRecord(event)) {
       if (latestUsageEstimate !== undefined) {
         trailingBytes += serializedBytes;
       }
@@ -129,21 +126,16 @@ export function estimateParentForkPromptTokens(
       continue;
     }
     const contextUsage = readTranscriptContextUsage(usageRaw);
-    if (message?.api === "cli" && contextUsage === undefined) {
+    if (
+      (message?.api === "cli" && contextUsage === undefined) ||
+      contextUsage?.state === "unavailable"
+    ) {
       latestUsageEstimate = undefined;
-      latestUsageEstimateIsExactContext = false;
-      trailingBytes = 0;
-      continue;
-    }
-    if (contextUsage?.state === "unavailable") {
-      latestUsageEstimate = undefined;
-      latestUsageEstimateIsExactContext = false;
       trailingBytes = 0;
       continue;
     }
     if (contextUsage?.state === "available") {
       latestUsageEstimate = normalizePositiveTokenCount(contextUsage.totalTokens);
-      latestUsageEstimateIsExactContext = true;
       trailingBytes = 0;
       continue;
     }
@@ -162,34 +154,54 @@ export function estimateParentForkPromptTokens(
         : normalizePositiveTokenCount(promptTokens + outputTokens);
     if (typeof totalTokens === "number") {
       latestUsageEstimate = totalTokens;
-      latestUsageEstimateIsExactContext = false;
       trailingBytes = 0;
     }
   }
   if (latestUsageEstimate !== undefined) {
-    const tokens = normalizePositiveTokenCount(latestUsageEstimate + Math.ceil(trailingBytes / 4));
-    return tokens === undefined
-      ? undefined
-      : {
-          kind: latestUsageEstimateIsExactContext ? "exact-context" : "legacy-or-bytes",
-          tokens,
-        };
+    return normalizePositiveTokenCount(latestUsageEstimate + Math.ceil(trailingBytes / 4));
   }
-  const tokens = normalizePositiveTokenCount(Math.ceil(byteEstimate / 4));
-  return tokens === undefined ? undefined : { kind: "legacy-or-bytes", tokens };
+  return normalizePositiveTokenCount(Math.ceil(byteEstimate / 4));
 }
 
-function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]): Generator<{
+function* selectParentForkTokenEstimateEvents(
+  branch: readonly TranscriptEvent[],
+  readEvent: (event: TranscriptEvent) => TranscriptEvent,
+): Generator<{
   event: TranscriptEvent;
   context: "current" | "retained" | "reset-retained" | "opaque";
+  placed?: boolean;
 }> {
+  if (branch.some((entry) => readBackgroundResultPlacement(entry))) {
+    for (const { entry, placement, context } of iterateSessionContextEntries(
+      branch.filter(isIndexedSessionEntry),
+    )) {
+      // Hydrate before projecting: placement carries ancestry, not the result body.
+      const hydrated = readEvent(entry);
+      const hydratedPlacement = placement ? readEvent(placement) : undefined;
+      yield {
+        event:
+          isRecord(hydratedPlacement) &&
+          isIndexedSessionEntry(hydrated) &&
+          hydrated.type === "message"
+            ? {
+                ...hydratedPlacement,
+                type: "message",
+                message: projectPlacedBackgroundResultMessage(hydrated.message),
+              }
+            : hydrated,
+        context,
+        placed: placement !== undefined,
+      };
+    }
+    return;
+  }
   if (
     !branch.some(
       (event) => isRecord(event) && (event.type === "compaction" || event.type === "reset"),
     )
   ) {
     for (const event of branch) {
-      yield { event, context: "current" };
+      yield { event: readEvent(event), context: "current" };
     }
     return;
   }
@@ -198,7 +210,7 @@ function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]
   const boundary = selected[0]?.entry;
   if (boundary?.type !== "compaction" && boundary?.type !== "reset") {
     for (const event of branch) {
-      yield { event, context: "current" };
+      yield { event: readEvent(event), context: "current" };
     }
     return;
   }
@@ -209,12 +221,12 @@ function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]
     const context =
       isRecord(event) && typeof event.id === "string" ? contexts.get(event.id) : undefined;
     if (context) {
-      yield { event, context };
+      yield { event: readEvent(event), context };
     } else if (
       index > boundaryIndex &&
       (!isRecord(event) || typeof event.id !== "string" || !indexedIds.has(event.id))
     ) {
-      yield { event, context: "opaque" };
+      yield { event: readEvent(event), context: "opaque" };
     }
   }
 }
@@ -269,10 +281,14 @@ export function resolveParentForkSourceTranscript(
     }),
     tree.nodes,
   );
-  const branchEntries =
+  let branchEntries =
     forkFrom === "last-completed"
-      ? visibleBranchEntries.slice(0, findLastCompletedAssistantIndex(visibleBranchEntries) + 1)
+      ? visibleBranchEntries.slice(0, findLastCompletedForkIndex(visibleBranchEntries) + 1)
       : visibleBranchEntries;
+  if (forkFrom === "last-completed" && !hasAssistantHistory(branchEntries)) {
+    // The child writer keeps no history without an assistant; size the same empty prefix.
+    branchEntries = [];
+  }
   const pathEntryIds = new Set(
     branchEntries.flatMap((entry) =>
       isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [],
@@ -290,37 +306,53 @@ export function resolveParentForkSourceTranscript(
     branchEntries,
     cwd: typeof header?.cwd === "string" ? header.cwd : undefined,
     version: header?.version ?? MIN_READABLE_SESSION_VERSION,
-    labelsToWrite: collectBranchLabels({ allEntries: entries, pathEntryIds }),
+    labelsToWrite: entries.flatMap((entry) =>
+      isRecord(entry) &&
+      entry.type === "label" &&
+      typeof entry.label === "string" &&
+      typeof entry.targetId === "string" &&
+      typeof entry.id === "string" &&
+      !pathEntryIds.has(entry.id) &&
+      pathEntryIds.has(entry.targetId) &&
+      typeof entry.timestamp === "string"
+        ? [{ targetId: entry.targetId, label: entry.label, timestamp: entry.timestamp }]
+        : [],
+    ),
     leafId: forkFrom === "last-completed" ? lastBranchEntryId : tree.leafId,
     preserveLeafControl:
       forkFrom !== "last-completed" && isSessionTranscriptLeafControl(lastLeafUpdateNode?.entry),
   };
 }
 
-function findLastCompletedAssistantIndex(entries: readonly TranscriptEvent[]): number {
+function findLastCompletedForkIndex(entries: readonly TranscriptEvent[]): number {
   return entries.findLastIndex((entry) => {
-    const message = isRecord(entry) && isRecord(entry.message) ? entry.message : undefined;
-    // Tool-use assistant messages are mid-turn checkpoints. Any other persisted
-    // assistant message is a stable boundary, including legacy rows without a reason.
-    return message?.role === "assistant" && message.stopReason !== "toolUse";
+    if (!isRecord(entry)) {
+      return false;
+    }
+    // A reset is stable even before the next assistant response completes.
+    if (entry.type === "reset" || readBackgroundResultPlacement(entry)) {
+      return true;
+    }
+    const message = isRecord(entry.message) ? entry.message : undefined;
+    // Commands and delivery notices can commit while a model turn is still
+    // running; they must not make its unfinished tail a completed fork prefix.
+    // Legacy model responses without a reason remain stable boundaries.
+    return (
+      message?.role === "assistant" &&
+      message.provider !== OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
+      !isPendingBackgroundResultMessage(message) &&
+      message.stopReason !== "toolUse"
+    );
   });
 }
 
-function collectBranchLabels(params: {
-  allEntries: readonly TranscriptEvent[];
-  pathEntryIds: Set<string>;
-}): Array<{ targetId: string; label: string; timestamp: string }> {
-  return params.allEntries.flatMap((entry) =>
-    isRecord(entry) &&
-    entry.type === "label" &&
-    typeof entry.label === "string" &&
-    typeof entry.targetId === "string" &&
-    typeof entry.id === "string" &&
-    !params.pathEntryIds.has(entry.id) &&
-    params.pathEntryIds.has(entry.targetId) &&
-    typeof entry.timestamp === "string"
-      ? [{ targetId: entry.targetId, label: entry.label, timestamp: entry.timestamp }]
-      : [],
+function hasAssistantHistory(entries: readonly TranscriptEvent[]): boolean {
+  return entries.some(
+    (entry) =>
+      isRecord(entry) &&
+      entry.type === "message" &&
+      isRecord(entry.message) &&
+      entry.message.role === "assistant",
   );
 }
 
@@ -337,43 +369,13 @@ function generateEntryId(existingIds: Set<string>): string {
   return id;
 }
 
-function buildLabelEntries(params: {
-  labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
-  pathEntryIds: Set<string>;
-  lastEntryId: string | null;
-}): TranscriptEvent[] {
-  let parentId = params.lastEntryId;
-  return params.labelsToWrite.map(({ targetId, label, timestamp }) => {
-    const entry = {
-      type: "label",
-      id: generateEntryId(params.pathEntryIds),
-      parentId,
-      timestamp,
-      targetId,
-      label,
-    };
-    parentId = entry.id;
-    return entry;
-  });
-}
-
-function hasAssistantEntry(entries: readonly TranscriptEvent[]): boolean {
-  return entries.some(
-    (entry) =>
-      isRecord(entry) &&
-      entry.type === "message" &&
-      isRecord(entry.message) &&
-      entry.message.role === "assistant",
-  );
-}
-
 export function buildForkedChildTranscriptEvents(params: {
   parentSessionFile: string;
   source: ParentForkSourceTranscript;
   targetSessionId: string;
 }): TranscriptEvent[] {
   const keepHistory =
-    params.source.preserveLeafControl || hasAssistantEntry(params.source.branchEntries);
+    params.source.preserveLeafControl || hasAssistantHistory(params.source.branchEntries);
   const header = {
     ...createSessionTranscriptHeader({
       cwd: params.source.cwd,
@@ -394,16 +396,24 @@ export function buildForkedChildTranscriptEvents(params: {
   const lastPathEntry = params.source.branchEntries.at(-1);
   const lastPathEntryId =
     isRecord(lastPathEntry) && typeof lastPathEntry.id === "string" ? lastPathEntry.id : null;
-  const labelEntries = buildLabelEntries({
-    labelsToWrite: params.source.labelsToWrite,
-    pathEntryIds,
-    lastEntryId: lastPathEntryId,
+  let parentId = lastPathEntryId;
+  const labelEntries = params.source.labelsToWrite.map(({ targetId, label, timestamp }) => {
+    const entry = {
+      type: "label",
+      id: generateEntryId(pathEntryIds),
+      parentId,
+      timestamp,
+      targetId,
+      label,
+    };
+    parentId = entry.id;
+    return entry;
   });
   const leafEntry = params.source.preserveLeafControl
     ? {
         type: "leaf",
         id: generateEntryId(pathEntryIds),
-        parentId: (labelEntries.at(-1) as { id?: string } | undefined)?.id ?? lastPathEntryId,
+        parentId,
         timestamp: new Date().toISOString(),
         targetId: params.source.leafId,
         appendParentId: params.source.appendParentId,
@@ -411,9 +421,32 @@ export function buildForkedChildTranscriptEvents(params: {
       }
     : null;
   return [
-    header,
+    // The parent transcript keeps counting the copied branch.
+    { ...header, ...(lastPathEntryId ? { inheritedThrough: [lastPathEntryId] } : {}) },
     ...params.source.branchEntries,
     ...labelEntries,
     ...(leafEntry ? [leafEntry] : []),
   ];
+}
+
+export function resolveParentForkLimitDecision(
+  params: Pick<
+    ForkSessionFromParentTranscriptParams,
+    "enforceTokenLimit" | "forkFrom" | "maxTokens" | "parentEntry"
+  >,
+  source: ParentForkSourceTranscript,
+  readEvent: (event: TranscriptEvent) => TranscriptEvent = (event) => event,
+): Extract<SessionParentForkDecision, { status: "skip" }> | undefined {
+  if (!params.enforceTokenLimit) {
+    return undefined;
+  }
+  const decision = planParentForkDecision(
+    params.parentEntry,
+    estimateParentForkPromptTokens(source, readEvent),
+    {
+      maxTokens: params.maxTokens,
+      preferTranscriptEstimate: params.forkFrom === "last-completed",
+    },
+  );
+  return decision.status === "skip" ? decision : undefined;
 }

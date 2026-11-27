@@ -37,10 +37,7 @@ export function collectBaseArrayPaths(base: unknown, path: string): string[] {
 
 function normalizeConfigPatchReplacePath(value: string): string {
   const trimmed = value.trim();
-  if (trimmed.endsWith("[]")) {
-    return trimmed.slice(0, -2).replace(/\[\d+\](?=\.)/g, "[]");
-  }
-  return trimmed.replace(/\[\d+\](?=\.)/g, "[]");
+  return trimmed.replace(/\[\]$/, "").replace(/\[\d+\](?=\.)/g, "[]");
 }
 
 export function normalizeConfigPatchReplacePaths(

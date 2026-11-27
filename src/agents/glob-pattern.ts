@@ -1,24 +1,18 @@
 /**
  * Compiles and matches lightweight glob patterns used by agent policies.
  */
+import { escapeRegExp } from "../shared/regexp.js";
+
 type CompiledGlobPattern =
   | { kind: "all" }
   | { kind: "exact"; value: string }
   | { kind: "regex"; value: RegExp };
-
-function escapeRegex(value: string) {
-  // Standard "escape string for regex literal" pattern.
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function compileGlobPattern(params: {
   raw: string;
   normalize: (value: string) => string;
 }): CompiledGlobPattern {
   const normalized = params.normalize(params.raw);
-  if (!normalized) {
-    return { kind: "exact", value: "" };
-  }
   if (normalized === "*") {
     return { kind: "all" };
   }
@@ -27,7 +21,7 @@ function compileGlobPattern(params: {
   }
   return {
     kind: "regex",
-    value: new RegExp(`^${escapeRegex(normalized).replaceAll("\\*", ".*")}$`),
+    value: new RegExp(`^${escapeRegExp(normalized).replaceAll("\\*", ".*")}$`),
   };
 }
 
@@ -45,13 +39,11 @@ export function compileGlobPatterns(params: {
 
 export function matchesAnyGlobPattern(value: string, patterns: CompiledGlobPattern[]): boolean {
   for (const pattern of patterns) {
-    if (pattern.kind === "all") {
-      return true;
-    }
-    if (pattern.kind === "exact" && value === pattern.value) {
-      return true;
-    }
-    if (pattern.kind === "regex" && pattern.value.test(value)) {
+    if (
+      pattern.kind === "all" ||
+      (pattern.kind === "exact" && value === pattern.value) ||
+      (pattern.kind === "regex" && pattern.value.test(value))
+    ) {
       return true;
     }
   }

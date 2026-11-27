@@ -4,6 +4,8 @@ import {
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   memoryCoreStateReference,
+  memoryCoreWorkspaceEntryKey,
+  openWorkspaceStore,
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
@@ -25,6 +27,21 @@ const SHORT_TERM_STORE_NAMESPACES = {
   recall: SHORT_TERM_RECALL_NAMESPACE,
   phase: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
 };
+
+// The workspace mutation lock covers source inspection and this atomic cleanup.
+export async function pruneShortTermStore(workspaceDir: string, keys: string[]): Promise<void> {
+  if (keys.length === 0) {
+    return;
+  }
+  const recall = openWorkspaceStore(SHORT_TERM_RECALL_NAMESPACE);
+  const phase = openWorkspaceStore(SHORT_TERM_PHASE_SIGNAL_NAMESPACE);
+  await recall.deleteKeys!(
+    keys.map((key) => memoryCoreWorkspaceEntryKey(workspaceDir, key)),
+    {
+      alsoFrom: phase,
+    },
+  );
+}
 
 export async function readShortTermStore(
   workspaceDir: string,
@@ -96,20 +113,13 @@ export function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore
   };
 }
 
-export function normalizeShortTermPhaseSignalStore(
-  raw: unknown,
+export async function readPhaseSignalStore(
+  workspaceDir: string,
   nowIso: string,
-): ShortTermPhaseSignalStore {
-  const record = asNullableRecord(raw);
-  if (!record) {
-    return emptyPhaseSignalStore(nowIso);
-  }
-  const entriesRaw = asNullableRecord(record?.entries);
-  if (!entriesRaw) {
-    return emptyPhaseSignalStore(nowIso);
-  }
+): Promise<ShortTermPhaseSignalStore> {
+  const record = await readShortTermStore(workspaceDir, "phase", nowIso);
   const entries: Record<string, ShortTermPhaseSignalEntry> = {};
-  for (const [mapKey, value] of Object.entries(entriesRaw)) {
+  for (const [mapKey, value] of Object.entries(record.entries)) {
     const entry = asNullableRecord(value);
     if (!entry) {
       continue;
@@ -137,16 +147,6 @@ export function normalizeShortTermPhaseSignalStore(
     updatedAt: readNonBlankString(record.updatedAt) ?? nowIso,
     entries,
   };
-}
-
-export async function readPhaseSignalStore(
-  workspaceDir: string,
-  nowIso: string,
-): Promise<ShortTermPhaseSignalStore> {
-  return normalizeShortTermPhaseSignalStore(
-    await readShortTermStore(workspaceDir, "phase", nowIso),
-    nowIso,
-  );
 }
 
 export async function writePhaseSignalStore(

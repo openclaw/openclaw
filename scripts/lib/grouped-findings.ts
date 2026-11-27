@@ -1,18 +1,12 @@
+import { groupBy } from "./group-by.mts";
+
 export function renderFindingGroups<T extends { file: string }>(
   findings: T[],
   limit: number,
   renderFinding: (finding: T) => string,
 ): string[] {
   // Group before applying the cap so counts stay complete and files keep first-seen order.
-  const grouped = new Map<string, T[]>();
-  for (const finding of findings) {
-    const fileFindings = grouped.get(finding.file);
-    if (fileFindings) {
-      fileFindings.push(finding);
-    } else {
-      grouped.set(finding.file, [finding]);
-    }
-  }
+  const grouped = groupBy(findings, (finding) => finding.file);
 
   const lines: string[] = [];
   let shown = 0;

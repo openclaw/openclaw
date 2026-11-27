@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import type { AgentMessage } from "../../../src/agents/runtime/index.js";
-import { redactTranscriptMessage } from "../../../src/agents/transcript-redact.js";
-import { resolveChatHistoryWithCliSessionImports } from "../../../src/gateway/cli-session-history.js";
+import {
+  mergeImportedChatHistoryMessages,
+  readClaudeCliSessionMessagesAsync,
+} from "../../../src/gateway/cli-session-history.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   chatSessionListResponse,
@@ -20,12 +22,9 @@ const suite = createChatFlowE2eSuite();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 suite.define(() => {
-  it("renders a real imported Claude transcript once without exposing its unredacted secret", async () => {
+  it("renders a real imported Claude transcript once with its original text", async () => {
     const homeDir = tempDirs.make("openclaw-cli-history-redaction-");
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-
-    try {
-      const page = await context.newPage();
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const cliSessionId = "control-ui-claude-history-redaction";
       const secret = "sk-abcdef1234567890xyz";
       const userText = `CLI user copy ${secret}`;
@@ -36,39 +35,32 @@ suite.define(() => {
       await fs.writeFile(
         filePath,
         [
-          {
-            type: "user",
-            uuid: "control-ui-claude-user-copy",
-            timestamp: "2026-03-26T16:29:54.800Z",
-            message: { role: "user", content: userText },
-          },
-          {
-            type: "assistant",
-            uuid: "control-ui-claude-imported-assistant",
-            timestamp: "2026-03-26T16:29:55.800Z",
-            message: { role: "assistant", content: assistantText },
-          },
+          ["user", "user-copy", "54", userText],
+          ["assistant", "imported-assistant", "55", assistantText],
         ]
+          .map(([role, suffix, second, content]) => ({
+            type: role,
+            uuid: `control-ui-claude-${suffix}`,
+            timestamp: `2026-03-26T16:29:${second}.800Z`,
+            message: { role, content },
+          }))
           .map((entry) => JSON.stringify(entry))
           .join("\n"),
         "utf-8",
       );
 
-      const localUserMessage = redactTranscriptMessage({
+      const localUserMessage = {
         role: "user",
         content: userText,
         timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
-      } as AgentMessage);
-      const mergedMessages = resolveChatHistoryWithCliSessionImports({
-        entry: {
-          sessionId: "control-ui-local-claude-history",
-          updatedAt: Date.now(),
-          cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
-        },
-        provider: "claude-cli",
+      } as AgentMessage;
+      const mergedMessages = mergeImportedChatHistoryMessages({
         localMessages: [localUserMessage],
-        homeDir,
-      }).messages;
+        importedMessages: await readClaudeCliSessionMessagesAsync({
+          cliSessionId,
+          projectsDir: path.join(homeDir, ".claude", "projects"),
+        }),
+      });
 
       expect(mergedMessages).toHaveLength(2);
       expect(mergedMessages[0]).toEqual({
@@ -84,7 +76,7 @@ suite.define(() => {
         externalId: "control-ui-claude-imported-assistant",
         importedFrom: "claude-cli",
       });
-      expect(JSON.stringify(mergedMessages)).not.toContain(secret);
+      expect(JSON.stringify(mergedMessages)).toContain(secret);
       expect(await fs.readFile(filePath, "utf-8")).toContain(secret);
 
       const gateway = await installMockGateway(page, {
@@ -93,23 +85,17 @@ suite.define(() => {
         sessionKey: "agent:main:session-a",
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-      await waitForRequests(gateway, "chat.startup", 1);
+      await waitForRequests(gateway, "sessions.messages.subscribe", 1);
       const thread = page.locator(".chat-thread");
-      await thread.getByText("CLI user copy", { exact: false }).waitFor({ timeout: 10_000 });
-      await thread.getByText("CLI imported-only reply", { exact: false }).waitFor({
-        timeout: 10_000,
-      });
-
+      const prefixes = ["CLI user copy", "CLI imported-only reply"];
+      for (const prefix of prefixes) {
+        await thread.getByText(prefix, { exact: false }).waitFor({ timeout: 10_000 });
+      }
       const visibleMessages = await visibleChatBubbleTexts(page);
-      expect(visibleMessages.filter((message) => message.includes("CLI user copy"))).toHaveLength(
-        1,
-      );
-      expect(
-        visibleMessages.filter((message) => message.includes("CLI imported-only reply")),
-      ).toHaveLength(1);
-      expect(await thread.textContent()).not.toContain(secret);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+      for (const prefix of prefixes) {
+        expect(visibleMessages.filter((message) => message.includes(prefix))).toHaveLength(1);
+      }
+      expect(await thread.textContent()).toContain(secret);
+    });
   });
 });

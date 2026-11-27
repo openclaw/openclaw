@@ -29,3 +29,26 @@ export async function collectStreamEvents(stream: AsyncIterable<unknown>): Promi
   }
   return events;
 }
+
+type SettledStream = Awaited<
+  ReturnType<typeof import("./attempt-stream-settle.js").settleEmbeddedAttemptStream>
+>;
+
+export function createSettledStreamResult(overrides: Partial<SettledStream> = {}): SettledStream {
+  return {
+    promptError: null,
+    promptErrorSource: null,
+    timedOutDuringCompaction: false,
+    compactionOccurredThisAttempt: false,
+    messagesSnapshot: [],
+    sessionIdUsed: "session-1",
+    lastAssistant: undefined,
+    currentAttemptAssistant: undefined,
+    currentAttemptCompletedAssistant: undefined,
+    attemptUsage: undefined,
+    lastCallUsage: undefined,
+    promptCache: undefined,
+    successfulNestedToolNames: [],
+    ...overrides,
+  };
+}

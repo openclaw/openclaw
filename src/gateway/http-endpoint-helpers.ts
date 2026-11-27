@@ -1,38 +1,24 @@
-// Gateway HTTP endpoint helpers.
-// Wraps common POST JSON method, auth, scope, and body handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
 } from "./http-common.js";
-import { sendGatewayHttpAuthFailure } from "./http-operator-access.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   type AuthorizedGatewayHttpRequest,
-  resolveTrustedHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 
-/** Handles a gateway POST JSON endpoint and returns the parsed body when authorized. */
 export async function handleGatewayPostJsonEndpoint(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
+  opts: GatewayHttpRequestAuthOptions & {
     pathname: string;
-    auth: ResolvedGatewayAuth;
     maxBodyBytes: number;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-    requiredOperatorMethod?: "chat.send" | (string & Record<never, never>);
-    resolveOperatorScopes?: (
-      req: IncomingMessage,
-      requestAuth: AuthorizedGatewayHttpRequest,
-    ) => string[];
+    requiredOperatorMethod: string;
   },
 ): Promise<
   | false
@@ -50,36 +36,24 @@ export async function handleGatewayPostJsonEndpoint(
   }
 
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
   });
   if (!requestAuth) {
     return undefined;
   }
 
-  const operatorScopes =
-    opts.resolveOperatorScopes?.(req, requestAuth) ??
-    resolveTrustedHttpOperatorScopes(req, requestAuth);
-  if (opts.requiredOperatorMethod) {
-    const scopeAuth = authorizeOperatorScopesForMethod(opts.requiredOperatorMethod, operatorScopes);
-    if (!scopeAuth.allowed) {
-      sendMissingScopeForbidden(res, scopeAuth.missingScope);
-      return undefined;
-    }
-  }
-
-  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes);
-  if (body === undefined) {
+  // Compat HTTP treats shared-secret bearer auth as full operator access.
+  const operatorScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
+  const scopeAuth = authorizeOperatorScopesForMethod(opts.requiredOperatorMethod, operatorScopes);
+  if (!scopeAuth.allowed) {
+    sendMissingScopeForbidden(res, scopeAuth.missingScope);
     return undefined;
   }
-  if (!hasCurrentGatewayOperatorAccess(requestAuth.operatorAccessAuthority)) {
-    if (!res.writableEnded && !res.destroyed) {
-      sendGatewayHttpAuthFailure(res, { ok: false, reason: "operator_access_denied" });
-    }
+
+  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes, 60_000);
+  if (body === undefined || res.writableEnded || res.destroyed) {
     return undefined;
   }
 

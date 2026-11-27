@@ -16,6 +16,13 @@ import {
 import type { BoardStore, BoardSessionTarget } from "./board-store.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
+export async function closeBoardDatabases() {
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+}
+
 export function createTestBoardStore(options: { stateDir?: string } = {}): SqliteBoardStore {
   const ownsStateDir = options.stateDir === undefined;
   const stateDir = options.stateDir ?? mkdtempSync(path.join(tmpdir(), "openclaw-board-store-"));
@@ -24,10 +31,7 @@ export function createTestBoardStore(options: { stateDir?: string } = {}): Sqlit
 
   if (ownsStateDir) {
     onTestFinished(async () => {
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await closeBoardDatabases();
       rmSync(stateDir, { recursive: true, force: true });
     });
   }
@@ -59,15 +63,5 @@ export function createTestBoardStore(options: { stateDir?: string } = {}): Sqlit
 export async function readBoardHtml(store: BoardStore, target: BoardSessionTarget, name: string) {
   return await store.useWidgetDocument(target, name, (document) =>
     document && "html" in document ? document : undefined,
-  );
-}
-
-export async function readBoardRegistered(
-  store: BoardStore,
-  target: BoardSessionTarget,
-  name: string,
-) {
-  return await store.useWidgetDocument(target, name, (document) =>
-    document && "source" in document ? document : undefined,
   );
 }

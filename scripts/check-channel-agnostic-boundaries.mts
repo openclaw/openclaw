@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 
-// Checks channel-agnostic core surfaces for channel-specific coupling.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
+import * as ts from "typescript/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
-  collectTypeScriptFiles,
+  collectTypeScriptFilesFromRoots,
   getPropertyNameText,
   runAsScript,
   toLine,
+  visitModuleSpecifiers,
 } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -19,6 +19,7 @@ const acpCoreProtectedSources = [
   path.join(repoRoot, "src", "acp"),
   path.join(repoRoot, "src", "agents", "subagents", "spawn", "acp-spawn.ts"),
   path.join(repoRoot, "src", "auto-reply", "reply", "commands-acp"),
+  path.join(repoRoot, "src", "auto-reply", "reply", "commands-session.ts"),
   path.join(repoRoot, "src", "infra", "outbound", "conversation-id.ts"),
 ];
 
@@ -38,6 +39,17 @@ const systemMarkLiteralGuardSources = [
   path.join(repoRoot, "src", "auto-reply", "reply", "directive-handling.shared.ts"),
   path.join(repoRoot, "src", "channels", "thread-bindings-messages.ts"),
 ];
+
+// Channel conversation ids are opaque outside their codec: core asks the channel plugin.
+const topicGrammarSources = [path.join(repoRoot, "src")];
+const topicGrammarExempt = new Set([
+  // Doctor migration owns rewriting legacy Telegram General-topic rows.
+  "src/commands/doctor-telegram-general-topic-conversations.ts",
+  // Telegram-named session protection; moves to a channel capability next.
+  "src/config/sessions/store-maintenance.ts",
+]);
+const testSupportPathRe =
+  /(^|\/)(test-utils|test-helpers)\/|\.test-(support|setup|helpers)\.ts$|-test-support\.ts$|\.generated\.ts$/;
 
 const channelIds = [
   "discord",
@@ -59,6 +71,7 @@ const channelIds = [
   "twitch",
   "web",
   "whatsapp",
+  "x",
   "zalo",
   "zalouser",
 ];
@@ -72,22 +85,7 @@ const comparisonOperators: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.ExclamationEqualsToken,
 ]);
 
-const allowedViolations = new Set<string>();
-
 type BoundaryViolation = { line: number; reason: string };
-type BoundaryOptions = {
-  checkModuleSpecifiers?: boolean;
-  checkConfigPaths?: boolean;
-  checkChannelComparisons?: boolean;
-  checkChannelAssignments?: boolean;
-  moduleSpecifierMatcher?: (specifier: string) => boolean;
-};
-type ModuleSpecifierVisit = {
-  kind: string;
-  node: ts.Node;
-  specifier: string;
-  specifierNode: ts.Node;
-};
 function isChannelsPropertyAccess(node: ts.Node) {
   if (ts.isPropertyAccessExpression(node)) {
     return node.name.text === "channels";
@@ -99,22 +97,12 @@ function isChannelsPropertyAccess(node: ts.Node) {
 }
 
 function readStringLiteral(node: ts.Node) {
-  if (ts.isStringLiteral(node)) {
-    return node.text;
-  }
-  if (ts.isNoSubstitutionTemplateLiteral(node)) {
-    return node.text;
-  }
-  return null;
+  return ts.isStringLiteralLikeNode(node) ? node.text : null;
 }
 
 function isChannelLiteralNode(node: ts.Node) {
   const text = readStringLiteral(node);
   return text ? channelIdSet.has(text) : false;
-}
-
-function matchesChannelModuleSpecifier(specifier: string) {
-  return channelSegmentRe.test(specifier.replaceAll("\\", "/"));
 }
 
 const userFacingChannelNameRe =
@@ -133,56 +121,43 @@ function isModuleSpecifierStringNode(node: ts.Node) {
   );
 }
 
-/**
- * Finds channel-specific references inside channel-agnostic protected sources.
- */
-export function findChannelAgnosticBoundaryViolations(
-  content: string,
-  fileName = "source.ts",
-  options: BoundaryOptions = {},
-) {
-  const checkModuleSpecifiers = options.checkModuleSpecifiers ?? true;
-  const checkConfigPaths = options.checkConfigPaths ?? true;
-  const checkChannelComparisons = options.checkChannelComparisons ?? true;
-  const checkChannelAssignments = options.checkChannelAssignments ?? true;
-  const moduleSpecifierMatcher = options.moduleSpecifierMatcher ?? matchesChannelModuleSpecifier;
+function collectChannelModuleViolations(sourceFile: ts.SourceFile) {
+  const violations = new Map<ts.Node, BoundaryViolation>();
+  visitModuleSpecifiers(
+    sourceFile,
+    ({ kind, node, specifier, specifierNode }) => {
+      // The platform AbortSignal utility is unrelated to the Signal channel.
+      const channelPath = specifier
+        .replaceAll("\\", "/")
+        .replace(/(^|\/)infra\/abort-signal\.[cm]?[jt]s$/, "$1");
+      if (channelSegmentRe.test(channelPath)) {
+        const verb =
+          kind === "export"
+            ? "re-exports"
+            : kind === "dynamic-import"
+              ? "dynamically imports"
+              : "imports";
+        violations.set(node, {
+          line: toLine(sourceFile, specifierNode),
+          reason: verb + ' channel module "' + specifier + '"',
+        });
+      }
+    },
+    { includeCommonJs: true, includeImportMetaUrl: true, includeImportTypes: true },
+  );
+  return violations;
+}
 
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function findChannelAgnosticBoundaryViolations(sourceFile: ts.SourceFile) {
   const violations: BoundaryViolation[] = [];
-  const moduleViolations = new Map<ts.Node, BoundaryViolation>();
-  if (checkModuleSpecifiers) {
-    visitModuleSpecifiers(
-      ts,
-      sourceFile,
-      ({ kind, node, specifier, specifierNode }: ModuleSpecifierVisit) => {
-        if (moduleSpecifierMatcher(specifier)) {
-          const verb =
-            kind === "export"
-              ? "re-exports"
-              : kind === "dynamic-import"
-                ? "dynamically imports"
-                : "imports";
-          moduleViolations.set(node, {
-            line: toLine(sourceFile, specifierNode),
-            reason: verb + ' channel module "' + specifier + '"',
-          });
-        }
-      },
-      { includeCommonJs: true, includeImportMetaUrl: true, includeImportTypes: true },
-    );
-  }
-
+  const moduleViolations = collectChannelModuleViolations(sourceFile);
   const visit = (node: ts.Node): void => {
     const moduleViolation = moduleViolations.get(node);
     if (moduleViolation) {
       violations.push(moduleViolation);
     }
 
-    if (
-      checkConfigPaths &&
-      ts.isPropertyAccessExpression(node) &&
-      channelIdSet.has(node.name.text)
-    ) {
+    if (ts.isPropertyAccessExpression(node) && channelIdSet.has(node.name.text)) {
       if (isChannelsPropertyAccess(node.expression)) {
         violations.push({
           line: toLine(sourceFile, node.name),
@@ -192,7 +167,6 @@ export function findChannelAgnosticBoundaryViolations(
     }
 
     if (
-      checkConfigPaths &&
       ts.isElementAccessExpression(node) &&
       ts.isStringLiteral(node.argumentExpression) &&
       channelIdSet.has(node.argumentExpression.text)
@@ -205,11 +179,7 @@ export function findChannelAgnosticBoundaryViolations(
       }
     }
 
-    if (
-      checkChannelComparisons &&
-      ts.isBinaryExpression(node) &&
-      comparisonOperators.has(node.operatorToken.kind)
-    ) {
+    if (ts.isBinaryExpression(node) && comparisonOperators.has(node.operatorToken.kind)) {
       if (isChannelLiteralNode(node.left) || isChannelLiteralNode(node.right)) {
         const leftText = node.left.getText(sourceFile);
         const rightText = node.right.getText(sourceFile);
@@ -220,7 +190,7 @@ export function findChannelAgnosticBoundaryViolations(
       }
     }
 
-    if (checkChannelAssignments && ts.isPropertyAssignment(node)) {
+    if (ts.isPropertyAssignment(node)) {
       const propName = getPropertyNameText(node.name);
       if (propName === "channel" && isChannelLiteralNode(node.initializer)) {
         violations.push({
@@ -230,74 +200,72 @@ export function findChannelAgnosticBoundaryViolations(
       }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);
   return violations;
 }
 
-/**
- * Finds reverse dependencies from channel core into plugin/runtime surfaces.
- */
-export function findChannelCoreReverseDependencyViolations(
-  content: string,
-  fileName = "source.ts",
-) {
-  return findChannelAgnosticBoundaryViolations(content, fileName, {
-    checkModuleSpecifiers: true,
-    checkConfigPaths: false,
-    checkChannelComparisons: false,
-    checkChannelAssignments: false,
-    moduleSpecifierMatcher: matchesChannelModuleSpecifier,
-  });
+export function findChannelCoreReverseDependencyViolations(sourceFile: ts.SourceFile) {
+  return [...collectChannelModuleViolations(sourceFile).values()];
 }
 
-/**
- * Finds user-facing channel names in ACP-owned text sources.
- */
-export function findAcpUserFacingChannelNameViolations(content: string, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const violations: BoundaryViolation[] = [];
+function stringLiteralBoundaryRule(matches: (text: string) => boolean, reason: string) {
+  return (sourceFile: ts.SourceFile) => {
+    const violations: BoundaryViolation[] = [];
+    const visit = (node: ts.Node): void => {
+      const text = readStringLiteral(node);
+      if (text && matches(text) && !isModuleSpecifierStringNode(node)) {
+        violations.push({
+          line: toLine(sourceFile, node),
+          reason: `${reason} (${JSON.stringify(text)})`,
+        });
+      }
+      node.forEachChild(visit);
+    };
+    visit(sourceFile);
+    return violations;
+  };
+}
 
+export function findTopicGrammarViolations(sourceFile: ts.SourceFile) {
+  const violations: BoundaryViolation[] = [];
   const visit = (node: ts.Node): void => {
-    const text = readStringLiteral(node);
-    if (text && userFacingChannelNameRe.test(text) && !isModuleSpecifierStringNode(node)) {
+    const literal =
+      ts.isStringLiteralLikeNode(node) ||
+      ts.isRegularExpressionLiteral(node) ||
+      ts.isTemplateHead(node) ||
+      ts.isTemplateMiddle(node) ||
+      ts.isTemplateTail(node);
+    if (literal && /:topic:/i.test(node.text)) {
       violations.push({
         line: toLine(sourceFile, node),
-        reason: `user-facing text references channel name (${JSON.stringify(text)})`,
+        reason: "parses or builds channel :topic: grammar; ask the channel plugin",
       });
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
-
   visit(sourceFile);
   return violations;
 }
 
-/**
- * Finds raw system mark literals where shared constants should be used.
- */
-export function findSystemMarkLiteralViolations(content: string, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const violations: BoundaryViolation[] = [];
+export const findAcpUserFacingChannelNameViolations = stringLiteralBoundaryRule(
+  (text) => userFacingChannelNameRe.test(text),
+  "user-facing text references channel name",
+);
 
-  const visit = (node: ts.Node): void => {
-    const text = readStringLiteral(node);
-    if (text && text.includes(systemMarkLiteral) && !isModuleSpecifierStringNode(node)) {
-      violations.push({
-        line: toLine(sourceFile, node),
-        reason: `hardcoded system mark literal (${JSON.stringify(text)})`,
-      });
-    }
-    ts.forEachChild(node, visit);
-  };
+export const findSystemMarkLiteralViolations = stringLiteralBoundaryRule(
+  (text) => text.includes(systemMarkLiteral),
+  "hardcoded system mark literal",
+);
 
-  visit(sourceFile);
-  return violations;
-}
-
-const boundaryRuleSets = [
+const boundaryRuleSets: Array<{
+  id: string;
+  sources: string[];
+  scan: (sourceFile: ts.SourceFile) => BoundaryViolation[];
+  skip?: (relativeFile: string) => boolean;
+}> = [
   {
     id: "acp-core",
     sources: acpCoreProtectedSources,
@@ -318,34 +286,28 @@ const boundaryRuleSets = [
     sources: systemMarkLiteralGuardSources,
     scan: findSystemMarkLiteralViolations,
   },
+  {
+    id: "core-topic-grammar",
+    sources: topicGrammarSources,
+    scan: findTopicGrammarViolations,
+    skip: (relativeFile: string) =>
+      topicGrammarExempt.has(relativeFile) || testSupportPathRe.test(relativeFile),
+  },
 ];
 
-/**
- * Runs all channel-agnostic boundary checks.
- */
 export async function main() {
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
   const violations: string[] = [];
   for (const ruleSet of boundaryRuleSets) {
-    const files = (
-      await Promise.all(
-        ruleSet.sources.map(
-          async (sourcePath) =>
-            await collectTypeScriptFiles(sourcePath, {
-              ignoreMissing: true,
-            }),
-        ),
-      )
-    ).flat();
+    const files = await collectTypeScriptFilesFromRoots(ruleSet.sources);
     for (const filePath of files) {
-      const relativeFile = path.relative(repoRoot, filePath);
-      if (
-        allowedViolations.has(`${ruleSet.id}:${relativeFile}`) ||
-        allowedViolations.has(relativeFile)
-      ) {
+      const relativeFile = path.relative(repoRoot, filePath).split(path.sep).join("/");
+      if (ruleSet.skip?.(relativeFile)) {
         continue;
       }
       const content = await fs.readFile(filePath, "utf8");
-      for (const violation of ruleSet.scan(content, relativeFile)) {
+      const sourceFile = parser.parseSourceFile(filePath, content);
+      for (const violation of ruleSet.scan(sourceFile)) {
         violations.push(`${ruleSet.id} ${relativeFile}:${violation.line}: ${violation.reason}`);
       }
     }
@@ -362,7 +324,7 @@ export async function main() {
   console.error(
     "Move channel-specific logic to channel adapters or add a justified allowlist entry.",
   );
-  process.exit(1);
+  process.exitCode = 1;
 }
 
 runAsScript(import.meta.url, main);
