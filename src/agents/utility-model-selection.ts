@@ -9,11 +9,8 @@ import { resolveNativeModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import {
-  buildModelAliasIndex,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-} from "./model-selection.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "./model-selection-shared.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 import { readUtilityModelSetting } from "./utility-model-setting.js";
 
