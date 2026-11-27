@@ -181,6 +181,11 @@ function renderSidebarMenus(
             const source = view.sessionDataContext?.theme;
             return source && projectTheme(source).preferences;
           });
+          // Pins live in the per-operator sidebar preferences; menu rows follow them.
+          const pinnedAgentIds = createMemo(() => {
+            const source = view.sessionDataContext?.navigation;
+            return source && projectOwner(source, (owner) => owner.snapshot).read().pinnedAgentIds;
+          });
           const creationDisabledReason = createMemo(() => {
             const snapshot = gateway()?.read().snapshot;
             if (canCallGatewayMethod(snapshot, "agents.create", "operator.admin")) {
@@ -214,6 +219,7 @@ function renderSidebarMenus(
                 basePath: view.basePath,
                 activeId: chipAgent().agent ? chipAgent().activeId : "",
                 agents: chipAgent().agents,
+                pinnedAgentIds: pinnedAgentIds() ?? [],
                 identities: chipAgent().identities,
                 pendingAgent: agents()?.read().pendingAgent,
                 recentlyCreatedAgentId:
