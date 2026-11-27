@@ -32,10 +32,8 @@ import {
 import * as pluginRuntime from "../plugins/runtime.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import {
-  getPluginRuntimeGenerationRegistry,
-  withPluginRuntimeGenerationScope,
-} from "../plugins/runtime/generation-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,

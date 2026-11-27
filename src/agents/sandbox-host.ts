@@ -288,7 +288,7 @@ export function decodeSandboxHostCsp(value: string | null): SandboxHostCsp | und
 }
 
 /** Trusted outer document. Untrusted content is written only into its inner iframe. */
-function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
+export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   const blockDescendantFrames = csp?.blockDescendantFrames === true;
   // Runtime insertion reaches existing saved widgets without changing their
   // approved bytes. Capture listeners consume private host state before stored

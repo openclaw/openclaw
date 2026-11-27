@@ -21,7 +21,7 @@ import { createParkedProjection } from "../../../lib/reactive/parked-projection.
 import { projectSource } from "../../../lib/reactive/projection.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
-import "./browser-tab-card.css";
+import { addressedSession } from "../chat-spawned-subagent.ts";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { ChatImportBoundary } from "./chat-import-boundary.tsx";
 import { ChatPermissionCard } from "./chat-message-deferred.tsx";
@@ -29,7 +29,7 @@ import { ToolIcon } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
-import { resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
+import { resolveToolOperationLabel, resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -174,7 +174,15 @@ function ToolCardRowPlaceholder(props: ToolCardProps) {
           when={verb() && input().path}
           fallback={
             <span class={["chat-tool-msg-summary__label", { "text-shimmer": running() }]}>
-              {display().label}
+              {resolveToolOperationLabel(
+                props.card,
+                outcome(),
+                addressedSession(
+                  props.card,
+                  props.options.subagents?.subagentSessions,
+                  props.options.subagents?.recordedStopNames,
+                ),
+              )}
             </span>
           }
         >
@@ -217,11 +225,13 @@ function ToolCardView(props: ToolCardProps & { output?: ToolCardOutput }) {
                 identity={[props.options.sessionKey, props.options.messageKey, card().id]}
                 connected={() => Boolean(host?.isConnected)}
                 fallback={() => (
-                  <ToolCardRowPlaceholder
-                    card={card()}
-                    options={props.options}
-                    hasChildren={props.hasChildren}
-                  />
+                  <Show when={!props.options.hideSummary}>
+                    <ToolCardRowPlaceholder
+                      card={card()}
+                      options={props.options}
+                      hasChildren={props.hasChildren}
+                    />
+                  </Show>
                 )}
               >
                 <ToolCardBody

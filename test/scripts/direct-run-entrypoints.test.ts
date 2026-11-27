@@ -6,7 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
-import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
+import { isDirectRunPath, isDirectRunUrl } from "../../scripts/lib/direct-run.mjs";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
@@ -540,6 +540,26 @@ process.stdout.write(response + "\n");
         "win32",
       ),
     ).toBe(true);
+  });
+
+  it.each([
+    [
+      "drive",
+      "C:\\repo\\scripts\\android-app-i18n.ts",
+      "file:///C:/repo/scripts/android-app-i18n.ts",
+    ],
+    [
+      "UNC",
+      "\\\\server\\share\\scripts\\android-app-i18n.ts",
+      "file://server/share/scripts/android-app-i18n.ts",
+    ],
+  ])("matches Windows %s module URLs", (_kind, directPath, moduleUrl) => {
+    expect(isDirectRunUrl(directPath, moduleUrl, "win32")).toBe(true);
+  });
+
+  it("compares POSIX file URLs case-sensitively on every host", () => {
+    expect(isDirectRunUrl("/repo/Tool.mjs", "file:///repo/Tool.mjs", "linux")).toBe(true);
+    expect(isDirectRunUrl("/repo/tool.mjs", "file:///repo/Tool.mjs", "linux")).toBe(false);
   });
 
   it.each(["scripts/verify-docker-attestations.mjs"])(

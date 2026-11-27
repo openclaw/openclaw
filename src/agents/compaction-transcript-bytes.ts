@@ -19,7 +19,6 @@ export async function readCompactionTranscriptBytes(params: {
   target: SessionTranscriptRuntimeTarget;
   rawBytes: number | undefined;
   maxBytes: number | undefined;
-  contextTokenBudget: number | undefined;
   signal?: AbortSignal;
   runtime: Pick<
     CompactEmbeddedAgentSessionParams,
@@ -100,9 +99,7 @@ export async function readCompactionTranscriptBytes(params: {
     }
     const context = await SessionManager.openModelContextAsync(params.target, {
       signal,
-      limits: resolveEmbeddedSessionContextLimits({
-        contextTokenBudget: params.contextTokenBudget,
-      }),
+      limits: resolveEmbeddedSessionContextLimits({}),
     });
     signal?.throwIfAborted();
     const expired = resolveExpiredRuntimeContextContentBytes(

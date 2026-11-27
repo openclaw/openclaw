@@ -46,6 +46,7 @@ export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDeliver
     pacing?: CronPacing;
     activeHours?: CronActiveHours;
     idleOnly?: boolean;
+    cyberAccessProgram?: CronJob["cyberAccessProgram"];
     sessionTarget: TSessionTarget;
     wakeMode: TWakeMode;
     payload: TPayload;

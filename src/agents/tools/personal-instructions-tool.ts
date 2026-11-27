@@ -9,10 +9,7 @@ import { assertAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { bindAgentToolGatewayRequest } from "./in-process-gateway.js";
 
 const PersonalInstructionsSchema = Type.Object(
@@ -55,13 +52,13 @@ export function createPersonalInstructionsTool(agentId: string): AnyAgentTool {
       }
       // Keep the canonical file owner on the admitted Gateway, independent of the
       // task workspace/sandbox. Never fall back to shell access or another Gateway.
-      const authority = getGatewayToolCallerIdentity()?.operatorAuthority;
-      const assertCurrent = captureGatewayToolCallerAssertion();
-      if (!authority || !assertCurrent) {
+      const caller = getGatewayToolCallerIdentity();
+      const authority = caller?.operatorAuthority;
+      if (!authority || !caller.operationalRunInstance) {
         throw new Error("Personal instructions require a live authenticated Gateway user turn.");
       }
       assertAdmittedRunOperatorAuthority(authority);
-      assertCurrent();
+      signal?.throwIfAborted();
       const request = bindAgentToolGatewayRequest({ hostedOnly: true });
       return jsonResult(
         await request<UsersPersonalFileGetResult>({

@@ -32,7 +32,9 @@ const enProfile = {
       unlink: "Unlink",
       ownerOf: "{email} · Owner of {claw}",
       linkedElsewhere:
-        "This OpenClaw ID is already linked to another profile. Merge that profile into this one in Users, or unlink it there first.",
+        "This OpenClaw ID is already linked to another profile. Unlink it from that profile first. If both profiles belong to you, an admin can merge them instead.",
+      profileLinked:
+        "This profile is already linked to an OpenClaw ID. Unlink it first to link another.",
       failed: "Couldn’t update the OpenClaw ID link. Try again.",
     },
     access: {

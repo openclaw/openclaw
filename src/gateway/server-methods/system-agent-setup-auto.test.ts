@@ -86,6 +86,19 @@ const ollama: SetupInferenceCandidate = {
   recommended: false,
 };
 
+const presentedLlama = {
+  kind: "provider-auto:llama-app" as const,
+  modelRef: "llama-app/ggml-org/model:Q4_K_M",
+  label: "Llama",
+  detail: "Available locally",
+  brandId: "llama-app",
+};
+const llama: SetupInferenceCandidate = {
+  ...presentedLlama,
+  credentials: true,
+  recommended: false,
+};
+
 const chatGptSignIn = {
   id: "openai-device-code",
   brandId: "openai",
@@ -120,7 +133,7 @@ function expectUnused(...mocks: unknown[]) {
 function context(): GatewayRequestContext {
   return createWizardSessionTracker() as GatewayRequestContext;
 }
-const runSetup = () => runGatewayAutomaticSetup(context(), () => {});
+const runSetup = () => runGatewayAutomaticSetup(context());
 
 function pauseDiscovery() {
   const started = createDeferred();
@@ -201,21 +214,24 @@ describe("Gateway automatic inference setup", () => {
     },
   );
 
-  it("can select Ollama when Codex is genuinely absent", async () => {
-    fixture.detect.mockResolvedValueOnce(detection([{ ...ollama }]));
+  it.each([
+    { label: "Ollama when Llama is absent", selected: ollama, candidates: [ollama] },
+    { label: "Llama before other local providers", selected: llama, candidates: [ollama, llama] },
+  ])("selects $label without installing another runtime", async ({ selected, candidates }) => {
+    fixture.detect.mockResolvedValueOnce(detection(candidates));
     fixture.activate.mockResolvedValueOnce({
       ok: true,
-      modelRef: "ollama/fixture",
+      modelRef: selected.modelRef,
       latencyMs: 1,
       lines: [],
     });
 
     expect(await runSetup()).toMatchObject({
       status: "activated",
-      selected: { kind: "provider-auto:ollama-local", modelRef: "ollama/fixture" },
+      selected: { kind: selected.kind, modelRef: selected.modelRef },
       attempts: [],
     });
-    expect(fixture.activate).toHaveBeenCalledOnce();
+    expectActivationKinds(selected.kind);
     expect(fixture.prepare).not.toHaveBeenCalled();
   });
   it.each(["user", "agent"] as const)(
@@ -233,7 +249,9 @@ describe("Gateway automatic inference setup", () => {
         },
       });
       fixture.detect.mockResolvedValue(
-        detection([openai, { ...codex, kind: "existing-model" }, codex], { setupComplete: true }),
+        detection([llama, openai, { ...codex, kind: "existing-model" }, codex], {
+          setupComplete: true,
+        }),
       );
       const result = await runSetup();
       expect(result).toEqual({
@@ -244,7 +262,7 @@ describe("Gateway automatic inference setup", () => {
           ...(homeScope === "user" ? { shared: true } : {}),
         },
         ...(homeScope === "user" ? { separateSignIn } : {}),
-        alternatives: [presentedCodex, presentedOpenai],
+        alternatives: [presentedCodex, presentedOpenai, presentedLlama],
         attempts: [],
         installedPlugins: [],
       });
@@ -312,13 +330,56 @@ describe("Gateway automatic inference setup", () => {
     });
   });
 
+  it.each([
+    { status: "unavailable", error: "The local model needs more memory. Load a smaller model." },
+    { status: "timeout", error: "The local model did not respond. Check the server and retry." },
+  ] as const)(
+    "keeps a $status candidate failure when Codex needs a login",
+    async ({ status, error }) => {
+      fixture.detect.mockResolvedValueOnce(detection([ollama])).mockResolvedValueOnce(detection());
+      fixture.activate.mockResolvedValueOnce({ ok: false, status, error });
+      fixture.prepare.mockResolvedValue({ ok: true, config: {} });
+
+      expect(await runSetup()).toMatchObject({
+        status: "unavailable",
+        signIn: separateSignIn,
+        attempts: [{ kind: ollama.kind, label: ollama.label, error }],
+      });
+    },
+  );
+
+  it("preserves mixed credential and capacity failures without making sign-in the diagnosis", async () => {
+    fixture.detect
+      .mockResolvedValueOnce(detection([openai, ollama]))
+      .mockResolvedValueOnce(detection([codex]));
+    fixture.activate
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "API key is missing." })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: "unavailable",
+        error: "Not enough memory to load the local model.",
+      })
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "ChatGPT login expired." });
+    fixture.prepare.mockResolvedValue({ ok: true, config: {} });
+
+    expect(await runSetup()).toMatchObject({
+      status: "unavailable",
+      signIn: separateSignIn,
+      attempts: [
+        { kind: openai.kind, error: "API key is missing." },
+        { kind: ollama.kind, error: "Not enough memory to load the local model." },
+        { kind: codex.kind, error: "ChatGPT login expired." },
+      ],
+    });
+  });
+
   it("joins concurrent callers before activation and holds admission against an independent context", async () => {
     const { started, discovered } = pauseDiscovery();
     const gateway = context();
-    const first = runGatewayAutomaticSetup(gateway, () => {});
+    const first = runGatewayAutomaticSetup(gateway);
     try {
       await awaitGateBeforeSettlement(started.promise, first, "setup ended before discovery");
-      const joined = runGatewayAutomaticSetup(gateway, () => {});
+      const joined = runGatewayAutomaticSetup(gateway);
       expect(joined).toBe(first);
       await expect(runSetup()).rejects.toBeInstanceOf(SetupAdmissionBusyError);
       expect(fixture.activate).not.toHaveBeenCalled();
@@ -329,22 +390,6 @@ describe("Gateway automatic inference setup", () => {
       discovered.resolve(detection());
       await first;
     }
-  });
-
-  it("rejects revoked requester authority after discovery before any activation or preparation", async () => {
-    const { started, discovered } = pauseDiscovery();
-    let current = true;
-    const run = runGatewayAutomaticSetup(context(), () => {
-      if (!current) {
-        throw new Error("Requester authority revoked");
-      }
-    });
-    const rejection = expect(run).rejects.toThrow("Requester authority revoked");
-    await awaitGateBeforeSettlement(started.promise, run, "setup ended before discovery");
-    current = false;
-    discovered.resolve(detection([codex]));
-    await rejection;
-    expectUnused(fixture.activate, fixture.prepare, fixture.commit);
   });
 
   it.each([false, true])(

@@ -30,18 +30,15 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
     expect(identity).not.toBeNull();
     const tooltip = () =>
       document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("body > openclaw-tooltip");
-    // The retained rail is icon-only: pointer and keyboard users need its identity hint.
+    // Keep the icon-only button named without surfacing its accessible label as a tooltip.
     await page.elementLocator(identity!).hover();
-    expect(tooltip()?.anchor).toBe(identity);
-    expect(tooltip()?.content).toContain("Identity and app menu for Owner");
-    expect(identity?.getAttribute("title")).toBe("");
+    expect(tooltip()).toBeNull();
     expect(page.getByRole("button", { name: /Owner/ }).elements()).toContain(identity);
     expect(identity?.getAttribute("aria-expanded")).toBe("false");
     // A pointer left over the footer can open Help as the keyboard menu appears.
     await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
     identity?.focus();
-    expect(tooltip()?.anchor).toBe(identity);
-    expect(tooltip()?.content).toContain("Identity and app menu for Owner");
+    expect(tooltip()).toBeNull();
     await userEvent.keyboard("{Enter}");
 
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");

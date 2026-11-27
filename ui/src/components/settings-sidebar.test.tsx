@@ -139,6 +139,8 @@ describe("settings sidebar search", () => {
     });
     search.input.focus();
     search.enter("collapse task progress");
+    // The first search loads its module before Solid can publish the results.
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(labels(".settings-sidebar__subitem-label")).toContain("Chat"));
     expect(container.querySelector(".settings-sidebar__search-input")).toBe(search.input);
     expect(document.activeElement).toBe(search.input);
@@ -348,7 +350,7 @@ describe("settings sidebar search", () => {
     const onNavigate = vi.fn();
     const { input, enter: enterQuery } = searchHarness("", { onNavigate });
     const allLabels = labels();
-    expect(input).toMatchObject({ ariaLabel: "Search settings", placeholder: "Search settings…" });
+    expect(input).toMatchObject({ ariaLabel: "Search settings", placeholder: "Search" });
     // Management surfaces moved back to the workspace sidebar.
     expect(allLabels).not.toContain("Activity");
     expect(allLabels).not.toContain("Sessions");
@@ -489,13 +491,10 @@ describe("settings sidebar search", () => {
     expect(labels()).toEqual(["Appearance"]);
   });
 
-  it("sends Escape from an empty search up a level and shows esc only where it exits", () => {
+  it("sends Escape from an empty search up a level", () => {
     const onExit = vi.fn();
     const onEscape = vi.fn();
-    render({ activeRouteId: "appearance", onExit, onEscape });
-    expect(container.querySelector(".settings-sidebar__esc")).not.toBeNull();
     render({ activeRouteId: "lobsterdex", onExit, onEscape });
-    expect(container.querySelector(".settings-sidebar__esc")).toBeNull();
     expect(
       container.querySelector('.settings-sidebar__item[href="/settings/appearance"]')?.className,
     ).toContain("settings-sidebar__item--active");

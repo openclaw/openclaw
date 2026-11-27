@@ -208,7 +208,7 @@ private struct ControllableTLSProbe {
         GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in
                 self.started.continuation.yield()
                 for await result in self.results.stream {
@@ -227,7 +227,7 @@ private func makeTLSProbeController(
     GatewayConnectionController(
         appModel: appModel,
         startDiscovery: false,
-        tcpReachabilityProbe: { _, _, _, _ in true },
+        tcpReachabilityProbe: { _, _, _, _ in .reachable },
         tlsFingerprintProbe: { _ in .fingerprint(fingerprint) }, ingress: makeOrdinaryIngress())
 }
 
@@ -1307,9 +1307,10 @@ private func pendingHandoffDiagnostic(
             role: "node",
             token: "legacy-share-token",
             profile: .shareExtension)
-        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest(
+        #expect(GenericPasswordKeychainStore.saveString(
             "unproven-field-token",
-            instanceId: instanceID)
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)"))
         saveActiveManualGateway(
             host: "gateway.example.com",
             port: 443,
@@ -1374,9 +1375,10 @@ private func pendingHandoffDiagnostic(
             deviceId: primaryIdentity.deviceId,
             role: "operator",
             token: "legacy-operator-without-shared-auth")
-        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest(
+        #expect(GenericPasswordKeychainStore.saveString(
             "unproven-field-token",
-            instanceId: instanceID)
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)"))
         saveActiveManualGateway(
             host: "pair-again.example.com",
             port: 443,
@@ -2023,7 +2025,7 @@ private func pendingHandoffDiagnostic(
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint("exact-owner-fingerprint") },
             serviceEndpointResolver: { _ in (host: "127.0.0.1", port: 1) },
             persistTLSFingerprint: { _, owner in
@@ -2060,7 +2062,7 @@ private func pendingHandoffDiagnostic(
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint("unpersisted-fingerprint") },
             persistTLSFingerprint: { _, _ in false }, ingress: makeOrdinaryIngress())
 
@@ -2335,7 +2337,7 @@ private func pendingHandoffDiagnostic(
                 tcpReachabilityProbe: { host, _, _, _ in
                     probes.withLock {
                         $0.append(host)
-                        return reachableRetry && $0.count > 1
+                        return (reachableRetry && $0.count > 1) ? .reachable : .unreachable
                     }
                 },
                 tlsFingerprintProbe: { _ in .fingerprint("replacement-fingerprint") }, ingress: makeOrdinaryIngress())
@@ -3516,7 +3518,7 @@ private func pendingHandoffDiagnostic(
         #expect(SessionStatusScope.available(isConnected: appModel.isOperatorGatewayConnected).contains(.snoozed))
         let snoozed = roster.sessions.filter { SessionStatusScope.snoozed.includes($0, at: now) }
         #expect(snoozed == [session])
-        #expect(CommandCenterTab.sessionDetail(session, now: now).hasPrefix("Wakes "))
+        #expect(SessionPresentation.detail(session, now: now).hasPrefix("Wakes "))
         appModel.selectedAgentId = "work"
         #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "work") == [workGlobal])
     }

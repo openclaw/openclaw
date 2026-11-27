@@ -23,6 +23,9 @@
 // including stale-batch replays with --iterations. --concurrent submits two callers.
 // --transport-base-file compares saved base-fetch.ts; --allow-failure reports
 // failed launches as failures with timing/allocation, never as successful hydration.
+// --ref-writer-hold-ms models one already-admitted shared ref writer. Native mode,
+// one iteration only; compare fresh partial clones and matched zero-hold controls.
+// Acceptance: hydration overlaps the writer, identical bytes, no CPU/allocation regression.
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { Session, type HeapProfiler } from "node:inspector/promises";
@@ -32,6 +35,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -47,6 +51,7 @@ const { values } = parseArgs({
     "hydrate-objects": { type: "string" },
     ref: { type: "string" },
     concurrent: { type: "boolean" },
+    "ref-writer-hold-ms": { type: "string" },
   },
 });
 const repo = values.repo ? path.resolve(values.repo) : undefined;
@@ -59,6 +64,9 @@ const hydrateObjects = values["hydrate-objects"]
   : undefined;
 const iterations = Number(values.iterations ?? (repo ? "1" : "2000"));
 assert(Number.isSafeInteger(iterations) && iterations > 0, "iterations must be a positive integer");
+const refWriterHoldMs = Number(values["ref-writer-hold-ms"] ?? 0);
+assert(Number.isSafeInteger(refWriterHoldMs) && refWriterHoldMs >= 0);
+assert(!refWriterHoldMs || (repo && iterations === 1));
 const fileCount = 10_000;
 const treeCount = 101;
 const sizes = Array.from({ length: fileCount }, (_, index) => (index * 7919) % 131_072);
@@ -174,6 +182,9 @@ export async function requireGit(cwd, args, options) {
   },
 });
 const inspector = new Session();
+let releaseWriter: (() => void) | undefined;
+let heldWriter: Promise<void> | undefined;
+let releaseTimer: ReturnType<typeof setTimeout> | undefined;
 try {
   const { estimateCheckoutObjectBytes } =
     await import("../../src/agents/worktrees/capacity.runtime.js");
@@ -204,15 +215,24 @@ try {
   state.counts = counts();
   state.copiedOutputBufferBytes = 0;
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   const samples: number[] = [];
   const failures: string[] = [];
+  if (refWriterHoldMs) {
+    const { enqueueGitRefMutation } = await import("../../src/infra/git-exec.js");
+    const { requireGit } = await import("../../src/agents/worktrees/git.js");
+    const common = await requireGit(repo!, ["rev-parse", "--git-common-dir"]);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    releaseWriter = release.resolve;
+    heldWriter = enqueueGitRefMutation(repo!, common, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    releaseTimer = setTimeout(release.resolve, refWriterHoldMs);
+  }
   const loadBefore = loadavg();
   const cpuStart = process.cpuUsage();
   const allocatedStart = getHeapStatistics().total_allocated_bytes;
@@ -251,6 +271,7 @@ try {
       failures,
       hydrationObjects: hydrateObjects?.length,
       concurrent: Boolean(values.concurrent),
+      refWriterHoldMs,
       samplesMs: hydrateObjects ? samples : undefined,
       allocatedBytesPerOperation: Number.isFinite(allocatedBytes)
         ? allocatedBytes / iterations
@@ -278,6 +299,9 @@ try {
     }),
   );
 } finally {
+  clearTimeout(releaseTimer);
+  releaseWriter?.();
+  await heldWriter;
   inspector.disconnect();
   hooks.deregister();
   Reflect.deleteProperty(globalThis, stateKey);

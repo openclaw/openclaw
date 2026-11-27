@@ -212,7 +212,7 @@ it("recognizes Code Mode command aliases from their native result envelope", () 
   expect(scan.result()).toMatchObject({ rows: [], successfulCalls: 0, excluded: { wrappers: 1 } });
 });
 
-it("never attributes a nested MCP dispatch to a same-named native tool", () => {
+it("attributes a nested MCP dispatch to its exact id, never a same-named native tool", () => {
   const scan = createToolUsageTranscriptAccumulator({
     catalog: [{ id: "openclaw:notes:lookup", name: "lookup" }],
     since: 0,
@@ -256,9 +256,90 @@ it("never attributes a nested MCP dispatch to a same-named native tool", () => {
     120,
   );
   expect(scan.result()).toMatchObject({
-    successfulCalls: 0,
-    rows: [],
-    excluded: { unknownTools: 1 },
+    successfulCalls: 1,
+    rows: [{ toolId: "mcp:bundle-mcp:lookup", score: 1, updatedAt: 120 }],
+  });
+});
+
+it("backfills direct, bare-name dispatch, and Code Mode MCP calls from server evidence", () => {
+  const scan = createToolUsageTranscriptAccumulator({
+    catalog: [
+      { id: "openclaw:core:exec", name: "exec" },
+      { id: "openclaw:notes:granola__shadow", name: "granola__shadow" },
+    ],
+    since: 0,
+    before: 1000,
+  });
+  const mcp = { mcpServer: "granola" };
+  const append = (message: unknown, at = 120) => scan.append({ type: "message", message }, at);
+  const nested = (
+    toolCallId: string,
+    parentToolCallId: string,
+    toolName: string,
+    details: Record<string, unknown> = mcp,
+  ) =>
+    createNestedToolActivity({
+      runId: "synthetic",
+      scopeId: "synthetic",
+      afterEntryId: null,
+      startOrder: 0,
+      parentToolCallId,
+      toolCallId,
+      toolName,
+      input: {},
+      result: { content: [], details },
+      isError: false,
+      startedAt: 110,
+      timestamp: 120,
+    });
+  const call = (id: string, name: string, args: Record<string, unknown> = {}) => ({
+    type: "toolCall",
+    id,
+    name,
+    arguments: args,
+  });
+  append(
+    {
+      role: "assistant",
+      content: [
+        call("direct", "granola__list_meetings"),
+        call("unproven", "granola__get_notes"),
+        call("bare", "dispatch_action", { id: "granola__list_meetings" }),
+        call("code", "exec", { code: "await MCP.x()" }),
+      ],
+    },
+    100,
+  );
+  const result = (toolCallId: string, toolName: string, details?: unknown) => ({
+    role: "toolResult",
+    toolCallId,
+    toolName,
+    isError: false,
+    details,
+  });
+  append(result("direct", "granola__list_meetings", mcp));
+  append(result("unproven", "granola__get_notes"));
+  append(nested("n-bare", "bare", "granola__list_meetings"));
+  append(nested("n-code", "code", "granola__list_meetings"));
+  // MCP evidence for a name a native catalog entry owns stays uncounted, direct or nested.
+  append(nested("n-shadow", "code", "granola__shadow"));
+  const shadow = { id: "granola__shadow" };
+  const calls = [call("shadow", "granola__shadow"), call("d-nested", "dispatch_action", shadow)];
+  append(
+    { role: "assistant", content: [...calls, call("d-wrap", "dispatch_action", shadow)] },
+    100,
+  );
+  append(result("shadow", "granola__shadow", mcp));
+  append(nested("n-d-nested", "d-nested", "granola__shadow"));
+  append({ ...result("d-wrap", "dispatch_action"), details: { result: { details: mcp } } });
+  // A failed MCP call is excluded even with server evidence.
+  append(nested("n-failed", "code", "granola__list_meetings", { ...mcp, status: "error" }));
+  append(result("bare", "dispatch_action"), 130);
+  append(result("code", "exec"), 130);
+  expect(scan.result()).toMatchObject({
+    rows: [{ toolId: "mcp:granola:granola__list_meetings", score: 3 }],
+    successfulCalls: 3,
+    excluded: { unknownTools: 5, errors: 1 },
   });
 });
 

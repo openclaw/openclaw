@@ -3,7 +3,7 @@ import { isCodeModeControlTool } from "./code-mode-control-tools.js";
 import { isToolUsageWrapper } from "./tool-usage.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-/** Bind exact source identities once, while the native tool surface is assembled. */
+/** Bind exact OpenClaw and MCP source identities once, while the native tool surface is assembled. */
 export function bindToolUsageIds(
   tools: readonly AnyAgentTool[],
   clientToolNames: readonly string[],
@@ -15,11 +15,8 @@ export function bindToolUsageIds(
       ambiguous.add(tool.name);
       continue;
     }
+    // Same identity as the catalog entry, so MCP calls count under `mcp:<server>:<tool>`.
     const { source, sourceName } = classifyAgentToolSource(tool);
-    if (source !== "openclaw") {
-      ambiguous.add(tool.name);
-      continue;
-    }
     const toolId = `${source}:${sourceName}:${tool.name}`;
     const previous = byName.get(tool.name);
     if (previous && previous !== toolId) {

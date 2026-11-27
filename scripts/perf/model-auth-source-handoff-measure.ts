@@ -24,6 +24,7 @@ import { parseArgs } from "node:util";
 import type { ModelAuthAvailabilityEvaluation } from "../../src/agents/model-auth-availability.types.js";
 import type { ModelServiceTierObservation } from "../../src/agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig, ModelProviderConfig } from "../../src/config/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -175,12 +176,7 @@ try {
   global.gc();
   await nextTurn();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else {
     observer.observe({ entryTypes: ["gc"] });
   }

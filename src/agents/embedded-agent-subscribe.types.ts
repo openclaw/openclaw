@@ -4,6 +4,7 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { AssistantMessage } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { UserTranscriptContext } from "./embedded-agent-runner/run/attempt-llm-boundary.types.js";
 import type { EmbeddedRunAttemptInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
@@ -57,6 +58,8 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
   | "internalEvents"
 > & {
   session: AgentSession;
+  /** Attempt-owned runtime/transcript pairs, including consumed steering inputs. */
+  getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
   /** Created only by the opted-in embedded attempt; absent for incognito and other harnesses. */
   toolUsageRecorder?: RunToolUsageRecorder;
   /** Bound source ids for direct calls, refreshed with the native tool surface. */

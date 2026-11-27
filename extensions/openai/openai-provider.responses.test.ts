@@ -210,7 +210,7 @@ describe("configured speed defaults", () => {
     expect((await next.result()).errorMessage).toBe("captured before sending");
     expect(params.at(-1)).toMatchObject({
       service_tier: "default",
-      context_management: [{ type: "compaction", compact_threshold: 735_000 }],
+      context_management: [{ type: "compaction", compact_threshold: 892_500 }],
     });
   });
 

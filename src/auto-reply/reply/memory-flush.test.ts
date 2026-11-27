@@ -54,11 +54,11 @@ function providerConfig(
 
 describe("Responses server compaction host/transport parity", () => {
   it.each<[number | undefined, CompactionRoute]>([
-    [560_000, { baseUrl: undefined, preparedWindow: 800_000 }],
-    [112_000, { contextWindow: 1_000_000, preparedWindow: 160_000 }],
-    [140_000, { baseUrl: undefined }],
-    [190_400, { contextTokens: 272_000, contextWindow: 1_050_000 }],
-    [140_000, {}],
+    [680_000, { baseUrl: undefined, preparedWindow: 800_000 }],
+    [136_000, { contextWindow: 1_000_000, preparedWindow: 160_000 }],
+    [170_000, { baseUrl: undefined }],
+    [231_200, { contextTokens: 272_000, contextWindow: 1_050_000 }],
+    [170_000, {}],
     [
       undefined,
       {
@@ -77,7 +77,7 @@ describe("Responses server compaction host/transport parity", () => {
       },
     ],
     [undefined, { compat: { supportsStore: false }, extraParams: CUSTOM_THRESHOLD }],
-    [140_000, { provider: "OpenAI" }],
+    [170_000, { provider: "OpenAI" }],
     [undefined, { baseUrl: "https://proxy.example.com/v1", extraParams: CUSTOM_THRESHOLD }],
     [undefined, { extraParams: { responsesServerCompaction: false } }],
     [
@@ -135,11 +135,11 @@ describe("Responses server compaction host/transport parity", () => {
 
 describe("configured model consumer parity", () => {
   it.each([
-    [false, "Model", true, 140_000],
-    [false, "model", false, 700_000],
-    [true, "Model", true, 140_000],
-    [true, "model", false, 700_000],
-    [false, "MODEL", true, 140_000],
+    [false, "Model", true, 170_000],
+    [false, "model", false, 850_000],
+    [true, "Model", true, 170_000],
+    [true, "model", false, 850_000],
+    [false, "MODEL", true, 170_000],
   ] as const)(
     "matches transport with reversed=%s, model=%s",
     async (reverse, modelId, vision, threshold) => {
@@ -207,11 +207,11 @@ describe("Anthropic server compaction host threshold", () => {
 
   it.each([
     ["keeps the local threshold for default-on compaction", {}, 200_000, undefined],
-    ["uses 70 percent of the context window", enabled, 200_000, 140_000],
+    ["uses 85 percent of the context window", enabled, 200_000, 170_000],
     ["uses the minimum for small windows", enabled, 32_000, 50_000],
     ["clamps low thresholds", { ...enabled, anthropicCompactThreshold: 42_000 }, 200_000, 50_000],
     ["uses custom thresholds", { ...enabled, anthropicCompactThreshold: 80_000 }, 200_000, 80_000],
-    ["uses a prepared-only window for its enabled server floor", enabled, undefined, 700_000],
+    ["uses a prepared-only window for its enabled server floor", enabled, undefined, 850_000],
   ] as const)("%s", (_name, params, contextWindowTokens, expected) => {
     const cfg: OpenClawConfig = {
       models: providerConfig(

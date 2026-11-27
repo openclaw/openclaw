@@ -436,7 +436,12 @@ describe("assertSqliteSchemaContains", () => {
     }
   });
 
-  it.each(["TEXT"])("accepts a compatible future additive %s column only when enabled", (type) => {
+  it.each([
+    "TEXT",
+    "TEXT DEFAULT NULL",
+    "TEXT CHECK (future_note IS NULL OR future_note IN ('read', 'suggest', 'send'))",
+    "TEXT CHECK (future_note IN ('read', 'suggest', 'send'))",
+  ])("accepts a compatible future additive %s column only when enabled", (type) => {
     const database = createDatabase(CANONICAL_SCHEMA);
     try {
       database.exec(`ALTER TABLE compatible_columns ADD COLUMN future_note ${type};`);
@@ -454,21 +459,25 @@ describe("assertSqliteSchemaContains", () => {
     }
   });
 
-  it.each(["TEXT DEFAULT NULL"])(
-    "rejects a future additive column declared as %s",
-    (declaration) => {
-      const database = createDatabase(schemaWithFutureColumn(declaration));
-      try {
-        expect(() =>
-          assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA, {
-            allowCompatibleAdditiveColumns: true,
-          }),
-        ).toThrow("column definitions differ for compatible_columns");
-      } finally {
-        database.close();
-      }
-    },
-  );
+  it.each([
+    "TEXT NOT NULL",
+    "TEXT DEFAULT 'read'",
+    "TEXT CHECK (future_note IS NOT NULL)",
+    "TEXT UNIQUE",
+    "TEXT REFERENCES parents(id)",
+    "TEXT GENERATED ALWAYS AS ('read') VIRTUAL",
+  ])("rejects a future additive column declared as %s", (declaration) => {
+    const database = createDatabase(schemaWithFutureColumn(declaration));
+    try {
+      expect(() =>
+        assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA, {
+          allowCompatibleAdditiveColumns: true,
+        }),
+      ).toThrow("column definitions differ for compatible_columns");
+    } finally {
+      database.close();
+    }
+  });
 
   it("keeps allowlisted missing additive columns compatible in the upgrade direction", () => {
     const futureSchema = CANONICAL_SCHEMA.replace(

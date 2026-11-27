@@ -1,6 +1,7 @@
 import type { serializeConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { Model } from "../llm/types.js";
 import type { ActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
+import type { RemoteModelCatalogWorkerTransfer } from "../model-catalog/remote-startup-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import type { AuthProfileCredentialReceipts } from "../state/user-model-account-authority.js";
@@ -42,7 +43,9 @@ export type PreparedModelCatalogWorkerTask = {
     registrationFingerprint: string;
   };
   value:
-    | PreparedModelCatalogWorkerInput
+    | (Omit<PreparedModelCatalogWorkerInput, "remoteCatalog"> & {
+        remoteCatalog: RemoteModelCatalogWorkerTransfer | null;
+      })
     | Omit<PreparedModelCatalogWorkerInput, "remoteCatalog" | "pluginMetadataSnapshot">;
   request: PreparedModelWorkerRequest;
 };
@@ -59,8 +62,6 @@ export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
   Readonly<{
     syntheticAuth: PreparedSyntheticAuthFacts;
     templateInstallSchemaVersions: ReturnType<typeof captureTemplateInstallSchemaVersionFacts>;
-    /** Codex client version decided by the parent; absent means the bundled pin. */
-    codexClientVersion?: string;
   }>;
 
 export type PreparedModelWorkerResult = PreparedModelWorkerOutcome &

@@ -115,24 +115,18 @@ it("presents a single-owner environment only in that owner's connection", async 
   );
 });
 
-it.each(["ambiguity", "revocation"])("cancels before allocation: %s", async (change) => {
+it("cancels before allocation when another participant steers", async () => {
   const test = fixture();
   await withPersonalToolTurn({ owner, allowCollaborativeSteering: true }, async (turn) => {
     const store = support.testState.store;
     const reserve = store.createSessionAttachmentIntent.bind(store);
     vi.spyOn(store, "createSessionAttachmentIntent").mockImplementation(async (...args) => {
       const reservation = await reserve(...args);
-      if (change === "revocation") {
-        turn.revoke(owner.profileId);
-      } else {
-        expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
-      }
+      expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
       return reservation;
     });
     await test.call("portal");
-    test.expectRejected(
-      change === "revocation" ? /Profile access revoked/ : /Several people.*Alice.*Bob/s,
-    );
+    test.expectRejected(/Several people.*Alice.*Bob/s);
     expect(test.service.getSessionAttachmentStatus(identity.sessionId)).toMatchObject({
       attachment: { closedAtMs: expect.any(Number) },
       environment: { state: "failed" },

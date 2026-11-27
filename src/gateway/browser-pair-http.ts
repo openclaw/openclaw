@@ -1,6 +1,8 @@
 // Public device-code pairing for browsers that hold no Gateway credential yet.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatCliCommand } from "../cli/command-format.js";
+import { normalizeProfileName } from "../cli/profile-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -15,6 +17,7 @@ import {
 import {
   BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE,
   buildBrowserPairPayload,
+  formatBrowserPairCode,
   type BrowserPairAction,
 } from "../shared/browser-pair.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -74,6 +77,19 @@ function verifyBrowserPairProof(action: BrowserPairAction, body: BrowserPairBody
   return verifyDeviceSignature(publicKey, payload, body.signature) ? publicKey : null;
 }
 
+/**
+ * The approval command, so a host running several Gateways reaches the issuer: a named profile
+ * rides in the code (`work:ABCD-EFGH`) and the CLI selects it before loading config.
+ */
+export function buildBrowserPairCommand(
+  code: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const displayCode = formatBrowserPairCode(code, normalizeProfileName(env.OPENCLAW_PROFILE));
+  // The code carries the profile, so only a container hint is left to add.
+  return formatCliCommand(`openclaw pair ${displayCode}`, { ...env, OPENCLAW_PROFILE: undefined });
+}
+
 function boundedMetadata(value: string | undefined): string | undefined {
   return value?.trim().slice(0, BROWSER_PAIR_MAX_METADATA_CHARS) || undefined;
 }
@@ -131,7 +147,7 @@ export async function handleBrowserPairHttpRequest(params: {
       }
       const context = captureOpenClawStateWorkerContext();
       if (action === "start") {
-        if (params.config.gateway?.roles) {
+        if (params.config.gateway?.roles?.default) {
           sendJson(res, 409, {
             error: "identity_required",
             message: BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE,
@@ -153,7 +169,12 @@ export async function handleBrowserPairHttpRequest(params: {
           return;
         }
         const { requestId, code, expiresAtMs } = started;
-        sendJson(res, 200, { requestId, code, expiresAtMs });
+        sendJson(res, 200, {
+          requestId,
+          code,
+          expiresAtMs,
+          command: buildBrowserPairCommand(code),
+        });
         return;
       }
 

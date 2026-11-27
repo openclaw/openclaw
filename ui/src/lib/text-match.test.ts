@@ -6,6 +6,9 @@ it.each([
   ["Kim 민수 Lee", "lee", "Lee"],
   ["José García".normalize("NFD"), "garci", "Garcí".normalize("NFD")],
   ["ΝΙΚΟΣ", " κος ", "ΚΟΣ"],
+  ["ΝΙΚΟΣ", "Σ", "Σ"],
+  ["🦊Νίκος", "σ", "ς"],
+  ["κόσμος", "ς", "σ"],
   ["Ada", "", undefined],
 ])("maps the folded match in %j for %j to source text", (text, query, expected) => {
   const match = matchFoldedQuery(text, query);

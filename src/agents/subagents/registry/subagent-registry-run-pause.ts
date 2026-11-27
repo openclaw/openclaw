@@ -4,6 +4,7 @@ import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import { isSubagentCompletionCancelled } from "./subagent-control-kill-intent.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -12,6 +13,7 @@ import {
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { mutateSubagentRuns, SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isSameSubagentRunOwner, latestSubagentRun } from "./subagent-run-generation.js";
 import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
 import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
@@ -52,7 +54,7 @@ export function isCompletionHeldByYield(
   // since resumed, finished, or been claimed by a kill. A kill claim keeps its pause reason.
   return request.settleYielded === true
     ? !isYieldedSubagentRun(entry)
-    : entry.pauseReason === "sessions_yield" && request.reason !== SUBAGENT_ENDED_REASON_KILLED;
+    : isSubagentPausedByYield(entry) && request.reason !== SUBAGENT_ENDED_REASON_KILLED;
 }
 
 type SubagentYieldClaim = "nothing-pending" | "pending-work" | { messageWaitRegistered: boolean };
@@ -77,9 +79,7 @@ export async function claimSubagentYieldInRuns(params: {
       matchesSubagentChildSessionOwner(entry, params.sessionKey, params.agentId) &&
       !entry.collect &&
       entry.execution.status === "running" &&
-      !entry.killIntent &&
-      !entry.killReconciliation &&
-      !entry.suppressCompletionDelivery &&
+      !isSubagentCompletionCancelled(entry) &&
       // A separate admitted follow-up shares the session, not this logical task.
       isSameSubagentRunOwner(
         entry,
@@ -173,7 +173,7 @@ export function markSubagentRunPausedAfterYield(params: {
   if (
     (shouldSuppressSubagentSessionEffects(entry) &&
       (resolveSubagentChildAuthority(entry).status !== "legacy-unverified" ||
-        (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield"))) ||
+        (entry.execution.status === "terminal" && !isSubagentPausedByYield(entry)))) ||
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||
     entry.suppressAnnounceReason === "killed" ||
     (entry.cleanup === "delete" && Number.isFinite(entry.deleteCleanupDispatchedAt))
@@ -201,7 +201,7 @@ export function markSubagentRunPausedAfterYield(params: {
     delete entry.execution.outcome;
     mutated = true;
   }
-  if (entry.pauseReason !== "sessions_yield") {
+  if (!isSubagentPausedByYield(entry)) {
     entry.pauseReason = "sessions_yield";
     mutated = true;
   }

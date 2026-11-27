@@ -6,8 +6,8 @@ import {
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveDeliveryQueueMediaDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
@@ -34,6 +34,7 @@ import {
 } from "../infra/session-delivery-queue.records.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getMediaDir } from "../media/store.js";
+import { chatRef, type ChatRef } from "../sessions/chat-ref.js";
 import { isSessionControllerWorkActive } from "../sessions/session-controller.lifecycle.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -111,7 +112,10 @@ async function persistQueuedGeneratedMedia(params: {
           },
         ],
         stateDir,
-        localRoots: [getMediaDir()],
+        localRoots: [
+          getMediaDir(),
+          ...(entry.reviewedTaskId ? [resolveDeliveryQueueMediaDir(stateDir)] : []),
+        ],
       });
       if (
         !blocks.some(
@@ -310,6 +314,8 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
           "queued generated-media transcript write is waiting for the running turn",
         );
       }
+      // The queue arbitrates exact-task correction before preparing the visible write.
+      await markSessionDeliveryAttemptStarted(entry, params.queueContext);
       await persistQueuedGeneratedMedia({
         ...params,
         entry,
@@ -318,18 +324,15 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
       });
     } else {
       assertRequesterAdmissionCurrent();
-      const sessionId = sessionEntry?.sessionId?.trim();
-      const sessionGeneration: SessionDeliveryGeneration | undefined =
-        binding ??
-        (sessionId
-          ? {
+      const sessionGeneration: ChatRef | undefined = binding
+        ? chatRef(binding)
+        : sessionEntry?.sessionId?.trim()
+          ? chatRef({
               agentId: params.agentId,
               storePath: params.storePath,
               sessionKey: params.canonicalKey,
-              sessionId,
-              lifecycleRevision: sessionEntry?.lifecycleRevision ?? null,
-            }
-          : undefined);
+            })
+          : undefined;
       if (!sessionGeneration) {
         return await deadLetterSessionDelivery(
           entry,

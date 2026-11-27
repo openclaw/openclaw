@@ -6,7 +6,6 @@ import type { JSX } from "@solidjs/web";
 import { Errored, For, Loading, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { TRANSCRIPT_SOURCE_LOCATOR_FIELDS } from "../../../../src/plugins/manifest-contract-keys.js";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
@@ -251,7 +250,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
       return available;
     });
     const selectedProvider = () =>
-      captureStatus()?.providers.find((item) => item.providerId === editedProviderId());
+      knownCaptureStatus()?.providers.find((item) => item.providerId === editedProviderId());
     const fields = () =>
       [
         "title",
@@ -285,7 +284,9 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                 />
               }
             />
-            {editedProviderId() && !supportsAutoStartSetup(selectedProvider()) ? (
+            {editedProviderId() &&
+            knownCaptureStatus() &&
+            !supportsAutoStartSetup(selectedProvider()) ? (
               <SettingsUnavailable message={t("meetingCapture.autoStartUnavailable")} />
             ) : undefined}
             <For each={fields()}>
@@ -614,17 +615,15 @@ export function MeetingCaptureSettings(props: SettingsProps) {
           <p class="settings-page__intro">{t("meetingCapture.sttHint")}</p>
         </div>
       </SettingsPage>
-      <ShellLayoutBoundary traits={{ settingsPage: true }}>
-        <div class="settings-page">
-          <SettingsDisclosure
-            sections
-            title={t("meetingCapture.advancedSettings")}
-            open={props.advancedExpanded}
-          >
-            {props.buildEditor?.()}
-          </SettingsDisclosure>
-        </div>
-      </ShellLayoutBoundary>
+      <div class="settings-page">
+        <SettingsDisclosure
+          sections
+          title={t("meetingCapture.advancedSettings")}
+          open={props.advancedExpanded}
+        >
+          {props.buildEditor?.()}
+        </SettingsDisclosure>
+      </div>
     </openclaw-meeting-capture-settings>
   );
 }

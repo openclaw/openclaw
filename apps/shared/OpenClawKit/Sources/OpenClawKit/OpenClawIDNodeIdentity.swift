@@ -7,7 +7,18 @@ public protocol OpenClawIDNodeIdentityStore: Sendable {
     func loadOrCreateSeed() async throws -> Data
 }
 
-/// Device-only Keychain owner for W, separate from native pairing and owner/member identities.
+/// Which OpenClaw ID key a Keychain item holds. Each has its own service, so a node worker's W
+/// can never be loaded as an owner or member device's D or W.
+public enum OpenClawIDKeyPurpose: String, Sendable {
+    /// W_node: the only key a node worker sees.
+    case node = "ai.openclaw.node-enrollment"
+    /// D: an owner or member device's signing key.
+    case device = "ai.openclaw.openclaw-id-device"
+    /// W: an owner or member device's own peer key.
+    case devicePeer = "ai.openclaw.openclaw-id-peer"
+}
+
+/// Device-only Keychain owner for one OpenClaw ID key, separate from native pairing identities.
 public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
     private let service: String
     private let account: String
@@ -15,10 +26,24 @@ public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
 
     /// A dedicated per-enrollment node identity on every Apple platform, including iOS.
     /// Never reuse the phone's operator/client-pairing key or its Keychain namespace.
-    public init(enrollmentID: UUID, accessGroup: String? = nil) {
-        self.service = "ai.openclaw.node-enrollment"
+    public init(enrollmentID: UUID, purpose: OpenClawIDKeyPurpose = .node, accessGroup: String? = nil) {
+        self.service = purpose.rawValue
         self.account = enrollmentID.uuidString
         self.accessGroup = accessGroup
+    }
+
+    /// Deletes the key when its device or node is removed. A missing item is already deleted.
+    public func delete() throws {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: self.service, kSecAttrAccount as String: self.account,
+            kSecAttrSynchronizable as String: false,
+        ]
+        if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw OpenClawIDNodeEnrollmentError.keychain(status)
+        }
     }
 
     /// Creates W only for a genuinely missing item; concurrent creators retain the winning key.

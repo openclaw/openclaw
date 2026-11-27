@@ -89,13 +89,9 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
-To force local GGUF embeddings, install and configure the official
+To force local GGUF embeddings, configure the bundled
 [llama.cpp provider](/plugins/llama-cpp), then point `local.modelPath` at a
 GGUF file:
-
-```bash
-openclaw plugins install @openclaw/llama-cpp-provider
-```
 
 ```json5
 {
@@ -311,6 +307,25 @@ that dropped them. Incremental syncs keep unchanged chunks, so the oldest
 published chunk can be much older and fewer entries qualify. Newer unreferenced
 entries, such as a retry's or another sync's unpublished vectors, keep plain
 oldest-first order. At or below the cap nothing is removed.
+
+After a successful publication, the embedding cache also drops entries the
+published memory index already holds byte for byte. An ordinary sync that
+finishes its memory files without failing or deferring work removes the entries
+written since it started, or since the oldest earlier sync that did not finish
+cleanly. A full rebuild, once it publishes, removes the entries it wrote and the
+older entries its new index now holds, since it rewrote every chunk. An entry
+goes only when every published chunk with its text hash holds the same
+vector and at least one of those chunks belongs to a memory file indexed with
+the active provider, model, provider settings, input format and dimensions.
+Entries whose vector differs from any published copy, entries for unpublished
+or session-only text, and entries of other providers or provider aliases stay.
+Failed, partial and deferred runs keep their entries for the retry, until a
+later run publishes the same vectors. Unchanged chunks of an edited memory file
+are then read from the published index instead of the cache, so they are not
+embedded again; text copied or moved into a different memory file is embedded
+again. The cleanup runs in bounded batches after publication, outside the
+publication transaction. An error is logged and does not fail the sync. A
+disabled cache keeps its entries.
 
 Other agent state, including sessions and transcripts in the same database,
 is retained. Use the [memory index command](/cli/memory#memory-index) for

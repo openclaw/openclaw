@@ -1,9 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
-import {
-  answerCliHistoryOwnerProbe,
-  type CliHistoryWriter,
-} from "../../config/sessions/cli-history-boundary.js";
 import type {
   SessionMetadataOperations,
   SessionMetadataWorkerOperations,
@@ -49,11 +44,7 @@ export async function withSessionMetadataWorker<T>(
   if ("withMetadata" in database) {
     return await database.withMetadata(assertCurrent, operation, controls);
   }
-  let cliWriter: CliHistoryWriter | undefined;
-  const assertMetadataCurrent = () => {
-    assertCurrent();
-    cliWriter?.assertCurrent();
-  };
+  const assertMetadataCurrent = assertCurrent;
   const admission = captureSessionMessageAdmission(assertMetadataCurrent, controls);
   await runOpenClawAgentWorkerWrite(options, () =>
     database.prepare(
@@ -76,16 +67,8 @@ export async function withSessionMetadataWorker<T>(
     {
       moduleUrl,
       input: undefined,
-      assertAdmission: (request) => {
-        let admitted = request;
-        // The worker's coverage check, answered by the host right before the grant.
-        if (isRecord(request.facts) && "cliHistoryOwnerProbe" in request.facts) {
-          const { cliHistoryOwnerProbe, ...facts } = request.facts;
-          answerCliHistoryOwnerProbe(cliHistoryOwnerProbe, cliWriter);
-          admitted = { ...request, facts: Object.keys(facts).length ? facts : undefined };
-        }
-        return admission.assertAdmission(transcriptPublication.unwrap(admitted));
-      },
+      assertAdmission: (request) =>
+        admission.assertAdmission(transcriptPublication.unwrap(request)),
       onAdmitted: transcriptPublication.onAdmitted,
       observeAdmission: transcriptPublication.observeAdmission,
     },
@@ -94,7 +77,7 @@ export async function withSessionMetadataWorker<T>(
   try {
     const value = await operation({
       execute: async (command, commandOptions) => {
-        cliWriter = prepareSessionManagerMetadataCommand(command, database.path, admission.control);
+        prepareSessionManagerMetadataCommand(command, admission.control);
         assertMetadataCurrent();
         const reply = await worker.execute(command, assertMetadataCurrent, commandOptions);
         if (!reply.ok) {

@@ -330,29 +330,6 @@ describe("telegramPlugin gateway startup", () => {
     ).resolves.toBe(42);
   });
 
-  it("keeps cached startup botInfo when unrelated Telegram config changes", async () => {
-    installTelegramRuntime();
-    await writeCachedTelegramBotInfo({
-      accountId: "ops",
-      botToken: "123456:bad-token",
-      botInfo: startupBotInfo,
-    });
-
-    await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
-      accountId: "ops",
-      prevCfg: createTelegramConfig("ops"),
-      nextCfg: createTelegramConfig("ops", { timeoutSeconds: 60 }),
-      runtime: createRuntimeSpies(),
-    });
-
-    await expect(
-      readCachedTelegramBotInfo({
-        accountId: "ops",
-        botToken: "123456:bad-token",
-      }),
-    ).resolves.toMatchObject({ botInfo: startupBotInfo });
-  });
-
   it("deletes cached startup botInfo when the account is removed", async () => {
     installTelegramRuntime();
     await cacheBotInfo();

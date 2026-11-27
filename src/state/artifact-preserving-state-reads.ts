@@ -28,16 +28,20 @@ export const artifactPreservingReads = resolveGlobalSingleton(
 
 const liveStateReads = resolveGlobalSingleton(
   Symbol.for("openclaw.liveStateReads"),
-  () => new AsyncLocalStorage<boolean>(),
+  () => new AsyncLocalStorage<"runtime" | "startup-config">(),
 );
 
 /** Select live runtime state bytes without changing an inspection's side-effect policy. */
-export function withLiveStateReads<T>(operation: () => T): T {
-  return liveStateReads.run(true, operation);
+export function withLiveStateReads<T>(operation: () => T, options?: { startupConfig: true }): T {
+  return liveStateReads.run(options?.startupConfig ? "startup-config" : "runtime", operation);
 }
 
 export function isLiveStateRead(): boolean {
-  return liveStateReads.getStore() === true;
+  return liveStateReads.getStore() !== undefined;
+}
+
+export function isStartupConfigStateRead(): boolean {
+  return liveStateReads.getStore() === "startup-config";
 }
 
 /**

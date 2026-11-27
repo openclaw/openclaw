@@ -40,7 +40,7 @@ const FUZZY_VARIANT_TOKENS = [
 export function resolveModelDirectiveSelection(params: {
   raw: string;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
@@ -58,7 +58,7 @@ export function resolveModelDirectiveSelection(params: {
       cfg: params.cfg ?? {},
       catalog: [],
       defaultProvider,
-      defaultModel: { provider: defaultProvider, model: defaultModel },
+      defaultModel: defaultModel ? { provider: defaultProvider, model: defaultModel } : undefined,
       agentId: params.agentId,
     });
 
@@ -294,7 +294,7 @@ export async function prepareInlineModelDirectiveMatcher(params: {
   cfg: OpenClawConfig;
   agentId: string;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   aliasIndex: ModelAliasIndex;
   preparedModelCatalog?: ModelCatalogSnapshot;
 }) {
@@ -309,7 +309,7 @@ export async function prepareInlineModelDirectiveMatcher(params: {
     agentId,
     catalog: preparedModelCatalog.entries,
     defaultProvider,
-    defaultModel: { provider: defaultProvider, model: defaultModel },
+    defaultModel: defaultModel ? { provider: defaultProvider, model: defaultModel } : undefined,
     ...resolveRuntimeNormalization(cfg),
   });
   return {

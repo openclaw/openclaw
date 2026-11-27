@@ -43,6 +43,10 @@ export type WorkerTaskChannel = {
 };
 
 export type WorkerTaskServerHost<TaskContext> = {
+  /** A logical endpoint in a shared host isolate serves this port instead of parentPort. */
+  startupPort?: MessagePort;
+  /** Replaces the isolate exit code when the host, not this server, owns isolate exit. */
+  onRetired?: () => void;
   selectStartupPort?: (message: unknown) => MessagePort | undefined;
   initialize: (port: MessagePort) => void;
   onReady?: () => void;
@@ -72,16 +76,18 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
   options: {
     transferList?: (value: Output) => Transferable[];
     closeResource: (key?: string) => void | Promise<void>;
+    /** Keys whose cleanup cannot touch the running task's resources skip waiting for that task. */
+    closesBesideExecution?: (key?: string) => boolean;
     encodeResourceError?: (error: unknown) => unknown;
     /** Unknown native state cannot publish a reusable task failure before isolate exit. */
     retireOnError?: boolean;
   },
   host: WorkerTaskServerHost<TaskContext>,
 ): void {
-  if (!parentPort) {
+  const startupPort = host.startupPort ?? parentPort;
+  if (!startupPort) {
     return;
   }
-  const startupPort = parentPort;
   let port = startupPort;
   let receivedStartup = false;
   let retiring = false;
@@ -125,7 +131,10 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
   };
   const finish = () => {
     if (!retiring) {
-      host.onIdle();
+      // Admitted cleanup may still retain resources after the task reply.
+      if (pendingResourceClosures === 0) {
+        host.onIdle();
+      }
       return;
     }
     // Queued resource receipts depend on execution. Join them after returning,
@@ -137,7 +146,11 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
         try {
           await host.onRetire?.();
         } finally {
-          process.exitCode = 1;
+          if (host.onRetired) {
+            host.onRetired();
+          } else {
+            process.exitCode = 1;
+          }
           try {
             port.close();
           } finally {
@@ -186,7 +199,9 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
       host.onMessage(message.sampleMemory === true);
       if (message.closeResource && message.resourcePort) {
         const receipt = message.resourcePort;
-        const precedingExecution = execution;
+        const precedingExecution = options.closesBesideExecution?.(message.key)
+          ? undefined
+          : execution;
         pendingResourceClosures++;
         resourceClosures = resourceClosures
           .then(() => precedingExecution)
@@ -210,7 +225,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
           .finally(() => {
             receipt.close();
             pendingResourceClosures--;
-            if (!active && !retiring) {
+            if (!active && !retiring && pendingResourceClosures === 0) {
               host.onIdle();
             }
           });

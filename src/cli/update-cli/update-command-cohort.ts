@@ -41,6 +41,7 @@ import type { OwnedManagedUpdateContext } from "./update-command-managed-context
 import type { UpdatePluginCohortSettlementInput } from "./update-command-migrated-types.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { assertUpdateCommandRecoveryState } from "./update-command-recovery.js";
 import { withUpdateStateRead } from "./update-command-result.js";
 import {
   resolveUpdatedInstallCommandEnv,
@@ -62,11 +63,8 @@ export async function createUpdateCommandRollbackCapture(
   const previous = await readPackageUpdateIdentity(execution.root);
   assertCurrent();
   let candidate: Awaited<ReturnType<typeof readPackageUpdateIdentity>> | undefined;
-  let targetVersion = execution.packageTargetVersion;
+  const targetVersion = execution.packageTargetVersion;
   return {
-    selectTargetVersion(version: string | undefined) {
-      targetVersion = version;
-    },
     async observeCandidate(root: string) {
       candidate = await readPackageUpdateIdentity(root);
       assertCurrent();
@@ -91,7 +89,7 @@ export async function createUpdateCommandRollbackCapture(
           execution.packageUpdateNodeRunner ??
           process.execPath,
       };
-      await beginUpdatePluginCohort({
+      const pair = await beginUpdatePluginCohort({
         runId: run.runId,
         env: context?.env ?? run.env,
         fence,
@@ -101,12 +99,19 @@ export async function createUpdateCommandRollbackCapture(
       });
       assertCurrent();
       // Reservation writes share the state database; capture their settled generation.
-      return await captureUpdateDatabases({
+      const captured = await captureUpdateDatabases({
         transaction,
         execution,
         context,
         assertCurrent,
       });
+      if (captured.backup) {
+        captured.backup.pluginCohortRecovery = {
+          runId: pair.cohort.runId,
+          transactionId: pair.cohort.transactionId,
+        };
+      }
+      return captured;
     },
   };
 }
@@ -169,15 +174,20 @@ export async function assertUpdatePluginCohortReportingAdmission(
   pluginCohort: PluginCohortRecoveryContinuation | undefined,
   settlementFailed: boolean,
 ): Promise<void> {
-  const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
+  const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env ?? process.env;
   // Keep the first target stable if selectors change during admission.
   const targetPath = resolveOpenClawStateSqlitePath(env);
   await withUpdateStateRead(
     async () => {
       await assertUpdateRecoveryAdmission({ env, path: targetPath, pluginCohort });
       if (params.opts.run) {
+        assertUpdateCommandRecoveryState({
+          ...params.opts,
+          run: { ...params.opts.run, env },
+        });
         if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
           await assertUpdateRecoveryAdmission({ env: params.opts.run.env, pluginCohort });
+          assertUpdateCommandRecoveryState(params.opts);
         }
         const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
         if (prior && prior.status !== "running" && settlementFailed) {

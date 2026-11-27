@@ -37,6 +37,7 @@ export default definePluginEntry({
       label: "Connected apps",
       icon: "plug",
       group: "control",
+      placement: "settings",
       requiredScopes: ["operator.read"],
     });
     api.registerService({

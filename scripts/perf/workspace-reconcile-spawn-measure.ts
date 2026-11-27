@@ -16,7 +16,11 @@
  * Report cold-owner and warm separately, median/p95/range, and flag >=20% changes
  * in latency, CPU or allocation. First-owner is warm filesystem, not cold disk.
  * Timing includes the real Git worker and broker. Total CPU includes their threads
- * and reaped Git children. Allocation is main-isolate traffic only. A separately
+ * and reaped Git children. Allocation is main-isolate traffic only.
+ * --counts installs FS/spawn counters in a separate run; timing/allocation runs install no
+ * wrappers. Counter-mode cost metrics are instrumented diagnostics, never acceptance data.
+ * syncFsCalls counts Node synchronous filesystem API calls during the owner operation;
+ * it is a main-isolate work counter, not a kernel syscall or native-addon census. A separately
  * selected --cpu-profile writes profiles; never mix profiling into acceptance runs.
  * --workload reconcile runs the real staged-result apply, including materialization,
  * preflight, patch, conflict preservation, and accepted-manifest capture. Create its
@@ -26,6 +30,9 @@
  * A placement-owned hash memo survives applies: first-owner starts empty; warm
  * reuses unchanged file hashes. Each row reports content hashes and memo hits.
  * Preparation/staging and fixture resets are outside the measured apply interval.
+ * Comparison samples use fresh processes and one synthetic checkout. Before each row,
+ * every initial manifest entry and byte digest plus Git HEAD are revalidated after reset;
+ * the complete result checks reject extra eligible paths before that checkout is reused.
  * This mode also runs on macOS; there total CPU excludes unreaped Git children.
  * Correctness compares every accepted entry and each changed file byte digest.
  * Acceptance: identical results/conflicts, reduced main CPU/allocation, and no
@@ -71,8 +78,10 @@ const { values } = parseArgs({
     fixture: { type: "string" },
     compare: { type: "string" },
     sample: { type: "string" },
+    repository: { type: "string" },
     "cpu-profile": { type: "string" },
     control: { type: "boolean", default: false },
+    counts: { type: "boolean", default: false },
     samples: { type: "string", default: "5" },
     commands: { type: "string", default: "2" },
     "rss-mib": { type: "string", default: "8192" },
@@ -394,47 +403,72 @@ if (values.prepare) {
     result: { rows: Measurement[] };
   }> = [];
   const fingerprints = new Map<string, string>();
-  for (let sample = 0; sample < samples; sample++) {
-    for (const arm of sample % 2 === 0 ? ["before", "after"] : ["after", "before"]) {
-      const actual = values.control ? "before" : arm;
-      const output: string = childProcess.execFileSync(
-        process.execPath,
-        [
-          script,
-          "--sample",
-          path.join(path.resolve(values.compare), actual),
-          "--fixture",
-          path.resolve(values.fixture),
-          "--workload",
-          values.workload,
-          "--commands",
-          values.commands,
-          "--rss-mib",
-          values["rss-mib"],
-        ],
-        { env: environment, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-      );
-      const lines = output.trim().split("\n");
-      const resultLine = lines.findLast((line) => line.startsWith(samplePrefix));
-      assert(resultLine, "Sample did not produce its completion record");
-      const result: { rows: Measurement[] } = JSON.parse(resultLine.slice(samplePrefix.length));
-      for (const row of result.rows) {
-        if (fingerprints.has(row.operation)) {
-          assert.equal(
-            row.fingerprint,
-            fingerprints.get(row.operation),
-            `Different bytes: ${row.operation}`,
-          );
-        }
-        fingerprints.set(row.operation, row.fingerprint);
-      }
-      rows.push({
-        arm,
-        sample,
-        diagnostics: lines.filter((line) => !line.startsWith(samplePrefix)),
-        result,
+  // Each row gets a fresh process; only the validated synthetic checkout is reused.
+  const scratch =
+    values.workload === "reconcile" && !values.repository
+      ? fs.mkdtempSync(
+          path.join(path.dirname(path.resolve(values.fixture)), "workspace-reconcile-series-"),
+        )
+      : undefined;
+  const repository = values.repository ?? (scratch && path.join(scratch, "repository"));
+  try {
+    if (scratch && repository) {
+      fs.cpSync(path.join(path.resolve(values.fixture), "base"), repository, {
+        recursive: true,
+        mode: fs.constants.COPYFILE_FICLONE,
       });
-      console.error(`completed ${values.control ? "A/A" : "A/B"} ${sample + 1}/${samples} ${arm}`);
+    }
+    for (let sample = 0; sample < samples; sample++) {
+      for (const arm of sample % 2 === 0 ? ["before", "after"] : ["after", "before"]) {
+        const actual = values.control ? "before" : arm;
+        const output: string = childProcess.execFileSync(
+          process.execPath,
+          [
+            script,
+            "--sample",
+            path.join(path.resolve(values.compare), actual),
+            "--fixture",
+            path.resolve(values.fixture),
+            ...(repository ? ["--repository", repository] : []),
+            ...(values.counts ? ["--counts"] : []),
+            "--workload",
+            values.workload,
+            "--commands",
+            values.commands,
+            "--rss-mib",
+            values["rss-mib"],
+          ],
+          { env: environment, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+        );
+        const lines = output.trim().split("\n");
+        const resultLine = lines.findLast((line) => line.startsWith(samplePrefix));
+        assert(resultLine, "Sample did not produce its completion record");
+        const result: { rows: Measurement[] } = JSON.parse(resultLine.slice(samplePrefix.length));
+        for (const row of result.rows) {
+          if (fingerprints.has(row.operation)) {
+            assert.equal(
+              row.fingerprint,
+              fingerprints.get(row.operation),
+              `Different bytes: ${row.operation}`,
+            );
+          }
+          fingerprints.set(row.operation, row.fingerprint);
+        }
+        rows.push({
+          arm,
+          sample,
+          diagnostics: lines.filter((line) => !line.startsWith(samplePrefix)),
+          result,
+        });
+        console.error(`row:${JSON.stringify(rows.at(-1))}`);
+        console.error(
+          `completed ${values.control ? "A/A" : "A/B"} ${sample + 1}/${samples} ${arm}`,
+        );
+      }
+    }
+  } finally {
+    if (scratch) {
+      fs.rmSync(scratch, { recursive: true, force: true });
     }
   }
   const groups = new Map<string, Measurement[]>();
@@ -473,6 +507,7 @@ if (values.prepare) {
   console.log(
     JSON.stringify({
       control: values.control,
+      instrumentation: values.counts ? "sync-fs-and-spawn" : "none",
       summary,
       provenance: JSON.parse(fs.readFileSync(path.join(values.compare, "source.json"), "utf8")),
       rows,
@@ -513,8 +548,10 @@ if (values.prepare) {
   const scratch = fs.mkdtempSync(
     path.join(reconcile ? path.dirname(directory) : os.tmpdir(), "workspace-reconcile-measure-"),
   );
-  const repository = path.join(scratch, "repository");
-  if (reconcile) {
+  const repository = values.repository ?? path.join(scratch, "repository");
+  if (values.repository) {
+    assert(reconcile, "Shared synthetic checkout is only for reconciliation controls");
+  } else if (reconcile) {
     assert(fixture.reconcile, "Create the fixture with --workload reconcile");
     fs.cpSync(path.join(directory, "base"), repository, {
       recursive: true,
@@ -570,40 +607,83 @@ if (values.prepare) {
         : "unavailable",
     ]),
   );
+  let measuringFs = false;
+  let syncFsCalls = 0;
   let nativeCalls = 0,
     nativeBlockingMs = 0,
     brokerCalls = 0;
+  const fsOriginals = new Map<string, PropertyDescriptor>();
   const nativeSpawn = childProcess.spawn;
-  Object.defineProperty(childProcess, "spawn", {
-    value: (...args: Parameters<typeof nativeSpawn>) => {
-      nativeCalls++;
-      const start = performance.now();
-      try {
-        return nativeSpawn(...args);
-      } finally {
-        nativeBlockingMs += performance.now() - start;
-      }
-    },
-  });
-  syncBuiltinESMExports();
-  if (broker) {
-    const spawnExeca = broker.spawnExeca.bind(broker),
-      spawn = broker.spawn.bind(broker);
-    broker.spawnExeca = (...args) => {
-      brokerCalls++;
-      return spawnExeca(...args);
-    };
-    broker.spawn = (...args) => {
-      brokerCalls++;
-      return spawn(...args);
-    };
-  }
+  let restoreBroker: (() => void) | undefined;
   const inspector = values["cpu-profile"] ? new Session() : undefined;
-  inspector?.connect();
   const rows: Measurement[] = [];
   const hashMemo = new Map<string, string>();
   const hashMetrics = { contentHashCount: 0, memoHitCount: 0 };
   try {
+    if (values.counts) {
+      const nativeRealpath = new Proxy(fs.realpathSync.native, {
+        apply(target, receiver, args) {
+          if (measuringFs) {
+            syncFsCalls++;
+          }
+          return Reflect.apply(target, receiver, args);
+        },
+      });
+      for (const [name, original] of Object.entries(fs)) {
+        if (!name.endsWith("Sync") || typeof original !== "function") {
+          continue;
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(fs, name);
+        assert(descriptor);
+        fsOriginals.set(name, descriptor);
+        Object.defineProperty(fs, name, {
+          value: new Proxy(original, {
+            apply(target, receiver, args) {
+              if (measuringFs) {
+                syncFsCalls++;
+              }
+              return Reflect.apply(target, receiver, args);
+            },
+            get(target, key, receiver) {
+              return name === "realpathSync" && key === "native"
+                ? nativeRealpath
+                : Reflect.get(target, key, receiver);
+            },
+          }),
+        });
+      }
+      Object.defineProperty(childProcess, "spawn", {
+        value: (...args: Parameters<typeof nativeSpawn>) => {
+          nativeCalls++;
+          const start = performance.now();
+          try {
+            return nativeSpawn(...args);
+          } finally {
+            nativeBlockingMs += performance.now() - start;
+          }
+        },
+      });
+      syncBuiltinESMExports();
+      if (broker) {
+        const originalSpawnExeca = broker.spawnExeca;
+        const originalSpawn = broker.spawn;
+        const spawnExeca = originalSpawnExeca.bind(broker),
+          spawn = originalSpawn.bind(broker);
+        broker.spawnExeca = (...args) => {
+          brokerCalls++;
+          return spawnExeca(...args);
+        };
+        broker.spawn = (...args) => {
+          brokerCalls++;
+          return spawn(...args);
+        };
+        restoreBroker = () => {
+          broker.spawnExeca = originalSpawnExeca;
+          broker.spawn = originalSpawn;
+        };
+      }
+    }
+    inspector?.connect();
     if (inspector) {
       await inspector.post("Profiler.enable");
       await inspector.post("Profiler.start");
@@ -637,6 +717,26 @@ if (values.prepare) {
           for (const relative of fixture.reconcile!.conflictPaths) {
             fs.writeFileSync(path.join(repository, relative), "retained local conflict\n");
           }
+          const initial: {
+            baseCommit: string;
+            entries: Array<WorkerWorkspaceManifestEntry | { path: string; type: "directory" }>;
+          } = JSON.parse(fixture.baseManifestRaw);
+          assert.equal(
+            git(repository, ["rev-parse", "HEAD"]).toString().trim(),
+            initial.baseCommit,
+          );
+          for (const entry of initial.entries) {
+            const target = path.join(repository, entry.path);
+            if (entry.type === "directory") {
+              assert(fs.statSync(target).isDirectory());
+            } else {
+              assert(entry.type === "file");
+              const expected = fixture.reconcile!.conflictPaths.includes(entry.path)
+                ? hash("retained local conflict\n")
+                : entry.sha256;
+              assert.equal(hash(fs.readFileSync(target)), expected, `Initial bytes: ${entry.path}`);
+            }
+          }
         }
         const loop = monitorEventLoopDelay({ resolution: 1 });
         loop.enable();
@@ -653,6 +753,8 @@ if (values.prepare) {
         const cpu = process.cpuUsage(),
           thread = process.threadCpuUsage(),
           start = performance.now();
+        syncFsCalls = 0;
+        measuringFs = values.counts;
         const result = await withBroker(async () => {
           if (operation === "reconcile") {
             return runtime.withWorkspaceHashMemo(
@@ -691,6 +793,7 @@ if (values.prepare) {
             appliedEntries: operation === "patch" ? fixture.current : [],
           });
         });
+        measuringFs = false;
         const wallMs = performance.now() - start,
           threadDelta = process.threadCpuUsage(thread),
           cpuDelta = process.cpuUsage(cpu);
@@ -751,10 +854,15 @@ if (values.prepare) {
           operation,
           fingerprint,
           ...(reconcile ? { ...hashMetrics } : {}),
-          nativeCalls,
-          brokerCalls,
-          totalLaunches: nativeCalls + brokerCalls,
-          nativeBlockingMs,
+          ...(values.counts
+            ? {
+                syncFsCalls,
+                nativeCalls,
+                brokerCalls,
+                totalLaunches: nativeCalls + brokerCalls,
+                nativeBlockingMs,
+              }
+            : {}),
           wallMs,
           threadCpuMs: (threadDelta.user + threadDelta.system) / 1000,
           processCpuMs: (cpuDelta.user + cpuDelta.system) / 1000,
@@ -777,6 +885,11 @@ if (values.prepare) {
       samplePrefix +
         JSON.stringify({
           node: process.version,
+          instrumentation: values.counts
+            ? "sync-fs-and-spawn"
+            : values["cpu-profile"]
+              ? "cpu-profile"
+              : "none",
           uv: process.versions.uv,
           kernel: os.release(),
           arch: process.arch,
@@ -807,8 +920,15 @@ if (values.prepare) {
     );
   } finally {
     inspector?.disconnect();
-    Object.defineProperty(childProcess, "spawn", { value: nativeSpawn });
-    syncBuiltinESMExports();
+    measuringFs = false;
+    if (values.counts) {
+      for (const [name, descriptor] of fsOriginals) {
+        Object.defineProperty(fs, name, descriptor);
+      }
+      Object.defineProperty(childProcess, "spawn", { value: nativeSpawn });
+      restoreBroker?.();
+      syncBuiltinESMExports();
+    }
     await runtime.drainGlobalSingletonLifecycleState();
     await broker?.close();
     fs.rmSync(scratch, { recursive: true, force: true });

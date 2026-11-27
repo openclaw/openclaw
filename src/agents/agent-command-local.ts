@@ -2,6 +2,7 @@
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
+import { LOCAL_HOST } from "../gateway/operator-admission.js";
 import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -9,6 +10,7 @@ import {
 import { settleWithCleanup } from "../infra/error-graph-internal.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import {
   getBoundLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
@@ -47,7 +49,8 @@ export async function runLocalAgentCommand<TResult>(params: {
 }): Promise<TResult> {
   const existingHost = getBoundLegacyPluginSdkResourceHost();
   const scheduler = existingHost ? existingHost.scheduler : new GatewayScheduler();
-  const host = existingHost ?? new LegacyPluginSdkResourceHost();
+  const host =
+    existingHost ?? new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   if (!existingHost) {
     host.bindScheduler(scheduler);
   }
@@ -64,7 +67,7 @@ export async function runLocalAgentCommand<TResult>(params: {
           const opts = {
             ...params.opts,
             lifecycleGeneration,
-            senderIsOwner: params.opts.senderIsOwner ?? true,
+            senderIsOwner: LOCAL_HOST.grant.owner,
             allowModelOverride: params.opts.allowModelOverride ?? true,
             // Standalone commands cannot retain transports after their idle scheduler closes.
             cleanupBundleMcpOnRunEnd: existingHost ? params.opts.cleanupBundleMcpOnRunEnd : true,
@@ -73,10 +76,9 @@ export async function runLocalAgentCommand<TResult>(params: {
             prepareAgentCommandExecution(opts, params.runtime),
           );
           try {
-            const capability =
-              params.operatorAuthority && prepared.opts.senderIsOwner === true
-                ? createCronCreatorAuthorityCapability(prepared.runId, { kind: "local" })
-                : undefined;
+            const capability = params.operatorAuthority
+              ? createCronCreatorAuthorityCapability(prepared.runId, { kind: "local" })
+              : undefined;
             const admittedPrepared = capability
               ? {
                   ...prepared,
@@ -147,6 +149,7 @@ export async function runLocalAgentCommand<TResult>(params: {
                 )
               : await run();
           } finally {
+            prepared.releaseParticipation?.();
             await prepared.runLease?.release();
           }
         }),

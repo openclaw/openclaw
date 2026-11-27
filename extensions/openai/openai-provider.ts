@@ -53,10 +53,7 @@ import {
   isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
 } from "./model-route-contract.js";
-import {
-  buildOpenAIChatGPTAuthMethodRuns,
-  buildOpenAICodexProviderHooks,
-} from "./openai-chatgpt-provider.js";
+import { buildOpenAICodexProviderHooks, runOpenAICodexLogin } from "./openai-chatgpt-provider.js";
 import {
   buildOpenAIProviderCatalog,
   isCodexCatalogAuthMode,
@@ -240,7 +237,6 @@ export function buildOpenAIProvider(): ProviderPlugin {
   if (!apiKeyDefinition) {
     throw new Error("OpenAI provider contract is missing API-key auth");
   }
-  const chatGPTAuthRuns = buildOpenAIChatGPTAuthMethodRuns();
   const apiKeyRuntime = createProviderApiKeyAuthMethod({
     providerId: PROVIDER_ID,
     methodId: apiKeyDefinition.id,
@@ -264,9 +260,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
         (await import("./token-sharing-oauth.runtime.js")).loginTokenSharing(ctx);
       continue;
     }
-    if (method.id === "oauth" || method.id === "device-code") {
+    if (method.id === "oauth") {
       method.starterModel = OPENAI_CODEX_DEFAULT_MODEL;
-      method.run = chatGPTAuthRuns[method.id];
+      method.run = runOpenAICodexLogin;
       continue;
     }
     if (method.id !== "api-key") {

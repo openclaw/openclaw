@@ -375,7 +375,7 @@ describe("native harness auth failover", () => {
         expect.objectContaining({ profileId: failedProfile, reason: "auth" }),
       );
       expect(buildExternalRunFailureReply({ error: failure, message }).text).toBe(
-        "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+        "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
       );
     },
   );

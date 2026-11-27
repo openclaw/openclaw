@@ -17,10 +17,22 @@ import {
 } from "../media-generation/runtime-shared.js";
 import { createCapabilityProviderLookup } from "../plugins/provider-registry-shared.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
+import type { ImageGenerationProvider } from "./provider-types.js";
 import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 import type { ImageGenerationIgnoredOverride, ImageGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
+
+export function resolveImageGenerationModelCapabilities(
+  provider: ImageGenerationProvider,
+  model?: string,
+) {
+  const overrides = provider.capabilitiesByModel;
+  return (
+    (model && overrides && Object.hasOwn(overrides, model) ? overrides[model] : undefined) ??
+    provider.capabilities
+  );
+}
 
 /** Dependency seam used by image-generation runtime tests and plugin host callers. */
 type ImageGenerationRuntimeDeps = {
@@ -82,11 +94,12 @@ async function runImageGeneration(
     prepareCandidate(candidate, provider) {
       const inputImageCount = params.inputImages?.length ?? 0;
       const model = candidate.model.trim();
+      const capabilities = resolveImageGenerationModelCapabilities(provider, model);
       let prefixLimit: number | undefined;
       let prefixLength = -1;
       if (model) {
         for (const [prefix, limit] of Object.entries(
-          provider.capabilities.edit.maxInputImagesByModelPrefix ?? {},
+          capabilities.edit.maxInputImagesByModelPrefix ?? {},
         )) {
           if (prefix.length > prefixLength && model.startsWith(prefix)) {
             prefixLimit = limit;
@@ -95,14 +108,14 @@ async function runImageGeneration(
         }
       }
       const maxInputImages =
-        (model ? provider.capabilities.edit.maxInputImagesByModel?.[model] : undefined) ??
+        (model ? capabilities.edit.maxInputImagesByModel?.[model] : undefined) ??
         prefixLimit ??
-        provider.capabilities.edit.maxInputImages;
+        capabilities.edit.maxInputImages;
       const referenceImageError = resolveReferenceImageCapabilityError({
         candidateRef: `${candidate.provider}/${candidate.model}`,
         inputImageCount,
         edit: {
-          enabled: provider.capabilities.edit.enabled,
+          enabled: capabilities.edit.enabled,
           ...(maxInputImages !== undefined ? { maxInputImages } : {}),
         },
       });
@@ -116,32 +129,33 @@ async function runImageGeneration(
           timeoutMs: requestedTimeoutMs,
           providerDefaultTimeoutMs: provider.defaultTimeoutMs,
         });
-        const modelResolutions =
-          provider.capabilities.geometry?.resolutionsByModel?.[candidate.model];
+        const geometry = capabilities.geometry;
+        const resolutions =
+          geometry?.resolutionsByModel?.[candidate.model] ?? geometry?.resolutions;
         const modeCapabilities = params.inputImages?.length
-          ? provider.capabilities.edit
-          : provider.capabilities.generate;
-        const inferredResolution =
-          modeCapabilities.supportsResolution === false || modelResolutions?.length === 0
-            ? undefined
-            : params.inferredResolution;
-        const geometry = provider.capabilities.geometry;
+          ? capabilities.edit
+          : capabilities.generate;
+        // An empty resolution list means this model accepts no resolution, like supportsResolution: false.
+        const supportsResolution =
+          modeCapabilities.supportsResolution !== false && resolutions?.length !== 0;
+        const inferredResolution = supportsResolution ? params.inferredResolution : undefined;
         const sanitized = resolveMediaGeometryOverrides({
           size: params.size,
           aspectRatio: params.aspectRatio,
           resolution: params.resolution ?? inferredResolution,
           capabilities: {
             ...modeCapabilities,
+            supportsResolution: modeCapabilities.supportsResolution && supportsResolution,
             sizes: geometry?.sizesByModel?.[candidate.model] ?? geometry?.sizes,
             aspectRatios:
               geometry?.aspectRatiosByModel?.[candidate.model] ?? geometry?.aspectRatios,
-            resolutions: modelResolutions ?? geometry?.resolutions,
+            resolutions,
           },
           fallbackSizes: geometry?.sizes,
         });
         const ignoredOverrides: ImageGenerationIgnoredOverride[] = sanitized.ignoredOverrides;
         let { quality, outputFormat, background } = params;
-        const output = provider.capabilities.output;
+        const output = capabilities.output;
         const qualities = output?.qualitiesByModel?.[candidate.model] ?? output?.qualities;
         const formats = output?.formatsByModel?.[candidate.model] ?? output?.formats;
         const backgrounds = output?.backgroundsByModel?.[candidate.model] ?? output?.backgrounds;
@@ -190,6 +204,17 @@ async function runImageGeneration(
           throw new Error(
             `Image generation provider returned an empty image buffer at index ${emptyImageIndex}.`,
           );
+        }
+        if (params.size && sanitized.size && /^\d+x\d+$/.test(sanitized.size)) {
+          const { getImageMetadata } = await import("../media/media-services.js");
+          for (const image of result.images) {
+            // Keep a completed image even when its dimensions cannot be inspected.
+            const dimensions = await getImageMetadata(image.buffer).catch(() => null);
+            if (dimensions && `${dimensions.width}x${dimensions.height}` !== sanitized.size) {
+              ignoredOverrides.push({ key: "size", value: params.size });
+              break;
+            }
+          }
         }
         return {
           images: result.images,

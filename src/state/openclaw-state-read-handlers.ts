@@ -1,9 +1,5 @@
 import type { ExecutionIdentityInspectionOutcome } from "../audit/execution-identity-inspection.types.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
-import {
-  isCronStateReadCommand,
-  readCronStateCommandInDatabase,
-} from "../cron/store/read-command.js";
 import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isUpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
@@ -104,7 +100,13 @@ export async function prepareOpenClawStateRead(
     const { readBackupRunsInDatabase } = await import("./backup-run-records.kernel.js");
     return (db: EngineConnection) => ({ type: command.type, runs: readBackupRunsInDatabase(db) });
   }
-  if (isCronStateReadCommand(command)) {
+  if (
+    command.type === "cron.currentReceipt" ||
+    command.type === "cron.scratch" ||
+    command.type === "cron.jobNames" ||
+    command.type === "cron.quarantine"
+  ) {
+    const { readCronStateCommandInDatabase } = await import("../cron/store/read-command.js");
     return (db: EngineConnection) => readCronStateCommandInDatabase(db, command);
   }
   if (
@@ -224,8 +226,8 @@ export async function prepareOpenClawStateRead(
     });
   }
   if (isUpdateRunAdmissionReadCommand(command)) {
-    const { readUpdateRunAdmissionCommand } = await import("../infra/update-run-admission.read.js");
-    return (db: EngineConnection) => readUpdateRunAdmissionCommand(db, command);
+    const { prepareUpdateRunAdmissionRead } = await import("../infra/update-run-admission.read.js");
+    return prepareUpdateRunAdmissionRead(command);
   }
   if (command.type === "updateRuns.status") {
     const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
@@ -249,24 +251,6 @@ export async function prepareOpenClawStateRead(
     return (db: EngineConnection) => ({
       type: command.type,
       run: readInterruptedUpdateCandidate(db),
-    });
-  }
-  if (command.type === "updateRuns.pluginCohortRecoveries") {
-    const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
-    const { inspectPluginCohortRecoveryRows } =
-      await import("../infra/update-run-recovery-store.js");
-    return (db: EngineConnection) => ({
-      type: command.type,
-      pairs: runSqliteReadSnapshotSync(db, () => inspectPluginCohortRecoveryRows(db)),
-    });
-  }
-  if (command.type === "updateRuns.pluginSnapshotCollection") {
-    const { runSqliteReadSnapshotSync } = await import("../infra/sqlite-transaction.js");
-    const { canCollectPluginSourceSnapshotsInDatabase } =
-      await import("../infra/update-run-recovery-store.js");
-    return (db: EngineConnection) => ({
-      type: command.type,
-      allowed: runSqliteReadSnapshotSync(db, () => canCollectPluginSourceSnapshotsInDatabase(db)),
     });
   }
   if (command.type === "exec-approvals.read") {

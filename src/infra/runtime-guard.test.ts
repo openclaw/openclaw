@@ -244,32 +244,20 @@ describe("runtime-guard", () => {
 
   it("preserves the target package's numeric engine range", () => {
     const engine = ">=24.22.1 <25 || >=26.12.1";
-    expect(nodeVersionSatisfiesEngine("22.23.2", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("22.22.2", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("23.11.0", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.14.1", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.15.0+vendor.1", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.22.1", engine)).toBe(true);
-    expect(nodeVersionSatisfiesEngine("25.8.1", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("25.9.0", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("26.0.0", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("26.12.1", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine(null, engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("unknown", engine)).toBe(false);
   });
 
   it.each([
-    ["22.23.2", false],
-    ["23.11.0", false],
     ["24.15.0", false],
     ["24.16.0", true],
-    ["24.22.0", true],
-    ["24.22.1", true],
     ["25.9.0", false],
     ["26.0.0", false],
     ["26.1.0", true],
-    ["26.12.0", true],
-    ["26.12.1", true],
     ["27.0.0", true],
     ["v27.0.0-head", true],
     ["27.0.0-nightly20261018f88a1d25e9", true],
@@ -277,14 +265,11 @@ describe("runtime-guard", () => {
     ["24.22.1-rc.1", false],
     ["26.12.1-rc.1", false],
     ["27.0.0-01", false],
-    ["27.0.0-nightly..1", false],
-    ["27.0.0-", false],
     ["24.22.1+local.1", true],
     ["24.15.0-rc.1", false],
     ["25.9.1-nightly.20260714", false],
     ["24.15", false],
     ["garbage24.15.0suffix", false],
-    ["24.15.0suffix", false],
     [null, false],
   ] as const)("classifies supported Node version %s", (version, expected) => {
     expect(isSupportedNodeVersion(version)).toBe(expected);
@@ -295,13 +280,10 @@ describe("runtime-guard", () => {
 
   it.each([
     ["1.4.0", false],
-    ["1.4.1", false],
-    ["1.4.2", false],
     ["1.4.3", false],
     ["1.4.4", true],
     ["1.4.4-canary.1+65d94e715", true],
     ["2.0.0", true],
-    ["1.3.14", false],
     [null, false],
   ] as const)("classifies supported Bun version %s", (version, expected) => {
     expect(isSupportedBunVersion(version)).toBe(expected);

@@ -1,6 +1,7 @@
 import type { NativeBrowserTab } from "../../app/native-browser-bridge.ts";
 import { resizeBrowserViewport, type BrowserRequestClient } from "./browser-client.ts";
 import type { BrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 
 interface BrowserPanelViewportHost {
@@ -10,7 +11,12 @@ interface BrowserPanelViewportHost {
   readonly canAutoResizeViewport: boolean;
   readonly view: BrowserPanelView | null;
   readonly operations: Pick<BrowserPanelOperations, "captureClient">;
-  runAction(action: (client: BrowserRequestClient) => Promise<void>): Promise<boolean>;
+  readonly stream: Pick<BrowserPanelStream, "resize">;
+  runAction(
+    action: (client: BrowserRequestClient) => Promise<void>,
+    refreshView?: boolean,
+    options?: { passive?: boolean },
+  ): Promise<boolean>;
 }
 
 const VIEWPORT_RESIZE_DELAY_MS = 300;
@@ -131,7 +137,13 @@ export class BrowserPanelViewportOwner {
       // Invalidation retires observations, but an issued resize still has to settle.
       this.resizing = true;
       void this.controller
-        .runAction((client) => resizeBrowserViewport(client, request))
+        // Viewport sync is not the person's action, so it leaves their error visible.
+        .runAction((client) => resizeBrowserViewport(client, request), true, { passive: true })
+        .then((current) => {
+          if (current) {
+            this.controller.stream.resize(true);
+          }
+        })
         .finally(() => {
           this.resizing = false;
           this.schedule();

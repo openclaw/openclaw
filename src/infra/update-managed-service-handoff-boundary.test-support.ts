@@ -11,9 +11,9 @@ import {
 } from "../../test/helpers/fixture-receipts.js";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { writeTriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { writeRestartSentinel } from "./restart-sentinel.js";
-import { writeTriageUpdateFailure } from "./update-failure-report-artifact.js";
 import * as handoffArtifacts from "./update-managed-service-handoff-artifacts.test-support.js";
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import {
@@ -167,7 +167,7 @@ export function createManagedServiceManagerBoundary({
         ...(options?.systemScope ? { supervisor: "systemd" as const } : {}),
         runId: run?.runId,
         ...(options?.beforeParkNotice ? { beforePark: async () => {} } : {}),
-        ...(options?.profileRequester ? { requesterAuthority: { assertCurrent() {} } } : {}),
+        ...(options?.profileRequester ? { requesterAuthority: {} } : {}),
         root: interrupted?.installRoot ?? root,
         timeoutMs: options?.recoveryTimeoutMs,
         restartDrainTimeoutMs: 300_000,

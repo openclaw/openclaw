@@ -60,10 +60,11 @@ enum MacNodeOpenClawIDBridgeWebSocket {
         request: MacNodeOpenClawIDBridgeRequest,
         reader: MacNodeOpenClawIDBridgeReader,
         io: MacNodeOpenClawIDBridgeIO,
+        path: String = "/__openclaw__/worker",
         prepare: Prepare) async throws
     {
         let response: Data
-        do { response = try Codec.upgrade(request) } catch {
+        do { response = try Codec.upgrade(request, path: path) } catch {
             try await Self.reject(400, io: io)
             return
         }

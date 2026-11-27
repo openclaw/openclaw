@@ -137,6 +137,9 @@ it.each([
     expect(result.remediation).toBeUndefined();
   }
   if (kind === "pairing-required") {
+    // The waiting client is blocked by the same gate, so the hint must name a trusted approver.
+    expect(result.remediation).toContain("Approve this request from the Gateway host");
+    expect(result.remediation).toContain("Control UI (Settings -> Devices)");
     expect(result.remediation).toContain("--url");
     expect(result.remediation).toContain("--token/--password");
   }
@@ -218,11 +221,11 @@ it.each([
       message: "protocol mismatch",
       details: { ...protocolDetails, code: "\tPROTOCOL_MISMATCH\n" },
     },
-    "protocol mismatch: Control UI v5, Gateway v4",
+    "protocol mismatch: Web app v5, Gateway v4",
   ],
   [
     { message: "protocol mismatch", details: { ...protocolDetails, minimumProbeProtocol: 4 } },
-    "protocol mismatch: Control UI v5, Gateway v4, connection check min v4",
+    "protocol mismatch: Web app v5, Gateway v4, connection check min v4",
   ],
 ])("formats structured and padded connect details %j", (input, message) => {
   expect(formatError(input)).toBe(message);

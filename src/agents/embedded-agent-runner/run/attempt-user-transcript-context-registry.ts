@@ -5,8 +5,12 @@ import type { UserTranscriptContext } from "./attempt-llm-boundary.types.js";
 export function createUserTranscriptContextRegistry() {
   const contexts: UserTranscriptContext[] = [];
 
-  const upsert = (runtimeMessage: AgentMessage, transcriptMessage: AgentMessage) => {
-    const context = { runtimeMessage, transcriptMessage };
+  const upsert = (
+    runtimeMessage: AgentMessage,
+    transcriptMessage: AgentMessage,
+    recorder?: UserTranscriptContext["recorder"],
+  ) => {
+    const context = { runtimeMessage, transcriptMessage, ...(recorder ? { recorder } : {}) };
     const existingIndex = contexts.findIndex(
       (candidate) => candidate.runtimeMessage === runtimeMessage,
     );
@@ -21,9 +25,13 @@ export function createUserTranscriptContextRegistry() {
     clear: () => {
       contexts.length = 0;
     },
-    list: (latestRuntimeMessage?: AgentMessage, latestTranscriptMessage?: AgentMessage) => {
+    list: (
+      latestRuntimeMessage?: AgentMessage,
+      latestTranscriptMessage?: AgentMessage,
+      recorder?: UserTranscriptContext["recorder"],
+    ) => {
       if (latestRuntimeMessage && latestTranscriptMessage) {
-        upsert(latestRuntimeMessage, latestTranscriptMessage);
+        upsert(latestRuntimeMessage, latestTranscriptMessage, recorder);
       }
       return contexts as readonly UserTranscriptContext[];
     },

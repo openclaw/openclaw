@@ -215,9 +215,9 @@ describe("plugin registry runtime session ownership", () => {
           : factory.then(async (read) => {
               const snapshot = await read();
               expect(snapshot.entries).toBe(entries);
-              snapshot.assertCurrent();
-              expect(assertSourceCurrent).toHaveBeenCalledOnce();
               if (phase === "snapshot") {
+                snapshot.assertCurrent();
+                expect(assertSourceCurrent).toHaveBeenCalledOnce();
                 revokePluginRecord(registry.registry, record);
                 expect(snapshot.assertCurrent).toThrow("runtime is no longer active");
                 await expect(read()).rejects.toThrow("runtime is no longer active");
@@ -385,7 +385,6 @@ describe("plugin registry runtime session ownership", () => {
       value: runEmbeddedAgent,
     });
     const gatewayRequest = vi.fn(async () => ({ ok: true }));
-    runtime.gateway.isAvailable = vi.fn(async () => true);
     runtime.gateway.request = gatewayRequest as unknown as PluginRuntime["gateway"]["request"];
     const createApi = createApis(runtime, cfg);
     const owner = createApi("codex-owner");

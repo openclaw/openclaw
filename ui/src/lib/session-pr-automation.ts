@@ -41,7 +41,8 @@ export async function loadCiAutomationJobs(
         limit: 200,
         offset,
       },
-      { signal },
+      // Reopening and post-write reconciliation require fresh authority; sibling reads still join.
+      { signal, refresh: offset === 0 },
     );
     const page = readCanonicalCronListPage<CronJob>(response, 200);
     resolveCronListPageNextOffset(page, offset);
@@ -90,7 +91,14 @@ export async function setCiAutomationEnabled(
     result = await client.request<CronJob>("cron.update", {
       id: current.id,
       expectedConfigRevision: current.configRevision,
-      patch: { enabled },
+      // An explicit enable refreshes the recipe through the ordinary revision-checked
+      // update/reauthorization path. Reading or disabling a legacy job never migrates it.
+      patch: {
+        enabled,
+        ...(enabled && option === "autoFix"
+          ? { trigger: ciAutomationJobSpec(target, option).trigger }
+          : {}),
+      },
     });
   } else {
     // Declaration convergence makes a lost create acknowledgement discoverable as the same job.

@@ -103,6 +103,7 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
 const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
 const { installManagedPlugin, setManagedPluginEnabled } = await import("./management-mutations.js");
 const { installManagedPluginSource } = await import("./management-install.js");
+const { listManagedPlugins } = await import("./management-service.js");
 
 type InstallOptions = Parameters<typeof installManagedPlugin>[0];
 const installPlugin = (
@@ -185,6 +186,25 @@ afterEach(() => {
   clearPluginMetadataLifecycleCaches();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it("confirms a hidden plugin install without exposing it in the catalog", async () => {
+  const id = "openclaw-id-access";
+  mockInstalledPlugin(id, "@openclaw/" + id);
+  const result = await installPlugin(reviewedClawHub("@openclaw/" + id));
+  expect(result.plugin.id).toBe(id);
+  const catalog = await listManagedPlugins({ config: {}, env: {} });
+  expect(catalog.plugins.some((plugin) => plugin.id === id)).toBe(false);
+});
+
+it("confirms hidden plugin policy changes without exposing it in the catalog", async () => {
+  const id = "openclaw-id-access";
+  mockMetadata(id);
+  mocks.replaceConfig.mockResolvedValue({});
+  const result = await setManagedPluginEnabled({ pluginId: id, enabled: false, env: {} });
+  expect(result.plugin).toMatchObject({ id, enabled: false });
+  const catalog = await listManagedPlugins({ config: {}, env: {} });
+  expect(catalog.plugins.some((plugin) => plugin.id === id)).toBe(false);
 });
 
 it("requires artifact consent before a linked source is enabled or recorded", async () => {

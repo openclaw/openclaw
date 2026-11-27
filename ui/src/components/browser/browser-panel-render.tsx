@@ -208,6 +208,14 @@ function ViewportContent(
           />
         )}
       </Match>
+      <Match when={!props.controller.view && props.controller.screenshotUnavailable}>
+        <PanelEmptyState
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
+          icon={<Icon name="globe" />}
+          heading={t("chat.sidePanel.browser")}
+          description={t("browser.previewUnavailable")}
+        />
+      </Match>
       <Match when={!props.controller.view && props.controller.loading}>
         <PanelLoadingSkeleton variant="browser-viewport" label={t("browser.loading")} />
       </Match>
@@ -373,6 +381,7 @@ export function BrowserPanelChrome(
         <PanelIconButton
           class="rail-header__action bp-icon"
           label={t("browser.openExternal")}
+          title={t("browser.openExternalTooltip")}
           icon={<Icon name="externalLink" />}
           newTab
           disabled={!activeUrl()}
@@ -381,6 +390,7 @@ export function BrowserPanelChrome(
         <PanelIconButton
           class="rail-header__action bp-icon"
           label={t("browser.close")}
+          title={false}
           icon={<Icon name="x" />}
           onClick={() => props.onClose()}
         />

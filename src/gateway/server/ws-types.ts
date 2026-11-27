@@ -88,14 +88,22 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   internal?: {
     /** Authenticated operator transport ingress; never accepted from wire params. */
     authenticatedOperator?: true;
+    /** Closed publication transport device admission; never accepted from wire params. */
+    publicationTransport?: import("../publication-reader.js").PublicationTransportAdmission;
     /** Exact accepted/issued operator token; null attests a tokenless ingress. */
     operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
+    /** Attested device ceiling before identity grants; never accepted from wire params. */
+    operatorDeviceScopeCeiling?: readonly string[];
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Handshake-attested non-remote gateway-client backend; never accepted from wire params. */
+    localBackendClient?: true;
     /** Device key W of a connection relayed by the OpenClaw ID tunnel child; never from wire params. */
     openclawIdPeerKey?: string;
     /** Original peer admission; every later grant checks the live membership owner. */
     openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+    /** Scopes this connection held before its role capped them; reload reconnects it when a role would grant more. */
+    roleCappedScopes?: readonly string[];
     /** Authenticated Control UI operator ingress; never accepted from wire params. */
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */

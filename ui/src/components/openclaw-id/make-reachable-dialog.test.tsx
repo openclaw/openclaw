@@ -44,6 +44,11 @@ vi.mock("../../lib/openclaw-id/link.ts", () => ({
   }),
 }));
 
+// The device sign-in behind Link your profile; it has its own dialog and tests.
+const showDeviceSignInDialog = vi.hoisted(() => vi.fn());
+// mock-isolation: the device sign-in dialog is replaced so the setup dialog's outcome handling runs alone.
+vi.mock("./device-sign-in-dialog.tsx", () => ({ showDeviceSignInDialog }));
+
 // Click only enabled controls, so assertions follow the actual wizard gates.
 async function click(label: string) {
   await vi.waitFor(() => {
@@ -54,6 +59,33 @@ async function click(label: string) {
     expect(button?.disabled).toBe(false);
     button!.click();
   });
+}
+
+// The relay step's state on the progress card.
+const relayState = () =>
+  document.querySelectorAll<HTMLElement>(".openclaw-id-steps__item")[3]?.dataset.state;
+
+// Signs in this tab as `signedIn`, the way a completed sign-in publishes the account.
+function signIn() {
+  installSafeLocalStorageForTesting().setItem(
+    "openclaw.openclawId.account",
+    JSON.stringify(signedIn),
+  );
+  window.dispatchEvent(
+    new StorageEvent("storage", {
+      key: "openclaw.openclawId.account",
+      newValue: JSON.stringify(signedIn),
+    }),
+  );
+}
+
+// Walks the name and recovery-kit steps, then waits for the completed progress card.
+async function completeSetup() {
+  await click("Continue");
+  await vi.waitFor(() => expect(document.querySelector('input[type="checkbox"]')).not.toBeNull());
+  (document.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+  await click("Continue");
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Your claw address"));
 }
 
 describe("Make reachable publication outcome", () => {
@@ -140,9 +172,9 @@ describe("Make reachable publication outcome", () => {
       if (online && !retryable) {
         expect(document.body.textContent).not.toContain("will keep trying");
       }
-      if (!online) {
-        expect(document.body.textContent).toContain("Remote access is not connected yet");
-      }
+      // A relay that isn't up yet keeps its step running instead of warning at once.
+      expect(relayState()).toBe(online ? "done" : "running");
+      expect(document.body.textContent).not.toContain("Remote access is not connected yet");
       const warning = document.querySelector<HTMLButtonElement>(
         '.openclaw-id-steps__item[data-state="warning"] button',
       );
@@ -154,6 +186,205 @@ describe("Make reachable publication outcome", () => {
       expect(await done).toBe(true);
     },
   );
+});
+
+describe("Make reachable over a personal sign-in", () => {
+  afterEach(() => {
+    cleanupSolid();
+    keyEvents.length = 0;
+    showDeviceSignInDialog.mockReset();
+    localStorage.removeItem("openclaw.openclawId.account");
+    window.dispatchEvent(new StorageEvent("storage", { key: "openclaw.openclawId.account" }));
+  });
+
+  // A Gateway that answers setup, reporting `profileLink` at commit and `online` in turn for
+  // each relay status read (the last answer repeats).
+  function gateway(profileLink: string | null, online: boolean[] = [true]) {
+    let reads = 0;
+    return vi.fn(async (method: string, params: { action?: string }) => {
+      if (method === "openclawId.status") {
+        const relayOnline = online[Math.min(reads++, online.length - 1)];
+        return { status: { state: "on", tunnel: { state: "running", relayOnline } } };
+      }
+      if (params.action === "account_link_code") {
+        return { code: "synthetic-code" };
+      }
+      if (params.action === "commit") {
+        return { publication: { state: "published" }, profileLink };
+      }
+      return { claw_id: "synthetic-claw", hostname: "studio-test.claws.test", available: true };
+    });
+  }
+
+  const notice = () => document.querySelector(".openclaw-id-setup__profile");
+  const pin = () =>
+    document.querySelectorAll<HTMLElement>(".openclaw-id-steps__item")[1]?.dataset.state;
+  const close = () =>
+    document
+      .querySelector("openclaw-modal-dialog")!
+      .dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+
+  it.each([
+    { linkProfile: true, profileLink: "linked", expected: null, canLink: false },
+    {
+      linkProfile: true,
+      profileLink: "sign_in_not_held",
+      expected: "Sign in again to link it",
+      canLink: true,
+    },
+    {
+      linkProfile: true,
+      profileLink: "not_admin",
+      expected: "Link it in Settings → Profile",
+      canLink: false,
+    },
+    {
+      linkProfile: true,
+      profileLink: "profile_linked",
+      expected: "already linked to an OpenClaw ID",
+      canLink: false,
+    },
+    { linkProfile: false, profileLink: null, expected: null, canLink: false },
+  ])(
+    "links the admin's profile at commit (linkProfile $linkProfile, result $profileLink)",
+    async ({ linkProfile, profileLink, expected, canLink }) => {
+      const request = gateway(profileLink);
+      signIn();
+      const done = showMakeReachableDialog({
+        client: { request } as unknown as GatewayBrowserClient,
+        loaderDomain: "claws.test",
+        signedIn,
+        linkProfile,
+      });
+      await completeSetup();
+      const commit = request.mock.calls.find(([, params]) => params.action === "commit")?.[1];
+      // The ID token leaves the browser only when the admin's setup links the profile.
+      if (linkProfile) {
+        expect(commit).toMatchObject({ idToken: "synthetic" });
+      } else {
+        expect(commit).not.toHaveProperty("idToken");
+      }
+      // The claw's access is set up either way; the profile link is a separate note.
+      expect(pin()).toBe("done");
+      if (expected) {
+        expect(notice()?.textContent).toContain(expected);
+      } else {
+        expect(notice()).toBeNull();
+      }
+      const action = [...document.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Link your profile",
+      );
+      expect(Boolean(action)).toBe(canLink);
+      await click(expected ? "Close" : "Done");
+      expect(await done).toBe(true);
+      expect(showDeviceSignInDialog).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { outcome: "linked", expected: null },
+    { outcome: "linked_elsewhere", expected: "already linked to another profile" },
+    { outcome: null, expected: "Sign in again to link it" },
+  ])(
+    "links the profile with a fresh sign-in after sign_in_not_held (outcome $outcome)",
+    async ({ outcome, expected }) => {
+      const linking = Promise.withResolvers<{ signedIn: unknown; link: string } | null>();
+      showDeviceSignInDialog.mockReturnValueOnce(linking.promise);
+      const request = gateway("sign_in_not_held");
+      signIn();
+      const done = showMakeReachableDialog({
+        client: { request } as unknown as GatewayBrowserClient,
+        loaderDomain: "claws.test",
+        signedIn,
+        linkProfile: true,
+      });
+      await completeSetup();
+      await click("Link your profile");
+      await vi.waitFor(() => expect(showDeviceSignInDialog).toHaveBeenCalledOnce());
+      expect(showDeviceSignInDialog).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ client: { request }, link: true }),
+      );
+      const action = [...document.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Link your profile",
+      );
+      expect(action?.disabled).toBe(true);
+      // A closed sign-in dialog resolves null and keeps the note.
+      linking.resolve(outcome === null ? null : { signedIn, link: outcome });
+      if (expected) {
+        await vi.waitFor(() => expect(notice()?.textContent).toContain(expected));
+        close();
+      } else {
+        await vi.waitFor(() => expect(notice()).toBeNull());
+        await click("Done");
+      }
+      expect(await done).toBe(true);
+    },
+  );
+
+  it("ignores a profile link that finishes after setup closes", async () => {
+    const linking = Promise.withResolvers<{ signedIn: unknown; link: string } | null>();
+    showDeviceSignInDialog.mockReturnValueOnce(linking.promise);
+    const request = gateway("sign_in_not_held");
+    signIn();
+    const done = showMakeReachableDialog({
+      client: { request } as unknown as GatewayBrowserClient,
+      loaderDomain: "claws.test",
+      signedIn,
+      linkProfile: true,
+    });
+    await completeSetup();
+    await click("Link your profile");
+    await vi.waitFor(() => expect(showDeviceSignInDialog).toHaveBeenCalledOnce());
+    await click("Close");
+    expect(await done).toBe(true);
+    linking.resolve({ signedIn, link: "linked" });
+    await linking.promise;
+    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
+  it("keeps the note and offers the link again when the sign-in fails", async () => {
+    showDeviceSignInDialog.mockRejectedValueOnce(new Error("Sign-in timed out. Try again."));
+    const request = gateway("sign_in_not_held");
+    signIn();
+    const done = showMakeReachableDialog({
+      client: { request } as unknown as GatewayBrowserClient,
+      loaderDomain: "claws.test",
+      signedIn,
+      linkProfile: true,
+    });
+    await completeSetup();
+    await click("Link your profile");
+    // The sign-in failure replaces the note, mapped like any other sign-in error.
+    await vi.waitFor(() => expect(notice()?.textContent).toContain("Start sign-in again"));
+    await click("Link your profile");
+    await vi.waitFor(() => expect(showDeviceSignInDialog).toHaveBeenCalledTimes(2));
+    close();
+    expect(await done).toBe(true);
+  });
+
+  it("turns the relay step done once the relay comes up after the commit", async () => {
+    const request = gateway("linked", [false, true]);
+    signIn();
+    const done = showMakeReachableDialog({
+      client: { request } as unknown as GatewayBrowserClient,
+      loaderDomain: "claws.test",
+      signedIn,
+      linkProfile: true,
+    });
+    await completeSetup();
+    expect(relayState()).toBe("running");
+    // The setup is done, so the dialog can close while the relay step still runs.
+    expect(
+      [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Done")
+        ?.disabled,
+    ).toBe(false);
+    await vi.waitFor(() => expect(relayState()).toBe("done"), { timeout: 5_000 });
+    expect(
+      request.mock.calls.filter(([method]) => method === "openclawId.status").length,
+    ).toBeGreaterThanOrEqual(2);
+    await click("Done");
+    expect(await done).toBe(true);
+  });
 });
 
 describe("Make reachable preparation", () => {

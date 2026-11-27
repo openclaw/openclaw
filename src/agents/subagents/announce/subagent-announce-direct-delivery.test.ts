@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { GatewayClientRequestError } from "../../../../packages/gateway-client/src/request-error.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createLifecycleTypingManager } from "../../../gateway/lifecycle-typing.js";
 import { registerGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import type { sendMessage } from "../../../infra/outbound/message.js";
 import { createOwnedTestInstance } from "../../../plugins/plugin-instance.test-support.js";
 import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
@@ -15,19 +15,27 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
-import { getPluginRegistryForContext } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRegistryForContext,
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../../sessions/session-controller.contracts.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
+  adoptSessionControllerSource,
   clearSessionControllerMailbox,
   reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
+import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
@@ -43,7 +51,6 @@ const unconfirmedCommit = {
 const queued = {
   delivered: false,
   reason: "requester_turn_pending",
-  disposition: "session_queued",
 } as const;
 
 const sessionKey = "agent:main:requester-settle";
@@ -59,7 +66,12 @@ function setup(sourceTool = "subagent_settle") {
     lifecycleRevision: "requester-revision",
     updatedAt: 1,
   };
-  const state = { entry: initialEntry, allowed: true, active: false };
+  const state = {
+    entry: initialEntry,
+    childEntry: undefined as SessionEntry | undefined,
+    allowed: true,
+    active: false,
+  };
   const storePath = "/synthetic/requester-completion/sessions.json";
   const cfg: OpenClawConfig = { session: { store: storePath } };
   const target = captureSessionTarget({
@@ -69,9 +81,12 @@ function setup(sourceTool = "subagent_settle") {
     incarnation: initialEntry.sessionId,
   });
   let executionStarted: (() => unknown) | undefined;
+  let dispatchedAuthority: AdmittedRunOperatorAuthority | undefined;
   const dispatch = vi.fn(async function <T>(
     ...args: Parameters<typeof dispatchGatewayMethodInProcess>
   ) {
+    dispatchedAuthority =
+      getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
     executionStarted = args[2]?.onExecutionStarted;
     args[2]?.onAccepted?.({ status: "accepted" });
     dispatchEntered.resolve();
@@ -94,7 +109,7 @@ function setup(sourceTool = "subagent_settle") {
       canonicalKey: key,
       agentId: "main",
       storePath,
-      entry: state.entry,
+      entry: key === sessionKey ? state.entry : (state.childEntry ?? state.entry),
     }),
     getRequesterSessionActivity: () => ({
       sessionId: initialEntry.sessionId,
@@ -119,6 +134,9 @@ function setup(sourceTool = "subagent_settle") {
     signal: controller.signal,
   };
   return {
+    get dispatchedAuthority() {
+      return dispatchedAuthority;
+    },
     target,
     startDelivery: () => (ownedDelivery = deliverSubagentAnnouncement(params)),
     state,
@@ -135,6 +153,8 @@ function setup(sourceTool = "subagent_settle") {
 function steering(
   fixture: ReturnType<typeof setup>,
   inject: ReplyBackendMessageInjectionV2["queueMessage"],
+  phase: "running" | "preflight_compacting" = "running",
+  runId?: string,
 ) {
   const { target } = fixture;
   const operation = createReplyOperation({
@@ -143,17 +163,18 @@ function steering(
     resetTriggered: false,
     target,
   });
-  operation.setPhase("running");
+  operation.setPhase(phase);
   const queueMessage = vi.fn(inject);
   operation.attachBackend({
     kind: "embedded",
+    runId,
     cancel() {},
     supportsTranscriptCommitWait: true,
     messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
   });
   const input = reserveSessionControllerSource(sessionKey, {
     target,
-    policy: { mode: "steer" },
+    policy: { mode: "followup" },
   });
   onTestFinished(() => {
     operation.complete();
@@ -161,13 +182,138 @@ function steering(
     clearSessionControllerMailbox(input.mailbox, () => {});
   });
   fixture.state.active = true;
-  return { queueMessage, input };
+  return { queueMessage, input, operation };
 }
+
+it.each(["rpc", "restart"])(
+  "settles a private completion interrupted by %s",
+  async (stopReason) => {
+    const fixture = setup("subagent_announce");
+    fixture.params.completionTarget = "parent";
+    const delivery = fixture.startDelivery();
+    await fixture.dispatchEntered.promise;
+    fixture.dispatchDone.resolve({ status: "timeout", stopReason });
+    expect(await delivery).toMatchObject({
+      delivered: false,
+    });
+    expect(fixture.send).not.toHaveBeenCalled();
+  },
+);
 
 function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.dispatch).toHaveBeenCalledTimes(dispatches);
   expect(fixture.send).not.toHaveBeenCalled();
 }
+
+it.each(["resumed", "preparing", "idle"] as const)(
+  "delivers a restart-terminated child's result to the %s requester session",
+  async (state) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const fixture = setup("subagent_announce");
+    const dispatch = fixture.dispatch.getMockImplementation()!;
+    fixture.dispatch.mockImplementation(async function <T>(
+      ...args: Parameters<typeof dispatchGatewayMethodInProcess>
+    ) {
+      const input = args[2]?.controllerInput;
+      assert(input);
+      adoptSessionControllerSource(input, {
+        protocolRunId: fixture.params.directIdempotencyKey,
+        target: fixture.target,
+        policy: input.policy,
+        adapter: {},
+      });
+      return (await withSessionTurn(
+        {
+          sessionKey,
+          sessionId: fixture.state.entry.sessionId,
+          target: fixture.target,
+          controllerInput: input,
+        },
+        () => dispatch(...args),
+      )) as T;
+    });
+    const original = steering(
+      fixture,
+      async () => assert.fail("Retired requester received input"),
+      "running",
+      "pre-restart",
+    );
+    const child = createReplyOperation({
+      sessionKey: "agent:worker:subagent:interrupted-child",
+      sessionId: "child-session",
+      resetTriggered: false,
+    });
+    original.operation.abortForRestart();
+    child.abortForRestart();
+    original.operation.complete();
+    child.complete();
+    retireSessionControllerInput(original.input);
+    fixture.params.sourceSessionKey = "agent:worker:subagent:interrupted-child";
+    fixture.params.internalEvents = taskCompletionEvents({
+      childSessionKey: fixture.params.sourceSessionKey,
+      status: "error",
+      statusLabel: "failed: Gateway stopped",
+      result: "(no output)",
+      noVisibleResult: true,
+    });
+    const received: string[] = [];
+    const childTerminal = createDeferredCore();
+    const resumed =
+      state !== "idle"
+        ? steering(
+            fixture,
+            async (_text, options) => {
+              options?.onQueueAccepted?.(true);
+              received.push(options?.currentInboundContext?.text ?? "");
+              childTerminal.resolve();
+            },
+            state === "preparing" ? "preflight_compacting" : "running",
+            "restart-recovery",
+          )
+        : undefined;
+    const parentContinuation = childTerminal.promise.then(() => "child failure handled");
+    const input =
+      resumed?.input ??
+      reserveSessionControllerSource(sessionKey, {
+        target: fixture.target,
+        policy: { mode: "followup" },
+      });
+    fixture.params.controllerInput = input;
+    fixture.dispatchDone.resolve(
+      response([{ text: "Child interruption handled" }], sentDeliveryStatus),
+    );
+    try {
+      const delivery = fixture.startDelivery();
+      let settled: Awaited<typeof delivery> | undefined;
+      void delivery.then((result) => {
+        settled = result;
+      });
+      if (state === "preparing") {
+        setTimeout(() => resumed!.operation.setPhase("running"), 10);
+      }
+      await vi.advanceTimersByTimeAsync(10);
+      expect(settled).toMatchObject({ delivered: true, path: resumed ? "steered" : "direct" });
+      expect(original.queueMessage).not.toHaveBeenCalled();
+      if (resumed) {
+        expect(received).toHaveLength(1);
+        expect(received[0]).toContain("Gateway stopped");
+        await expect(parentContinuation).resolves.toBe("child failure handled");
+        resumed.operation.complete();
+        expect(resumed.operation.result).toMatchObject({ kind: "completed" });
+        expect(fixture.dispatch).not.toHaveBeenCalled();
+      } else {
+        expect(fixture.dispatch).toHaveBeenCalledOnce();
+        expect(fixture.dispatch.mock.calls[0]?.[1]).toMatchObject({ sessionKey });
+      }
+    } finally {
+      resumed?.operation.complete();
+      retireSessionControllerInput(input);
+    }
+  },
+);
 
 it("delivers a text fallback on the current generation after its producer releases", async ({
   signal,
@@ -233,11 +379,51 @@ it("delivers a text fallback on the current generation after its producer releas
   }
 });
 
-it("preserves the direct completion phase without replacing controller custody", async () => {
+it.for(["subagent_settle", "subagent_announce"] as const)(
+  "passes only retained requester identity into %s agent admission",
+  async (sourceTool, { signal }) => {
+    const fixture = setup(sourceTool);
+    const requesterOrigin = { sessionKey, messageProvider: "discord", senderId: "owner-fixture" };
+    const assertCurrent = vi.fn();
+    const delivery = withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey,
+        requesterOrigin,
+        personalToolIdentityScoped: true,
+        personalToolSelection: { requesterOrigin, assertCurrent },
+        fullPermission: true,
+        sessionEventToolsAllow: ["openclaw"],
+      },
+      fixture.startDelivery,
+    );
+    await withinTest(
+      awaitGateBeforeSettlement(
+        fixture.dispatchEntered.promise,
+        delivery,
+        "retained requester dispatch not reached",
+      ),
+      signal,
+    );
+    expect(fixture.dispatch.mock.calls[0]?.[2]?.agentToolCaller).toEqual({
+      agentId: "main",
+      sessionKey,
+      requesterOrigin,
+      assertCurrent,
+    });
+    fixture.dispatchDone.resolve(response([{ text: "Completed" }], sentDeliveryStatus));
+    await withinTest(delivery, signal);
+  },
+);
+
+it.each([false, true])("preserves a committed direct completion (restart=%s)", async (restart) => {
   const fixture = setup("agent_harness_completion");
   const expected = { delivered: true, path: "direct" };
   const { queueMessage, input } = steering(fixture, vi.fn());
-  fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
+  fixture.dispatchDone.resolve({
+    ...response([{ text: "Completed directly" }], sentDeliveryStatus),
+    ...(restart ? { status: "timeout", stopReason: "restart" } : {}),
+  });
   const result = await deliverSubagentAnnouncement({
     ...fixture.params,
     controllerInput: input,
@@ -258,7 +444,7 @@ it("preserves the direct completion phase without replacing controller custody",
   expect(options).toMatchObject({ controllerInput: input, replyExpectation: "optional" });
 });
 
-it("keeps the same completion input queued when timeout recovery cannot accept steering", async ({
+it("keeps the same completion input when timeout recovery ends without a backend", async ({
   signal,
 }) => {
   const fixture = setup("subagent_announce");
@@ -288,6 +474,10 @@ it("keeps the same completion input queued when timeout recovery cannot accept s
     const parentClaim = input.mailbox.claim;
     fixture.params.controllerInput = input;
     delivery = fixture.startDelivery();
+    expect(input.mailbox.claim).toBe(parentClaim);
+    expect(input.phase).not.toBe("consumed");
+    releaseRecovery.resolve();
+    await recovery;
     await withinTest(
       awaitGateBeforeSettlement(
         fixture.dispatchEntered.promise,
@@ -297,10 +487,7 @@ it("keeps the same completion input queued when timeout recovery cannot accept s
       signal,
     );
     expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
-    expect(input.mailbox.claim).toBe(parentClaim);
     expect(input.phase).not.toBe("consumed");
-    releaseRecovery.resolve();
-    await recovery;
     fixture.dispatchDone.resolve(response([{ text: "Recovered completion" }], sentDeliveryStatus));
     await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
     expectNoReplay(fixture);
@@ -315,13 +502,57 @@ it("keeps the same completion input queued when timeout recovery cannot accept s
   }
 });
 
+it("queues participant completion as a capped new turn instead of steering an active owner", async () => {
+  const fixture = setup("subagent_announce");
+  const ceiling = {
+    kind: "send" as const,
+    profileId: "participant",
+    sessionKey,
+    tools: ["read"],
+    source: {
+      agentId: "main",
+      sessionId: "requester-session",
+      lifecycleRevision: "requester-revision",
+      creatorProfileId: "creator",
+      root: "/synthetic/root",
+    },
+  };
+  const operatorAuthority = createTestOperatorAuthority({
+    canonicalIdentity: null,
+    profileId: ceiling.profileId,
+    scopes: ["operator.write"],
+    participationCeiling: { ...ceiling, permission: "guarded" },
+  });
+  await withPluginRuntimeGatewayRequestScope(
+    {
+      client: createSyntheticPluginRuntimeClient({
+        operatorRunAuthority: operatorAuthority,
+        scopes: ["operator.write"],
+      }),
+      isWebchatConnect: () => false,
+    },
+    async () => {
+      const { queueMessage, input } = steering(fixture, async () => {});
+      fixture.dispatchDone.resolve(response([{ text: "Private participant result" }]));
+      await deliverSubagentAnnouncement({
+        ...fixture.params,
+        controllerInput: input,
+        sourceSessionKey: "agent:main:subagent:participant-child",
+      });
+      expect(queueMessage).not.toHaveBeenCalled();
+    },
+  );
+  expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  expect(fixture.dispatchedAuthority).toBe(operatorAuthority);
+  expect(fixture.dispatch.mock.calls[0]![1]).toMatchObject({ deliver: false });
+});
+
 it("reports no attempted completion phase when cancelled before dispatch", async () => {
   const fixture = setup();
   fixture.controller.abort();
-  await expect(fixture.startDelivery()).resolves.toEqual({
+  await expect(fixture.startDelivery()).resolves.toMatchObject({
     delivered: false,
     path: "none",
-    phases: [],
   });
   expectNoReplay(fixture, 0);
 });
@@ -357,17 +588,17 @@ it.each([
     expect(queueMessage).not.toHaveBeenCalled();
   } else {
     expect(queueMessage).toHaveBeenCalledOnce();
+    // A committed steer is the delivery; only an unconfirmed commit still depends on its owner.
     expect(result).toMatchObject(
-      change === "admission"
-        ? outcome === "accepted"
-          ? { delivered: true, path: "steered" }
-          : {
+      outcome === "accepted"
+        ? { delivered: true, path: "steered" }
+        : change === "admission"
+          ? {
               delivered: false,
               path: "steered",
-              disposition: "ambiguous",
               error: "commit outcome unknown",
             }
-        : { delivered: false, reason: "source_owner_changed" },
+          : { delivered: false, reason: "source_owner_changed" },
     );
   }
   expectNoReplay(fixture, 0);
@@ -412,8 +643,6 @@ it.each([
   const visible = ending !== "private" && ending !== "child" && ending !== "session-only";
   if (ending === "private") {
     fixture.params.completionTarget = "parent";
-    fixture.params.completionRequesterSessionId = "requester-session";
-    fixture.params.completionRequesterLifecycleRevision = "requester-revision";
   }
   if (ending === "child") {
     fixture.params.requesterIsSubagent = true;
@@ -462,42 +691,9 @@ it.each([
   expect(sendTyping).toHaveBeenCalledTimes(count);
   expect(clearTyping).toHaveBeenCalledOnce();
 });
-it.each([
-  ["pending settle response", { status: "accepted", runId: "pending-requester" }, queued],
-  ["explicit stop", { status: "error", stopReason: "rpc" }, { disposition: undefined }],
-  [
-    "partial send failure",
-    Object.assign(new Error("send incomplete"), { sentBeforeError: true }),
-    { disposition: "ambiguous" },
-  ],
-  [
-    "archived requester",
-    'Session "agent:main:requester-settle" is archived. Restore it before starting new work.',
-    { disposition: "permanent_failure" },
-  ],
-  [
-    "pending workspace",
-    'Session "agent:main:requester-settle" workspace is not ready. Wait for setup to finish or retry in chat.',
-    { disposition: "retryable" },
-  ],
-] as const)("reports the direct outcome for %s without replay", async (_name, input, expected) => {
-  const fixture = setup(typeof input === "string" ? "image_generate" : "subagent_settle");
-  const resultInput =
-    typeof input === "string"
-      ? new GatewayClientRequestError({ code: "INVALID_REQUEST", message: input })
-      : input;
-  const onDeliveryError = vi.fn();
-  fixture.params.onDeliveryError = onDeliveryError;
-  if (resultInput instanceof Error) {
-    fixture.dispatchDone.reject(resultInput);
-  } else {
-    fixture.dispatchDone.resolve(resultInput);
-  }
-  const result = await fixture.startDelivery();
-  const { disposition, ...fields } = expected;
-  expect(result).toMatchObject({ delivered: false, path: "direct", ...fields });
-  expect(result.disposition).toBe(disposition);
-  expect(onDeliveryError.mock.calls).toEqual(resultInput instanceof Error ? [[resultInput]] : []);
-  expect(result).toMatchObject(resultInput instanceof Error ? { error: resultInput.message } : {});
+it("reports queue custody for a pending settle response without replay", async () => {
+  const fixture = setup();
+  fixture.dispatchDone.resolve({ status: "accepted", runId: "pending-requester" });
+  expect(await fixture.startDelivery()).toMatchObject({ ...queued, path: "queued" });
   expectNoReplay(fixture);
 });

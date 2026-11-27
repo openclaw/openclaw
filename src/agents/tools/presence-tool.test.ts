@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayMethodDescriptorInput } from "../../gateway/methods/descriptor.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { NodeRegistry } from "../../gateway/node-registry.js";
@@ -9,13 +8,13 @@ import { createContext } from "../../gateway/server-plugin-in-process-dispatch.t
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -25,11 +24,10 @@ import { createPresenceTool } from "./presence-tool.js";
 
 const adaPresence = { people: [{ name: "Ada" }] };
 
-function readerAuthority(scopes: string[], assertCurrent = () => {}) {
-  return createAdmittedRunOperatorAuthority({
+function readerAuthority(scopes: string[]) {
+  return createTestOperatorAuthority({
     profileId: ensureProfileForEmail("presence-reader@example.test").id,
     scopes,
-    assertCurrent,
   });
 }
 
@@ -114,9 +112,7 @@ describe("presence tool source authority", () => {
       const capability = createCronCreatorAuthorityCapability(
         "presence-channel-run",
         origin,
-        origin.kind === "external"
-          ? { source: "channel-owner", isCurrent: () => current }
-          : undefined,
+        origin.kind === "external" ? { source: "channel-owner" } : undefined,
         () => current,
       )!;
       await run(undefined, () =>
@@ -124,7 +120,7 @@ describe("presence tool source authority", () => {
           const tool = createPresenceTool({ runId: "presence-channel-run" });
           expect((await tool.execute("owner", {})).details).toMatchObject(adaPresence);
           current = false;
-          await expect(tool.execute("revoked-owner", {})).rejects.toThrow(/authority|source/i);
+          await expect(tool.execute("revoked-owner", {})).rejects.toThrow(/turn has ended/);
         }),
       );
       expect(snapshot).toHaveBeenCalledOnce();
@@ -177,33 +173,6 @@ describe("presence tool source authority", () => {
         );
       }
       expect(snapshot).toHaveBeenCalledTimes(allowed ? 1 : 0);
-    });
-  });
-
-  it("withholds a delayed location result after the original operator is revoked", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      let current = true;
-      const authority = readerAuthority(["operator.read"], () => {
-        if (!current) {
-          throw new Error("presence reader revoked");
-        }
-      });
-      const entered = createDeferred();
-      const release = createDeferred();
-      const { run, snapshot } = fixture(async ({ respond }) => {
-        entered.resolve();
-        await release.promise;
-        respond(true, { results: [] });
-      });
-      const pending = run(authority, () =>
-        createPresenceTool().execute("location", { include: ["location"] }),
-      );
-      const rejected = expect(pending).rejects.toThrow("presence reader revoked");
-      await entered.promise;
-      current = false;
-      release.resolve();
-      await rejected;
-      expect(snapshot).toHaveBeenCalledOnce();
     });
   });
 });

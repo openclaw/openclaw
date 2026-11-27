@@ -14,7 +14,6 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { preserveSessionEntryCacheAcrossWrite } from "./session-accessor.sqlite-entry-cache.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -347,7 +346,6 @@ export function appendTranscriptEventInTransaction(
           });
         });
       }
-      advanceCliHistoryBoundaryInTransaction(database, scope, seq);
       if (isCompaction && parseCompactionDetails(persistedEvent.details)?.qualityDegraded) {
         const entry = readSessionEntryRow(database, scope.sessionKey)?.entry;
         if (entry?.sessionId === scope.sessionId && !entry.compactionQualityDegraded) {

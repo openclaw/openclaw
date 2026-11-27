@@ -8,14 +8,13 @@ import {
   resolveProviderIdForAuth,
 } from "../../agents/provider-auth-aliases.js";
 import { resolveScheduledToolCallerContext } from "../../agents/scheduled-tool-policy.js";
-import { intersectSessionPermissionModes } from "../../agents/session-permission-exec-mode.js";
 import { resolveChannelConfigActivationFacts } from "../../config/channel-config-activation.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import { serializeConfigResolutionFacts } from "../../config/resolution-facts.js";
 import { getRuntimeConfigCapture } from "../../config/runtime-config-capture-state.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
-import { intersectSessionToolOverrides } from "../../config/sessions/session-tool-overrides.js";
+import { SessionWorkStartChangedError } from "../../config/sessions/work-start-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronJobToolPolicyContext } from "../../cron/execution-context-admission.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
@@ -23,26 +22,14 @@ import type { CronStoredJob } from "../../cron/types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseConcreteConfigPathTokens } from "../../shared/dot-path.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
-import type { SessionEventTarget } from "./session-event-contract.js";
 
 type PolicySelection = Omit<
   Parameters<NonNullable<GetReplyOptions["onModelSelected"]>>[0],
   "thinkLevel"
 >;
 
-/** A delayed producer can retain restrictions, never replace current session authority. */
-export function narrowSessionEventSettings(
-  retained: SessionEventTarget["settings"],
-  current: SessionEventTarget["settings"],
-): NonNullable<SessionEventTarget["settings"]> {
-  return {
-    permissionMode: intersectSessionPermissionModes(
-      retained?.permissionMode,
-      current?.permissionMode,
-    ),
-    toolOverrides: intersectSessionToolOverrides(retained?.toolOverrides, current?.toolOverrides),
-  };
-}
+/** Policy publications an accepted occurrence may outlive before it settles as failed. */
+const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
 
 /** One occurrence keeps its original policy while selected model consumers may change. */
 export function captureSessionEventConfigPolicy(
@@ -55,10 +42,18 @@ export function captureSessionEventConfigPolicy(
   let checkedConfig = config;
   let checkedPublication = publication;
   let changed = false;
+  let started = false;
   let matches = captureSessionEventConfigRelevance(captured, agentId, job);
   return {
     get changed() {
       return changed;
+    },
+    /** Config gates admission only: a started turn finishes under the config it started with. */
+    start() {
+      started = true;
+    },
+    canReadmit(attempt: number) {
+      return attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
     },
     selectModel(selection: PolicySelection) {
       if (job) {
@@ -70,13 +65,15 @@ export function captureSessionEventConfigPolicy(
     },
     assertCurrent(current: OpenClawConfig, routeChannels: Array<string | undefined>) {
       const currentPublication = getRuntimeConfigSnapshotMetadata();
-      if (current === checkedConfig && currentPublication === checkedPublication) {
+      if (started || (current === checkedConfig && currentPublication === checkedPublication)) {
         return;
       }
       if (!matches(current, routeChannels)) {
         // Only this recorded refusal permits the handoff owner to re-admit unstarted work.
         changed = true;
-        throw new Error("Session event configuration changed; inspect the run before retrying");
+        throw new SessionWorkStartChangedError(
+          "Session event configuration changed; inspect the run before retrying",
+        );
       }
       checkedConfig = current;
       checkedPublication = currentPublication;
@@ -162,6 +159,11 @@ export function captureSessionEventConfigRelevance(
         mcp,
         channels: channelConfig,
         logging: _logging,
+        diagnostics: _diagnostics,
+        ui: _ui,
+        telemetry: _telemetry,
+        update: _update,
+        session,
         meta: _meta,
         // Plugin reloads own their admitted turns: they hand over at a step boundary or
         // stay pinned to the admitted generation (src/agents/plugin-turn-handover.ts).
@@ -171,6 +173,8 @@ export function captureSessionEventConfigRelevance(
       profiles: ReadonlySet<string>,
     ) => ({
       ...global,
+      // Housekeeping does not alter the admitted target, permissions, or tools.
+      session: { ...session, maintenance: undefined },
       // OpenClaw's MCP owner revokes exact servers; native runtimes can retain raw config.
       mcp: runtimeOwnsMcpServers ? { ...mcp, servers: undefined } : mcp,
       models: selection
@@ -203,6 +207,8 @@ export function captureSessionEventConfigRelevance(
         },
         agent: {
           ...resolveAgentEntry({ agents }, agentId),
+          // Display identity does not change an admitted event's authority.
+          identity: undefined,
           modelPolicy: selection ? undefined : resolveAgentEntry({ agents }, agentId)?.modelPolicy,
         },
       },
@@ -223,8 +229,10 @@ export function captureSessionEventConfigRelevance(
     const relevantPath = (path: string, profiles: ReadonlySet<string>) => {
       const tokens = parseConcreteConfigPathTokens(path);
       if (
-        tokens?.[0] === "logging" ||
-        tokens?.[0] === "plugins" ||
+        ["logging", "diagnostics", "ui", "telemetry", "update", "plugins"].some(
+          (key) => tokens?.[0] === key,
+        ) ||
+        (tokens?.[0] === "session" && tokens[1] === "maintenance") ||
         (runtimeOwnsMcpServers && tokens?.[0] === "mcp" && tokens[1] === "servers")
       ) {
         return false;
@@ -242,8 +250,10 @@ export function captureSessionEventConfigRelevance(
         );
       }
       if (tokens?.[0] === "agents" && tokens[1] === "entries" && typeof tokens[2] === "string") {
-        // Matches the projection, which keeps only this agent's entry.
-        return normalizeAgentId(tokens[2]) === normalizeAgentId(agentId);
+        // Matches the projection: only this agent's non-display settings.
+        return (
+          tokens[3] !== "identity" && normalizeAgentId(tokens[2]) === normalizeAgentId(agentId)
+        );
       }
       return (
         !job ||

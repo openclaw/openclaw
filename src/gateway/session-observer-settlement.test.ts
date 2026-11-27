@@ -16,7 +16,7 @@ type Message = ReturnType<typeof modelMessage>;
 const message = (headline: string) => modelMessage({ headline, health: "on-track" });
 const { createHarness } = useObserverSuite();
 
-it("waits for an abort-ignoring completion before retrying and never publishes its late result", async ({
+it("waits for a stuck completion to settle before retrying and publishes only the retry", async ({
   signal,
 }) => {
   const pending = createDeferred<Message>();
@@ -33,12 +33,12 @@ it("waits for an abort-ignoring completion before retrying and never publishes i
     expect(completeModel).toHaveBeenCalledOnce();
     const requestSignal = completeModel.mock.calls[0]?.[0].abortSignal as AbortSignal;
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(requestSignal.aborted).toBe(true);
+    expect(requestSignal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(completeModel).toHaveBeenCalledOnce();
     expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
 
-    pending.resolve(message("Late digest"));
+    pending.reject(new Error("candidate timed out"));
     await withinTest(published.promise, signal);
     expect(completeModel).toHaveBeenCalledTimes(2);
     expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();

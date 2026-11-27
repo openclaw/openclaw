@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
@@ -8,9 +9,12 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 export const UPDATE_CLEANUP_BUDGET_MS = 5 * 60_000;
 
+/** Shared manual-removal hint for update-owned temporary trees and snapshots. */
 export function formatUpdateCleanupCommand(directory: string): string {
+  // Windows PowerShell 5.1 silently leaves entries beyond MAX_PATH, and retained
+  // copies of deep installations exceed it; the extended-length prefix removes them.
   return process.platform === "win32"
-    ? `Remove-Item -LiteralPath ${quotePowerShellArg(directory)} -Recurse -Force`
+    ? `Remove-Item -LiteralPath ${quotePowerShellArg(path.win32.toNamespacedPath(directory))} -Recurse -Force`
     : `rm -rf -- ${quoteCliArg(directory)}`;
 }
 

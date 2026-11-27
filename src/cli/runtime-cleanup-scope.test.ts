@@ -1,16 +1,23 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
-import * as postgres from "../infra/postgres-sync/pool.js";
+import { PREPARED_MODEL_RUNTIME_LIFETIMES_KEY } from "../agents/prepared-model-runtime.types.js";
+import * as postgres from "../infra/postgres-sync/pool-state.js";
 import {
   captureRuntimeWorkerSource,
   withRuntimeWorkerGeneration,
 } from "../infra/runtime-worker-generation.js";
 import * as workers from "../infra/worker-native-lifecycle.js";
+import { NATIVE_WORKER_LIFETIMES_KEY } from "../infra/worker-native-lifecycle.types.js";
+import * as singletons from "../shared/global-singleton.js";
 import * as database from "../state/openclaw-state-db-cache.js";
+import { STATE_DATABASE_LIFECYCLE_KEY } from "../state/openclaw-state-db-contract.js";
 import * as lifecycle from "./gateway-cli/run-loop.test-support.js";
 import { withCliCommandCleanup, withCliProcessScope } from "./runtime-cleanup-scope.js";
 import { runCliDisposer, waitForPendingCliDisposers } from "./runtime-cleanup.js";
 
+const { resolveGlobalSingleton } = singletons;
+const resetDatabase = database.closeOpenClawStateDatabaseAsync;
+const resetWorkers = workers.closeDefaultRetainedNativeWorkerSource;
 const closeDatabase = vi.spyOn(database, "closeOpenClawStateDatabaseAsync");
 const closeWorkers = vi.spyOn(workers, "closeDefaultRetainedNativeWorkerSource");
 const closePostgres = vi.spyOn(postgres, "closePostgresPool");
@@ -22,13 +29,28 @@ beforeEach(() => {
   closeDatabase.mockReset().mockImplementation(async () => void events.push("database"));
   closeWorkers.mockReset().mockImplementation(async () => void events.push("workers"));
   closePostgres.mockReset().mockImplementation(async () => void events.push("postgres"));
+  resolveGlobalSingleton(
+    STATE_DATABASE_LIFECYCLE_KEY,
+    () => ({}),
+    () => closeDatabase(),
+    "shared-state",
+  );
+  resolveGlobalSingleton(
+    NATIVE_WORKER_LIFETIMES_KEY,
+    () => ({}),
+    () => closeWorkers(),
+  );
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.mocked(console.error).mockRestore();
 });
-afterAll(() => vi.restoreAllMocks());
+afterAll(() => {
+  vi.restoreAllMocks();
+  resolveGlobalSingleton(STATE_DATABASE_LIFECYCLE_KEY, () => ({}), resetDatabase, "shared-state");
+  resolveGlobalSingleton(NATIVE_WORKER_LIFETIMES_KEY, () => ({}), resetWorkers);
+});
 
 const runCommand = <T>(run: () => T | Promise<T>) =>
   withCliProcessScope(() =>
@@ -86,6 +108,33 @@ it("keeps PostgreSQL services through generation settlement and native backend c
   }
 });
 
+it("closes shared resources in order after an overdue prepared model fails to close", async () => {
+  const model = lifecycle.createLifecycleGate();
+  const reset = singletons.resetGlobalSingletonLifecycleState;
+  using modelFailure = vi.spyOn(singletons, "resetGlobalSingletonLifecycleState");
+  modelFailure.mockImplementation(async (key) => {
+    if (key === PREPARED_MODEL_RUNTIME_LIFETIMES_KEY) {
+      await model.wait();
+      events.push("models");
+      throw new Error("model shutdown failed");
+    }
+    await reset(key);
+  });
+
+  const command = runCommand(() => "command-result");
+  try {
+    await model.entered;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(command).resolves.toBe("command-result");
+    expect(events).toEqual([]);
+  } finally {
+    model.release();
+    await waitForPendingCliDisposers();
+  }
+  expect(events).toEqual(["models", "database", "workers", "postgres"]);
+  expect(console.error).toHaveBeenCalledWith(expect.stringContaining("model shutdown failed"));
+});
+
 it.each(["database", "workers"] as const)(
   "retains PostgreSQL services and reports a rejected %s drain",
   async (stage) => {
@@ -122,7 +171,7 @@ it("defers shared-state closure until expired disposal and its late write settle
     await vi.advanceTimersByTimeAsync(5_000);
     expect(completed).toHaveBeenCalledWith("command-result");
     expect(console.error).toHaveBeenCalledWith(
-      "CLI cleanup deferred: shared-state until pending disposers settle: plugin-parent",
+      "CLI cleanup deferred: shared-state until pending disposers settle: plugin-parent, prepared-model-runtime",
     );
     // A subsequent command's drain must follow the first without waiting on itself.
     await runCommand(() => {});
