@@ -156,9 +156,8 @@ it.each(["recovered", "preparation-failure", "later-failure"] as const)(
   },
 );
 
-// Production shapes (2026-11-27): a multi-day provider limit on one model, and every
-// fallback limited. The Gateway agent route showed "Your request couldn't be completed."
-// and "try again in a few minutes" instead of the provider's reset.
+// A multi-day limit on one model, and on every fallback: the agent route's session
+// notice must keep the provider's reset, as chat.send does.
 it.each(["single model", "all fallbacks"] as const)(
   "publishes the provider reset as the failure notice when %s are rate-limited",
   async (shape) => {
@@ -179,6 +178,7 @@ it.each(["single model", "all fallbacks"] as const)(
       {
         reason: "rate_limit",
         status: 429,
+        code: "rate_limit_exceeded",
         provider: "openai",
         model: "gpt-5.5",
         rateLimitResetAt: resetAt,

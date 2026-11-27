@@ -664,7 +664,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         );
         continue;
       }
-      // Same capacity copy as chat.send, so the session notice keeps the provider's reset.
       lifecycle.emitBasicError(err instanceof Error ? err : new Error("Agent run failed"), {
         ...resolveAgentRunErrorLifecycleFields(err, params.opts.abortSignal),
         ...(!executionStarted ? { executionStarted: false, providerStarted: false } : {}),
