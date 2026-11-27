@@ -24,6 +24,7 @@ import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
 import { describeUnavailableMacosSystemGit } from "../infra/update-macos-git.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
+import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunStep } from "../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../infra/update-run-recovery-admission.js";
 import {
@@ -48,7 +49,6 @@ import { preparePackage } from "./prepare-package.js";
 import {
   acquireUpdateLock,
   allocateStaging,
-  collectReleases,
   createTrialPending,
   hasReleaseUpdateOwner,
   publishStaging,
@@ -168,15 +168,45 @@ export async function prepareUpdate(params: {
           "Another update is switching releases. Try again in a few minutes.",
         );
       }
-      if (lock.previous) {
-        await finishUpdateRunAsync(
-          lock.previous.runId,
-          { status: "failed", reason: "interrupted" },
-          { env },
-        );
-      }
       await checkUpdateInstallationSlot(params.runningRoot, env);
       await assertUpdateRecoveryAdmission({ env });
+      const runningRoot = await fs.realpath(params.runningRoot);
+      const servingTrialRoot =
+        trial && (trial.phase === "committed" || trial.phase === "rolled-back")
+          ? await fs
+              .realpath(
+                path.resolve(prefix, trial.phase === "rolled-back" ? trial.previous : trial.target),
+              )
+              .catch((error: unknown) => {
+                if (!hasErrnoCode(error, "ENOENT")) {
+                  throw error;
+                }
+                return undefined;
+              })
+          : undefined;
+      // The serving release may still own its handed-over plugin work after commit.
+      const handedOverRunId = servingTrialRoot === runningRoot ? trial?.runId : undefined;
+      for (;;) {
+        const unfinished = await listUpdateRunsAsync(
+          {
+            active: true,
+            limit: 100,
+            excludeRunIds: handedOverRunId ? [params.runId, handedOverRunId] : [params.runId],
+          },
+          { env },
+          { current: true },
+        );
+        if (unfinished.length === 0) {
+          break;
+        }
+        for (const run of unfinished) {
+          await finishUpdateRunAsync(
+            run.runId,
+            { status: "failed", reason: "interrupted" },
+            { env },
+          );
+        }
+      }
       const missingGit = await describeUnavailableMacosSystemGit(runCommandWithTimeout, {
         timeoutMs: Math.min(10_000, Math.max(1, deadline - Date.now())),
       });
@@ -212,8 +242,6 @@ export async function prepareUpdate(params: {
         }
         throw error;
       }
-      // Releases left by an earlier update; never on the critical path.
-      void collectReleases(prefix).catch(() => undefined);
       staging = await allocateStaging({ kind: install.kind }, prefix);
       let target;
       try {

@@ -31,6 +31,7 @@ import {
 } from "./manager-embedding-cache.js";
 import {
   upgradeMemoryIndexProviderKey,
+  writeMemoryEmbeddingRefusal,
   writeMemoryIndexMetadata,
 } from "./manager-index-metadata.js";
 import { readMemoryIndex } from "./manager-index-read.js";
@@ -527,6 +528,18 @@ export function bindPostgresMemoryPublication(
             rebuilding.serialized = JSON.stringify(metadata);
           } else {
             writeMemoryIndexMetadata(db, command.input);
+          }
+        },
+        { publishFacts: true },
+      );
+    }
+    if (command.type === "index.writeEmbeddingRefusal") {
+      // The refusal describes the endpoint, not index content, so a staged rebuild keeps it live.
+      return write(
+        () => {
+          writeMemoryEmbeddingRefusal(db, command.input);
+          if (rebuilding) {
+            rebuilding.embeddingRefusal = command.input;
           }
         },
         { publishFacts: true },

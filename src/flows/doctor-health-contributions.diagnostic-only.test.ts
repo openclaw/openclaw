@@ -24,7 +24,10 @@ import {
 // never has work. Each one runs here as `doctor --fix --non-interactive --yes` would run it
 // under maintenance, on an install with a state database, an agent database, a config and a
 // workspace, and must leave every one of them byte-identical. A declared contribution that
-// starts writing fails here instead of silently losing its repair.
+// starts writing fails here instead of silently losing its repair. A diagnostic may read, and
+// a read-only open of an unheld WAL store leaves an empty -wal and a -shm that are not a write,
+// so those are ignored here; pending checks are held to creating none
+// (doctor-health-contributions.pending-read-only.test.ts).
 
 const diagnosticOnly = resolveDoctorHealthContributions().filter(
   (contribution) => contribution.pending === "diagnostic-only",
@@ -72,12 +75,14 @@ describe("diagnostic-only Doctor contributions", () => {
         prompter: createDoctorPrompterFixture(true),
         gatewayMaintenanceActive: true,
       });
-      const before = snapshotStoreFiles(state.root);
+      const before = snapshotStoreFiles(state.root, { ignoreReadSidecars: true });
 
       await contribution.run(ctx);
       closeDatabases();
 
-      expect(changedStoreFiles(before, snapshotStoreFiles(state.root))).toEqual([]);
+      expect(
+        changedStoreFiles(before, snapshotStoreFiles(state.root, { ignoreReadSidecars: true })),
+      ).toEqual([]);
       expect(ctx.cfg).toEqual(cfg);
       expect(ctx.configResult.pendingChangePanels).toBeUndefined();
     },

@@ -23,10 +23,10 @@ import { runMemoryStatus } from "./manager-cpu-worker-runtime.js";
 import { captureMemoryDatabaseWriteOptions } from "./manager-database-admission.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
+import type { MemoryEmbeddingProviderRequirement } from "./manager-embedding-refusal-ops.js";
 import {
   resolveEffectiveMemorySearchSettings,
   resolveMemoryEmbeddingProviderRequirement,
-  type MemoryEmbeddingProviderRequirement,
 } from "./manager-provider-lifecycle.js";
 import { getLocalEmbeddingRuntimeFacts } from "./manager-provider-runtime-facts.js";
 import type { MemoryProviderLifecycleState } from "./manager-provider-state.js";
@@ -563,7 +563,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         throw new Error("Memory status requires its captured database target");
       }
       const snapshot = await runMemoryStatus({ agentId, databasePath }, this.statusQuery());
-      return this.publishedStatus(snapshot);
+      return this.publishedStatus(await this.withStatusRefusalIdentity(snapshot));
     });
   }
 
@@ -579,7 +579,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     snapshot?: ReturnType<typeof collectMemoryStatusSnapshot>,
   ): MemoryProviderStatus {
     const aggregateState = snapshot?.aggregate;
-    if (this.embeddingBootstrapFailure) {
+    // A current recorded refusal means search runs keyword-only, as after a bootstrap failure.
+    const refusal = this.projectStatusEmbeddingRefusal(snapshot?.embeddingRefusal);
+    const keywordOnly = Boolean(this.embeddingBootstrapFailure || (refusal && !this.provider));
+    if (keywordOnly) {
       this.refreshKeywordFallbackIndexIdentity();
     } else {
       this.refreshIndexIdentityDirty({
@@ -589,8 +592,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     // Status projects the effective keyword-only search mode while degraded.
     // Sync generations still snapshot this.provider so recovery can rebuild vectors.
     const providerInfo = resolveStatusProviderInfo({
-      provider: this.embeddingBootstrapFailure ? null : this.provider,
-      providerInitialized: this.embeddingBootstrapFailure ? true : this.providerInitialized,
+      provider: keywordOnly ? null : this.provider,
+      providerInitialized: keywordOnly ? true : this.providerInitialized,
       requestedProvider: this.settings.provider,
       resolveConfiguredModel: () =>
         this.resolveConfiguredIndexIdentity()?.provider.model || this.settings.model,
@@ -644,13 +647,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         dims: this.vector.dims,
       },
       batch: {
-        enabled: this.batch.enabled,
+        ...this.batch,
         failures: this.batchFailure.count,
         limit: this.batchFailureLimit,
-        wait: this.batch.wait,
-        concurrency: this.batch.concurrency,
-        pollIntervalMs: this.batch.pollIntervalMs,
-        timeoutMs: this.batch.timeoutMs,
         lastError: this.batchFailure.lastError,
         lastProvider: this.batchFailure.lastProvider,
       },
@@ -662,6 +661,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         providerUnavailableReason: this.providerUnavailableReason,
         indexIdentity: this.indexIdentityState,
         automaticRebuildNotice: this.automaticRebuildNotice,
+        embeddingRefusal: refusal,
       },
     };
   }

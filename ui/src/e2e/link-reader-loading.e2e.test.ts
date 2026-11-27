@@ -38,6 +38,9 @@ it("makes the overview readable before extras and retains visible content throug
     async ({ page, gateway, panel, content, button }) => {
       await panel.locator(".lr-skeleton").waitFor();
       await gateway.waitForRequest("forge.detail", { match: { section: "overview" } });
+      const original = panel.getByRole("link", { name: "Open on Forge", exact: true });
+      expect(await original.getAttribute("href", { timeout: 2000 })).toBe(url);
+      expect(await original.isVisible()).toBe(true);
       await gateway.resolveDeferred("forge.detail", overview, { match: { section: "overview" } });
       await panel.getByRole("heading", { name: overview.title, exact: true }).waitFor();
       await gateway.waitForRequest("forge.detail", { match: { section: "checks" } });
@@ -100,7 +103,7 @@ it("makes the overview readable before extras and retains visible content throug
       expect(
         await panel
           .locator(".lr-document")
-          .evaluate((node, original) => node === original, initialDocument),
+          .evaluate((node, priorDocument) => node === priorDocument, initialDocument),
       ).toBe(true);
       expect(await content.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
       await page.setViewportSize({ width: 1280, height: 900 });
@@ -127,7 +130,8 @@ it("makes the overview readable before extras and retains visible content throug
       ).toBe(0);
       const top = await content.evaluate((node) => node.scrollTop);
       const document = await panel.locator(".lr-document").elementHandle();
-      await button("Refresh item").click();
+      // Refresh sits in the document header; a pointer click would scroll back to it first.
+      await button("Refresh item").dispatchEvent("click");
       await expect.poll(() => button("Refresh item").getAttribute("aria-busy")).toBe("true");
       expect(await content.evaluate((node) => node.scrollTop)).toBe(top);
       expect(await document!.evaluate((node) => node.isConnected)).toBe(true);

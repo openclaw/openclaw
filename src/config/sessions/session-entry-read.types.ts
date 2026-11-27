@@ -53,6 +53,7 @@ export type SessionEntryListWorkerInput = {
   database: { agentId: string; path: string };
   scope: SessionEntryListScope & {
     cleanupSession?: string;
+    promptCacheSince?: number;
   };
   expectedIdentity?: DatabasePathIdentity;
   continuation?: CanonicalSessionReaderContinuation;
@@ -65,6 +66,8 @@ export type SessionEntryListWorkerResult = {
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
   revision?: string;
   unchanged?: true;
+  /** Returned without row payloads for prompt-cache recovery. */
+  promptCacheKeys?: string[];
   /** Oldest cron run in the requested logical agent; null means no run rows. */
   nextCronRunUpdatedAt?: number | null;
   /** Last scanned cron key when another retention page may remain. */
