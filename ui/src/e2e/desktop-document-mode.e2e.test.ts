@@ -1,8 +1,11 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { DesktopClient } from "../components/desktop/desktop-client.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -458,14 +461,121 @@ suite.define(() => {
     },
   );
 
-  it("returns from an unavailable focused desktop", async () => {
+  it.each(["source", "session"] as const)(
+    "recovers Host Desktop setup in a focused %s document",
+    async (selector) => {
+      await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+        const sessionKey = "agent:main:host-setup";
+        const host = { ...gatewayEnvironment, desktop: false, platform: "darwin" };
+        const needsServer = selector === "session";
+        const config = { desktop: { host: { enabled: false } } };
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          operatorScopes: ["operator.admin"],
+          deferredMethods: ["config.patch"],
+          featureMethods: [...desktopMethods, "config.get", "config.patch"],
+          methodResponses: {
+            "sessions.describe": { session: sessionRow(sessionKey, {}) },
+            "environments.status": host,
+            "environments.list": {
+              environments: [
+                { ...host, desktopSetup: { state: needsServer ? "needs-server" : "ready" } },
+              ],
+            },
+            "config.get": { config, raw: JSON.stringify(config), hash: "host-off", valid: true },
+            "desktop.observe": {
+              __mockError: {
+                code: "INVALID_REQUEST",
+                message: "macOS account credentials are required to observe Screen Sharing",
+                details: { code: "DESKTOP_CREDENTIALS_REQUIRED", auth: "ard-account" },
+              },
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "dashboards");
+        await page.locator("openclaw-app-shell").waitFor();
+        const route =
+          selector === "source"
+            ? "focus/desktop/source/gateway"
+            : "focus/desktop/session/" + encodeURIComponent(sessionKey);
+        await page.goto(suite.server.baseUrl + route);
+        const panel = page.locator("openclaw-desktop-panel");
+        await panel.locator(".desktop-status").waitFor();
+        for (const width of [390, 1280]) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            panel.locator("section.desktop-document"),
+            [panel.locator(".desktop-status")],
+            { viewport: { width, height: 844 }, animations: "disabled" },
+          );
+          await writeFile(
+            path.join(suite.artifactDir, selector + "-setup-" + width + ".png"),
+            frame.png,
+          );
+          expect(
+            await panel
+              .locator(".desktop-status")
+              .evaluate((element) => element.scrollWidth <= element.clientWidth),
+          ).toBe(true);
+        }
+        await exactText(
+          panel,
+          needsServer ? "Turn on Screen Sharing" : "Screen Sharing is available",
+        ).waitFor();
+        expect(await panel.textContent()).not.toContain(unavailable);
+        expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        expect(
+          (await gateway.getRequests("environments.list")).map((request) => request.params),
+        ).toContainEqual({ includeDesktopSetup: true });
+        const enable = button(panel, "Enable desktop access in OpenClaw");
+        await page.setViewportSize({ width: 390, height: 844 });
+        await button(panel, "Back").focus();
+        await page.keyboard.press("Tab");
+        expect(await page.evaluate(() => document.activeElement?.textContent?.trim())).toBe(
+          needsServer ? "Check again" : "Enable desktop access in OpenClaw",
+        );
+        if (needsServer) {
+          expect(await enable.count()).toBe(0);
+          await gateway.setMethodResponse("environments.status", { ...host, desktop: true });
+          await page.keyboard.press("Enter");
+        } else {
+          await page.keyboard.press("Enter");
+          const patch = await gateway.waitForRequest("config.patch");
+          expect(patch.params).toMatchObject({
+            raw: '{"desktop":{"host":{"enabled":true}}}',
+          });
+          await gateway.setMethodResponse("environments.status", { ...host, desktop: true });
+          await gateway.resolveDeferred("config.patch", {
+            ok: true,
+            config: { desktop: { host: { enabled: true } } },
+            hash: "host-on",
+          });
+        }
+        await panel.getByLabel("macOS username", { exact: true }).waitFor();
+        await expectObserve(gateway, "gateway");
+        expect(await gateway.getRequests("config.patch")).toHaveLength(needsServer ? 0 : 1);
+        expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+        await button(panel, "Back").focus();
+        await page.keyboard.press("Enter");
+        await page.waitForURL(suite.server.baseUrl + "dashboards");
+      });
+    },
+  );
+
+  it.each([
+    { access: "unadvertised", operatorScopes: ["operator.admin"], featureMethods: [] },
+    { access: "non-admin", operatorScopes: ["operator.read"], featureMethods: desktopMethods },
+  ])("returns from an unavailable focused desktop ($access)", async (scenario) => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page);
+      const gateway = await installMockGateway(page, scenario);
       await page.goto(`${suite.server.baseUrl}dashboards`);
       await page.locator("openclaw-app-shell").waitFor();
       await page.goto(`${suite.server.baseUrl}focus/desktop`);
 
       await exactText(page, "Desktop viewing is unavailable for this connection.").waitFor();
+      expect(await button(page, "Enable desktop access in OpenClaw").count()).toBe(0);
+      await expectRequests(gateway, { "config.patch": 0, "desktop.observe": 0 });
       const back = button(page, "Back");
       await back.waitFor();
       await back.click();
