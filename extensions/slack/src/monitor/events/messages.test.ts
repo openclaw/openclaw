@@ -445,6 +445,7 @@ describe("registerSlackMessageEvents", () => {
     channelAllowBots?: boolean | "mentions";
     accountAllowBots?: boolean | "mentions";
     directMessage?: boolean;
+    mentionPatterns?: string[];
   }) {
     const harness = createSlackSystemEventTestHarness({
       channelType: params?.directMessage ? "im" : "channel",
@@ -456,6 +457,9 @@ describe("registerSlackMessageEvents", () => {
           ...(params?.accountAllowBots !== undefined ? { allowBots: params.accountAllowBots } : {}),
         },
       },
+      ...(params?.mentionPatterns
+        ? { messages: { groupChat: { mentionPatterns: params.mentionPatterns } } }
+        : {}),
     };
     harness.ctx.channelsConfig =
       !params?.directMessage && params?.channelAllowBots !== undefined
@@ -516,6 +520,96 @@ describe("registerSlackMessageEvents", () => {
     await handler({
       event: botEdit("hey <@U_BOT> take a look"),
       body: { event_id: "Ev-bot-mentioned" },
+    });
+
+    expect(messageQueueMock).toHaveBeenCalledExactlyOnceWith(
+      "Slack message edited in #general.",
+      expect.objectContaining({ sessionKey: "agent:main:main" }),
+    );
+  });
+
+  it("admits a subteam-mention bot edit when the group includes the agent", async () => {
+    const { handler } = createBotAdmissionHandlers({ channelAllowBots: "mentions" });
+    const usersList = vi.fn(async () => ({ ok: true, users: ["U_BOT", "U_OTHER"] }));
+    const client = { usergroups: { users: { list: usersList } } };
+
+    await handler({
+      event: botEdit("<!subteam^S123> deployment failed"),
+      body: { event_id: "Ev-subteam-mention" },
+      client,
+    });
+
+    expect(usersList).toHaveBeenCalledExactlyOnceWith({
+      usergroup: "S123",
+      team_id: "T_TEST",
+    });
+    expect(messageQueueMock).toHaveBeenCalledExactlyOnceWith(
+      "Slack message edited in #general.",
+      expect.objectContaining({ sessionKey: "agent:main:main" }),
+    );
+  });
+
+  it("admits a subteam-mention bot delete when the group includes the agent", async () => {
+    const { handler } = createBotAdmissionHandlers({ channelAllowBots: "mentions" });
+    const client = {
+      usergroups: {
+        users: {
+          list: vi.fn(async () => ({ ok: true, users: ["U_BOT"] })),
+        },
+      },
+    };
+
+    await handler({
+      event: {
+        type: "message",
+        subtype: "message_deleted",
+        channel: "C123",
+        channel_type: "channel",
+        deleted_ts: "2.000",
+        previous_message: {
+          ts: "2.000",
+          bot_id: "B_OTHER",
+          text: "<!subteam^S123> deployment failed",
+        },
+        event_ts: "2.100",
+      },
+      body: { event_id: "Ev-subteam-deleted" },
+      client,
+    });
+
+    expect(messageQueueMock).toHaveBeenCalledExactlyOnceWith(
+      "Slack message deleted in #general.",
+      expect.objectContaining({ sessionKey: "agent:main:main" }),
+    );
+  });
+
+  it("drops a subteam-mention bot edit when the group excludes the agent", async () => {
+    const { handler } = createBotAdmissionHandlers({ channelAllowBots: "mentions" });
+
+    await handler({
+      event: botEdit("<!subteam^S999> deployment failed"),
+      body: { event_id: "Ev-subteam-other" },
+      client: {
+        usergroups: {
+          users: {
+            list: vi.fn(async () => ({ ok: true, users: ["U_OTHER"] })),
+          },
+        },
+      },
+    });
+
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("admits a bot edit that matches a configured mention pattern", async () => {
+    const { handler } = createBotAdmissionHandlers({
+      channelAllowBots: "mentions",
+      mentionPatterns: ["\\bdeploybot\\b"],
+    });
+
+    await handler({
+      event: botEdit("Deploybot deployment failed"),
+      body: { event_id: "Ev-pattern-mentioned" },
     });
 
     expect(messageQueueMock).toHaveBeenCalledExactlyOnceWith(

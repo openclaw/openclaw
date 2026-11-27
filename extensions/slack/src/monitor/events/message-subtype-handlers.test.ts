@@ -1,4 +1,5 @@
 // Slack tests cover message subtype handlers plugin behavior.
+import type { WebClient } from "@slack/web-api";
 import { describe, expect, it } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackBotSubtypeAdmission } from "./message-subtype-admission.js";
@@ -157,12 +158,22 @@ describe("resolveSlackBotSubtypeAdmission", () => {
     text: "hello there",
   } as const;
 
+  function subteamClient(users: string[]) {
+    return {
+      usergroups: {
+        users: {
+          list: async () => ({ ok: true, users }),
+        },
+      },
+    } as unknown as WebClient;
+  }
+
   it.each([
     [false, "drop"],
     [true, "allow"],
     [undefined, "allow"],
-  ] as const)("applies allowBots=%s to bot edits as %s", (allowBots, expected) => {
-    expect(resolveSlackBotSubtypeAdmission({ ...bot, allowBots })).toBe(expected);
+  ] as const)("applies allowBots=%s to bot edits as %s", async (allowBots, expected) => {
+    await expect(resolveSlackBotSubtypeAdmission({ ...bot, allowBots })).resolves.toBe(expected);
   });
 
   it.each([
@@ -174,42 +185,79 @@ describe("resolveSlackBotSubtypeAdmission", () => {
     ["<!subteam^S123> subteam only", "drop"],
     ["", "drop"],
     [undefined, "drop"],
-  ] as const)("applies allowBots=mentions to text %s as %s", (text, expected) => {
-    expect(resolveSlackBotSubtypeAdmission({ ...bot, allowBots: "mentions", text })).toBe(expected);
+  ] as const)("applies allowBots=mentions to text %s as %s", async (text, expected) => {
+    await expect(
+      resolveSlackBotSubtypeAdmission({ ...bot, allowBots: "mentions", text }),
+    ).resolves.toBe(expected);
   });
 
-  it("drops mentions-mode bot edits when the bot user id is unknown", () => {
-    expect(
+  it("admits a subteam mention when the bot belongs to the user group", async () => {
+    await expect(
+      resolveSlackBotSubtypeAdmission({
+        allowBots: "mentions",
+        botUserId: "U_BOT",
+        text: "<!subteam^S123> deployment failed",
+        teamId: "T_TEST",
+        client: subteamClient(["U_BOT", "U_OTHER"]),
+      }),
+    ).resolves.toBe("allow");
+  });
+
+  it("drops a subteam mention when the bot is not a member", async () => {
+    await expect(
+      resolveSlackBotSubtypeAdmission({
+        allowBots: "mentions",
+        botUserId: "U_BOT",
+        text: "<!subteam^S123|deploys> deployment failed",
+        teamId: "T_TEST",
+        client: subteamClient(["U_OTHER"]),
+      }),
+    ).resolves.toBe("drop");
+  });
+
+  it("admits text that matches a configured mention pattern", async () => {
+    await expect(
+      resolveSlackBotSubtypeAdmission({
+        allowBots: "mentions",
+        botUserId: "U_BOT",
+        text: "Deploybot deployment failed",
+        mentionRegexes: [/\bdeploybot\b/i],
+      }),
+    ).resolves.toBe("allow");
+  });
+
+  it("drops mentions-mode bot edits when the bot user id is unknown", async () => {
+    await expect(
       resolveSlackBotSubtypeAdmission({
         allowBots: "mentions",
         botUserId: undefined,
         text: "<@U_BOT> hello",
       }),
-    ).toBe("drop");
+    ).resolves.toBe("drop");
   });
 
   it.each([
     ["without a mention", "no mention at all"],
     ["without any text", undefined],
-  ] as const)("admits mentions-mode bot edits in DMs %s", (_label, text) => {
-    expect(
+  ] as const)("admits mentions-mode bot edits in DMs %s", async (_label, text) => {
+    await expect(
       resolveSlackBotSubtypeAdmission({
         allowBots: "mentions",
         botUserId: "U_BOT",
         text,
         directMessage: true,
       }),
-    ).toBe("allow");
+    ).resolves.toBe("allow");
   });
 
-  it("still drops mentions-mode bot DMs when allowBots is false", () => {
-    expect(
+  it("still drops mentions-mode bot DMs when allowBots is false", async () => {
+    await expect(
       resolveSlackBotSubtypeAdmission({
         allowBots: false,
         botUserId: "U_BOT",
         text: "<@U_BOT> hello",
         directMessage: true,
       }),
-    ).toBe("drop");
+    ).resolves.toBe("drop");
   });
 });

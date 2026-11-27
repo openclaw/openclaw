@@ -1,4 +1,5 @@
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
+import { buildMentionRegexes } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -13,6 +14,7 @@ import {
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveSlackAccount } from "../../accounts.js";
 import { noteSlackDraftConversationMessage } from "../../draft-message-boundaries.js";
+import { formatSlackTarget } from "../../target-parsing.js";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { resolveAllowBots, resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
@@ -231,13 +233,29 @@ export function registerSlackMessageEvents(params: {
                   account.config,
                   runtimeContext.cfg.channels?.slack,
                 );
+                const mentionRegexes =
+                  allowBotsSetting === "mentions" && message.channel
+                    ? buildMentionRegexes(runtimeContext.cfg, ingressContext.route.agentId, {
+                        provider: "slack",
+                        conversationId: formatSlackTarget({
+                          teamId: eventScope?.teamId,
+                          kind: "channel",
+                          id: message.channel,
+                        }),
+                        providerPolicy: account.config.mentionPatterns,
+                      })
+                    : undefined;
                 if (
-                  resolveSlackBotSubtypeAdmission({
+                  (await resolveSlackBotSubtypeAdmission({
                     allowBots: allowBotsSetting,
                     botUserId: runtimeContext.botUserId,
                     text: subtypeHandler.text,
                     directMessage: ingressContext.channelType === "im",
-                  }) === "drop"
+                    client: eventScope?.client ?? client,
+                    teamId: eventScope?.teamId ?? runtimeContext.teamId,
+                    mentionRegexes,
+                    log: logVerbose,
+                  })) === "drop"
                 ) {
                   logVerbose(
                     `slack: drop bot ${subtypeHandler.eventKind === "message_changed" ? "edit" : "delete"} (${allowBotsSetting === "mentions" ? "bot-missing-mention" : "bot-disabled"}) channel=${message.channel ?? "unknown"}`,
