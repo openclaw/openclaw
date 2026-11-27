@@ -311,9 +311,15 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         }
       }
       const indexIdentity = refreshSearchIdentity();
+      const shouldRepairConfiguredScope =
+        searchSyncEnabled &&
+        indexIdentity.status === "mismatched" &&
+        indexIdentity.owner === "configuration" &&
+        indexIdentity.code === "scope";
       const shouldRepairIdentity =
         hasIndexedContent &&
         (indexIdentity.status === "missing" ||
+          shouldRepairConfiguredScope ||
           (searchSyncEnabled &&
             indexIdentity.status === "mismatched" &&
             indexIdentity.owner === "openclaw" &&
@@ -485,11 +491,11 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
               throw err;
             }
             if (fallbackAttempt) {
-              this.markLocalEmbeddingProviderDegraded(err);
+              this.markEmbeddingProviderFailure(err);
               throw err;
             }
             opts?.onPartialResults?.(null);
-            this.markLocalEmbeddingProviderDegraded(err);
+            this.markEmbeddingProviderFailure(err);
             const message = formatErrorMessage(err);
             const activatedFallback =
               isMemoryEmbeddingOperationError(err) && (await this.activateSearchFallback(message));

@@ -31,18 +31,18 @@ import {
 import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
-/** A stored-row owner is already selected; request hints still require normal admission. */
+/** A prepared owner is already selected; defaults deliberately have no agent owner. */
 export type AgentRuntimePolicyScope = { sessionKey?: string } & (
   | { agentId?: string; agentScope?: never }
-  | { agentId?: never; agentScope: { kind: "prepared"; agentId: string } }
+  | { agentId?: never; agentScope: { kind: "prepared"; agentId: string } | { kind: "defaults" } }
 );
 
 /** Resolve request hints; prepared owner facts never re-admit a canonical sentinel. */
 export function resolveAgentRuntimePolicyAgentId(
   params: AgentRuntimePolicyScope & { config?: OpenClawConfig },
 ): string | undefined {
-  if (params.agentScope?.kind === "prepared") {
-    return params.agentScope.agentId;
+  if (params.agentScope) {
+    return params.agentScope.kind === "prepared" ? params.agentScope.agentId : undefined;
   }
   return params.config && (params.agentId?.trim() || params.sessionKey?.trim())
     ? resolveSessionAgentIds({

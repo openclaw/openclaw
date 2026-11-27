@@ -110,7 +110,7 @@ export function formatRelativeTimestamp(
   return options.suffix === false ? formatUnit({ value, unit }) : formatRelative(signedValue, unit);
 }
 
-export function formatUnknownText(value: unknown): string {
+export function formatUnknownText(value: unknown, jsonIndent?: number): string {
   if (value == null) {
     return "";
   }
@@ -126,7 +126,7 @@ export function formatUnknownText(value: unknown): string {
     return String(value);
   }
   try {
-    const serialized = JSON.stringify(value);
+    const serialized = JSON.stringify(value, null, jsonIndent);
     if (serialized !== undefined) {
       return serialized;
     }

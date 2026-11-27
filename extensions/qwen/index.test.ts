@@ -143,6 +143,10 @@ describe("qwen provider plugin", () => {
     const profile = (modelId: string, ownerId = TOKEN_PLAN) =>
       getProvider(ownerId).resolveThinkingProfile?.({ modelId } as never);
     for (const ownerId of ["qwen", TOKEN_PLAN]) {
+      expect(profile("qwen4-max", ownerId)).toEqual({
+        levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((id) => ({ id })),
+        defaultLevel: "high",
+      });
       expect(profile("qwen3.8-max", ownerId)).toEqual({
         levels: ["off", "low", "medium", "xhigh"].map((id) => ({ id })),
         defaultLevel: "xhigh",

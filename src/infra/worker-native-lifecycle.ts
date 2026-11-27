@@ -8,7 +8,7 @@ import {
   type WorkerOptions,
 } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
+import { createAttachmentBrokerHost } from "../process/spawn-broker/host.js";
 import { attachBrokerNativeResource } from "../process/spawn-broker/resource-client.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -29,6 +29,7 @@ import {
   type SqliteDatabaseAdmissionCursor,
 } from "./sqlite-database-admission.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
+import { captureWorkerMemoryBudgetEnvironmentData } from "./worker-memory-budget.js";
 import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
 import {
@@ -70,6 +71,8 @@ export type RetainedNativeWorkerSource = {
     input?: unknown,
   ): Promise<{
     port: MessagePort;
+    ref(this: void): void;
+    unref(this: void): void;
     retainBrokerUntilProcessExit(this: void): void;
     close(): Promise<void>;
   }>;
@@ -82,7 +85,7 @@ export type RetainedNativeWorkerSource = {
 };
 
 type NativeBrokerLifetime = {
-  host?: SpawnBrokerHost;
+  host?: ReturnType<typeof createAttachmentBrokerHost>;
   closing?: Promise<void>;
   idleTimer?: ReturnType<typeof setTimeout>;
   retainedUntilProcessExit?: boolean;
@@ -111,6 +114,7 @@ const lifetime = resolveGlobalSingleton(
     defaultBroker: {},
   }),
   closeDefaultRetainedNativeWorkerSource,
+  "native-workers",
 );
 
 /** Terminal process cleanup joins the existing unbound owner without starting another. */
@@ -134,11 +138,11 @@ function nativeCleanupFailures(results: PromiseSettledResult<unknown>[]): unknow
 
 const NATIVE_BROKER_IDLE_MS = 60_000;
 
-function nativeResourceBroker(source: NativeSource): SpawnBrokerHost {
+function nativeResourceBroker(source: NativeSource) {
   clearTimeout(source.broker.idleTimer);
   source.broker.idleTimer = undefined;
   return (source.broker.host ??= runInDetachedAsyncContext(() =>
-    createSpawnBrokerHost({ nativeResources: true, workerUrl: source.brokerModuleUrl }),
+    createAttachmentBrokerHost(source.brokerModuleUrl),
   ));
 }
 
@@ -460,8 +464,21 @@ export function captureRetainedNativeWorkerSource(options?: {
         fail,
       );
       let closed = false;
+      let closing = false;
       const resource = {
         port: port2,
+        ref() {
+          lease.setReferenced(true);
+          port2.ref();
+        },
+        unref() {
+          // A late operation acknowledgment cannot release an in-progress close.
+          if (closing) {
+            return;
+          }
+          lease.setReferenced(false);
+          port2.unref();
+        },
         retainBrokerUntilProcessExit() {
           // Loaded native images retain physical tokens after domain ports close.
           // The broker already unrefs idle handles and joins on the host's real exit.
@@ -471,6 +488,8 @@ export function captureRetainedNativeWorkerSource(options?: {
           if (closed) {
             return;
           }
+          closing = true;
+          resource.ref();
           if (!attachment.dispatched) {
             lease.abandonUnattached();
           } else {
@@ -594,7 +613,10 @@ function startNativeWorker(
         type: "create",
         id,
         filename: { kind: filename instanceof URL ? "url" : "path", value: String(filename) },
-        environmentData: captureSqliteWorkerEnvironmentData(databaseAdmissions),
+        environmentData: [
+          ...captureSqliteWorkerEnvironmentData(databaseAdmissions),
+          captureWorkerMemoryBudgetEnvironmentData(),
+        ],
         options: {
           ...captured,
           environment: { ...(env === SHARE_ENV ? process.env : (env ?? process.env)) },

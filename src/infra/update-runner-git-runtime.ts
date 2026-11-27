@@ -8,7 +8,6 @@ import { settleWithCleanup, throwSettledAggregate } from "./error-graph-internal
 import { formatErrorMessage } from "./errors.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { isPathInside } from "./path-guards.js";
-import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-runner-types.js";
 import {
   readRuntimeModulesManifest,
@@ -464,11 +463,8 @@ export function createGitRuntimeTransaction({
   promotion,
   assertRollbackSafe,
   restoreRuntime,
-  activation,
 }: {
   root: string;
-  /** The checked-out candidate commit and the build it replaced. */
-  activation?: { sha: string; previousBuildId: string | null };
   promotion: Pick<Awaited<ReturnType<typeof prepareGitRuntimePromotion>>, "backupRoot"> & {
     cleanup: (assertCurrent?: () => void) => Promise<UpdateStepResult | void>;
   };
@@ -486,15 +482,8 @@ export function createGitRuntimeTransaction({
     stderrTail: message,
     ...(warning ? { advisory: { kind: "recoverable-maintenance" as const, message } } : {}),
   });
-  const transaction: PackageUpdateTransaction = {
+  return {
     backupRoot: promotion.backupRoot,
-    ...(activation && {
-      // Activation copies the candidate's build-info unchanged: this is the validated build.
-      readGitActivation: async () => {
-        const buildId = await readBuiltGatewayBuildId(root);
-        return buildId ? { ...activation, buildId } : undefined;
-      },
-    }),
     assertRollbackSafe,
     rollback: (assertCurrent) => {
       assertCurrent();
@@ -515,9 +504,8 @@ export function createGitRuntimeTransaction({
             `Git recovery is unverified; previous runtime retained at ${promotion.backupRoot}.`,
           );
         }
-        let retired: UpdateStepResult | void;
         try {
-          retired = await promotion.cleanup(assertCurrent);
+          return await promotion.cleanup(assertCurrent);
         } catch (error) {
           assertCurrent();
           if (
@@ -531,38 +519,7 @@ export function createGitRuntimeTransaction({
             true,
           );
         }
-        // Verified activation ends automatic database restoration, as for package
-        // updates. Capture and late refusals clear this root to keep manual recovery.
-        if (!outcome.activationVerified || !transaction.databaseBackupRoot) {
-          return retired;
-        }
-        const snapshots = `${transaction.databaseBackupRoot}.databases`;
-        assertCurrent();
-        try {
-          // Server-side captures go first; their manifests stay until the drop succeeds.
-          await transaction.discardDatabaseCaptures?.();
-        } catch (error) {
-          assertCurrent();
-          return retention(
-            `Git verification succeeded; PostgreSQL capture cleanup remains pending at ${snapshots}: ${formatErrorMessage(error)}`,
-            true,
-          );
-        }
-        assertCurrent();
-        try {
-          await fs.rm(snapshots, { recursive: true, force: true });
-        } catch (error) {
-          if (!isErrno(error)) {
-            throw error;
-          }
-          return retention(
-            `Git verification succeeded; database snapshot cleanup remains pending at ${snapshots}: ${formatErrorMessage(error)}`,
-            true,
-          );
-        }
-        return retired;
       })());
     },
   };
-  return transaction;
 }

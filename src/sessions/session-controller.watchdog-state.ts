@@ -4,6 +4,8 @@ export const SESSION_WATCHDOG_WARNING_MS = 120_000;
 export const SESSION_WATCHDOG_ABORT_FLOOR_MS = 5 * 60_000;
 export const SESSION_WATCHDOG_QUIET_TOOL_MS = 15 * 60_000;
 export const SESSION_WATCHDOG_CLEANUP_MS = 60_000;
+/** Nested maintenance reports its own timeout first; the reply stop is only its backstop. */
+export const SESSION_WATCHDOG_MAINTENANCE_GRACE_MS = 30_000;
 
 export type OwnedWait = {
   admission?: AdmissionDiagnostics;

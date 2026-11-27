@@ -132,7 +132,6 @@ export function buildGatewayCronService(params: {
   const cronScriptsEnabled = cronTriggersEnabled && !hostExecutionDisabled;
   const scriptRuntime = cronScriptsEnabled
     ? createCronScriptRuntime({
-        config: params.cfg,
         loadPluginRegistry: loadPreparedInboundPluginRegistry,
         resolveGatewayContext: scheduledGatewayContextResolver,
       })
@@ -720,7 +719,6 @@ export function buildGatewayCronService(params: {
           fireStreamJob(job, {
             run: async (jobId, onDisposition) => {
               const result = await cron.run(jobId, "force", {
-                evaluateTrigger: true,
                 streamBatch: batch,
                 streamScheduleKey,
                 streamSourceIdentity,

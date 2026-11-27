@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { AssistantHistoryMessage, AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
@@ -247,7 +247,7 @@ export function resolveResponsesContextUsageBoundary(
   return undefined;
 }
 
-function isAssistant(message: { role: string }): message is AssistantMessage {
+function isAssistant(message: { role: string }): message is AssistantHistoryMessage {
   return message.role === "assistant";
 }
 

@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveStateDir } from "../config/paths.js";
 import {
-  PACKAGE_RELEASES_DIR,
   packageReleaseGlobalRoot,
+  packageReleasePrefixOfRoot,
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
+
+const GIT_RELEASE_DIR = "git-install";
 
 /** Written once beside the release link; the service names it and it never changes. */
 export const GIT_RELEASE_LAUNCHER = "openclaw-launcher.mjs";
@@ -13,34 +16,53 @@ export const GIT_RELEASE_LAUNCHER = "openclaw-launcher.mjs";
 export const GIT_RELEASE_TRIAL = ".trial";
 
 /**
- * Whether a Git update runs from releases. POSIX only: #198835's link is POSIX-only, so
- * Windows checkouts and package-to-Git switches keep the in-place runner. Only an installed
- * Gateway service that owns this install starts through the release link; a checkout run
- * by hand keeps the in-place runner, or its next start would run the old commit. The layout never
- * fails an update (#197949 decision 8): when it cannot be used, `onUnavailable` hears why
- * and the update takes the in-place runner. The next update tries the layout again.
+ * The `openclaw.mjs` an npm global package holds once a Git install runs from releases. Its exact
+ * text is how a later switch back to npm recognizes the package as this installation's.
  */
-export function usesGitReleases(
-  switchToGit: boolean,
-  serviceOwnsInstall: boolean,
-  onUnavailable?: (reason: string) => void,
-): boolean {
-  if (switchToGit || process.platform === "win32" || !serviceOwnsInstall) {
-    return false;
-  }
-  const prefix = resolveGitReleasePrefix();
-  const slot = gitReleaseSlot(prefix);
+export function gitReleaseForwardingEntry(launcher: string): string {
+  return `#!/usr/bin/env node\n// Starts the OpenClaw Git release that ${launcher} selects.\nawait import(${JSON.stringify(pathToFileURL(launcher).href)});\n`;
+}
+
+/** The package left intact by this install's npm-to-Git switch, including after fallback. */
+export function isGitReleaseForwardingPackage(root: string, prefix: string): boolean {
   try {
-    fs.mkdirSync(path.join(prefix, PACKAGE_RELEASES_DIR), { recursive: true });
-    if (fs.lstatSync(slot, { throwIfNoEntry: false }) && !readPackageReleaseSlotSync(slot)) {
-      onUnavailable?.(`${slot} is not a release link`);
-      return false;
-    }
-    return true;
-  } catch (error) {
-    onUnavailable?.(`${prefix} is unavailable: ${String(error)}`);
+    return (
+      fs.readFileSync(path.join(root, "openclaw.mjs"), "utf8") ===
+      gitReleaseForwardingEntry(path.join(prefix, GIT_RELEASE_LAUNCHER))
+    );
+  } catch {
     return false;
   }
+}
+
+/**
+ * Every Git install updates through releases (on Windows the link is a junction). The layout
+ * never refuses an update (#197949 decision 8): something other than a release link at the
+ * package path is moved aside, and the returned warning names where. A Git checkout there (the
+ * installer accepts any `--git-dir`) is a live installation that services and wrappers name, so
+ * it stays; publication then refuses with the installation unchanged (rare, accepted). A state
+ * directory that cannot hold `releases/` fails the update at its first write, naming the path.
+ */
+export function prepareGitReleaseLayout(): string | undefined {
+  const slot = gitReleaseSlot(resolveGitReleasePrefix());
+  const entry = fs.lstatSync(slot, { throwIfNoEntry: false });
+  if (
+    !entry ||
+    readPackageReleaseSlotSync(slot) ||
+    (entry.isSymbolicLink() && isGitReleaseForwardingPackage(slot, path.dirname(slot)))
+  ) {
+    return undefined;
+  }
+  if (fs.existsSync(path.join(slot, ".git"))) {
+    return `${slot} is a Git checkout at the release link path, so Git releases cannot be published there; move the checkout (or reinstall with another --git-dir), then update again.`;
+  }
+  const aside = `${slot}.displaced-${Date.now()}`;
+  try {
+    fs.renameSync(slot, aside);
+  } catch (error) {
+    return `${slot} is not a release link and could not be moved aside (${String(error)}); remove it, then update again.`;
+  }
+  return `${slot} was not a release link; it was moved to ${aside}.`;
 }
 
 /**
@@ -50,7 +72,7 @@ export function usesGitReleases(
  * service path and an update never changes it.
  */
 export function resolveGitReleasePrefix(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "git-install");
+  return path.join(resolveStateDir(env), GIT_RELEASE_DIR);
 }
 
 export function gitReleaseSlot(prefix: string): string {
@@ -69,12 +91,33 @@ export function servingGitReleaseSlot(prefix: string): string {
   return !readPackageReleaseSlotSync(slot) && readPackageReleaseSlotSync(legacy) ? legacy : slot;
 }
 
+/** The installation that selects this physical Git release, independent of the active profile. */
+export function resolveServingGitReleasePrefix(root: string): string | null {
+  const releasePrefix = packageReleasePrefixOfRoot(root);
+  if (!releasePrefix) {
+    return null;
+  }
+  const prefix = path.dirname(path.dirname(releasePrefix));
+  if (path.basename(prefix) !== GIT_RELEASE_DIR) {
+    return null;
+  }
+  const slot = readPackageReleaseSlotSync(servingGitReleaseSlot(prefix));
+  return slot?.releaseRoot === root ? slot.prefix : null;
+}
+
 /** The release link's prefix when `entrypoint` starts through it, for the launcher. */
 export function resolveGitReleaseLauncherForEntrypoint(entrypoint: string): string | null {
   const packagePath = path.dirname(path.dirname(path.resolve(entrypoint)));
-  const slot =
-    path.basename(packagePath) === "openclaw" ? readPackageReleaseSlotSync(packagePath) : null;
-  return slot ? path.join(slot.prefix, GIT_RELEASE_LAUNCHER) : null;
+  if (path.basename(packagePath) !== "openclaw") {
+    return null;
+  }
+  const prefix =
+    readPackageReleaseSlotSync(packagePath)?.prefix ??
+    // The link can name the npm package a switch keeps as its fallback.
+    (isGitReleaseForwardingPackage(packagePath, path.dirname(packagePath))
+      ? path.dirname(packagePath)
+      : null);
+  return prefix ? path.join(prefix, GIT_RELEASE_LAUNCHER) : null;
 }
 
 /** The launcher's release entry, so service ownership reads the release it starts. */
@@ -82,4 +125,58 @@ export function resolveGitReleaseEntrypointForLauncher(entrypoint: string): stri
   return path.basename(entrypoint) === GIT_RELEASE_LAUNCHER
     ? path.join(servingGitReleaseSlot(path.dirname(entrypoint)), "dist", "index.js")
     : null;
+}
+
+/**
+ * The release entry that a converted Git checkout's `openclaw.mjs` or `dist/index.js` forwards
+ * to. Git conversions keep a service written for the checkout; the update's forwarding marker
+ * (`markForwarding` in `src/update/run.ts`) sends that entry to the launcher, and
+ * `release-launcher-forward.mjs` follows the marker with the rules read here. Package trees
+ * are left to their own service staging.
+ */
+export function resolveGitReleaseEntrypointForForwardingTree(entrypoint: string): string | null {
+  const resolved = path.resolve(entrypoint);
+  const tree =
+    path.basename(resolved) === "openclaw.mjs"
+      ? path.dirname(resolved)
+      : path.basename(resolved) === "index.js" && path.basename(path.dirname(resolved)) === "dist"
+        ? path.dirname(path.dirname(resolved))
+        : null;
+  if (!tree) {
+    return null;
+  }
+  let root: string;
+  try {
+    root = fs.realpathSync(tree);
+  } catch {
+    return null;
+  }
+  // Only a checkout whose entries carry the forwarder runs the launcher instead of itself.
+  if (
+    !fs.existsSync(path.join(root, ".git")) ||
+    !fs.existsSync(path.join(root, "release-launcher-forward.mjs"))
+  ) {
+    return null;
+  }
+  for (const marker of [
+    path.join(root, ".openclaw-launcher"),
+    path.join(root, ".git", "openclaw-launcher"),
+  ]) {
+    let launcher: string;
+    try {
+      launcher = fs.readFileSync(marker, "utf8").trim();
+    } catch {
+      continue;
+    }
+    if (!launcher || !fs.existsSync(launcher)) {
+      continue;
+    }
+    // A release never forwards: it is what the launcher starts.
+    if (root.startsWith(path.join(path.dirname(launcher), "releases") + path.sep)) {
+      return null;
+    }
+    const release = resolveGitReleaseEntrypointForLauncher(launcher);
+    return release && fs.existsSync(release) ? release : null;
+  }
+  return null;
 }

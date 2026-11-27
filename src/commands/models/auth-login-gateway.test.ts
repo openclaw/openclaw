@@ -39,6 +39,15 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
       choiceLabel: "OpenAI API key",
       appGuidedSecret: true,
     },
+    {
+      pluginId: "openai",
+      providerId: "openai",
+      methodId: "oauth",
+      choiceId: "openai",
+      choiceLabel: "Codex login",
+      appGuidedAuth: "device-code",
+      credentialOnly: true,
+    },
   ],
 }));
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv;
@@ -98,6 +107,16 @@ it("maps normalized API-key method and agent to the exact plugin choice", async 
   });
 });
 
+it("routes --device-code to the declared device-code sign-in under another method id", async () => {
+  await expect(
+    readGatewayLoginParams(
+      { provider: "openai", method: "device-code" },
+      "login",
+      new AbortController().signal,
+    ),
+  ).resolves.toEqual({ sessionId: "login", authChoice: "openai/openai", agentId: undefined });
+});
+
 it("renders device codes and sends selection answers on the admitted session", async () => {
   prompts.select.mockResolvedValueOnce("keep");
   const h = gateway([
@@ -118,6 +137,19 @@ it("renders device codes and sends selection answers on the admitted session", a
   );
   expect(prompts.note).toHaveBeenCalledWith("ABCD-1234", "Device code");
   expect(h.calls).toEqual([next(), next("device"), next("access", "keep")]);
+});
+
+it("keeps the line breaks of multi-line login steps while stripping terminal controls", async () => {
+  const message =
+    "Enter this code.\nCode: ABCD-1234\n\n\u001b[31mxAI OAuth complete\u001b[0m\u0007";
+  await gateway([
+    step({ id: "device", type: "progress", title: "xAI OAuth", message }),
+    done,
+  ]).run();
+  expect(prompts.note).toHaveBeenCalledWith(
+    "Enter this code.\nCode: ABCD-1234\n\nxAI OAuth complete",
+    "xAI OAuth",
+  );
 });
 
 it("closes the admitted session when a terminal prompt is cancelled", async () => {

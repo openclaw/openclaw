@@ -13,7 +13,6 @@ import {
   onSettled,
 } from "solid-js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
@@ -289,6 +288,7 @@ export function SessionStorageSettings(props: SettingsProps) {
         />
         <SettingsRow
           title={t("configView.sessionStorage.archives")}
+          stackedOnNarrow
           control={<SettingsValue value={storageSize(totals().archives)} />}
         />
         <SettingsRow
@@ -519,17 +519,15 @@ export function SessionStorageSettings(props: SettingsProps) {
           />
         </div>
       </SettingsPage>
-      <ShellLayoutBoundary traits={{ settingsPage: true }}>
-        <div class="settings-page">
-          <SettingsDisclosure
-            sections
-            title={t("configView.sessionStorage.advanced")}
-            open={props.advancedExpanded}
-          >
-            {props.buildEditor?.()}
-          </SettingsDisclosure>
-        </div>
-      </ShellLayoutBoundary>
+      <div class="settings-page">
+        <SettingsDisclosure
+          sections
+          title={t("configView.sessionStorage.advanced")}
+          open={props.advancedExpanded}
+        >
+          {props.buildEditor?.()}
+        </SettingsDisclosure>
+      </div>
     </openclaw-session-storage-settings>
   );
 }

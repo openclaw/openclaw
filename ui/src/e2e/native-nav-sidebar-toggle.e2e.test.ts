@@ -357,6 +357,10 @@ suite.define(() => {
         backdropOpacity: "0",
         moving: false,
       });
+      if (destination === "session") {
+        // Home stays mounted during navigation; wait before resolving its replacement composer.
+        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/main/session-a" });
+      }
       const composer = page.locator(
         destination === "session"
           ? ".chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea"

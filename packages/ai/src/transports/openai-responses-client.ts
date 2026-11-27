@@ -4,6 +4,7 @@ import type OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { codeModeToolSurfaceObserver } from "../provider-options.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
@@ -302,7 +303,7 @@ function createResponsesTransportExecutor(config: {
           finalizeTransportStream({ stream, output, signal: options?.signal });
           return;
         }
-        const sessionId = options?.sessionId;
+        const providerState = responsesOptions?.[PROVIDER_STATE_SCOPE];
         // Custom routes require an explicit capability; native routes retain
         // their existing eligibility and final request storage checks below.
         const httpContinuationEligible =
@@ -314,14 +315,14 @@ function createResponsesTransportExecutor(config: {
             resolveOpenAIResponsesPayloadPolicy(model).explicitContinuationOptIn);
         if (
           httpContinuationEligible &&
-          sessionId &&
+          providerState &&
           (params.store === true || supportsResponsesReasoningUpdate(params)) &&
           !params.previous_response_id
         ) {
           const restoreRequest = () =>
             restoreResponsesReasoningState(context, model, responsesOptions, params);
           continuationClaim = claimOpenAIResponsesHttpContinuation({
-            sessionId,
+            scope: providerState,
             apiKey,
             baseUrl: model.baseUrl,
             headers: httpHeaders,
@@ -451,7 +452,7 @@ function createResponsesTransportExecutor(config: {
               restoreRequest: (request) =>
                 restoreResponsesReasoningState(context, model, responsesOptions, request),
               mode: websocketMode,
-              sessionId: options?.sessionId,
+              providerState: responsesOptions?.[PROVIDER_STATE_SCOPE],
               headers: websocketHeaders,
               signal: websocketSignal,
               callerSignal: options?.signal,

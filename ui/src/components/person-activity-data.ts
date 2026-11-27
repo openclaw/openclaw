@@ -62,6 +62,7 @@ export function observePersonActivityData(context: ApplicationContext, changed: 
     ? sessions.observeList(
         {
           source: "activity",
+          excludeSystem: true,
           limit: SIDEBAR_SESSION_ROSTER_LIMIT,
           rowMode: "compact",
           includeDerivedTitles: true,

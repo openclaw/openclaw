@@ -76,7 +76,9 @@ export type ChannelMessageToolSchemaContribution = {
   /**
    * Actions whose validation depends on this schema fragment. Cross-channel
    * discovery can hide only these actions when the fragment is current-channel
-   * scoped. Omit to keep the legacy conservative behavior.
+   * scoped. A non-empty list also omits the fragment when none of these actions
+   * is advertised in the final tool schema. Omit to keep the legacy
+   * conservative behavior.
    */
   actions?: readonly ChannelMessageActionName[] | null;
   visibility?: "current-channel" | "all-configured";

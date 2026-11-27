@@ -181,6 +181,7 @@ export function mutateSessionActorMemoryStorage(
     case "session.conversation.delivery.transition":
       return transitionSessionActorMemoryConversationDelivery(context, command.input);
     case "session.collaboration.add":
+    case "session.collaboration.set-access":
     case "session.collaboration.remove":
     case "session.collaboration.participant":
     case "session.collaboration.owner.assign":

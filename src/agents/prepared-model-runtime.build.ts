@@ -285,24 +285,13 @@ async function buildSnapshotBatch(
           // Otherwise file creation can retire the credentials this build just captured.
           // Discovery stays asynchronous; read-only admission must not borrow write permission.
           if (!readAgentDatabaseAdmissionRefusal(agentId, { env })) {
-            try {
-              await prepareOpenClawAgentDatabaseExecution(
-                { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
-                () => assertBuildCurrent(input),
-                candidate.retirementSignal,
-              );
-            } catch (error) {
-              // Database admission can return the retired generation's raw abort reason.
-              // Recover generation or publication supersession before startup joins it.
-              if (
-                candidate.retirementSignal.aborted &&
-                error === candidate.retirementSignal.reason
-              ) {
-                assertPreparedModelRuntimeInputCurrent(input, candidate.isGenerationCurrent);
-                assertBuildCurrent(input);
-              }
-              throw error;
-            }
+            // Admission belongs to this build, not the individual catalog generation.
+            // Auth changes can retire that generation while this publication drains them.
+            await prepareOpenClawAgentDatabaseExecution(
+              { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
+              () => assertBuildCurrent(input),
+              signal,
+            );
             assertBuildCurrent(input);
           }
         }

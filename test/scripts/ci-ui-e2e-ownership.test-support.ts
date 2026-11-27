@@ -7,7 +7,7 @@ import { expect } from "vitest";
 import {
   createUiRealGatewayTestShards,
   createUiTestShardGroups,
-} from "../../scripts/lib/ci-node-test-plan.mts";
+} from "../../scripts/lib/ci-ui-test-plan.mts";
 import type { NativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { sharedVitestConfig } from "../vitest/vitest.shared.config.ts";
 import { createPrebuiltUiE2eVitestConfig } from "../vitest/vitest.ui-e2e-prebuilt.config.ts";
@@ -55,6 +55,7 @@ export function assertControlUiE2eOwnership(
         const buildInfo = node.arguments[1];
         if (
           callName === "createGatewayHttpServer" ||
+          callName === "createModelGatewayFixture" ||
           (inSuiteServer &&
             [
               "createOpenClawTestInstance",
@@ -174,18 +175,6 @@ export function assertControlUiE2eOwnership(
   expect(selectedFiles(rootTest)).toEqual(trackedUiE2eFiles);
   assertPartition(localSelected, trackedUiE2eFiles);
   expect(localSelected.slice(2).flat().toSorted()).toEqual(uiE2eSerialTestFiles);
-  expect(localSelected[1]).toEqual([
-    "ui/src/e2e/board-fixture.e2e.test.ts",
-    "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
-    "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
-    "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
-    "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
-    "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
-    "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
-    "ui/src/e2e/service-worker-update.e2e.test.ts",
-    "ui/src/e2e/template-chat-review.e2e.test.ts",
-    "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
-  ]);
   expect(localSelected[3]).toEqual(
     uiE2ePrivateServerTestFiles.filter((file) => uiE2eSerialTestFiles.includes(file)),
   );

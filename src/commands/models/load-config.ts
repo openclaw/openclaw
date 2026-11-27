@@ -1,6 +1,6 @@
 /** Config loader for model commands with command-scoped secret resolution. */
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
-import { getModelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { getModelsCommandSecretTargetIds } from "../../cli/model-secret-targets.js";
 import {
   captureRuntimeConfigAsyncReader,
   getRuntimeConfigSourceSnapshot,

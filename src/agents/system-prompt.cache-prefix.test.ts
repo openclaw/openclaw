@@ -61,11 +61,7 @@ it.each([false, true])("preserves system authority with literal markers=%s", (ma
       : undefined,
   );
   expectMessage(first.messages[0], "system", coauthor, hookInstruction);
-  expectMessage(
-    first.messages[0],
-    "system",
-    "empty/none only reflects that scope/time, not global absence.",
-  );
+  expectMessage(first.messages[0], "system", "empty/none covers only that scope/time");
   expect(JSON.stringify(first.messages[0])).not.toContain("none means no active work");
   expect(JSON.stringify(first.messages)).not.toMatch(
     /OPENCLAW_CACHE_BOUNDARY|OPENCLAW-RELOCATABLE-BOUNDARY/,
@@ -129,6 +125,20 @@ it.each(["", prepareSkillsForPrompt({ skills: [demo], maxSkillsInPrompt: 0 }).pr
     } else {
       expect(denied).not.toContain("## Skills");
     }
+  },
+);
+
+it.each([true, false])(
+  "keeps skill descriptions unless skills_search can match them (%s)",
+  (search) => {
+    const description = "Recover a PostgreSQL primary after failover.";
+    const skill = { ...createFixtureSkillEntry("ops-a").skill, description };
+    const prompt = renderSkills(
+      search ? ["skills_read", "skills_search"] : ["skills_read"],
+      formatSkillsForPromptCore([skill]),
+    );
+    expect(prompt).toContain('- "ops-a"');
+    expect(prompt.includes(description)).toBe(!search);
   },
 );
 

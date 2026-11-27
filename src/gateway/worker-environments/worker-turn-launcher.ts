@@ -1,3 +1,5 @@
+import { readRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { assertParticipationWorkerExecution } from "../../agents/participation-ceiling.js";
 import { withRequiredSessionPlacement } from "../../agents/session-placement-admission.js";
 import type {
   PreparedSessionPlacementSandbox,
@@ -154,6 +156,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             return await runLocalTurn(prepared);
           }
           prepared.release();
+          assertParticipationWorkerExecution(
+            readRunOperatorAuthority(inputTurn)?.participationCeiling,
+          );
           let identity = resolvePlacementIdentity(claim, current);
           const reportProvisioning = () =>
             emitAgentRunStatusEvent({
@@ -168,7 +173,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           const initialSetupSource = createDynamicSessionSourceAssertion(
             () => initialSetup?.assertCurrent,
             () => {
-              throw new Error("Worker setup authority changed during turn admission");
+              throw new Error("Worker setup ended during turn admission. Start a new turn.");
             },
           );
           const assertAdmissionCurrent = composeSessionSourceAssertion(

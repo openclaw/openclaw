@@ -411,14 +411,13 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
   );
 
   it.each([
-    ["a tool call without a recorded result", { resultRecorded: false }, true],
+    ["a tool call without a recorded result", { resultRecorded: false }],
     [
       "a direct tool active while Code Mode is merely enabled",
       { activeCount: 1, codeModeEngaged: true },
-      true,
     ],
-    ["asynchronous tool activity", { asyncStarted: true }, false],
-  ])("keeps %s fail-closed", async (_label, attemptParams, expectsWarning) => {
+    ["asynchronous tool activity", { asyncStarted: true }],
+  ])("keeps %s fail-closed", async (_label, attemptParams) => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow(attemptParams));
 
     const result = await runEmbeddedAgent({
@@ -428,13 +427,9 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-    if (expectsWarning) {
-      expect(result.payloads?.[0]?.text).toContain(
-        "some tool actions may have already been executed",
-      );
-    } else {
-      expect(result.payloads).toBeUndefined();
-    }
+    expect(result.payloads?.[0]?.text).toContain(
+      "some tool actions may have already been executed",
+    );
   });
 
   it("preserves compaction failure guidance after settled tools", async () => {

@@ -161,7 +161,7 @@
 .sidebar-rail__separator {
   flex: 0 0 1px;
   width: 24px;
-  background: var(--border);
+  background: light-dark(var(--border-strong), var(--border));
 }
 
 /* While a pin is dragged, a faint fill marks the zone and a short line marks where it lands. */
@@ -410,32 +410,6 @@
 
 .sidebar-rail .sidebar-footer-bar__home .session-glyph__ring {
   inset: -4px;
-}
-
-.sidebar-footer-bar__home {
-  position: relative;
-}
-
-/* Home keeps its centered activity glyph; compact badges never move the rail. */
-.sidebar-footer-bar__home .session-row-badges {
-  position: absolute;
-  inset-block-end: 0;
-  inset-inline-end: 0;
-  gap: 2px;
-  padding: 1px;
-  border-radius: var(--radius-sm);
-  align-items: center;
-  background: var(--rail-control-surface);
-}
-
-.sidebar-footer-bar__home .session-row-badge > i {
-  width: 10px;
-  height: 10px;
-}
-
-/* The tooltip and accessible label retain the full outbox count. */
-.sidebar-footer-bar__home .session-row-badge--attention > span {
-  display: none;
 }
 
 .sidebar-rail__pin {

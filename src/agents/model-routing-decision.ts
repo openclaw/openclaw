@@ -44,7 +44,7 @@ export function recordAdmittedModelRoutingDecision(params: {
     (params.fallbackSelected ? "model_route_selected_after_fallback" : "model_route_selected");
   const assertActive = resolveAdmittedRunActiveAssertion(admittedRunContext, params.abortSignal);
   if (!assertActive) {
-    throw new Error("admitted run authority is no longer active");
+    throw new Error("This agent run is no longer active. Start a new turn to retry.");
   }
   assertActive();
   return recordExecutionDecisionWork({

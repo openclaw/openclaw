@@ -51,6 +51,7 @@ struct ChatSessionSidebar: View {
     @State var observedOrder = ChatSessionSidebarModel.ObservedOrder()
     @State var batch = ChatSessionSidebarBatch()
     @State private var lastSnoozeWake = Date.distantPast
+    @State private var consumedRosterExpiry: Double?
     @State var catalogData = ChatSessionSidebarCatalogs()
 
     var body: some View {
@@ -59,10 +60,19 @@ struct ChatSessionSidebar: View {
         }
     }
 
-    private func sidebar(now: Date) -> some View {
-        let sections = self.interactionSections(now: now)
-        let nextWake = OpenClawChatSessionSnooze.nextWake(
-            in: self.rosterData?.queryRows ?? self.viewModel.sessions, now: now)
+    var sidebarClock: OpenClawChatSessionSnooze.RosterClock {
+        guard self.menuActions.connection?.supportsPersonalPins == true else { return .init() }
+        return self.viewModel.sidebarRosterClock
+    }
+
+    private func sidebar(now localNow: Date) -> some View {
+        let clock = self.sidebarClock
+        let now = clock.gatewayDate(at: localNow)
+        let sections = self.interactionSections(now: localNow)
+        let nextWake = clock.localWake(
+            in: self.rosterData?.queryRows ?? self.viewModel.sessions,
+            at: localNow,
+            ignoringExpiry: self.consumedRosterExpiry)
         let projectedRows = sections.flatMap(\.nodes).flatMap(\.previewSessions)
         let visibleRows = self.visibleInteractionRows(sections)
         let rosterIDs = (self.rosterData?.rows ?? self.viewModel.sessions).map(OpenClawChatSessionSidebarData.identity)
@@ -139,7 +149,10 @@ struct ChatSessionSidebar: View {
             guard items.count == 1, let item = items.first else { return false }
             return self.dropInteraction(item, section: "list", after: false)
         }
-        .onChange(of: self.viewModel.sidebarData?.scopeRevision) { _, _ in self.batch.reset() }
+        .onChange(of: self.viewModel.sidebarData?.scopeRevision) { _, _ in
+            self.batch.reset()
+            self.consumedRosterExpiry = nil
+        }
         .onChange(of: self.rosterData?.query) { _, _ in self.batch.reset(clearConnection: false) }
         .onChange(of: self.viewModel.currentSessionTarget) { _, _ in self.batch.selection = .init() }
         .task(id: self.viewModel.sidebarData?.scopeRevision) { await self.watchPinOrder() }
@@ -189,14 +202,7 @@ struct ChatSessionSidebar: View {
             guard !Task.isCancelled, ObjectIdentifier(self.viewModel) == context.previewRequest.modelID else { return }
             await self.previews.refresh(context.previewRequest, cache: cache)
         }
-        .task(id: nextWake) {
-            guard let nextWake else { return }
-            do {
-                try await Task.sleep(for: .seconds(max(0, nextWake.timeIntervalSinceNow)))
-                try Task.checkCancellation()
-                self.lastSnoozeWake = max(nextWake, .now)
-            } catch {}
-        }
+        .task(id: nextWake) { await self.refreshAfterWake(nextWake, clock: clock) }
         .task(id: self.groupRefreshID) {
             self.viewModel.refreshSessions(limit: 200)
             do {
@@ -212,6 +218,23 @@ struct ChatSessionSidebar: View {
             }
         }
         return self.presentingDialogs(content)
+    }
+
+    private func refreshAfterWake(_ wake: Date?, clock: OpenClawChatSessionSnooze.RosterClock) async {
+        guard let wake else { return }
+        do {
+            try await Task.sleep(for: .seconds(max(0, wake.timeIntervalSinceNow)))
+            try Task.checkCancellation()
+            self.lastSnoozeWake = max(wake, .now)
+            let newExpiry = clock.activityWake.map {
+                $0.local <= self.lastSnoozeWake && $0.expiresAt != self.consumedRosterExpiry
+            } ?? false
+            if newExpiry { self.consumedRosterExpiry = clock.activityWake?.expiresAt }
+            if self.menuActions.connection?.supportsPersonalPins == true {
+                self.viewModel.refreshSessions(limit: 200)
+                self.viewModel.refreshSidebarData(afterRosterExpiry: newExpiry)
+            }
+        } catch {}
     }
 
     func rowContext(

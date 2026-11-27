@@ -7,7 +7,8 @@
       "none": "无法访问他人的会话",
       "view": "查看他人的会话",
       "suggest": "查看他人的会话并提出修改建议",
-      "write": "查看并修改他人的会话"
+      "write": "查看并修改他人的会话",
+      "invited": "仅限受邀加入的会话"
     },
     "sandboxRequired": "必须使用沙箱",
     "sandboxInherited": "沙箱遵循智能体设置",
@@ -17,10 +18,6 @@
     "adminConfirm": "{role} 角色拥有管理员权限。管理员可以更改 Gateway 设置、管理设备和审批，以及访问已连接的服务。请仅邀请您信任的人使用此 claw。",
     "adminInvite": "确认邀请管理员",
     "cancel": "取消",
-    "changeRole": "更改角色",
-    "saveRole": "保存角色",
-    "saveAdminRole": "确认管理员角色",
-    "roleChanged": "角色已更改。其设备将以新的权限重新连接。",
     "blocked": "已阻止",
     "undefinedRole": "此 claw 上未定义角色 {role}。请选择其他角色以恢复访问权限。",
     "yourRole": "你的角色：{role}",
@@ -32,7 +29,21 @@
     "sandboxAsk": "让 OpenClaw 完成设置",
     "sandboxAsked": "OpenClaw 正在此页面旁的聊天中处理此事。完成后，请再次检查，即可邀请他人担任此角色。",
     "sandboxAskFailed": "无法与 OpenClaw 发起聊天。请重试。",
-    "sandboxCheckAgain": "再次检查"
+    "sandboxCheckAgain": "再次检查",
+    "invitedAccess": "仅限受邀加入的会话 · 受邀权限最高可达 {level}",
+    "invitedPermission": "参与者权限：{mode}",
+    "permissions": {
+      "read-only": "只读",
+      "guarded": "受限",
+      "workspace": "工作区",
+      "full": "完全"
+    },
+    "invitationLevels": {
+      "read": "读取",
+      "suggest": "建议",
+      "send": "发送"
+    },
+    "ownSandboxRequired": "其自己的会话需要使用沙箱"
   },
   "zh-TW": {
     "role": "角色",
@@ -42,7 +53,8 @@
       "none": "無法存取他人的工作階段",
       "view": "檢視他人的工作階段",
       "suggest": "檢視他人的工作階段並提出修改建議",
-      "write": "檢視及修改他人的工作階段"
+      "write": "檢視及修改他人的工作階段",
+      "invited": "僅限受邀加入的工作階段"
     },
     "sandboxRequired": "必須使用沙箱",
     "sandboxInherited": "沙箱依循代理程式設定",
@@ -52,10 +64,6 @@
     "adminConfirm": "{role} 角色具備管理員權限。管理員可以變更 Gateway 設定、管理裝置與核准事項，以及存取已連線的服務。請只邀請您信任的人管理此 claw。",
     "adminInvite": "確認邀請管理員",
     "cancel": "取消",
-    "changeRole": "變更角色",
-    "saveRole": "儲存角色",
-    "saveAdminRole": "確認管理員角色",
-    "roleChanged": "角色已變更。對方的裝置將以新的權限重新連線。",
     "blocked": "已封鎖",
     "undefinedRole": "此 claw 未定義 {role} 角色。請選擇其他角色以恢復存取權限。",
     "yourRole": "您的角色：{role}",
@@ -67,7 +75,21 @@
     "sandboxAsk": "請 OpenClaw 協助設定",
     "sandboxAsked": "OpenClaw 正在此頁面旁的聊天中處理這項設定。完成後，請再次檢查，即可以此角色邀請他人。",
     "sandboxAskFailed": "無法與 OpenClaw 開始聊天。請再試一次。",
-    "sandboxCheckAgain": "再次檢查"
+    "sandboxCheckAgain": "再次檢查",
+    "invitedAccess": "僅限受邀加入的工作階段 · 受邀權限最高可達 {level}",
+    "invitedPermission": "參與者權限：{mode}",
+    "permissions": {
+      "read-only": "唯讀",
+      "guarded": "受保護",
+      "workspace": "工作區",
+      "full": "完整"
+    },
+    "invitationLevels": {
+      "read": "讀取",
+      "suggest": "建議",
+      "send": "傳送"
+    },
+    "ownSandboxRequired": "自己的工作階段必須使用沙箱"
   },
   "pt-BR": {
     "role": "Função",
@@ -77,7 +99,8 @@
       "none": "Sem acesso às sessões de outras pessoas",
       "view": "Ler sessões de outras pessoas",
       "suggest": "Ler e sugerir alterações nas sessões de outras pessoas",
-      "write": "Ler e alterar sessões de outras pessoas"
+      "write": "Ler e alterar sessões de outras pessoas",
+      "invited": "Apenas sessões para as quais receberem convite"
     },
     "sandboxRequired": "Sandbox obrigatório",
     "sandboxInherited": "O sandbox segue as configurações do agente",
@@ -87,10 +110,6 @@
     "adminConfirm": "A função {role} tem acesso de administrador. Administradores podem alterar as configurações do Gateway, gerenciar dispositivos e aprovações e acessar serviços conectados. Convide apenas alguém em quem você confie para acessar este claw.",
     "adminInvite": "Confirmar convite de administrador",
     "cancel": "Cancelar",
-    "changeRole": "Alterar função",
-    "saveRole": "Salvar função",
-    "saveAdminRole": "Confirmar função de administrador",
-    "roleChanged": "Função alterada. Os dispositivos dessa pessoa se reconectam com as novas permissões de acesso.",
     "blocked": "Bloqueado",
     "undefinedRole": "A função {role} não está definida neste claw. Escolha outra função para restaurar o acesso.",
     "yourRole": "Sua função: {role}",
@@ -102,7 +121,21 @@
     "sandboxAsk": "Pedir ao OpenClaw para configurar",
     "sandboxAsked": "O OpenClaw está cuidando disso no chat ao lado desta página. Quando terminar, verifique novamente para convidar pessoas com esta função.",
     "sandboxAskFailed": "Não foi possível iniciar um chat com o OpenClaw. Tente novamente.",
-    "sandboxCheckAgain": "Verificar novamente"
+    "sandboxCheckAgain": "Verificar novamente",
+    "invitedAccess": "Apenas sessões para as quais receberem convite · Podem receber convites até o nível {level}",
+    "invitedPermission": "Permissão do participante: {mode}",
+    "permissions": {
+      "read-only": "Somente leitura",
+      "guarded": "Protegido",
+      "workspace": "Espaço de trabalho",
+      "full": "Total"
+    },
+    "invitationLevels": {
+      "read": "Ler",
+      "suggest": "Sugerir",
+      "send": "Enviar"
+    },
+    "ownSandboxRequired": "Ambiente isolado obrigatório para suas próprias sessões"
   },
   "de": {
     "role": "Rolle",
@@ -112,7 +145,8 @@
       "none": "Kein Zugriff auf Sitzungen anderer Personen",
       "view": "Sitzungen anderer Personen lesen",
       "suggest": "Sitzungen anderer Personen lesen und Änderungen vorschlagen",
-      "write": "Sitzungen anderer Personen lesen und ändern"
+      "write": "Sitzungen anderer Personen lesen und ändern",
+      "invited": "Nur Sitzungen, zu denen sie eingeladen sind"
     },
     "sandboxRequired": "Sandbox erforderlich",
     "sandboxInherited": "Sandbox richtet sich nach den Agenteneinstellungen",
@@ -122,10 +156,6 @@
     "adminConfirm": "Die Rolle {role} hat Administratorzugriff. Administratoren können Gateway-Einstellungen ändern, Geräte und Genehmigungen verwalten und auf verbundene Dienste zugreifen. Laden Sie nur Personen ein, denen Sie diesen Claw anvertrauen.",
     "adminInvite": "Einladung mit Administratorzugriff bestätigen",
     "cancel": "Abbrechen",
-    "changeRole": "Rolle ändern",
-    "saveRole": "Rolle speichern",
-    "saveAdminRole": "Administratorrolle bestätigen",
-    "roleChanged": "Rolle geändert. Die Geräte dieser Person verbinden sich mit den neuen Zugriffsrechten erneut.",
     "blocked": "Blockiert",
     "undefinedRole": "Die Rolle {role} ist auf diesem Claw nicht definiert. Wähle eine andere Rolle, um den Zugriff wiederherzustellen.",
     "yourRole": "Deine Rolle: {role}",
@@ -137,7 +167,21 @@
     "sandboxAsk": "OpenClaw um die Einrichtung bitten",
     "sandboxAsked": "OpenClaw arbeitet im Chat neben dieser Seite daran. Prüfe nach Abschluss erneut, ob du Personen mit dieser Rolle einladen kannst.",
     "sandboxAskFailed": "Der Chat mit OpenClaw konnte nicht gestartet werden. Versuche es erneut.",
-    "sandboxCheckAgain": "Erneut prüfen"
+    "sandboxCheckAgain": "Erneut prüfen",
+    "invitedAccess": "Nur Sitzungen, zu denen sie eingeladen sind · Einladungen bis zur Stufe {level} möglich",
+    "invitedPermission": "Teilnahmeberechtigung: {mode}",
+    "permissions": {
+      "read-only": "Nur Lesen",
+      "guarded": "Geschützt",
+      "workspace": "Arbeitsbereich",
+      "full": "Vollzugriff"
+    },
+    "invitationLevels": {
+      "read": "Lesen",
+      "suggest": "Vorschlagen",
+      "send": "Senden"
+    },
+    "ownSandboxRequired": "Sandbox für eigene Sitzungen erforderlich"
   },
   "es": {
     "role": "Rol",
@@ -147,7 +191,8 @@
       "none": "Sin acceso a las sesiones de otras personas",
       "view": "Leer las sesiones de otras personas",
       "suggest": "Leer y sugerir cambios en las sesiones de otras personas",
-      "write": "Leer y modificar las sesiones de otras personas"
+      "write": "Leer y modificar las sesiones de otras personas",
+      "invited": "Solo las sesiones a las que se les invite"
     },
     "sandboxRequired": "Se requiere un entorno aislado",
     "sandboxInherited": "El entorno aislado sigue la configuración del agente",
@@ -157,10 +202,6 @@
     "adminConfirm": "El rol {role} tiene acceso de administrador. Los administradores pueden cambiar la configuración de Gateway, gestionar dispositivos y aprobaciones, y acceder a los servicios conectados. Invita solo a alguien a quien confiarías este claw.",
     "adminInvite": "Confirmar invitación de administrador",
     "cancel": "Cancelar",
-    "changeRole": "Cambiar rol",
-    "saveRole": "Guardar rol",
-    "saveAdminRole": "Confirmar rol de administrador",
-    "roleChanged": "Rol cambiado. Sus dispositivos se vuelven a conectar con los nuevos permisos de acceso.",
     "blocked": "Bloqueado",
     "undefinedRole": "El rol {role} no está definido en este claw. Elige otro rol para restablecer el acceso.",
     "yourRole": "Tu rol: {role}",
@@ -172,7 +213,21 @@
     "sandboxAsk": "Pedir a OpenClaw que lo configure",
     "sandboxAsked": "OpenClaw está trabajando en ello en el chat junto a esta página. Cuando termine, vuelve a comprobarlo para invitar a personas con este rol.",
     "sandboxAskFailed": "No se pudo iniciar un chat con OpenClaw. Inténtalo de nuevo.",
-    "sandboxCheckAgain": "Volver a comprobar"
+    "sandboxCheckAgain": "Volver a comprobar",
+    "invitedAccess": "Solo las sesiones a las que se les invite · Se les puede invitar hasta el nivel {level}",
+    "invitedPermission": "Permiso del participante: {mode}",
+    "permissions": {
+      "read-only": "Solo lectura",
+      "guarded": "Protegido",
+      "workspace": "Espacio de trabajo",
+      "full": "Completo"
+    },
+    "invitationLevels": {
+      "read": "Leer",
+      "suggest": "Sugerir",
+      "send": "Enviar"
+    },
+    "ownSandboxRequired": "Se requiere un entorno aislado para sus propias sesiones"
   },
   "ja-JP": {
     "role": "ロール",
@@ -182,7 +237,8 @@
       "none": "他のユーザーのセッションへのアクセス不可",
       "view": "他のユーザーのセッションを閲覧",
       "suggest": "他のユーザーのセッションを閲覧し、変更を提案",
-      "write": "他のユーザーのセッションを閲覧・変更"
+      "write": "他のユーザーのセッションを閲覧・変更",
+      "invited": "招待されたセッションのみ"
     },
     "sandboxRequired": "サンドボックス必須",
     "sandboxInherited": "サンドボックスはエージェントの設定に従う",
@@ -192,10 +248,6 @@
     "adminConfirm": "{role} ロールには管理者権限があります。管理者は Gateway の設定変更、デバイスや承認の管理、接続されたサービスへのアクセスが可能です。この claw を任せられる、信頼できるユーザーのみを招待してください。",
     "adminInvite": "管理者の招待を確認",
     "cancel": "キャンセル",
-    "changeRole": "ロールを変更",
-    "saveRole": "ロールを保存",
-    "saveAdminRole": "管理者ロールを確認",
-    "roleChanged": "ロールを変更しました。対象ユーザーのデバイスは新しいアクセス権限で再接続されます。",
     "blocked": "ブロック済み",
     "undefinedRole": "この claw ではロール {role} が定義されていません。アクセスを復元するには、別のロールを選択してください。",
     "yourRole": "あなたのロール: {role}",
@@ -207,7 +259,21 @@
     "sandboxAsk": "OpenClawに設定を依頼",
     "sandboxAsked": "OpenClawがこのページの横のチャットで設定を進めています。完了したら再確認して、このロールでユーザーを招待してください。",
     "sandboxAskFailed": "OpenClawとのチャットを開始できませんでした。もう一度お試しください。",
-    "sandboxCheckAgain": "再確認"
+    "sandboxCheckAgain": "再確認",
+    "invitedAccess": "招待されたセッションのみ · {level}までの権限で招待可能",
+    "invitedPermission": "参加者の権限：{mode}",
+    "permissions": {
+      "read-only": "読み取り専用",
+      "guarded": "保護付き",
+      "workspace": "ワークスペース",
+      "full": "フルアクセス"
+    },
+    "invitationLevels": {
+      "read": "閲覧",
+      "suggest": "提案",
+      "send": "送信"
+    },
+    "ownSandboxRequired": "自身のセッションにはサンドボックスが必要"
   },
   "ko": {
     "role": "역할",
@@ -217,7 +283,8 @@
       "none": "다른 사람의 세션에 접근할 수 없음",
       "view": "다른 사람의 세션 읽기",
       "suggest": "다른 사람의 세션 읽기 및 변경 제안",
-      "write": "다른 사람의 세션 읽기 및 변경"
+      "write": "다른 사람의 세션 읽기 및 변경",
+      "invited": "초대받은 세션만"
     },
     "sandboxRequired": "샌드박스 필수",
     "sandboxInherited": "샌드박스는 에이전트 설정을 따름",
@@ -227,10 +294,6 @@
     "adminConfirm": "{role} 역할에는 관리자 권한이 있습니다. 관리자는 Gateway 설정을 변경하고, 기기와 승인을 관리하며, 연결된 서비스에 접근할 수 있습니다. 이 claw를 맡길 수 있는 신뢰하는 사람만 초대하세요.",
     "adminInvite": "관리자 초대 확인",
     "cancel": "취소",
-    "changeRole": "역할 변경",
-    "saveRole": "역할 저장",
-    "saveAdminRole": "관리자 역할 확인",
-    "roleChanged": "역할이 변경되었습니다. 해당 멤버의 기기가 새 권한으로 다시 연결됩니다.",
     "blocked": "차단됨",
     "undefinedRole": "이 claw에 {role} 역할이 정의되어 있지 않습니다. 액세스 권한을 복원하려면 다른 역할을 선택하세요.",
     "yourRole": "내 역할: {role}",
@@ -242,7 +305,21 @@
     "sandboxAsk": "OpenClaw에 설정 요청",
     "sandboxAsked": "OpenClaw가 이 페이지 옆의 채팅에서 설정을 진행하고 있습니다. 완료되면 다시 확인하여 이 역할로 사람들을 초대하세요.",
     "sandboxAskFailed": "OpenClaw와 채팅을 시작하지 못했습니다. 다시 시도하세요.",
-    "sandboxCheckAgain": "다시 확인"
+    "sandboxCheckAgain": "다시 확인",
+    "invitedAccess": "초대받은 세션만 · 최대 {level} 권한으로 초대 가능",
+    "invitedPermission": "참가자 권한: {mode}",
+    "permissions": {
+      "read-only": "읽기 전용",
+      "guarded": "보호 모드",
+      "workspace": "작업 공간",
+      "full": "전체 권한"
+    },
+    "invitationLevels": {
+      "read": "읽기",
+      "suggest": "제안",
+      "send": "전송"
+    },
+    "ownSandboxRequired": "본인 세션에는 샌드박스 필요"
   },
   "fr": {
     "role": "Rôle",
@@ -252,7 +329,8 @@
       "none": "Aucun accès aux sessions des autres personnes",
       "view": "Consulter les sessions des autres personnes",
       "suggest": "Consulter les sessions des autres personnes et suggérer des modifications",
-      "write": "Consulter et modifier les sessions des autres personnes"
+      "write": "Consulter et modifier les sessions des autres personnes",
+      "invited": "Uniquement les sessions sur invitation"
     },
     "sandboxRequired": "Bac à sable requis",
     "sandboxInherited": "Le bac à sable suit les paramètres de l’agent",
@@ -262,10 +340,6 @@
     "adminConfirm": "Le rôle {role} dispose d’un accès administrateur. Les administrateurs peuvent modifier les paramètres de Gateway, gérer les appareils et les approbations, et accéder aux services connectés. Invitez uniquement une personne à qui vous faites confiance pour gérer ce claw.",
     "adminInvite": "Confirmer l’invitation en tant qu’administrateur",
     "cancel": "Annuler",
-    "changeRole": "Modifier le rôle",
-    "saveRole": "Enregistrer le rôle",
-    "saveAdminRole": "Confirmer le rôle d’administrateur",
-    "roleChanged": "Rôle modifié. Les appareils de cette personne se reconnectent avec les nouveaux droits d’accès.",
     "blocked": "Bloqué",
     "undefinedRole": "Le rôle {role} n’est pas défini sur ce claw. Choisissez un autre rôle pour rétablir l’accès.",
     "yourRole": "Votre rôle : {role}",
@@ -277,7 +351,21 @@
     "sandboxAsk": "Demander à OpenClaw de le configurer",
     "sandboxAsked": "OpenClaw s’en occupe dans la discussion à côté de cette page. Une fois la configuration terminée, vérifiez à nouveau pour inviter des personnes avec ce rôle.",
     "sandboxAskFailed": "Impossible de démarrer une discussion avec OpenClaw. Réessayez.",
-    "sandboxCheckAgain": "Vérifier à nouveau"
+    "sandboxCheckAgain": "Vérifier à nouveau",
+    "invitedAccess": "Uniquement les sessions sur invitation · Invitations possibles jusqu’au niveau {level}",
+    "invitedPermission": "Autorisation du participant : {mode}",
+    "permissions": {
+      "read-only": "Lecture seule",
+      "guarded": "Protégé",
+      "workspace": "Espace de travail",
+      "full": "Complet"
+    },
+    "invitationLevels": {
+      "read": "Lire",
+      "suggest": "Suggérer",
+      "send": "Envoyer"
+    },
+    "ownSandboxRequired": "Environnement isolé requis pour ses propres sessions"
   },
   "hi": {
     "role": "भूमिका",
@@ -287,7 +375,8 @@
       "none": "दूसरों के सत्रों तक पहुँच नहीं",
       "view": "दूसरों के सत्र पढ़ें",
       "suggest": "दूसरों के सत्र पढ़ें और बदलाव सुझाएँ",
-      "write": "दूसरों के सत्र पढ़ें और उनमें बदलाव करें"
+      "write": "दूसरों के सत्र पढ़ें और उनमें बदलाव करें",
+      "invited": "केवल वे सत्र जिनमें उन्हें आमंत्रित किया गया है"
     },
     "sandboxRequired": "सैंडबॉक्स आवश्यक है",
     "sandboxInherited": "सैंडबॉक्स एजेंट की सेटिंग के अनुसार चलता है",
@@ -297,10 +386,6 @@
     "adminConfirm": "{role} भूमिका के पास प्रशासक की पहुँच है। प्रशासक Gateway की सेटिंग बदल सकते हैं, डिवाइस और स्वीकृतियाँ प्रबंधित कर सकते हैं और जुड़ी हुई सेवाओं तक पहुँच सकते हैं। केवल उसी व्यक्ति को आमंत्रित करें जिस पर आप इस claw के मामले में भरोसा करते हैं।",
     "adminInvite": "प्रशासक के आमंत्रण की पुष्टि करें",
     "cancel": "रद्द करें",
-    "changeRole": "भूमिका बदलें",
-    "saveRole": "भूमिका सहेजें",
-    "saveAdminRole": "प्रशासक की भूमिका की पुष्टि करें",
-    "roleChanged": "भूमिका बदल दी गई है। उनके डिवाइस नए पहुँच अधिकारों के साथ फिर से कनेक्ट होंगे।",
     "blocked": "ब्लॉक किया गया",
     "undefinedRole": "इस claw पर {role} भूमिका परिभाषित नहीं है। पहुँच बहाल करने के लिए कोई दूसरी भूमिका चुनें।",
     "yourRole": "आपकी भूमिका: {role}",
@@ -312,7 +397,21 @@
     "sandboxAsk": "OpenClaw से इसे सेट अप करने के लिए कहें",
     "sandboxAsked": "OpenClaw इस पेज के बगल में मौजूद चैट में इस पर काम कर रहा है। काम पूरा होने पर, इस भूमिका वाले लोगों को आमंत्रित करने के लिए फिर से जाँचें।",
     "sandboxAskFailed": "OpenClaw के साथ चैट शुरू नहीं हो सकी। फिर से कोशिश करें।",
-    "sandboxCheckAgain": "फिर से जाँचें"
+    "sandboxCheckAgain": "फिर से जाँचें",
+    "invitedAccess": "केवल वे सत्र जिनमें उन्हें आमंत्रित किया गया है · {level} तक आमंत्रित किया जा सकता है",
+    "invitedPermission": "प्रतिभागी की अनुमति: {mode}",
+    "permissions": {
+      "read-only": "केवल पढ़ने की अनुमति",
+      "guarded": "सुरक्षित",
+      "workspace": "कार्यस्थान",
+      "full": "पूर्ण"
+    },
+    "invitationLevels": {
+      "read": "पढ़ें",
+      "suggest": "सुझाव दें",
+      "send": "भेजें"
+    },
+    "ownSandboxRequired": "उनके अपने सत्रों के लिए सैंडबॉक्स आवश्यक है"
   },
   "ar": {
     "role": "الدور",
@@ -322,7 +421,8 @@
       "none": "لا يمكن الوصول إلى جلسات الآخرين",
       "view": "قراءة جلسات الآخرين",
       "suggest": "قراءة جلسات الآخرين واقتراح تغييرات عليها",
-      "write": "قراءة جلسات الآخرين وتعديلها"
+      "write": "قراءة جلسات الآخرين وتعديلها",
+      "invited": "الجلسات التي تتم دعوتهم إليها فقط"
     },
     "sandboxRequired": "بيئة معزولة مطلوبة",
     "sandboxInherited": "تتبع البيئة المعزولة إعدادات الوكيل",
@@ -332,10 +432,6 @@
     "adminConfirm": "يتمتع الدور {role} بصلاحيات المسؤول. يمكن للمسؤولين تغيير إعدادات Gateway وإدارة الأجهزة والموافقات والوصول إلى الخدمات المتصلة. لا تدعُ إلا شخصًا تثق به لإدارة هذا claw.",
     "adminInvite": "تأكيد دعوة المسؤول",
     "cancel": "إلغاء",
-    "changeRole": "تغيير الدور",
-    "saveRole": "حفظ الدور",
-    "saveAdminRole": "تأكيد دور المسؤول",
-    "roleChanged": "تم تغيير الدور. ستُعاد اتصالات أجهزة العضو بالصلاحيات الجديدة.",
     "blocked": "محظور",
     "undefinedRole": "الدور {role} غير معرّف على هذا الـ claw. اختر دورًا آخر لاستعادة الوصول.",
     "yourRole": "دورك: {role}",
@@ -347,7 +443,21 @@
     "sandboxAsk": "اطلب من OpenClaw إعداده",
     "sandboxAsked": "يعمل OpenClaw على هذا في المحادثة بجانب هذه الصفحة. عند الانتهاء، تحقّق مجددًا لدعوة أشخاص بهذا الدور.",
     "sandboxAskFailed": "تعذّر بدء محادثة مع OpenClaw. حاول مرة أخرى.",
-    "sandboxCheckAgain": "تحقّق مجددًا"
+    "sandboxCheckAgain": "تحقّق مجددًا",
+    "invitedAccess": "الجلسات التي تتم دعوتهم إليها فقط · يمكن دعوتهم حتى مستوى {level}",
+    "invitedPermission": "صلاحية المشارك: {mode}",
+    "permissions": {
+      "read-only": "للقراءة فقط",
+      "guarded": "مقيّد",
+      "workspace": "مساحة العمل",
+      "full": "كامل"
+    },
+    "invitationLevels": {
+      "read": "قراءة",
+      "suggest": "اقتراح",
+      "send": "إرسال"
+    },
+    "ownSandboxRequired": "تلزم بيئة معزولة لجلساتهم الخاصة"
   },
   "it": {
     "role": "Ruolo",
@@ -357,7 +467,8 @@
       "none": "Nessun accesso alle sessioni altrui",
       "view": "Lettura delle sessioni altrui",
       "suggest": "Lettura e suggerimento di modifiche alle sessioni altrui",
-      "write": "Lettura e modifica delle sessioni altrui"
+      "write": "Lettura e modifica delle sessioni altrui",
+      "invited": "Solo le sessioni a cui ricevono un invito"
     },
     "sandboxRequired": "Sandbox obbligatoria",
     "sandboxInherited": "La sandbox segue le impostazioni dell'agente",
@@ -367,10 +478,6 @@
     "adminConfirm": "Il ruolo {role} dispone dell'accesso da amministratore. Gli amministratori possono modificare le impostazioni di Gateway, gestire dispositivi e approvazioni e accedere ai servizi connessi. Invita solo persone a cui affideresti questo claw.",
     "adminInvite": "Conferma l'invito come amministratore",
     "cancel": "Annulla",
-    "changeRole": "Cambia ruolo",
-    "saveRole": "Salva ruolo",
-    "saveAdminRole": "Conferma il ruolo di amministratore",
-    "roleChanged": "Ruolo modificato. I dispositivi del membro si riconnettono con i nuovi permessi di accesso.",
     "blocked": "Bloccato",
     "undefinedRole": "Il ruolo {role} non è definito su questo claw. Scegli un altro ruolo per ripristinare l'accesso.",
     "yourRole": "Il tuo ruolo: {role}",
@@ -382,7 +489,21 @@
     "sandboxAsk": "Chiedi a OpenClaw di configurarla",
     "sandboxAsked": "OpenClaw se ne sta occupando nella chat accanto a questa pagina. Al termine, verifica di nuovo per invitare persone con questo ruolo.",
     "sandboxAskFailed": "Impossibile avviare una chat con OpenClaw. Riprova.",
-    "sandboxCheckAgain": "Verifica di nuovo"
+    "sandboxCheckAgain": "Verifica di nuovo",
+    "invitedAccess": "Solo le sessioni a cui ricevono un invito · Possono ricevere inviti fino al livello {level}",
+    "invitedPermission": "Autorizzazione del partecipante: {mode}",
+    "permissions": {
+      "read-only": "Sola lettura",
+      "guarded": "Protetto",
+      "workspace": "Area di lavoro",
+      "full": "Completo"
+    },
+    "invitationLevels": {
+      "read": "Lettura",
+      "suggest": "Suggerimento",
+      "send": "Invio"
+    },
+    "ownSandboxRequired": "Sandbox obbligatoria per le proprie sessioni"
   },
   "tr": {
     "role": "Rol",
@@ -392,7 +513,8 @@
       "none": "Başkalarının oturumlarına erişim yok",
       "view": "Başkalarının oturumlarını okuma",
       "suggest": "Başkalarının oturumlarını okuma ve değişiklik önerme",
-      "write": "Başkalarının oturumlarını okuma ve değiştirme"
+      "write": "Başkalarının oturumlarını okuma ve değiştirme",
+      "invited": "Yalnızca davet edildikleri oturumlar"
     },
     "sandboxRequired": "Yalıtılmış ortam gerekli",
     "sandboxInherited": "Yalıtılmış ortam, aracı ayarlarını izler",
@@ -402,10 +524,6 @@
     "adminConfirm": "{role} rolünün yönetici erişimi var. Yöneticiler Gateway ayarlarını değiştirebilir, cihazları ve onayları yönetebilir ve bağlı hizmetlere erişebilir. Yalnızca bu claw için güvendiğiniz birini davet edin.",
     "adminInvite": "Yönetici davetini onayla",
     "cancel": "İptal",
-    "changeRole": "Rolü değiştir",
-    "saveRole": "Rolü kaydet",
-    "saveAdminRole": "Yönetici rolünü onayla",
-    "roleChanged": "Rol değiştirildi. Üyenin cihazları yeni erişim yetkileriyle yeniden bağlanır.",
     "blocked": "Engellendi",
     "undefinedRole": "{role} rolü bu claw üzerinde tanımlı değil. Erişimi yeniden sağlamak için başka bir rol seçin.",
     "yourRole": "Rolünüz: {role}",
@@ -417,7 +535,21 @@
     "sandboxAsk": "OpenClaw'dan kurmasını isteyin",
     "sandboxAsked": "OpenClaw, bu sayfanın yanındaki sohbette bunun üzerinde çalışıyor. İşlem tamamlandığında bu rolle kişileri davet etmek için tekrar kontrol edin.",
     "sandboxAskFailed": "OpenClaw ile sohbet başlatılamadı. Tekrar deneyin.",
-    "sandboxCheckAgain": "Tekrar kontrol et"
+    "sandboxCheckAgain": "Tekrar kontrol et",
+    "invitedAccess": "Yalnızca davet edildikleri oturumlar · En fazla {level} düzeyinde davet edilebilirler",
+    "invitedPermission": "Katılımcı izni: {mode}",
+    "permissions": {
+      "read-only": "Salt okunur",
+      "guarded": "Korumalı",
+      "workspace": "Çalışma alanı",
+      "full": "Tam"
+    },
+    "invitationLevels": {
+      "read": "Okuma",
+      "suggest": "Önerme",
+      "send": "Gönderme"
+    },
+    "ownSandboxRequired": "Kendi oturumları için korumalı alan gereklidir"
   },
   "uk": {
     "role": "Роль",
@@ -427,7 +559,8 @@
       "none": "Без доступу до сеансів інших користувачів",
       "view": "Перегляд сеансів інших користувачів",
       "suggest": "Перегляд сеансів інших користувачів і пропонування змін",
-      "write": "Перегляд і зміна сеансів інших користувачів"
+      "write": "Перегляд і зміна сеансів інших користувачів",
+      "invited": "Лише сеанси, до яких їх запрошено"
     },
     "sandboxRequired": "Потрібна пісочниця",
     "sandboxInherited": "Пісочниця використовує налаштування агента",
@@ -437,10 +570,6 @@
     "adminConfirm": "Роль {role} має доступ адміністратора. Адміністратори можуть змінювати налаштування Gateway, керувати пристроями й схваленнями та отримувати доступ до підключених сервісів. Запрошуйте лише тих, кому довіряєте керування цим claw.",
     "adminInvite": "Підтвердити запрошення адміністратора",
     "cancel": "Скасувати",
-    "changeRole": "Змінити роль",
-    "saveRole": "Зберегти роль",
-    "saveAdminRole": "Підтвердити роль адміністратора",
-    "roleChanged": "Роль змінено. Пристрої цього користувача перепідключаються з новими правами доступу.",
     "blocked": "Заблоковано",
     "undefinedRole": "Роль {role} не визначено для цього claw. Виберіть іншу роль, щоб відновити доступ.",
     "yourRole": "Ваша роль: {role}",
@@ -452,7 +581,21 @@
     "sandboxAsk": "Попросити OpenClaw налаштувати",
     "sandboxAsked": "OpenClaw працює над цим у чаті поруч із цією сторінкою. Коли все буде готово, перевірте ще раз, щоб запросити людей із цією роллю.",
     "sandboxAskFailed": "Не вдалося розпочати чат з OpenClaw. Спробуйте ще раз.",
-    "sandboxCheckAgain": "Перевірити ще раз"
+    "sandboxCheckAgain": "Перевірити ще раз",
+    "invitedAccess": "Лише сеанси, до яких їх запрошено · Можна запрошувати з рівнем доступу до {level}",
+    "invitedPermission": "Дозвіл учасника: {mode}",
+    "permissions": {
+      "read-only": "Лише читання",
+      "guarded": "З обмеженнями",
+      "workspace": "Робочий простір",
+      "full": "Повний доступ"
+    },
+    "invitationLevels": {
+      "read": "Читання",
+      "suggest": "Пропонування",
+      "send": "Надсилання"
+    },
+    "ownSandboxRequired": "Для власних сеансів потрібне ізольоване середовище"
   },
   "id": {
     "role": "Peran",
@@ -462,7 +605,8 @@
       "none": "Tidak dapat mengakses sesi orang lain",
       "view": "Membaca sesi orang lain",
       "suggest": "Membaca dan menyarankan perubahan pada sesi orang lain",
-      "write": "Membaca dan mengubah sesi orang lain"
+      "write": "Membaca dan mengubah sesi orang lain",
+      "invited": "Hanya sesi yang mengundang mereka"
     },
     "sandboxRequired": "Sandbox wajib digunakan",
     "sandboxInherited": "Sandbox mengikuti pengaturan agen",
@@ -472,10 +616,6 @@
     "adminConfirm": "Peran {role} memiliki akses administrator. Administrator dapat mengubah pengaturan Gateway, mengelola perangkat dan persetujuan, serta mengakses layanan yang terhubung. Hanya undang orang yang Anda percayai untuk mengelola claw ini.",
     "adminInvite": "Konfirmasi undangan administrator",
     "cancel": "Batal",
-    "changeRole": "Ubah peran",
-    "saveRole": "Simpan peran",
-    "saveAdminRole": "Konfirmasi peran administrator",
-    "roleChanged": "Peran diubah. Perangkat mereka terhubung kembali dengan akses baru.",
     "blocked": "Diblokir",
     "undefinedRole": "Peran {role} tidak ditentukan pada claw ini. Pilih peran lain untuk memulihkan akses.",
     "yourRole": "Peran Anda: {role}",
@@ -487,7 +627,21 @@
     "sandboxAsk": "Minta OpenClaw untuk menyiapkannya",
     "sandboxAsked": "OpenClaw sedang mengerjakan ini di obrolan di samping halaman ini. Setelah selesai, periksa lagi untuk mengundang orang dengan peran ini.",
     "sandboxAskFailed": "Tidak dapat memulai obrolan dengan OpenClaw. Coba lagi.",
-    "sandboxCheckAgain": "Periksa lagi"
+    "sandboxCheckAgain": "Periksa lagi",
+    "invitedAccess": "Hanya sesi yang mengundang mereka · Dapat diundang hingga tingkat {level}",
+    "invitedPermission": "Izin peserta: {mode}",
+    "permissions": {
+      "read-only": "Hanya baca",
+      "guarded": "Terproteksi",
+      "workspace": "Ruang kerja",
+      "full": "Penuh"
+    },
+    "invitationLevels": {
+      "read": "Baca",
+      "suggest": "Sarankan",
+      "send": "Kirim"
+    },
+    "ownSandboxRequired": "Sandbox diperlukan untuk sesi mereka sendiri"
   },
   "pl": {
     "role": "Rola",
@@ -497,7 +651,8 @@
       "none": "Brak dostępu do sesji innych osób",
       "view": "Odczyt sesji innych osób",
       "suggest": "Odczyt sesji innych osób i sugerowanie zmian",
-      "write": "Odczyt i modyfikowanie sesji innych osób"
+      "write": "Odczyt i modyfikowanie sesji innych osób",
+      "invited": "Tylko sesje, do których otrzymają zaproszenie"
     },
     "sandboxRequired": "Wymagana piaskownica",
     "sandboxInherited": "Piaskownica zgodna z ustawieniami agenta",
@@ -507,10 +662,6 @@
     "adminConfirm": "Rola {role} ma uprawnienia administratora. Administratorzy mogą zmieniać ustawienia Gateway, zarządzać urządzeniami i zatwierdzeniami oraz korzystać z połączonych usług. Zapraszaj tylko osoby, którym ufasz na tyle, by powierzyć im tę instancję claw.",
     "adminInvite": "Potwierdź zaproszenie administratora",
     "cancel": "Anuluj",
-    "changeRole": "Zmień rolę",
-    "saveRole": "Zapisz rolę",
-    "saveAdminRole": "Potwierdź rolę administratora",
-    "roleChanged": "Rola została zmieniona. Urządzenia tej osoby połączą się ponownie z nowymi uprawnieniami.",
     "blocked": "Zablokowano",
     "undefinedRole": "Rola {role} nie jest zdefiniowana w tej instancji claw. Wybierz inną rolę, aby przywrócić dostęp.",
     "yourRole": "Twoja rola: {role}",
@@ -522,7 +673,21 @@
     "sandboxAsk": "Poproś OpenClaw o konfigurację",
     "sandboxAsked": "OpenClaw pracuje nad tym na czacie obok tej strony. Gdy skończy, sprawdź ponownie, aby zaprosić osoby z tą rolą.",
     "sandboxAskFailed": "Nie udało się rozpocząć czatu z OpenClaw. Spróbuj ponownie.",
-    "sandboxCheckAgain": "Sprawdź ponownie"
+    "sandboxCheckAgain": "Sprawdź ponownie",
+    "invitedAccess": "Tylko sesje, do których otrzymają zaproszenie · Można zapraszać z uprawnieniami do poziomu {level}",
+    "invitedPermission": "Uprawnienia uczestnika: {mode}",
+    "permissions": {
+      "read-only": "Tylko do odczytu",
+      "guarded": "Ograniczone",
+      "workspace": "Obszar roboczy",
+      "full": "Pełne"
+    },
+    "invitationLevels": {
+      "read": "Odczyt",
+      "suggest": "Sugerowanie",
+      "send": "Wysyłanie"
+    },
+    "ownSandboxRequired": "Własne sesje wymagają środowiska izolowanego"
   },
   "th": {
     "role": "บทบาท",
@@ -532,7 +697,8 @@
       "none": "ไม่สามารถเข้าถึงเซสชันของผู้อื่น",
       "view": "อ่านเซสชันของผู้อื่น",
       "suggest": "อ่านและเสนอการเปลี่ยนแปลงเซสชันของผู้อื่น",
-      "write": "อ่านและแก้ไขเซสชันของผู้อื่น"
+      "write": "อ่านและแก้ไขเซสชันของผู้อื่น",
+      "invited": "เฉพาะเซสชันที่ได้รับเชิญ"
     },
     "sandboxRequired": "ต้องใช้แซนด์บ็อกซ์",
     "sandboxInherited": "แซนด์บ็อกซ์ใช้ตามการตั้งค่าเอเจนต์",
@@ -542,10 +708,6 @@
     "adminConfirm": "บทบาท {role} มีสิทธิ์ผู้ดูแลระบบ ผู้ดูแลระบบสามารถเปลี่ยนการตั้งค่า Gateway จัดการอุปกรณ์และการอนุมัติ รวมถึงเข้าถึงบริการที่เชื่อมต่อได้ เชิญเฉพาะผู้ที่คุณไว้วางใจให้ใช้ claw นี้เท่านั้น",
     "adminInvite": "ยืนยันการเชิญผู้ดูแลระบบ",
     "cancel": "ยกเลิก",
-    "changeRole": "เปลี่ยนบทบาท",
-    "saveRole": "บันทึกบทบาท",
-    "saveAdminRole": "ยืนยันบทบาทผู้ดูแลระบบ",
-    "roleChanged": "เปลี่ยนบทบาทแล้ว อุปกรณ์ของสมาชิกจะเชื่อมต่อใหม่โดยใช้สิทธิ์การเข้าถึงใหม่",
     "blocked": "ถูกบล็อก",
     "undefinedRole": "ยังไม่ได้กำหนดบทบาท {role} ใน claw นี้ เลือกบทบาทอื่นเพื่อกู้คืนสิทธิ์การเข้าถึง",
     "yourRole": "บทบาทของคุณ: {role}",
@@ -557,7 +719,21 @@
     "sandboxAsk": "ขอให้ OpenClaw ตั้งค่าให้",
     "sandboxAsked": "OpenClaw กำลังดำเนินการในแชตข้างหน้านี้ เมื่อเสร็จแล้ว ให้ตรวจสอบอีกครั้งเพื่อเชิญผู้คนเข้าร่วมด้วยบทบาทนี้",
     "sandboxAskFailed": "ไม่สามารถเริ่มแชตกับ OpenClaw ได้ โปรดลองอีกครั้ง",
-    "sandboxCheckAgain": "ตรวจสอบอีกครั้ง"
+    "sandboxCheckAgain": "ตรวจสอบอีกครั้ง",
+    "invitedAccess": "เฉพาะเซสชันที่ได้รับเชิญ · สามารถได้รับเชิญด้วยสิทธิ์สูงสุดระดับ {level}",
+    "invitedPermission": "สิทธิ์ของผู้เข้าร่วม: {mode}",
+    "permissions": {
+      "read-only": "อ่านอย่างเดียว",
+      "guarded": "มีการป้องกัน",
+      "workspace": "พื้นที่ทำงาน",
+      "full": "เต็มรูปแบบ"
+    },
+    "invitationLevels": {
+      "read": "อ่าน",
+      "suggest": "เสนอแนะ",
+      "send": "ส่ง"
+    },
+    "ownSandboxRequired": "ต้องใช้แซนด์บ็อกซ์สำหรับเซสชันของตนเอง"
   },
   "vi": {
     "role": "Vai trò",
@@ -567,7 +743,8 @@
       "none": "Không có quyền truy cập phiên của người khác",
       "view": "Đọc phiên của người khác",
       "suggest": "Đọc và đề xuất thay đổi cho phiên của người khác",
-      "write": "Đọc và thay đổi phiên của người khác"
+      "write": "Đọc và thay đổi phiên của người khác",
+      "invited": "Chỉ các phiên họ được mời tham gia"
     },
     "sandboxRequired": "Bắt buộc dùng môi trường cách ly",
     "sandboxInherited": "Môi trường cách ly tuân theo cài đặt tác nhân",
@@ -577,10 +754,6 @@
     "adminConfirm": "Vai trò {role} có quyền quản trị viên. Quản trị viên có thể thay đổi cài đặt Gateway, quản lý thiết bị và yêu cầu phê duyệt, cũng như truy cập các dịch vụ đã kết nối. Chỉ mời người mà bạn tin tưởng giao quyền sử dụng claw này.",
     "adminInvite": "Xác nhận lời mời quản trị viên",
     "cancel": "Hủy",
-    "changeRole": "Đổi vai trò",
-    "saveRole": "Lưu vai trò",
-    "saveAdminRole": "Xác nhận vai trò quản trị viên",
-    "roleChanged": "Đã đổi vai trò. Thiết bị của họ sẽ kết nối lại với quyền truy cập mới.",
     "blocked": "Đã chặn",
     "undefinedRole": "Vai trò {role} chưa được định nghĩa trên claw này. Chọn vai trò khác để khôi phục quyền truy cập.",
     "yourRole": "Vai trò của bạn: {role}",
@@ -592,7 +765,21 @@
     "sandboxAsk": "Yêu cầu OpenClaw thiết lập",
     "sandboxAsked": "OpenClaw đang xử lý việc này trong cuộc trò chuyện bên cạnh trang này. Khi hoàn tất, hãy kiểm tra lại để mời những người có vai trò này.",
     "sandboxAskFailed": "Không thể bắt đầu cuộc trò chuyện với OpenClaw. Hãy thử lại.",
-    "sandboxCheckAgain": "Kiểm tra lại"
+    "sandboxCheckAgain": "Kiểm tra lại",
+    "invitedAccess": "Chỉ các phiên họ được mời tham gia · Có thể được mời với cấp quyền tối đa là {level}",
+    "invitedPermission": "Quyền của người tham gia: {mode}",
+    "permissions": {
+      "read-only": "Chỉ đọc",
+      "guarded": "Có bảo vệ",
+      "workspace": "Không gian làm việc",
+      "full": "Toàn quyền"
+    },
+    "invitationLevels": {
+      "read": "Đọc",
+      "suggest": "Đề xuất",
+      "send": "Gửi"
+    },
+    "ownSandboxRequired": "Cần có môi trường cô lập cho các phiên riêng của họ"
   },
   "nl": {
     "role": "Rol",
@@ -602,7 +789,8 @@
       "none": "Geen toegang tot sessies van anderen",
       "view": "Sessies van anderen lezen",
       "suggest": "Sessies van anderen lezen en wijzigingen voorstellen",
-      "write": "Sessies van anderen lezen en wijzigen"
+      "write": "Sessies van anderen lezen en wijzigen",
+      "invited": "Alleen sessies waarvoor ze zijn uitgenodigd"
     },
     "sandboxRequired": "Sandbox vereist",
     "sandboxInherited": "Sandbox volgt de agentinstellingen",
@@ -612,10 +800,6 @@
     "adminConfirm": "De rol {role} heeft beheerderstoegang. Beheerders kunnen Gateway-instellingen wijzigen, apparaten en goedkeuringen beheren en toegang krijgen tot verbonden diensten. Nodig alleen iemand uit aan wie je deze claw toevertrouwt.",
     "adminInvite": "Uitnodiging voor beheerder bevestigen",
     "cancel": "Annuleren",
-    "changeRole": "Rol wijzigen",
-    "saveRole": "Rol opslaan",
-    "saveAdminRole": "Beheerdersrol bevestigen",
-    "roleChanged": "Rol gewijzigd. De apparaten van dit lid maken opnieuw verbinding met de nieuwe toegangsrechten.",
     "blocked": "Geblokkeerd",
     "undefinedRole": "De rol {role} is niet gedefinieerd op deze claw. Kies een andere rol om de toegang te herstellen.",
     "yourRole": "Je rol: {role}",
@@ -627,7 +811,21 @@
     "sandboxAsk": "Vraag OpenClaw om dit in te stellen",
     "sandboxAsked": "OpenClaw werkt hieraan in de chat naast deze pagina. Controleer opnieuw zodra dit klaar is om mensen met deze rol uit te nodigen.",
     "sandboxAskFailed": "Kan geen chat met OpenClaw starten. Probeer het opnieuw.",
-    "sandboxCheckAgain": "Opnieuw controleren"
+    "sandboxCheckAgain": "Opnieuw controleren",
+    "invitedAccess": "Alleen sessies waarvoor ze zijn uitgenodigd · Kunnen worden uitgenodigd tot niveau {level}",
+    "invitedPermission": "Deelnemersrechten: {mode}",
+    "permissions": {
+      "read-only": "Alleen lezen",
+      "guarded": "Beveiligd",
+      "workspace": "Werkruimte",
+      "full": "Volledig"
+    },
+    "invitationLevels": {
+      "read": "Lezen",
+      "suggest": "Voorstellen",
+      "send": "Verzenden"
+    },
+    "ownSandboxRequired": "Sandbox vereist voor hun eigen sessies"
   },
   "fa": {
     "role": "نقش",
@@ -637,7 +835,8 @@
       "none": "بدون دسترسی به نشست‌های دیگران",
       "view": "خواندن نشست‌های دیگران",
       "suggest": "خواندن نشست‌های دیگران و پیشنهاد تغییر در آن‌ها",
-      "write": "خواندن و تغییر نشست‌های دیگران"
+      "write": "خواندن و تغییر نشست‌های دیگران",
+      "invited": "فقط نشست‌هایی که به آن‌ها دعوت شده‌اند"
     },
     "sandboxRequired": "محیط ایزوله الزامی است",
     "sandboxInherited": "محیط ایزوله از تنظیمات عامل پیروی می‌کند",
@@ -647,10 +846,6 @@
     "adminConfirm": "نقش {role} دسترسی مدیر دارد. مدیران می‌توانند تنظیمات Gateway را تغییر دهند، دستگاه‌ها و تأییدها را مدیریت کنند و به سرویس‌های متصل دسترسی داشته باشند. فقط کسی را دعوت کنید که برای دسترسی به این claw به او اعتماد دارید.",
     "adminInvite": "تأیید دعوت با دسترسی مدیر",
     "cancel": "لغو",
-    "changeRole": "تغییر نقش",
-    "saveRole": "ذخیرهٔ نقش",
-    "saveAdminRole": "تأیید نقش مدیر",
-    "roleChanged": "نقش تغییر کرد. دستگاه‌های این عضو با دسترسی جدید دوباره متصل می‌شوند.",
     "blocked": "مسدود شده",
     "undefinedRole": "نقش {role} در این claw تعریف نشده است. برای بازیابی دسترسی، نقش دیگری انتخاب کنید.",
     "yourRole": "نقش شما: {role}",
@@ -662,7 +857,21 @@
     "sandboxAsk": "از OpenClaw بخواهید آن را راه‌اندازی کند",
     "sandboxAsked": "OpenClaw در گفتگوی کنار این صفحه در حال انجام این کار است. پس از پایان کار، دوباره بررسی کنید تا بتوانید افراد را با این نقش دعوت کنید.",
     "sandboxAskFailed": "شروع گفتگو با OpenClaw ممکن نشد. دوباره تلاش کنید.",
-    "sandboxCheckAgain": "بررسی دوباره"
+    "sandboxCheckAgain": "بررسی دوباره",
+    "invitedAccess": "فقط نشست‌هایی که به آن‌ها دعوت شده‌اند · امکان دعوت تا سطح {level}",
+    "invitedPermission": "مجوز شرکت‌کننده: {mode}",
+    "permissions": {
+      "read-only": "فقط خواندن",
+      "guarded": "محافظت‌شده",
+      "workspace": "فضای کاری",
+      "full": "کامل"
+    },
+    "invitationLevels": {
+      "read": "خواندن",
+      "suggest": "پیشنهاد دادن",
+      "send": "ارسال"
+    },
+    "ownSandboxRequired": "برای نشست‌های خودشان به محیط ایزوله نیاز دارند"
   },
   "ru": {
     "role": "Роль",
@@ -672,7 +881,8 @@
       "none": "Нет доступа к сеансам других пользователей",
       "view": "Просмотр сеансов других пользователей",
       "suggest": "Просмотр сеансов других пользователей и предложение изменений",
-      "write": "Просмотр и изменение сеансов других пользователей"
+      "write": "Просмотр и изменение сеансов других пользователей",
+      "invited": "Только сеансы, в которые их пригласили"
     },
     "sandboxRequired": "Требуется песочница",
     "sandboxInherited": "Песочница использует настройки агента",
@@ -682,10 +892,6 @@
     "adminConfirm": "Роль {role} предоставляет права администратора. Администраторы могут изменять настройки Gateway, управлять устройствами и одобрениями, а также получать доступ к подключённым сервисам. Приглашайте только тех, кому вы доверяете управление этим claw.",
     "adminInvite": "Подтвердить приглашение администратора",
     "cancel": "Отмена",
-    "changeRole": "Изменить роль",
-    "saveRole": "Сохранить роль",
-    "saveAdminRole": "Подтвердить роль администратора",
-    "roleChanged": "Роль изменена. Устройства участника переподключаются с новыми правами доступа.",
     "blocked": "Заблокировано",
     "undefinedRole": "Роль {role} не определена в этом claw. Выберите другую роль, чтобы восстановить доступ.",
     "yourRole": "Ваша роль: {role}",
@@ -697,7 +903,21 @@
     "sandboxAsk": "Попросить OpenClaw настроить песочницу",
     "sandboxAsked": "OpenClaw выполняет настройку в чате рядом с этой страницей. Когда настройка завершится, проверьте ещё раз, чтобы приглашать людей с этой ролью.",
     "sandboxAskFailed": "Не удалось начать чат с OpenClaw. Попробуйте ещё раз.",
-    "sandboxCheckAgain": "Проверить ещё раз"
+    "sandboxCheckAgain": "Проверить ещё раз",
+    "invitedAccess": "Только сеансы, в которые их пригласили · Можно приглашать с уровнем доступа до {level}",
+    "invitedPermission": "Права участника: {mode}",
+    "permissions": {
+      "read-only": "Только чтение",
+      "guarded": "С ограничениями",
+      "workspace": "Рабочая область",
+      "full": "Полный доступ"
+    },
+    "invitationLevels": {
+      "read": "Чтение",
+      "suggest": "Предложение изменений",
+      "send": "Отправка"
+    },
+    "ownSandboxRequired": "Для собственных сеансов требуется песочница"
   },
   "sv": {
     "role": "Roll",
@@ -707,7 +927,8 @@
       "none": "Ingen åtkomst till andras sessioner",
       "view": "Läsa andras sessioner",
       "suggest": "Läsa och föreslå ändringar i andras sessioner",
-      "write": "Läsa och ändra andras sessioner"
+      "write": "Läsa och ändra andras sessioner",
+      "invited": "Endast sessioner de är inbjudna till"
     },
     "sandboxRequired": "Sandlåda krävs",
     "sandboxInherited": "Sandlådan följer agentens inställningar",
@@ -717,10 +938,6 @@
     "adminConfirm": "Rollen {role} har administratörsbehörighet. Administratörer kan ändra inställningarna för Gateway, hantera enheter och godkännanden samt komma åt anslutna tjänster. Bjud bara in någon som du litar på kan hantera denna claw.",
     "adminInvite": "Bekräfta administratörsinbjudan",
     "cancel": "Avbryt",
-    "changeRole": "Ändra roll",
-    "saveRole": "Spara roll",
-    "saveAdminRole": "Bekräfta administratörsroll",
-    "roleChanged": "Rollen har ändrats. Medlemmens enheter återansluter med den nya behörigheten.",
     "blocked": "Blockerad",
     "undefinedRole": "Rollen {role} är inte definierad på denna claw. Välj en annan roll för att återställa åtkomsten.",
     "yourRole": "Din roll: {role}",
@@ -732,7 +949,21 @@
     "sandboxAsk": "Be OpenClaw konfigurera det",
     "sandboxAsked": "OpenClaw arbetar med detta i chatten bredvid den här sidan. Kontrollera igen när det är klart för att bjuda in personer med den här rollen.",
     "sandboxAskFailed": "Det gick inte att starta en chatt med OpenClaw. Försök igen.",
-    "sandboxCheckAgain": "Kontrollera igen"
+    "sandboxCheckAgain": "Kontrollera igen",
+    "invitedAccess": "Endast sessioner de är inbjudna till · Kan bjudas in upp till {level}",
+    "invitedPermission": "Deltagarbehörighet: {mode}",
+    "permissions": {
+      "read-only": "Skrivskyddad",
+      "guarded": "Skyddad",
+      "workspace": "Arbetsyta",
+      "full": "Fullständig"
+    },
+    "invitationLevels": {
+      "read": "Läsa",
+      "suggest": "Föreslå",
+      "send": "Skicka"
+    },
+    "ownSandboxRequired": "Sandlåda krävs för deras egna sessioner"
   },
   "ca": {
     "role": "Rol",
@@ -742,7 +973,8 @@
       "none": "Sense accés a les sessions d'altres persones",
       "view": "Llegir les sessions d'altres persones",
       "suggest": "Llegir i suggerir canvis a les sessions d'altres persones",
-      "write": "Llegir i modificar les sessions d'altres persones"
+      "write": "Llegir i modificar les sessions d'altres persones",
+      "invited": "Només les sessions a les quals se'ls convida"
     },
     "sandboxRequired": "Cal un entorn aïllat",
     "sandboxInherited": "L'entorn aïllat segueix la configuració de l'agent",
@@ -752,10 +984,6 @@
     "adminConfirm": "El rol {role} té accés d'administrador. Els administradors poden canviar la configuració de Gateway, gestionar dispositius i aprovacions, i accedir als serveis connectats. Convida només persones en qui confiïs per gestionar aquest claw.",
     "adminInvite": "Confirma la invitació d'administrador",
     "cancel": "Cancel·la",
-    "changeRole": "Canvia el rol",
-    "saveRole": "Desa el rol",
-    "saveAdminRole": "Confirma el rol d'administrador",
-    "roleChanged": "S'ha canviat el rol. Els dispositius d'aquesta persona es tornen a connectar amb el nou accés.",
     "blocked": "Bloquejat",
     "undefinedRole": "El rol {role} no està definit en aquest claw. Trieu un altre rol per restablir l'accés.",
     "yourRole": "El vostre rol: {role}",
@@ -767,6 +995,20 @@
     "sandboxAsk": "Demana a OpenClaw que ho configuri",
     "sandboxAsked": "OpenClaw hi està treballant al xat que hi ha al costat d'aquesta pàgina. Quan hagi acabat, torna-ho a comprovar per convidar persones amb aquest rol.",
     "sandboxAskFailed": "No s'ha pogut iniciar un xat amb OpenClaw. Torna-ho a provar.",
-    "sandboxCheckAgain": "Torna-ho a comprovar"
+    "sandboxCheckAgain": "Torna-ho a comprovar",
+    "invitedAccess": "Només les sessions a les quals se'ls convida · Se'ls pot convidar fins al nivell {level}",
+    "invitedPermission": "Permís del participant: {mode}",
+    "permissions": {
+      "read-only": "Només lectura",
+      "guarded": "Protegit",
+      "workspace": "Espai de treball",
+      "full": "Complet"
+    },
+    "invitationLevels": {
+      "read": "Llegir",
+      "suggest": "Suggerir",
+      "send": "Enviar"
+    },
+    "ownSandboxRequired": "Cal un entorn aïllat per a les seves pròpies sessions"
   }
 }

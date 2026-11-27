@@ -554,8 +554,8 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
       excludeGeneratedProviderIds.map(normalizeProviderId),
     );
     const { contents: modelsJsonContents } = await captureModelsJsonSource(facts.input.agentDir);
-    // Signed-in providers browse known manifest rows until their account listing publishes. Scope
-    // by current credentials: config reloads (API-key sign-in rewrites auth.profiles) leave
+    // Signed-in providers whose manifest is their list browse it at once. Scope by current
+    // credentials: config reloads (API-key sign-in rewrites auth.profiles) leave
     // credential-only providers out of facts.providerIds.
     const staticProviderConfigs = {
       ...loadManifestModelProviderConfigs({

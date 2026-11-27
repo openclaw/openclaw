@@ -447,6 +447,16 @@ describe("native Talk through the public OpenAI plugin registration", () => {
               socket.serverEvent(transcript);
             }
             await settleNativeBackend(finishModel.resolve);
+            if (control !== "cancel") {
+              // The typed-turn owner finalizes the chat turn before the consult answer returns.
+              await vi.waitFor(
+                () =>
+                  expect(socket.sent.map((frame): unknown => JSON.parse(frame))).toContainEqual(
+                    nativeCompletion("real-runner-request"),
+                  ),
+                { timeout: 5_000 },
+              );
+            }
             const frames = socket.sent.map((frame): unknown => JSON.parse(frame));
             if (control === "cancel") {
               expect(frames).not.toContainEqual(
@@ -574,8 +584,10 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       expect(transcriptEvents()).toHaveLength(1);
       upstream.runEmbeddedAgent.mockImplementation(nativeConsult("Legacy provider consultation."));
       socket.serverEvent(nativeDelegation("legacy-status", "Status?"));
-      await vi.waitFor(() =>
-        expect(socket.sent.join("\n")).toContain("Legacy provider consultation."),
+      // The consult runs as a typed chat turn, whose preparation loads cold in this fixture.
+      await vi.waitFor(
+        () => expect(socket.sent.join("\n")).toContain("Legacy provider consultation."),
+        { timeout: 5_000 },
       );
       expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
     });

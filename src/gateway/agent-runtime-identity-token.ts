@@ -1,7 +1,10 @@
 import { createHmac } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  getAdmittedRunOperatorProfileId,
+  type OperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
 import {
   parseExecutionIdentityAdmissionToken,
   type ExecutionIdentityAdmissionToken,
@@ -49,6 +52,8 @@ export type AgentRuntimeIdentity = {
   operationalRunInstance: OperationalRunInstanceRef;
   delegatedAuthority: AgentRuntimeDelegatedAuthority;
   approvalOwnerPluginId?: string;
+  /** Signed host-admission provenance for approval visibility, never public request input. */
+  approvalRequesterProfileId?: string;
   executionIdentity?: ExecutionIdentityAdmissionToken;
   turnSourceChannel?: string;
   /** Explicit admission fact; omission is unknown, never inferred from session routing. */
@@ -138,6 +143,7 @@ const sessionSpawnContextSchema = z
     gitContributorProfileId: normalizedRequiredStringSchema.optional(),
     requesterSenderIsOwner: z.boolean().optional(),
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
+    createdIndependently: z.literal(true).optional(),
     inheritedPermissionMode: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
     resolvedModel: z
       .object({
@@ -172,6 +178,7 @@ const sessionSpawnContextSchema = z
     ...(context.requesterSenderIsOwner !== undefined
       ? { requesterSenderIsOwner: context.requesterSenderIsOwner }
       : {}),
+    ...(context.createdIndependently ? { createdIndependently: true } : {}),
     inheritedToolPolicy: context.inheritedToolPolicy,
     ...(context.inheritedPermissionMode
       ? { inheritedPermissionMode: context.inheritedPermissionMode }
@@ -239,6 +246,7 @@ const agentRuntimeIdentityTokenPayloadSchema = z.object({
   turnSourceAccountId: z.string().optional().catch(undefined),
   turnSourceThreadId: z.union([z.string(), z.number()]).optional().catch(undefined),
   gatewayUiCommandTarget: gatewayUiCommandTargetSchema.optional(),
+  approvalRequesterProfileId: normalizedRequiredStringSchema.optional(),
   messageActionContext: messageActionContextSchema.optional(),
   cronSelfManagementContext: cronSelfManagementContextSchema.optional(),
   cronToolsAllowCapture: z.literal("final-executable-surface").optional(),
@@ -417,6 +425,9 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
       ...(turnSourceTo ? { turnSourceTo } : {}),
       ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
       ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+      ...(raw.approvalRequesterProfileId
+        ? { approvalRequesterProfileId: raw.approvalRequesterProfileId }
+        : {}),
       ...(raw.gatewayUiCommandTarget
         ? { gatewayUiCommandTarget: Object.freeze(raw.gatewayUiCommandTarget) }
         : {}),
@@ -437,7 +448,11 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
 
 export type AgentRuntimeIdentityTokenParams = Omit<
   AgentRuntimeIdentity,
-  "kind" | "delegatedAuthority" | "executionIdentity" | "cronSelfManagementContext"
+  | "kind"
+  | "delegatedAuthority"
+  | "executionIdentity"
+  | "cronSelfManagementContext"
+  | "approvalRequesterProfileId"
 > & {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   cronSelfManagementJobId?: string;
@@ -479,6 +494,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
   ) {
     throw new Error("worker delegated authority disagrees with the operational run");
   }
+  const approvalRequesterProfileId = getAdmittedRunOperatorProfileId(activeAuthority);
   const approvalAuthority = params.approvalAuthority ?? activeAuthority;
   if (params.workerTurnClaim && approvalAuthority.claimId === activeAuthority.claimId) {
     throw new Error("worker runtime identity requires its original claim approval authority");
@@ -488,7 +504,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
     approvalAuthority.operationalRunInstance.runId !== operationalRunId ||
     !validateAgentRunDelegatedAuthority(approvalAuthority)
   ) {
-    throw new Error("agent runtime approval authority is no longer active");
+    throw new Error("Agent runtime approval scope ended. Start a new turn to retry.");
   }
   const delegatedAuthority: AgentRuntimeDelegatedAuthority = params.workerTurnClaim
     ? { kind: "worker", ...approvalAuthority, turnClaim: params.workerTurnClaim }
@@ -549,6 +565,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
     ...(turnSourceTo ? { turnSourceTo } : {}),
     ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
     ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+    ...(approvalRequesterProfileId ? { approvalRequesterProfileId } : {}),
     ...(params.gatewayUiCommandTarget
       ? {
           gatewayUiCommandTarget: gatewayUiCommandTargetSchema.parse(params.gatewayUiCommandTarget),

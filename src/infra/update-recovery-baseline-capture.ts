@@ -18,6 +18,7 @@ import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveBackupConfigCapture } from "./backup-config-capture.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
@@ -442,6 +443,7 @@ export function captureUpdateRecoveryBaseline(params: {
       }
       // Database acquisition used this volume first; reserve remaining payload and metadata now.
       checkPayloadCapacity();
+      const filePayloads: string[] = [];
       for (const [pathname, before] of files) {
         assertCurrent();
         await pin.assertCurrent();
@@ -464,9 +466,10 @@ export function captureUpdateRecoveryBaseline(params: {
           throw new Error(`Original update file changed before capture: ${pathname}`);
         }
         assertCurrent();
-        await using output = await fs.open(path.join(directory, archivePath), "wx+", 0o600);
+        const payloadPath = path.join(directory, archivePath);
+        await using output = await fs.open(payloadPath, "wx+", 0o600);
         await copyFileHandle(handle, output, { assertBeforeMutation: assertCurrent });
-        await output.sync();
+        filePayloads.push(payloadPath);
         const content = await sha256File(output);
         if (
           content.digest !== sha256 ||
@@ -484,6 +487,21 @@ export function captureUpdateRecoveryBaseline(params: {
           mode: Number(before.mode & 0o777n),
         });
       }
+      // Plugin trees hold thousands of small files (#201251). Serial fsyncs each wait for
+      // their own journal commit; concurrent ones share commits. The manifest still seals last.
+      // Let in-flight syncs settle before failing so cleanup never races open handles.
+      const synced = await runTasksWithConcurrency({
+        tasks: filePayloads.map((payloadPath) => async () => {
+          await using payload = await fs.open(payloadPath, "r+");
+          await payload.sync();
+        }),
+        limit: 32,
+        errorMode: "stop",
+      });
+      if (synced.hasError) {
+        throw synced.firstError;
+      }
+      assertCurrent();
       await configCapture.revalidate();
       assertCurrent();
       const boundedWarnings = warnings.slice(0, 32).map((warning) => ({

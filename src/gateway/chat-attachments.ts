@@ -1,5 +1,11 @@
+import { MIMEType } from "node:util";
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
-import { extensionForMime, kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import {
+  extensionForMime,
+  HEADERLESS_CSV_MIME_TYPE,
+  kindFromMime,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
 import type { Static } from "typebox";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { ChatAttachmentSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -267,6 +273,17 @@ function ensureExtension(label: string, mime: string): string {
   return ext ? `${label}${ext}` : label;
 }
 
+function hasHeaderlessCsvDeclaration(mime: string): boolean {
+  try {
+    const declared = new MIMEType(mime);
+    return (
+      declared.essence === "text/csv" && declared.params.get("header")?.toLowerCase() === "absent"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function normalizeAttachment(att: ChatAttachment, idx: number): NormalizedAttachment {
   const mime = att.mimeType ?? "";
   const content = att.content;
@@ -466,7 +483,10 @@ export async function parseMessageWithAttachments(
         id: savedMedia.id,
         path: savedMedia.path,
         kind: kindFromMime(finalMime) ?? "unknown",
-        mimeType: finalMime,
+        mimeType:
+          finalMime === "text/csv" && hasHeaderlessCsvDeclaration(mime)
+            ? HEADERLESS_CSV_MIME_TYPE
+            : finalMime,
         label,
         sizeBytes,
         sourceIndex: idx,

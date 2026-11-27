@@ -215,9 +215,9 @@ The `run-failure-feedback` replacement occupies only the feedback action beside
 an existing terminal run failure. Its props are `{ sessionKey, agentId, runId,
 repeatCount }`; `runId` identifies the displayed failed run, not the currently
 running reply. The host preserves the original error details, copying, and
-recovery controls. No replacement, a disabled plugin, or a failed mount keeps
-the built-in **Report a bug** link available; `context.mountDefault(container)`
-can also delegate to that link.
+recovery controls. The built-in failure row has no feedback action, so no
+replacement, a disabled plugin, or a failed mount shows nothing there, and
+`context.mountDefault(container)` mounts nothing.
 
 Plugins can render their own feedback actions and status receipts in this slot
 without appending a transcript message or starting a model turn. Rendering the
@@ -321,7 +321,10 @@ host.ui.registerAction({
 
 A composer action with a host icon-registry `icon` renders as a compact button in
 the composer toolbar, after the attachment menu, with `label` as its accessible
-name and tooltip. Composer actions without an icon keep the text button above
+name and tooltip. On mobile, open **+** and choose the plugin by name to see
+its icon actions. The menu shows the [plugin icon](/plugins/manifest/surfaces#plugin-icon)
+beside its name, or a plug if the artwork is unavailable. Composer actions
+without an icon keep the text button above
 the composer, as do icon actions beside a replacement composer. A composer
 action's `resolve` receives the pane's current `draft`, so an action that needs
 text can return `{ disabled: !draft.trim() }`; the host re-resolves as the user

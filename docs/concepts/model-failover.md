@@ -315,6 +315,8 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
   </Step>
 </Steps>
 
+With multiple Codex subscriptions, **Settings → Models → Provider access → OpenAI** shows one bar per quota window. Each segment shows what is left on that account, not a share of a combined allowance. The Credits row shows each account’s reported balance separately: zero is a reported balance; a dash means no balance was reported. Select an account name for its plan and account actions, or a quota segment for its reset time. When the order is editable, drag a segment left or right (or focus it and use the arrow keys) to change the selected agent’s stored priority. This does not change a session’s explicitly selected account.
+
 If no explicit order is configured, OpenClaw uses a round-robin order:
 
 - **Primary key:** profile type (**OAuth, then static token, then API key**).
@@ -372,7 +374,7 @@ Same-model rate-limit retries also record the failed profile before waiting, usi
 
 After bounded recovery, a model-silent or request timeout records profile cooldown only when an authorized replacement profile is selected or a model fallback is configured; otherwise the profile stays available for the next turn.
 
-A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin.json` when its upstream gateway owns capacity recovery. This applies to the plugin's declared providers and skips only rate-limit and overload cooldowns (`rate_limit` and `overloaded`). OpenRouter and Kilo Gateway use this declaration. Billing, authentication, permanent credential failures, and provider-reported subscription blocks remain enforced. Routing and auth status use the same policy, including before the provider runtime loads. There is no user configuration setting.
+A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin.json` when its upstream gateway owns capacity recovery. This applies to the plugin's declared providers and skips only rate-limit and overload cooldowns (`rate_limit` and `overloaded`). ClawRouter, OpenRouter, and Kilo Gateway use this declaration. Billing, authentication, permanent credential failures, and provider-reported subscription blocks remain enforced. Routing and auth status use the same policy, including before the provider runtime loads. A rate-limit or overload window stored before the declaration is ignored, and a later failure of another kind starts its own window. Its failure count restarts too, unless another active restriction, such as a billing disable or subscription block, keeps the count. There is no user configuration setting.
 
 CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback. A successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
 

@@ -10,6 +10,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSqliteSessionWrite } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { SqliteWorkerOperations } from "../../infra/sqlite-worker-contract.js";
@@ -100,7 +101,7 @@ it.each(["replaced", "preparation"] as const)(
       }
     });
     const claimOps = createPlacementTurnClaimFixtureOps(support.testState.stateDb);
-    const prepare = (message: ReturnType<typeof makeAgentAssistantMessage>) => {
+    const prepare: PrepareAssistantTranscriptMessage = (message) => {
       claimOps.releaseTurn(claim);
       return message;
     };

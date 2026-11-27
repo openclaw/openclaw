@@ -3,9 +3,8 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
 import { captureEnvironmentKey } from "../../shared/environment-key.js";
 import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
-import { normalizePluginsConfig } from "../config-state.js";
+import { resolvePreparedPluginRegistrationConfigKey } from "../config-state.js";
 import { hashStableJson } from "../installed-plugin-index-hash.js";
-import { resolvePluginRegistrationConfigKey } from "../loader-registration-config.js";
 import type { PluginLoadOptions } from "../loader-types.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugin-control-plane-context.js";
@@ -89,9 +88,9 @@ export function setPluginRuntimeLoadContext(
     registrationConfigKey:
       previous?.registrationConfigKey ??
       registrationConfigKey ??
-      resolvePluginRegistrationConfigKey({
-        runtimeEntries: normalizePluginsConfig(context.config.plugins).entries,
-        sourceEntries: normalizePluginsConfig(context.activationSourceConfig.plugins).entries,
+      resolvePreparedPluginRegistrationConfigKey({
+        runtimeConfig: context.config.plugins,
+        sourceConfig: context.activationSourceConfig.plugins,
       }),
     declaredProviderOwners:
       context.metadataSnapshot &&

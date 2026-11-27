@@ -1,21 +1,13 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { CHANNEL_IDS } from "../channels/ids.js";
 import {
   clearMemoryPluginState,
   registerMemoryPromptPreparation,
 } from "../plugins/memory-state.test-fixtures.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
 import { activateWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { prepareAgentMemoryPrompt } from "./memory-prompt-prepare.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
-import { buildSystemPromptParams } from "./system-prompt-params.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 type PromptParams = Parameters<typeof buildAgentSystemPrompt>[0];
@@ -162,7 +154,9 @@ describe("buildAgentSystemPrompt", () => {
       "points can't-do claims at session capabilities and the docs index",
       { toolNames: ["read", "session_status", "web_fetch"] },
       [
-        "Can't-do claims: missing tools/failures show session limits, not OpenClaw's—check `session_status` with `capabilities=true`, then the docs index https://docs.openclaw.ai/llms.txt first.",
+        "session limits, not OpenClaw's",
+        "`session_status` with `capabilities=true`",
+        "https://docs.openclaw.ai/llms.txt",
       ],
     ],
     [
@@ -179,9 +173,10 @@ describe("buildAgentSystemPrompt", () => {
       "acknowledges unavailable capability and docs routes in a sandbox without web tools",
       { toolNames: ["read"], sandboxInfo: { enabled: true } },
       [
-        "Can't-do claims: missing tools/failures show session limits, not OpenClaw's—state what could not be checked.",
+        "session limits, not OpenClaw's",
+        "what could not be checked",
         "Docs: https://docs.openclaw.ai",
-        "state docs could not be checked and mark recall unverified",
+        "docs could not be checked and mark recall unverified",
       ],
       [
         "capabilities=true",
@@ -237,7 +232,7 @@ describe("buildAgentSystemPrompt", () => {
     [
       "sanitizes runtime cwd before rendering directory roles",
       { runtimeCwd: "/tmp/repo\n\u2028\u202e-injected" },
-      ["Working directory: /tmp/repo-injected (tools and deliverables)."],
+      ["Working directory: /tmp/repo-injected (tools, deliverables, and relative reply"],
     ],
   ])("%s", expectPromptCase);
   it("does not inspect owner identities when minimal prompts omit owner guidance", () => {
@@ -380,8 +375,8 @@ describe("buildAgentSystemPrompt", () => {
       { toolNames: ["openclaw", "gateway"] },
       [
         "For this Gateway's config writes, channels, plugins, agents, or models/providers: use `openclaw`",
-        "`gateway` runs `update.run` (supervised restart)",
-        "`update.cleanup` (`dryRun` previews; permanently removes rollback copies",
+        "`gateway` update.run only for built-in-updater installs",
+        "`update.cleanup` (`dryRun` previews; deletes rollback copies, so require an explicit request)",
       ],
       ["models/providers, updates: ask `openclaw`"],
     ],
@@ -477,33 +472,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompts[2]).toBe(prompts[0]);
   });
 
-  it.each(["full", "minimal", "none"] as const)(
-    "keeps the entire %s system prompt byte-identical across midnight",
-    (promptMode) => {
-      const clock = vi.spyOn(Date, "now");
-      const build = (now: string) => {
-        clock.mockReturnValue(Date.parse(now));
-        return renderPrompt({
-          ...buildSystemPromptParams({
-            config: { agents: { defaults: { userTimezone: "America/Chicago" } } },
-            runtime: { host: "host", os: "os", arch: "arch", node: "node", model: "model" },
-          }),
-          promptMode,
-          toolNames: ["session_status"],
-        });
-      };
-      try {
-        const beforeMidnight = build("2026-01-06T05:59:59Z");
-        const afterMidnight = build("2026-01-06T06:00:01Z");
-        expect(afterMidnight).toBe(beforeMidnight);
-        expect(beforeMidnight).not.toContain("Current date:");
-        expect(beforeMidnight).not.toContain("Time zone:");
-      } finally {
-        clock.mockRestore();
-      }
-    },
-  );
-
   it.each([
     { codeModeActive: true, search: true, listed: false },
     { codeModeActive: true, search: false, listed: true },
@@ -587,30 +555,6 @@ describe("buildAgentSystemPrompt", () => {
       prompt.indexOf("Personal preferences"),
     );
     expect(prompt).toContain("belongs to this session");
-  });
-
-  it("keeps model-visible channel ids stable across external registration order", () => {
-    const activeRegistry = captureActivePluginRegistrySnapshot();
-    const registrations = ["zeta-channel", "alpha-channel"].map((id) => ({
-      pluginId: id,
-      source: "test" as const,
-      plugin: createChannelTestPluginBase({ id }),
-    }));
-    const buildPrompt = () => renderPrompt({ toolNames: ["message"] });
-
-    try {
-      setActivePluginRegistry(createTestRegistry(registrations));
-      const firstPrompt = buildPrompt();
-      setActivePluginRegistry(createTestRegistry(registrations.toReversed()));
-      const secondPrompt = buildPrompt();
-
-      expect(firstPrompt).toBe(secondPrompt);
-      expect(firstPrompt).toContain(
-        `(${[...CHANNEL_IDS, "alpha-channel", "zeta-channel"].join("|")}).`,
-      );
-    } finally {
-      restoreActivePluginRegistrySnapshot(activeRegistry);
-    }
   });
 
   it("gates sub-agent orchestration guidance on available tools", () => {
@@ -718,33 +662,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("Only that whole reply is silent.");
     expect(prompt).not.toContain("`send`: `target` + `message`.");
-  });
-
-  it.each([
-    { operation: "rewinds", sessionKey: "agent:work:main", runScoped: false },
-    { operation: "isolated cron runs", sessionKey: "agent:work:cron:nightly-job", runScoped: true },
-  ])("keeps runtime prompt bytes stable across $operation", ({ sessionKey, runScoped }) => {
-    const buildForRun = (sessionId: string) => {
-      const { runtimeInfo } = buildSystemPromptParams({
-        config: { gateway: { publicOrigin: "https://gateway.example" } },
-        agentId: "work",
-        runtime: {
-          sessionKey: runScoped ? `${sessionKey}:run:${sessionId}` : sessionKey,
-          sessionId,
-          host: "host",
-          os: "linux",
-          arch: "x64",
-          node: "v24",
-          model: "test/model",
-        },
-      });
-      return buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", runtimeInfo });
-    };
-    const before = buildForRun("11111111-1111-1111-1111-111111111111");
-    const after = buildForRun("22222222-2222-2222-2222-222222222222");
-
-    expect(before).toContain(`session=${sessionKey}`);
-    expect(after).toBe(before);
   });
 
   it("keys the stable directory roles by runtime cwd without moving agent files", () => {

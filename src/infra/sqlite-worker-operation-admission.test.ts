@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
+import fs, { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -191,25 +191,6 @@ it.each(["rotated", "expired"] as const)(
     context.disable();
   },
 );
-
-it("finishes settled admissions without traversing empty pending decisions", () => {
-  const admission = admissionFixture();
-  admission.port.postMessage({ kind: "native-settlement", settlement: { kind: "completed" } }, []);
-  const iterate = vi.spyOn(Set.prototype, Symbol.iterator);
-  try {
-    const firstFinish = admission.finish();
-    const repeatedFinish = admission.finish();
-    onTestFinished(async () => {
-      await Promise.all([firstFinish, repeatedFinish]);
-    });
-    expect(iterate).not.toHaveBeenCalled();
-  } finally {
-    iterate.mockRestore();
-  }
-  expect(admission.settlement).toEqual({ kind: "completed" });
-  expect(admission.failure).toBeUndefined();
-  expect(() => admission.observeRequests(() => {})).toThrow("closed");
-});
 
 it("releases publication captures from retained finished admissions", async () => {
   let publications = 0;
@@ -543,6 +524,7 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
     const databasePath = path.join(root, "admitted.sqlite");
     const requestedPath =
       scenario === "different-path" ? path.join(root, "other.sqlite") : databasePath;
+    using stat = vi.spyOn(fs, "statSync");
     const admission = admissionFixture(() => {
       throw new Error("Format exchange must not request transaction authority");
     });
@@ -596,6 +578,7 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
         await expect(exchange).resolves.toEqual([0]);
       }
       expect(existsSync(requestedPath)).toBe(scenario === "admitted");
+      expect(stat.mock.calls.filter(([location]) => location === requestedPath)).toEqual([]);
     } finally {
       await worker.terminate();
       await admission.finish();

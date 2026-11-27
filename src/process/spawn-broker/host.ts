@@ -34,7 +34,11 @@ import {
   type BrokerCommandRequest as Request,
 } from "./commands.js";
 import { BrokerFileReads } from "./file-reads.js";
-import type { SpawnBrokerHost } from "./host-contract.js";
+import type {
+  AttachmentBrokerHost,
+  SpawnBrokerHost,
+  SpawnBrokerHostOptions,
+} from "./host-contract.js";
 import { BrokerIpcAdmissionError, createBrokerReceiver, createBrokerSender } from "./ipc.js";
 import {
   childCapacityError,
@@ -55,7 +59,7 @@ import {
 import {
   SPAWN_BROKER_STARTUP_TIMEOUT_MS,
   spawnBrokerStartupNowMs,
-  type BrokerBootstrap,
+  createBrokerBootstrap,
   type BrokerResourceRequest,
   type BrokerResourceResponse,
 } from "./resource-protocol.js";
@@ -110,18 +114,14 @@ class BrokerHost implements SpawnBrokerHost {
   };
 
   constructor(
-    private readonly options: {
-      onReady?: (pid: number, restarted: boolean) => void;
-      onClosed?: () => void;
-      workerUrl?: URL;
-      nativeResources?: true;
-    } = {},
+    private readonly options: SpawnBrokerHostOptions = {},
+    attachmentsOnly?: true,
   ) {
     this.workerUrl =
       options.workerUrl ?? resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker);
     this.entryPath = fileURLToPath(this.workerUrl);
     if (options.nativeResources) {
-      this.resourceAuthority = createNativeResourceAuthority();
+      this.resourceAuthority = createNativeResourceAuthority(attachmentsOnly);
       this.resourceClaims = new BrokerResourceClaims({
         transmit: async (request) => {
           if (!this.available) {
@@ -150,7 +150,8 @@ class BrokerHost implements SpawnBrokerHost {
     return this.resourceClaims?.hasOpenClaims ?? false;
   }
   get nativeResourceAdmissionClosed(): boolean {
-    return this.resourceClaims?.admissionClosed ?? false;
+    // Native IPC state can change before the disconnect callback is delivered.
+    return (this.resourceClaims?.admissionClosed ?? false) || this.process?.connected === false;
   }
   ready(): Promise<void> {
     return this.closing
@@ -213,7 +214,7 @@ class BrokerHost implements SpawnBrokerHost {
     if (!this.resourceClaims || !this.process) {
       return;
     }
-    if (this.closing || this.resourceClaims.hasOpenClaims || this.requests.size > 0) {
+    if (this.closing || this.resourceClaims.hasReferencedClaims || this.requests.size > 0) {
       this.process.ref();
       process.ref(this.process.stderr);
       // Newer Bun releases, like Node, reference IPC independently of the child.
@@ -238,6 +239,9 @@ class BrokerHost implements SpawnBrokerHost {
     message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
     initiateSpawn?: SpawnInitiation,
   ): Request {
+    if (this.resourceAuthority?.attachmentsOnly) {
+      throw new SpawnBrokerError("Attachment-only broker cannot run commands");
+    }
     message.admission = getSpawnBrokerAdmission();
     const capacityError = childCapacityError(this.childAdmissions.values(), message.admission);
     const request = createBrokerCommandRequest(message, initiateSpawn, this.transmit.bind(this));
@@ -324,7 +328,7 @@ class BrokerHost implements SpawnBrokerHost {
   }
 
   private transmit(
-    message: BrokerRequest | Exclude<BrokerResourceRequest, { type: "resource-attach" }>,
+    message: BrokerRequest | Buffer | Exclude<BrokerResourceRequest, { type: "resource-attach" }>,
     handle?: SendHandle,
     initiateSpawn?: SpawnInitiation,
   ): Promise<void> {
@@ -345,12 +349,7 @@ class BrokerHost implements SpawnBrokerHost {
       return;
     }
     const generation = this.generation++;
-    const bootstrap: BrokerBootstrap = {
-      type: "bootstrap",
-      ...(this.resourceAuthority
-        ? { nativeResource: { ...this.resourceAuthority, generation } }
-        : {}),
-    };
+    const bootstrap = createBrokerBootstrap(this.resourceAuthority, generation);
     if (serialize(bootstrap).byteLength > MAX_BOOTSTRAP_BYTES) {
       throw new SpawnBrokerError("Spawn broker bootstrap exceeds its IPC bound");
     }
@@ -736,8 +735,11 @@ class BrokerHost implements SpawnBrokerHost {
   }
 }
 
-export function createSpawnBrokerHost(
-  options?: ConstructorParameters<typeof BrokerHost>[0],
-): SpawnBrokerHost {
+/** Worker lifecycle owners can only attach resources, never start commands. */
+export function createAttachmentBrokerHost(workerUrl: URL): AttachmentBrokerHost {
+  return new BrokerHost({ nativeResources: true, workerUrl }, true);
+}
+
+export function createSpawnBrokerHost(options?: SpawnBrokerHostOptions): SpawnBrokerHost {
   return new BrokerHost(options);
 }

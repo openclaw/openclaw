@@ -42,8 +42,7 @@ import {
 } from "../../openclaw-id/tunnel-principal.js";
 import { hasCurrentGatewayOperatorAccess } from "../../operator-access-policy.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
-import { isPublicationReaderCurrent } from "../../publication-reader.js";
-import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
+import { isPublicationTransportCurrent } from "../../publication-reader.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
 import { classifyGatewayStaleInstall } from "../../stale-install.js";
@@ -199,16 +198,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         ? client.internal.operatorDeviceTokenIdentity
         : undefined;
     const reconnectProfile = client.authenticatedUserProfile?.profileId;
-    const hasCurrentPublicationReader = () => {
-      const reader = client.internal?.publicationReader;
-      if (!reader || isPublicationReaderCurrent(reader)) {
+    const hasCurrentPublicationTransport = () => {
+      const reader = client.internal?.publicationTransport;
+      if (!reader || isPublicationTransportCurrent(reader)) {
         return true;
       }
       invalidateGatewayPolicyClient(client, {
-        reason: "publication-reader-authority-changed",
+        reason: "publication-transport-authority-changed",
         code: 4001,
-        message: "publication reader authority changed",
-        close: () => close(4001, "publication reader authority changed"),
+        message: "Publication transport credentials changed. Reconnect and try again.",
+        close: () =>
+          close(4001, "Publication transport credentials changed. Reconnect and try again."),
       });
       return false;
     };
@@ -216,7 +216,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
       () => {
-        if (!hasCurrentPublicationReader() || !hasCurrentIngress()) {
+        if (!hasCurrentPublicationTransport() || !hasCurrentIngress()) {
           return false;
         }
         if (!hasCurrentGatewayOperatorAccess(client.internal?.operatorAccessAuthority)) {
@@ -287,7 +287,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 : {}),
             },
             isCurrent: () =>
-              hasCurrentPublicationReader() &&
+              hasCurrentPublicationTransport() &&
               hasCurrentIngress() &&
               hasCurrentGatewayPolicyClientSource(client) &&
               isCommittedGrantCurrent(),
@@ -363,11 +363,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       const expectedProfileBinding =
         req.expectedProfileId === undefined
           ? undefined
-          : await createExpectedProfileBinding(req.expectedProfileId, client, () => {
-              if (!hasCurrentClientAuthority()) {
-                throw new Error("Gateway requester authority changed");
-              }
-            });
+          : await createExpectedProfileBinding(req.expectedProfileId, client);
       const publishResponse = (
         initialOk: boolean,
         initialPayload?: unknown,
@@ -568,29 +564,25 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           }
           await runOutsideGatewayRootWorkAdmission(() =>
             handleGatewayRequest(
-              bindWebSocketRequestMutationAuthority(
-                {
-                  req,
-                  respond,
-                  acceptsSerializedJson: true,
-                  acceptsDeflatedSegments: params.handler.socket.acceptsDeflatedSegments,
-                  client,
-                  isWebchatConnect: params.isWebchatConnect,
-                  hasCurrentClientAuthority,
-                  expectedProfileBinding,
-                  extraHandlers,
-                  methodRegistry: getMethodRegistry?.(),
-                  context,
-                  ...(admission ? { admission } : {}),
-                  requestEntry: entry,
-                  onHandlerStart: () => {
-                    handlerStarted = true;
-                  },
-                  ...(signal ? { signal } : {}),
-                },
+              {
+                req,
+                respond,
+                acceptsSerializedJson: true,
+                acceptsDeflatedSegments: params.handler.socket.acceptsDeflatedSegments,
                 client,
-                getRequiredSharedGatewaySessionGeneration,
-              ),
+                isWebchatConnect: params.isWebchatConnect,
+                hasCurrentClientAuthority,
+                expectedProfileBinding,
+                extraHandlers,
+                methodRegistry: getMethodRegistry?.(),
+                context,
+                ...(admission ? { admission } : {}),
+                requestEntry: entry,
+                onHandlerStart: () => {
+                  handlerStarted = true;
+                },
+                ...(signal ? { signal } : {}),
+              },
               diagnostics,
             ),
           );

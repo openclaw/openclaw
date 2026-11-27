@@ -53,6 +53,7 @@ export const SESSION_DASHBOARD_ROW_FIELDS: ReadonlySet<string> = new Set([
   "childOwnerSessionKeys",
   "isMain",
   "worktree",
+  "worktreeState",
   "repository",
   "execNode",
 ]);
@@ -89,6 +90,7 @@ export const SESSION_SIDEBAR_ROW_FIELDS: ReadonlySet<string> = new Set([
   "hiddenFromInvolvingMe",
   "visibility",
   "sharingRole",
+  "invitedAccess",
   "communication",
   "effectiveCommunication",
   "hasActiveRun",

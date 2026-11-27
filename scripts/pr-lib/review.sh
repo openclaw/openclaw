@@ -384,6 +384,59 @@ correction_review_snapshot() (
   done
 )
 
+# Incoming succession validates retained review bytes without review_guard:
+# that guard can recover a journal or change the checkout through enter_worktree.
+incoming_workflow_review_snapshot() (
+  local pr="$1" head="$2" tree="$3" review="$4" snapshot
+  local PR_NUMBER="" PR_HEAD_SHA="" REVIEW_MODE=""
+  snapshot=$(pr_batch_wrapper_git workflow-ready-snapshot "$canonical_repo_root" "$pr" "$PWD" "$head" "$tree" "$review" incoming) || return 1
+  source .local/pr-meta.env || return 1
+  source .local/review-mode.env || return 1
+  [ "$PR_NUMBER" = "$pr" ] && [ "$PR_HEAD_SHA" = "$head" ] && [ "$REVIEW_MODE" = pr ] || {
+    echo "Incoming workflow succession requires the exact ordinary PR review." >&2; return 1;
+  }
+  validate_review_artifact_data && require_ready_review_recommendation || return 1
+  printf '%s\n' "$snapshot"
+)
+
+# READY succession is deliberately narrower than ordinary preparation: no
+# incoming-only review, local/hosted alias, correction or pending-proof authority.
+ready_workflow_review_snapshot() (
+  local pr="$1" head="$2" tree="$3" review="$4"
+  local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE="" PREP_BRANCH="" PREP_REVIEW_MODE=""
+  local PREP_INCOMING_JSON_OID="" PREP_BASELINE_REFRESH_HEAD="" PREP_BASELINE_REFRESH_OID=""
+  local REVIEW_MODE="" PR_HEAD_SHA="" prepared_branch
+  for receipt in prep-context.env pr-meta.env review-mode.env prep.env; do
+    [ -f ".local/$receipt" ] && [ ! -L ".local/$receipt" ] || return 1
+  done
+  source .local/prep-context.env || return 1
+  [ "$PR_NUMBER" = "$pr" ] && [ "$PREP_REVIEW_MODE" = ready ] &&
+    [ "$PR_HEAD_SHA_BEFORE" = "$head" ] &&
+    [ -z "$PREP_INCOMING_JSON_OID$PREP_BASELINE_REFRESH_HEAD$PREP_BASELINE_REFRESH_OID" ] || {
+    echo "READY workflow succession requires exact ordinary preparation identity." >&2; return 1;
+  }
+  prepared_branch="$PR_HEAD"
+  PR_NUMBER="" PR_HEAD=""
+  source .local/pr-meta.env || return 1
+  source .local/review-mode.env || return 1
+  [ "$PR_NUMBER" = "$pr" ] && [ "$PR_HEAD_SHA" = "$head" ] &&
+    [ "$PR_HEAD" = "$prepared_branch" ] && [ "$REVIEW_MODE" = pr ] &&
+    [ "$(pr_git rev-parse HEAD)" = "$head" ] &&
+    [ "$(pr_git branch --show-current)" = "$PREP_BRANCH" ] || {
+    echo "READY workflow succession requires the same reviewed, prepared and hosted candidate." >&2; return 1;
+  }
+  pr_git verify-commit "$head" >/dev/null 2>&1 || return 1
+  (
+    local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE="" PREP_HEAD_SHA="" LOCAL_PREP_HEAD_SHA=""
+    source .local/prep.env || return 1
+    [ "$PR_NUMBER" = "$pr" ] && [ "$PR_HEAD" = "$prepared_branch" ] &&
+      [ "$PR_HEAD_SHA_BEFORE" = "$head" ] && [ "$PREP_HEAD_SHA" = "$head" ] &&
+      [ "$LOCAL_PREP_HEAD_SHA" = "$head" ]
+  ) || { echo "READY succession requires exact completed preparation, without commit aliases." >&2; return 1; }
+  validate_review_artifact_data && require_ready_review_recommendation || return 1
+  pr_batch_wrapper_git workflow-ready-snapshot "$canonical_repo_root" "$pr" "$PWD" "$head" "$tree" "$review"
+)
+
 correction_review_snapshot_with_publication() {
   # Derive the successor from retained authority, not a fresh post-push snapshot
   # that could accidentally admit unrelated review or receipt changes.

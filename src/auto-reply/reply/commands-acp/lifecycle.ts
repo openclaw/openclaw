@@ -73,7 +73,6 @@ async function persistSpawnedSessionLabel(params: {
   });
 
   // Only the requester store has an in-memory snapshot to keep coherent.
-  params.commandParams.command.assertOwnerCurrent?.();
   if (params.commandParams.sessionStore && params.commandParams.storePath === storePath) {
     const existing = params.commandParams.sessionStore[params.sessionKey];
     if (existing) {
@@ -90,10 +89,7 @@ async function persistSpawnedSessionLabel(params: {
       agentId,
       sessionKey: params.sessionKey,
     },
-    () => {
-      params.commandParams.command.assertOwnerCurrent?.();
-      return { label, updatedAt: now };
-    },
+    () => ({ label, updatedAt: now }),
   );
 }
 
@@ -158,7 +154,6 @@ export async function handleAcpSpawnAction(
   let initialized: Awaited<ReturnType<typeof acpManager.initializeSession>>;
   try {
     initialized = await acpManager.initializeSession({
-      assertActive: params.command.assertOwnerCurrent,
       cfg: params.cfg,
       sessionKey,
       agentId: ownerAgentId,
@@ -273,9 +268,7 @@ async function withResolvedAcpSessionTarget(params: {
   const resolved = await acpManager.resolveSessionAsync({
     cfg: params.commandParams.cfg,
     ...target,
-    assertCurrent: params.commandParams.command.assertOwnerCurrent,
   });
-  params.commandParams.command.assertOwnerCurrent?.();
   const error = resolveAcpSessionResolutionError(resolved);
   if (error) {
     return acpCommandErrorReply(error, error.message, "ACP_SESSION_INIT_FAILED");
@@ -300,7 +293,6 @@ export async function handleAcpCancelAction(
     run: async ({ acpManager, sessionKey, agentId }) =>
       await withAcpCommandErrorBoundary({
         run: async () => {
-          const assertCurrent = params.command.assertOwnerCurrent;
           const { storePath } = resolveSessionStorePathForAcp({
             cfg: params.cfg,
             sessionKey,
@@ -310,7 +302,6 @@ export async function handleAcpCancelAction(
           return await runSessionMutation({
             target,
             policy: "allow-live",
-            assertCurrent,
             run: async () => {
               const stop = stopSession({
                 source: "client-session",
@@ -320,7 +311,6 @@ export async function handleAcpCancelAction(
                     readChannelContextGatewayContextResolver(params.rootCtx ?? params.ctx) ??
                     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
                 }),
-                assertCurrent,
                 hookContext: {
                   sessionKey,
                   commandSource: params.command.surface,
@@ -331,7 +321,6 @@ export async function handleAcpCancelAction(
                     cfg: params.cfg,
                     requesterSessionKey: sessionKey,
                     requesterAgentId: agentId,
-                    assertCurrent,
                     beforeKill: async (sealRootSelection) => {
                       sealRootSelection();
                       return await applyParentStop();
@@ -344,7 +333,6 @@ export async function handleAcpCancelAction(
               }
               if (!outcome.aborted && outcome.queuedCancelled === 0) {
                 await acpManager.cancelSession({
-                  assertActive: assertCurrent,
                   cfg: params.cfg,
                   sessionKey,
                   agentId,
@@ -388,7 +376,6 @@ export async function handleAcpSteerAction(
           const steeringManager = getAcpSessionManager();
           let output = "";
           const admittedRunContext = await prepareChannelRunAdmission({
-            assertSourceCurrent: params.command.assertOwnerCurrent,
             cfg: params.cfg,
             runId: requestId,
             agentId,
@@ -443,7 +430,6 @@ export async function handleAcpCloseAction(
       let runtimeNotice;
       try {
         const closed = await acpManager.closeSession({
-          assertActive: params.command.assertOwnerCurrent,
           cfg: params.cfg,
           sessionKey,
           agentId,

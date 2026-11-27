@@ -167,7 +167,7 @@ struct RootSidebar: View {
                         {
                             ForEach(self.selectableAgents, id: \.id) { agent in
                                 Label {
-                                    Text(verbatim: Self.agentDisplayName(agent))
+                                    Text(verbatim: AgentIdentityPresentation.displayName(for: agent))
                                         .font(OpenClawType.subheadSemiBold)
                                 } icon: {
                                     self.agentMenuAvatarImage(agent)
@@ -186,7 +186,7 @@ struct RootSidebar: View {
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("RootTabs.Sidebar.AgentSelector")
                     .accessibilityLabel(String(localized: "Agent"))
-                    .accessibilityValue(Self.agentDisplayName(selectedAgent))
+                    .accessibilityValue(AgentIdentityPresentation.displayName(for: selectedAgent))
                     self.attentionBadges(for: self.model.sessions, targetID: "agent:\(selectedAgent.id)")
                 }
             }
@@ -215,11 +215,11 @@ struct RootSidebar: View {
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: Self.agentDisplayName(agent))
+                Text(verbatim: AgentIdentityPresentation.displayName(for: agent))
                     .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(OpenClawSidebarPalette.textStrong)
                     .lineLimit(1)
-                if let model = Self.agentModelLabel(agent) {
+                if let model = AgentIdentityPresentation.modelLabel(for: agent) {
                     Text(verbatim: model)
                         .font(OpenClawType.caption2Medium)
                         .foregroundStyle(OpenClawSidebarPalette.muted)
@@ -259,19 +259,6 @@ struct RootSidebar: View {
         .accessibilityLabel(String(localized: "New Chat"))
     }
 
-    /// Same key order the Agents roster uses for its model subtitles.
-    static func agentModelLabel(_ agent: AgentSummary) -> String? {
-        guard let model = agent.model else { return nil }
-        for key in ["primary", "name", "id", "model"] {
-            if let value = (model[key]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !value.isEmpty
-            {
-                return value
-            }
-        }
-        return nil
-    }
-
     private func headerIconButton(
         systemName: String,
         label: String,
@@ -294,17 +281,6 @@ struct RootSidebar: View {
         return self.appModel.gatewayDefaultAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    static func agentDisplayName(_ agent: AgentSummary) -> String {
-        let name = agent.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return name.isEmpty ? agent.id : name
-    }
-
-    static func agentBadge(name: String, identity: [String: AnyCodable]?) -> String {
-        AgentIdentityPresentation.badge(
-            avatarText: identity?["emoji"]?.value as? String,
-            displayName: name)
-    }
-
     private func agentAvatarBadge(_ agent: AgentSummary, size: CGFloat) -> some View {
         ZStack {
             Circle()
@@ -314,7 +290,9 @@ struct RootSidebar: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
+                Text(verbatim: AgentIdentityPresentation.badge(
+                    avatarText: agent.identity?["emoji"]?.value as? String,
+                    displayName: AgentIdentityPresentation.displayName(for: agent)))
                     .font(OpenClawType.caption2Bold)
                     .foregroundStyle(OpenClawSidebarPalette.textStrong)
                     .minimumScaleFactor(0.65)

@@ -12,11 +12,6 @@ import {
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import {
-  getCliHistoryWriter,
-  runWithCliHistoryWriter,
-  type CliHistoryWriterFacts,
-} from "./cli-history-boundary.js";
-import {
   applySessionGoalOperation,
   prepareSessionTurnGoalMessage,
 } from "./goals-operation-policy.js";
@@ -97,34 +92,6 @@ export function createSessionActorMemoryTranscript(options: {
     ) {
       throw new SessionTranscriptWriterClaimReboundError();
     }
-  };
-  const withCliWriter = <T>(
-    writer: CliHistoryWriterFacts | undefined,
-    sessionId: string,
-    run: () => T,
-  ): T => {
-    const target = {
-      agentId,
-      storePath: path,
-      sessionKey: state.hot.target.sessionKey,
-      sessionId,
-    };
-    // This actor runs on the host. A writer that needs the owner check takes it from the
-    // caller's live writer when that is in scope; without it, coverage does not advance.
-    const live = writer?.confirmOwner ? getCliHistoryWriter(target) : undefined;
-    const confirmsOwner = live?.runId === writer?.runId ? live?.confirmsOwner : undefined;
-    return runWithCliHistoryWriter(
-      writer
-        ? {
-            ...writer,
-            ...(confirmsOwner ? { confirmsOwner } : {}),
-            target,
-            assertCurrent: () => admit("transaction"),
-            assertReadable: () => admit("transaction"),
-          }
-        : undefined,
-      run,
-    );
   };
   const metadata = (
     input: MetadataInput,
@@ -222,72 +189,70 @@ export function createSessionActorMemoryTranscript(options: {
   };
   return {
     append(append: SessionActorAppend): SessionActorAppendCommitted {
-      return withCliWriter(append.input.cliWriter, append.input.scope.sessionId, () => {
-        let initialEntry: InitialSessionEntryCommit | undefined;
-        if (append.initialization) {
-          if (append.initialization.scope.sessionId !== append.input.scope.sessionId) {
-            throw new SessionTranscriptWriterClaimReboundError();
-          }
-          initialEntry = initializeSessionActorMemoryEntry(options, append.initialization);
-          if (!initialEntry.owned) {
-            throw new SessionTranscriptWriterClaimReboundError();
-          }
+      let initialEntry: InitialSessionEntryCommit | undefined;
+      if (append.initialization) {
+        if (append.initialization.scope.sessionId !== append.input.scope.sessionId) {
+          throw new SessionTranscriptWriterClaimReboundError();
         }
-        const header = append.header
-          ? (() => {
-              if (decodeMetadataAppendEvent(append.header).type !== "session") {
-                throw new Error("Session actor header must be a session event");
-              }
-              return metadata({
-                ...append.header,
-                scope: { ...append.header.scope, ...initialEntry?.fence },
-              });
-            })()
-          : undefined;
-        const input = { ...append.input, scope: { ...append.input.scope, ...initialEntry?.fence } };
-        if (append.kind === "metadata") {
-          return {
-            kind: "metadata",
-            value: metadata({ ...append.input, scope: input.scope }),
-            initialEntry,
-            header,
-          };
+        initialEntry = initializeSessionActorMemoryEntry(options, append.initialization);
+        if (!initialEntry.owned) {
+          throw new SessionTranscriptWriterClaimReboundError();
         }
-        bindScope(input.scope);
-        const message: unknown = JSON.parse(append.input.messageJson);
-        if (!isReadableSessionMessage(message)) {
-          throw new Error("Invalid serialized session transcript message");
-        }
-        const before = version();
-        const appended = appendMessage({
-          message,
-          messageJson: append.input.messageJson,
-          cwd: append.input.cwd,
-          custody: append.input.pendingInput,
-          fresh: append.input.freshMessageCheck
-            ? () => admit("transaction", { kind: "session-message", check: "fresh" })
-            : undefined,
-        });
+      }
+      const header = append.header
+        ? (() => {
+            if (decodeMetadataAppendEvent(append.header).type !== "session") {
+              throw new Error("Session actor header must be a session event");
+            }
+            return metadata({
+              ...append.header,
+              scope: { ...append.header.scope, ...initialEntry?.fence },
+            });
+          })()
+        : undefined;
+      const input = { ...append.input, scope: { ...append.input.scope, ...initialEntry?.fence } };
+      if (append.kind === "metadata") {
         return {
-          kind: "message",
+          kind: "metadata",
+          value: metadata({ ...append.input, scope: input.scope }),
           initialEntry,
           header,
-          value: {
-            snapshot: {
-              ok: true,
-              value: {
-                result: readableResult(appended.result, appended.receipt),
-                before,
-                after: version(),
-                lifecycleRevision: requireEntry().lifecycleRevision,
-                visibleTail: { entryId: tree().leafId, generation: version().generation },
-              },
-            },
-            projectionNeedsReconcile: false,
-            pendingInputReceipt: appended.receipt,
-          },
         };
+      }
+      bindScope(input.scope);
+      const message: unknown = JSON.parse(append.input.messageJson);
+      if (!isReadableSessionMessage(message)) {
+        throw new Error("Invalid serialized session transcript message");
+      }
+      const before = version();
+      const appended = appendMessage({
+        message,
+        messageJson: append.input.messageJson,
+        cwd: append.input.cwd,
+        custody: append.input.pendingInput,
+        fresh: append.input.freshMessageCheck
+          ? () => admit("transaction", { kind: "session-message", check: "fresh" })
+          : undefined,
       });
+      return {
+        kind: "message",
+        initialEntry,
+        header,
+        value: {
+          snapshot: {
+            ok: true,
+            value: {
+              result: readableResult(appended.result, appended.receipt),
+              before,
+              after: version(),
+              lifecycleRevision: requireEntry().lifecycleRevision,
+              visibleTail: { entryId: tree().leafId, generation: version().generation },
+            },
+          },
+          projectionNeedsReconcile: false,
+          pendingInputReceipt: appended.receipt,
+        },
+      };
     },
     appendEvent(input) {
       const entry = requireEntry();
@@ -306,226 +271,223 @@ export function createSessionActorMemoryTranscript(options: {
       return { projectionNeedsReconcile: false };
     },
     turn(input: SessionTurnPlan): SessionTurnCommitted {
-      return withCliWriter(input.cliWriter, input.options.expectedSessionId, () => {
-        const opts = input.options;
-        if (opts.voiceTranscript) {
-          // Incognito voice metadata deliberately stays with the separate durable voice worker.
-          throw new Error(
-            "Incognito transcript commits confirm Talk metadata through the durable voice worker",
-          );
-        }
-        const mutation = opts.sessionTurnMutation;
-        goals.assertRouting(mutation?.routingPredicate);
-        const previous = state.hot.entry;
-        if (input.ownerSources?.length) {
-          const sourceValidation = validateSources(input.ownerSources);
-          if (sourceValidation.refusedSource) {
-            throw new SessionTranscriptWriterClaimReboundError();
-          }
-          admit("transaction", { kind: "session-turn-owner", sourceValidation });
-        }
-        const replay = mutation
-          ? goals.readReceipt(opts.expectedSessionId, mutation.operation)
-          : undefined;
-        if (replay && previous?.sessionId === opts.expectedSessionId) {
-          return {
-            kind: "session-turn",
-            result: {
-              appendedMessages: [],
-              sessionEntry: structuredClone(previous),
-              sessionFile: opts.sessionFile,
-              sessionTurnMutationResult: { result: replay, replayed: true },
-            },
-            sequences: [],
-            projectionNeedsReconcile: false,
-          };
-        }
-        if (
-          opts.initialSessionEntry &&
-          (previous ||
-            opts.initialSessionEntry.sessionId !== opts.expectedSessionId ||
-            opts.expectedLifecycleRevision !== undefined ||
-            opts.expectedWriterRunId !== undefined ||
-            opts.expectedSessionState !== undefined)
-        ) {
+      const opts = input.options;
+      if (opts.voiceTranscript) {
+        // Incognito voice metadata deliberately stays with the separate durable voice worker.
+        throw new Error(
+          "Incognito transcript commits confirm Talk metadata through the durable voice worker",
+        );
+      }
+      const mutation = opts.sessionTurnMutation;
+      goals.assertRouting(mutation?.routingPredicate);
+      const previous = state.hot.entry;
+      if (input.ownerSources?.length) {
+        const sourceValidation = validateSources(input.ownerSources);
+        if (sourceValidation.refusedSource) {
           throw new SessionTranscriptWriterClaimReboundError();
         }
-        if (
-          opts.selectedSessionId !== undefined &&
-          ((previous?.sessionId ?? null) !== opts.selectedSessionId ||
-            previous?.lifecycleRevision !== (opts.selectedLifecycleRevision ?? undefined))
-        ) {
-          throw new SessionTranscriptWriterClaimReboundError();
-        }
-        if (
-          !opts.initialSessionEntry &&
-          !sessionMatchesExpectedTranscriptTurn(previous ? { entry: previous } : undefined, opts)
-        ) {
-          throw new SessionTranscriptWriterClaimReboundError();
-        }
-        if (opts.initialSessionEntry) {
-          state.hot.entry = structuredClone(opts.initialSessionEntry);
-        }
-        const entry = requireEntry();
-        if (opts.acceptedResultGuard) {
-          const error = resolveSessionWorkStartError(state.hot.target.sessionKey, entry, {
-            expectedSessionId: opts.expectedSessionId,
-            purpose: "accepted-result-settlement",
-          });
-          if (
-            entry.activeWriterRunId !==
-              (opts.acceptedResultGuard.expectedWriterRunId ?? undefined) ||
-            error
-          ) {
-            throw new Error(error ?? opts.acceptedResultGuard.errorMessage);
-          }
-        }
-        const goal = mutation
-          ? applySessionGoalOperation(entry, mutation.operation, Date.now())
-          : undefined;
-        if (goal && opts.preparedGoalId) {
-          goal.id = opts.preparedGoalId;
-        }
-        const transactionVersion = version();
-        let custody: SessionPendingInputWorkerReceipt | undefined;
-        const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
-        let predicateSkipped = false;
-        for (const [index, append] of opts.messages.entries()) {
-          const predicate = append.predicate;
-          if (predicate?.kind === "active-entry") {
-            if (
-              !state.hot.transcript.anchors.some((anchor) => anchor.entryId === predicate.entryId)
-            ) {
-              throw new Error(predicate.errorMessage);
-            }
-          } else if (predicate) {
-            const latest = selectSessionTranscriptTreePathNodes(tree(), tree().leafId).findLast(
-              ({ entry: event }) =>
-                isRecord(event) &&
-                event.type === "message" &&
-                isRecord(event.message) &&
-                event.message.role === "assistant",
-            )?.entry;
-            const message = isRecord(latest) ? latest.message : undefined;
-            if (
-              resolveTerminalAssistantTranscriptRunId(
-                message,
-                readSessionTranscriptRunId(message),
-              ) === predicate.runId &&
-              extractAssistantPhaseText(message)?.trim() === predicate.text
-            ) {
-              predicateSkipped = true;
-              continue;
-            }
-          }
-          const committed = appendMessage({
-            ...append,
-            message: prepareSessionTurnGoalMessage(append.message, mutation, goal?.id),
-            cwd: append.cwd ?? opts.cwd,
-            custody: input.custody
-              ? { facts: input.custody, relocation: input.relocation }
-              : undefined,
-            fresh: () => {
-              if (
-                (append.preparedMessage && !append.preparedMessage.prepared) ||
-                (append.preparationVersion &&
-                  !isDeepStrictEqual(append.preparationVersion, transactionVersion))
-              ) {
-                throw new SqliteTranscriptMutationConflictError(entry.sessionId);
-              }
-              if (append.freshGuard) {
-                const sourceValidation = validateSources(append.sources);
-                if (sourceValidation.refusedSource) {
-                  throw new SessionTranscriptWriterClaimReboundError();
-                }
-                admit("transaction", { kind: "session-turn-fresh", index, sourceValidation });
-              }
-            },
-          });
-          if (committed.result) {
-            appendedMessages.push(committed.result);
-          }
-          if (committed.receipt) {
-            custody = {
-              transcriptInputId: committed.receipt.transcriptInputId,
-              consumedInputIds: [
-                ...new Set([
-                  ...(custody?.consumedInputIds ?? []),
-                  ...committed.receipt.consumedInputIds,
-                ]),
-              ],
-            };
-          }
-        }
-        if (
-          opts.atomicGroup &&
-          (appendedMessages.length !== opts.messages.length ||
-            appendedMessages.some((message) => message.appended) !==
-              appendedMessages.every((message) => message.appended))
-        ) {
-          throw new Error("Transcript batch was not wholly inserted or replayed");
-        }
-        if (
-          (mutation || opts.initialSessionEntry) &&
-          (!appendedMessages.length ||
-            appendedMessages.length !== opts.messages.length ||
-            appendedMessages.some((message) => !message.appended))
-        ) {
-          throw new Error(
-            mutation
-              ? "Goal admission requires a new transcript turn in the same transaction."
-              : "Session initialization requires a new transcript turn in the same transaction.",
-          );
-        }
-        const patch = {
-          ...buildExpectedTranscriptTurnSessionPatch({
-            appendedMessages,
-            currentEntry: requireEntry(),
-            expectedSessionState: opts.expectedSessionState,
-            sessionLifecyclePatch: opts.sessionLifecyclePatch,
-            touchSessionEntry: opts.touchSessionEntry,
-          }),
-          ...(mutation ? { goal } : {}),
-        };
-        state.hot.entry = Object.keys(patch).length
-          ? mergeSessionEntry(requireEntry(), patch)
-          : requireEntry();
+        admit("transaction", { kind: "session-turn-owner", sourceValidation });
+      }
+      const replay = mutation
+        ? goals.readReceipt(opts.expectedSessionId, mutation.operation)
+        : undefined;
+      if (replay && previous?.sessionId === opts.expectedSessionId) {
         return {
           kind: "session-turn",
           result: {
-            appendedMessages,
-            predicateSkipped,
-            sessionEntry: structuredClone(state.hot.entry),
+            appendedMessages: [],
+            sessionEntry: structuredClone(previous),
             sessionFile: opts.sessionFile,
-            transcriptVersion: version(),
-            ...(mutation
-              ? {
-                  sessionTurnMutationResult: {
-                    result: goals.commitReceipt(
-                      opts.expectedSessionId,
-                      mutation.operation,
-                      goal,
-                      mutation.runId,
-                    ),
-                    replayed: false,
-                  },
-                }
-              : {}),
+            sessionTurnMutationResult: { result: replay, replayed: true },
           },
-          sequences: appendedMessages.map((message) => {
-            const position = message.appended
-              ? state.hot.transcript.anchors.find((anchor) => anchor.entryId === message.messageId)
-                  ?.activeMessagePosition
-              : undefined;
-            return position === undefined ? undefined : position + 1;
-          }),
+          sequences: [],
           projectionNeedsReconcile: false,
-          custody,
-          ...(input.custody?.preparedAuthority
-            ? { authority: pending.authority(input.custody.agentId) }
-            : {}),
         };
-      });
+      }
+      if (
+        opts.initialSessionEntry &&
+        (previous ||
+          opts.initialSessionEntry.sessionId !== opts.expectedSessionId ||
+          opts.expectedLifecycleRevision !== undefined ||
+          opts.expectedWriterRunId !== undefined ||
+          opts.expectedSessionState !== undefined)
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+      if (
+        opts.selectedSessionId !== undefined &&
+        ((previous?.sessionId ?? null) !== opts.selectedSessionId ||
+          previous?.lifecycleRevision !== (opts.selectedLifecycleRevision ?? undefined))
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+      if (
+        !opts.initialSessionEntry &&
+        !sessionMatchesExpectedTranscriptTurn(previous ? { entry: previous } : undefined, opts)
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+      if (opts.initialSessionEntry) {
+        state.hot.entry = structuredClone(opts.initialSessionEntry);
+      }
+      const entry = requireEntry();
+      if (opts.acceptedResultGuard) {
+        const error = resolveSessionWorkStartError(state.hot.target.sessionKey, entry, {
+          expectedSessionId: opts.expectedSessionId,
+          purpose: "accepted-result-settlement",
+        });
+        if (
+          entry.activeWriterRunId !== (opts.acceptedResultGuard.expectedWriterRunId ?? undefined) ||
+          error
+        ) {
+          throw new Error(error ?? opts.acceptedResultGuard.errorMessage);
+        }
+      }
+      const goal = mutation
+        ? applySessionGoalOperation(entry, mutation.operation, Date.now())
+        : undefined;
+      if (goal && opts.preparedGoalId) {
+        goal.id = opts.preparedGoalId;
+      }
+      const transactionVersion = version();
+      let custody: SessionPendingInputWorkerReceipt | undefined;
+      const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
+      let predicateSkipped = false;
+      for (const [index, append] of opts.messages.entries()) {
+        const predicate = append.predicate;
+        if (predicate?.kind === "active-entry") {
+          if (
+            !state.hot.transcript.anchors.some((anchor) => anchor.entryId === predicate.entryId)
+          ) {
+            throw new Error(predicate.errorMessage);
+          }
+        } else if (predicate) {
+          const latest = selectSessionTranscriptTreePathNodes(tree(), tree().leafId).findLast(
+            ({ entry: event }) =>
+              isRecord(event) &&
+              event.type === "message" &&
+              isRecord(event.message) &&
+              event.message.role === "assistant",
+          )?.entry;
+          const message = isRecord(latest) ? latest.message : undefined;
+          if (
+            resolveTerminalAssistantTranscriptRunId(
+              message,
+              readSessionTranscriptRunId(message),
+            ) === predicate.runId &&
+            extractAssistantPhaseText(message)?.trim() === predicate.text
+          ) {
+            predicateSkipped = true;
+            continue;
+          }
+        }
+        const committed = appendMessage({
+          ...append,
+          message: prepareSessionTurnGoalMessage(append.message, mutation, goal?.id),
+          cwd: append.cwd ?? opts.cwd,
+          custody: input.custody
+            ? { facts: input.custody, relocation: input.relocation }
+            : undefined,
+          fresh: () => {
+            if (
+              (append.preparedMessage && !append.preparedMessage.prepared) ||
+              (append.preparationVersion &&
+                !isDeepStrictEqual(append.preparationVersion, transactionVersion))
+            ) {
+              throw new SqliteTranscriptMutationConflictError(entry.sessionId);
+            }
+            if (append.freshGuard) {
+              const sourceValidation = validateSources(append.sources);
+              if (sourceValidation.refusedSource) {
+                throw new SessionTranscriptWriterClaimReboundError();
+              }
+              admit("transaction", { kind: "session-turn-fresh", index, sourceValidation });
+            }
+          },
+        });
+        if (committed.result) {
+          appendedMessages.push(committed.result);
+        }
+        if (committed.receipt) {
+          custody = {
+            transcriptInputId: committed.receipt.transcriptInputId,
+            consumedInputIds: [
+              ...new Set([
+                ...(custody?.consumedInputIds ?? []),
+                ...committed.receipt.consumedInputIds,
+              ]),
+            ],
+          };
+        }
+      }
+      if (
+        opts.atomicGroup &&
+        (appendedMessages.length !== opts.messages.length ||
+          appendedMessages.some((message) => message.appended) !==
+            appendedMessages.every((message) => message.appended))
+      ) {
+        throw new Error("Transcript batch was not wholly inserted or replayed");
+      }
+      if (
+        (mutation || opts.initialSessionEntry) &&
+        (!appendedMessages.length ||
+          appendedMessages.length !== opts.messages.length ||
+          appendedMessages.some((message) => !message.appended))
+      ) {
+        throw new Error(
+          mutation
+            ? "Goal admission requires a new transcript turn in the same transaction."
+            : "Session initialization requires a new transcript turn in the same transaction.",
+        );
+      }
+      const patch = {
+        ...buildExpectedTranscriptTurnSessionPatch({
+          appendedMessages,
+          currentEntry: requireEntry(),
+          expectedSessionState: opts.expectedSessionState,
+          sessionLifecyclePatch: opts.sessionLifecyclePatch,
+          touchSessionEntry: opts.touchSessionEntry,
+        }),
+        ...(mutation ? { goal } : {}),
+      };
+      state.hot.entry = Object.keys(patch).length
+        ? mergeSessionEntry(requireEntry(), patch)
+        : requireEntry();
+      return {
+        kind: "session-turn",
+        result: {
+          appendedMessages,
+          predicateSkipped,
+          sessionEntry: structuredClone(state.hot.entry),
+          sessionFile: opts.sessionFile,
+          transcriptVersion: version(),
+          ...(mutation
+            ? {
+                sessionTurnMutationResult: {
+                  result: goals.commitReceipt(
+                    opts.expectedSessionId,
+                    mutation.operation,
+                    goal,
+                    mutation.runId,
+                  ),
+                  replayed: false,
+                },
+              }
+            : {}),
+        },
+        sequences: appendedMessages.map((message) => {
+          const position = message.appended
+            ? state.hot.transcript.anchors.find((anchor) => anchor.entryId === message.messageId)
+                ?.activeMessagePosition
+            : undefined;
+          return position === undefined ? undefined : position + 1;
+        }),
+        projectionNeedsReconcile: false,
+        custody,
+        ...(input.custody?.preparedAuthority
+          ? { authority: pending.authority(input.custody.agentId) }
+          : {}),
+      };
     },
   };
 }

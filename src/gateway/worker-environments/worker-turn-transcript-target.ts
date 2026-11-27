@@ -279,7 +279,7 @@ export async function withWorkerTurnTranscriptDatabase<T>(
     }
     controls.signal?.throwIfAborted();
     if (authority && !authority.isCurrent()) {
-      throw new Error("Cloud worker placement authority changed during preparation");
+      throw new Error("Cloud worker placement changed during preparation. Start a new turn.");
     }
   };
   const memory = captureSessionActorStorageOwner(target, {

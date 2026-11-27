@@ -405,17 +405,28 @@ export function combineWhatsAppSendResults(
   kind: WhatsAppSendKind,
   results: readonly WhatsAppSendResult[],
 ): WhatsAppSendResult {
-  const messageIds = uniqueStrings(results.flatMap(listWhatsAppSendResultMessageIds));
-  const messageId = messageIds[0];
+  const receipt = createMessageReceiptFromOutboundResults({
+    results: results.map((result) => ({
+      channel: "whatsapp",
+      receipt: result.receipt?.platformMessageIds.length
+        ? result.receipt
+        : createWhatsAppSendReceipt(result.kind, result.keys),
+    })),
+  });
+  const messageId = receipt.primaryPlatformMessageId;
   if (!messageId) {
     throw createWhatsAppProviderNotAcceptedError(kind);
   }
-  const keys = results.flatMap((result) => result.keys);
+  // Child part indexes start at zero for each accepted send.
+  receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+  receipt.raw = results.flatMap((result) =>
+    result.receipt?.raw?.length ? result.receipt.raw : result.keys.map(toReceiptSourceResult),
+  );
   const combined: WhatsAppSendResult = {
     kind,
     messageId,
-    receipt: createWhatsAppSendReceipt(kind, keys),
-    keys,
+    receipt,
+    keys: results.flatMap((result) => result.keys),
     providerAccepted: results.some((result) => result.providerAccepted),
   };
   if (results.some((result) => activityAccountedWhatsAppSendResults.has(result))) {

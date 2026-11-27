@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
@@ -13,6 +13,7 @@ const { config, coreParams, mocks } = await vi.hoisted(
 
 // mock-isolation: Mailbox ordering uses fixture-owned run admission instead of the process-wide model and tool authority context.
 vi.mock("../../agents/admitted-run-context.js", () => ({
+  closeAdmittedRunDelegatedAuthority: vi.fn(),
   createOperationalRunInstanceRef: mocks.createOperationalRunInstanceRef,
   prepareAgentRunAdmission: mocks.prepareAgentRunAdmission,
 }));
@@ -20,9 +21,20 @@ vi.mock("../../agents/admitted-run-context.js", () => ({
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: mocks.runEmbeddedAgentCore,
 }));
+// mock-isolation: command-owner stand-in keeps the gated backend in control of mailbox ordering.
+vi.mock("../../agents/agent-command.js", async () => {
+  const { createTalkCommandOwnerStandIn } =
+    await import("./client-agent-runtime.command-owner.test-support.js");
+  return {
+    agentCommandFromGatewayIngress: createTalkCommandOwnerStandIn({
+      run: (params) => mocks.runEmbeddedAgentCore(params),
+      prepareAdmission: (params) => mocks.prepareAgentRunAdmission(params),
+    }),
+  };
+});
 vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-consult-runtime.js")>()),
-  consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
+  consultRealtimeVoiceAgentInSessionRuntime: mocks.consultRealtimeVoiceAgent,
 }));
 
 import { parseRealtimeVoiceAgentConsultArgs } from "../../talk/agent-consult-tool.js";
@@ -63,7 +75,10 @@ function gate(backend = true) {
       { once: true },
     );
     await released.promise;
-    return { payloads: [] };
+    return {
+      payloads: [],
+      meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "done" } },
+    };
   };
   if (backend) {
     mocks.runEmbeddedAgentCore.mockImplementationOnce(run);
@@ -129,8 +144,8 @@ let runSequence = 0;
 const startedRunIds: string[] = [];
 
 beforeEach(() => {
-  resetConsultFixture();
   mocks.runEmbeddedAgentCore.mockReset();
+  resetConsultFixture();
   order.length = 0;
   startedRunIds.length = 0;
   mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
@@ -158,11 +173,18 @@ beforeEach(() => {
 
 afterEach(resetSessionControllerStateForTest);
 
-it("runs a Gateway-bound voice consult outside the request scope", async () => {
-  const { enqueue, owner, expectResults } = createOwner(undefined, true);
+it("runs a Gateway-bound voice consult outside the request scope", async ({ signal }) => {
+  const { bridge, enqueue, owner, expectResults } = createOwner(undefined, true);
+  const earlyReply = createDeferred<never>();
+  bridge.submitToolResult.mockImplementationOnce(async (...args: unknown[]) => {
+    earlyReply.reject(
+      new Error(`Talk settled before its backend started: ${JSON.stringify(args[1])}`),
+    );
+  });
   const task = enqueue("consult", "configure the Dial");
   try {
-    await vi.waitFor(() => expect(order).toEqual(["configure the Dial"]));
+    await withinTest(Promise.race([task.started.promise, earlyReply.promise]), signal);
+    expect(order).toEqual(["configure the Dial"]);
     task.release();
     await expectResults("configure the Dial");
   } finally {

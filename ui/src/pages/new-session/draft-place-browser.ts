@@ -66,7 +66,7 @@ export class DraftPlaceBrowser {
   #projectQueryValue = "";
   #environmentQueryValue = "";
   #debouncedProjectQuery = "";
-  #browserOpenValue = false;
+  #browserMode: "browse" | "enter-path" | null = null;
   // Empty lists the Gateway host; otherwise the paired device whose folders are listed.
   #browserNodeIdValue = "";
   #browserProjectPathValue: string | null = null;
@@ -105,7 +105,7 @@ export class DraftPlaceBrowser {
     this.browser = new PlaceBrowserState(
       (path) => {
         const snapshot = this.read().context?.gateway.snapshot;
-        if (snapshot?.phase !== "connected" || !snapshot.client || !this.#browserOpenValue) {
+        if (snapshot?.phase !== "connected" || !snapshot.client || this.#browserMode !== "browse") {
           return Promise.reject(new Error("Folder browser is unavailable"));
         }
         return snapshot.client.request<FsListDirResult>("fs.listDir", {
@@ -269,7 +269,11 @@ export class DraftPlaceBrowser {
   }
 
   get browserOpen(): boolean {
-    return this.#browserOpenValue;
+    return this.#browserMode !== null;
+  }
+
+  get devicePathEntryOpen(): boolean {
+    return this.#browserMode === "enter-path";
   }
 
   get browserNodeId(): string {
@@ -463,10 +467,11 @@ export class DraftPlaceBrowser {
   }
 
   showRoot() {
-    const wasBrowsing = this.#browserOpenValue;
+    const wasBrowsing = this.browserOpen;
+    const focus = this.#browserNodeIdValue ? "search" : "browse";
     this.#resetBrowser(false);
     if (wasBrowsing) {
-      this.#focusProjectView("browse");
+      this.#focusProjectView(focus);
     }
   }
 
@@ -478,8 +483,15 @@ export class DraftPlaceBrowser {
     this.#openBrowser(nodeId, path);
   }
 
+  enterDevicePath(nodeId: string) {
+    this.#browserMode = "enter-path";
+    this.#browserNodeIdValue = nodeId;
+    this.callbacks.changed();
+    this.#focusProjectView("path");
+  }
+
   #openBrowser(nodeId: string, path?: string) {
-    this.#browserOpenValue = true;
+    this.#browserMode = "browse";
     this.#browserNodeIdValue = nodeId;
     this.#browserProjectPathValue = null;
     void this.browser.navigate(path && isAbsolutePath(path) ? path : undefined, "initial");
@@ -575,7 +587,7 @@ export class DraftPlaceBrowser {
   #resetBrowser(closePopover: boolean) {
     this.#focusRequestId += 1;
     this.browser.reset();
-    this.#browserOpenValue = false;
+    this.#browserMode = null;
     this.#browserNodeIdValue = "";
     this.#browserProjectPathValue = null;
     this.#retireRegistration();

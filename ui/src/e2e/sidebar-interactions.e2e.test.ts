@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -52,6 +53,39 @@ function agentResponses(agents: Array<{ id: string; name?: string }>) {
 }
 
 suite.define(() => {
+  it("loads the agent switcher on a direct unknown URL without leaving the 404 page", async () => {
+    await suite.withPage(desktop, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        awaitInitialRoster: false,
+        methodResponses: agentResponses([
+          { id: "main", name: "Main" },
+          { id: "research", name: "Research" },
+        ]),
+      });
+      const requested = new URL("c?missing=1#anchor", suite.server.baseUrl).href;
+      await page.goto(requested);
+      await waitForControlUiGatewayReady(page);
+      const notice = page.getByText("Page not found", { exact: true });
+      await notice.waitFor({ state: "visible" });
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: /Agent menu|Switch agent/ }).click();
+      const menu = sidebar.locator(".sidebar-agent-menu");
+      await expect
+        .poll(() =>
+          menu
+            .locator(".sidebar-agent-menu__agent-list .agent-select__option-label")
+            .allTextContents(),
+        )
+        .toEqual(expect.arrayContaining(["Main", "Research"]));
+      expect(await gateway.getRequests("agents.list")).toHaveLength(1);
+      expect(page.url()).toBe(requested);
+      expect(await notice.isVisible()).toBe(true);
+
+      await menu.getByRole("menuitem", { name: "Research", exact: true }).click();
+      await waitForControlUiRoute(page, { routeId: "chat", pathnamePrefix: "/chat/research" });
+    });
+  });
+
   it("keeps every new-session plus native and opens group and catalog targets without creating sessions", async () => {
     await suite.withPage(desktop, async ({ context, page }) => {
       const agentId = "research";

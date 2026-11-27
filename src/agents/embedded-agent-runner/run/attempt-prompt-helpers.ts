@@ -17,6 +17,7 @@ import {
 } from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { truncateUtf16Safe } from "../../../utils.js";
+import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
@@ -28,6 +29,7 @@ import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-con
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
 import type { DecisionPromptBuildFields } from "./attempt-decision-prefilter.js";
+import { attachCompactionAccountingRecorder } from "./compaction-accounting-bridge.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type ResolvedPromptBuildHookResult = PluginHookBeforePromptBuildResult & {
@@ -372,6 +374,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "runtimePlan"
   | "userTurnTranscriptRecorder"
 > & {
+  admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"];
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
 
@@ -402,7 +405,7 @@ export function buildAfterTurnRuntimeContext(params: {
       : undefined;
   const tokenBudget = floorPositiveFiniteNumber(params.tokenBudget);
   const currentTokenCount = floorPositiveFiniteNumber(params.currentTokenCount);
-  return {
+  const runtimeContext: ContextEngineRuntimeContext = {
     ...buildEmbeddedCompactionRuntimeContext(
       {
         sessionKey: params.attempt.sessionKey,
@@ -458,6 +461,10 @@ export function buildAfterTurnRuntimeContext(params: {
     transcriptStorage: { kind: "sqlite" },
     ...(sessionTarget ? { sessionTarget } : {}),
   };
+  attachCompactionAccountingRecorder(runtimeContext, {
+    operatorAuthority: readAdmittedRunOperatorAuthority(params.attempt.admittedRunContext),
+  });
+  return runtimeContext;
 }
 
 export function buildAfterTurnRuntimeContextFromUsage(

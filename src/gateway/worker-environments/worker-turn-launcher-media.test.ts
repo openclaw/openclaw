@@ -247,7 +247,8 @@ describe("cloud turn media boundary", () => {
     expect(path.dirname(mediaUrl!)).toBe(path.join(getMediaDir(), "outbound"));
     await expect(fs.readFile(mediaUrl!)).resolves.toEqual(bytes);
     await expect(fs.stat(remotePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect((await openSessionManager()).getLeafEntry()).toMatchObject({
+    const branch = (await openSessionManager()).getBranch();
+    expect(branch.findLast((entry) => entry.type === "message")).toMatchObject({
       type: "message",
       message: { role: "assistant", content: [{ type: "text", text }] },
     });

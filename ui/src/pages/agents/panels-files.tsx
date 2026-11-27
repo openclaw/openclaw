@@ -226,7 +226,7 @@ export function AgentFiles(
           list() ? (
             <>
               {t("agents.files.coreFilesSubtitle")} {t("agents.files.workspace")}:
-              <code>{list()?.workspace}</code>
+              <code class="agent-files-workspace">{list()?.workspace}</code>
             </>
           ) : (
             t("agents.files.coreFilesSubtitle")

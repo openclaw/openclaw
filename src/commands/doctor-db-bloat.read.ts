@@ -202,6 +202,7 @@ export async function readSqliteDatabaseBloat(params: {
     withOpenClawStateDatabaseReadSnapshot(async () => readRegisteredAgentDatabases(params, false), {
       ...params,
       signal,
+      preferLiveOwner: true,
     }),
   );
   for (const entry of registered) {

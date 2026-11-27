@@ -1,4 +1,3 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -104,8 +103,8 @@ export type VoiceSessionEntry = {
   // Conversation-only segments may retain their WAV after this recording frontier settles.
   processingQueue: Promise<void>;
   conversations: import("./voice-conversation-input.js").DiscordVoiceConversationQueue;
-  audioInputBudget: Awaited<
-    ReturnType<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>
+  readAudioInputBudget: ReturnType<
+    typeof import("openclaw/plugin-sdk/media-understanding-runtime").createAudioInputBudgetReader
   >;
   ttsStreamFallbackWarned: boolean;
   capture: VoiceCaptureState;
