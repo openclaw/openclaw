@@ -48,8 +48,9 @@ function shellEarlyReleaseLink(
 }
 
 /** The one-time rebuild, run from the checkout. On POSIX shells (proven with systemd and launchd
- * services) it is one line: a failed step starts the previous service again and the line still
- * exits non-zero; running it again finishes a rebuild that stopped part way. */
+ * services) it is one line. A failed step puts the release link back if the line had removed it,
+ * starts the previous service again and still exits non-zero; running the line again finishes a
+ * rebuild that stopped part way. */
 function formatRebuild(platform: NodeJS.Platform, stateDir: string, env: NodeJS.ProcessEnv) {
   const build = [
     "git pull --ff-only",
@@ -65,10 +66,20 @@ function formatRebuild(platform: NodeJS.Platform, stateDir: string, env: NodeJS.
     ];
   }
   const { link, guard } = shellEarlyReleaseLink(stateDir, env);
-  const steps = [...(guard ? [guard] : []), ...build, `rm -f ${link}`, install];
+  // The previous service may start through this link, so a failure after its removal restores it.
+  const saved = "OPENCLAW_EARLY_RELEASE_LINK";
+  const steps = [
+    ...(guard ? [guard] : []),
+    `${saved}=`,
+    ...build,
+    `${saved}=$(readlink ${link} || true)`,
+    `rm -f ${link}`,
+    install,
+  ];
+  const restore = `[ -z "$${saved}" ] || [ -L ${link} ] || ln -s "$${saved}" ${link}`;
   return [
     "Rebuild the checkout once from its directory. It also removes this updater's release link, so the reinstalled Gateway runs the rebuilt checkout; later updates then run normally:",
-    `${steps.join(" && ")} || { openclaw gateway start; false; }`,
+    `${steps.join(" && ")} || { ${restore}; openclaw gateway start; false; }`,
   ];
 }
 

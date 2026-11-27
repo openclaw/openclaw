@@ -2437,7 +2437,7 @@ rebuilt. Nothing rebuilds it automatically, on any platform. Run the printed lin
 checkout. With the default state directory it reads:
 
 ```sh
-git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && rm -f "$HOME/.openclaw/git-install/lib/node_modules/openclaw" && openclaw gateway install --force || { openclaw gateway start; false; }
+OPENCLAW_EARLY_RELEASE_LINK= && git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && OPENCLAW_EARLY_RELEASE_LINK=$(readlink "$HOME/.openclaw/git-install/lib/node_modules/openclaw" || true) && rm -f "$HOME/.openclaw/git-install/lib/node_modules/openclaw" && openclaw gateway install --force || { [ -z "$OPENCLAW_EARLY_RELEASE_LINK" ] || [ -L "$HOME/.openclaw/git-install/lib/node_modules/openclaw" ] || ln -s "$OPENCLAW_EARLY_RELEASE_LINK" "$HOME/.openclaw/git-install/lib/node_modules/openclaw"; openclaw gateway start; false; }
 ```
 
 The printed line names your state directory relative to `$HOME`. For a state directory outside
@@ -2448,8 +2448,8 @@ The Gateway is down while the checkout builds. The older updater's release link
 (`git-install/lib/node_modules/openclaw`) is removed after the build, because while it exists
 `openclaw gateway install` binds the service to that updater's launcher, which keeps serving the
 old release. The reinstalled service then starts the rebuilt Gateway, which migrates state at
-boot. If an earlier step fails, the command starts the previous service again and exits
-non-zero; a failed `pnpm build` can leave the checkout's build incomplete, so fix the reported
+boot. If a step fails, the command puts the link back if it had removed it, starts the previous
+service again and exits non-zero; a failed `pnpm build` can leave the checkout's build incomplete, so fix the reported
 error and run the line again. For this rebuild, PostgreSQL-backed stores still require the
 stopped-writer Doctor procedure in
 [PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).

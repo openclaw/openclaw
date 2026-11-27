@@ -12,8 +12,10 @@ import { refuseEarlyGitReleaseSchemaChange as refuse } from "./update-candidate-
 const roots: string[] = [];
 afterEach(() => cleanupTempDirs(roots));
 
-const rebuild = (link: string) =>
-  `git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && rm -f "${link}/git-install/lib/node_modules/openclaw" && openclaw gateway install --force || { openclaw gateway start; false; }`;
+const rebuild = (link: string) => {
+  const quoted = `"${link}/git-install/lib/node_modules/openclaw"`;
+  return `OPENCLAW_EARLY_RELEASE_LINK= && git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && OPENCLAW_EARLY_RELEASE_LINK=$(readlink ${quoted} || true) && rm -f ${quoted} && openclaw gateway install --force || { [ -z "$OPENCLAW_EARLY_RELEASE_LINK" ] || [ -L ${quoted} ] || ln -s "$OPENCLAW_EARLY_RELEASE_LINK" ${quoted}; openclaw gateway start; false; }`;
+};
 
 function sqlite(file: string, version: number, setup = "") {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -134,7 +136,7 @@ it.runIf(process.platform !== "win32")(
 );
 
 it.runIf(process.platform !== "win32")(
-  "runs the printed line only when the shell can name a state directory outside HOME",
+  "runs the printed line only with a known state directory and restores the link when the install fails",
   () => {
     const { root, stateDir, env } = install({});
     const line = refuse(root, { ...env, HOME: "/nonexistent-home" }, "linux")!
@@ -144,9 +146,11 @@ it.runIf(process.platform !== "win32")(
     const bin = makeTempDir(roots, "openclaw-early-release-bin-");
     const log = path.join(bin, "calls.log");
     for (const tool of ["git", "pnpm", "openclaw"]) {
-      fs.writeFileSync(path.join(bin, tool), `#!/bin/sh\necho "${tool} $*" >> "${log}"\n`, {
-        mode: 0o755,
-      });
+      fs.writeFileSync(
+        path.join(bin, tool),
+        `#!/bin/sh\necho "${tool} $*" >> "${log}"\n[ "$1 $2" = "gateway install" ] && [ -n "$FAIL_INSTALL" ] && exit 1\nexit 0\n`,
+        { mode: 0o755 },
+      );
     }
     const run = (extra: NodeJS.ProcessEnv) =>
       spawnSync("/bin/sh", ["-c", line], {
@@ -161,6 +165,17 @@ it.runIf(process.platform !== "win32")(
     // Nothing ran: the Gateway was not stopped and the link is still there.
     expect(fs.existsSync(log)).toBe(false);
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+
+    // A failed service install puts the link back before starting the previous service.
+    const target = fs.readlinkSync(link);
+    const failed = run({ OPENCLAW_STATE_DIR: stateDir, FAIL_INSTALL: "1" });
+    expect(failed.status).not.toBe(0);
+    expect(fs.readlinkSync(link)).toBe(target);
+    expect(fs.readFileSync(log, "utf8").trim().split("\n").slice(-2)).toEqual([
+      "openclaw gateway install --force",
+      "openclaw gateway start",
+    ]);
+    fs.rmSync(log);
 
     expect(run({ OPENCLAW_STATE_DIR: stateDir }).status).toBe(0);
     expect(fs.readFileSync(log, "utf8").trim().split("\n")).toEqual([
