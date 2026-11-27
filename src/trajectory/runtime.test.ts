@@ -581,17 +581,21 @@ describe("trajectory runtime", () => {
       messagesSnapshot: oversizedMessages(),
     });
 
-    const parsed = restoreTrajectorySnapshots(writes.map((line) => JSON.parse(line)))[0];
+    const parsed = expectDefined(
+      restoreTrajectorySnapshots(writes.map((line) => JSON.parse(line)))[0],
+      "completed event",
+    );
+    const data = expectDefined(parsed.data, "completion data");
     expect(parsed.type).toBe("model.completed");
-    expect(parsed.data).toMatchObject({
+    expect(data).toMatchObject({
       usage,
       promptCache,
       assistantTexts: ["done"],
       finalPromptText: "inspect",
     });
-    expect(parsed.data.finalPromptTextOriginalLength).toBeUndefined();
-    expect(parsed.data.messagesSnapshot).toEqual(oversizedMessages());
-    expect(parsed.data.truncated).toBeUndefined();
+    expect(data.finalPromptTextOriginalLength).toBeUndefined();
+    expect(data.messagesSnapshot).toEqual(oversizedMessages());
+    expect(data.truncated).toBeUndefined();
     const secondUsage = { input: 12, output: 3, total: 15 };
     recorder.recordEvent("model.completed", {
       usage: secondUsage,
