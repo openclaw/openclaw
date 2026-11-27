@@ -12,10 +12,10 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { captureActiveCronManagementAuthority } from "../cron-creator-authority-context.js";
 import type { FollowupRequesterAuthority } from "./completion/session-followup-completion.types.js";
+import { isSubagentDeliveryWithheld } from "./registry/subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import {
   sameRequesterSettleBatch,
-  isRequesterYieldCohortMember,
   resolveCurrentRequesterSettleBatch,
 } from "./registry/subagent-requester-settle-identity.js";
 import {
@@ -29,7 +29,6 @@ import {
 
 type RequesterCronAuthority = {
   managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
-  requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
   requesterSessionKey: string;
   requesterSessionId: string;
   requesterAgentId: string;
@@ -112,15 +111,13 @@ function discard(authority: RequesterCronAuthority): void {
 function isCurrent(authority: RequesterCronAuthority): boolean {
   if (
     !authority.active ||
-    (authority.managementEntitlement?.source === "channel-owner" &&
-      !authority.managementEntitlement.isCurrent()) ||
     authority.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
     !state.bySession.get(authority.requesterSessionKey)?.has(authority)
   ) {
     return false;
   }
   if (authority.kind === "followup") {
-    if (!authority.isFollowupCurrent() || authority.requesterOwner?.isCurrent() !== true) {
+    if (!authority.isFollowupCurrent()) {
       return false;
     }
     const binding = authority.binding;
@@ -132,9 +129,7 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
       entry &&
       isSameSubagentRunOwner(entry, binding.entry) &&
       state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority &&
-      !entry.suppressCompletionDelivery &&
-      !entry.killIntent?.suppressTaskDelivery &&
-      !entry.killReconciliation?.suppressTaskDelivery,
+      !isSubagentDeliveryWithheld(entry),
     );
   }
   let session: PreparedSessionMutationFacts["target"];
@@ -165,13 +160,17 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
   ) {
     return false;
   }
-  const batchRunIds = authority.batch.map((entry) => entry.runId).toSorted();
-  return batch.every(
-    (entry) =>
+  // Earlier partitions leave the authority; its remaining members keep their frozen cohort.
+  return batch.every((entry) => {
+    const wake = entry.requesterSettleWake;
+    return (
       state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority &&
       (authority.rearmGeneration === undefined ||
-        isRequesterYieldCohortMember(entry, batchRunIds, authority.rearmGeneration)),
-  );
+        (wake?.requesterYieldBatch === true &&
+          wake.rearmGeneration === authority.rearmGeneration &&
+          batch.every((member) => wake.batchRunIds?.includes(member.runId))))
+    );
+  });
 }
 
 export type PreparedRequesterCronAuthority = {
@@ -234,7 +233,7 @@ export function prepareRequesterCronAuthority(params: {
         (boundAuthority &&
           current.entry.lifecycleRevision !== boundAuthority.sessionLifecycleRevision)
       ) {
-        throw new Error("Requester session authority changed before yield handoff");
+        throw new Error("Requester session was reset or archived; yield handoff stopped");
       }
     }
   };
@@ -270,7 +269,6 @@ export function prepareRequesterCronAuthority(params: {
         requesterAgentId,
         requesterSessionId: capture.sessionId,
         managementEntitlement: capture.managementEntitlement,
-        requesterOwner: capture.requesterOwner,
         lifecycleGeneration: capture.lifecycleGeneration,
         sessionLifecycleRevision: session.entry.lifecycleRevision,
         sessionFacts,
@@ -408,6 +406,15 @@ export function revokeRequesterCronAuthorityBatch(
       ) {
         continue;
       }
+      // A partition settled ahead of its siblings leaves; the last partition keeps the authority.
+      const remaining = authority.batch.filter(
+        (member) => !batch.some((settled) => isSameSubagentRunOwner(settled, member)),
+      );
+      if (remaining.length > 0 && !authority.runScopeBound) {
+        authority.batch = remaining;
+        state.byEntry.delete(getSubagentRunRuntimeKey(entry));
+        continue;
+      }
       discard(authority);
     }
   }
@@ -516,7 +523,7 @@ async function runRequesterFollowupAuthority<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   if (!isCurrent(authority) || authority.admittedRunId !== undefined) {
-    throw new Error("Requester followup authority is no longer current");
+    throw new Error("Requester followup ended");
   }
   return await activeDispatch.run(
     { authority, runId, isCurrent: () => isCurrent(authority), consumed: false },
@@ -552,13 +559,16 @@ export function captureRequesterFollowupAuthority(params: {
     sessionKey: params.requesterSessionKey,
     agentId: params.requesterAgentId,
   });
-  if (!capture?.requesterOwner || capture.sessionId !== params.requesterSessionId) {
+  // A channel owner's followup returns its automation management to the exact requester.
+  if (
+    capture?.managementEntitlement.source !== "channel-owner" ||
+    capture.sessionId !== params.requesterSessionId
+  ) {
     return undefined;
   }
   const authority: RequesterCronAuthority = {
     kind: "followup",
     ...params,
-    requesterOwner: capture.requesterOwner,
     managementEntitlement: capture.managementEntitlement,
     lifecycleGeneration: capture.lifecycleGeneration,
     isFollowupCurrent: params.isCurrent,
@@ -598,7 +608,7 @@ export function captureRequesterFollowupAuthority(params: {
     },
     async run<T>(runId: string, run: () => Promise<T>): Promise<T> {
       // The followup owner retains caller restrictions separately. This scope
-      // supplies only the captured channel identity to the returning parent.
+      // supplies only the captured automation management to the returning parent.
       return await runRequesterFollowupAuthority(authority, runId, run);
     },
   };
@@ -615,7 +625,7 @@ export function captureRequesterCronAuthorityAdmissionAssertion(params: Requeste
   // Storage can invoke the pre-commit guard outside this dispatch's async context.
   return () => {
     if (!dispatch.consumed && !dispatch.isCurrent()) {
-      throw new Error("Requester authority is no longer current");
+      throw new Error("Requester continuation ended");
     }
   };
 }
@@ -625,7 +635,6 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
       runId: string;
       callerOrigin: { kind: "unknown" };
       managementEntitlement: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
-      requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
       isCurrent: () => boolean;
       bindRunScope: (scope: CronCreatorAuthorityCapability) => void;
       release?: () => void;
@@ -652,7 +661,6 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
     runId: params.runId,
     callerOrigin: { kind: "unknown" },
     managementEntitlement: dispatch.authority.managementEntitlement,
-    requesterOwner: dispatch.authority.requesterOwner,
     isCurrent: dispatch.isCurrent,
     ...(dispatch.pause
       ? {
@@ -671,7 +679,6 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
         scope.runId !== params.runId ||
         scope.isCurrent !== dispatch.isCurrent ||
         scope.managementEntitlement !== dispatch.authority.managementEntitlement ||
-        scope.requesterOwner !== dispatch.authority.requesterOwner ||
         scope.callerOrigin.kind !== "unknown" ||
         !scope.active ||
         scope.signal.aborted

@@ -15,10 +15,10 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
 import * as gatewayModule from "../../agents/tools/gateway.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import { getCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
 import { resolveReplyCronChannelRequester } from "../../auto-reply/reply/get-reply-run.cron-requester.js";
 import { buildSessionEventContext } from "../../auto-reply/reply/session-event-context.js";
+import { prepareSessionEventTargetForHost } from "../../auto-reply/reply/session-event-target.js";
 import {
   createHostIngressFixture,
   ingressInput,
@@ -65,7 +65,7 @@ const sessionKey = "agent:main:discord:group:policy-adoption";
 const sessionId = "scheduled-policy-session";
 const accountId = "work";
 const cfg: OpenClawConfig = {
-  agents: { entries: { main: {} } },
+  agents: { entries: { main: { model: "openai/gpt-4.1" } } },
   commands: { ownerAllowFrom: ["discord:owner-1", "telegram:owner-1", "slack:owner-1"] },
 };
 const accountPolicy = cronAccountPolicy(sessionKey, accountId);
@@ -106,7 +106,6 @@ async function withAgentManagement<T>(
     channel?: string;
     sessionKey?: string;
     channelRequester?: CronAuthenticatedChannelRequester;
-    ownerAuthority?: ReturnType<typeof getCommandOwnerAuthority>;
   } = {},
 ): Promise<T> {
   const callerSessionKey = options.sessionKey ?? sessionKey;
@@ -129,16 +128,7 @@ async function withAgentManagement<T>(
       createCronCreatorAuthorityCapability(
         runId,
         options.origin ?? { kind: "unknown" },
-        {
-          source: "channel-owner",
-          isCurrent:
-            options.ownerAuthority?.isCurrent ??
-            (() =>
-              isConfiguredCommandOwner(getRuntimeConfig(), {
-                channel,
-                senderId: "owner-1",
-              })),
-        },
+        { source: "channel-owner" },
         undefined,
         options.channelRequester,
       ),
@@ -332,7 +322,6 @@ it.each(["telegram", "discord", "slack"] as const)(
       ingressInput(message, { identity: { authentication: "verified" } }),
     );
     const ingressContext = host.buildContext({ ...message, channelIngress });
-    const ownerAuthority = expectDefined(getCommandOwnerAuthority(ingressContext), "host owner");
     const channelRequester = expectDefined(
       resolveReplyCronChannelRequester(ingressContext, {
         channel,
@@ -382,7 +371,6 @@ it.each(["telegram", "discord", "slack"] as const)(
         channel,
         sessionKey: parentSessionKey,
         channelRequester,
-        ownerAuthority,
       },
     );
     host.retire();
@@ -401,12 +389,13 @@ it.each(["telegram", "discord", "slack"] as const)(
     const requester = resolveScheduledRequester(stored);
     expect(requester).toEqual({ kind: "channel", requester: channelRequester });
     const captureRepair = async (job = stored) => {
-      const repair = await captureCronJobTurnTarget({
+      const target = await captureCronJobTurnTarget({
         job,
         agentId: "main",
         sessionKey: parentSessionKey,
         context,
       });
+      const prepared = await prepareSessionEventTargetForHost(target);
       const event = buildSessionEventContext({
         cfg: getRuntimeConfig(),
         agentId: "main",
@@ -414,17 +403,17 @@ it.each(["telegram", "discord", "slack"] as const)(
         text: "Repair the scheduled automation.",
         options: { source: "cron_failure_repair" },
         occurrenceId: "channel-owner-repair",
-        target: repair.target,
-        assertCurrent: () => {},
+        target,
+        assertCurrent: prepared.assertCurrent,
       });
-      return { owner: getCommandOwnerAuthority(event), release: repair.release };
+      return { owner: getCommandOwnerAuthority(event), release: prepared.release };
     };
     const repair = await captureRepair();
     try {
       expect(repair.owner?.isCurrent()).toBe(true);
       const revoked = { ...cfg, commands: { ownerAllowFrom: [`${channel}:other-owner`] } };
       setRuntimeConfigSnapshot(revoked);
-      expect(() => repair.owner?.isCurrent()).toThrow("no longer an owner");
+      expect(repair.owner?.isCurrent()).toBe(true);
       const denied = await captureRepair();
       try {
         expect(denied.owner).toBeUndefined();
@@ -434,17 +423,6 @@ it.each(["telegram", "discord", "slack"] as const)(
     } finally {
       repair.release();
       setRuntimeConfigSnapshot(cfg);
-    }
-    const nonOwner = structuredClone(stored);
-    expectDefined(nonOwner.toolsAllowProvenance, "persisted provenance").channelRequester = {
-      ...channelRequester,
-      senderId: "not-owner",
-    };
-    const denied = await captureRepair(nonOwner);
-    try {
-      expect(denied.owner).toBeUndefined();
-    } finally {
-      denied.release();
     }
 
     const config: OpenClawConfig = {

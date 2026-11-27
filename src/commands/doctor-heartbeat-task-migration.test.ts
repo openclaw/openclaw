@@ -146,7 +146,7 @@ async function createExistingInboxJob(fixture: Awaited<ReturnType<typeof createF
     enabled: false,
     schedule: { kind: "every", everyMs: 5 * 60 * 60_000, anchorMs: fixture.nowMs - 60_000 },
     payload: { kind: "systemEvent", text: "Previous inbox prompt", toolsAllow: ["read"] },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "next-heartbeat",
     state: { lastRunAtMs: fixture.nowMs - 10_000 },
   };
@@ -295,12 +295,20 @@ describe("heartbeat scratch task cron migration", () => {
         cron.update(job.id, {
           payload: { kind: "systemEvent", text: "Check priority inbox items" },
         }),
-      ).rejects.toThrow(
-        'cron sessionTarget "session:agent:research:main" cannot run systemEvent: systemEvent only runs in the main session',
+      ).resolves.toMatchObject({
+        agentId: "research",
+        sessionTarget: job.sessionTarget,
+        payload: { kind: "systemEvent", text: "Check priority inbox items" },
+      });
+      const { delivery: _delivery, ...previous } = persisted!;
+      const converted = (await loadCronJobsStore(fixture.storePath)).jobs.find(
+        (entry) => entry.id === job.id,
       );
-      expect(
-        (await loadCronJobsStore(fixture.storePath)).jobs.find((entry) => entry.id === job.id),
-      ).toEqual(persisted);
+      expect(converted).toEqual({
+        ...previous,
+        payload: { kind: "systemEvent", text: "Check priority inbox items" },
+      });
+      expect(converted).not.toHaveProperty("delivery");
     } finally {
       cron.stop();
     }
@@ -378,7 +386,7 @@ describe("heartbeat scratch task cron migration", () => {
           text: "Keep the existing task prompt",
           toolsAllow: ["read"],
         },
-        sessionTarget: "main",
+        sessionTarget: "session:main",
         wakeMode: "next-heartbeat",
         schedule: { kind: "every", everyMs: 50000, anchorMs: 12 },
         state: { nextRunAtMs: 12345, queuedAtMs: 12345, lastRunAtMs: 9999 },

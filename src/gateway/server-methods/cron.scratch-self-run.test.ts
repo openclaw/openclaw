@@ -1,7 +1,6 @@
 import { expect, it, vi } from "vitest";
 import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { createCronStoreHarness } from "../../cron/service.test-harness.js";
-import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createHistoryJob, createReadService } from "./cron-read.test-support.js";
 import { cronHandlers } from "./cron.js";
@@ -110,18 +109,12 @@ it("keeps other callers out of a trusted job's scratch", async () => {
     // The owner conversation still may not write prompt text under operator authority.
     const owner = callerClient("ops", "default", OWNER.sessionKey);
     expect(reply((await set(owner)).respond).message).toContain("operator access");
-    // A run of another job, an expired claim, and a run whose authority ended are refused.
+    // A run of another job and an expired claim are refused. A run whose authority already
+    // ended is refused at request start (authorizeGatewayRequestPreDispatch), not here.
     expect(reply((await set(other.runClient())).respond).message).toContain("Automation not found");
     expect(reply((await set(runClient(job.id, Date.now() - 1))).respond).message).toContain(
       "Automation not found",
     );
-    const ended = runClient();
-    const authority = ended.internal?.agentRuntimeIdentity?.delegatedAuthority;
-    if (authority?.kind !== "local") {
-      throw new Error("expected local delegated authority");
-    }
-    releaseAgentRunDelegatedAuthority(authority);
-    expect(reply((await set(ended)).respond).message).toContain("no longer active");
     expect((await cron.readScratch(job.id)).scratch?.content).toBe("notes r1");
   } finally {
     cron.stop();

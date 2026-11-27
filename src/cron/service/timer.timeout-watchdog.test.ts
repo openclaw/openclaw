@@ -120,7 +120,7 @@ it.each([false, true])(
     let admitLane: (() => void) | undefined;
     let waitAgain: (() => void) | undefined;
     const job = agentJob(`unstarted-session-${waiting}`, 1);
-    job.sessionTarget = "main";
+    job.sessionTarget = "session:main";
     const { state, advance, jobState } = await fixture(job, {
       runSessionEvent: async ({ onLaneWait, onExecutionStarted, abortSignal }) => {
         onLaneWait?.({ waiting });

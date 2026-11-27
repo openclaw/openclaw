@@ -3,7 +3,7 @@ import type { CronJob } from "../types.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 
 function makeJob(payload: CronJob["payload"]): CronJob {
-  const sessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
+  const sessionTarget = payload.kind === "agentTurn" ? "isolated" : "session:main";
   return {
     id: "job-1",
     name: "job",

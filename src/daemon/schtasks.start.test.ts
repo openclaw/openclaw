@@ -219,6 +219,30 @@ it("explicitly starts a disabled registered node without replacing its launcher"
   expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "schtasks-start" }]]);
 });
 
+it.each(["beforeMutation", "prepareEffect"] as const)(
+  "does not dispatch Scheduled Task Run when %s refuses the prepared effect",
+  async (hook) => {
+    const { env } = await fixture();
+    native.enabled = true;
+    let authorityChecked = false;
+    const prepare = vi.fn(async () => {
+      expect(authorityChecked).toBe(true);
+      throw new Error("Caller refused prepared effect");
+    });
+    await expect(
+      startTask(env, {
+        assertCurrent: () => {
+          authorityChecked = true;
+        },
+        [hook]: prepare,
+      }),
+    ).rejects.toThrow("Caller refused prepared effect");
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(native.running).toBe(false);
+    expect(native.calls.some((args) => args[0] === "/Run")).toBe(false);
+  },
+);
+
 it("does not enable a captured service whose auto-start policy must be preserved", async () => {
   const { env } = await fixture();
   await expect(startTask(env, { preserveAutoStart: true })).rejects.toThrow("disabled");

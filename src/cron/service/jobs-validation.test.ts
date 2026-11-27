@@ -6,38 +6,31 @@ import {
 } from "./jobs-validation.js";
 
 describe("cron target and payload guidance", () => {
-  it.each(["current", "session:agent:main:dashboard:continuation"] as const)(
-    "names %s and the agent-turn fix for a system event",
-    (sessionTarget) => {
-      expect(() =>
-        assertSupportedJobSpec({ sessionTarget, payload: { kind: "systemEvent" } }),
-      ).toThrow(
-        `cron sessionTarget "${sessionTarget}" cannot run systemEvent: systemEvent only runs in the main session; for sessionTarget "${sessionTarget}" use payload {kind:"agentTurn",message}`,
-      );
-    },
-  );
-
-  it.each(["current", "session:agent:main:dashboard:continuation"] as const)(
-    "explains headless scripts and the conversation-turn fix for %s",
-    (sessionTarget) => {
-      expect(() => assertSupportedJobSpec({ sessionTarget, payload: { kind: "script" } })).toThrow(
-        `cron sessionTarget "${sessionTarget}" cannot run script payloads: scripts run headless and support only "main" or "isolated"; to run a turn in an existing conversation use payload {kind:"agentTurn",message} with sessionTarget "session:<key>"`,
-      );
-    },
-  );
-
-  it("names the valid payloads for isolated jobs", () => {
+  it.each(["main", "current"])("rejects the retired %s target", (sessionTarget) => {
     expect(() =>
-      assertSupportedJobSpec({ sessionTarget: "isolated", payload: { kind: "systemEvent" } }),
-    ).toThrow(
-      'cron sessionTarget "isolated" requires payload.kind="agentTurn", "command", or "script"',
-    );
+      assertSupportedJobSpec({
+        sessionTarget: sessionTarget as never,
+        payload: { kind: "agentTurn" },
+      }),
+    ).toThrow('Expected cron sessionTarget "isolated" or "session:<key>"');
   });
 
-  it("accepts ordinary agent turns in the main session", () => {
+  it.each(["agentTurn", "systemEvent", "command", "script"] as const)(
+    "accepts %s with an explicit conversation target",
+    (kind) => {
+      expect(() =>
+        assertSupportedJobSpec({
+          sessionTarget: "session:agent:main:continuation",
+          payload: { kind },
+        }),
+      ).not.toThrow();
+    },
+  );
+
+  it("requires an explicit conversation for system events", () => {
     expect(() =>
-      assertSupportedJobSpec({ sessionTarget: "session:main", payload: { kind: "agentTurn" } }),
-    ).not.toThrow();
+      assertSupportedJobSpec({ sessionTarget: "isolated", payload: { kind: "systemEvent" } }),
+    ).toThrow("A system event requires an explicit conversation");
   });
 });
 

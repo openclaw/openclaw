@@ -193,8 +193,9 @@ describe("cron service run admission", () => {
     const store = fixtures.makeStorePath();
     const storeKey = cronStoreKey(store.storePath);
     const job = makeJob("invalid-manual-stale-notification", dueAt);
-    job.sessionTarget = "main";
-    job.payload = { kind: "command", argv: ["echo", "invalid main payload"] };
+    job.sessionTarget = "session:main";
+    job.payload = { kind: "command", argv: ["echo", "invalid recent chat"] };
+    job.includeRecentChat = true;
     job.failureAlert = { after: 1, cooldownMs: 60_000, includeSkipped: true };
     const sendCronFailureAlert = vi.fn(async () => {});
     const editedName = "edited after invalid-run commit";

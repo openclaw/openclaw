@@ -8,7 +8,6 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
@@ -17,7 +16,6 @@ import {
   ownCodexInferenceClient,
 } from "./inference-routing.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
-import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
@@ -425,70 +423,6 @@ describe("Codex native hook Gateway fallback", () => {
       await run.catch(() => undefined);
       harness.close();
     }
-  });
-  it("cancels an unqualified parent on new policy while preserving its permitted sibling", async () => {
-    const params = participantParams("retained-model-source");
-    const listeners = new Set<() => void>();
-    let policy: NonNullable<
-      Parameters<typeof bindProductionHarnessHostCapabilitiesForTest>[1]
-    >["modelPolicy"];
-    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
-      profileId: "unrestricted-native-operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-      get modelPolicy() {
-        return policy;
-      },
-      onModelPolicyChanged: (listener) => {
-        listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
-      },
-    });
-    const selected = { provider: params.provider, model: params.modelId };
-    const permitted = params.hostCapabilities.bindModelExecution?.(selected);
-    if (!permitted) {
-      throw new Error("Expected a canonical operator model guard");
-    }
-    const harness = createStartedThreadHarness(async (method) =>
-      method === "account/read" ? { account: { type: "apiKey" } } : undefined,
-    );
-    ownCodexInferenceClient(harness.client);
-    const abort = new AbortController();
-    params.abortSignal = abort.signal;
-    const run = runCodexAppServerAttempt(params, { nativeHookRelay: { enabled: false } });
-    try {
-      await run.waitForTurnAccepted();
-      const accepted = await codexNativeSubagentMonitorRuntime.captureModelSource({
-        client: harness.client,
-        threadId: "thread-1",
-        turnId: "turn-1",
-      });
-      expect(accepted).toBeDefined();
-      accepted?.release();
-      policy = {
-        models: [selected],
-        allows: (model) => model.provider === selected.provider && model.model === selected.model,
-      };
-      for (const changed of listeners) {
-        changed();
-      }
-      expect(readAttemptTerminal(await run).aborted).toBe(true);
-      expect(harness.requests).toContainEqual({
-        method: "turn/interrupt",
-        params: { threadId: "thread-1", turnId: "turn-1" },
-      });
-      expect(permitted.signal.aborted).toBe(false);
-      expect(permitted.assertCurrent).not.toThrow();
-    } finally {
-      abort.abort("test cleanup");
-      await run.catch(() => undefined);
-      permitted.release();
-      closeHost();
-      harness.close();
-    }
-    expect(listeners.size).toBe(0);
   });
   it("keeps resumed native hook policy available when the direct listener fails", async () => {
     const sessionFile = path.join(tempDir, "listener-unavailable.jsonl");

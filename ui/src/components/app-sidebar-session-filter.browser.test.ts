@@ -40,7 +40,7 @@ function nativeOcclusion() {
   const values: boolean[] = [];
   onTestFinished(
     subscribeNativeOverlayOcclusion(
-      (value) => values.push(value),
+      (value) => values.push(value !== "live"),
       () => new DOMRect(0, 0, innerWidth, innerHeight),
     ),
   );

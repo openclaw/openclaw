@@ -104,7 +104,7 @@ defineDiscordVoiceTests(
           }
           await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
           expect(agentCommandArgsAt(0)).toMatchObject({
-            senderIsOwner: true,
+            runContext: { senderId: "u-owner" },
             extraSystemPrompt: "owner context",
           });
           if (rejectDelivery) {
@@ -157,7 +157,7 @@ defineDiscordVoiceTests(
             });
             expect(agentCommandMock).toHaveBeenCalledTimes(2);
             expect(agentCommandArgsAt(1)).toMatchObject({
-              senderIsOwner: false,
+              runContext: { senderId: "u-guest" },
               extraSystemPrompt: "guest context",
             });
             expect(guest.session.submitToolResult.mock.calls.at(-1)).toEqual([
@@ -264,7 +264,7 @@ defineDiscordVoiceTests(
           await consult("call-fresh-deduped", fresh);
           expect(agentCommandMock).toHaveBeenCalledTimes(2);
           expect(agentCommandArgsAt(1)).toMatchObject({
-            senderIsOwner: false,
+            runContext: { senderId: "u-guest" },
             extraSystemPrompt: "fresh guest",
           });
           expect(fresh.session.submitToolResult.mock.calls).toEqual([

@@ -133,12 +133,15 @@ export async function agentExecCommand(
     // Cleanup owns only the temporary state directory, never the caller's --state-dir.
     temporaryStateDir = opts.stateDir ? undefined : stateDir;
     configIo = await import("../config/io.js");
-    // Ambient loading publishes a snapshot, so capture the caller's snapshot first.
     const previousRuntimeConfigSnapshot = configIo.getRuntimeConfigSnapshot();
+    const previousRuntimeConfigSourceSnapshot = configIo.getRuntimeConfigSourceSnapshot();
     const snapshotIo = configIo;
     restoreRuntimeConfigSnapshot = () => {
       if (previousRuntimeConfigSnapshot) {
-        snapshotIo.setRuntimeConfigSnapshot(previousRuntimeConfigSnapshot);
+        snapshotIo.setRuntimeConfigSnapshot(
+          previousRuntimeConfigSnapshot,
+          previousRuntimeConfigSourceSnapshot ?? undefined,
+        );
       } else {
         snapshotIo.clearRuntimeConfigSnapshot();
       }
@@ -164,9 +167,15 @@ export async function agentExecCommand(
       }).publish();
     }
     const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
+    const runSourceConfig = buildExecRunConfig({
+      base: snapshotIo.projectConfigOntoRuntimeSourceSnapshot(baseConfig),
+      cwd,
+      opts,
+    });
     if (temporaryStateDir || opts.isolated) {
       // Throwaway state must never create stores in the operator's PostgreSQL namespaces.
       runConfig.database = { engine: "sqlite" };
+      runSourceConfig.database = runConfig.database;
     }
     // Plugin discovery and its index keep the operator's roots after state moves.
     const inheritInstalledPlugins = opts.isolated !== true && opts.authEnvOnly !== true;
@@ -235,7 +244,7 @@ export async function agentExecCommand(
       ]);
     installDatabaseEngineSelection(await resolveDatabaseEngineSelection(runConfig));
     // Publish in memory; a temporary config file would expose resolved provider keys to tools.
-    snapshotIo.setRuntimeConfigSnapshot(runConfig);
+    snapshotIo.setRuntimeConfigSnapshot(runConfig, runSourceConfig);
     const [
       { withAuthProfileStoreAgentDir, withEnvOnlyAuthProfileStore },
       { withHostExecInheritedEnvOmitted },

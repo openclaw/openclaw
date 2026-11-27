@@ -69,11 +69,12 @@ it("refuses a stored job whose explicit session belongs to another agent", async
   expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
 });
 
-it.each(["current", "isolated"] as const)(
-  "keeps %s turns on detached execution despite a captured result conversation",
-  async (sessionTarget) => {
+it.each([true, false])(
+  "keeps recent-chat=%s turns on detached execution despite a captured result conversation",
+  async (includeRecentChat) => {
     const job = await addAgentTurnJob(state, "detached", "hello", {
-      sessionTarget,
+      sessionTarget: "isolated",
+      includeRecentChat,
       sessionKey: "agent:main:captured-result",
     });
     await state.cron.run(job.id, "force");

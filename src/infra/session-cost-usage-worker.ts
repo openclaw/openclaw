@@ -34,6 +34,7 @@ import {
 } from "./session-cost-usage-quarters.worker.js";
 import {
   createUsageCostCollectionAccess,
+  matchesUsageCostSqliteMutation,
   usageRefreshInputs,
 } from "./session-cost-usage-refresh-inputs.worker.js";
 import {
@@ -113,12 +114,13 @@ export async function executeUsageCostWorker(
     const database = target(agentId, storePath);
     return control.runNativeSection(() => readDatabase(database, read));
   };
-  const { yieldRead, readRows } = createUsageCostTranscriptReader({
+  const { yieldRead, readRows, settleReadPacing } = createUsageCostTranscriptReader({
     target,
     readStore,
     readFacts: (marker) => readFacts(marker),
     control,
     env,
+    cooperativePacing: operation.kind === "refresh" && operation.background === true,
   });
   const refreshInputs =
     operation.kind === "refresh" ? usageRefreshInputs(location.databasePath) : undefined;
@@ -352,10 +354,27 @@ export async function executeUsageCostWorker(
     operation.maxFiles > 0
       ? Math.floor(operation.maxFiles)
       : undefined;
-  const selectedSources = [...sourcesByPath].filter(
-    ([filePath, source]) =>
-      !(minMtimeMs !== undefined && source.mtimeMs < minMtimeMs) || quarterGaps.has(filePath),
-  );
+  const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
+  const selectedSources = [...sourcesByPath].filter(([filePath, source]) => {
+    if (quarterGaps.has(filePath)) {
+      return true;
+    }
+    if (minMtimeMs !== undefined && source.mtimeMs < minMtimeMs) {
+      return false;
+    }
+    // Discovery already read these mutation facts and validated the rollup envelope.
+    // A fresh window neither consumes a batch slot nor needs a continuation.
+    const cached = byPath.get(filePath);
+    const checkpoint = cached?.envelope?.checkpoint;
+    return !(
+      source.kind === "sqlite" &&
+      checkpoint?.kind === "sqlite" &&
+      matchesUsageCostSqliteMutation(checkpoint, source) &&
+      cached?.envelope?.projection &&
+      cached.row.bodyBytes === cached.envelope.body.storedBytes &&
+      !rebuildByPath.has(filePath)
+    );
+  });
   const deferredSources = maxFiles ? selectedSources.splice(maxFiles) : [];
   const files = operation.sessionFiles
     ? requestedFiles
@@ -408,7 +427,6 @@ export async function executeUsageCostWorker(
       ...collectSupersededArchiveRows(await readMetadata(true), supersededArchiveKey, byPath),
     );
   }
-  const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const unreadable = new Map<string, unknown>();
   // Undecodable archives with no usage to carry keep their superseded rows.
   const retainedArchiveKeys = new Set<string>();
@@ -641,6 +659,7 @@ export async function executeUsageCostWorker(
     }
   }
   await pruner.flush();
+  await settleReadPacing();
   const unreadableFiles = unreadable.size
     ? {
         unreadableFiles: [...unreadable].map(([sessionFile, error]) => ({

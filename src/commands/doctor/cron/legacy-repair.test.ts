@@ -16,6 +16,7 @@ import { cronStoreKey } from "../../../cron/store/key.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
 import type { CronJob } from "../../../cron/types.js";
 import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
+import { withInstalledOfficialProviderCustody } from "../../../plugins/provider-policy-custody.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -91,7 +92,7 @@ it(
     const canonical: CronJob = {
       ...job("canonical-at"),
       schedule: { kind: "at", at: "2026-04-01T10:00:00.000Z" },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       payload: { kind: "systemEvent", text: "tick" },
     };
     await saveJobs(storePath, canonical);
@@ -181,7 +182,8 @@ it(
       ...job("current-source"),
       agentId: "main",
       enabled: false,
-      sessionTarget: "current",
+      sessionTarget: "isolated",
+      includeRecentChat: true,
       sessionKey: "agent:main:dashboard:source",
       delivery: { mode: "announce" },
       state: { consecutiveErrors: 2 },
@@ -209,7 +211,7 @@ it(
       schedule: { ...current.schedule, anchorMs: current.createdAtMs },
     });
     await expect(resolveCronDeliveryPreview({ cfg, job: reloaded! })).resolves.toEqual({
-      label: "announce -> current session",
+      label: "announce -> creating conversation",
       detail: "commits to this conversation (no external channel route)",
     });
     expect(reloadedSandbox).toMatchObject(sandbox);
@@ -301,7 +303,7 @@ it(
             ...job("variant-cron"),
             name: "Variant cron",
             schedule: { kind: " CRON ", expr: "0 9 * * *" },
-            sessionTarget: "main",
+            sessionTarget: "session:main",
             payload: { kind: "systemEvent", text: "tick" },
           },
         },
@@ -422,7 +424,7 @@ it(
 const legacyJob = (overrides: Partial<CronJob> = {}) =>
   job("legacy", {
     name: "Legacy",
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     payload: { kind: "systemEvent", text: "keep me" },
     ...overrides,
   });
@@ -611,4 +613,31 @@ it.each(["load", "commit"])(
         expect(await fs.readFile(`${file}.migrated`)).toEqual(bytes);
       }
     })(),
+);
+
+it(
+  "prepares an installed provider policy before checking retired models under Doctor custody",
+  withState(async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    await saveJobs(storePath, {
+      ...job("disabled-legacy", { enabled: false }),
+      payload: { kind: "agentTurn", message: "run", model: "anthropic/claude-sonnet-4-6" },
+    });
+    const cfg = {
+      cron: { store: storePath },
+      agents: { defaults: { modelPolicy: { allow: ["arcee/trinity-large-thinking"] } } },
+    } as OpenClawConfig;
+
+    const result = await withInstalledOfficialProviderCustody(
+      fixture.statePath("policy-owner"),
+      async () =>
+        await applyLegacyCronStoreRepair({
+          cfg,
+          state: expectDefined(await loadLegacyCronRepairState({ cfg, storePath }), "cron state"),
+          repairRetiredModelRefs: true,
+        }),
+    );
+
+    expect(result.warnings).toEqual([]);
+  }),
 );

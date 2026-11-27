@@ -5,14 +5,14 @@ import { hasCanonicalCronDeliveryMode } from "../../../../src/cron/store/deliver
 import type { CronJob, CronPayload } from "../../api/types.ts";
 import { toNumber } from "../format.ts";
 import { parseCronDurationMs, parseFailureAlertCooldownMs } from "./decimal.ts";
+import { DEFAULT_CRON_FORM } from "./editor-state.ts";
 import {
   formatDateTimeLocal,
   parseEverySchedule,
   durationMsToSecondsString,
   parseStaggerSchedule,
-  parseCronScheduleAt,
+  resolveCronScheduleAt,
 } from "./form-schedule.ts";
-import { DEFAULT_CRON_FORM } from "./state.ts";
 import type { CronFieldErrors, CronFormState } from "./types.ts";
 import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 
@@ -68,9 +68,6 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
   if (form.sessionTarget === "isolated" && form.includeRecentChat && !form.sessionKey.trim()) {
     errors.recentChatConversation = "cron.errors.conversationRequired";
   }
-  if (!form.name.trim()) {
-    errors.name = "cron.errors.nameRequired";
-  }
   if (form.scheduleKind === "event" && form.payloadKind !== "agentTurn") {
     errors.payloadText = "cron.events.agentTurnRequired";
   }
@@ -85,7 +82,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.eventArguments = "cron.events.eventArgumentsInvalid";
     }
   } else if (form.scheduleKind === "at") {
-    if (!parseCronScheduleAt(form.scheduleAt)) {
+    if (!resolveCronScheduleAt(form)) {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
@@ -198,6 +195,10 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   if (!isCronFormSessionTarget(job.sessionTarget)) {
     throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
   }
+  const originalScheduleAt =
+    job.schedule.kind === "at"
+      ? { at: job.schedule.at, local: formatDateTimeLocal(job.schedule.at) }
+      : undefined;
   const next: CronFormState = {
     ...prev,
     name: job.name,
@@ -213,7 +214,8 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     eventServer: "",
     eventName: "",
     eventArguments: "{}",
-    scheduleAt: "",
+    originalScheduleAt,
+    scheduleAt: originalScheduleAt?.local ?? "",
     cronTz: "",
     scheduleExact: false,
     staggerAmount: "",
@@ -280,8 +282,6 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
       typeof job.schedule.options.server === "string" ? job.schedule.options.server : "";
     next.eventName = typeof job.schedule.options.name === "string" ? job.schedule.options.name : "";
     next.eventArguments = JSON.stringify(job.schedule.options.arguments ?? {}, null, 2);
-  } else if (job.schedule.kind === "at") {
-    next.scheduleAt = formatDateTimeLocal(job.schedule.at);
   } else if (job.schedule.kind === "every") {
     Object.assign(next, parseEverySchedule(job.schedule.everyMs));
   } else if (job.schedule.kind === "cron") {

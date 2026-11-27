@@ -12,9 +12,11 @@ import { readOpenClawIdUserProfiles } from "../state/user-profile-openclaw-id.js
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import { prepareDeviceTokenBindingLookup } from "./openclaw-id/device-token-binding.js";
 import {
-  openclawIdTunnelRolePolicy,
+  openclawIdSubjectRolePolicy,
   prepareOpenClawIdTunnelPrincipalLookup,
 } from "./openclaw-id/tunnel-principal.js";
+import { operatorRoleSubject } from "./operator-role-enforcement.js";
+import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { APPROVALS_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import {
   isApprovalRecordVisibleToClient,
@@ -87,7 +89,27 @@ export async function prepareIosApprovalPushAuthority(record: ExecApprovalRecord
                 if (peer && !principal) {
                   return false;
                 }
-                const policy = openclawIdTunnelRolePolicy(principal);
+                const profileId =
+                  principal?.kind === "member" ? profiles[principal.accountId]?.id : undefined;
+                // Profile changes during preparation defer this push rather than reuse stale links.
+                if (principal?.kind === "member" && readUserProfileVersion() !== profileVersion) {
+                  return false;
+                }
+                const profile = profileId ? catalog?.readCurrentIdentity(profileId) : undefined;
+                if (principal?.kind === "member" && !profile) {
+                  return false;
+                }
+                const policy = openclawIdSubjectRolePolicy(principal, () =>
+                  principal?.kind === "member"
+                    ? resolveOperatorRolePolicyForAssignment(
+                        profileId,
+                        profile?.role ?? null,
+                        getRuntimeConfig(),
+                        profile?.githubLogin ?? null,
+                        operatorRoleSubject(profile),
+                      )
+                    : undefined,
+                );
                 const scopes = policy
                   ? intersectOperatorScopes(token.scopes, policy.scopes)
                   : token.scopes;
@@ -98,17 +120,6 @@ export async function prepareIosApprovalPushAuthority(record: ExecApprovalRecord
                     allowedScopes: scopes,
                   })
                 ) {
-                  return false;
-                }
-                // An account link is attribution for session access, never a local-role fallback.
-                const profileId =
-                  principal?.kind === "member" ? profiles[principal.accountId]?.id : undefined;
-                // Profile changes during preparation defer this push rather than reuse stale links.
-                if (principal?.kind === "member" && readUserProfileVersion() !== profileVersion) {
-                  return false;
-                }
-                const profile = profileId ? catalog?.readCurrentIdentity(profileId) : undefined;
-                if (principal?.kind === "member" && !profile) {
                   return false;
                 }
                 const client: GatewayClient = {

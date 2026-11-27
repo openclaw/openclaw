@@ -54,6 +54,45 @@ const agents = [
   agent("reviewer", "Review bot", "", "🦀"),
 ];
 suite.define(() => {
+  it("opens session and message results in new tabs without closing search", async () => {
+    await suite.withPage({}, async ({ context, page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": { ...roster, count: 1, sessions: rows.slice(0, 1) },
+          "sessions.search": transcript,
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.locator(".shell").waitFor({ state: "visible" });
+      await page.keyboard.press("ControlOrMeta+K");
+      const palette = page.locator(".cmd-palette");
+      const input = palette.locator(".cmd-palette__input");
+      await input.fill("missing errors");
+      const session = palette.getByRole("option").filter({ hasText: rows[0]!.displayName });
+      const message = palette.getByRole("option").filter({ hasText: rows[1]!.displayName });
+      await session.waitFor();
+      await message.waitFor();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await palette.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "palette-new-tab-results.png"),
+        });
+      }
+      const originalUrl = page.url();
+      for (const [result, click, destination] of [
+        [session, { button: "middle" }, "/chat/main/search-design"],
+        [message, { modifiers: ["ControlOrMeta"] }, "/chat/main/worker"],
+      ] satisfies [typeof session, Parameters<typeof session.click>[0], string][]) {
+        expect(await result.getAttribute("href")).toBe(destination);
+        const [tab] = await Promise.all([context.waitForEvent("page"), result.click(click)]);
+        await tab.waitForURL(new URL(destination, originalUrl).href);
+        expect(page.url()).toBe(originalUrl);
+        expect(await input.inputValue()).toBe("missing errors");
+        await tab.close();
+      }
+    });
+  });
+
   it.each([
     { width: 1280, height: 900, mode: "light" },
     { width: 1280, height: 900, mode: "dark" },

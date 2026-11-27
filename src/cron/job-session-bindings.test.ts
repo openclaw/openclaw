@@ -9,7 +9,7 @@ import type { CronJob, CronStoredJob } from "./types.js";
 test.each([
   [
     "wake/delivery lanes",
-    "main",
+    "session:main",
     "discord:channel:123",
     "main",
     ["agent:main:main", "agent:main:discord:channel:123"],
@@ -80,7 +80,7 @@ test("refreshes binding facts after job edits and agent/session routing changes"
   definition.sourceConversation = undefined;
   opts.defaultAgentId = "rebound";
   check(["agent:rebound:other"]);
-  definition.sessionTarget = "main";
+  definition.sessionTarget = "session:main";
   check(["agent:rebound:home"]);
   cfg.session!.mainKey = "inbox";
   check(["agent:rebound:inbox"]);

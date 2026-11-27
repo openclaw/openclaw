@@ -28,7 +28,7 @@ export function PluginsHubHeader(props: {
   };
 }) {
   const runtimeConfig = projectRuntimeConfig(useApplication().runtimeConfig);
-  // Templates is experimental; its tab follows the same flag as its route.
+  // The advanced Templates opt-out controls this tab and its route.
   const templates = () => isTemplatesAvailable(runtimeConfig.read().state) === true;
   return (
     <HubPageHeader<PluginsHubTab>

@@ -17,6 +17,7 @@ import type {
   createPackageIntegrityReader,
   PackageLauncherFingerprint,
 } from "./package-update-integrity.js";
+import { resolvePackageUpdateLauncherNames } from "./package-update-launcher-names.js";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
 import { pathEntryExists as packagePathEntryExists } from "./path-existence.js";
 import { retryAsync } from "./retry.js";
@@ -516,16 +517,6 @@ export type PackageLauncherBackup = {
     fingerprint?: PackageLauncherFingerprint;
   }>;
 };
-
-export function resolvePackageUpdateLauncherNames(
-  packageName: string,
-  entries?: readonly string[],
-) {
-  const names = new Set([packageName, "openclaw"]);
-  return (
-    entries?.filter((entry) => names.has(entry) || names.has(path.parse(entry).name)) ?? [...names]
-  ).toSorted();
-}
 
 /** Publish partial backup state so the swap owner can recover after any failed copy. */
 export async function capturePackageLaunchers(

@@ -28,8 +28,8 @@ import {
   resolveThreadFlag,
 } from "../../config/sessions/reset.js";
 import { commitReplySessionInitialization } from "../../config/sessions/session-accessor.js";
+import { buildNewSessionCreationFields } from "../../config/sessions/session-diff-baseline-capture.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { selectSessionModelOverride } from "../../config/sessions/session-entry-selection.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
@@ -77,7 +77,6 @@ import {
 } from "../../sessions/model-overrides.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
-import { acknowledgeReplySessionTransition } from "../../sessions/session-controller.session-reader.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
@@ -122,6 +121,7 @@ import type {
   SessionInitResult,
 } from "./session-init.types.js";
 import {
+  acknowledgeCommittedReplyInitialization,
   assertReplySessionInitializationAllowed,
   loadReplySessionInitializationForAttempt,
   prepareReplySessionInitialization,
@@ -594,7 +594,7 @@ async function initSessionStateAttemptLocked(
           origin: baseDeliveryOrigin,
         });
   const creationStamp =
-    !entry && ctx.SessionCreation ? buildSessionCreationStamp(ctx.SessionCreation) : undefined;
+    !entry && ctx.SessionCreation ? buildNewSessionCreationFields(ctx.SessionCreation) : undefined;
   const recordedActivity =
     !isNewSession &&
     params.recordedSessionActivity?.sessionId === sessionId &&
@@ -618,11 +618,11 @@ async function initSessionStateAttemptLocked(
     sessionStartedAt: isNewSession
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
-    lastInteractionAt: isSystemEvent
-      ? baseEntry?.lastInteractionAt
-      : recordedActivity
-        ? Math.max(baseEntry?.lastInteractionAt ?? 0, recordedActivity.at)
-        : now,
+    // An inbound message is visible chat content; internal turns keep both stored values.
+    ...(!isSystemEvent && {
+      lastInteractionAt: Math.max(baseEntry?.lastInteractionAt ?? 0, recordedActivity?.at ?? now),
+      lastActivityAt: Math.max(baseEntry?.lastActivityAt ?? 0, recordedActivity?.at ?? now),
+    }),
     agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
     pinnedAt: entry?.pinnedAt,
     snoozedUntil: isSystemEvent ? entry?.snoozedUntil : undefined,
@@ -820,16 +820,15 @@ async function initSessionStateAttemptLocked(
     // The outer retry owns conflicts; never retry while holding the writer lane.
     throw new ReplySessionInitConflictError(sessionKey);
   }
-  await acknowledgeReplySessionTransition(
-    params.replyOperation,
+  await acknowledgeCommittedReplyInitialization(
+    params,
+    sessionTarget,
     { previous: entry, current: committed.sessionEntry },
-    captureSessionTarget({ storeScope: storePath, sessionKey, agentId }),
+    !isSystemEvent && !isInterSession,
   );
   clearCommittedSessionResetRuntimeState({
+    ...sessionTarget,
     previousSessionEntry,
-    storePath,
-    agentId,
-    sessionKey,
     signal: params.signal,
     onError: (error) =>
       log.warn(`failed to clear reset runtime state for session ${sessionKey}: ${String(error)}`),

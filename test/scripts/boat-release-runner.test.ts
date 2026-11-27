@@ -1,18 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const linuxRunnerTest = it.skipIf(process.platform === "win32");
 
 const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+afterEach(() => cleanupTempDirs(roots));
 
 function fixture(mode = "") {
   const root = mkdtempSync(join(tmpdir(), "boat-runner-test-"));

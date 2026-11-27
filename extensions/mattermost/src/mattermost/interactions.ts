@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { requestBodyErrorToText } from "openclaw/plugin-sdk/webhook-request-guards";
-import { getMattermostRuntime } from "../runtime.js";
 import { resolveCallbackHost } from "./callback-host.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import {
@@ -197,13 +196,19 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
 }
 
 /**
- * Sanitize a button ID so Mattermost's action router can match it.
- * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
- * and IDs containing hyphens or underscores break the server-side routing.
+ * Mattermost routes a click through `/api/v4/posts/{post_id}/actions/{action_id:[A-Za-z0-9]+}`,
+ * so any other character in an action ID makes Mattermost answer 404 before the callback runs.
+ * Other IDs (agent values, `question-0`, non-ASCII text) become `<alphanumerics>x<index>`: the
+ * index after the last `x` keeps them unique on the post; the original value travels in the
+ * signed context. A raw alphanumeric id equal to a derived id in the same post would clash;
+ * accepted, not observed.
  * See: https://github.com/mattermost/mattermost/issues/25747
  */
-function sanitizeActionId(id: string): string {
-  return id.replace(/[-_]/g, "");
+function toMattermostActionId(id: string, index: number): string {
+  if (/^[A-Za-z0-9]+$/.test(id)) {
+    return id;
+  }
+  return `${id.replace(/[^A-Za-z0-9]/g, "").slice(0, 16)}x${index}`;
 }
 
 export function buildButtonAttachments(params: {
@@ -217,8 +222,8 @@ export function buildButtonAttachments(params: {
   }>;
   text?: string;
 }) {
-  const actions = params.buttons.map((btn) => {
-    const safeId = sanitizeActionId(btn.id);
+  const actions = params.buttons.map((btn, index) => {
+    const safeId = toMattermostActionId(btn.id, index);
     const context: Record<string, unknown> = {
       action_id: safeId,
       ...btn.context,
@@ -293,11 +298,6 @@ export function createMattermostInteractionHandler(params: {
   allowedSourceIps?: string[];
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
-  resolveSessionKey?: (params: {
-    channelId: string;
-    userId: string;
-    post: MattermostPost;
-  }) => Promise<string>;
   handleInteraction?: (opts: {
     payload: MattermostInteractionPayload;
     userName: string;
@@ -317,13 +317,13 @@ export function createMattermostInteractionHandler(params: {
     userName: string;
     actionId: string;
     actionName: string;
+    callbackData?: unknown;
     postId: string;
     post: MattermostPost;
   }) => Promise<void>;
   log?: (message: string) => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { client, accountId, log } = params;
-  const core = getMattermostRuntime();
 
   function parseInteractionPayload(raw: string): MattermostInteractionPayload {
     const payload = safeParseJson<MattermostInteractionPayload>(raw);
@@ -512,30 +512,6 @@ export function createMattermostInteractionHandler(params: {
       }
     }
 
-    // Wrapped in try/catch — the post update below must still run even if
-    // system event dispatch fails (e.g. missing sessionKey or channel lookup).
-    try {
-      const eventLabel =
-        `Mattermost button click: action="${actionId}" ` +
-        `by ${payload.user_name ?? payload.user_id} ` +
-        `in channel ${payload.channel_id}`;
-
-      const sessionKey = params.resolveSessionKey
-        ? await params.resolveSessionKey({
-            channelId: payload.channel_id,
-            userId: payload.user_id,
-            post: originalPost,
-          })
-        : `agent:main:mattermost:${accountId}:${payload.channel_id}`;
-
-      core.system.enqueueSystemEvent(eventLabel, {
-        sessionKey,
-        contextKey: `mattermost:interaction:${payload.post_id}:${actionId}`,
-      });
-    } catch (err) {
-      log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);
-    }
-
     try {
       await updateMattermostPost(client, payload.post_id, {
         message: originalMessage,
@@ -561,6 +537,7 @@ export function createMattermostInteractionHandler(params: {
           userName,
           actionId,
           actionName: clickedButtonName,
+          callbackData: contextWithoutToken.callback_data,
           postId: payload.post_id,
           post: originalPost,
         });

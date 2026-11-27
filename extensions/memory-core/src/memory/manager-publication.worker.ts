@@ -184,7 +184,10 @@ export function bindSqliteWorkerBackend(
   context: {
     databasePath: string;
     database: EngineConnection;
-    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
+    admitSearchExtensions?: (
+      definitions: Readonly<Record<string, SearchSchema>>,
+      options?: { rebuild: true },
+    ) => void;
     admit(stage: "transaction" | "commit"): void;
   },
 ) {

@@ -2,7 +2,7 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeOptionalAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCronDeliverySessionKey } from "../session-target.js";
-import type { CronJob, CronMessageChannel } from "../types.js";
+import type { CronDelivery, CronJob, CronMessageChannel } from "../types.js";
 
 export type CronNotificationRouting = { defaultAgentId?: string };
 
@@ -18,7 +18,14 @@ export function captureCronNotificationRouting(
 
 export type CronNotificationJob = Pick<
   CronJob,
-  "id" | "name" | "agentId" | "sessionTarget" | "sessionKey" | "wakeMode" | "owner"
+  | "id"
+  | "name"
+  | "agentId"
+  | "sessionTarget"
+  | "includeRecentChat"
+  | "sessionKey"
+  | "wakeMode"
+  | "owner"
 > & {
   state: Pick<
     CronJob["state"],
@@ -32,6 +39,7 @@ export function cronNotificationJob(job: CronJob): CronNotificationJob {
     name: job.name,
     agentId: job.agentId,
     sessionTarget: job.sessionTarget,
+    includeRecentChat: job.includeRecentChat,
     sessionKey: job.sessionKey,
     owner: job.owner ? { ...job.owner } : undefined,
     wakeMode: job.wakeMode,
@@ -62,6 +70,8 @@ export function resolveCronNotificationQueueOwner(
 }
 
 type CronFailureAlertRoute = {
+  target?: CronDelivery["target"];
+  directPolicy?: CronDelivery["directPolicy"];
   channel: CronMessageChannel;
   to?: string;
   mode?: "announce" | "webhook";

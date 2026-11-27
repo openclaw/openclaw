@@ -456,6 +456,20 @@ it.each([true, false])("protects ambiguous choices in JSON=%s or legacy text", a
   expect(runtime.log).not.toHaveBeenCalled();
 });
 
+it.each([false, true])(
+  "points a missed name lookup to the list that includes disabled automations, legacy=%s",
+  async (legacy) => {
+    installGateway(
+      [createJob(0, { name: "Backup summary", enabled: false })],
+      legacy ? { transformListPage: unversionedPage, getError: legacyGetError } : {},
+    );
+
+    await expectFailure(["show", "missing-job"], "`openclaw cron list --all`");
+    await runCron(["list", "--all"]);
+    expectIncludes(output("log"), "job-000", "Backup summary", "disabled");
+  },
+);
+
 it("does not scan after transport errors", async () => {
   installGateway([createJob(0)], { getError: new Error("Gateway transport is unavailable") });
 

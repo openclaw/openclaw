@@ -4,6 +4,7 @@ import {
   createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
+import { getResourceProfile } from "openclaw/plugin-sdk/resource-profile";
 import { pluginFilesLocation } from "./plugin-files.js";
 import type { RegistryOperations, RegistryRequest, RegistryResponse } from "./registry-host.js";
 import { KnowledgeRestartError } from "./restart-error.js";
@@ -27,6 +28,8 @@ export class RegistryUnavailable extends Error {}
  * snapshot so store resolution can read registry facts synchronously. */
 export class RegistryClient {
   private worker?: Worker;
+  private idleTimer?: NodeJS.Timeout;
+  private closing?: Promise<void>;
   private readonly pending = new Map<number, Pending>();
   private nextId = 0;
   private disposed = false;
@@ -43,6 +46,10 @@ export class RegistryClient {
     op: Op,
     ...args: Parameters<RegistryOperations[Op]>
   ): Promise<ReturnType<RegistryOperations[Op]>> {
+    clearTimeout(this.idleTimer);
+    if (this.closing) {
+      await this.closing;
+    }
     const worker = this.start(),
       id = ++this.nextId;
     const value = await new Promise<unknown>((resolve, reject) => {
@@ -71,11 +78,17 @@ export class RegistryClient {
   }
   /** Stop the worker and resolve once it has exited. Outstanding calls fail;
    * the next call starts a new worker unless the client was disposed. */
-  async close() {
+  close(): Promise<void> {
+    clearTimeout(this.idleTimer);
     const worker = this.worker;
     this.worker = undefined;
     this.fail(stopped());
-    await worker?.terminate();
+    if (worker) {
+      this.closing = worker.terminate().then(() => {
+        this.closing = undefined;
+      });
+    }
+    return this.closing ?? Promise.resolve();
   }
   /** Close for good: no later call starts a worker. */
   dispose() {
@@ -101,6 +114,14 @@ export class RegistryClient {
       this.pending.delete(message.id);
       if (!this.pending.size) {
         worker.unref();
+        if (getResourceProfile() === "lean") {
+          this.idleTimer = setTimeout(() => {
+            if (this.worker === worker && !this.pending.size) {
+              // Keep a failed termination as the next call's visible failure.
+              void this.close().catch(() => {});
+            }
+          }, 60_000).unref();
+        }
       }
       if (message.ok) {
         call.resolve(message.value);

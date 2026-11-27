@@ -83,7 +83,7 @@ async function saveAndReopen(state: CronState, readJob: () => CronJob) {
 describe("automation save editor ownership", () => {
   it.each([true, false])("saves ordinary job policies enabled=%s", async (enabled) => {
     const stored = storedJob({
-      sessionTarget: enabled ? "main" : "session:agent:main:main",
+      sessionTarget: enabled ? "session:main" : "session:agent:main:main",
       activeHours: { start: "22:00", end: "06:00", timezone: "UTC" },
       idleOnly: true,
       payload: {
@@ -119,7 +119,7 @@ describe("automation save editor ownership", () => {
     }
     await saveAndReopen(state, readJob);
     expect(stored).toMatchObject({
-      sessionTarget: enabled ? "main" : "session:agent:main:main",
+      sessionTarget: enabled ? "session:main" : "session:agent:main:main",
       idleOnly: enabled,
       payload: {
         kind: "agentTurn",

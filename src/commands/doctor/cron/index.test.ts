@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronQuarantinedJobs,
@@ -1022,4 +1023,75 @@ it("reports a moved partition, refuses --yes guessing, and binds only an explici
   } finally {
     await maintenance.close();
   }
+});
+
+it.each([
+  ["current", "sha256:MFExkGsEBuJRSSPXxaBM9ZPwNyKkjKWgPl9pgxiSjQI"],
+  ["main", "sha256:aLjS3kbEI09DvBMzh1t-fsFdXSaPm9J9iSb1_qEaFtg"],
+])("preserves valid captured authority when Doctor converts %s jobs", async (target, revision) => {
+  // Captured with main fc25865d99bd's storage codec and execution-revision owner.
+  const legacy = {
+    id: `legacy-${target}`,
+    name: "Legacy authority",
+    agentId: "ops",
+    enabled: true,
+    createdAtMs: 1700000000000,
+    updatedAtMs: 1700000000000,
+    sessionTarget: target,
+    sessionKey: "agent:ops:main",
+    schedule: { kind: "every", everyMs: 60000, anchorMs: 1 },
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "Check notes", toolsAllow: ["read"] },
+    ...(target === "current" ? { delivery: { mode: "announce" } } : {}),
+    state: {},
+    operatorSource: {
+      executionRevision: revision,
+      source: {
+        version: 1,
+        kind: "gateway",
+        agentId: "ops",
+        snapshot: {
+          profileId: "synthetic-operator",
+          scopes: ["operator.read", "operator.write"],
+          assignedRole: null,
+          githubLogin: null,
+          grant: null,
+          aliasBindingIds: [],
+          authPolicy: {
+            generation: "",
+            grantGeneration: "synthetic-generation",
+            role: "operator",
+            authMethod: "token",
+          },
+          controlUiAdmin: false,
+          localOperator: true,
+          sourceIngress: "internal",
+        },
+      },
+    },
+  };
+  const stale = {
+    ...legacy,
+    id: "stale",
+    operatorSource: { ...legacy.operatorSource, executionRevision: "stale-revision" },
+  };
+  await writeCronStore([legacy, stale]);
+  await repairCronStore();
+  const migrated = (await loadCronStore(storePath)).jobs;
+  expect(migrated).toHaveLength(2);
+  expect(migrated[0]).toMatchObject({
+    enabled: true,
+    agentId: "ops",
+    sessionKey: "agent:ops:main",
+    sessionTarget: target === "current" ? "isolated" : "session:agent:ops:main",
+    delivery: { mode: target === "current" ? "announce" : "none" },
+    operatorSource: { source: legacy.operatorSource.source },
+  });
+  expect(migrated[0]!.operatorSource!.executionRevision).toBe(
+    resolveCronOperatorExecutionRevision(migrated[0]!),
+  );
+  expect(migrated[0]!.operatorSource!.executionRevision).not.toBe(revision);
+  expect(migrated[1]!.operatorSource).toEqual(stale.operatorSource);
+  await repairCronStore();
+  expect((await loadCronStore(storePath)).jobs).toEqual(migrated);
 });

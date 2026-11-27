@@ -3,6 +3,7 @@ import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
 import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
+import type { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import { focusedTranscriptRowKey } from "./chat-transcript-range.ts";
 
 type TranscriptVirtualizer = Virtualizer<HTMLDivElement, HTMLElement>;
@@ -13,7 +14,7 @@ type ReaderAnchorHost = {
   readonly offsetState: TranscriptOffsetState;
   readonly renderer: Pick<ChatTranscriptRenderer, "columnElement" | "queueAfterCommit">;
   readonly initialRange: { readonly pending: boolean };
-  readonly prependAnchor: { readonly messageKey: string | null };
+  readonly prependAnchor: Pick<TranscriptPrependAnchor, "messageKey" | "retainReader">;
   readonly headerHeight: number;
   readonly scrollElement: HTMLDivElement | null;
   readonly contentElement: HTMLDivElement | null;
@@ -32,6 +33,30 @@ type ReaderContent = {
   /** The deepest content the edge cuts, with its height when recorded. */
   readonly inner?: { readonly element: Element; readonly offset: number; readonly height: number };
 };
+
+/** Find the first layout box, looking through wrappers that lay out only their children. */
+function firstContentBox(
+  first: Element | null,
+  after = -Infinity,
+): { element: Element; rect: DOMRect } | null {
+  for (let element = first; element; element = element.nextElementSibling) {
+    const rect = element.getBoundingClientRect();
+    if (rect.height > 0 && rect.bottom > after) {
+      return { element, rect };
+    }
+    if (
+      !rect.height &&
+      element.firstElementChild &&
+      getComputedStyle(element).display === "contents"
+    ) {
+      const box = firstContentBox(element.firstElementChild, after);
+      if (box) {
+        return box;
+      }
+    }
+  }
+  return null;
+}
 
 /** A row first measured while crossing the top edge was laid out above the reader. */
 function isAboveReader(top: number, height: number, first: boolean, readerTop: number): boolean {
@@ -78,9 +103,10 @@ export class TranscriptReaderAnchor {
   private columnShift = 0;
   private landedShift = 0;
   private owedScroll = 0;
+  private settleFrame: number | null = null;
   private observer: ResizeObserver | null = null;
   private readerContent: ReaderContent | null = null;
-  // A landed size before the flow moved its start, and scrollTop with it, this batch.
+  // A measured predecessor changed the virtual flow's start in this batch.
   private flowMoved = false;
   private animatedRow: HTMLElement | null = null;
 
@@ -121,7 +147,9 @@ export class TranscriptReaderAnchor {
       this.host.initialRange.pending ||
       offsetState.hasPendingCommand ||
       offsetState.pendingInteractionAnchor !== null ||
-      this.host.prependAnchor.messageKey !== null
+      // The absolute prepend correction pauses during native touch. Measurements that
+      // land in the meantime must still keep the visible content under the reader's finger.
+      (this.host.prependAnchor.messageKey !== null && !offsetState.touchActive)
     );
   }
 
@@ -134,11 +162,16 @@ export class TranscriptReaderAnchor {
     this.observer?.unobserve(row);
   }
 
-  /** Native writes can stop a gesture; hold the correction in the column until it ends. */
+  /**
+   * Native writes can stop a gesture; hold the correction in the column until it ends. Once the
+   * input has produced its own scrolling, only its own idle ends the hold, not virtual-core's
+   * debounced `isScrolling`, which can lapse between frames of a slow native smooth scroll.
+   */
   private holdsNativeOffset(): boolean {
+    const { nativeInputActive, inputAwaitingScroll, touchActive } = this.host.offsetState;
     return (
-      (this.host.virtualizer.isScrolling && this.host.offsetState.nativeInputActive) ||
-      this.host.offsetState.touchActive
+      (nativeInputActive && (this.host.virtualizer.isScrolling || !inputAwaitingScroll)) ||
+      touchActive
     );
   }
 
@@ -223,7 +256,7 @@ export class TranscriptReaderAnchor {
       const above =
         isAboveReader(previousTop, previous, first, readerTop) ||
         (first && retainedIndex !== undefined && index < retainedIndex);
-      const applied = above ? delta : this.contentShift(row);
+      const applied = above ? delta : this.contentShift(row, delta);
       if (!applied) {
         continue;
       }
@@ -277,7 +310,7 @@ export class TranscriptReaderAnchor {
   }
 
   /** How far the recorded reader content moved inside a resized row. */
-  private contentShift(row: HTMLElement): number {
+  private contentShift(row: HTMLElement, delta: number): number {
     const content = this.readerContent;
     // At native zero the reader is at the start, where new content stays visible.
     if (content?.row !== row || !this.host.scrollElement?.scrollTop) {
@@ -285,7 +318,9 @@ export class TranscriptReaderAnchor {
     }
     const anchor = this.anchor(content);
     if (!anchor) {
-      return 0;
+      // In the gap after the row's content, its whole resize moves the next visible row.
+      // Detached candidates can no longer locate the reader.
+      return content.candidates.length === 0 ? delta : 0;
     }
     const shift =
       anchor.element.getBoundingClientRect().top - row.getBoundingClientRect().top - anchor.offset;
@@ -352,37 +387,30 @@ export class TranscriptReaderAnchor {
     const cut: { element: Element; offset: number }[] = [];
     let until = row.getBoundingClientRect().height;
     let walked: Element = row;
-    let child = row.firstElementChild;
-    while (child) {
-      const rect = child.getBoundingClientRect();
-      if (rect.height > 0 && rect.bottom > readerTop) {
-        const offset = rect.top - rowTop;
-        walked = child;
-        if (offset >= edge - 0.5) {
-          below.push({ element: child, offset });
-          until = Math.min(until, offset);
-          break;
-        }
-        cut.unshift({ element: child, offset });
-        until = Math.min(until, rect.bottom - rowTop);
-        child = child.firstElementChild;
-      } else {
-        child = child.nextElementSibling;
+    let box = firstContentBox(row.firstElementChild, readerTop);
+    while (box) {
+      const { element: child, rect } = box;
+      const offset = rect.top - rowTop;
+      walked = child;
+      if (offset >= edge - 0.5) {
+        below.push({ element: child, offset });
+        until = Math.min(until, offset);
+        break;
       }
+      cut.unshift({ element: child, offset });
+      until = Math.min(until, rect.bottom - rowTop);
+      box = firstContentBox(child.firstElementChild, readerTop);
     }
     // A rendered replacement (a diagram for its source block) detaches what it replaces; the
     // content after it still marks the reader's place.
     for (let node: Element | null = walked; node && node !== row; node = node.parentElement) {
-      let next = node.nextElementSibling;
-      while (next && !next.getBoundingClientRect().height) {
-        next = next.nextElementSibling;
-      }
-      const offset = next ? next.getBoundingClientRect().top - rowTop : -Infinity;
-      if (next && offset >= edge - 0.5) {
-        below.push({ element: next, offset });
+      const next = firstContentBox(node.nextElementSibling);
+      if (next && next.rect.top >= readerTop - 0.5) {
+        below.push({ element: next.element, offset: next.rect.top - rowTop });
       }
     }
-    if (!below.length && !cut.length) {
+    // Keep an empty candidate list for the trailing gap of a row with rendered content.
+    if (!below.length && !cut.length && !firstContentBox(row.firstElementChild)) {
       return;
     }
     const inner = cut[0] && { ...cut[0], height: cut[0].element.getBoundingClientRect().height };
@@ -490,14 +518,22 @@ export class TranscriptReaderAnchor {
         return false;
       }
       if (moves && !owned && !held) {
-        // The flow moves in this frame; virtual-core would defer its write while iOS scrolls.
-        this.owedScroll += delta;
+        // Retained messages use committed geometry; other content keeps relative correction.
+        if (!this.host.prependAnchor.retainReader(this.host.scrollElement)) {
+          this.owedScroll += delta;
+        }
         return false;
       }
       if (!above || owned || !held) {
         // Prepend restores the measured bubble absolutely; relative compensation
         // can replay after its anchor retires during iOS's post-touch grace.
-        return above && this.host.prependAnchor.messageKey === null;
+        const adjust = above && this.host.prependAnchor.messageKey === null;
+        if (adjust) {
+          // Virtual-core writes its cached offset plus the delta; a reader scroll whose event
+          // has not arrived yet would be undone by that stale base.
+          this.host.offsetState.syncNativeOffset?.(true);
+        }
+        return adjust;
       }
       this.columnShift += delta;
       this.landedShift += delta;
@@ -515,9 +551,8 @@ export class TranscriptReaderAnchor {
   };
 
   /**
-   * Apply corrections collected while virtual-core landed a measurement batch. Returns whether a
-   * landed size moved the flow's start: its scroll adjustment is already written, so the flow
-   * must be redrawn in the same frame.
+   * Reconcile native corrections after virtual-core lands a measurement batch. Returns whether
+   * an out-of-flow predecessor changed the virtual flow's start and needs a geometry projection.
    */
   flush(): boolean {
     const flowMoved = this.flowMoved;
@@ -566,6 +601,19 @@ export class TranscriptReaderAnchor {
     // A held negative shift cannot be reached by native scrolling past zero.
     const reachesStart = shift < 0 && offset + shift <= 0;
     if (!force && this.holdsNativeOffset() && !reachesStart) {
+      // Virtual-core's idle flush can precede the input's own idle, and nothing else may flush
+      // after it. Recheck next frame: a continuing smooth scroll delivers its scroll event (and
+      // re-asserts the gesture) before animation-frame callbacks run; an ended one does not.
+      if (
+        !this.host.virtualizer.isScrolling &&
+        !this.host.offsetState.touchActive &&
+        this.settleFrame === null
+      ) {
+        this.settleFrame = requestAnimationFrame(() => {
+          this.settleFrame = null;
+          this.settle();
+        });
+      }
       return;
     }
     // A write during elastic overscroll snaps back and drops the correction; retry in range.
@@ -575,7 +623,11 @@ export class TranscriptReaderAnchor {
     this.columnShift = 0;
     this.shiftVirtual(-shift);
     this.syncColumn();
-    this.scrollBy(shift);
+    // Home explicitly requests the start; a touch reaching zero still retains its reader.
+    // History loading observes the edge independently before input idles.
+    if (shift < 0 || offset > 0 || !this.host.offsetState.inputTargetsStart) {
+      this.scrollBy(shift);
+    }
   }
 
   /** A moved pane keeps its mounted rows observed; only pending corrections are retired. */

@@ -83,7 +83,7 @@ const schedule = (kind: "at" | "every" | "cron", at: number): CronJobCreate["sch
       : { kind, expr: "* * * * *", tz: "UTC", staggerMs: 0 };
 
 describe("ordinary session agent turns", () => {
-  it.each(["isolated", "main", "session:agent:main:project:inbox"] as const)(
+  it.each(["isolated", "session:main", "session:agent:main:project:inbox"] as const)(
     "requires fresh authority after a human transfer on %s, including a transfer back",
     async (sessionTarget) => {
       const { cron, storePath, run } = await service();
@@ -131,7 +131,7 @@ describe("ordinary session agent turns", () => {
 
   it.each(
     (["ok", "error"] as const).flatMap((status) =>
-      (["main", "session:agent:main:project:inbox"] as const).map((sessionTarget) => ({
+      (["session:main", "session:agent:main:project:inbox"] as const).map((sessionTarget) => ({
         status,
         sessionTarget,
       })),
@@ -295,7 +295,7 @@ describe("unstarted scheduled admission", () => {
           schedule: schedule(scheduleKind, scheduler.now() + 1_000),
           idleOnly: true,
           payload: { kind: "agentTurn", message: "Check once idle" },
-          sessionTarget: boundary === "isolated" ? "isolated" : "main",
+          sessionTarget: boundary === "isolated" ? "isolated" : "session:main",
           delivery: { mode: "webhook", to: "https://example.invalid/completed" },
           state: {
             lastRunAtMs: previousRunAt,

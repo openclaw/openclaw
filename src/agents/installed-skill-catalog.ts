@@ -10,6 +10,8 @@ import { scoreLexical, tokenizeDocument } from "./tool-search-ranking.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type InstalledSkill = CodeModeSkill & {
+  /** Forwarded reads are rendered elsewhere, so this host cannot attest their final bytes. */
+  instructionDelivery?: "local" | "forwarded";
   /** Published content generation; projections preserve it, never read authority. */
   catalogRevision?: string;
   /** Prompt-listed instructions retain the shipped Code Mode whole-read contract. */

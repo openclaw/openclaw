@@ -11,7 +11,6 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
 import * as gatewayModule from "../../agents/tools/gateway.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCronRunAdmissionSource,
@@ -131,9 +130,8 @@ const OPS: Record<string, Record<string, unknown>> = {
   cap: { payload: { kind: "agentTurn", message: "p3", toolsAllow: ["read"] } },
 };
 
-// "revoked" is a channel-owner manager whose ownership is removed after admission, before the write.
-type Caller = "scoped" | "creator" | "manager" | "revoked";
-const CALLERS: Caller[] = ["scoped", "creator", "manager", "revoked"];
+type Caller = "scoped" | "creator" | "manager";
+const CALLERS: Caller[] = ["scoped", "creator", "manager"];
 
 const OWNER_CONFIG = {
   agents: { entries: { ops: {} } },
@@ -173,19 +171,15 @@ async function updateAs(
   const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
   identity.delegatedAuthority = { kind: "local", ...authority };
   context.validateAgentRuntimeApprovalAuthority = () => true;
-  const isOwner = () =>
-    isConfiguredCommandOwner(getRuntimeConfig(), { channel: "telegram", senderId: "owner-1" });
   const scope = createCronCreatorAuthorityRunScope(
     identity.operationalRunInstance.runId,
     { kind: "external", channel: "telegram" },
-    caller === "manager" || caller === "revoked"
-      ? { source: "channel-owner", isCurrent: isOwner }
-      : undefined,
+    caller === "manager" ? { source: "channel-owner" } : undefined,
   );
   try {
     return await runWithCronCreatorAuthorityCapability(scope, () =>
       withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
-        if (caller === "manager" || caller === "revoked") {
+        if (caller === "manager") {
           identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint("cron.update");
         } else {
           identity.cronToolsAllowCapture = "final-executable-surface";
@@ -450,12 +444,9 @@ describe("cron ownership access matrix", () => {
           context.cron.getJob.mockImplementation((id) => cron.getJob(id));
           context.cron.getDefaultAgentId.mockImplementation(() => "ops");
           getRuntimeConfig.mockReturnValue(OWNER_CONFIG);
-          context.cron.updateWithPrecondition.mockImplementation((...args) => {
-            if (caller === "revoked") {
-              getRuntimeConfig.mockReturnValue({ ...OWNER_CONFIG, commands: {} });
-            }
-            return cron.updateWithPrecondition(...args);
-          });
+          context.cron.updateWithPrecondition.mockImplementation((...args) =>
+            cron.updateWithPrecondition(...args),
+          );
           let ok = false;
           let message = "";
           try {

@@ -24,7 +24,7 @@ export async function publishConnectModelCatalog(
   const client = handler.getClient();
   const requestedScope = client?.connect.modelCatalog;
   if (
-    client?.internal?.publicationReader ||
+    client?.internal?.publicationTransport ||
     client?.connect.client.id !== GATEWAY_CLIENT_IDS.CONTROL_UI ||
     !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT) ||
     !requestedScope

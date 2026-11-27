@@ -13,6 +13,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   NODE_DESKTOP_ATTACH_PATH,
   NODE_PORTAL_ATTACH_PATH,
+  NODE_STREAM_MAX_FRAME_BYTES,
 } from "../../shared/node-desktop-stream.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
@@ -24,7 +25,6 @@ import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 type WebSocket = import("ws").WebSocket;
 
 const DEFAULT_TICKET_TTL_MS = 60_000;
-const MAX_ATTACH_FRAME_BYTES = 64 * 1024;
 const streamLog = createSubsystemLogger("gateway/node-stream");
 
 type NodeDesktopStreamMetadata = {
@@ -67,7 +67,7 @@ function parseStreamMetadata(
   kind: NodeStreamKind,
 ): NodeDesktopStreamMetadata | undefined {
   const length = rawDataByteLength(data);
-  if (!isBinary || length === 0 || length > MAX_ATTACH_FRAME_BYTES) {
+  if (!isBinary || length === 0 || length > NODE_STREAM_MAX_FRAME_BYTES) {
     throw new Error(`invalid node ${kind} attach metadata`);
   }
   let value: unknown;
@@ -155,7 +155,7 @@ export function createNodeDesktopStreamBroker() {
     onExpire: (entry, ticket) =>
       rejectTicket(ticket, new Error(`node ${entry.kind} stream ticket expired`)),
   });
-  const wss = new NpmWebSocketServer({ noServer: true, maxPayload: MAX_ATTACH_FRAME_BYTES });
+  const wss = new NpmWebSocketServer({ noServer: true, maxPayload: NODE_STREAM_MAX_FRAME_BYTES });
 
   const remove = (ticket: string): TicketEntry | undefined => {
     const entry = pending.get(ticket);

@@ -22,7 +22,7 @@ const actualSession = await vi.importActual<typeof import("./session.js")>("./se
 const actualAccessor = await vi.importActual<
   typeof import("../../config/sessions/session-accessor.js")
 >("../../config/sessions/session-accessor.js");
-const { prepareCronRunContext } = await import("./run-prepare.js");
+const { prepareCronRunContext } = await import("./run-prepare-context.js");
 const { beginCronPreparationEffect } = await import("./run-session-state.js");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {

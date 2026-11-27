@@ -77,6 +77,7 @@ export function props({
       navigate: vi.fn(),
     },
     filters: { personId: null, query: "", time: "7d" as const },
+    searchInputValue: overrides.filters?.query ?? "",
     presenceViewers: [] as PresenceViewer[],
     result: {
       ts: 1,

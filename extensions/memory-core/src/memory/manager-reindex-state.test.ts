@@ -397,6 +397,26 @@ describe("memory reindex state", () => {
     ).toBe(true);
   });
 
+  it("keeps extra path scope hashes in persisted code-unit order", () => {
+    const paths = [
+      { path: "notes/备", pattern: "reference/**/*.md" },
+      { path: "notes/阿", pattern: "reference/**/*.md" },
+    ];
+
+    const persistedScopeHash = "64b0edd0082f34c4531b871e3fb2bc509ae1d6a7b37fa053afb5ec92a5906ee2";
+
+    expect(scope(paths)).toBe(persistedScopeHash);
+    expect(scope(paths.toReversed())).toBe(persistedScopeHash);
+  });
+
+  it("orders distinct Unicode path spellings independently of input order", () => {
+    const composed = { path: "notes/é", pattern: "reference/**/*.md" };
+    const decomposed = { path: "notes/e\u0301", pattern: "reference/**/*.md" };
+
+    expect(scope([composed, decomposed])).toBe(scope([decomposed, composed]));
+    expect(scope([composed, decomposed])).not.toBe(scope([composed]));
+  });
+
   it("keeps scope identity stable when only extra-path recency policy changes", () => {
     expect(scope([{ path: "reference", pattern: "**/*.md", evergreen: true }])).toBe(
       scope([{ path: "reference", pattern: "**/*.md" }]),

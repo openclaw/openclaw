@@ -30,14 +30,17 @@ import {
 // the Git activation does, and records the activation fact unless `marker` is
 // `none` (an older updater) or names another build. `end` set to `killed` then
 // SIGKILLs the child; `stalled` reports and stays alive until its parent kills it.
+// `root` is the install path the update ran from when it differs from the
+// installation key, as for pnpm, whose install path links to the package's own directory.
 const [installKey, authority, options] = process.argv.slice(2);
 assert(installKey && authority && options);
-const { end, candidate, installed, trigger, gateway, checkout } = JSON.parse(options) as {
+const { end, candidate, installed, trigger, gateway, checkout, root } = JSON.parse(options) as {
   end: "killed" | "stalled";
   candidate: string;
   installed: "previous" | "candidate";
   trigger: "cli" | "api";
   gateway: "untouched" | "stopped" | "restarted";
+  root?: string;
   checkout?: {
     sha: string;
     buildId: string;
@@ -47,7 +50,7 @@ const { end, candidate, installed, trigger, gateway, checkout } = JSON.parse(opt
 const manifest = path.join(installKey, "package.json");
 const { version, buildId = null } = await readPackageUpdateIdentity(installKey);
 assert(version);
-const runtime = { root: installKey, nodePath: process.execPath };
+const runtime = { root: root ?? installKey, nodePath: process.execPath };
 const ledger = { env: process.env };
 const runId = randomUUID();
 

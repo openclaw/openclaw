@@ -66,6 +66,36 @@ describe("automation invocation tools", () => {
     },
   );
 
+  it.each([
+    {
+      input: {},
+      error: {
+        name: "ToolInputError",
+        status: 400,
+        message: 'Set `in` to a non-empty duration string, for example `"5m"`.',
+      },
+    },
+    ...["later", "0m"].map((value) => ({
+      input: { in: value },
+      error: {
+        name: "Error",
+        message: 'Set `in` to a duration greater than zero, for example `"5m"`.',
+      },
+    })),
+  ])("explains how to fix a next check delay with input $input", async ({ input, error }) => {
+    const { invocation, tool } = createInvocation(true);
+    await expect(tool.execute("invalid", { action: "next_check", ...input })).rejects.toMatchObject(
+      error,
+    );
+    expect(invocation.nextCheckMs).toBeUndefined();
+
+    await expect(tool.execute("retry", { action: "next_check", in: "5m" })).resolves.toMatchObject({
+      details: { ok: true, delayMs: 300_000 },
+    });
+    expect(invocation.nextCheckMs).toBe(300_000);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("accepts one concise structured result without dispatching another turn", async () => {
     const { invocation, tool } = createInvocation();
     await expect(
@@ -78,6 +108,15 @@ describe("automation invocation tools", () => {
       details: { ok: true, outcome: "no_change", summary: "Nothing new." },
     });
     expect(invocation.result).toEqual({ outcome: "no_change", summary: "Nothing new." });
+    await expect(
+      tool.execute("repeat", {
+        action: "record_result",
+        outcome: "no_change",
+        summary: "Nothing new.",
+      }),
+    ).resolves.toMatchObject({
+      details: { ok: true, outcome: "no_change", summary: "Nothing new." },
+    });
     await expect(
       tool.execute("duplicate", {
         action: "record_result",
@@ -136,10 +175,10 @@ describe("automation invocation tools", () => {
 
   it("carries the exact invocation fence and caller revision to the scratch owner", async () => {
     const { invocation, tool } = createInvocation();
-    let receiptAuthority: (() => boolean | void) | undefined;
+    let receiptAuthority: (() => void) | undefined;
     callGatewayMock.mockImplementationOnce(async () => {
       receiptAuthority = getGatewayToolCallerIdentity()?.receiptAuthority;
-      expect(receiptAuthority?.()).not.toBe(false);
+      expect(receiptAuthority).not.toThrow();
       return { ok: false, reason: "revision-conflict", currentRevision: 4 };
     });
     await expect(
@@ -157,6 +196,6 @@ describe("automation invocation tools", () => {
     });
     expect(receiptAuthority).toBeDefined();
     invocation.closed = true;
-    expect(receiptAuthority?.()).toBe(false);
+    expect(receiptAuthority).toThrow("Automation invocation is no longer active");
   });
 });

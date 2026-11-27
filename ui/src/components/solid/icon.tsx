@@ -73,7 +73,7 @@ function IconShape(props: { node: IconNode; scope: string }) {
   );
 }
 
-function IconSvg(props: IconPresentation & { data: IconData }) {
+export function IconSvg(props: IconPresentation & { data: IconData }) {
   const scope = createUniqueId();
   return (
     <svg

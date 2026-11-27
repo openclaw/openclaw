@@ -29,6 +29,7 @@ import {
   type ProviderStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import { createEmptyTransportUsage } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const { values } = parseArgs({
@@ -213,12 +214,7 @@ async function measure(workload: Workload, allocation: boolean) {
   const inspector = allocation ? new Session() : undefined;
   try {
     if (inspector) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 4096,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 4096);
     }
     const hostLoad = loadavg();
     const started = performance.now();

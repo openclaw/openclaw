@@ -34,6 +34,23 @@ import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 export const NPM_PACKAGE_PRODUCER_WORKFLOW = ".github/workflows/openclaw-npm-preflight.yml";
 export const PREPARED_NPM_BUNDLE_SCHEMA = "openclaw.prepared-npm-bundle/v1";
 export const QUALIFIED_NPM_PREFLIGHT_SCHEMA = "openclaw.qualified-npm-preflight/v1";
+export const SEALED_NPM_PREFLIGHT_SCHEMA = "openclaw.sealed-npm-preflight/v1";
+const BUILD_ONLY_VALIDATION = Object.freeze({
+  mode: "build-only",
+  skipped: Object.freeze(["source", "sdk", "dependencies", "contents"]),
+});
+
+// This marker describes missing validation, never publication authorization.
+export function isBuildOnlyNpmPreflight(manifest) {
+  return (
+    manifest?.version === 4 &&
+    isDeepStrictEqual(manifest.validation, BUILD_ONLY_VALIDATION) &&
+    !Object.hasOwn(manifest, "qualificationProofs") &&
+    !Object.hasOwn(manifest, "pluginSdkApi") &&
+    !Object.hasOwn(manifest, "dependencyEvidenceDir") &&
+    !Object.hasOwn(manifest, "dependencyEvidenceManifest")
+  );
+}
 export const NPM_SOURCE_CHECK_SCHEMA = "openclaw.npm-source-check/v1";
 export const NPM_QUALIFICATION_PROOF_SCHEMA = "openclaw.npm-qualification-proof/v1";
 const PACKAGE_MANIFEST_SCHEMA = "openclaw.npm-package-bundle/v1";
@@ -983,7 +1000,9 @@ export function describeNpmBundle({ directory, artifact, qualified = false }) {
   };
   if (qualified) {
     return {
-      schema: QUALIFIED_NPM_PREFLIGHT_SCHEMA,
+      schema: isBuildOnlyNpmPreflight(manifest)
+        ? SEALED_NPM_PREFLIGHT_SCHEMA
+        : QUALIFIED_NPM_PREFLIGHT_SCHEMA,
       ...shared,
       preparedBundle: manifest.preparedBundle,
     };
@@ -1002,6 +1021,22 @@ export function describeNpmBundle({ directory, artifact, qualified = false }) {
   };
 }
 
+/**
+ * @param {{
+ *   descriptor: ReturnType<typeof describeNpmBundle>,
+ *   producer: Parameters<typeof verifyNpmBundleProducer>[0]["producer"],
+ *   inputDir: string,
+ *   outputDir: string,
+ *   sourceCheck?: unknown,
+ *   sdkProof?: unknown,
+ *   dependencyProof?: unknown,
+ *   contentsProof?: unknown,
+ *   validationMode?: "full" | "build-only",
+ *   token?: string,
+ *   runGh?: typeof runReleaseToolingGh,
+ *   fetchImpl?: typeof fetch,
+ * }} options
+ */
 export async function qualifyNpmPackageBundle({
   descriptor,
   inputDir,
@@ -1011,10 +1046,21 @@ export async function qualifyNpmPackageBundle({
   sdkProof,
   dependencyProof,
   contentsProof,
+  validationMode = "full",
   token,
   runGh = runReleaseToolingGh,
   fetchImpl,
 }) {
+  if (!["full", "build-only"].includes(validationMode)) {
+    throw new Error("Unsupported npm bundle validation mode.");
+  }
+  const buildOnly = validationMode === "build-only";
+  if (
+    buildOnly &&
+    [sourceCheck, sdkProof, dependencyProof, contentsProof].some((value) => value !== undefined)
+  ) {
+    throw new Error("Build-only npm bundles must not claim validation proofs.");
+  }
   validateProducer(producer, {
     repository: descriptor.producer.repository,
     toolingSha: descriptor.producer.workflowSha,
@@ -1039,34 +1085,40 @@ export async function qualifyNpmPackageBundle({
   );
   const prepared = verifyPreparedNpmBundleFiles({ descriptor, files });
   const { repository, workflowSha: toolingSha } = descriptor.producer;
-  verifyNpmSourceCheck({
-    descriptor: sourceCheck,
-    repository,
-    sourceSha: descriptor.source.sha,
-    toolingSha,
-    runGh,
-  });
+  if (!buildOnly) {
+    verifyNpmSourceCheck({
+      descriptor: sourceCheck,
+      repository,
+      sourceSha: descriptor.source.sha,
+      toolingSha,
+      runGh,
+    });
+  }
   // Independent checks may overlap; only this join can mint publishable qualification.
   // Authenticate every completed job and its exact bytes before creating the output.
-  const [sdkFiles, dependencyFiles] = await Promise.all(
-    [
-      ["sdk", sdkProof],
-      ["dependencies", dependencyProof],
-      ["contents", contentsProof],
-    ].map(([kind, proof]) =>
-      verifyNpmQualificationProof({
-        proof,
-        kind,
-        descriptor,
-        manifest: prepared,
-        token,
-        runGh,
-        fetchImpl,
-      }),
-    ),
-  );
-  const pluginSdkApi = JSON.parse(sdkFiles.get("plugin-sdk-api-release-evidence.json"));
-  if (!dependencyFiles.has("dependency-evidence-manifest.json")) {
+  const [sdkFiles, dependencyFiles] = buildOnly
+    ? []
+    : await Promise.all(
+        [
+          ["sdk", sdkProof],
+          ["dependencies", dependencyProof],
+          ["contents", contentsProof],
+        ].map(([kind, proof]) =>
+          verifyNpmQualificationProof({
+            proof,
+            kind,
+            descriptor,
+            manifest: prepared,
+            token,
+            runGh,
+            fetchImpl,
+          }),
+        ),
+      );
+  const pluginSdkApi = buildOnly
+    ? undefined
+    : JSON.parse(sdkFiles.get("plugin-sdk-api-release-evidence.json"));
+  if (!buildOnly && !dependencyFiles.has("dependency-evidence-manifest.json")) {
     throw new Error("Dependency qualification proof is missing its manifest.");
   }
   mkdirSync(outputDir, { recursive: true });
@@ -1076,34 +1128,46 @@ export async function qualifyNpmPackageBundle({
   for (const entry of packageInventory(descriptor)) {
     writeFileSync(join(outputDir, entry.tarballName), files.get(entry.tarballName));
   }
-  for (const [kind, evidenceFiles] of [
-    ["sdk", sdkFiles],
-    ["dependencies", dependencyFiles],
-  ]) {
-    const evidenceDir = join(inputDir, "qualification", kind);
-    mkdirSync(evidenceDir, { recursive: true });
-    for (const [name, bytes] of evidenceFiles) {
-      writeFileSync(join(evidenceDir, name), bytes, { flag: "wx" });
+  if (!buildOnly) {
+    for (const [kind, evidenceFiles] of [
+      ["sdk", sdkFiles],
+      ["dependencies", dependencyFiles],
+    ]) {
+      const evidenceDir = join(inputDir, "qualification", kind);
+      mkdirSync(evidenceDir, { recursive: true });
+      for (const [name, bytes] of evidenceFiles) {
+        writeFileSync(join(evidenceDir, name), bytes, { flag: "wx" });
+      }
     }
   }
-  cpSync(join(inputDir, "qualification", "dependencies"), join(outputDir, "dependency-evidence"), {
-    recursive: true,
-  });
+  if (!buildOnly) {
+    cpSync(
+      join(inputDir, "qualification", "dependencies"),
+      join(outputDir, "dependency-evidence"),
+      {
+        recursive: true,
+      },
+    );
+  }
   const { schema: _schema, producer: _producer, ...identity } = prepared;
   const manifest = {
-    version: 3,
+    version: buildOnly ? 4 : 3,
     producer,
     preparedBundle: descriptor,
-    qualificationProofs: {
-      sourceCheck,
-      sdk: sdkProof,
-      dependencies: dependencyProof,
-      contents: contentsProof,
-    },
     ...identity,
-    pluginSdkApi,
-    dependencyEvidenceDir: "dependency-evidence",
-    dependencyEvidenceManifest: "dependency-evidence/dependency-evidence-manifest.json",
+    ...(buildOnly
+      ? { validation: BUILD_ONLY_VALIDATION }
+      : {
+          qualificationProofs: {
+            sourceCheck,
+            sdk: sdkProof,
+            dependencies: dependencyProof,
+            contents: contentsProof,
+          },
+          pluginSdkApi,
+          dependencyEvidenceDir: "dependency-evidence",
+          dependencyEvidenceManifest: "dependency-evidence/dependency-evidence-manifest.json",
+        }),
   };
   writeJson(join(outputDir, "preflight-manifest.json"), manifest);
   writeFileSync(join(outputDir, "release-tag.txt"), `${manifest.releaseTag}\n`);
@@ -1200,16 +1264,17 @@ async function main() {
       },
       preparedBundle: values.descriptor ? readJson(values.descriptor) : undefined,
     });
-  } else if (command === "qualify") {
+  } else if (command === "qualify" || command === "seal") {
     result = await qualifyNpmPackageBundle({
       descriptor: readJson(values.descriptor),
       inputDir: resolve(values["input-dir"]),
       outputDir: resolve(values["output-dir"]),
       producer: resolveCurrentProducer(process.env, VERIFY_JOB_NAME),
-      sourceCheck: readJson(values["source-check"]),
-      sdkProof: readJson(values["sdk-proof"]),
-      dependencyProof: readJson(values["dependency-proof"]),
-      contentsProof: readJson(values["contents-proof"]),
+      validationMode: command === "seal" ? "build-only" : "full",
+      sourceCheck: command === "seal" ? undefined : readJson(values["source-check"]),
+      sdkProof: command === "seal" ? undefined : readJson(values["sdk-proof"]),
+      dependencyProof: command === "seal" ? undefined : readJson(values["dependency-proof"]),
+      contentsProof: command === "seal" ? undefined : readJson(values["contents-proof"]),
       token: process.env.GH_TOKEN,
     });
   } else if (command === "describe" || command === "describe-qualified") {
@@ -1226,7 +1291,7 @@ async function main() {
     });
   } else {
     throw new Error(
-      "Usage: npm-prepared-bundle.mjs <prepare|download|proof|qualify|describe|describe-qualified> [options]",
+      "Usage: npm-prepared-bundle.mjs <prepare|download|proof|qualify|seal|describe|describe-qualified> [options]",
     );
   }
   if (process.env.GITHUB_OUTPUT) {

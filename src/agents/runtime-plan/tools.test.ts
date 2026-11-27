@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
-  createNativeOpenAIResponsesModel,
   createParameterFreeTool,
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
@@ -33,7 +32,7 @@ import {
   setToolTerminalPresentation,
 } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "../tools/common.js";
-import { logAgentRuntimeToolDiagnostics, normalizeAgentRuntimeTools } from "./tools.js";
+import { normalizeAgentRuntimeTools } from "./tools.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -523,28 +522,5 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       noteMetadata,
     );
     expectQuarantine(diagnostics, "tool[0]", "tool[0].name is unreadable");
-  });
-
-  it("routes diagnostics through RuntimePlan when a plan is available", () => {
-    const tools = [createParameterFreeTool()] as AgentTool[];
-    const model = createNativeOpenAIResponsesModel() as never;
-    const logDiagnostics = vi.fn();
-    const plan = runtimePlan();
-    plan.tools.logDiagnostics = logDiagnostics;
-    const context = {
-      workspaceDir: "/tmp/openclaw-runtime-plan-tools",
-      modelApi: "openai-responses",
-      model,
-    };
-
-    logAgentRuntimeToolDiagnostics({
-      runtimePlan: plan,
-      tools,
-      provider: "openai",
-      modelId: "gpt-5.4",
-      ...context,
-    });
-
-    expect(logDiagnostics).toHaveBeenCalledWith(tools, context);
   });
 });

@@ -67,7 +67,7 @@ function externalPreview(to: string) {
   };
 }
 
-function conversationPreview(destination = "current session") {
+function conversationPreview(destination = "creating conversation") {
   return {
     label: `announce -> ${destination}`,
     detail: "commits to this conversation (no external channel route)",
@@ -80,7 +80,8 @@ async function withCurrentOrigin(
     channelCount?: number;
     delivery?: CronDelivery;
     source?: DeliveryContext;
-    sessionTarget?: "current" | "isolated";
+    sessionTarget?: "isolated";
+    includeRecentChat?: boolean;
     payload?: CronStoredJob["payload"];
   },
   check: (fixture: {
@@ -117,12 +118,16 @@ async function withCurrentOrigin(
     );
     const job: CronStoredJob = makeCronJob({
       agentId: "main",
-      sessionTarget: options.sessionTarget ?? "current",
+      sessionTarget: "isolated",
+      includeRecentChat:
+        options.includeRecentChat ??
+        (options.sessionTarget === undefined &&
+          (!options.payload || options.payload.kind === "agentTurn")),
       sessionKey,
       delivery: options.delivery ?? { mode: "announce" },
       ...(options.payload ? { payload: options.payload } : {}),
     });
-    if (options.sessionTarget === "isolated") {
+    if (options.sessionTarget === "isolated" && !job.includeRecentChat) {
       job.sourceConversation = { sessionKey, sessionId: "source-session" };
     }
     await check({ cfg, job, preview: () => resolveCronDeliveryPreview({ cfg, job }) });
@@ -253,7 +258,12 @@ it("resolves previews without routing history beside healthy jobs", () =>
     const jobs = [
       { ...job, id: "healthy" },
       missing,
-      { ...missing, id: "missing-last", sessionTarget: "isolated" as const },
+      {
+        ...missing,
+        id: "missing-last",
+        sessionTarget: "isolated" as const,
+        includeRecentChat: false,
+      },
       explicit,
     ];
     const previews = await resolveCronDeliveryPreviews({ cfg, jobs });
@@ -348,7 +358,7 @@ it("shares alias reads across a preview batch and refreshes routes on the next r
       }
     };
     try {
-      await checkBatch("announce -> current session");
+      await checkBatch("announce -> creating conversation");
       // One store-sized read scope, independent of the number of repeated jobs.
       expect(reads.rowCounts.sessions).toBeLessThanOrEqual(4 * 65);
     } finally {

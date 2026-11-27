@@ -33,6 +33,7 @@ import {
   loadLegacySessionStore,
   updateLegacySessionStore,
 } from "../../../infra/state-migrations.legacy-session-store.js";
+import { prepareProviderModelPolicySurfaces } from "../../../plugins/provider-model-routes.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../../../sessions/model-overrides.js";
 import { createRetainedAgentDatabaseMatcher } from "../../../state/agent-deletion-discovery.js";
@@ -495,6 +496,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const warnings: string[] = [];
   let requiresFullDoctor = false;
   await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env });
+  await prepareProviderModelPolicySurfaces();
   const pending = readDeferredPluginMigrations({ env });
   const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
     resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),

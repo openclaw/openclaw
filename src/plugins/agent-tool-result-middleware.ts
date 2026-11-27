@@ -110,10 +110,13 @@ export function getAgentToolResultMiddlewareMatcherScope(
 
 export function listAgentToolResultMiddlewareRegistrations(
   runtime: AgentToolResultMiddlewareRuntime,
+  toolName?: string,
 ): PluginAgentToolResultMiddlewareRegistration[] {
   return (
     getPluginRegistryForContext()?.agentToolResultMiddlewares?.filter((entry) =>
-      entry.runtimes.includes(runtime),
+      toolName === undefined
+        ? entry.runtimes.includes(runtime)
+        : agentToolResultMiddlewareRegistrationCoversTool(entry, runtime, toolName),
     ) ?? []
   );
 }

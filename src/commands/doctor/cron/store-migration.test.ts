@@ -405,18 +405,30 @@ it("converts saved current jobs without changing their linked conversation", () 
   expect(normalizeStoredCronJobs(result.jobs).mutated).toBe(false);
 });
 
-it("pins the original agent's configured main conversation without adding announce delivery", () => {
-  const { job, result } = normalizeOneJob(
-    makeLegacyJob({ agentId: "gardener", payload: agentPayload() }),
-    { cfg: { session: { mainKey: "desk" } } },
-  );
-  expect(job).toMatchObject({
-    sessionTarget: "session:agent:gardener:desk",
-    delivery: { mode: "none" },
-    enabled: true,
-  });
-  expect(result.pausedSessionTargetJobs).toEqual([]);
-});
+it.each(["explicit", "session-key"])(
+  "pins the %s agent\'s configured main conversation without adding announce delivery",
+  (owner) => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        agentId: owner === "explicit" ? "gardener" : undefined,
+        sessionKey: "agent:gardener:main",
+        payload: agentPayload(),
+      }),
+      {
+        cfg: {
+          agents: { defaults: { systemAgent: { agentId: "main" } } },
+          session: { mainKey: "desk" },
+        },
+      },
+    );
+    expect(job).toMatchObject({
+      sessionTarget: "session:agent:gardener:desk",
+      delivery: { mode: "none" },
+      enabled: true,
+    });
+    expect(result.pausedSessionTargetJobs).toEqual([]);
+  },
+);
 
 it("pauses and preserves a current job when its creating conversation is missing", () => {
   const { job, result } = normalizeLegacy({ sessionTarget: "current", payload: agentPayload() });

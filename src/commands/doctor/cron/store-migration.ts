@@ -13,13 +13,17 @@ import {
 import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import { resolveCanonicalMainSessionKey } from "../../../config/sessions/main-session-key.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { classifyCronAgentTurnShellPrompt } from "../../../cron/agent-turn-command-prompt.js";
+import { hashCronJobDefinition } from "../../../cron/definition-hash.js";
 import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
 import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
 import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
+import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import { decodeStoredCronJobConfig } from "../../../cron/store/job-config-codec.js";
+import { rowToCronJob } from "../../../cron/store/row-codec.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import {
   hasLegacyToolNameList,
@@ -158,6 +162,32 @@ export function canRepairCronDeliveryForDoctor(delivery: unknown): boolean {
   );
 }
 
+function hasValidLegacyOperatorSource(job: Record<string, unknown>): boolean {
+  if (job.sessionTarget !== "main" && job.sessionTarget !== "current") {
+    return false;
+  }
+  const source = asNullableRecord(job.operatorSource);
+  if (!source) {
+    return false;
+  }
+  // Captured jobs are already storage projections. Hash their original persisted
+  // inputs: the current runtime normalizer deliberately rejects retired targets.
+  const {
+    operatorSource: _operatorSource,
+    streamOperatorSource: _streamOperatorSource,
+    description: _description,
+    displayName: _displayName,
+    createdActor: _createdActor,
+    ownerProfileId: _ownerProfileId,
+    ownerTransferPending: _ownerTransferPending,
+    toolsAllowProvenance: _toolsAllowProvenance,
+    state: _state,
+    updatedAtMs: _updatedAtMs,
+    ...definition
+  } = job;
+  return source.executionRevision === hashCronJobDefinition({ ...definition, enabled: true });
+}
+
 /** Normalize persisted cron jobs in place and report issues plus rows to quarantine. */
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
@@ -192,6 +222,7 @@ export function normalizeStoredCronJobs(
       keptJobs.push(raw);
       continue;
     }
+    const preserveOperatorSource = hasValidLegacyOperatorSource(raw);
     const jobIssues = new Set<CronStoreIssueKey>();
     const trackIssue = (key: CronStoreIssueKey) => {
       if (jobIssues.has(key)) {
@@ -472,14 +503,17 @@ export function normalizeStoredCronJobs(
     const pause = (reason: string) => {
       setField(raw, "enabled", false);
       raw.state = { ...asNullableRecord(raw.state), lastError: reason };
-      pausedSessionTargetJobs.push(
-        `Paused automation ${jobName ?? String(raw.id ?? "(unnamed)")}: ${reason}`,
-      );
+      pausedSessionTargetJobs.push(`Paused automation ${jobName ?? "(unnamed)"}: ${reason}`);
     };
     if (wasMain) {
       const { cfg } = options;
-      const agentId =
-        normalizeOptionalString(raw.agentId) ?? tryResolveAmbientOwnerAgentId(cfg ?? {});
+      const agentId = tryResolveCronJobEffectiveAgentId(
+        {
+          agentId: normalizeOptionalString(raw.agentId),
+          sessionKey: normalizeOptionalString(raw.sessionKey),
+        },
+        tryResolveAmbientOwnerAgentId(cfg ?? {}),
+      );
       const sessionKey =
         agentId &&
         resolveCanonicalMainSessionKey({
@@ -563,6 +597,18 @@ export function normalizeStoredCronJobs(
       removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
       mutated = true;
       continue;
+    }
+    if (preserveOperatorSource) {
+      const migrated = rowToCronJob(
+        { job_id: String(raw.id), state_json: "{}", updated_at: 0, runtime_updated_at_ms: 0 },
+        raw,
+      );
+      if (migrated?.operatorSource) {
+        setField(raw, "operatorSource", {
+          ...migrated.operatorSource,
+          executionRevision: resolveCronOperatorExecutionRevision(migrated),
+        });
+      }
     }
     keptJobs.push(raw);
   }

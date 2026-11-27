@@ -1,11 +1,14 @@
-import fs from "node:fs/promises";
 import type { HeapProfiler, Runtime } from "node:inspector";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { HeapSpaceInfo } from "node:v8";
 import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { observeRuntimeProfileCapability } from "../infra/runtime-capabilities.js";
-import { reserveDiagnosticProfileFile } from "./diagnostic-profile-file.js";
+import {
+  reserveDiagnosticProfileFile,
+  settleDiagnosticProfileFile,
+  writeDiagnosticProfileParts,
+} from "./diagnostic-profile-file.js";
 import {
   captureDiagnosticProfile,
   createInspectorProfileCapture,
@@ -15,8 +18,6 @@ import {
 } from "./diagnostic-profile.js";
 
 const SUMMARY_STACK_DEPTH = 32;
-const MAX_FILE_BYTES = 64 * 1024 * 1024;
-const WRITE_CHUNK_BYTES = 64 * 1024;
 
 // Node's inspector declarations omit these fields from the current V8 protocol.
 type SamplingNode = Omit<HeapProfiler.SamplingHeapProfileNode, "children"> & {
@@ -385,29 +386,12 @@ export async function captureDiagnosticHeapProfile(
   };
   const persistOverflow = async (profile: SamplingProfile) => {
     try {
-      artifact = await reserveDiagnosticProfileFile("heap-profile", assertActive, MAX_FILE_BYTES);
-      let sizeBytes = 0;
-      let chunk = "";
-      let chunkBytes = 0;
-      for (const part of heapProfileParts(profile)) {
-        const bytes = Buffer.byteLength(part);
-        sizeBytes += bytes;
-        if (sizeBytes > MAX_FILE_BYTES) {
-          throw new ProfileFailure("profile-too-large");
-        }
-        chunk += part;
-        chunkBytes += bytes;
-        if (chunkBytes >= WRITE_CHUNK_BYTES) {
-          assertActive();
-          await artifact.handle.writeFile(chunk, "utf8");
-          chunk = "";
-          chunkBytes = 0;
-        }
-      }
-      if (chunk) {
-        assertActive();
-        await artifact.handle.writeFile(chunk, "utf8");
-      }
+      artifact = await reserveDiagnosticProfileFile("heap-profile", assertActive);
+      const sizeBytes = await writeDiagnosticProfileParts(
+        artifact,
+        heapProfileParts(profile),
+        assertActive,
+      );
       return { path: artifact.path, sizeBytes };
     } catch (error) {
       throw error instanceof ProfileFailure ? error : new ProfileFailure("capture-failed");
@@ -459,26 +443,5 @@ export async function captureDiagnosticHeapProfile(
         ),
     }),
   );
-  const closeFailed = artifact
-    ? await artifact.handle.close().then(
-        () => false,
-        () => true,
-      )
-    : false;
-  if (artifact && (outcome.status === "unavailable" || closeFailed)) {
-    const removalFailed = await fs.unlink(artifact.path).then(
-      () => false,
-      () => true,
-    );
-    if (outcome.status === "unavailable") {
-      outcome.cleanupFailed ||= closeFailed || removalFailed;
-    } else {
-      return {
-        status: "unavailable" as const,
-        reason: "cleanup-failed" as const,
-        cleanupFailed: true,
-      };
-    }
-  }
-  return outcome;
+  return settleDiagnosticProfileFile(artifact, outcome);
 }

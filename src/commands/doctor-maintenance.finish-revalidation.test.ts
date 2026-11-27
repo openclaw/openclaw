@@ -540,7 +540,7 @@ async function runDoctorFinishForStoppedUnit(
         expect(restart).not.toHaveBeenCalled();
       }
       if (legacyCatalog) {
-        expect(() => maintenance?.run(() => listUpdateRuns())).toThrow();
+        expect(maintenance?.run(() => listUpdateRuns())).toEqual([]);
       }
       if (continuation === "terminal-dead-before-restart") {
         if (runId) {
@@ -698,7 +698,12 @@ it("continues owning-run Doctor maintenance", async () => {
   expect(result).toMatchObject({ finishError: undefined, restartCalls: 1 });
   expect(mocks.stops).toBe(1);
   expect(result.logs).toContain("Stopped the managed Gateway for Doctor repair.");
-  expect(result.logs).toContain("Gateway restarted and verified after Doctor maintenance.");
+  expect(result.logs).toContainEqual(
+    expect.stringContaining("its repairs write state that the running Gateway also writes"),
+  );
+  const restarted = result.logs.indexOf("Gateway restarted and verified after Doctor maintenance.");
+  expect(restarted).toBeGreaterThan(-1);
+  expect(result.logs[restarted + 1]).toMatch(/^The Gateway was stopped for \d+\.\d s\.$/u);
 });
 
 it("rechecks update admission after failed restoration inspection", async () => {

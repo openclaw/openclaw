@@ -145,7 +145,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
           const connected = await connectGatewayClient({
             url: instance.url,
             token: instance.gatewayToken,
-            clientName: GATEWAY_CLIENT_NAMES.TEST,
+            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
             role: "operator",
             scopes: ["operator.admin", "operator.read", "operator.write"],

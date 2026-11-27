@@ -38,7 +38,7 @@ import {
 import {
   failedGatewayRunConfigSnapshot,
   completeGatewayRunSnapshot as completeSnapshot,
-  registerInvalidConfigResetTests,
+  registerGatewayRunConfigGuardTests,
   gatewayRunReadFailures,
   type RuntimeDotEnvLoadResult,
 } from "./run-config.test-support.js";
@@ -498,7 +498,7 @@ describe("gateway run option collisions", () => {
     return await prepareGatewayRunBootstrap({ opts: { reset: true }, runtime: defaultRuntime });
   }
 
-  registerInvalidConfigResetTests(configState);
+  registerGatewayRunConfigGuardTests(configState);
   function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
     const call = mock.mock.calls[index];
     if (!call) {

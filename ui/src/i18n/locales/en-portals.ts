@@ -3,6 +3,7 @@ import { en } from "./en.ts";
 
 const enPortals = {
   portalsPage: {
+    readPermissionDenied: "You don’t have permission to view portals.",
     listLabel: "Active portals",
     portLabel: "Port {port}",
     openNewTab: "Open in new tab",

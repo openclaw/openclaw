@@ -18,6 +18,7 @@ import { createSqliteDatabaseAdmissionCursor } from "../../src/infra/sqlite-data
 import { dispatchSqliteWorkerJob } from "../../src/infra/sqlite-worker-broker-reply.js";
 import type { Job, Slot } from "../../src/infra/sqlite-worker-broker.types.js";
 import { SqliteWorkerSlotCustody } from "../../src/infra/sqlite-worker-request-custody.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const iterations = 10_000;
 const gc = global.gc;
@@ -101,12 +102,7 @@ try {
   }
   const jobs = prepare(iterations);
   gc();
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 512,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 512);
   await run(jobs);
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   await drain();

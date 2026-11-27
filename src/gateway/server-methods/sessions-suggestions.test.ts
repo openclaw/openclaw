@@ -95,30 +95,23 @@ function expectFailure(result: Awaited<ReturnType<typeof call>>, message: string
 }
 
 it.each([
-  ["send", "authority revocation"],
-  ["edit", "authority revocation"],
   ["edit", "request abort"],
   ["dismiss", "host closed"],
 ] as const)("releases the %s claim after %s before finalization", (resolution, change) =>
   withState(async (state) => {
     const { database } = await seedClaim(state.env, "revoke-before-finalize");
     const requestAbort = new AbortController();
-    let revoked = false;
+    let hostClosed = false;
     mocks.afterSuggestionClaim.mockImplementationOnce(() => {
       if (change === "request abort") {
         requestAbort.abort(new Error("suggestion request aborted"));
       } else {
-        revoked = true;
+        hostClosed = true;
       }
     });
     const assertCurrent = () => {
-      if (revoked && change === "host closed") {
+      if (hostClosed) {
         throw new Error("suggestion host closed");
-      }
-      if (revoked) {
-        throw new SessionMutationAuthorizationChangedError(
-          errorShape(ErrorCodes.FORBIDDEN, "caller authority revoked"),
-        );
       }
     };
     const params = { sessionKey, id: "revoke-before-finalize", resolution };
@@ -130,7 +123,7 @@ it.each([
       signal: requestAbort.signal,
       sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
     });
-    expect(change === "request abort" ? requestAbort.signal.aborted : revoked).toBe(true);
+    expect(change === "request abort" ? requestAbort.signal.aborted : hostClosed).toBe(true);
     expect(mocks.afterSuggestionClaim).toHaveBeenCalledOnce();
     expect(mocks.handleChatSend).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalled();
@@ -140,9 +133,7 @@ it.each([
       expect.objectContaining(
         change === "request abort"
           ? { code: ErrorCodes.UNAVAILABLE, message: "suggestion request was cancelled" }
-          : change === "host closed"
-            ? { code: ErrorCodes.UNAVAILABLE, message: "suggestion host closed" }
-            : { code: "FORBIDDEN" },
+          : { code: ErrorCodes.UNAVAILABLE, message: "suggestion host closed" },
       ),
     );
     const stored = database.db
@@ -399,17 +390,15 @@ it("keeps an uncertain dispatch claimed until retry reconciliation", () =>
       params: { idempotencyKey: `session-suggestion:${id}`, queueMode: "steer" },
       client: {
         authenticatedUserProfile: { profileId: "owner", displayName: "Owner" },
-        internal: expect.objectContaining({
-          syntheticClient: true,
-          senderAttribution: {
-            id: "alice",
-            name: "Suggested by Alice",
-            identity: { type: "profile", id: "alice" },
-          },
-        }),
+        internal: expect.objectContaining({ suggestedBy: { id: "alice", name: "Alice" } }),
       },
     };
     expect(mocks.handleChatSend.mock.calls).toMatchObject([[dispatchedInput], [dispatchedInput]]);
+    // The approver sends the turn as their own; the author is display credit only.
+    for (const [{ client: dispatchedClient }] of mocks.handleChatSend.mock.calls) {
+      expect(dispatchedClient.internal).not.toHaveProperty("senderAttribution");
+      expect(dispatchedClient.internal).not.toHaveProperty("syntheticClient");
+    }
   }));
 
 it("claims a pending suggestion before dispatching it", () =>

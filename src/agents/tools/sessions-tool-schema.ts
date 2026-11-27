@@ -1,6 +1,9 @@
 import { Type } from "typebox";
 import { SessionMoveProfileTargetSchema } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
-import { SESSIONS_PATCH_MANY_MAX_TARGETS } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
+import {
+  SESSIONS_PATCH_MANY_MAX_TARGETS,
+  SessionsPatchMutationSchema,
+} from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { UsersListParamsSchema } from "../../../packages/gateway-protocol/src/schema/users.js";
 import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
@@ -53,14 +56,14 @@ const SessionsToolSchema = Type.Object(
           minItems: 1,
           maxItems: SESSIONS_PATCH_MANY_MAX_TARGETS,
           description:
-            "patch: apply the same settings to these sessions. Cannot combine with top-level sessionKey/expectedSessionId. Archive/restore requires each target's expectedSessionId. Current-session archive uses a single patch. Results use zero-based succeeded/failed indexes; valid targets continue after item errors.",
+            "patch: apply the same settings to these sessions. Cannot combine with top-level sessionKey/expectedSessionId. Archive/restore and snooze/wake require each target's expectedSessionId. Current-session archive or snooze uses a single patch. Results use zero-based succeeded/failed indexes; valid targets continue after item errors.",
         },
       ),
     ),
     expectedSessionId: Type.Optional(
       Type.String({
         description:
-          "Durable identity returned by sessions_list; rejects a replaced session. Required to archive, restore, or delete another session, and for non-owner rename of another session.",
+          "Durable identity returned by sessions_list; rejects a replaced session. Required to archive, restore, snooze, wake or delete another session, and for non-owner rename of another session.",
       }),
     ),
     runId: Type.Optional(
@@ -117,12 +120,17 @@ const SessionsToolSchema = Type.Object(
     pinned: Type.Optional(
       Type.Boolean({
         description:
-          "Pin session (root and Home-linked sessions only; spawned, subagent, and nested-child sessions cannot be pinned)",
+          "Set the requesting person’s sidebar pin. Send separately from shared session settings. Only roots and Home-linked conversations can be pinned; rail-only shortcuts are independent.",
       }),
     ),
     archived: Type.Optional(
       Type.Boolean({ description: "True archives without deleting; false restores the session." }),
     ),
+    snoozedUntil: Type.Optional({
+      ...SessionsPatchMutationSchema.properties.snoozedUntil,
+      description:
+        "Future epoch milliseconds: hide from Active until then (does not start a run). Self-snooze takes effect after this reply unless newer user input arrives. Null wakes now.",
+    }),
     model: Type.Optional(Type.String({ description: "Model override" })),
     thinkingLevel: Type.Optional(Type.String({ description: "Thinking override" })),
     ownerType: Type.Optional(
@@ -167,6 +175,7 @@ export const SessionControlToolSchema = Type.Object(
           "patch archive/restore: true archives without deleting, false restores. Omit when renaming.",
       }),
     ),
+    snoozedUntil: SessionsToolSchema.properties.snoozedUntil,
     runId: SessionsToolSchema.properties.runId,
     clearQueued: SessionsToolSchema.properties.clearQueued,
   },

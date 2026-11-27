@@ -252,7 +252,7 @@ describe("cron service timer seam coverage", () => {
 
   it.each([
     { target: "isolated", notify: "queue changed", wake: "now" },
-    { target: "main", notify: undefined, wake: "now" },
+    { target: "session:main", notify: undefined, wake: "now" },
   ] as const)(
     "routes $target script side effects (notify=$notify, wake=$wake)",
     async ({ target, notify, wake }) => {
@@ -335,7 +335,6 @@ describe("cron service timer seam coverage", () => {
     await expect(executeJobCore(state, createDueScriptJob({ now }))).resolves.toEqual({
       status: "error",
       error: "cron script payload returned nextCheck, but this job has no pacing bounds",
-      errorClassification: { kind: "permanent" },
       failureNotificationDetail: {
         kind: "script-failure",
         source: "payload",
@@ -454,12 +453,7 @@ describe("cron quiet outcome finalization", () => {
       }
       try {
         const execution = mode.includes("manual")
-          ? run(
-              state,
-              job.id,
-              force ? "force" : "due",
-              force ? { evaluateTrigger: true } : undefined,
-            )
+          ? run(state, job.id, force ? "force" : "due")
           : onTimer(state);
         if (failWrite) {
           await expect(execution).rejects.toThrow("quiet row unavailable");

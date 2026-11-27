@@ -17,6 +17,7 @@ import {
   isLaunchctlAlreadyLoaded,
   isUnsupportedGuiDomain,
   probeLaunchAgentState,
+  launchAgentNeedsReloadSync,
   readLaunchAgentRuntime,
   resolveLaunchAgentGatewayContext,
   resolveLaunchAgentGuiDomain,
@@ -32,6 +33,7 @@ import {
 import { formatLine } from "./output.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
+import { inspectLaunchdProcessMembershipSync } from "./service-process-membership.js";
 import type {
   GatewayServiceControlArgs,
   GatewayServiceEnv,
@@ -383,13 +385,18 @@ export async function restartLaunchAgent(
             timeoutMs: params.deadline?.remainingMs(),
           });
           const managedPid = runtime.pid;
-          // Only the current supervised PID may keep the port busy before a
-          // disruptive restart. Re-read after cleanup to close over a concurrent
-          // launchd respawn rather than trusting the protected pre-cleanup PID.
+          // The resident release launcher supervises a separate Gateway listener.
+          // Re-read the job after cleanup and require native membership for every
+          // listener rather than trusting argv or an inherited service marker.
           const ownedByLaunchAgent =
             managedPid !== undefined &&
             diagnostics.listeners.length > 0 &&
-            diagnostics.listeners.every((listener) => listener.pid === managedPid);
+            [...new Set(diagnostics.listeners.map((listener) => listener.pid))].every(
+              (pid) =>
+                pid === managedPid ||
+                (pid !== undefined &&
+                  inspectLaunchdProcessMembershipSync(pid, managedPid) === "inside"),
+            );
           if (!ownedByLaunchAgent) {
             throw new Error(
               [
@@ -409,16 +416,17 @@ export async function restartLaunchAgent(
     }
     throw error;
   }
-  // Preservation permits native activation only, including detached handoffs.
   const plistReloadNeeded =
-    !preserveDefinition &&
-    (await rewriteLaunchAgentPlistForRestart({
-      env: serviceEnv,
-      label,
-      plistPath,
-      stdout,
-      warn,
-    }));
+    (!preserveDefinition &&
+      (await rewriteLaunchAgentPlistForRestart({
+        env: serviceEnv,
+        label,
+        plistPath,
+        stdout,
+        warn,
+      }))) ||
+    launchAgentNeedsReloadSync(serviceEnv, params.deadline?.remainingMs());
+  assertCurrent?.();
   // Restart requests issued from inside the managed gateway process tree need a
   // detached handoff. A direct `kickstart -k` would terminate the caller before
   // it can finish the restart command.

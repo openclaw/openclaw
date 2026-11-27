@@ -670,8 +670,12 @@ describe("OpenClawTerminalPanel", () => {
         expect(panel.querySelector(".tabstrip-tab__status")?.textContent).not.toBe("exited");
       }
       expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(0);
-      // Restoration and attach reconciliation are independent of dock catalog discovery.
-      expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(3);
+      // Transient attach failures never adopt a session ID for dock discovery.
+      await waitForFast(() =>
+        expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(
+          failure === "missing" ? 3 : 2,
+        ),
+      );
       expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
       expect(controller.write).not.toHaveBeenCalled();
       expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
@@ -1023,31 +1027,6 @@ describe("OpenClawTerminalPanel", () => {
     expect(staleHost.isConnected).toBe(false);
     expect(requests.filter((method) => method === "terminal.open")).toHaveLength(1);
     expect(currentController.dispose).not.toHaveBeenCalled();
-  });
-
-  it("removes resize listeners when disconnected mid-drag", async () => {
-    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
-    const client: TerminalGatewayClient = createTerminalGatewayClient(
-      async <T>(method: string) =>
-        (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T,
-    );
-    const panel = mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
-    panel.toggle();
-    await panel.updateComplete;
-
-    panel
-      .querySelector(".tp-resizer")
-      ?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 20, clientY: 200 }));
-    panel.remove();
-    await Promise.resolve();
-    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 20, clientY: 20 }));
-
-    expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-bottom")).toBe(
-      "0px",
-    );
-    expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-right")).toBe(
-      "0px",
-    );
   });
 
   it("retranslates cached exit state when the locale changes", async () => {

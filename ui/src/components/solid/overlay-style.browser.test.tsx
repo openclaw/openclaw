@@ -12,9 +12,12 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
+import { Icon } from "./icon.tsx";
 import type { MenuItem } from "./menu.tsx";
 import { Popover, type PopoverHandle } from "./popover.tsx";
 import "../../styles/base.css";
+import "../../styles/chat/split-view.css";
+import "../../styles/select-picker.css";
 import "../../../public/themes/absolutely.css";
 import "../../../public/themes/phosphor.css";
 
@@ -88,6 +91,46 @@ function expectItemVisible(element: HTMLElement, menu: HTMLElement) {
 }
 
 describe("native overlay presentation", () => {
+  it("centers the sharing permission caret before and after opening", async () => {
+    mountMenu({
+      panelClass: "chat-pane__sharing-menu--desktop",
+      items: [
+        {
+          id: "access",
+          label: "Can send",
+          trigger: (
+            <>
+              <span>Can send</span>
+              <span class="picker-select__chevron">
+                <Icon name="chevronDown" />
+              </span>
+            </>
+          ),
+          class: "chat-pane__sharing-permission",
+          children: [{ id: "read", label: "Can read" }],
+        },
+      ],
+    });
+    await openMenu();
+    const button = trigger("people-access");
+    for (const expanded of [false, true]) {
+      if (expanded) {
+        await openMenu("people-access");
+      }
+      document.getAnimations().forEach((animation) => animation.finish());
+      const box = button.getBoundingClientRect();
+      const icon = button.querySelector(".picker-select__chevron > svg")!;
+      expect(
+        button.querySelector<HTMLElement>(".oc-menu-item__submenu-icon")!.checkVisibility(),
+      ).toBe(false);
+      const glyph = icon.getBoundingClientRect();
+      expect(glyph.y + glyph.height / 2).toBeCloseTo(box.y + box.height / 2, 1);
+      expect(getComputedStyle(icon).marginInlineEnd).toBe("0px");
+      expect(glyph.width).toBe(
+        Number.parseFloat(getComputedStyle(root).getPropertyValue("--chrome-icon-size")),
+      );
+    }
+  });
   it("inherits palettes, focus, and menu states across stock, imported, and custom themes", async () => {
     mountMenu({
       items: [

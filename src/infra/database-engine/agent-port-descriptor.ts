@@ -29,7 +29,11 @@ import {
   AGENT_VECTOR_SEARCH_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../../state/openclaw-agent-db-contract.js";
-import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
+import {
+  agentEngineSchema,
+  openAgentEngineStore,
+  withoutAgentPostgresArchiveUndo,
+} from "../../state/openclaw-agent-db-engine.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../../state/openclaw-agent-db-lease.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "../../state/openclaw-agent-db-schema-compatibility.js";
 import {
@@ -43,6 +47,10 @@ import {
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { withLegacyAgentPostgresIndexes } from "../../state/openclaw-agent-index-retirement-migration.js";
+import {
+  AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+  withoutAgentPostgresMemberAccess,
+} from "../../state/openclaw-agent-member-access-schema.js";
 import { withLegacyAgentPostgresMemoryPaths } from "../../state/openclaw-agent-memory-path-migration.js";
 import {
   LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS,
@@ -60,6 +68,7 @@ import {
 } from "../../state/openclaw-agent-tool-usage-schema.js";
 import { withLegacyAgentPostgresTrajectoryStorage } from "../../state/openclaw-agent-trajectory-storage-migration.js";
 import { withLegacyAgentPostgresWriteLayout } from "../../state/openclaw-agent-write-layout-migration.js";
+import { AGENT_ARCHIVE_UNDO_SCHEMA_VERSION } from "../../state/openclaw-schema-versions.js";
 import { ensureColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import metadata from "../../state/postgres-schema.generated/agent-port.json" with { type: "json" };
 import { agentPostgresRuntime } from "../../state/postgres-schema.generated/agent-runtime.js";
@@ -205,11 +214,15 @@ export async function loadAgentPortDescriptor(
     // Schema 41 adds active event facts; predecessors retain their unknown-row fallback.
     // Schema 42 adds usage counters; predecessors retain their counter-free catalog.
     // Schema 43 adds pending-input endings and reserved provenance columns.
+    // Schema 44 adds optional member access levels.
+    // Schema 45 adds the private session-node archive undo marker.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 43 ||
-      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 45 ||
+      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44].includes(
+        sourceVersion,
+      )
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -224,25 +237,49 @@ export async function loadAgentPortDescriptor(
   const legacyCreation = sourceVersion < AGENT_CREATION_OPERATIONS_SCHEMA_VERSION;
   const legacyActiveFacts = sourceVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION;
   const legacyToolUsage = sourceVersion < AGENT_TOOL_USAGE_SCHEMA_VERSION;
+  const legacyArchiveUndo = sourceVersion < AGENT_ARCHIVE_UNDO_SCHEMA_VERSION;
+  const legacyMemberAccess = sourceVersion < AGENT_MEMBER_ACCESS_SCHEMA_VERSION;
   const legacyPendingEndings = sourceVersion < AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION;
   const legacyTrajectory = sourceVersion < 30;
-  const catalog = agentPostgresRuntime.expectedCatalog.filter(
-    (fact) =>
-      !(
-        legacyPendingEndings &&
-        fact.table === "session_pending_inputs" &&
-        isColumn(fact) &&
-        ["end_cause", "origin_source_json"].includes(fact.value.name)
-      ) &&
-      !(legacyToolUsage && fact.table === "agent_tool_usage") &&
-      !(legacyColdArchive && fact.table === "session_transcript_cold_archive_chunks") &&
-      !(legacyCreation && fact.table === "session_creation_operations") &&
-      !(legacyActiveFacts && fact.table === "session_transcript_active_event_facts") &&
-      (!legacyTrajectory ||
-        fact.table !== "trajectory_runtime_events" ||
-        !isColumn(fact) ||
-        !["event_utf8_bytes", "event_payload", "event_codec"].includes(fact.value.name)),
-  );
+  const catalog = agentPostgresRuntime.expectedCatalog
+    .map((fact) => ({ ...fact }))
+    .filter(
+      (fact) =>
+        !(
+          legacyArchiveUndo &&
+          fact.table === "session_nodes" &&
+          isColumn(fact) &&
+          fact.value.name === "archive_undo_marker"
+        ) &&
+        !(
+          legacyMemberAccess &&
+          fact.table === "session_members" &&
+          isColumn(fact) &&
+          fact.value.name === "access"
+        ) &&
+        !(
+          legacyPendingEndings &&
+          fact.table === "session_pending_inputs" &&
+          isColumn(fact) &&
+          ["end_cause", "origin_source_json"].includes(fact.value.name)
+        ) &&
+        !(legacyToolUsage && fact.table === "agent_tool_usage") &&
+        !(legacyColdArchive && fact.table === "session_transcript_cold_archive_chunks") &&
+        !(legacyCreation && fact.table === "session_creation_operations") &&
+        !(legacyActiveFacts && fact.table === "session_transcript_active_event_facts") &&
+        (!legacyTrajectory ||
+          fact.table !== "trajectory_runtime_events" ||
+          !isColumn(fact) ||
+          !["event_utf8_bytes", "event_payload", "event_codec"].includes(fact.value.name)),
+    );
+  if (legacyMemberAccess) {
+    const checks = catalog.find(
+      (fact) => fact.table === "session_members" && fact.kind === "checks",
+    );
+    if (checks) {
+      checks.value = 0;
+    }
+  }
   const columns = catalog.filter(isColumn);
   const keys = catalog.filter(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
@@ -504,7 +541,11 @@ export async function loadAgentPortDescriptor(
   const withoutLegacyColdArchive = (sql: string) =>
     legacyColdArchive ? withoutAgentPostgresColdArchiveChunks(sql) : sql;
   const withoutLaterSchema = (sql: string) => {
-    const pendingInputs = legacyPendingEndings ? withoutAgentPostgresPendingInputEndings(sql) : sql;
+    const nodes = legacyArchiveUndo ? withoutAgentPostgresArchiveUndo(sql) : sql;
+    const members = legacyMemberAccess ? withoutAgentPostgresMemberAccess(nodes) : nodes;
+    const pendingInputs = legacyPendingEndings
+      ? withoutAgentPostgresPendingInputEndings(members)
+      : members;
     const toolUsage = legacyToolUsage
       ? withoutAgentPostgresToolUsage(pendingInputs)
       : pendingInputs;

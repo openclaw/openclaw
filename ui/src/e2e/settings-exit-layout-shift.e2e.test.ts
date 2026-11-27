@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -23,6 +24,36 @@ const cases = targets.flatMap((target) => [
 ]);
 
 suite.define(() => {
+  it.each([400, 820, 1280])(
+    "keeps the agent trigger still as the roster arrives at %ipx",
+    (width) =>
+      suite.withPage(
+        { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, { heldMethods: ["agents.list"] });
+          await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+          await waitForControlUiRoute(page, settings);
+          const trigger = page.locator(".settings-sidebar__agent--header .agent-select__trigger");
+          if (width < 1280) {
+            await page.locator(".topbar-nav-toggle").click();
+          }
+          await trigger.waitFor();
+          await page.locator(".shell-nav").evaluate(finishElementAnimations);
+          await page.evaluate(() => document.fonts.ready);
+          expect(await trigger.locator(".agent-select__avatar").count()).toBe(0);
+          const before = await trigger.boundingBox();
+          expect(before).not.toBeNull();
+          const chevron = trigger.locator(".agent-select__chevron");
+          const beforeChevron = await chevron.boundingBox();
+          await gateway.waitForRequest("agents.list");
+          await gateway.resolveDeferred("agents.list");
+          await trigger.locator(".agent-select__avatar").waitFor();
+          expect(await trigger.boundingBox()).toEqual(before);
+          expect(await chevron.boundingBox()).toEqual(beforeChevron);
+        },
+      ),
+  );
+
   it.each(cases)(
     "keeps the shell still from $from.pathname to $to.pathname at $width px",
     ({ from, to, width }) =>

@@ -146,6 +146,28 @@ const enOpenClawIdDialogs = {
     moveKeysDone: "This claw now uses new keys.",
     moveKeysFollowUpFailed:
       "Follow-up setup failed. Run {command} to check remote access. Do not move to new keys again.",
+    unlinkTitle: "Unlink {host} from OpenClaw ID?",
+    unlinkLoading: "Checking who has access…",
+    unlinkLosesAccess:
+      "{people} and {devices} lose access now. Every member is removed; linking again starts with no one.",
+    unlinkPeopleOne: "1 person",
+    unlinkPeopleMany: "{count} people",
+    unlinkDevicesOne: "1 device",
+    unlinkDevicesMany: "{count} devices",
+    unlinkAddressStops: "https://{host} stops working at once.",
+    unlinkNameRetired:
+      "The name “{name}” can never be used again, by any account, including yours.",
+    unlinkLocalStays:
+      "Conversations and everything else on this computer stay. You can link it again later as a new claw.",
+    unlinkConfirm: "Unlink",
+    unlinkDone: "{host} is unlinked from OpenClaw ID.",
+    unlinkLocalOnly: "OpenClaw ID never registered this claw, so it had no address to retire.",
+    unlinkPending:
+      "OpenClaw ID couldn't be reached. This computer sends the unlink as soon as it can.",
+    unlinkRefused:
+      "OpenClaw ID refused the unlink, so the address may still be listed. This computer no longer lets anyone in through it.",
+    unlinkFollowUpFailed:
+      "The claw is unlinked. Restart the Gateway to finish closing remote sessions.",
     regenExpiry: "End this device's owner access after (days)",
     regenExpiryHint: "Leave empty for no expiry.",
     deviceSignInTitle: "Sign in with OpenClaw ID",

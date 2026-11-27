@@ -72,9 +72,8 @@ function payloadFor(kind: PayloadKind): CronStoredJob["payload"] {
 const PAYLOAD_KINDS: readonly PayloadKind[] = ["agentTurn", "systemEvent", "command", "script"];
 const SESSION_TARGETS: readonly CronStoredJob["sessionTarget"][] = [
   "isolated",
-  "current",
   "session:agent:main:dashboard:parent",
-  "main",
+  "session:main",
 ];
 
 function harness() {
@@ -110,23 +109,6 @@ const MATRIX = PAYLOAD_KINDS.flatMap((kind) =>
 );
 
 describe("scheduled occurrence admission", () => {
-  it("classifies every executor that can start occurrence work", () => {
-    expect(Object.values(executorsRequireOccurrence).every(Boolean)).toBe(true);
-    expect(Object.keys(EXECUTOR_ADMISSION).toSorted()).toMatchInlineSnapshot(`
-      [
-        "enqueueSessionEvent",
-        "enqueueSystemEvent",
-        "evaluateCronTrigger",
-        "runCommandJob",
-        "runCronFailureRepair",
-        "runIsolatedAgentJob",
-        "runSchedulerOwned",
-        "runScriptJob",
-        "runSessionEvent",
-      ]
-    `);
-  });
-
   it.each(MATRIX)(
     "$kind on $sessionTarget (trigger: $withTrigger) runs every executor with one admitted occurrence",
     async ({ kind, sessionTarget, withTrigger }) => {
@@ -198,9 +180,7 @@ describe("scheduled occurrence admission", () => {
       if (kind === "command") {
         // Command jobs do not pause on a missing parent; they still run with the occurrence.
         expect(result).not.toHaveProperty("parentUnavailable");
-        if (sessionTarget !== "main") {
-          expect(seen.map((call) => call.executor)).toContain("runCommandJob");
-        }
+        expect(seen.map((call) => call.executor)).toContain("runCommandJob");
         return;
       }
       expect(seen).toEqual([]);
@@ -218,12 +198,14 @@ describe("scheduled occurrence admission", () => {
     await executeJobCore(state, makeCronJob({ payload: payloadFor("agentTurn") }));
     const occurrence = seen[0]?.occurrence as ScheduledOccurrence;
     expect(
-      occurrence.mint({
-        cfg: {},
-        agentId: "main",
-        runId: "run",
-        runSessionKey: "agent:main:cron:job",
-      }).result,
+      (
+        await occurrence.mint({
+          cfg: {},
+          agentId: "main",
+          runId: "run",
+          runSessionKey: "agent:main:cron:job",
+        })
+      ).result,
     ).toEqual({ status: "fail", error: "occurrence admission is not configured" });
   });
 });

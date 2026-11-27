@@ -1251,30 +1251,30 @@ describe("test-projects build admission", () => {
   const avatarTarget = "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts";
   const mockUiTarget = "ui/src/e2e/chat-code-block-fences.e2e.test.ts";
 
-  it.each(["test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts"])(
-    "prepares cold UI before admitting the real Doctor fixture %s",
-    async (target) => {
-      const runtime = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
-      const ui = createPreparationGate<number>(commands.prepare);
-      commands.uiAssets.mockReturnValueOnce({ kind: "missing-index", indexPath: null });
-      const entry = start([target]);
-      try {
-        await Promise.race([runtime.started, entry]);
-        expect(commands.uiAssets).not.toHaveBeenCalled();
-        expect(commands.reader).not.toHaveBeenCalled();
-        runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
-        await Promise.race([ui.started, entry]);
-        expect(commands.reader).not.toHaveBeenCalled();
-        expect(commands.prepare.mock.lastCall?.[0].args).toEqual(uiBuildArgs);
-      } finally {
-        runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
-        ui.resolve(0);
-        await entry;
-      }
-      await expectPassed();
-      expect(commands.reader).toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts",
+    "test/doctor-guest-session-upgrade.e2e.test.ts",
+  ])("prepares cold UI before admitting the real Doctor fixture %s", async (target) => {
+    const runtime = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
+    const ui = createPreparationGate<number>(commands.prepare);
+    commands.uiAssets.mockReturnValueOnce({ kind: "missing-index", indexPath: null });
+    const entry = start([target]);
+    try {
+      await Promise.race([runtime.started, entry]);
+      expect(commands.uiAssets).not.toHaveBeenCalled();
+      expect(commands.reader).not.toHaveBeenCalled();
+      runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      await Promise.race([ui.started, entry]);
+      expect(commands.reader).not.toHaveBeenCalled();
+      expect(commands.prepare.mock.lastCall?.[0].args).toEqual(uiBuildArgs);
+    } finally {
+      runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      ui.resolve(0);
+      await entry;
+    }
+    await expectPassed();
+    expect(commands.reader).toHaveBeenCalled();
+  });
 
   it.each(["ready", "missing", "failed", "skip"])(
     "handles prebuilt Doctor UI with no runtime build-info: %s",

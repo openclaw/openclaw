@@ -1,11 +1,10 @@
+import { stampAgentControlValue } from "openclaw/plugin-sdk/interactive-runtime";
+
 const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
 const TELEGRAM_OPAQUE_CALLBACK_PREFIX = "tgcb1:";
-// Typed callbacks sent with message(action=send). A tap that no plugin handler
-// claims reaches the agent as callback data instead of expiring.
+// Agent buttons already delivered by v2026.11.5. Read-only; remove once those messages
+// have aged out of chats.
 const TELEGRAM_AGENT_CALLBACK_PREFIX = "tgac1:";
-
-/** Who receives a typed callback tap that no plugin interactive handler claims. */
-export type TelegramTypedCallbackOwner = "plugin" | "agent";
 
 export function buildTelegramNativeCommandCallbackData(commandText: string): string {
   return `${TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX}${commandText}`;
@@ -20,29 +19,22 @@ export function parseTelegramNativeCommandCallbackData(data?: string | null): st
   return commandText.startsWith("/") ? commandText : null;
 }
 
-export function buildTelegramOpaqueCallbackData(
-  value: string,
-  owner: TelegramTypedCallbackOwner = "plugin",
-): string {
-  const prefix =
-    owner === "agent" ? TELEGRAM_AGENT_CALLBACK_PREFIX : TELEGRAM_OPAQUE_CALLBACK_PREFIX;
-  return `${prefix}${checksumTelegramOpaqueCallbackValue(value)}:${value}`;
+export function buildTelegramOpaqueCallbackData(value: string): string {
+  return `${TELEGRAM_OPAQUE_CALLBACK_PREFIX}${checksumTelegramOpaqueCallbackValue(value)}:${value}`;
 }
 
 export function hasTelegramOpaqueCallbackPrefix(data?: string | null): boolean {
   return data?.startsWith(TELEGRAM_OPAQUE_CALLBACK_PREFIX) === true;
 }
 
-export function hasTelegramAgentCallbackPrefix(data?: string | null): boolean {
-  return data?.startsWith(TELEGRAM_AGENT_CALLBACK_PREFIX) === true;
-}
-
 export function parseTelegramOpaqueCallbackData(data?: string | null): string | null {
   return parseTelegramTypedCallbackEnvelope(TELEGRAM_OPAQUE_CALLBACK_PREFIX, data);
 }
 
+/** Re-expresses a v2026.11.5 agent envelope as the core-marked callback value it stands for. */
 export function parseTelegramAgentCallbackData(data?: string | null): string | null {
-  return parseTelegramTypedCallbackEnvelope(TELEGRAM_AGENT_CALLBACK_PREFIX, data);
+  const value = parseTelegramTypedCallbackEnvelope(TELEGRAM_AGENT_CALLBACK_PREFIX, data);
+  return value ? stampAgentControlValue(value) : null;
 }
 
 function parseTelegramTypedCallbackEnvelope(prefix: string, data?: string | null): string | null {
