@@ -329,7 +329,7 @@ function shouldPreserveExistingBaseUrl(params: {
 }
 
 /** Returns why the model registry rejects this provider's models, if it does. */
-export function findProviderModelsError(
+function findProviderModelsError(
   providerName: string,
   config: ProviderModelCatalog,
   source: "catalog" | "registration",
