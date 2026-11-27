@@ -10,8 +10,8 @@ import {
   MachineIdentitySchema,
   type LockPayload,
 } from "./gateway-lock-payload.js";
+import { managedHandoffBootSchema } from "./update-managed-service-handoff-boot-schema.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
-import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
 
 export type StateLeaseProcessOwner = {
   pid: number;

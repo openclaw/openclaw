@@ -1,7 +1,7 @@
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
 
 /** Capture exact lifecycle hooks before their caller can leave its runtime scope. */
 export function captureAgentHarnessLifecycleHooks<

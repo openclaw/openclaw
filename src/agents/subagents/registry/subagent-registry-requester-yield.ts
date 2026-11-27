@@ -12,6 +12,7 @@ import {
 } from "../requester-cron-authority.js";
 import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
+import { hasSubagentKill, isSubagentCompletionCancelled } from "./subagent-control-kill-intent.js";
 import { hasSubagentControllerInput } from "./subagent-controller-inputs.js";
 import { isSubagentRetirementSettled } from "./subagent-delivery-state.js";
 import { trackSubagentProgressYield } from "./subagent-progress-draft.js";
@@ -75,9 +76,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
           (!entry.requesterTurnRunId || entry.requesterTurnRunId === requesterTurnRunId) &&
           entry.expectsCompletionMessage === true &&
           entry.collect !== true &&
-          !entry.killIntent &&
-          !entry.killReconciliation &&
-          entry.suppressCompletionDelivery !== true &&
+          !isSubagentCompletionCancelled(entry) &&
           entry.cleanupCompletedAt === undefined &&
           !hasSubagentControllerInput(entry) &&
           (entry.requesterSettleWake?.batchRunIds === undefined
@@ -245,9 +244,7 @@ export function listUnsettledRequesterChildrenInRuns(params: {
             requesterAgentId: params.requesterAgentId,
             runsById: params.runs,
           }))) ||
-      entry.killIntent ||
-      entry.killReconciliation ||
-      entry.suppressCompletionDelivery === true
+      isSubagentCompletionCancelled(entry)
     ) {
       continue;
     }
@@ -473,8 +470,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
   ): requester is SubagentRunRecord =>
     params.requesterYielded &&
     requester?.childSessionKey === requesterSessionKey &&
-    !requester.killIntent &&
-    !requester.killReconciliation &&
+    !hasSubagentKill(requester) &&
     ![...params.runs.values()].some(
       (entry) =>
         entry.childSessionKey === requesterSessionKey &&

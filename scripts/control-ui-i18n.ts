@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { createLlmRuntime, type AssistantMessage, type Model } from "@openclaw/ai";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
@@ -31,6 +31,7 @@ import {
   loadControlUiPluginCatalogs,
   materializeControlUiPluginTranslations,
 } from "./lib/control-ui-plugin-i18n-catalog.ts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { sleep } from "./lib/sleep.mjs";
 
@@ -1073,7 +1074,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await main().catch((error: unknown) => {
     console.error(
       formatErrorMessage(error, {

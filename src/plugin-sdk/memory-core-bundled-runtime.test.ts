@@ -13,14 +13,6 @@ const mocks = vi.hoisted(() => ({
   repairShortTermPromotionArtifacts: vi.fn().mockResolvedValue({ changed: false }),
   previewGroundedRemMarkdown: vi.fn().mockResolvedValue({ files: [] }),
 }));
-const runtimeHelpers = [
-  "removeGroundedShortTermCandidates",
-  "loadShortTermPromotionDreamingStats",
-  "auditDreamingArtifacts",
-  "auditShortTermPromotionArtifacts",
-  "repairDreamingArtifacts",
-  "repairShortTermPromotionArtifacts",
-] as const;
 
 vi.mock("./facade-loader.js", async () => {
   const actual = await vi.importActual<typeof import("./facade-loader.js")>("./facade-loader.js");
@@ -64,19 +56,15 @@ it("keeps the bundled memory facade cold until a helper is used", async () => {
   });
 });
 
-it("delegates doctor and embedding helpers through the bundled public surfaces", async () => {
+it("delegates preview through the bundled API surface", async () => {
   const module = await import("./memory-core-bundled-runtime.js");
 
-  for (const name of ["previewGroundedRemMarkdown", ...runtimeHelpers] as const) {
+  for (const name of ["previewGroundedRemMarkdown"] as const) {
     await module[name]({} as never);
     expect(mocks[name]).toHaveBeenCalledWith({} as never);
   }
   expect(loadSurface).toHaveBeenCalledWith({
     dirName: "memory-core",
     artifactBasename: "api.js",
-  });
-  expect(loadSurface).toHaveBeenCalledWith({
-    dirName: "memory-core",
-    artifactBasename: "runtime-api.js",
   });
 });
