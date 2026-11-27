@@ -105,7 +105,7 @@ it("rejects mismatched replay payloads and queued launches without a reservation
     swarmLaunchRequestFingerprint: "request-fingerprint",
     swarmLaunchPending: true,
     execution: { status: "queued" },
-    completion: undefined,
+    completion: { required: false },
     collectorCompletion: undefined,
   });
   saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));

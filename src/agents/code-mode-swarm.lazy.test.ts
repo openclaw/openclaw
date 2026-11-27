@@ -29,6 +29,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     },
   );
   vi.doMock("./code-mode-swarm.runtime.js", load);
+  // mock-isolation: Delayed runtime imports must not initialize the process-global registry.
   vi.doMock("./subagents/registry/subagent-registry.js", () => ({
     resolveSwarmLaunchReplay: lookup,
     initSubagentRegistry: initialize,
