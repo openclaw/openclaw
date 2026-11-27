@@ -21,8 +21,8 @@ struct RootTabsPresentationTests {
 
     @Test func `every sidebar destination resolves to a native screen or a valid Dashboard route`() {
         let expected: [RootTabs.SidebarDestination: RootTabs.SidebarScreen] = [
-            .chat: .chat, .overview: .overview, .agents: .agents, .sessions: .sessions,
-            .files: .files, .desktop: .desktop, .terminal: .terminal, .docs: .docs,
+            .chat: .chat, .overview: .overview, .sessions: .sessions,
+            .files: .files, .desktop: .desktop, .terminal: .terminal,
             .settings: .settings, .gateway: .gateway,
             .activity: .dashboard("/activity"), .workboard: .dashboard("/workboard"),
             .systems: .dashboard("/systems"),
@@ -379,20 +379,17 @@ struct RootTabsPresentationTests {
             .activity,
             .systems,
             .skillWorkshop,
-            .agents,
             .instances,
             .files,
             .dreaming,
             .desktop,
             .terminal,
-            .docs,
         ])
         #expect(destinationIDs == [
             "chat",
             "overview",
             "activity",
             "systems",
-            "agents",
             "workboard",
             "skillWorkshop",
             "instances",
@@ -403,7 +400,6 @@ struct RootTabsPresentationTests {
             "cron",
             "desktop",
             "terminal",
-            "docs",
             "settings",
             "gateway",
         ])
@@ -430,7 +426,7 @@ struct RootTabsPresentationTests {
             .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "overview"]) == .overview)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "chat"]) == .chat)
         #expect(RootTabs
-            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "agents"]) == .agents)
+            .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "agents"]) == .chat)
         #expect(RootTabs
             .initialDestination(arguments: ["OpenClaw", "--openclaw-initial-destination", "gateway"]) == .gateway)
         #expect(
@@ -449,7 +445,7 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "chat"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "talk"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "voice"]) == .chat)
-        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "agents"]) == .agents)
+        #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "agents"]) == .chat)
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
     }
 
@@ -895,14 +891,14 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.pinnedSidebarPagesStorage([]) == "none")
 
         // Storage order is the user's pin order (web parity).
-        let parsed = RootTabs.pinnedSidebarPages(from: "usage,overview,docs")
-        #expect(parsed == [.usage, .overview, .docs])
+        let parsed = RootTabs.pinnedSidebarPages(from: "usage,overview,docs,agents")
+        #expect(parsed == [.usage, .overview])
 
-        let storage = RootTabs.pinnedSidebarPagesStorage([.docs, .overview, .usage])
-        #expect(RootTabs.pinnedSidebarPages(from: storage) == [.docs, .overview, .usage])
+        let storage = RootTabs.pinnedSidebarPagesStorage([.sessions, .activity, .usage])
+        #expect(RootTabs.pinnedSidebarPages(from: storage) == [.sessions, .activity, .usage])
 
         // Duplicates collapse to first occurrence.
-        #expect(RootTabs.pinnedSidebarPages(from: "usage,usage,docs") == [.usage, .docs])
+        #expect(RootTabs.pinnedSidebarPages(from: "usage,usage,sessions") == [.usage, .sessions])
 
         // Unknown raw values are dropped; chat is never pinnable.
         #expect(RootTabs.pinnedSidebarPages(from: "chat,bogus").isEmpty)

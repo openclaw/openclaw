@@ -1234,33 +1234,6 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
     }
 
-    func testAgentUsesToolbarFilter() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Agent proof only")
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "agent",
-            initialDestination: "agents",
-            name: "agent-toolbar-filter"))
-
-        let menu = try XCTUnwrap(app?.buttons["agent-status-filter-menu"])
-        XCTAssertTrue(menu.waitForExistence(timeout: 8))
-        XCTAssertFalse(self.app?.segmentedControls["Agent status"].exists == true)
-        menu.tap()
-        XCTAssertTrue(self.app?.buttons["All"].waitForExistence(timeout: 3) == true)
-        XCTAssertTrue(self.app?.buttons["Online"].exists == true)
-        XCTAssertTrue(self.app?.buttons["Ready"].exists == true)
-        self.attachScreenshot(named: "agent-toolbar-filter")
-
-        // Native context menus must finish their dismissal before teardown. Killing
-        // the app with this menu open can leave the next app scene inactive.
-        self.app?.buttons["Ready"].tap()
-        self.waitForValue("Ready", of: menu)
-        menu.tap()
-        let all = try XCTUnwrap(self.app?.buttons["All"])
-        XCTAssertTrue(all.waitForExistence(timeout: 3))
-        all.tap()
-        self.waitForValue("All", of: menu)
-    }
-
     /// Real app onboarding, history decoder, artifact RPC, HTTP loader, and system share sheet.
     /// Only the loopback Gateway is synthetic; no production UI state is injected.
     func testManagedDocumentDownloadAndSystemShare() async throws {
