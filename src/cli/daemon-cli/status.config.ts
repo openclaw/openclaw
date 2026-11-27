@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
+import { applyImplicitAgentRosterDefaults } from "../../config/implicit-agent-roster.js";
 import type {
   OpenClawConfig,
   ConfigFileSnapshot,
@@ -96,7 +97,7 @@ async function readFastStatusConfig(
     return null;
   }
   const { validateConfigObjectRaw } = await import("../../config/validation-core.js");
-  const validated = validateConfigObjectRaw(parsed, { env });
+  const validated = validateConfigObjectRaw(applyImplicitAgentRosterDefaults(parsed), { env });
   const cfg = validated.ok ? validated.config : await resolveInvalidStatusConfig(parsed);
 
   return {

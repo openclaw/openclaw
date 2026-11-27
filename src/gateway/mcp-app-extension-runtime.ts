@@ -1,8 +1,9 @@
+import type { McpCatalogTool } from "../agents/agent-bundle-mcp-catalog.types.js";
 import { acquireSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
 import { releaseSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-cleanup.js";
 import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
 import { loadSessionMcpConfig } from "../agents/agent-bundle-mcp-runtime-config.js";
-import type { McpCatalogTool, SessionMcpRuntimeLease } from "../agents/agent-bundle-mcp-types.js";
+import type { SessionMcpRuntimeLease } from "../agents/agent-bundle-mcp-types.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import type { prepareAgentHarnessSessionRuntime } from "../agents/harness/session-preparation.js";
@@ -16,13 +17,14 @@ import {
   normalizeMcpToolFilter,
 } from "../agents/mcp-tool-filter.js";
 import type { McpAppPrepareToolCall } from "../agents/mcp-ui-resource.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveMcpAppRequesterId } from "./mcp-app-host-files.js";
 import { requestMcpAppToolApproval } from "./mcp-app-tool-approval.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { resolveSessionResourceToolPolicy } from "./session-resource-tool-policy.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -59,6 +61,9 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
     manifestPlugins: getGatewayPluginMetadataSnapshot() ?? [],
     assertCurrent: access.assertCurrent,
   });
+  if (!selectedModel) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   const harnessId = resolveEffectiveAgentRuntime({
     cfg,
     provider: selectedModel.provider,
@@ -107,7 +112,7 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
     const preparationOwner: {
       access?: ReturnType<typeof access.retain>;
       setup?: Awaited<ReturnType<typeof prepareAgentHarnessSessionRuntime>>;
-      source?: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      source?: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
     } = {};
     let preparing:
       | Promise<import("../agents/harness/types.js").AgentHarnessSessionPreparationV1>
@@ -146,7 +151,7 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
           signal.throwIfAborted();
         };
         assertPreparationCurrent();
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client: options.client,
           context: options.context,
           hasCurrentClientAuthority: options.hasCurrentClientAuthority,

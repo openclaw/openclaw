@@ -4,13 +4,25 @@ const entrypoint = createTestEntrypoint(import.meta.url, "plugins");
 
 // The child probes share invocation-owned preparation and module state.
 export const pluginProcessRuntimeEntrypoints = {
+  nativeRequire: entrypoint("native-module-require"),
+  sourceBuild: entrypoint("plugin-source-build"),
+  browserCompiler: entrypoint("runtime-compiler"),
   installRecordCommit: entrypoint("install-record-commit"),
   lifecycleLease: entrypoint("plugin-lifecycle-lease"),
   installedPluginIndex: entrypoint("installed-plugin-index-store"),
   installedPluginIndexWrite: entrypoint("installed-plugin-index-store-write"),
   sourceSnapshot: entrypoint("plugin-source-snapshot-artifact"),
   sourceCapture: entrypoint("plugin-generation-capture"),
+  loadedAddon: entrypoint("plugin-capture-loaded-addon.test-support"),
   snapshotPreparation: entrypoint("plugin-generation-worker"),
+  nativeLifecycle: entrypoint(
+    "../infra/worker-native-lifecycle",
+    "infra/worker-native-lifecycle.js",
+  ),
+  mainThreadFsGuard: entrypoint(
+    "../test-utils/main-thread-fs-spies.test-support",
+    "test-utils/main-thread-fs-spies.test-support.js",
+  ),
   directoryInventory: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/directory-walk",

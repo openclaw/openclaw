@@ -70,6 +70,26 @@ describe("exec authorization renderer", () => {
       "shell expansion in enforced arguments",
     ],
     ["cat ~/secret", "enforced", ["allowlist"], "shell expansion in enforced arguments"],
+    [
+      String.raw`test $'\0\''?v benign`,
+      "enforced",
+      ["safeBuiltins"],
+      "shell expansion in enforced arguments",
+    ],
+    // A prompt-only eval plan lets the renderer inspect $$; ordinary commands are
+    // already rejected as dynamic arguments by the planner. No allowlist grant is supplied.
+    [
+      String.raw`eval git status $$'a\'?v`,
+      "enforced",
+      [null],
+      "shell expansion in enforced arguments",
+    ],
+    [
+      String.raw`eval git status $$$$'a\'?v`,
+      "enforced",
+      [null],
+      "shell expansion in enforced arguments",
+    ],
     ["sh -c 'head -n 5'", "enforced", ["allowlist"], "shell quoting required in wrapper payload"],
     ["git diff | head", "safeBins", ["safeBins"], "segment metadata mismatch"],
   ])("fails closed for %s (%s)", async (command, mode, satisfiedBy, reason) => {
@@ -85,6 +105,18 @@ describe("exec authorization renderer", () => {
       expect.stringMatching(/^sh -c 'git status && \/.+\/head -c 16'$/),
     ],
     ["cd .", "enforced", ["safeBuiltins"], "cd ."],
+    [
+      String.raw`git status $'a\'?v'`,
+      "enforced",
+      ["allowlist"],
+      expect.stringMatching(/^\/.+\/git status \$'a\\'\?v'$/),
+    ],
+    [
+      String.raw`eval git status $$$'a\'?v'`,
+      "enforced",
+      [null],
+      String.raw`eval git status $$$'a\'?v'`,
+    ],
     [
       "LIMIT=1 head -n 5",
       "enforced",

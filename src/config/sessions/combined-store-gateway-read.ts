@@ -34,7 +34,7 @@ import {
   prepareSessionStoreTargetInventory,
 } from "./session-store-target-inventory.js";
 import {
-  targetDiscoveryLane,
+  sessionStoreLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
@@ -272,7 +272,7 @@ async function readCombinedSessionStoreTopology(
       }));
       return result;
     },
-    targetDiscoveryLane,
+    sessionStoreLane,
   );
 }
 

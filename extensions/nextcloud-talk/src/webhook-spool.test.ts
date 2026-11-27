@@ -11,11 +11,11 @@ import {
   createSignedCreateMessageRequest,
   createVoiceMessageActivityBody,
 } from "./monitor.test-fixtures.js";
+import { parseNextcloudTalkFileSharedActivity } from "./webhook-spool-state.js";
 import {
+  createNextcloudTalkWebhookSpool,
   migrateNextcloudTalkLegacyReplayState,
-  parseNextcloudTalkFileSharedActivity,
-} from "./webhook-spool-state.js";
-import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
+} from "./webhook-spool.js";
 
 type NextcloudTalkIngressQueue = NonNullable<
   Parameters<typeof createNextcloudTalkWebhookSpool>[0]["queue"]

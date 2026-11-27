@@ -1,7 +1,9 @@
 import { afterEach, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
+  deliveryRoutesShareConversation,
   resolveCommandConversationResolution as command,
   resolveInboundConversationResolution as inbound,
 } from "./conversation-resolution.js";
@@ -71,9 +73,26 @@ it.each<CommandCase>([
       messaging: {
         targetPrefixes: ["tg"],
         normalizeTarget: () => "telegram:group:-100123:topic:77",
+        // The channel owns its topic grammar; core asks it for the base conversation.
+        resolveSessionConversation: () => ({
+          id: "-100123:topic:77",
+          baseConversationId: "-100123",
+        }),
       },
     },
     "tg:group:-100123:topic:77",
+    ["-100123"],
+  ],
+  [
+    "legacy numeric shorthand adapter",
+    {
+      id: "legacychat",
+      messaging: {
+        numericTopicShorthand: true,
+        normalizeTarget: () => "legacychat:-100123:77",
+      },
+    },
+    "-100123:77",
     ["-100123"],
   ],
   [
@@ -132,4 +151,42 @@ it("keeps provider-resolved Matrix room casing for child threads", () => {
     parentConversationId: "!Room:Example.org",
     threadId: "$thread-root",
   });
+});
+
+it.each([
+  ["handle casing", { to: "@ExampleChannel" }, { to: "@examplechannel" }, true],
+  ["encoded topic", { to: "-100:topic:462" }, { to: "-100", threadId: 462, transport: true }, true],
+  [
+    "explicit send thread with encoded forum topic is left to the caller",
+    { to: "-100:topic:462", threadId: "111", transport: true },
+    { to: "-100:topic:462" },
+    undefined,
+  ],
+  [
+    "explicit send thread with Direct Messages topic is left to the caller",
+    { to: "-100123:direct-topic:77", threadId: "111", transport: true },
+    { to: "-100123:topic:111", transport: true },
+    undefined,
+  ],
+  [
+    "send thread on a bare chat",
+    { to: "-100", threadId: "462", transport: true },
+    { to: "-100:topic:462" },
+    true,
+  ],
+  [
+    "inbound encoded topic wins",
+    { to: "-100:topic:462", threadId: "111" },
+    { to: "-100:topic:462" },
+    true,
+  ],
+] as const)("Telegram delivery routes: %s", async (_name, left, right, expected) => {
+  const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+    pluginId: "telegram",
+    artifactBasename: "api.ts",
+  });
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+  );
+  expect(deliveryRoutesShareConversation({ channel: "telegram", left, right })).toBe(expected);
 });

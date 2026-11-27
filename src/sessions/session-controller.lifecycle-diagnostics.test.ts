@@ -15,6 +15,7 @@ import {
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { controllerGate as gate } from "./controller-core.test-support.js";
 import { logSessionControllerPhase as logPhase } from "./session-controller.diagnostics.js";
+import { createLifecycleDiagnosticWaitRecorder } from "./session-controller.lifecycle-diagnostics.js";
 import {
   beginSessionEffect as beginEffect,
   captureSessionTarget,
@@ -106,7 +107,7 @@ function mutate<T>(
   trace: DiagnosticTraceContext | undefined,
   options: Pick<
     Parameters<typeof runMutation<T>>[0],
-    "run" | "prepare" | "finalize" | "diagnosticLabel"
+    "run" | "prepare" | "finalize" | "diagnosticLabel" | "diagnosticSubphaseDurationsMs"
   >,
 ) {
   return withTrace(trace, () => runMutation({ ...target, policy: "wait", ...options }));
@@ -379,11 +380,20 @@ it.each([true, false])(
 it("measures prepare and finalize separately while successors wait for real finalization", async () => {
   const target = targetFor("phase-store");
   const [prepare, finalize] = [gate(), gate()];
+  let phase: "prepare" | "run" = "prepare";
+  const { subphaseDurationsMs, observeWait } = createLifecycleDiagnosticWaitRecorder(() => phase);
   const first = mutate(target, traces.first, {
-    diagnosticLabel: "create",
-    prepare: prepare.run,
-    run: async () => {
-      clock += 30;
+    diagnosticLabel: "subagent-kill",
+    diagnosticSubphaseDurationsMs: subphaseDurationsMs,
+    prepare: () => observeWait("descendants", prepare.run()),
+    run: () => {
+      phase = "run";
+      return observeWait(
+        "registry-settlement",
+        Promise.resolve().then(() => {
+          clock += 29.6;
+        }),
+      );
     },
     finalize: finalize.run,
   });
@@ -405,12 +415,13 @@ it("measures prepare and finalize separately while successors wait for real fina
     await finish([prepare.release, finalize.release], first, waiter);
   }
   expect(runWaiter).toHaveBeenCalledOnce();
-  await expectRecords(
+  const rows = await expectRecords(
     "slow",
     [
       {
         operationTraceId: traces.first.traceId,
         phaseDurationsMs: { prepare: 200, run: 30, finalize: 1_000 },
+        subphaseDurationsMs: { "prepare.descendants": 200, "run.registry-settlement": 30 },
         mutationQueueWaitMs: 0,
         lifecycleQueueWaitMs: 0,
       },
@@ -418,6 +429,9 @@ it("measures prepare and finalize separately while successors wait for real fina
     ],
     true,
   );
+  expect(
+    rows.find((row) => row.operationTraceId === traces.waiter.traceId)?.subphaseDurationsMs,
+  ).toBeUndefined();
 });
 
 it("keeps canceled validator custody visible until the real callback returns", async () => {

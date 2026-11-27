@@ -1,15 +1,12 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { setChatError } from "./chat-history-state.ts";
-import {
-  NEW_SESSION_ACTIVE_RUN_MESSAGE,
-  NEW_SESSION_CREATE_FAILED_MESSAGE,
-  NEW_SESSION_LIST_LOADING_MESSAGE,
-  preparePaneSessionHandoff,
-} from "./chat-pane-shared.ts";
+import { preparePaneSessionHandoff } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { canCreateChatSession } from "./chat-state-route.ts";
 
@@ -21,6 +18,40 @@ type SessionOperation = {
   isCurrent: () => boolean;
   onSessionChange: (nextSessionKey: string) => boolean | void;
 };
+
+export type HarnessUpdateSessionTarget = {
+  agentId: string;
+  /** The failed conversation; an incognito source keeps the recovery session incognito. */
+  sourceSessionKey: string;
+  /** The failed conversation's effective model, as `provider/model`. */
+  model: string | undefined;
+  create: ApplicationContext["sessions"]["createResult"];
+  open: (key: string) => boolean | void;
+  signal: AbortSignal;
+  isCurrent: () => boolean;
+};
+
+export async function createHarnessUpdateSession(
+  target: HarnessUpdateSessionTarget,
+  summary: string,
+) {
+  if (target.signal.aborted || !target.isCurrent()) {
+    return false;
+  }
+  const result = await target.create(
+    {
+      agentId: target.agentId,
+      ...(isIncognitoSessionKey(target.sourceSessionKey) ? { incognito: true } : {}),
+      ...(target.model ? { model: target.model, agentRuntime: "openclaw" as const } : {}),
+      message: t("chat.recovery.harnessUpdatePrompt", { summary }),
+    },
+    { signal: target.signal },
+  );
+  if (!result || target.signal.aborted || !target.isCurrent()) {
+    return false;
+  }
+  return target.open(result.key) !== false;
+}
 
 export async function createCapturedChatSession({
   state,
@@ -56,7 +87,7 @@ export async function createCapturedChatSession({
     return false;
   }
   if (!canCreateChatSession(state)) {
-    setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
+    setChatError(state, t("chat.sendErrors.newSessionBusy"));
     return false;
   }
   const currentAccess = readCreateAccess();
@@ -82,8 +113,8 @@ export async function createCapturedChatSession({
         state,
         state.sessionsError ??
           (state.sessionsLoading
-            ? NEW_SESSION_LIST_LOADING_MESSAGE
-            : NEW_SESSION_CREATE_FAILED_MESSAGE),
+            ? t("chat.sendErrors.newSessionLoading")
+            : t("chat.sendErrors.newSessionFailed")),
       );
     }
     return false;

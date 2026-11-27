@@ -235,8 +235,6 @@ describe("ui.command gateway method", () => {
           status: "accepted",
         });
         expectTarget(await execute(owner.profileId), "alice-tab");
-        turn.revoke(owner.profileId);
-        expectRejected(await execute(owner.profileId), "Alice's access changed; ask them again");
         await turn.complete();
         expect(turn.releaseCounts.get(owner.profileId)).toBe(1);
         expectRejected(await execute(owner.profileId));

@@ -30,6 +30,7 @@ import { loadGatewayStartupPluginPlanWithMetadata } from "../plugins/channel-plu
 import { withPluginDiagnosticsReport } from "../plugins/status.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { summarizeStringEntries } from "../shared/string-sample.js";
 import { displayPath } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
@@ -318,7 +319,8 @@ async function withHooksReport<T>(
 async function loadHooksReport<T>(
   agentId: string | undefined,
   consume: (report: HookStatusReport) => T,
-): Promise<T> {
+): Promise<T | undefined> {
+  const signal = getAsyncWorkSignal();
   const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const target = resolveHooksReportTarget(config, agentId);
   const { callGateway } = await import("../gateway/call.js");
@@ -327,12 +329,16 @@ async function loadHooksReport<T>(
     report = await callGateway<HookStatusReport>({
       config,
       method: "hooks.status",
+      signal,
       params: { agentId: target.agentId },
       timeoutMs: GATEWAY_HOOKS_STATUS_TIMEOUT_MS,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
   } catch (error) {
+    if (signal?.aborted) {
+      return undefined;
+    }
     if (
       !(await canFallbackToImplicitLocalGateway({
         config,
@@ -346,7 +352,7 @@ async function loadHooksReport<T>(
     // Only implicit local Gateways may use offline or older-Gateway discovery.
     return withHooksReport(config, target, consume);
   }
-  return consume(report);
+  return signal?.aborted ? undefined : consume(report);
 }
 
 function resolveHookSelection(
@@ -442,7 +448,9 @@ export function registerHooksCli(program: Command): void {
           resolveOptionFromCommand<string>(command, "agent"),
           (report) => format(report, { ...opts, json }),
         );
-        writeHooksOutput(output, json);
+        if (output !== undefined) {
+          writeHooksOutput(output, json);
+        }
       }, "root");
   const runHooksList = reportAction(formatHooksList);
 
@@ -473,6 +481,9 @@ export function registerHooksCli(program: Command): void {
             };
           },
         );
+        if (result === undefined) {
+          return undefined;
+        }
         writeHooksOutput(result.output, json);
         return result.exitCode;
       }, "root"),

@@ -1,5 +1,6 @@
 import type { AuthProviderHealth, AuthProviderHealthStatus } from "../../agents/auth-health.js";
 import type { ProviderUsageSnapshot } from "../../infra/provider-usage.types.js";
+import type { ProviderNativeAuthDisplay } from "../../plugins/provider-external-auth.types.js";
 
 /** Time-bounded credential expiry projected to gateway clients. */
 export type ModelAuthExpiry = {
@@ -32,6 +33,8 @@ export type ModelAuthStatusProvider = {
   status: AuthProviderHealthStatus;
   expiry?: ModelAuthExpiry;
   profiles: ModelAuthStatusProfile[];
+  /** Prepared native login display facts; never a saved/removable account. */
+  nativeAuth?: ProviderNativeAuthDisplay;
   /** Explicit stored/config priority. Omitted when selection is automatic. */
   profileOrder?: string[];
   /** True when the selected agent owns a stored priority override that can be reset. */
@@ -42,9 +45,18 @@ export type ModelAuthStatusProvider = {
     source: "config" | "env";
     envVar?: string;
   };
+  /** Provider-plugin actions for its saved OAuth sign-ins. */
+  oauthAccountActions?: {
+    /** The provider can revoke a sign-in's grant; `label` is the plugin's text. */
+    disconnect?: { label?: string };
+    /** HTTPS page where the person manages apps connected to their account. */
+    manage?: { url: string; label?: string };
+  };
+  /** The saved sign-in doesn't cover voice and no API key is set; adding one would. */
+  voiceApiKeyRequired?: true;
   usage?: Pick<
     ProviderUsageSnapshot,
-    "windows" | "summary" | "plan" | "billing" | "accountEmail"
+    "windows" | "summary" | "plan" | "billing" | "accountEmail" | "authProfileId"
   > & {
     /** Normalized provider id the usage payload was fetched under. */
     providerId: ProviderUsageSnapshot["provider"];
@@ -55,6 +67,9 @@ export type ModelProviderCapability = {
   provider: string;
   apiKeySupported: boolean;
   quickApiKeySetup: boolean;
+  quickApiKeyGroupLabel?: string;
+  /** A provider setup suggests first: one of its text-inference choices is onboarding-featured. */
+  featured?: true;
   loginOptions?: import("../../plugins/provider-login-options.js").ProviderLoginOption[];
 };
 

@@ -83,13 +83,13 @@ bundled xAI model provider reuses it as a fallback too.
 </Note>
 
 `openclaw status --usage`, `/status`, and the Control UI usage cards show
-SuperGrok quota when the xAI provider is signed in with OAuth. OpenClaw fetches
-the Grok billing window for that subscription and reports its reset time through
-the normal provider-usage surface. When xAI omits an included-usage percent on an
-otherwise valid weekly or monthly billing period, OpenClaw reports that included
-usage was omitted instead of inventing a percentage or showing generic
-"No usage data". Pay-as-you-go on-demand counters are not treated as SuperGrok
-subscription quota. API-key-only xAI setups are intentionally not
+SuperGrok quota when the xAI provider is signed in with OAuth. When usable
+included-usage data is available, OpenClaw shows the quota window and its reset
+time, if available. If xAI omits included-usage fields on an otherwise valid
+weekly or monthly billing period, OpenClaw instead shows "Included usage omitted",
+without a quota percentage or reset countdown. It does not invent a percentage
+or show generic "No usage data". Pay-as-you-go on-demand counters are not treated
+as SuperGrok subscription quota. API-key-only xAI setups are intentionally not
 shown as SuperGrok usage because xAI Console API credits and SuperGrok
 subscription quota are separate billing buckets.
 
@@ -230,6 +230,11 @@ transcription, xAI's Grok Voice Agent WebSocket for Talk realtime sessions,
 and the Responses API for chat, search, and code-execution tools.
 </Note>
 
+For vision input, inline GIFs are sent to xAI as first-frame JPEG images, including
+images retained from `view_image` on later turns. Stored image bytes are unchanged.
+PNG, JPEG, and WebP inputs keep their existing formats. Encoding errors use the
+existing request failure handling.
+
 ### Legacy fast-mode compatibility
 
 `/fast on` or `agents.defaults.models["xai/<model>"].params.fastMode: true`
@@ -282,9 +287,11 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
   `x_search` and `code_execution` run on xAI's servers. xAI bills $5 per 1,000
   tool calls, plus the model's input and output tokens. With each tool's
   `enabled` setting omitted, OpenClaw exposes it only for an active xAI model.
-  A known non-xAI model provider requires an explicit per-tool `enabled: true`;
-  a missing or unresolved provider blocks the request. xAI auth is always required,
-  and `enabled: false` disables the tool for every provider.
+  A known non-xAI model provider requires an explicit per-tool `enabled: true`,
+  except that Grok OAuth sign-in exposes `x_search` without it: those searches
+  use only the OAuth subscription credential and never fall back to an API key.
+  A missing or unresolved provider blocks the request. xAI auth is always
+  required, and `enabled: false` disables the tool for every provider.
 </Warning>
 
 <AccordionGroup>
@@ -623,7 +630,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
 
     | Key               | Type    | Default                   | Description                                      |
     | ----------------- | ------- | ------------------------- | ------------------------------------------------ |
-    | `enabled`         | boolean | Automatic for xAI models  | Disable, or opt in for a known non-xAI provider |
+    | `enabled`         | boolean | Automatic for xAI models and Grok OAuth | Disable, or opt in to API-key billing for a known non-xAI provider |
     | `model`           | string  | `grok-4.7`                | Model used for x_search requests                 |
     | `baseUrl`         | string  | -                         | xAI Responses base URL override                  |
     | `inlineCitations` | boolean | -                         | Include inline citations in results              |

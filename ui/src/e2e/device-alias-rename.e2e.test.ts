@@ -32,6 +32,49 @@ function pairedDevice(operatorLabel?: string) {
 }
 
 suite.define(() => {
+  it("keeps the full device ID clear of Close in rename and removal confirmations", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, reducedMotion: "reduce" },
+      async ({ page }) => {
+        const id = "dbca0716f009c12392b45fed723765ab".repeat(2);
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "device.pair.list": { pending: [], paired: [{ deviceId: id, roles: ["operator"] }] },
+            "node.list": { nodes: [] },
+            "system-presence": [],
+            "environments.list": { environments: [] },
+            "exec.approvals.get": {
+              exists: false,
+              file: { version: 1 },
+              hash: "inventory-fixture",
+              path: "",
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/devices");
+        const row = page.locator(`details[data-device-id="${id}"]`);
+        await row.locator(":scope > summary").tap();
+        for (const action of ["Edit alias", "Remove…"]) {
+          await row.getByRole("button", { name: action, exact: true }).tap();
+          const dialog = page.locator("openclaw-modal-dialog").last();
+          const heading = dialog.getByRole("heading").filter({ hasText: id });
+          await heading.waitFor();
+          const close = dialog.getByRole("button", { name: "Close", exact: true });
+          const lastGlyph = await heading.evaluate((element) => {
+            const text = document.createRange();
+            text.selectNodeContents(element);
+            return Math.max(...Array.from(text.getClientRects(), (line) => line.right));
+          });
+          expect(lastGlyph).toBeLessThan((await close.boundingBox())!.x);
+          await close.tap();
+          await dialog.waitFor({ state: "hidden" });
+          expect(await row.getAttribute("open")).not.toBeNull();
+        }
+        expect(await gateway.getRequests("device.pair.remove")).toHaveLength(0);
+      },
+    );
+  });
+
   it("retries a rejected alias rename and retains unsaved edits until client replacement", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const rename = { deviceId: DEVICE_ID, label: "Office node" };
@@ -56,8 +99,11 @@ suite.define(() => {
 
       const row = page.locator(".device-entry", { hasText: "office-workstation.example.test" });
       const openAlias = async (entry = row) => {
-        await entry.locator(".device-entry__menu-trigger").click();
-        await entry.locator('[role="menuitem"][data-value="editAlias"]').click();
+        // A row stays open through its own rename.
+        if (!(await entry.evaluate((element) => (element as HTMLDetailsElement).open))) {
+          await entry.locator(":scope > summary").click();
+        }
+        await entry.getByRole("button", { name: "Edit alias", exact: true }).click();
       };
       await row.waitFor();
 

@@ -1,6 +1,39 @@
 import { expect, it } from "vitest";
-import { resolveSelectedNodeTestRunner } from "../../scripts/lib/ci-node-test-capacity.mts";
+import {
+  resolveBoatNodeJobBudget,
+  resolveSelectedNodeTestRunner,
+} from "../../scripts/lib/ci-node-test-capacity.mts";
 import type { CompactNodeTestShard } from "../../scripts/lib/ci-node-test-plan.mts";
+
+it("paces Boat starts across the day and preserves included headroom", () => {
+  const limits = {
+    canStart: true,
+    starts: {
+      day: { limit: 2400, used: 0, remaining: 2400 },
+      hour: { limit: 600, used: 0, remaining: 600 },
+      minute: { limit: 90, used: 0, remaining: 90 },
+    },
+  };
+  expect(resolveBoatNodeJobBudget(limits)).toBe(20);
+  limits.starts.hour.used = 75;
+  expect(resolveBoatNodeJobBudget(limits)).toBe(5);
+  limits.starts.hour.used = 80;
+  expect(resolveBoatNodeJobBudget(limits)).toBe(0);
+  limits.starts.hour.used = 0;
+  limits.starts.day.used = 1918;
+  expect(resolveBoatNodeJobBudget(limits)).toBe(2);
+  limits.starts.day.used = 1920;
+  expect(resolveBoatNodeJobBudget(limits)).toBe(0);
+  limits.starts.day.used = 5610;
+  limits.starts.day.remaining = 0;
+  expect(resolveBoatNodeJobBudget(limits)).toBe(0);
+});
+
+it("uses no Boat starts when quota or account readiness is unknown", () => {
+  expect(resolveBoatNodeJobBudget({})).toBe(0);
+  expect(resolveBoatNodeJobBudget({ canStart: false })).toBe(0);
+  expect(resolveBoatNodeJobBudget({ canStart: true, starts: {} })).toBe(0);
+});
 
 function selectedCliJob(
   family = "cli",
@@ -55,6 +88,26 @@ it("retains capacity when one of several groups is unqualified", () => {
   job.groups.push({ ...job.groups[0]!, configs: ["test/vitest/vitest.tooling.config.ts"] });
   expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe(job.runner);
 });
+
+it.each(["qualified", "unqualified file", "unqualified config"])(
+  "preserves selected Gateway capacity when core and client share a group: %s",
+  (selection) => {
+    const job = selectedCliJob("gateway-core", [
+      "src/gateway/mcp-app-extension-runtime.test.ts",
+      selection === "unqualified file"
+        ? "src/gateway/unqualified.test.ts"
+        : "src/gateway/client-callsites.guard.test.ts",
+    ]);
+    job.groups[0]!.configs.push(
+      `test/vitest/vitest.${selection === "unqualified config" ? "tooling" : "gateway-client"}.config.ts`,
+    );
+    const before = structuredClone(job);
+    expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe(
+      selection === "qualified" ? "blacksmith-16vcpu-ubuntu-2404" : job.runner,
+    );
+    expect(job).toEqual(before);
+  },
+);
 
 it.each([
   { family: "cli", mode: undefined, targets: undefined },

@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
+  assertTransactionUsable,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -15,6 +16,7 @@ import {
   requestSqliteWorkerOperationAdmission,
   type SqliteWorkerBackend,
   type SqliteWorkerCommand,
+  type SynchronousSqliteCallback,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { MAX_FRAMES_PER_CALL, pickKeyframeId } from "./analyze.js";
 import { isLogbookWriteOperation } from "./store-contract.js";
@@ -33,6 +35,20 @@ import type { LogbookBatch, LogbookCard, LogbookFrame, LogbookObservation } from
 // Twelve card columns keep each batch below SQLite’s parameter limit.
 const WRITE_BATCH_SIZE = 64;
 const FRAME_PRUNE_BATCH_SIZE = 64;
+
+function runAdmittedTransaction<T>(
+  db: EngineConnection,
+  operation: SynchronousSqliteCallback<T>,
+): T {
+  requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+  return runSqliteImmediateTransactionSync(db, operation, {
+    withCommit(commit) {
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      commit();
+    },
+  });
+}
+
 class LogbookDatabaseStore {
   private readonly db: EngineConnection;
   private readonly query;
@@ -44,14 +60,18 @@ class LogbookDatabaseStore {
   private readonly database: ReturnType<typeof createLogbookDatabase>;
   readonly framesDir: string;
 
-  constructor(dataDir: string, dbPath: string, input?: DatabaseEngineInput) {
+  constructor(
+    dataDir: string,
+    dbPath: string,
+    private readonly postgresInput?: DatabaseEngineInput,
+  ) {
     // Screen captures and their database remain owner-only even in a permissive state directory.
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     chmodSync(dataDir, 0o700);
     this.framesDir = path.join(dataDir, "frames");
     mkdirSync(this.framesDir, { recursive: true, mode: 0o700 });
     chmodSync(this.framesDir, 0o700);
-    const database = createLogbookDatabase(dbPath, input);
+    const database = createLogbookDatabase(dbPath, postgresInput);
     const { db } = database;
     try {
       this.db = db;
@@ -251,7 +271,7 @@ class LogbookDatabaseStore {
     }
   }
 
-  private runTransaction<T>(operationLabel: string, operation: () => T): T {
+  private runTransaction<T>(operationLabel: string, operation: SynchronousSqliteCallback<T>): T {
     return runSqliteImmediateTransactionSync(this.db, operation, {
       busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
       databaseLabel: "logbook",
@@ -600,13 +620,17 @@ class LogbookDatabaseStore {
     if (rows.length === 0) {
       return 0;
     }
+    if (this.postgresInput) {
+      // Authorize irreversible file removal before BEGIN, then renew after filesystem work.
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    }
     const days = new Set<string>();
     for (const row of rows) {
       // Keep metadata until every file is removed; force makes interrupted passes retryable.
       rmSync(row.path, { force: true });
       days.add(row.day);
     }
-    const deleted = this.runTransaction("logbook.frames.prune", () => {
+    const deleteMetadata = () => {
       let count = 0;
       for (let offset = 0; offset < rows.length; offset += FRAME_PRUNE_BATCH_SIZE) {
         const batch = rows.slice(offset, offset + FRAME_PRUNE_BATCH_SIZE);
@@ -619,7 +643,10 @@ class LogbookDatabaseStore {
         count += Number(expectDefined(result.numAffectedRows, "Logbook pruned frame count"));
       }
       return count;
-    });
+    };
+    const deleted = this.postgresInput
+      ? runAdmittedTransaction(this.db, deleteMetadata)
+      : this.runTransaction("logbook.frames.prune", deleteMetadata);
     for (const day of days) {
       // Best-effort: removes now-empty day directories, keeps non-empty ones.
       try {
@@ -646,18 +673,24 @@ export function createSqliteWorkerBackend(
     return operations[command.type](command.input);
   }
   return {
+    assertSettled() {
+      const db = store.connection;
+      // A lost PostgreSQL client must retire this worker before the next command.
+      assertTransactionUsable(db);
+      if (!db.isOpen) {
+        throw new Error("Logbook database is closed");
+      }
+      if (db.isTransaction) {
+        throw new Error("Logbook database left an unsettled transaction");
+      }
+    },
     execute(command) {
       const execute = () => dispatch(command);
-      return isLogbookWriteOperation(command.type)
-        ? runEngineWorkerWrite(input.postgresInput, execute, (operation) => {
-            requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-            return runSqliteImmediateTransactionSync(store.connection, operation, {
-              withCommit(commit) {
-                requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-                commit();
-              },
-            });
-          })
+      // Pruning owns its SQL transaction so filesystem work does not hold the writer lock.
+      return isLogbookWriteOperation(command.type) && command.type !== "pruneFrames"
+        ? runEngineWorkerWrite(input.postgresInput, execute, (operation) =>
+            runAdmittedTransaction(store.connection, operation),
+          )
         : execute();
     },
     close: () => store.close(),

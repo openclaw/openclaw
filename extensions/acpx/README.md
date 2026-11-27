@@ -64,7 +64,7 @@ OpenClaw checks that execution choice before dispatching a chat turn; ACP runner
 implement OpenClaw sandboxing or workspace-only filesystem confinement.
 
 When optional chat restrictions cannot be enforced, an administrator can choose
-**Continue for this chat** to use the native app's permissions. This grants Full Access
+**Continue for this session** to use the native app's permissions. This grants Full Access
 and turns off optional sandboxing for that chat only; agent-wide and global settings
 stay unchanged. After a refused message, confirmation retries that message once.
 Confirming a model selection without a pending message does not send anything.

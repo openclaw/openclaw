@@ -23,6 +23,7 @@ suite.define(() => {
       },
     };
     await withPage(async ({ page, context }) => {
+      await page.clock.install();
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "config.get": configSnapshot(config, "required-fields", true),
@@ -30,7 +31,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/advanced?section=storage&advanced=1`);
-      const provider = page.getByRole("textbox", { name: "Storage Provider", exact: true });
+      const provider = page.getByRole("textbox", { name: "Storage provider", exact: true });
       await revealControl(provider);
       await provider.focus();
       expect(await provider.evaluate((element) => element === document.activeElement)).toBe(true);
@@ -41,7 +42,7 @@ suite.define(() => {
         tree.nodes.some(
           (node) =>
             node.role?.value === "textbox" &&
-            node.name?.value === "Storage Provider" &&
+            node.name?.value === "Storage provider" &&
             node.properties?.some(
               (property) => property.name === "required" && property.value.value === true,
             ),
@@ -67,8 +68,9 @@ suite.define(() => {
         },
       });
       await gateway.resolveDeferred("config.set");
+      const indicator = page.locator("openclaw-settings-save-indicator");
       await expect
-        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+        .poll(() => page.clock.runFor(1_000).then(() => indicator.textContent()))
         .toContain("Apply changes");
     });
   });

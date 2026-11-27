@@ -47,7 +47,7 @@ export function createNativeHookRelayPermissionRequestFixture(
   };
 }
 
-export function clearNativeHookRelayBridgeRecordsForTests(): void {
+function clearNativeHookRelayBridgeRecordsForTests(): void {
   runOpenClawStateWriteTransaction(({ db }) => {
     db.prepare("DELETE FROM native_hook_relay_bridges").run();
   });

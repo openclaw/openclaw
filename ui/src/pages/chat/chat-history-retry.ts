@@ -1,6 +1,10 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sleepWithAbort } from "@openclaw/retry";
+import {
+  monotonicDeadlineAfter,
+  remainingMonotonicMs,
+} from "../../../../src/shared/monotonic-time.ts";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -27,7 +31,7 @@ export async function retryChatHistoryRead<T>(options: {
     ? AbortSignal.any([options.signal, controller.signal])
     : controller.signal;
   let lastRetryableError: unknown;
-  const deadlineAt = Date.now() + CHAT_HISTORY_RETRY_WINDOW_MS;
+  const deadlineAt = monotonicDeadlineAfter(CHAT_HISTORY_RETRY_WINDOW_MS);
   const timeout = setTimeout(
     () =>
       controller.abort(
@@ -40,7 +44,8 @@ export async function retryChatHistoryRead<T>(options: {
       ),
     CHAT_HISTORY_RETRY_WINDOW_MS,
   );
-  const shouldRetry = () => !signal.aborted && Date.now() < deadlineAt && options.isCurrent();
+  const shouldRetry = () =>
+    !signal.aborted && remainingMonotonicMs(deadlineAt) > 0 && options.isCurrent();
   try {
     for (let attempt = 0; ; attempt += 1) {
       signal.throwIfAborted();

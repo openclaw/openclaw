@@ -20,7 +20,7 @@ import type { ProvisionedFileState } from "./types.js";
 export async function provisionIncludedFiles(
   repoRoot: string,
   worktreePath: string,
-  options: { signal?: AbortSignal; assertCurrent?: () => void } = {},
+  options: Parameters<typeof copyProvisionedPathsInWorker>[3] = {},
 ): Promise<string[]> {
   const inspection = await timeWorktreePreparationPhase("provisionInspect", () =>
     runGitWorkerOperation(
@@ -34,9 +34,7 @@ export async function provisionIncludedFiles(
   if (inspection.paths.length === 0) {
     return [];
   }
-  return await timeWorktreePreparationPhase("provisionCopy", () =>
-    copyProvisionedPathsInWorker(repoRoot, worktreePath, inspection.paths, options),
-  );
+  return await copyProvisionedPathsInWorker(repoRoot, worktreePath, inspection.paths, options);
 }
 
 /** Restores provisioned bytes and modes from SQLite, never from the mutable source checkout. */

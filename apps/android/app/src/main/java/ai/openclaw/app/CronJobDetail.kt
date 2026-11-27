@@ -4,14 +4,28 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.verbatimText
-import ai.openclaw.app.node.asObjectOrNull
-import ai.openclaw.app.node.asStringOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+
+data class GatewayCronStatus(
+  val enabled: Boolean,
+  val jobs: Int,
+  val nextWakeAtMs: Long?,
+)
+
+data class GatewayCronJobSummary(
+  val id: String,
+  val name: String,
+  val enabled: Boolean,
+  val scheduleLabel: NativeText,
+  val promptPreview: NativeText,
+  val nextRunAtMs: Long?,
+  val lastRunStatus: String?,
+)
 
 data class GatewayCronJobDetail(
   val id: String,
@@ -141,6 +155,30 @@ internal fun cronJobGetParams(id: String): String =
     put("id", JsonPrimitive(id))
   }.toString()
 
+internal fun parseCronJobs(jobs: JsonArray?): List<GatewayCronJobSummary> =
+  jobs
+    .mapObjects { obj ->
+      val id = obj.nonBlankString("id") ?: return@mapObjects null
+      val name = obj.nonBlankString("name") ?: return@mapObjects null
+      val schedule = obj["schedule"].asObjectOrNull()
+      val state = obj["state"].asObjectOrNull()
+      val payload = obj["payload"].asObjectOrNull()
+      GatewayCronJobSummary(
+        id = id,
+        name = name,
+        enabled = (obj["enabled"] as? JsonPrimitive)?.content?.trim() == "true",
+        scheduleLabel = cronScheduleLabel(schedule?.get("kind").asStringOrNull(), schedule),
+        promptPreview = cronPayloadPreview(payload),
+        nextRunAtMs = state.long("nextRunAtMs"),
+        lastRunStatus = cronJobLastRunStatus(state),
+      )
+    }
+
+internal fun cronJobLastRunStatus(state: JsonObject?): String? =
+  state
+    .nonBlankString("lastStatus")
+    ?: state.nonBlankString("lastRunStatus")
+
 internal fun parseGatewayCronJobDetail(job: JsonObject?): GatewayCronJobDetail? {
   val value = job ?: return null
   val id = value.nonBlankString("id") ?: return null
@@ -209,7 +247,7 @@ internal fun formatCronInterval(everyMs: Long): NativeText {
   val hours = minutes / 60L
   val days = hours / 24L
   return when {
-    days >= 1 && hours % 24L == 0L -> nativeText("Every \${days}d", days)
+    days >= 1 && minutes % (24L * 60L) == 0L -> nativeText("Every \${days}d", days)
     hours >= 1 && minutes % 60L == 0L -> nativeText("Every \${hours}h", hours)
     minutes >= 1 -> nativeText("Every \${minutes}m", minutes)
     else -> nativeText("Repeating")
@@ -250,6 +288,21 @@ private fun cronScheduleDetail(schedule: JsonObject): NativeText =
       nativeText("Scheduled")
     }
   }
+
+private fun cronPayloadPreview(payload: JsonObject?): NativeText {
+  val text =
+    when (payload?.get("kind").asStringOrNull()) {
+      "systemEvent" -> payload?.get("text").asStringOrNull()
+      "agentTurn" -> payload?.get("message").asStringOrNull()
+      else -> null
+    }
+  return text
+    ?.trim()
+    ?.replace(Regex("\\s+"), " ")
+    ?.takeIf { it.isNotEmpty() }
+    ?.let(::verbatimText)
+    ?: nativeText("No prompt")
+}
 
 private fun cronPayloadText(payload: JsonObject): String? =
   when (payload.nonBlankString("kind")) {

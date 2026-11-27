@@ -26,14 +26,15 @@ export const OLLAMA_CLOUD_DEFAULT_MODELS = [
   {
     id: "minimax-m2.7",
     contextWindow: 196_608,
-    // https://platform.minimax.io/docs/api-reference/text-chat
-    maxTokens: 204_800,
+    // Ollama Cloud rejects larger requests: "exceeds model's maximum output tokens (131072)".
+    maxTokens: 131_072,
     capabilities: ["completion", "thinking", "tools"],
   },
   {
     id: "minimax-m3",
     contextWindow: 524_288,
-    maxTokens: 524_288,
+    // Ollama Cloud caps output at 131,072 tokens and rejects a larger request.
+    maxTokens: 131_072,
     capabilities: ["completion", "thinking", "tools", "vision"],
   },
   {
@@ -65,21 +66,23 @@ export function resolveOllamaCloudDefaultModel(modelId: string) {
   return OLLAMA_CLOUD_DEFAULT_MODELS.find((model) => model.id === normalized);
 }
 
+/**
+ * Hosted Ollama output budget, curated list only. Ollama's API reports no
+ * per-model output limit and a context window is never a safe output budget,
+ * so uncurated cloud models return undefined and take the shared unknown-limit
+ * default on their full window (32,768 for large windows).
+ */
 export function resolveOllamaOutputBudget(params: {
   modelId: string;
-  contextWindow?: number;
   remote?: boolean;
-}): number {
+}): number | undefined {
   return params.remote || isCloudModelRef(params.modelId)
-    ? (resolveOllamaCloudDefaultModel(params.modelId)?.maxTokens ??
-        params.contextWindow ??
-        OLLAMA_DEFAULT_CONTEXT_WINDOW)
-    : OLLAMA_DEFAULT_MAX_TOKENS;
+    ? resolveOllamaCloudDefaultModel(params.modelId)?.maxTokens
+    : undefined;
 }
 
 export const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
 export const OLLAMA_LOCAL_CONTEXT_TOKENS = 32_768;
-export const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 export const OLLAMA_DEFAULT_COST = {
   input: 0,
   output: 0,

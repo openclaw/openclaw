@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
-  getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../../infra/sqlite-database-admission.js";
@@ -15,10 +15,7 @@ const rowsReceipt: SqliteDatabaseAdmissionKey<object> = {
 const initialReceipt = {};
 
 export function readAuthProfileRowsReceipt(databasePath: string): object {
-  return (
-    getOrLoadSqliteDatabaseAdmissionForPath(databasePath, rowsReceipt, () => initialReceipt) ??
-    initialReceipt
-  );
+  return peekSqliteDatabaseAdmissionForPath(databasePath, rowsReceipt) ?? initialReceipt;
 }
 
 export function publishAuthProfileRowsChanged(database: EngineConnection): void {

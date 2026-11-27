@@ -1,4 +1,4 @@
-import { createSignal, merge, type ComponentProps } from "solid-js";
+import { action, createOptimistic, createSignal, merge, type ComponentProps } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { WizardStep } from "../api/types.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -60,7 +60,7 @@ it("retains a channel draft through validation, submits it, and resets on a new 
   const [stepId, setStepId] = createSignal("account");
   const { container, answer } = mountStep(step("text"), () => ({
     get step(): WizardStep {
-      return { id: stepId(), type: "text", message: "Account name" };
+      return { id: stepId(), type: "text", message: "Account name\nUse your team account" };
     },
     value: "",
     presentation: "channels",
@@ -68,6 +68,9 @@ it("retains a channel draft through validation, submits it, and resets on a new 
       return validationError();
     },
   }));
+  expect(container.querySelector(".channels-wizard__message")?.textContent).toBe(
+    "Account name\nUse your team account",
+  );
   const input = container.querySelector("input")!;
   typeInto(input, "typed account");
   setValidationError("account-error");
@@ -141,30 +144,141 @@ it("preserves model paragraphs, cancellation, and object-valued choices", () => 
   expect(answer).toHaveBeenCalledWith(selected);
 });
 
-it.each([false, true])(
-  "keeps model submission in its native form (manual sign-in: %s)",
-  (externalAuthInput) => {
-    const cancel = vi.fn();
-    const { container, answer } = mountStep(step("text"), () => ({
-      value: "synthetic-answer",
+it("keeps a model setup choice usable when a text answer advances during a busy transition", async () => {
+  const initialStep: WizardStep = {
+    id: "key-storage",
+    type: "select",
+    message: "How do you want to provide this API key?",
+    options: [option("Paste API key now", "paste"), option("Environment variable", "env")],
+  };
+  const [currentStep, setStep] = createSignal(initialStep);
+  const next = Promise.withResolvers<void>();
+  const answer = vi.fn();
+  let saving = Promise.resolve();
+  const { container } = mountStep(initialStep, () => {
+    const [busy, setBusy] = createOptimistic(false);
+    const save = action(function* () {
+      setBusy(true);
+      yield next.promise.then(() =>
+        setStep({
+          id: "compatibility",
+          type: "select",
+          message: "Endpoint compatibility",
+          options: [
+            option("OpenAI-compatible", "openai"),
+            option("Anthropic", "anthropic"),
+            option("Other", "other"),
+          ],
+        }),
+      );
+    });
+    return {
       presentation: "model-setup",
-      externalAuthInput,
+      value: "synthetic-key",
+      get step() {
+        return currentStep();
+      },
+      get busy() {
+        return busy();
+      },
+      onAnswer: (value) => {
+        answer(value);
+        if (currentStep().type === "text") {
+          saving = save();
+        }
+      },
+    };
+  });
+  setStep({ id: "api-key", type: "text", title: "API key", sensitive: true });
+  flush();
+  submit(container.querySelector("form")!);
+  flush();
+  expect(container.querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
+  next.resolve();
+  await saving;
+  flush();
+  await updatePickers(container);
+  const picker = container.querySelector<HTMLElement>("openclaw-select-picker")!;
+  expect(picker.querySelector<HTMLButtonElement>("button")!.disabled).toBe(false);
+  await choosePickerValue(picker, "0");
+  container.querySelector<HTMLButtonElement>("openclaw-modal-actions button")!.click();
+  expect(answer).toHaveBeenLastCalledWith("openai");
+});
+
+it("keeps model submission in its native form", () => {
+  const cancel = vi.fn();
+  const { container, answer } = mountStep(step("text"), () => ({
+    value: "synthetic-answer",
+    presentation: "model-setup",
+    leadingAction: cancelButton(cancel),
+  }));
+  const form = container.querySelector("form")!;
+  const submitButton = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  const cancelControl = container.querySelector<HTMLButtonElement>(".cancel")!;
+  expect(submitButton.form).toBe(form);
+  expect(submitButton.closest("openclaw-modal-actions")).not.toBeNull();
+  expect(cancelControl.closest("openclaw-modal-actions")).not.toBeNull();
+  submitButton.click();
+  expect(answer).toHaveBeenCalledExactlyOnceWith("synthetic-answer");
+  cancelControl.click();
+  expect(cancel).toHaveBeenCalledOnce();
+});
+
+it("shows the pasted-address field of a browser sign-in and finishes with it", () => {
+  const cancel = vi.fn();
+  const [value, setValue] = createSignal("");
+  const [validationError, setValidationError] = createSignal<string>();
+  const signInUrl = "https://accounts.example.test/authorize?state=synthetic";
+  const { container, answer } = mountStep(
+    { id: "paste", type: "text", message: "Paste the redirect", externalUrl: signInUrl },
+    () => ({
+      get value() {
+        return value();
+      },
+      get validationError() {
+        return validationError();
+      },
+      validationErrorId: "paste-error",
+      presentation: "model-setup",
+      externalAuthInput: true,
+      brandId: "gemini",
+      providerLabel: "Example",
       leadingAction: cancelButton(cancel),
-    }));
-    const form = container.querySelector("form")!;
-    const submitButton = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-    const cancelControl = container.querySelector<HTMLButtonElement>(".cancel")!;
-    expect(submitButton.form).toBe(form);
-    expect(Boolean(submitButton.closest("openclaw-modal-actions"))).toBe(!externalAuthInput);
-    expect(Boolean(submitButton.closest("details"))).toBe(externalAuthInput);
-    expect(cancelControl.closest("openclaw-modal-actions")).not.toBeNull();
-    expect(cancelControl.closest("details")).toBeNull();
-    submitButton.click();
-    expect(answer).toHaveBeenCalledExactlyOnceWith("synthetic-answer");
-    cancelControl.click();
-    expect(cancel).toHaveBeenCalledOnce();
-  },
-);
+      onValueChange: (next) => setValue(String(next)),
+    }),
+  );
+  expect(container.querySelector("h2")?.textContent).toBe("Example");
+  expect(
+    container
+      .querySelector(".wizard-sign-in__badge [data-provider-icon]")
+      ?.getAttribute("data-provider-icon"),
+  ).toBe("gemini");
+  const open = container.querySelector<HTMLAnchorElement>("a.wizard-step__external-link")!;
+  expect(open.textContent).toBe("Open sign-in page");
+  expect(open.href).toBe(signInUrl);
+  expect(container.querySelector("[data-copy-label]")?.textContent).toBe("Copy link");
+  const input = container.querySelector<HTMLInputElement>('input[name="wizard-text"]')!;
+  expect(input.labels?.[0]?.textContent).toBe("Address of the page your browser opened");
+  expect(input.closest("details")).toBeNull();
+  const finish = container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  expect(finish.textContent).toBe("Finish sign-in");
+  expect(finish.disabled).toBe(true);
+  const footer = finish.closest("openclaw-modal-actions")!;
+  expect([...footer.querySelectorAll("button")]).toEqual([
+    container.querySelector(".cancel"),
+    finish,
+  ]);
+  typeInto(input, "http://127.0.0.1:8787/callback?code=synthetic");
+  flush();
+  expect(finish.disabled).toBe(false);
+  submit(input.form!);
+  expect(answer).toHaveBeenCalledExactlyOnceWith("http://127.0.0.1:8787/callback?code=synthetic");
+  setValidationError("State mismatch");
+  flush();
+  const alert = container.querySelector<HTMLElement>("#paste-error")!;
+  expect(alert.textContent).toContain("State mismatch");
+  expect(input.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
 
 it("submits the channel ID from a single-choice picker", async () => {
   const { container, answer } = mountStep(
@@ -176,7 +290,30 @@ it("submits the channel ID from a single-choice picker", async () => {
     container.querySelector<HTMLElement>("openclaw-select-picker")!,
     "discord",
   );
+  // Choosing only moves the selection, so keeping the preselected choice is an equal path.
+  expect(answer).not.toHaveBeenCalled();
+  container.querySelector<HTMLButtonElement>(".channels-wizard__footer button")!.click();
   expect(answer).toHaveBeenCalledExactlyOnceWith("discord");
+});
+
+it("continues with a preselected choice without opening the picker", () => {
+  const { container, answer } = mountStep(
+    step("select", [option("Telegram", "telegram"), option("Discord", "discord")]),
+    () => ({ value: "telegram", presentation: "channels" }),
+  );
+  container.querySelector<HTMLButtonElement>(".channels-wizard__footer button")!.click();
+  expect(answer).toHaveBeenCalledExactlyOnceWith("telegram");
+});
+
+it("holds Continue until a choice exists", () => {
+  const { container, answer } = mountStep(
+    step("select", [option("Telegram", "telegram"), option("Discord", "discord")]),
+    () => ({ value: undefined, presentation: "channels" }),
+  );
+  const button = container.querySelector<HTMLButtonElement>(".channels-wizard__footer button")!;
+  expect(button.disabled).toBe(true);
+  button.click();
+  expect(answer).not.toHaveBeenCalled();
 });
 
 it("delegates channel multiselect toggles and submits the caller-owned selection", () => {

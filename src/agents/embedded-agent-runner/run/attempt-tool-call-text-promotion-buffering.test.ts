@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import type * as MarkdownParser from "../../../../packages/markdown-core/src/reasoning-tag-parser.js";
 import {
   assistantMessage,
   collectPromotionEvents,
@@ -7,6 +8,53 @@ import {
   createPromotionStream,
   wrapPromotionStream,
 } from "./attempt-tool-call-text-promotion.test-support.js";
+
+const markdownWork = vi.hoisted(() => ({ characters: 0 }));
+vi.mock(
+  "../../../../packages/markdown-core/src/reasoning-tag-parser.js",
+  async (importOriginal) => {
+    const actual = await importOriginal<typeof MarkdownParser>();
+    return {
+      ...actual,
+      parseMarkdownOwnership(...args: Parameters<typeof actual.parseMarkdownOwnership>) {
+        markdownWork.characters += args[0].length;
+        return actual.parseMarkdownOwnership(...args);
+      },
+      findMarkdownCodeRegions(text: string) {
+        if (/[`~\t]| {4}/u.test(text)) {
+          markdownWork.characters += text.length;
+        }
+        return actual.findMarkdownCodeRegions(text);
+      },
+    };
+  },
+);
+
+it("bounds ownership work across growing snapshots and the final result", async () => {
+  const text = "[exec is a literal `example`, with no call payload.\n\n".repeat(64);
+  const message = (value: string) => assistantMessage([{ type: "text", text: value }]);
+  const events = Array.from({ length: Math.ceil(text.length / 16) }, (_, index) => ({
+    type: "text_delta",
+    contentIndex: 0,
+    delta: text.slice(index * 16, (index + 1) * 16),
+    partial: message(text.slice(0, (index + 1) * 16)),
+  }));
+  const before = markdownWork.characters;
+  const stream = await createPromotionStream({
+    events: [...events, { type: "done", reason: "stop", message: message(text) }],
+    resultMessage: message(text),
+  });
+  const output = await collectPromotionEvents(stream);
+  expect(
+    output
+      .filter((event) => event.type === "text_delta")
+      .map((event) => event.delta)
+      .join(""),
+  ).toBe(text);
+  expect(output.at(-1)?.message).toEqual(message(text));
+  expect(await stream.result()).toEqual(message(text));
+  expect(markdownWork.characters - before).toBeLessThan(text.length * 4);
+});
 
 it.each([0, 1])("buffers tool text around thinking at content index %s", async (thinkingIndex) => {
   const rawToolText = commandText("pwd");

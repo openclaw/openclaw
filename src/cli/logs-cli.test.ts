@@ -143,6 +143,64 @@ it.each([
   });
 });
 
+it.each([
+  { mode: "plain", args: ["--utc", "--plain"], time: "2025-01-01T12:00:00.000Z" },
+  { mode: "pretty", args: ["--utc"], time: "12:00:00+00:00" },
+])(
+  "renders blank positional messages in $mode output without the raw record and keeps other records raw",
+  async ({ args, time }) => {
+    await withTty(process.stdout, async () => {
+      const singleObject = JSON.stringify({
+        event: "example-event",
+        time: "2025-01-01T12:00:00.000Z",
+        _meta: { logLevelName: "WARN", name: "openclaw" },
+      });
+      const emptyError = JSON.stringify({
+        name: "Error",
+        message: "",
+        stack: [{ fileNameWithLine: "example.js:1", method: "exampleMethod" }],
+        time: "2025-01-01T12:00:00.000Z",
+        _meta: { logLevelName: "ERROR", name: "openclaw" },
+      });
+      const positionalMessage = JSON.stringify({
+        0: "example",
+        message: "",
+        time: "2025-01-01T12:00:00.000Z",
+        _meta: { logLevelName: "INFO", name: "openclaw" },
+      });
+      callGatewayFromCli.mockResolvedValueOnce(
+        logPage([
+          JSON.stringify({
+            0: "",
+            _meta: {
+              runtime: "node",
+              hostname: "example-host",
+              logLevelName: "INFO",
+              name: "openclaw",
+              path: { fullFilePath: "file:///home/example-user/.openclaw/entry.js" },
+            },
+            time: "2025-01-01T12:00:00.000Z",
+            hostname: "example-host",
+          }),
+          JSON.stringify({ unrecognized: true }),
+          singleObject,
+          emptyError,
+          positionalMessage,
+        ]),
+      );
+      const { stdout } = await run(["--no-color", ...args]);
+      expect(stdout.trim().split("\n")).toEqual([
+        "Log file: /tmp/openclaw.log",
+        `${time} info`,
+        '{"unrecognized":true}',
+        `${time} warn ${singleObject}`,
+        `${time} error ${emptyError}`,
+        `${time} info ${positionalMessage}`,
+      ]);
+    });
+  },
+);
+
 it("rejects combining --local-time with --utc", async () => {
   const flags = ["--local-time", "--utc"];
   const failure = await runLogsCli(["logs", ...flags]).catch((error: unknown) => error);
@@ -352,6 +410,51 @@ it("retries loopback close errors in --follow mode instead of tailing fallback f
   expect((stderr.match(/gateway disconnected/g) ?? []).length).toBe(8);
   expect(stderr).toContain("gateway closed (1006 abnormal closure): abnormal closure");
   expect(stdout).not.toContain("local fallback line");
+});
+
+it("reuses one Gateway connection for --follow polls and keeps the --timeout deadline", async () => {
+  const untilAborted = (signal: AbortSignal) => {
+    const pending = Promise.withResolvers<never>();
+    signal.addEventListener("abort", () => pending.reject(signal.reason));
+    return pending.promise;
+  };
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(logPage(["second poll"], 2))
+    .mockImplementationOnce((_method, _params, options) => untilAborted(options.signal));
+  callGatewayFromCli
+    .mockImplementationOnce(async (_method, _opts, _params, extra) => {
+      await extra.onResponse(request, new AbortController().signal, logPage(["first poll"], 1));
+    })
+    .mockImplementationOnce((_method, _opts, _params, extra) => untilAborted(extra.signal))
+    .mockRejectedValueOnce(new Error("stop after reconnect"));
+
+  const { stdout, stderr } = await runFailure([...follow, "--timeout", "5"]);
+
+  expect(callGatewayFromCli).toHaveBeenCalledTimes(3);
+  expect(request).toHaveBeenNthCalledWith(
+    1,
+    "logs.tail",
+    expect.objectContaining({ cursor: 1 }),
+    expect.any(Object),
+  );
+  expectText(stdout, ["first poll", "second poll"]);
+  expect(stderr.match(/gateway disconnected/g)).toHaveLength(2);
+  expectText(stderr, ["stop after reconnect"]);
+});
+
+it("stops --follow when the reused connection closes for auth", async () => {
+  const message = "gateway closed (4001): client invalidated";
+  const request = vi.fn().mockRejectedValueOnce(new Error(message));
+  callGatewayFromCli.mockImplementationOnce(async (_method, _opts, _params, extra) => {
+    await extra.onResponse(request, new AbortController().signal, logPage(["first poll"], 1));
+    throw createGatewayCloseError({ code: 4001, reason: "client invalidated", message });
+  });
+
+  const { stderr } = await runFailure(follow);
+
+  expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+  expectText(stderr, [message], ["gateway disconnected"]);
 });
 
 it.each(["text", "json"])("redacts Gateway URLs in %s errors", async (mode) => {

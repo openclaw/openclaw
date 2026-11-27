@@ -35,7 +35,7 @@ suite.define(() => {
           .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowTitle: true });
 
         const actions = page.locator(".settings-section__actions");
-        const search = actions.getByRole("button", { name: "Search transcripts" });
+        const search = actions.getByRole("button", { name: "Search chats" });
         const refresh = actions.getByRole("button", { name: "Refresh" });
         const filter = actions.getByRole("button", { name: "Filters", exact: true });
         const create = actions.getByRole("link", { name: "New session" });
@@ -70,13 +70,13 @@ suite.define(() => {
           width,
         );
         await search.click();
-        const transcriptInput = page.getByRole("searchbox", { name: "Search session transcripts" });
+        const transcriptInput = page.getByRole("searchbox", { name: "Search chats" });
         await transcriptInput.waitFor();
         await transcriptInput.press("Escape");
         await filter.click();
         const popover = page.locator(".sessions-filter-popover:popover-open");
         await popover.waitFor();
-        await popover.getByRole("button", { name: "Filter by key, agent, label, kind…" }).waitFor();
+        await popover.getByRole("searchbox", { name: "Search sessions…" }).waitFor();
         await popover.getByRole("radiogroup", { name: "Session state" }).waitFor();
         await expect.poll(() => popover.getAttribute("data-phase")).toBe("open");
         await page.keyboard.press("Escape");
@@ -89,7 +89,7 @@ suite.define(() => {
   // Narrow phones drop the big title but keep the heading for assistive tech.
   it.each([
     [390, false],
-    [620, true],
+    [620, false],
   ])("keeps the phone list toolbar usable at %i px", async (width, visibleTitle) => {
     await suite.withPage(
       { viewport: { width, height: 900 }, colorScheme: "dark" },
@@ -105,7 +105,7 @@ suite.define(() => {
         );
 
         const actions = page.locator(".settings-section__actions");
-        const search = actions.getByRole("button", { name: "Search transcripts" });
+        const search = actions.getByRole("button", { name: "Search chats" });
         const refresh = actions.getByRole("button", { name: "Refresh" });
         const filter = actions.getByRole("button", { name: "Filters", exact: true });
         await actions.getByRole("searchbox", { name: "Search sessions" }).waitFor();
@@ -120,7 +120,7 @@ suite.define(() => {
         );
 
         await search.click();
-        const transcriptInput = page.getByRole("searchbox", { name: "Search session transcripts" });
+        const transcriptInput = page.getByRole("searchbox", { name: "Search chats" });
         await transcriptInput.waitFor();
         await transcriptInput.press("Escape");
         await filter.click();
@@ -137,8 +137,65 @@ suite.define(() => {
         }
         await sheet.getByRole("button", { name: "Close" }).last().click();
         await sheet.waitFor({ state: "hidden" });
+
+        const row = page.locator(".session-data-row").first();
+        await row.getByRole("checkbox").check();
+        const bulkCount = page.locator(".data-table-bulk-bar > span");
+        const rowTitle = row.locator(".session-list-cell__title");
+        expect(await bulkCount.evaluate((el) => el.getBoundingClientRect().left)).toBe(
+          await rowTitle.evaluate((el) => el.getBoundingClientRect().left),
+        );
+        await row.locator(".session-details-toggle").click();
+        const details = page.locator(".session-details-panel");
+        const factLeft = await details
+          .locator(".session-detail-stat__label")
+          .first()
+          .evaluate((el) => el.getBoundingClientRect().left);
+        expect(
+          await details
+            .locator(".session-details-panel__eyebrow")
+            .evaluateAll((headings) => headings.map((el) => el.getBoundingClientRect().left)),
+        ).toEqual([factLeft, factLeft]);
       },
     );
+  });
+
+  it("shows the full expanded session name without pushing its badges out of the phone drawer", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+      const row = sessionRow(
+        "agent:main:dashboard:77d49b41-7f39-496e-987d-19c8ab47be60",
+        "Release readiness for the international observatory calibration workspaces",
+        10,
+      );
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": {
+            sessions: [row],
+            count: 1,
+            defaults: { model: null, modelProvider: null, contextTokens: null },
+            path: "",
+            ts: 10,
+          },
+          "sessions.describe": { session: row },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const drawer = page.locator("openclaw-sessions-page .session-details-panel");
+      await page.locator(".session-data-row .session-details-toggle").click();
+      await drawer.waitFor();
+      const heading = drawer.locator(".session-details-panel__title");
+      const fullHeading = await heading.evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return Array.from(range.getClientRects()).every(
+          (rect) => rect.right <= el.getBoundingClientRect().right + 1,
+        );
+      });
+      expect(fullHeading).toBe(true);
+      const badges = await drawer.locator(".session-details-panel__badges").boundingBox();
+      const panel = await drawer.boundingBox();
+      expect(badges!.x + badges!.width).toBeLessThanOrEqual(panel!.x + panel!.width);
+    });
   });
 
   it("groups by displayed kind while keeping the scan table compact", async () => {
@@ -149,18 +206,15 @@ suite.define(() => {
         sessionRow("agent:main:beta", "Beta conversation", 4),
         sessionRow("agent:main:room", "Project room", 3, { kind: "group" }),
         sessionRow("cron:weekly", "Weekly check", 2),
-        sessionRow("agent:main:pinned", "Pinned conversation", 1, { pinned: true, pinnedAt: 100 }),
+        sessionRow("agent:main:pinned", "Pinned conversation", 1),
       ];
       await installMockGateway(page, {
         sessionKey: "unknown",
-        methodResponses: {
-          "sessions.list": {
-            count: sessions.length,
-            defaults: { contextTokens: null, model: null, modelProvider: null },
-            path: "",
-            sessions,
-            ts: 10,
-          },
+        sessions,
+        presenceUsers: [{ id: "reader", self: true }],
+        bootstrapPreferences: {
+          profileId: "reader",
+          entries: { "ui.railShortcuts": ["session:agent:main:pinned"] },
         },
       });
       await page.goto(`${suite.server.baseUrl}sessions`);
@@ -173,6 +227,15 @@ suite.define(() => {
         "Actions",
       ]);
       expect(await table.locator(".session-data-row .session-kind").count()).toBe(0);
+      const selectAllLeft = await table
+        .getByRole("checkbox", { name: "Select all on page", exact: true })
+        .evaluate((box) => box.getBoundingClientRect().left);
+      expect(
+        await table
+          .getByRole("checkbox", { name: /^Select session:/ })
+          .first()
+          .evaluate((box) => box.getBoundingClientRect().left),
+      ).toBe(selectAllLeft);
 
       const filters = page.getByRole("button", { name: "Filters", exact: true });
       const popover = page.locator(".sessions-filter-popover");
@@ -212,7 +275,6 @@ suite.define(() => {
 
       await openFilters();
       const search = popover.locator(".sessions-filter-popover__search input");
-      await popover.locator(".header-search__toggle").click();
       await search.fill("Pinned");
       expect(await search.inputValue()).toBe("Pinned");
       await expect

@@ -1,6 +1,7 @@
 import { createComponent, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
+import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { LinkReaderContent } from "./link-reader-content.tsx";
@@ -156,12 +157,21 @@ describe("link reader document content", () => {
         commit: "abcdef0123456789",
       },
     });
-    const checks = container.querySelector<HTMLDetailsElement>(".lr-checks")!;
-    expect(checks.querySelector("summary strong")?.textContent).toBe("Checks passed");
-    expect(checks.open).toBe(false);
-    expect(checks.textContent).toContain("Provider-owned result");
+    const checks = container.querySelector<HTMLElement>(".lr-checks")!;
+    const toggle = checks.querySelector<HTMLButtonElement>(".lr-checks-summary")!;
+    expect(toggle.querySelector("strong")?.textContent).toBe("Checks passed");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    // Counted states come from the passive items; the source's own summary stays reachable.
+    const legend = checks.querySelector<HTMLElement>(".lr-checks-legend")!;
+    expect(legend.textContent).toBe("1 in progress");
+    expect(legend.title).toBe("Provider-owned result");
+    expect(checks.querySelector(".lr-check")).toBeNull();
+    toggle.click();
+    flush();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(checks.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("In progress");
-    const run = checks.querySelector<HTMLAnchorElement>(".lr-check-copy a")!;
+    expect(checks.querySelector(".lr-check-detail")?.textContent).toBe("Queued");
+    const run = checks.querySelector<HTMLAnchorElement>("a.lr-check-row")!;
     expect(run.href).toBe("https://github.com/acme/project/actions/runs/1");
     expect(run.rel).toContain("noreferrer");
     expect(run.hasAttribute("data-link-reader-external")).toBe(true);
@@ -181,17 +191,27 @@ describe("link reader document content", () => {
         url: "https://user:password@github.com/private",
       },
     });
-    expect(container.querySelector(".lr-checks-meter")).toBeNull();
-    expect(container.querySelector(".lr-checks summary strong")?.textContent).toBe(
-      "Checks unavailable",
+    // One known run of four: the ring leaves the rest open, and the legend counts it.
+    const segments = [...container.querySelectorAll(".lr-checks-meter .lr-check-segment")];
+    expect(segments).toHaveLength(1);
+    expect(Number.parseFloat(segments[0]!.getAttribute("stroke-dasharray")!)).toBeLessThan(30);
+    expect(container.querySelector(".lr-checks-summary strong")?.textContent).toBe(
+      "Checks incomplete",
     );
-    expect(container.querySelector<HTMLDetailsElement>(".lr-checks")?.open).toBe(false);
+    expect(container.querySelector(".lr-checks-legend")?.textContent).toBe("1 failed3 not shown");
+    // A failed run is named while the full list is collapsed.
+    expect(container.querySelector(".lr-checks-summary")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
     expect(container.querySelector(".lr-checks a, .lr-checks script")).toBeNull();
-    expect(container.querySelector(".lr-check-copy")?.textContent).toContain(
+    expect(container.querySelector(".lr-checks-title span")?.textContent).toBe(
       "<script>unsafe</script>",
     );
+    container.querySelector<HTMLButtonElement>(".lr-checks-summary")!.click();
+    flush();
+    expect(container.querySelector(".lr-checks a, .lr-checks script")).toBeNull();
     expect(container.querySelector(".lr-checks")?.textContent).toContain(
-      "Some checks could not be shown",
+      "Couldn’t show all checks. Open the original to see them.",
     );
     update(container, {
       ...detail("Description"),
@@ -204,12 +224,87 @@ describe("link reader document content", () => {
         url: url + "/checks",
       },
     });
+    // Without items there is nothing to count: the source's summary speaks, and no ring is drawn.
+    expect(container.querySelector(".lr-checks-legend")?.textContent).toBe("Partial checks");
+    expect(container.querySelector(".lr-checks-meter")).toBeNull();
     const source = container.querySelector<HTMLAnchorElement>(".lr-checks .lr-note a")!;
     expect(source).not.toBeNull();
     expect(source.textContent).toBe("View all checks on GitHub");
     expect(source.href).toBe(url + "/checks");
     expect(source.target).toBe("_blank");
     expect(source.hasAttribute("data-link-reader-external")).toBe(true);
+  });
+
+  it("numbers diff rows from their hunk headers and leaves the patch text intact", () => {
+    const patch = [
+      "@@ -10,3 +10,4 @@ export function run() {",
+      " context",
+      "-old",
+      "+new",
+      "+more",
+      "\\ No newline at end of file",
+    ].join("\n");
+    const container = mount({
+      ...detail("Description"),
+      files: [
+        { path: "src/reader/run.ts", status: "added", additions: 2, deletions: 1, patch },
+        { path: "README.md", status: "modified", additions: 0, deletions: 0, patch: "+unnumbered" },
+      ],
+      filesExpanded: true,
+    });
+    const [file, root] = [...container.querySelectorAll(".lr-file")];
+    // Numbers render from the attribute, so selecting the diff copies the patch itself.
+    expect(
+      [...file!.querySelectorAll(".lr-diff-line")].map((row) => [
+        row.className.replace("lr-diff-line lr-diff-line--", ""),
+        row.getAttribute("data-line"),
+      ]),
+    ).toEqual([
+      ["hunk", null],
+      ["context", "10"],
+      ["delete", "11"],
+      ["add", "11"],
+      ["add", "12"],
+      ["context", null],
+    ]);
+    expect(file!.querySelector(".lr-diff")?.textContent).toBe(patch.replaceAll("\n", ""));
+    expect(file!.querySelector(".lr-file-name")?.textContent).toBe("run.ts");
+    expect(file!.querySelector(".lr-file-directory")?.textContent).toBe("src/reader");
+    expect(file!.querySelector(".lr-file-status")?.textContent).toBe("added");
+    // A root file has no directory, an ordinary change no status, a bare patch no numbers.
+    expect(root!.querySelector(".lr-file-directory, .lr-file-status")).toBeNull();
+    expect(root!.querySelector(".lr-diff-line")?.hasAttribute("data-line")).toBe(false);
+  });
+
+  it("shows the author's picture only from a safe source and falls back to an initial", () => {
+    const picture = "data:image/png;base64,AAAA";
+    const container = mount({ ...detail("Description"), imageUrl: picture });
+    expect(container.querySelector<HTMLImageElement>(".lr-author img")?.src).toBe(picture);
+    update(container, { ...detail("Description"), imageUrl: "javascript:alert(1)" });
+    expect(container.querySelector(".lr-author img")).toBeNull();
+    expect(container.querySelector(".lr-author .lr-avatar")?.textContent).toBe("A");
+  });
+
+  it("admits bare emphasis tags in authored Markdown and keeps other HTML literal", () => {
+    const container = mount(
+      detail(
+        [
+          "<details><summary><strong>Agent review details</strong></summary>",
+          "Inside",
+          "</details>",
+          'First<br>second <b class="x">attributed</b> <span onclick="x()">span</span>',
+        ].join("\n\n"),
+      ),
+    );
+    expect(container.querySelector(".lr-markdown summary strong")?.textContent).toBe(
+      "Agent review details",
+    );
+    expect(container.querySelector(".lr-markdown br")).not.toBeNull();
+    // A tag with attributes, or any other element, is authored text and nothing more.
+    expect(container.querySelector(".lr-markdown span[onclick], .lr-markdown b")).toBeNull();
+    const text = container.querySelector(".lr-markdown")?.textContent;
+    expect(text).toContain('<b class="x">attributed');
+    expect(text).toContain('<span onclick="x()">span</span>');
   });
 
   it("hides HTML comment metadata while preserving visible prose and literal code examples", () => {
@@ -283,7 +378,9 @@ describe("link reader document content", () => {
     image.dispatchEvent(new Event("error"));
     expect(image.hidden).toBe(true);
     expect(container.textContent).toContain("Image unavailable: Build status");
-    const original = container.querySelector<HTMLAnchorElement>("a[data-link-reader-external]");
+    const original = container.querySelector<HTMLAnchorElement>(
+      ".lr-description a[data-link-reader-external]",
+    );
     expect(original?.href).toBe("https://images.example/status.png");
     expect(container.querySelector("a a")).toBeNull();
     update(container, { ...value, title: "Updated title" });
@@ -378,6 +475,10 @@ describe("link reader document content", () => {
   it("renders plugin-projected comment anchors and context without deriving service semantics", () => {
     const comments: ReaderComment[] = [
       comment("Ordinary comment", { id: "issuecomment-7", url: url + "#issuecomment-7" }),
+      comment("Reply with no file location", {
+        id: "reply-only",
+        context: { replyUrl: "#issuecomment-7", replyLabel: "Parent comment" },
+      }),
       comment("Review comment body", {
         createdAt: "2026-09-02T12:00:00Z",
         id: "discussion_r7",
@@ -398,6 +499,12 @@ describe("link reader document content", () => {
     const container = mount(detail("Description", comments));
     const review = container.querySelector("#discussion_r7")!;
     expect(container.querySelector("#issuecomment-7")).not.toBeNull();
+    const replyLinks = container.querySelectorAll<HTMLAnchorElement>(
+      "#reply-only .lr-review-location a",
+    );
+    expect(Array.from(replyLinks, (link) => [link.textContent, link.href])).toEqual([
+      ["Parent comment", url + "#issuecomment-7"],
+    ]);
     expect(review.textContent).toContain("Review comment");
     expect(review.textContent).toContain("src/reader.ts:4–6");
     expect(review.textContent).toContain("Before change · Outdated");
@@ -431,7 +538,10 @@ describe("link reader document content", () => {
         authorUrl: "https://forge.example/users/alex",
         coAuthors: [{ name: "Sam" }, { name: "Noor" }],
         coAuthorCount: 3,
-        metadata: [{ label: "Build", value: "Passed", tone: "positive" }],
+        metadata: [
+          { label: "Build", value: "Passed", tone: "positive" },
+          { label: "Additions", value: "+12", tone: "positive" },
+        ],
         body: "[Next change](C43)",
         partial: true,
         bodyTruncated: true,
@@ -463,12 +573,20 @@ describe("link reader document content", () => {
       link,
     );
     expect(container.querySelector("h1")?.textContent).toBe("Change C42");
-    expect(container.querySelector(".lr-metric dt")?.textContent).toBe("Build");
-    expect(container.querySelector(".lr-item-meta a")?.getAttribute("href")).toBe(
+    const labels = [...container.querySelectorAll(".lr-fact dt")];
+    expect(labels.map((label) => [label.textContent, label.classList.contains("sr-only")])).toEqual(
+      [
+        ["Build", false],
+        ["Additions", true],
+      ],
+    );
+    expect(container.querySelector(".lr-byline a")?.getAttribute("href")).toBe(
       "https://forge.example/users/alex",
     );
-    expect(container.querySelector(".lr-coauthors")?.textContent).toBe("Co-authors: Sam, Noor +1");
-    expect(container.querySelector(".lr-metric--positive dd")?.textContent).toBe("Passed");
+    const coAuthors = container.querySelector(".lr-coauthors")!;
+    expect(coAuthors.getAttribute("aria-label")).toBe("Co-authors: Sam, Noor +1");
+    expect(coAuthors.textContent).toBe("SN+1");
+    expect(container.querySelector(".lr-fact--positive dd")?.textContent).toBe("Passed");
     expect(container.querySelector(".lr-state--attention")?.textContent).toBe("Needs review");
     expect(container.querySelector('a[href="https://forge.example/changes/C43"]')).not.toBeNull();
     expect(
@@ -479,8 +597,29 @@ describe("link reader document content", () => {
     expect(container.querySelector<HTMLDetailsElement>(".lr-file")?.open).toBe(true);
     expect(container.textContent).toContain("Renamed from src/old.ts");
     expect(container.textContent).not.toContain("This view is incomplete");
-    expect(container.textContent).toContain("Some comments could not be shown");
-    expect(container.textContent).toContain("Some files could not be shown");
+    expect(container.textContent).toContain("Couldn’t show all comments.");
+    expect(container.textContent).toContain("Couldn’t show all files.");
     expect(container.textContent).toContain("No text diff available");
   });
+});
+
+it("renders document dates in the UI locale and leaves invalid external dates verbatim", () => {
+  const locale = vi.spyOn(i18n, "getLocale").mockReturnValue("de");
+  const createdAt = "2026-01-02T12:34:56Z";
+  const container = mount({ ...detail("Example"), createdAt });
+  try {
+    // Older dates stay absolute, without seconds; the full timestamp remains in the title.
+    const time = container.querySelector("time")!;
+    expect(time.textContent).toBe(
+      new Date(createdAt).toLocaleString("de", { dateStyle: "medium" }),
+    );
+    expect(time.title).toBe(new Date(createdAt).toLocaleString("de"));
+    const recent = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    update(container, { ...detail("Example"), createdAt: recent });
+    expect(container.querySelector("time")?.textContent).toBe("vor 2 Std.");
+    update(container, { ...detail("Example"), createdAt: "external date" });
+    expect(container.textContent).toContain("external date");
+  } finally {
+    locale.mockRestore();
+  }
 });

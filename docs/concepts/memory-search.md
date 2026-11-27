@@ -82,21 +82,18 @@ explicit API use the generic OpenAI-compatible bridge. For ClawRouter, see
 [Text embeddings for memory](/providers/clawrouter#text-embeddings-for-memory)
 for the `/v1` base URL, explicit router credential binding, and qualified model id.
 
-For local embeddings with no API key, install and configure the official
-llama.cpp provider, then set `provider: "local"`:
-
-```bash
-openclaw plugins install @openclaw/llama-cpp-provider
-```
+For local embeddings with no API key, configure the bundled llama.cpp
+provider, then set `provider: "local"`.
 
 Choose llama.cpp once in interactive setup. OpenClaw installs a verified
 `llama-server`, downloads the embedding GGUF, and writes its managed service
 configuration.
 
-Managed `local` and Ollama embeddings index one file at a time when batch
-indexing is disabled. This bounds background embedding requests during a full
-rebuild; large indexes can take longer on hosts that previously ran several
-local jobs in parallel.
+Managed `local`, Ollama, and OpenAI-compatible endpoints on loopback addresses
+(`localhost`, `127.0.0.0/8`, `::1`) index one file at a time when batch indexing
+is disabled. This limits the backlog that interactive searches share with
+background indexing. Other endpoints default to four indexing jobs. Serial
+indexing can make large rebuilds slower on servers with spare parallel capacity.
 
 EmbeddingGemma uses its trained task prefixes automatically for queries and
 indexed documents, including through Ollama, LM Studio, and OpenAI-compatible

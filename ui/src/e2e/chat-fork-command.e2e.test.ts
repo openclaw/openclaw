@@ -32,7 +32,7 @@ suite.define(() => {
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
     const input = composer(page);
     await input.fill("/fo");
-    const suggestion = page.locator(".slash-menu-item", { hasText: "/fork" });
+    const suggestion = page.getByRole("option", { name: /^Fork session\b/ });
     await suggestion.waitFor();
     const frame = await takeControlUiScreenshotFrame(page, input, [input, suggestion], {
       animations: "disabled",
@@ -56,7 +56,7 @@ suite.define(() => {
       .getByRole("button", { name: "Actions for Synthetic fork source", exact: true })
       .click();
     await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Fork conversation", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Fork session", exact: true }).click();
     await expect.poll(() => gateway.getRequests("sessions.create")).toHaveLength(1);
     const button = requireRecord((await gateway.getRequests("sessions.create"))[0]!.params);
     expect(button).toEqual({

@@ -5,6 +5,14 @@ inputs:
     description: Cache authority for this job (off, restore, or read-write).
     required: false
     default: "off"
+  gradle-cache-mode:
+    description: Override Gradle cache authority independently of the Android SDK cache; defaults to cache-mode.
+    required: false
+    default: ""
+  gradle-cache-key:
+    description: Lane name for the Gradle dependency cache; lanes resolve different artifacts.
+    required: false
+    default: shared
   install-screenshot-emulators:
     description: Install the pinned screenshot emulator images and enable Linux KVM access.
     required: false
@@ -30,15 +38,18 @@ runs:
       shell: bash
       env:
         CACHE_MODE: ${{ inputs.cache-mode }}
+        GRADLE_CACHE_MODE: ${{ inputs.gradle-cache-mode || inputs.cache-mode }}
         INSTALL_SCREENSHOT_EMULATORS: ${{ inputs.install-screenshot-emulators }}
       run: |
-        case "$CACHE_MODE" in
-          off|restore|read-write) ;;
-          *)
-            echo "::error::Invalid cache-mode input: '$CACHE_MODE' (expected off, restore, or read-write)"
-            exit 2
-            ;;
-        esac
+        for mode in "$CACHE_MODE" "$GRADLE_CACHE_MODE"; do
+          case "$mode" in
+            off|restore|read-write) ;;
+            *)
+              echo "::error::Invalid cache-mode input: '$mode' (expected off, restore, or read-write)"
+              exit 2
+              ;;
+          esac
+        done
         case "$INSTALL_SCREENSHOT_EMULATORS" in
           true|false) ;;
           *)
@@ -46,6 +57,16 @@ runs:
             exit 2
             ;;
         esac
+
+    - name: Reserve hosted runner disk for Android
+      if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Android does not use .NET; leave its SDK, NDK, Java and tool cache intact.
+        df -h /
+        sudo rm -rf -- /usr/share/dotnet
+        df -h /
 
     - name: Setup Java
       uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -63,13 +84,42 @@ runs:
         java-version: "21.0.12+101.0.LTS"
         set-default: false
 
-    - name: Setup Gradle cache
-      if: inputs.cache-mode != 'off'
-      uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+    - name: Setup Gradle
+      if: (inputs.gradle-cache-mode || inputs.cache-mode) != 'off'
+      uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
       with:
-        cache-provider: basic
-        cache-read-only: ${{ inputs.cache-mode != 'read-write' }}
+        # The dependency cache below owns ~/.gradle. setup-gradle's basic provider keyed one
+        # entry on root-relative patterns that miss apps/android/gradle/libs.versions.toml,
+        # so the first lane's artifact set was restored forever and never saved again.
+        cache-disabled: true
         add-job-summary: never
+
+    # Network-fetched modules and wrapper distributions only, one entry per lane and dependency
+    # inputs, so every lane restores what it resolves instead of fetching it from Maven Central.
+    - name: Restore and save Gradle dependency cache
+      if: (inputs.gradle-cache-mode || inputs.cache-mode) == 'read-write'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.gradle/caches/modules-2
+          ~/.gradle/wrapper/dists
+        key: ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-${{ hashFiles('apps/android/gradle/wrapper/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+        # A dependency change starts from this lane's previous set, then any lane's.
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-
+          ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-
+
+    - name: Restore Gradle dependency cache
+      if: (inputs.gradle-cache-mode || inputs.cache-mode) == 'restore'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.gradle/caches/modules-2
+          ~/.gradle/wrapper/dists
+        key: ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-${{ hashFiles('apps/android/gradle/wrapper/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-
+          ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-
 
     - name: Restore Android SDK cache
       id: android-sdk-cache

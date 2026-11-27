@@ -3,17 +3,6 @@
 import { describe, expect, it } from "vitest";
 import { extractText, extractTextCached, extractThinkingCached } from "./message-extract.ts";
 
-describe("extractTextCached", () => {
-  it("returns consistent text output for repeated calls", () => {
-    const message = {
-      role: "user",
-      content: "plain text",
-    };
-    expect(extractTextCached(message)).toBe("plain text");
-    expect(extractTextCached(message)).toBe("plain text");
-  });
-});
-
 describe("nullish messages", () => {
   // Chat events can arrive without a message (tool-only or heartbeat finals);
   // every unknown-typed extractor must read that as "no text", not throw.

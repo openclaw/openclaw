@@ -13,12 +13,12 @@ import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.
 
 const mocks = vi.hoisted(() => ({
   createGatewayUpdateCheck:
-    vi.fn<typeof import("../infra/update-startup.js").createGatewayUpdateCheck>(),
+    vi.fn<typeof import("../infra/update-startup-scheduler.js").createGatewayUpdateCheck>(),
   startUpdateRunWatcher: vi.fn<typeof import("./update-run-watcher.js").startUpdateRunWatcher>(),
 }));
 
-vi.mock("../infra/update-startup.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/update-startup.js")>()),
+vi.mock("../infra/update-startup-scheduler.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-startup-scheduler.js")>()),
   createGatewayUpdateCheck: mocks.createGatewayUpdateCheck,
 }));
 
@@ -33,7 +33,9 @@ vi.mock("../agents/prepared-model-runtime.js", async (importOriginal) => ({
 }));
 
 type UpdateCheckStartupParams = Parameters<typeof createDeferredGatewayUpdateCheck>[0];
-type UpdateCheck = ReturnType<typeof import("../infra/update-startup.js").createGatewayUpdateCheck>;
+type UpdateCheck = ReturnType<
+  typeof import("../infra/update-startup-scheduler.js").createGatewayUpdateCheck
+>;
 type Initialization = Awaited<ReturnType<UpdateCheck["initialize"]>>;
 const initialized: Initialization = {
   root: null,
@@ -51,7 +53,7 @@ beforeEach(async () => {
   scheduler = createTestGatewayScheduler();
   state = await createOpenClawTestState({ label: "gateway-update-check" });
   // Keep cold partial-mock loading outside the factory-readiness assertion window.
-  await import("../infra/update-startup.js");
+  await import("../infra/update-startup-scheduler.js");
   defaultUpdateCheck = {
     initialize: vi.fn(async () => initialized),
     start: vi.fn(),
@@ -212,10 +214,10 @@ it.each(["background", "early manual"])(
 it("fences and joins a pending factory on close", async () => {
   const factory = createDeferred();
   const factoryEntered = createDeferred();
-  const updateStartup = await vi.importActual<typeof import("../infra/update-startup.js")>(
-    "../infra/update-startup.js",
-  );
-  vi.doMock("../infra/update-startup.js", async () => {
+  const updateStartup = await vi.importActual<
+    typeof import("../infra/update-startup-scheduler.js")
+  >("../infra/update-startup-scheduler.js");
+  vi.doMock("../infra/update-startup-scheduler.js", async () => {
     factoryEntered.resolve();
     await factory.promise;
     return { ...updateStartup, createGatewayUpdateCheck: mocks.createGatewayUpdateCheck };
@@ -239,7 +241,7 @@ it("fences and joins a pending factory on close", async () => {
     factory.resolve();
     cleanup.resolve();
     await (stopping ?? result.stop());
-    vi.doMock("../infra/update-startup.js", () => ({
+    vi.doMock("../infra/update-startup-scheduler.js", () => ({
       ...updateStartup,
       createGatewayUpdateCheck: mocks.createGatewayUpdateCheck,
     }));

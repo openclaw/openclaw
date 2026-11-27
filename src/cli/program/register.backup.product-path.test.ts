@@ -14,6 +14,7 @@ import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -208,9 +209,13 @@ it("excludes only registered templates while preserving checkout edits and neste
     await fs.writeFile(include, JSON.stringify({ identity: { name: "Kept" } }));
     await state.writeConfig({
       agents: { ownership: "explicit", entries: { main: { agentDir, $include: include } } },
+      plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
     });
+    const diagnostic = path.join(agentDir, "codex-home/logs_2.sqlite");
+    await fs.mkdir(path.dirname(diagnostic));
     const kept: Array<[string, string]> = [
       [path.join(agentDir, "durable.txt"), "agent state"],
+      [diagnostic, "synthetic diagnostic bytes"],
       [path.join(credentials, "auth.json"), "synthetic credential"],
       [path.join(checkout, "edited.txt"), "uncommitted edits"],
       [path.join(checkout, ".git/HEAD"), "ref: refs/heads/work"],
@@ -242,7 +247,23 @@ it("excludes only registered templates while preserving checkout edits and neste
       () => {},
     );
     await (await import("../../test-utils/database-cleanup.js")).closeStateDatabaseForTest();
-    const env = { OPENCLAW_INCLUDE_ROOTS: template, OPENCLAW_OAUTH_DIR: credentials };
+    const env = {
+      OPENCLAW_INCLUDE_ROOTS: template,
+      OPENCLAW_OAUTH_DIR: credentials,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+    };
+    const { resolveBackupPlanFromDisk } = await import("../../commands/backup-shared.js");
+    await withEnvAsync(env, async () => {
+      const plan = await resolveBackupPlanFromDisk({
+        excludeWorktreeTemplates: true,
+        localCompanion: true,
+      });
+      expect(plan.resources.isIncluded(cache)).toBe(false);
+      expect(plan.resources.isIncluded(diagnostic)).toBe(false);
+      expect(plan.resources.isIncluded(path.join(agentDir, "durable.txt"))).toBe(true);
+      expect(plan.resources.isIncluded(path.join(credentials, "auth.json"))).toBe(true);
+    });
     // Default remains a full backup; the flag changes only the template owner.
     const full = await runBackupCli(state, true, env);
     expect(full.code, full.stderr).toBe(0);

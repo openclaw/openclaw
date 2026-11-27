@@ -3,6 +3,7 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { isExplicitPluginDisableMarker, normalizePluginId } from "../plugins/config-state.js";
@@ -25,6 +26,7 @@ import {
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
 import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
+import { listCronDefaultDestinationChannels } from "./cron-default-destinations.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { collectMcpTransportIssues } from "./mcp-config-normalize.js";
@@ -69,15 +71,14 @@ export type ValidateConfigWithPluginsParams = {
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
 };
 
+type ChannelSchema = { schema: Record<string, unknown>; pluginId?: string; origin: PluginOrigin };
+
 type RegistryInfo = {
   registry: PluginManifestRegistry;
   knownIds?: Set<string>;
   overriddenPluginIds?: Set<string>;
   channelSchemaSelection?: ReadonlySet<string>;
-  channelSchemas?: Map<
-    string,
-    { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
-  >;
+  channelSchemas?: Map<string, ChannelSchema>;
 };
 
 export function validatePreparedConfigWithPlugins(
@@ -226,31 +227,30 @@ export function validatePreparedConfigWithPlugins(
     return info.channelSchemaSelection;
   };
 
-  const ensureChannelSchemas = (): NonNullable<RegistryInfo["channelSchemas"]> => {
+  const resolveChannelSchema = (channelId: string): ChannelSchema | undefined => {
     const info = ensureRegistry();
     if (!info.channelSchemas) {
-      info.channelSchemas = new Map(
-        GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
-          (entry) => [entry.channelId, { schema: entry.schema, origin: "bundled" }] as const,
-        ),
-      );
+      info.channelSchemas = new Map();
       const selection = ensureChannelSchemaSelection();
       for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry, selection)) {
-        const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
           info.channelSchemas.set(entry.id, {
             schema: entry.configSchema,
             pluginId: entry.schemaPluginOrigin === "bundled" ? undefined : entry.schemaPluginId,
             origin: entry.schemaPluginOrigin,
           });
-        } else if (!current) {
-          info.channelSchemas.set(entry.id, {
-            origin: entry.schemaPluginOrigin,
-          });
         }
       }
     }
-    return info.channelSchemas;
+    const selected = info.channelSchemas.get(channelId);
+    if (selected) {
+      return selected;
+    }
+    // A manifest without a schema keeps the generated fallback for this channel.
+    const fallback = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.findLast(
+      (entry) => entry.channelId === channelId,
+    );
+    return fallback && { schema: fallback.schema, origin: "bundled" };
   };
 
   // Generic DM-policy/allowFrom dependency check on the raw user config (pre-defaults)
@@ -449,7 +449,8 @@ export function validatePreparedConfigWithPlugins(
     const suppressedModels = new Map<string, (typeof suppressions)[number]>();
     for (const suppression of suppressions) {
       const key = `${suppression.provider}/${suppression.model}`;
-      if (!suppression.when && !suppressedModels.has(key)) {
+      // Retired refs stay valid config: runtime refuses them and Doctor repairs them.
+      if (!suppression.when && !suppression.retirement && !suppressedModels.has(key)) {
         suppressedModels.set(key, suppression);
       }
     }
@@ -541,8 +542,8 @@ export function validatePreparedConfigWithPlugins(
       if (preserveUnavailableConfig(`channels.${trimmed}`)) {
         continue;
       }
-      const channelSchema = ensureChannelSchemas().get(trimmed);
-      if (!channelSchema?.schema) {
+      const channelSchema = resolveChannelSchema(trimmed);
+      if (!channelSchema) {
         continue;
       }
       const deferredChannelWarning = resolveDeferredChannelConfigWarning({
@@ -600,6 +601,23 @@ export function validatePreparedConfigWithPlugins(
         message: `unknown channel id: ${channelId} (install its channel plugin or correct this setting)`,
       });
     }
+  }
+
+  // A default destination on a missing channel silently drops every route-less
+  // automation that uses it, so reject it at load time like `channels.<id>`.
+  for (const { path, channel, globalFailureAlert } of listCronDefaultDestinationChannels(
+    config.cron,
+  )) {
+    const channelId = normalizeChatChannelId(channel) ?? channel.toLowerCase();
+    if (isKnownChannel(channelId) || preserveUnavailableConfig(path)) {
+      continue;
+    }
+    const issue = {
+      path,
+      message: `unknown channel id: ${channel} (install its channel plugin or correct this setting)`,
+    };
+    // `cron.failureAlert` predates this check; keep existing configs loadable.
+    (globalFailureAlert || hasStalePluginEvidence(channelId) ? warnings : issues).push(issue);
   }
 
   validateWebSearchProvider();

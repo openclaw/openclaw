@@ -38,6 +38,7 @@ import {
   type SqliteLifecycleTargetSnapshot,
 } from "../../src/config/sessions/session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryPatchCommit } from "../../src/config/sessions/session-entry-patch.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 type Arm = "base" | "candidate";
 type Phase = "timing" | "allocation";
@@ -117,12 +118,7 @@ async function sampler(phase: Phase) {
     return async () => undefined;
   }
   const session = new Session();
-  session.connect();
-  await session.post("HeapProfiler.startSampling", {
-    samplingInterval: 4_096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(session, 4_096);
   return async () => {
     const { profile } = await session.post("HeapProfiler.stopSampling");
     session.disconnect();

@@ -115,6 +115,8 @@ it.each(["success", "cleanup failure", "encoding failure"] as const)(
           );
         } else {
           expect(initial.payload.items[0].details).toEqual({ value: 42 });
+          // A service's cwd is incidental; the pre-import archive goes to the home folder.
+          expect(path.dirname(initial.payload.backupPath)).toBe(process.env.HOME);
         }
         expectConnections(fixture, [false, 1], [false, 1]);
         const reads = fixture.state.jsonReads;

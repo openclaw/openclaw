@@ -21,6 +21,7 @@ extension RootTabs {
         case chat
         case overview
         case activity
+        case systems
         case agents
         case workboard
         case skillWorkshop
@@ -45,6 +46,7 @@ extension RootTabs {
             case .chat: String(localized: "Chat")
             case .overview: String(localized: "Overview")
             case .activity: String(localized: "Activity")
+            case .systems: String(localized: "Systems")
             case .agents: String(localized: "Agents")
             case .workboard: String(localized: "Workboard")
             case .skillWorkshop: String(localized: "Skill Workshop")
@@ -74,6 +76,7 @@ extension RootTabs {
             case .chat: "bubble.left"
             case .overview: "chart.bar"
             case .activity: "waveform.path.ecg"
+            case .systems: "server.rack"
             case .agents: "person.2"
             case .workboard: "folder"
             case .skillWorkshop: "hammer"
@@ -94,6 +97,7 @@ extension RootTabs {
         var screen: SidebarScreen {
             switch self {
             case .activity: .dashboard(DashboardRouteMap.activityPagePath)
+            case .systems: .dashboard(DashboardRouteMap.systemsPagePath)
             case .workboard: .dashboard(DashboardRouteMap.workboardPagePath)
             case .skillWorkshop: .dashboard(DashboardRouteMap.skillWorkshopPagePath)
             case .instances: .dashboard(DashboardRouteMap.devicesSettingsPath)
@@ -192,16 +196,13 @@ extension RootTabs {
         navigationPath.last ?? baseRoute
     }
 
-    static func shouldShowSidebarRevealInDestinationHeader(
+    /// The destination header's sidebar control hides the sidebar only beside a visible
+    /// split sidebar; a drawer is dismissed from its own header, scrim, or swipe.
+    static func sidebarHeaderControlHidesSidebar(
         isSidebarVisible: Bool,
         layoutMode: SidebarLayoutMode) -> Bool
     {
-        switch layoutMode {
-        case .split:
-            true
-        case .drawer:
-            !isSidebarVisible
-        }
+        layoutMode == .split && isSidebarVisible
     }
 
     static func requestedInitialSidebarVisibility(arguments: [String]) -> Bool? {
@@ -244,6 +245,15 @@ extension RootTabs {
         return .settings
     }
 
+    /// A pending registry read is not evidence of a fresh install.
+    static func shouldOfferFirstGatewaySetup(
+        hasConnectedOnce: Bool,
+        hasSavedGateway: Bool?,
+        hasRuntimeOrLegacyGatewayConfig: Bool) -> Bool
+    {
+        !hasConnectedOnce && hasSavedGateway == false && !hasRuntimeOrLegacyGatewayConfig
+    }
+
     static func shouldPresentQuickSetup(
         quickSetupDismissed: Bool,
         showOnboarding: Bool,
@@ -268,6 +278,7 @@ extension RootTabs {
         .cron,
         .sessions,
         .activity,
+        .systems,
         .skillWorkshop,
         .agents,
         .instances,

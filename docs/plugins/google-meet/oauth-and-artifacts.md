@@ -172,6 +172,7 @@ openclaw googlemeet attendance --today --format csv --output attendance.csv
 ```
 
 `--today` searches today's `primary` calendar for an event with a Meet link; `--event <query>` searches matching event text; `--calendar <id>` targets a non-primary calendar. `calendar-events` previews matching events and marks which one `latest`/`artifacts`/`attendance`/`export` will choose.
+Calendar listing and lookup follow all result pages, including empty pages with a continuation token, before selecting the best matching event.
 
 If you already know the conference record id, address it directly:
 
@@ -203,6 +204,10 @@ openclaw googlemeet export --conference-record conferenceRecords/abc123 \
 ```
 
 For `artifacts` and `attendance`, `--output <path>` writes the selected format, including the default summary, to a file. Without `--output`, the report goes to stdout.
+
+In Markdown exports, two participants named Sam appear as `Sam` and `Sam (2)`
+in the order they first speak. Each keeps that label across transcripts from
+the same conference. `artifacts.json` preserves Google's participant references.
 
 `artifacts` returns conference record metadata plus participant, recording, transcript, structured transcript-entry, and smart-note resource metadata when Google exposes it. `--no-transcript-entries` skips entry lookup for large meetings. `attendance` expands participants into participant-session rows with first/last seen times, total session duration, late/early-leave flags, and duplicate participant resources merged by signed-in user or display name; `--no-merge-duplicates` keeps raw resources separate, `--late-after-minutes`/`--early-before-minutes` tune the thresholds.
 

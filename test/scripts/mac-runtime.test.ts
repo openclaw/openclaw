@@ -262,6 +262,7 @@ async function materializationFixture(mac: MacScriptFixture, complete = false) {
 async function stagingFixture(
   mac: MacScriptFixture,
   architectures: readonly string[] = ["arm64", "x86_64"],
+  pluginIds: readonly string[] = [],
 ) {
   const root = realpathSync(mac.createTempDir("openclaw-runtime-materialization-"));
   const binaries = await compiledMacNativeFixtures(root, mac);
@@ -281,9 +282,10 @@ async function stagingFixture(
     "lib/desktop-runtime-prune.mjs",
     readFileSync("scripts/lib/desktop-runtime-prune.mjs"),
   );
+  const plan = { releaseTag: pluginIds.length ? null : "v2026.10.2", pluginIds, allPluginBytes: 0 };
   await script(
     "lib/desktop-runtime-plugins.mjs",
-    'if (process.argv[2] === "plan") console.log(JSON.stringify({releaseTag: "v2026.10.2", pluginIds: []}));',
+    `if (process.argv[2] === "plan") console.log(${JSON.stringify(JSON.stringify(plan))});`,
   );
   await cp(materializer, path.join(scripts, path.basename(materializer)));
   await script("lib/mac-native-inventory.py", readFileSync(inventory));
@@ -602,6 +604,87 @@ describe.skipIf(process.platform !== "darwin")("Mac runtime materialization", ()
         '{"os":["win32"]}',
       );
       expectRuntimeScratchCleaned(fixture);
+    },
+  );
+
+  cases.for(["source", "release"] as const)(
+    "stages the Codex runtime and prunes only bundled TUI voice (%s)",
+    async (kind, mac) => {
+      const bundled = kind === "source";
+      const architectures = bundled ? (["arm64", "x86_64"] as const) : (["arm64"] as const);
+      const fixture = await stagingFixture(mac, architectures, bundled ? ["codex"] : []);
+      const { auditMacRuntimePortability } =
+        await import("../../scripts/lib/mac-runtime-portability.mjs");
+      const binaries = await compiledMacNativeFixtures(fixture.root, mac);
+      const modulesPath = "lib/node_modules/openclaw/node_modules";
+      const canonical = path.join(fixture.root, "canonical", modulesPath);
+      const staged = path.join(fixture.destination, modulesPath);
+      const launcher = "@openai/codex/bin/codex.js";
+      const unrelated = "unrelated/codex-resources/voice/resource.txt";
+      await write(path.join(canonical, launcher), "// Codex launcher\n");
+      await write(path.join(canonical, unrelated), "unrelated resource\n");
+      const source = path.join(fixture.root, "voice.c");
+      await write(source, "int main(void) { return 0; }\n");
+      const vendorPaths = [];
+      for (const arch of architectures) {
+        const intel = arch === "x86_64";
+        const cpu = intel ? "x64" : "arm64";
+        const machine = intel ? "x86_64" : "aarch64";
+        // Exercise a hoisted arm64 package and an x64 optional package nested under the launcher.
+        const platform = `${intel ? "@openai/codex/node_modules/" : ""}@openai/codex-darwin-${cpu}`;
+        const vendor = `${platform}/vendor/${machine}-apple-darwin`;
+        vendorPaths.push({ arch, vendor });
+        await write(
+          path.join(canonical, platform, "package.json"),
+          JSON.stringify({ name: "@openai/codex", os: ["darwin"], cpu: [cpu] }),
+        );
+        await write(path.join(canonical, vendor, "bin/codex"), binaries[arch], 0o755);
+        await write(path.join(canonical, vendor, "codex-resources/nonvoice.txt"), "runtime data\n");
+        const voice = path.join(canonical, vendor, "codex-resources/voice");
+        await write(path.join(voice, "lib/resource.txt"), "voice data\n");
+        await mkdir(path.join(voice, "bin"));
+        await runMacFixtureTool(
+          "/usr/bin/xcrun",
+          [
+            "clang",
+            "-arch",
+            arch,
+            source,
+            `-Wl,-rpath,@loader_path/codex-voice-host.runfiles/_main/_solib_darwin_${cpu}/voice/native_link_macos_${machine}`,
+            "-Wl,-rpath,@loader_path/../lib",
+            "-o",
+            path.join(voice, "bin/codex-voice-host"),
+          ],
+          fixture.root,
+          mac,
+        );
+      }
+      const before = snapshot(canonical);
+      expectExit(await fixture.run("standard"));
+      expect(snapshot(canonical)).toEqual(before);
+      expect(readFileSync(path.join(staged, launcher), "utf8")).toBe("// Codex launcher\n");
+      expect(readFileSync(path.join(staged, unrelated), "utf8")).toBe("unrelated resource\n");
+      for (const { arch, vendor } of vendorPaths) {
+        const executable = path.join(staged, vendor, "bin/codex");
+        expect(readFileSync(executable)).toEqual(binaries[arch]);
+        const resources = path.join(staged, vendor, "codex-resources");
+        expect(readFileSync(path.join(resources, "nonvoice.txt"), "utf8")).toBe("runtime data\n");
+        if (bundled) {
+          expect(existsSync(path.join(resources, "voice"))).toBe(false);
+        } else {
+          const voiceHost = path.join(vendor, "codex-resources/voice/bin/codex-voice-host");
+          expect(readFileSync(path.join(staged, voiceHost))).toEqual(
+            readFileSync(path.join(canonical, voiceHost)),
+          );
+        }
+      }
+      const entrypoint = path.join(staged, vendorPaths[0]!.vendor, "bin/codex");
+      const audit = () => auditMacRuntimePortability(fixture.destination, entrypoint);
+      if (bundled) {
+        expect(audit()).toBeGreaterThan(0);
+      } else {
+        expect(audit).toThrow(/Nonportable LC_RPATH.*codex-voice-host\.runfiles/);
+      }
     },
   );
 
@@ -1399,6 +1482,108 @@ esac
 describe.runIf(process.platform === "darwin")("Mac runtime portability inventory", () => {
   const it = createMacScriptTest();
   const cases = createMacCases(it, (mac) => mac);
+  it("rejects missing app dependencies without borrowing a sibling executable's runpaths", async ({
+    mac,
+  }) => {
+    const root = mac.createTempDir("openclaw-app-dependencies-");
+    const app = path.join(root, "OpenClaw.app");
+    const frameworks = path.join(app, "Contents/Frameworks");
+    const binaries = path.join(app, "Contents/MacOS");
+    const sparkle = path.join(frameworks, "Sparkle.framework/Sparkle");
+    const span = path.join(frameworks, "libswiftCompatibilitySpan.dylib");
+    const helper = path.join(binaries, "openclaw-mlx-tts");
+    mkdirSync(path.dirname(sparkle), { recursive: true });
+    mkdirSync(binaries);
+    const compile = async (name: string, source: string, args: string[]) => {
+      const input = path.join(root, `${name}.c`);
+      writeFileSync(input, source);
+      await runMacFixtureTool(
+        "/usr/bin/xcrun",
+        ["clang", input, "-Wl,-headerpad_max_install_names", ...args],
+        root,
+        mac,
+      );
+    };
+    await compile("span", "int span(void) { return 0; }", [
+      "-dynamiclib",
+      "-Wl,-install_name,@rpath/libswiftCompatibilitySpan.dylib",
+      "-o",
+      span,
+    ]);
+    await compile("sparkle", "int span(void); int sparkle(void) { return span(); }", [
+      "-dynamiclib",
+      "-Wl,-install_name,@rpath/Sparkle.framework/Sparkle",
+      span,
+      "-o",
+      sparkle,
+    ]);
+    await compile("main", "int sparkle(void); int main(void) { return sparkle(); }", [
+      sparkle,
+      "-Wl,-rpath,@loader_path/../Frameworks",
+      "-o",
+      path.join(binaries, "OpenClaw"),
+    ]);
+    // A toolchain copy exists, but neither it nor the main app's runpath can
+    // satisfy this separate process's dependency in the distributed app.
+    await cp(span, path.join(root, "libswiftCompatibilitySpan.dylib"));
+    await compile("helper", "int span(void); int main(void) { return span(); }", [
+      span,
+      "-Wl,-rpath,@loader_path",
+      `-Wl,-rpath,${root}`,
+      "-o",
+      helper,
+    ]);
+    const packager = readFileSync("scripts/package-mac-app.sh", "utf8");
+    const guard = packager.slice(
+      packager.indexOf("running_packaged_app_pids()"),
+      packager.indexOf('if [[ -n "${SIGN_IDENTITY:-}" ]]'),
+    );
+    expect(guard).not.toBe("");
+    const audit = () =>
+      mac.run("/bin/bash", ["-c", `set -euo pipefail\n${guard}\necho ready-to-sign`], {
+        encoding: "utf8",
+        env: {
+          HOME: root,
+          PATH: `${path.dirname(testNodeExecPath)}:${systemPath}`,
+          ROOT_DIR: process.cwd(),
+          APP_ROOT: app,
+        },
+      });
+    await rename(sparkle, path.join(root, "Sparkle"));
+    const missingSparkle = await audit();
+    expect(missingSparkle.status).not.toBe(0);
+    expect(missingSparkle.stderr).toContain("@rpath/Sparkle.framework/Sparkle");
+    expect(missingSparkle.stdout).not.toContain("ready-to-sign");
+    await rename(path.join(root, "Sparkle"), sparkle);
+    const missingHelperPath = await audit();
+    expect(missingHelperPath.status).not.toBe(0);
+    expect(missingHelperPath.stderr).toContain("openclaw-mlx-tts");
+    expect(missingHelperPath.stderr).toContain("@rpath/libswiftCompatibilitySpan.dylib");
+    // Exercise the packager's actual pre-signing install-name repair.
+    const repair = packager.slice(
+      packager.indexOf("  /usr/bin/install_name_tool -change"),
+      packager.indexOf("\nfi\n\nSPARKLE_FRAMEWORK_PRIMARY="),
+    );
+    const repairResult = await mac.run("/bin/bash", ["-c", repair], {
+      encoding: "utf8",
+      env: {
+        HOME: root,
+        PATH: systemPath,
+        APP_ROOT: app,
+        MLX_TTS_HELPER_PRODUCT: "openclaw-mlx-tts",
+      },
+    });
+    expect(repairResult.status, repairResult.stderr).toBe(0);
+    const repaired = await audit();
+    expect(repaired.status, repaired.stderr).toBe(0);
+    expect(repaired.stdout).toContain("ready-to-sign");
+    await unlink(span);
+    const missingTransitive = await audit();
+    expect(missingTransitive.status).not.toBe(0);
+    expect(missingTransitive.stderr).toContain("libswiftCompatibilitySpan.dylib");
+    expect(missingTransitive.stdout).not.toContain("ready-to-sign");
+  });
+
   it("audits supported thin and fat formats through real otool", async () => {
     const root = temps.make("openclaw-portability-native-");
     const { audit, machoFixture } = await portabilityFixture(root);

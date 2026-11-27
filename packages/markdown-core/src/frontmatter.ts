@@ -269,10 +269,15 @@ export function extractFrontmatterBlock(content: string): ExtractedFrontmatterBl
   return extractFrontmatterBlockFromNormalized(normalized);
 }
 
-/** Removes a leading YAML frontmatter block and returns the remaining Markdown body. */
-export function stripFrontmatterBlock(content: string): string {
+/** Returns the normalized Markdown body with its authored whitespace intact. */
+export function extractMarkdownBody(content: string): string {
   const normalized = normalizeFrontmatterContent(content);
-  return (extractFrontmatterBlockFromNormalized(normalized)?.body ?? normalized).trim();
+  return extractFrontmatterBlockFromNormalized(normalized)?.body ?? normalized;
+}
+
+/** Removes a leading YAML frontmatter block and trims the remaining body. */
+export function stripFrontmatterBlock(content: string): string {
+  return extractMarkdownBody(content).trim();
 }
 
 /** Parses leading YAML frontmatter into string values used by skill and metadata loaders. */

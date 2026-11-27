@@ -1,9 +1,11 @@
+import { isUtf8 } from "node:buffer";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { Minimatch, type MinimatchOptions } from "minimatch";
 import { runWithConcurrency } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
@@ -97,6 +99,12 @@ function expandHomePath(value: string): string {
 
 type NormalizedExtraMemoryPath = { path: string; pattern?: string; evergreen?: true };
 
+// Parsed patterns live only as long as their configured scan/read entry.
+const extraMemoryPathMatchers = new WeakMap<
+  NormalizedExtraMemoryPath,
+  { file: Minimatch; directories?: Minimatch[] }
+>();
+
 export function normalizeExtraMemoryPathEntries(
   workspaceDir: string,
   extraPaths?: MemoryExtraPath[],
@@ -142,24 +150,40 @@ export function matchesExtraMemoryPathEntry(
       return false;
     }
     const normalizedRelativePath = relativePath.replaceAll(path.sep, "/");
-    if (!options?.directory) {
-      return path.posix.matchesGlob(normalizedRelativePath, entry.pattern);
+    let matchers = extraMemoryPathMatchers.get(entry);
+    if (!matchers || matchers.file.pattern !== entry.pattern) {
+      const matcherOptions: MinimatchOptions = {
+        dot: false,
+        nonegate: true,
+        nocomment: true,
+        windowsPathsNoEscape: true,
+        optimizationLevel: 2,
+        // Configured globs use slash-separated relative paths on every host.
+        platform: "linux",
+        nocase: process.platform === "win32" || process.platform === "darwin",
+        nocaseMagicOnly: true,
+      };
+      const segments = entry.pattern.split("/");
+      const conservative =
+        /[{[(]/.test(entry.pattern) ||
+        segments.some((segment) => segment === "." || segment === "..");
+      const parentCount = segments.at(-1) === "**" ? segments.length : segments.length - 1;
+      matchers = {
+        file: new Minimatch(entry.pattern, matcherOptions),
+        // Prefix matches preserve dot rules; partial matches can enter hidden directories.
+        directories: conservative
+          ? undefined
+          : Array.from(
+              { length: parentCount },
+              (_, index) => new Minimatch(segments.slice(0, index + 1).join("/"), matcherOptions),
+            ),
+      };
+      extraMemoryPathMatchers.set(entry, matchers);
     }
-    const segments = entry.pattern.split("/");
-    // Keep complex patterns conservative; the leaf matcher owns their semantics.
-    if (
-      /[{[(]/.test(entry.pattern) ||
-      segments.some((segment) => segment === "." || segment === "..")
-    ) {
-      return true;
-    }
-    const parentCount = segments.at(-1) === "**" ? segments.length : segments.length - 1;
-    for (let length = 1; length <= parentCount; length += 1) {
-      if (path.posix.matchesGlob(normalizedRelativePath, segments.slice(0, length).join("/"))) {
-        return true;
-      }
-    }
-    return false;
+    return options?.directory
+      ? !matchers.directories ||
+          matchers.directories.some((matcher) => matcher.match(normalizedRelativePath))
+      : matchers.file.match(normalizedRelativePath);
   } catch {
     return false;
   }
@@ -252,7 +276,12 @@ async function collectMemoryFilesFromDir(
   if (operationalFailure) {
     throw new MemorySourceScanError(operationalFailure.path, operationalFailure.error);
   }
-  files.push(...scan.entries.map((entry) => entry.path).toSorted());
+  // oxlint-disable-next-line unicorn/no-array-sort -- map creates a private path array.
+  const paths = scan.entries.map((entry) => entry.path).sort();
+  // One directory can contain more paths than a single function call accepts.
+  for (const file of paths) {
+    files.push(file);
+  }
 }
 
 export async function listMemoryFiles(
@@ -427,7 +456,8 @@ export async function buildFileEntry(
     absPath,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
-    hash: sha256Hex(buffer.toString("utf-8")),
+    // Existing indexes hash replacement characters for malformed UTF-8.
+    hash: sha256Hex(isUtf8(buffer) ? buffer : buffer.toString("utf-8")),
     kind: "markdown",
   };
 }

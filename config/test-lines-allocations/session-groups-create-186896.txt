@@ -1,2 +1,0 @@
-# Atomic group creation, authority revocation, validation, advertisement, and portable declarations.
-197

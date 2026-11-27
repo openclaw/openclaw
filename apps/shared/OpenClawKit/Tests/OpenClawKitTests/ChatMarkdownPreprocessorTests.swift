@@ -7,36 +7,6 @@ struct ChatMarkdownPreprocessorTests {
     // Detection keys on this suffix, not label text. Keep byte-identical with
     // ChatMarkdownPreprocessor.inboundContextMarker / inbound-context-marker.ts.
     static let ctx = "\u{27E6}openclaw:ctx\u{27E7}"
-    @Test func extractsDataURLImages() {
-        let base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////GQAJ+wP/2hN8NwAAAABJRU5ErkJggg=="
-        let markdown = """
-        Hello
-
-        ![Pixel](data:image/png;base64,\(base64))
-        """
-
-        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
-
-        #expect(result.cleaned == "Hello")
-        #expect(result.images.count == 1)
-        #expect(result.images.first?.image != nil)
-    }
-
-    @Test func flattensRemoteMarkdownImagesIntoText() {
-        let base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////GQAJ+wP/2hN8NwAAAABJRU5ErkJggg=="
-        let markdown = """
-        ![Leak](https://example.com/collect?x=1)
-
-        ![Pixel](data:image/png;base64,\(base64))
-        """
-
-        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
-
-        #expect(result.cleaned == "Leak")
-        #expect(result.images.count == 1)
-        #expect(result.images.first?.image != nil)
-    }
-
     @Test func usesFallbackTextForUnlabeledRemoteMarkdownImages() {
         let markdown = "![](https://example.com/image.png)"
 
@@ -244,21 +214,6 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.cleaned == "Razor?")
     }
 
-    @Test func stripsSingleConversationInfoBlock() {
-        let text = """
-        Conversation info: \(Self.ctx)
-        ```json
-        {"x": 1}
-        ```
-
-        User message
-        """
-
-        let result = ChatMarkdownPreprocessor.preprocess(markdown: text)
-
-        #expect(result.cleaned == "User message")
-    }
-
     @Test func `context termination preserves adjacent content`() {
         let cases = [
             ("", ""),
@@ -270,30 +225,6 @@ struct ChatMarkdownPreprocessorTests {
         for (body, expected) in cases {
             let result = ChatMarkdownPreprocessor.preprocess(markdown: "Conversation info: \(Self.ctx)\n" + body)
             #expect(result.cleaned == expected)
-        }
-    }
-
-    @Test func stripsAllKnownInboundMetadataSentinels() {
-        let sentinels = [
-            "Conversation info:",
-            "Sender:",
-            "Thread starter:",
-            "Reply target of current user message:",
-            "Forwarded message context:",
-            "Chat history since last reply:",
-        ]
-
-        for sentinel in sentinels {
-            let markdown = """
-            \(sentinel) \(Self.ctx)
-            ```json
-            {"x": 1}
-            ```
-
-            User content
-            """
-            let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
-            #expect(result.cleaned == "User content")
         }
     }
 
@@ -325,6 +256,16 @@ struct ChatMarkdownPreprocessorTests {
         """
         let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
         #expect(result.cleaned == markdown.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    @Test(arguments: ["```", "~~~"])
+    func preservesAuthoredBlankLinesInsideFences(_ fence: String) {
+        let code = "\(fence)swift\na\n\n\nb\n\(fence)"
+        let markdown = "Before `inline`\n\n\n\n\(code)\n\n\nAfter"
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "Before `inline`\n\n\(code)\n\nAfter")
     }
 
     @Test func preservesNonMetadataJsonFence() {

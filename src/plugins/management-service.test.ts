@@ -134,7 +134,7 @@ describe("plugin management service", () => {
       origin: "global",
     });
     const manifest = metadata.plugins[0]!;
-    manifest.recommendedPrompts = ["Plan  my week.\nPrioritize commitments."];
+    manifest.recommendedPrompts = ["Plan my week. Prioritize commitments."];
     mocks.metadata.mockReturnValue(metadata);
     const catalog = await listManagedPlugins({
       config: {},
@@ -142,7 +142,7 @@ describe("plugin management service", () => {
       officialCatalog: { entries: [] },
     });
     expect(catalog.plugins[0]?.recommendedPrompts).toEqual([
-      "Plan  my week.\nPrioritize commitments.",
+      "Plan my week. Prioritize commitments.",
     ]);
   });
 

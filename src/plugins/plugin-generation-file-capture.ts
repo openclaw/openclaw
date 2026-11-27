@@ -7,6 +7,7 @@ import {
   type RootFileCopyBatchSync,
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
@@ -79,6 +80,44 @@ export function linkPluginGenerationDependency(
   return true;
 }
 
+/** Native child imports can follow host identity without borrowing parent resolver hooks. */
+function linkPluginGenerationHostModule(link: string, target: string): boolean {
+  if (fs.lstatSync(link, { throwIfNoEntry: false })) {
+    return false;
+  }
+  fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
+  try {
+    fs.symlinkSync(target, link, "file");
+    return true;
+  } catch (error) {
+    // Directory junctions can work where file links are denied. Keep the
+    // existing parent redirect; never copy a second SDK graph.
+    if (!["EPERM", "EACCES", "ENOSYS", "ENOTSUP"].some((code) => hasErrnoCode(error, code))) {
+      throw error;
+    }
+    return false;
+  }
+}
+
+/**
+ * Native Workers do not inherit the parent resolver. Link a captured relative import
+ * to the canonical host module instead of capturing another SDK identity.
+ */
+export function linkBundledSharedModule(
+  link: string,
+  shared: string,
+  additions: Set<string>,
+  hostModuleLinks: Set<string>,
+): void {
+  if (linkPluginGenerationHostModule(link, shared)) {
+    additions.add(link);
+  }
+  // Recovery can already contain the link; denied links still allow asset capture.
+  if (fs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    hostModuleLinks.add(link);
+  }
+}
+
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
   return {
@@ -114,6 +153,7 @@ export function createPluginGenerationFileCapture({
   outputRoot,
   capturedPaths,
   capturedDirectories,
+  hostModuleLinks,
   originalSources,
   hardlinkedSources,
   sourceCapture,
@@ -125,6 +165,8 @@ export function createPluginGenerationFileCapture({
   receipt,
   retained,
   sourceFacts,
+  executionAliases,
+  executionSources,
   onPackageMetadata,
 }: {
   boundary: string;
@@ -134,6 +176,7 @@ export function createPluginGenerationFileCapture({
   outputRoot?: string;
   capturedPaths: Map<string, string>;
   capturedDirectories: Set<string>;
+  hostModuleLinks?: ReadonlySet<string>;
   originalSources: Map<string, string>;
   hardlinkedSources: Set<string>;
   sourceCapture: Pick<ReturnType<typeof createPluginSourceCapture>, "additions">;
@@ -145,21 +188,25 @@ export function createPluginGenerationFileCapture({
   receipt: ReturnType<typeof createPluginGenerationReceipt>;
   retained?: { source: PluginRecoverySource; files: ReadonlyMap<string, PluginCapturedSourceFact> };
   sourceFacts?: Map<string, PluginCapturedSourceFact>;
+  executionAliases: Map<string, string>;
+  executionSources: Map<string, string>;
   onPackageMetadata: (source: string, target: string) => void;
 }) {
   const { additions } = sourceCapture;
   const ancestors = new Set<string>();
-  const copy = (
+  function* copy(
     source: string,
     target: string,
     copyFile: RootFileCopyBatchSync["copyFile"],
     openFile: RootFileOpenBatchSync["openFile"],
     realParent?: string,
     sourceEntry?: fs.BigIntStats,
-  ) => {
+  ): Generator<void, void, void> {
+    // One step per visited entry bounds directory traversal as well as file copying.
+    yield;
     const metrics = getPluginGenerationMetrics();
     // Metadata can precede its package body; promotion never replaces those captured bytes.
-    if (capturedPaths.get(path.resolve(source)) === target) {
+    if (capturedPaths.get(path.resolve(source)) === target || hostModuleLinks?.has(target)) {
       return;
     }
     const prepared = nativeAdmission.resolvePreparedSource(source);
@@ -220,7 +267,9 @@ export function createPluginGenerationFileCapture({
           !childEntry ||
           !sourceLinks.defer(childInput, inputBoundary, childSource, childEntry, !prepared)
         ) {
-          copy(childSource, path.join(target, name), copyFile, openFile, real, childEntry);
+          yield* copy(childSource, path.join(target, name), copyFile, openFile, real, childEntry);
+        } else {
+          yield;
         }
       }
       ancestors.delete(real);
@@ -273,12 +322,19 @@ export function createPluginGenerationFileCapture({
           },
         );
       }
+      const relative = path.relative(directory, target);
+      const compiledSource =
+        !sourceOnly && /\.(?:[cm]?tsx?|jsx)$/u.test(target) && !/\.d\.[cm]?ts$/u.test(target);
       receipt.file(
         {
           target: native?.path ?? target,
           boundary: native?.boundary ?? directory,
           sizeBytes: Number(stat.size),
           native: native !== undefined,
+          onSource:
+            compiledSource && !executionSources.has(relative)
+              ? (sourceText) => executionSources.set(relative, sourceText)
+              : undefined,
           prepared: native?.content ?? copiedContent,
           onContent: (content) => {
             native?.record(content);
@@ -290,6 +346,17 @@ export function createPluginGenerationFileCapture({
         },
         openFile,
       );
+      if (compiledSource) {
+        if (!executionAliases.has(relative)) {
+          // Node's ESM-to-CJS bridge requires an existing .js execution path.
+          // Publish it with admitted bytes; load hooks own the compiled contents.
+          const alias = path.join(".compiled", `${relative}.js`);
+          const output = path.join(directory, alias);
+          fs.mkdirSync(path.dirname(output), { recursive: true, mode: 0o700 });
+          fs.writeFileSync(output, "", { flag: "wx", mode: 0o600 });
+          executionAliases.set(relative, alias);
+        }
+      }
       if (path.basename(target) === "package.json") {
         onPackageMetadata(source, target);
       }
@@ -299,11 +366,49 @@ export function createPluginGenerationFileCapture({
         !prepared,
       );
     }
-  };
-  return (source: string, target: string) => {
+  }
+  const capture = (source: string, target: string): void => {
     using batch = createRootFileCopyBatchSync();
-    // Retained roots never outlive this synchronous capture or reach tree retirement.
     using opened = createRootFileOpenBatchSync();
-    return copy(source, target, batch.copyFile.bind(batch), opened.openFile.bind(opened));
+    // Synchronous consumers retain one batch for the complete recursive copy.
+    const steps = copy(source, target, batch.copyFile.bind(batch), opened.openFile.bind(opened));
+    while (!steps.next().done) {
+      // Drain the same acquisition steps without yielding to the host.
+    }
   };
+  return Object.assign(capture, {
+    *steps(source: string, target: string): Generator<void, void, void> {
+      let copyFile: RootFileCopyBatchSync["copyFile"];
+      let openFile: RootFileOpenBatchSync["openFile"];
+      const entries = copy(
+        source,
+        target,
+        (...args) => copyFile(...args),
+        (...args) => openFile(...args),
+      );
+      try {
+        let done = false;
+        while (!done) {
+          {
+            using batch = createRootFileCopyBatchSync();
+            using opened = createRootFileOpenBatchSync();
+            copyFile = batch.copyFile.bind(batch);
+            openFile = opened.openFile.bind(opened);
+            for (let count = 0; count < 32; count++) {
+              if (entries.next().done) {
+                done = true;
+                break;
+              }
+            }
+          }
+          // No pinned fs-safe root survives an actual asynchronous host yield.
+          if (!done) {
+            yield;
+          }
+        }
+      } finally {
+        entries.return();
+      }
+    },
+  });
 }

@@ -1,3 +1,4 @@
+import { composerInputHasFocus, focusComposerInput } from "../../lib/composer-input.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { chatPanesWithin } from "./chat-pane-elements.ts";
@@ -98,8 +99,8 @@ export class RouteDraftComposerFocus {
       stopEvents.forEach((stop) => stop());
       this.cancelMaintenance = undefined;
     };
-    const onFocus = (event: FocusEvent) => {
-      if (event.target !== ownedComposer) {
+    const onFocus = () => {
+      if (!composerInputHasFocus(ownedComposer)) {
         cancel();
       }
     };
@@ -127,13 +128,13 @@ export class RouteDraftComposerFocus {
       const composer = pane?.composerElement;
       const activeElement = doc.activeElement;
       const focusStillOwned =
-        activeElement === ownedComposer ||
+        composerInputHasFocus(ownedComposer) ||
         activeElement === doc.body ||
         (activeElement instanceof HTMLElement && !activeElement.isConnected);
 
       if (composer && (!ownedComposer || focusStillOwned)) {
         ownedComposer = composer;
-        composer.focus({ preventScroll: true });
+        focusComposerInput(composer, { preventScroll: true });
       } else if (ownedComposer && !focusStillOwned) {
         cancel();
         return;

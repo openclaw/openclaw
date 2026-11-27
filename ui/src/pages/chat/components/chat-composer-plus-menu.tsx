@@ -89,7 +89,15 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuProps }) {
       releaseAnchor();
     };
   });
-  const view = createMemo(() => (props.menu.capabilityMenu ? props.menu.view : "root"));
+  const view = createMemo(() => {
+    const current = props.menu.view;
+    if (current.startsWith("plugin:")) {
+      return props.menu.pluginActions?.some((action) => `plugin:${action.pluginId}` === current)
+        ? current
+        : "root";
+    }
+    return props.menu.capabilityMenu ? current : "root";
+  });
   // Native opening validates a row before the controlled open prop settles.
   const loadingItems = (): MenuEntry[] => [
     { id: "plus-menu-loading", label: t("common.loading"), disabled: true },
@@ -208,6 +216,7 @@ export function ChatComposerPlusMenu(props: { menu: ChatComposerPlusMenuProps })
   );
   const available = createMemo(() =>
     Boolean(
+      props.menu.pluginActions?.length ||
       props.menu.capabilityMenu ||
       props.menu.rootToggles?.length ||
       uploadsEnabled(props.menu.attachments.uploadConfig),

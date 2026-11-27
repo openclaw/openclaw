@@ -6,12 +6,9 @@ import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-recei
 import type { SessionActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionMember, SessionParticipantRecord } from "./session-membership-facts.types.js";
 import type { SessionParticipantIdentity } from "./session-participant-identity.js";
+import type { SessionSharingExpectedEntry } from "./session-sharing-authority.types.js";
 import type { SessionEntry, SessionProfileInvolvement } from "./types.js";
 
-export type SessionSharingExpectedEntry = Pick<
-  SessionEntry,
-  "sessionId" | "createdActor" | "visibility" | "incognito"
->;
 export type SessionMetadataExpectedEntry = SessionSharingExpectedEntry &
   Pick<SessionEntry, "lifecycleRevision">;
 export type SessionOwnerAssignParams = {
@@ -64,11 +61,22 @@ export type SessionSuggestionFinalizeParams = SessionSuggestionReleaseParams & {
 type OwnerPublication = { facts?: Extract<SessionRowFacts, { kind: "owner" }> };
 
 export type SessionMemberAdd = {
+  access?: SessionMember["access"];
   identityId: string;
   addedBy: string;
   addedAt?: number;
   expectedSessionId?: string;
   expectedEntry?: SessionSharingExpectedEntry;
+};
+export type SessionMemberSetAccess = {
+  identityId: string;
+  access: NonNullable<SessionMember["access"]>;
+  expectedSessionId?: string;
+  expectedEntry?: SessionSharingExpectedEntry;
+};
+export type SessionMemberAccessChange = {
+  changed: boolean;
+  previousAccess?: SessionMember["access"];
 };
 export type SessionParticipantRecordInput = {
   identity: SessionParticipantIdentity;
@@ -143,6 +151,10 @@ export type SessionSharingWorkerOperations = {
   add: {
     input: { scope: SessionAccessScope; params: SessionMemberAdd };
     output: { value: { member: SessionMember; inserted: boolean } } & MembershipPublication;
+  };
+  "set-access": {
+    input: { scope: SessionAccessScope; params: SessionMemberSetAccess };
+    output: { value: SessionMemberAccessChange | undefined } & MembershipPublication;
   };
   remove: {
     input: {

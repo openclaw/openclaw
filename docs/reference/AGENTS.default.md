@@ -67,7 +67,7 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 ## Memory system (recommended)
 
 - Daily log: `memory/YYYY-MM-DD.md` (create `memory/` if needed).
-- User model: `USER.md` for dated active or superseded directives about stable preferences and profile facts.
+- User model: `USER.md` for current directives about stable preferences and profile facts, without date/status metadata. Replace outdated directives; keep useful dated history in daily memory.
 - Long-term memory: `MEMORY.md` for durable non-profile facts and decisions.
 - Lowercase `memory.md` is legacy repair input only; do not keep both root files on purpose.
 - On session start, read today + yesterday + `MEMORY.md` when present.

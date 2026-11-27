@@ -29,6 +29,8 @@ export type UpdateCommandExecutor = {
     root: string,
     options?: { preflight?: true; activationTimeoutMs?: number; serviceRoot?: string },
   ): Promise<UpdateRecoveryFence>;
+  /** Runs separately bounded work outside the activation budget, which moves by its duration. */
+  exclude?<T>(operation: () => Promise<T>): Promise<T>;
 };
 
 export function resolveUpdateCommandRetainedRoot(

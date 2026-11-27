@@ -18,6 +18,8 @@ export type ApplicationRuntime = {
   } | null;
   readonly confirmPendingGatewayConnection: () => void;
   readonly cancelPendingGatewayConnection: () => void;
+  /** Accept ordinary rendered links while leaving document-owned handoffs to the browser. */
+  readonly navigateAppLink: (url: URL) => boolean;
   readonly setShell: (shell: MountedApplicationShell | undefined) => void;
   start: () => Promise<void>;
   stop: () => void;

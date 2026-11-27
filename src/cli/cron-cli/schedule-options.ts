@@ -4,7 +4,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isValidCronExpression } from "../../cron/schedule.js";
+import { isValidCronExpression } from "../../cron/expression.js";
 import type { CronSchedule } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
 import {
@@ -13,7 +13,7 @@ import {
   parseCronStreamCommandArgv,
   parseCronTimezoneOption,
   parsePositiveCronDurationMs,
-} from "./shared.js";
+} from "./input-options.js";
 
 type ScheduleOptionInput = {
   at?: unknown;
@@ -73,9 +73,6 @@ export function resolveCronCreateScheduleFromArgs(
       normalized.cronExpr = fields === 5 || fields === 6 ? positionalSchedule : "";
       normalized.at = normalized.cronExpr ? "" : positionalSchedule;
     }
-  }
-  if (normalized.onExitCwd && !normalized.onExitCommand) {
-    throw new CronCliError("--on-exit-cwd requires --on-exit.");
   }
   const chosen = countChosenSchedules(normalized);
   if (chosen !== 1) {
@@ -190,7 +187,15 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
       throw new CronCliError("Schedule values must not be blank");
     }
   }
+  const onExitCommand = readNonBlankString(options.onExit) ?? "";
+  const onExitCwd = readNonBlankString(options.onExitCwd);
+  if (onExitCwd && !onExitCommand) {
+    throw new CronCliError("--on-exit-cwd requires --on-exit.");
+  }
   const staggerRaw = normalizeOptionalString(options.stagger) ?? "";
+  if (typeof options.stagger === "string" && !staggerRaw) {
+    throw new CronCliError("Invalid --stagger; use e.g. 30s, 1m, 5m");
+  }
   const useExact = Boolean(options.exact);
   if (staggerRaw && useExact) {
     throw new CronCliError("Choose either --stagger or --exact, not both");
@@ -217,8 +222,8 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
     at: normalizeOptionalString(options.at) ?? "",
     every: normalizeOptionalString(options.every) ?? "",
     cronExpr: normalizeOptionalString(options.cron) ?? "",
-    onExitCommand: readNonBlankString(options.onExit) ?? "",
-    onExitCwd: readNonBlankString(options.onExitCwd),
+    onExitCommand,
+    onExitCwd,
     streamCommand: parseCronStreamCommandArgv(options.streamCommand),
     streamCwd: readNonBlankString(options.streamCwd),
     streamCwdSupplied: options.streamCwd !== undefined,
@@ -260,9 +265,6 @@ function resolveDirectSchedule(
   options: NormalizedScheduleOptions,
   behavior: { deferStreamMetadataValidation?: boolean } = {},
 ): CronSchedule | undefined {
-  if (options.onExitCwd && !options.onExitCommand) {
-    throw new CronCliError("--on-exit-cwd requires --on-exit.");
-  }
   if (hasStreamSchedulePatch(options) && !options.streamCommand) {
     throw new CronCliError("Stream options require --stream-command.");
   }
@@ -275,14 +277,18 @@ function resolveDirectSchedule(
   if (options.at) {
     const atIso = parseAt(options.at, options.tz);
     if (!atIso) {
-      throw new CronCliError("Invalid --at. Use an ISO timestamp or a duration like 20m.");
+      throw new CronCliError(
+        "OpenClaw couldn’t use that run time. Use a date and time like 2030-01-15T09:00:00Z or a delay like 20m.",
+      );
     }
     return { kind: "at", at: atIso };
   }
   if (options.every) {
     const everyMs = parsePositiveCronDurationMs(options.every);
     if (!everyMs) {
-      throw new CronCliError("Invalid --every. Use a duration like 10m, 1h, or 1d.");
+      throw new CronCliError(
+        'OpenClaw couldn’t use that repeat interval. Use --every 10m or, when creating an automation, "every 10m".',
+      );
     }
     return { kind: "every", everyMs };
   }
@@ -290,7 +296,7 @@ function resolveDirectSchedule(
     const tz = parseCronTimezoneOption(options.tz);
     if (!isValidCronExpression(options.cronExpr, tz)) {
       throw new CronCliError(
-        `Invalid cron expression "${options.cronExpr}". Use 5 fields like "0 9 * * *" or 6 fields like "0 0 9 * * *".`,
+        `OpenClaw couldn’t use the cron expression “${options.cronExpr}”. For example, "0 7 * * *" means every day at 7:00 AM. Six-field expressions put seconds first.`,
       );
     }
     return {

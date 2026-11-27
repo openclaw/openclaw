@@ -1,6 +1,7 @@
 import { Portal, render } from "@solidjs/web";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../i18n/index.ts";
+import type { ChatSelectionSource } from "../../../lib/chat/chat-types.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -11,18 +12,18 @@ import {
   matchesShortcutCombo,
 } from "../../../lib/keyboard-shortcut-contract.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import {
-  isChatSelectionPopupElement,
   mountChatSelectionPopup,
   positionChatSelectionPopup,
-  removeChatSelectionPopup,
-} from "./chat-selection-popup.tsx";
+} from "./chat-selection-popup-view.tsx";
+import { isChatSelectionPopupElement, removeChatSelectionPopup } from "./chat-selection-popup.tsx";
 
 export function showChatAnnotationEditor(options: {
   paneId: string;
   anchorRect: DOMRect;
   anchorElement?: HTMLElement;
-  sourceRange?: Range;
+  selectionAnchor?: { selection: ChatSelectionSource; bubbles?: Iterable<HTMLElement> };
   comment: string;
   expanded?: boolean;
   readSignal?: AbortSignal;
@@ -133,7 +134,7 @@ export function showChatAnnotationEditor(options: {
                 remove = element;
               }}
               type="button"
-              class="btn btn--icon btn--ghost chat-annotation-editor__delete"
+              class="oc-icon-button chat-annotation-editor__delete"
               aria-label={t("chat.messages.deleteAnnotation")}
               title={t("chat.messages.deleteAnnotation")}
               onClick={() => {
@@ -186,9 +187,14 @@ export function showChatAnnotationEditor(options: {
     options.onCancel,
     () => input.value === originalComment,
   );
-  if (options.sourceRange && typeof Highlight !== "undefined") {
+  // Resolve text only when this lazy editor opens, not on the chat boot path.
+  const anchor = options.selectionAnchor;
+  const sourceRange = anchor?.bubbles
+    ? resolveChatCommentAnchor(anchor.bubbles, anchor.selection)?.range
+    : undefined;
+  if (sourceRange && typeof Highlight !== "undefined") {
     // Keep the passage visible as a selection after focus moves into the textarea.
-    CSS.highlights.set("openclaw-comment", new Highlight(options.sourceRange));
+    CSS.highlights.set("openclaw-comment", new Highlight(sourceRange));
     listen(signal, "abort", () => CSS.highlights.delete("openclaw-comment"), {
       once: true,
     });
