@@ -18,6 +18,7 @@ import {
 } from "../../infra/update-run-recovery.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import { openDoctorStateSchemaReadAdmission } from "../../state/openclaw-state-db-doctor-schema.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
@@ -136,11 +137,22 @@ export async function assertUpdateCommandPackageFinalization(
     await assertUpdateRecoveryAdmission({ env, path: targetPath, pluginCohort });
     assertCurrent();
     if (run) {
+      await executeExistingOpenClawStateRead(
+        { env },
+        { type: "updateRuns.get", runId: run.runId },
+        { current: true },
+      );
+      assertCurrent();
       assertUpdateCommandRecoveryState({ ...params.opts, run: { ...run, env } });
     }
     if (run && resolveOpenClawStateSqlitePath(run.env) !== targetPath) {
       const historyEnv = cloneEnvWithPlatformSemantics(run.env ?? process.env);
       await assertUpdateRecoveryAdmission({ env: historyEnv, pluginCohort });
+      await executeExistingOpenClawStateRead(
+        { env: historyEnv },
+        { type: "updateRuns.get", runId: run.runId },
+        { current: true },
+      );
       assertCurrent();
       assertUpdateCommandRecoveryState({ ...params.opts, run: { ...run, env: historyEnv } });
     }
