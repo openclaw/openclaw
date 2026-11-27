@@ -2,7 +2,7 @@
 import SwiftUI
 
 struct ChatTranscriptSearchResults: Equatable {
-    private static let inlineMarkdownMarkers = CharacterSet(charactersIn: "*_`[<")
+    private static let inlineMarkdownMarkers = CharacterSet(charactersIn: "*_`[<~\\&")
 
     let messageIDs: [UUID]
 

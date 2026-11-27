@@ -58,6 +58,20 @@ struct ChatTranscriptSearchTests {
         #expect(ChatTranscriptSearchResults(rows: rows, query: "[pears](#fruit)").messageIDs == [link.id])
     }
 
+    @Test(arguments: [
+        ("A ~~red~~ fox", "red fox"),
+        ("Use \\#1 today", "Use #1 today"),
+        ("Tea &amp; pears", "Tea & pears"),
+    ])
+    func `find matches rendered strikethrough escapes and entities`(source: String, phrase: String) {
+        let formatted = self.message(source)
+        let plain = self.message(phrase, role: "user")
+        let rows = [formatted, plain].map(ChatTranscriptRow.message)
+
+        #expect(ChatTranscriptSearchResults(rows: rows, query: phrase).messageIDs == [formatted.id, plain.id])
+        #expect(ChatTranscriptSearchResults(rows: rows, query: source).messageIDs == [formatted.id])
+    }
+
     private func message(_ text: String, role: String = "assistant") -> OpenClawChatMessage {
         OpenClawChatMessage(
             role: role,
