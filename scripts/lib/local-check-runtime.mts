@@ -118,6 +118,7 @@ export function createDeclarationInputBoundary(cwd: string) {
   }
   prefixes.push(fs.realpathSync(declared));
   const root = fs.realpathSync.native(declared);
+  const hasAliases = prefixes.some((prefix) => prefix !== root);
   const resolvedPaths = new Map<string, string>();
   const containedPaths = new Map<string, boolean>();
   // Cache lexical membership; assert still resolves the current filesystem path each time.
@@ -142,7 +143,9 @@ export function createDeclarationInputBoundary(cwd: string) {
       return cached;
     }
     const absolute = path.resolve(declared, file);
-    const prefix = prefixes.find((candidate) => withinRoot(candidate, absolute));
+    const prefix = hasAliases
+      ? prefixes.find((candidate) => withinRoot(candidate, absolute))
+      : undefined;
     const resolved = prefix ? path.resolve(root, path.relative(prefix, absolute)) : absolute;
     // Watch builds can retain this boundary; cache lexical results, never filesystem checks.
     if (cacheable && resolvedPaths.size < DECLARATION_PATH_CACHE_LIMIT) {
