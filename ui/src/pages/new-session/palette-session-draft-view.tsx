@@ -1,0 +1,82 @@
+import { createMemo, Show } from "solid-js";
+import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import { AttachmentPreview } from "../chat/components/chat-attachments.tsx";
+import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
+import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
+import { NewSessionModelControlView } from "./model-control-view.tsx";
+import type { PaletteSessionDraft } from "./palette-session-draft.ts";
+import { PaletteSessionSettingsView } from "./palette-session-settings-view.tsx";
+
+type DraftProps = { draft: PaletteSessionDraft; revision: object };
+
+export function PaletteSessionControls(props: DraftProps) {
+  const view = createMemo(() => {
+    void props.revision;
+    return props.draft.settingsView();
+  });
+  return <Show when={view()}>{(settings) => <PaletteSessionSettingsView {...settings()} />}</Show>;
+}
+
+/** The existing New Session model picker; effort keeps following ordinary defaults. */
+export function PaletteSessionModel(props: DraftProps) {
+  const view = createMemo(() => {
+    void props.revision;
+    return props.draft.settingsView();
+  });
+  return (
+    <Show when={view()}>
+      {(settings) => (
+        <NewSessionModelControlView
+          control={settings().options.draft.place.modelControl}
+          options={{
+            agent: settings().options.draft.place.selectedAgent(),
+            agentId: settings().options.draft.place.agentId,
+            context: settings().options.context,
+            sending: props.draft.messageLocked,
+          }}
+          showEffort={false}
+        />
+      )}
+    </Show>
+  );
+}
+
+export function PaletteSessionAttachments(
+  props: DraftProps & { onOpenImage: (item: ImageLightboxItem) => void },
+) {
+  const preview = createMemo(() => {
+    void props.revision;
+    const attachments = props.draft.attachmentProps();
+    if (!attachments) {
+      return undefined;
+    }
+    const current = attachments.attachments ?? [];
+    return (attachments.attachmentReads?.project(current).length ?? current.length)
+      ? attachments
+      : undefined;
+  });
+  return (
+    <Show when={preview()}>
+      <div
+        class="cmd-palette__attachments"
+        onOpenclaw-comment-action={(event: CustomEvent<ChatCommentAction>) =>
+          props.draft.removeComment(event.detail)
+        }
+      >
+        <AttachmentPreview
+          {...preview()!}
+          readRevision={props.revision}
+          onOpenImage={props.onOpenImage}
+        />
+      </div>
+    </Show>
+  );
+}
+
+export function PaletteSessionAuxiliary(props: DraftProps) {
+  const view = createMemo(() => {
+    void props.revision;
+    return props.draft.auxiliaryView();
+  });
+  return <ConnectMachineDialog {...view()} />;
+}

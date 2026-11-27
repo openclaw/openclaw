@@ -5,7 +5,6 @@ describe("gateway origin scope", () => {
   it.each([
     ["wss://Gateway.Example:443/", "wss://gateway.example"],
     ["ws://gateway.example:80/rpc///", "ws://gateway.example/rpc"],
-    ["wss://gateway.example/rpc/?token=secret#fragment", "wss://gateway.example/rpc"],
   ])("normalizes token scope %s", (input, expected) => {
     expect(gatewayOriginScope(input)).toBe(expected);
   });

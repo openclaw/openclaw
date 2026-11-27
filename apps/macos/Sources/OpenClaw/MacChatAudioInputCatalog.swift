@@ -10,10 +10,8 @@ final class MacChatAudioInputCatalog {
 
     func start() {
         self.refresh()
-        self.observer.start { [weak self] in
-            Task { @MainActor in
-                self?.refresh()
-            }
+        MicRefreshSupport.startObserver(self.observer) { [weak self] in
+            self?.refresh()
         }
     }
 

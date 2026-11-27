@@ -6,7 +6,3 @@ const preparedMetadata = createPluginMetadataSnapshotFixture();
 export function prepareAuthFixture(params: Parameters<typeof prepareAgentRuntimeAuth>[0]) {
   return prepareAgentRuntimeAuth({ metadataSnapshot: preparedMetadata, ...params });
 }
-
-export function prepareAgentRuntimeAuthPlan(params: Parameters<typeof prepareAgentRuntimeAuth>[0]) {
-  return prepareAuthFixture(params).plan;
-}

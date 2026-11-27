@@ -1,6 +1,3 @@
-/**
- * Normalizes and logs provider-specific tool schemas at runtime.
- */
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
@@ -9,7 +6,6 @@ import {
   inspectProviderToolSchemasWithPlugin,
   normalizeProviderToolSchemasWithPlugin,
 } from "../../plugins/provider-runtime.js";
-import type { ProviderToolSchemaDiagnostic } from "../../plugins/types.js";
 import type { AgentTool } from "../runtime/index.js";
 import { log } from "./logger.js";
 
@@ -26,19 +22,26 @@ type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = u
   allowRuntimePluginLoad?: boolean;
 };
 
-function buildProviderToolSchemaContext<TSchemaType extends TSchema = TSchema, TResult = unknown>(
+function buildProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = unknown>(
   params: ProviderToolSchemaParams<TSchemaType, TResult>,
-  provider: string,
 ) {
-  return {
+  const context = {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    provider,
-    modelId: params.modelId,
-    modelApi: params.modelApi,
-    model: params.model,
-    tools: params.tools,
+    provider: params.provider.trim(),
+  };
+  return {
+    ...context,
+    runtimeHandle: params.runtimeHandle,
+    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
+    context: {
+      ...context,
+      modelId: params.modelId,
+      modelApi: params.modelApi,
+      model: params.model,
+      tools: params.tools,
+    },
   };
 }
 
@@ -50,43 +53,26 @@ export function normalizeProviderToolSchemas<
   TSchemaType extends TSchema = TSchema,
   TResult = unknown,
 >(params: ProviderToolSchemaParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
-  const provider = params.provider.trim();
-  const pluginNormalized = normalizeProviderToolSchemasWithPlugin({
-    provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    runtimeHandle: params.runtimeHandle,
-    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
-    context: buildProviderToolSchemaContext(params, provider),
-  });
+  const pluginNormalized = normalizeProviderToolSchemasWithPlugin(
+    buildProviderToolSchemaParams(params),
+  );
   return Array.isArray(pluginNormalized)
     ? (pluginNormalized as AgentTool<TSchemaType, TResult>[])
     : params.tools;
 }
 
-/**
- * Logs provider-owned tool-schema diagnostics after normalization.
- */
 export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParams): void {
-  const provider = params.provider.trim();
-  const diagnostics = inspectProviderToolSchemasWithPlugin({
-    provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    runtimeHandle: params.runtimeHandle,
-    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
-    context: buildProviderToolSchemaContext(params, provider),
-  });
-  if (!Array.isArray(diagnostics)) {
-    return;
-  }
-  if (diagnostics.length === 0) {
+  const diagnostics = inspectProviderToolSchemasWithPlugin(buildProviderToolSchemaParams(params));
+  if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
     return;
   }
 
-  const summary = summarizeProviderToolSchemaDiagnostics(diagnostics);
+  const visible = diagnostics.slice(0, 6).map((diagnostic) => {
+    const violationCount = diagnostic.violations.length;
+    return `${diagnostic.toolName || "unknown"} (${violationCount} ${violationCount === 1 ? "violation" : "violations"})`;
+  });
+  const remaining = diagnostics.length - visible.length;
+  const summary = remaining > 0 ? `${visible.join(", ")}, +${remaining} more` : visible.join(", ");
   log.warn(
     `provider tool schema diagnostics: ${diagnostics.length} ${diagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
     {
@@ -102,15 +88,4 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
       })),
     },
   );
-}
-
-function summarizeProviderToolSchemaDiagnostics(
-  diagnostics: readonly ProviderToolSchemaDiagnostic[],
-) {
-  const visible = diagnostics.slice(0, 6).map((diagnostic) => {
-    const violationCount = diagnostic.violations.length;
-    return `${diagnostic.toolName || "unknown"} (${violationCount} ${violationCount === 1 ? "violation" : "violations"})`;
-  });
-  const remaining = diagnostics.length - visible.length;
-  return remaining > 0 ? `${visible.join(", ")}, +${remaining} more` : visible.join(", ");
 }

@@ -119,12 +119,29 @@
   height: 14px;
 }
 
-.memory-import__files code {
-  overflow: hidden;
+.memory-import__file-label {
+  display: grid;
+  min-width: 0;
   color: var(--text);
   font-size: 10px;
+}
+
+.memory-import__file-label > span {
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: match-parent;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.memory-import__filename {
+  grid-row: 1;
+}
+
+.memory-import__folder {
+  grid-row: 2;
+  color: var(--muted);
 }
 
 .memory-import__file-status {
@@ -149,6 +166,7 @@
   gap: 8px;
   background: color-mix(in srgb, var(--ok) 9%, transparent);
   color: var(--ok);
+  overflow-wrap: anywhere;
 }
 
 .memory-import__result.memory-import__result--incomplete {
@@ -177,9 +195,16 @@
 .memory-import__result-path,
 .memory-import__result-artifact {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
   gap: 4px;
   align-items: baseline;
+}
+
+.memory-import__result-path {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.memory-import__result-artifact {
+  grid-template-columns: subgrid;
 }
 
 .memory-import__result-path code,
@@ -187,12 +212,8 @@
 .memory-import__result-issues code {
   display: block;
   min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
   color: inherit;
   font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .memory-import__result-issues {
@@ -205,7 +226,12 @@
 
 .memory-import__result-issues li {
   display: grid;
-  gap: 1px;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1px 4px;
+}
+
+.memory-import__result-issues li > * {
+  grid-column: 1 / -1;
 }
 
 .memory-import__result-issues strong,
@@ -214,6 +240,8 @@
 }
 
 .memory-import__loading {
+  --skeleton-base: var(--skeleton-base-raised);
+
   display: grid;
   gap: 12px;
   padding: 12px;
@@ -222,14 +250,6 @@
 .memory-import__skeleton {
   height: 96px;
   border-radius: var(--radius-md);
-}
-
-.memory-import__skeleton::after {
-  animation-duration: 1.4s;
-}
-
-.memory-import__confirm .callout {
-  margin-top: 12px;
 }
 
 .memory-import__backfill-dates,
@@ -283,6 +303,25 @@
 .memory-import__backfill-preview > ul > li > ul {
   color: var(--muted);
   font-size: 10px;
+}
+
+/* Let compact import values share their label's line, without stealing the width
+   a long workspace path or agent name needs when it wraps to the next line. */
+@media (max-width: 640px) {
+  .memory-import
+    .settings-row:has(> .settings-row__control > :is(openclaw-agent-select, .settings-row__value)) {
+    > .settings-row__text {
+      flex-basis: auto;
+    }
+
+    > .settings-row__control {
+      width: auto;
+    }
+
+    .settings-row__value {
+      text-align: start;
+    }
+  }
 }
 
 @media (max-width: 768px) {

@@ -1,0 +1,5 @@
+# Plugin UI onCleanup calls; shrink only.
+# Run pnpm check:control-ui-controllers --prune after removing calls.
+extensions/workboard/browser/components/host-components.tsx	1
+extensions/workboard/browser/pages/workboard/view-card-content.tsx	1
+extensions/workboard/browser/pages/workboard/view-scroll-fade.ts	1

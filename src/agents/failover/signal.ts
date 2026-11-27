@@ -20,6 +20,8 @@ export type FailoverClassification =
   | {
       kind: "reason";
       reason: FailoverReason;
+      /** A provider code can inform copy/failover without making a rejected request replayable. */
+      sameModelRetry?: false;
     }
   | {
       kind: "context_overflow";

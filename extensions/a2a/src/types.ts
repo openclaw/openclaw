@@ -1,20 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { A2aChannelConfig, A2aPeerConfig } from "./config-schema.js";
 
-export type A2aPeerConfig = {
-  token: string;
-  url?: string;
-  outboundToken?: string;
-};
-
-export type A2aChannelConfig = {
-  enabled?: boolean;
-  configWrites?: boolean;
-  advertisedUrl?: string;
-  replyTimeoutMs?: number;
-  rateLimitPerMinute?: number;
-  exposeAgents?: string[];
-  peers?: Record<string, A2aPeerConfig>;
-};
+export type { A2aChannelConfig, A2aPeerConfig };
 
 export type A2aCoreConfig = OpenClawConfig & {
   channels?: OpenClawConfig["channels"] & {
@@ -27,4 +14,8 @@ export type ResolvedA2aChannelAccount = {
   enabled: boolean;
   configured: boolean;
   config: A2aChannelConfig;
+  /** Peers withheld from `config` because their inbound token reference did not resolve. */
+  unresolvedPeers: string[];
+  /** Peers kept for inbound auth whose authored `outboundToken` reference did not resolve. */
+  unresolvedOutboundPeers: string[];
 };

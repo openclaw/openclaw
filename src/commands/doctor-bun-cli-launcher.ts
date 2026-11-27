@@ -1,0 +1,147 @@
+import fs from "node:fs";
+import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
+import {
+  getBunCliLauncherPathIssue,
+  inspectBunCliLauncher,
+  installBunCliLauncher,
+  resolveBunGlobalBinDir,
+} from "../../scripts/lib/bun-cli-launcher.mjs";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { resolveBunGlobalInstallOwner } from "../infra/detect-package-manager.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
+import { shouldAutoApproveDoctorFix } from "./doctor-repair-mode.js";
+
+function hasPersistentNode(): boolean {
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
+    const executable = path.resolve(directory || ".", "node");
+    try {
+      fs.accessSync(executable, fs.constants.X_OK);
+      if (!fs.statSync(executable).isFile()) {
+        continue;
+      }
+      // `bun --bun` supplies a temporary Node alias, not a future CLI runtime.
+      if (
+        /^bun-node-(?:[0-9a-f]+|[0-9]+-(?:[0-9a-f]+|debug)(?:-[0-9a-f]{16})?)$/u.test(
+          path.basename(path.dirname(executable)),
+        ) &&
+        fs.realpathSync(executable) === fs.realpathSync(process.execPath)
+      ) {
+        continue;
+      }
+      return true;
+    } catch {
+      // PATH lookup skips absent or nonexecutable candidates without spawning them.
+    }
+  }
+  return false;
+}
+
+/** Read-only: why this Bun installation's launcher is out of scope, or its global owner. */
+function resolveBunCliLauncherOwner(params: {
+  root: string | null;
+  prompter: Pick<DoctorPrompter, "repairMode">;
+}) {
+  if (
+    !params.root ||
+    !process.versions.bun ||
+    process.platform === "win32" ||
+    params.prompter.repairMode.updateInProgress ||
+    hasPersistentNode()
+  ) {
+    return undefined;
+  }
+  const owner = resolveBunGlobalInstallOwner(params.root);
+  if (!owner) {
+    return undefined;
+  }
+  const entryPath = path.join(params.root, "openclaw.mjs");
+  const pathIssue = getBunCliLauncherPathIssue({ bunPath: process.execPath, entryPath });
+  if (pathIssue) {
+    const command = `${quoteCliArg(process.execPath)} ${quoteCliArg(entryPath)}`;
+    return { pathIssue: `${pathIssue}. Run ${command} instead.` } as const;
+  }
+  return { root: params.root, owner } as const;
+}
+
+/** Read-only: the launcher this installation would publish and its current state. */
+function inspectOwnedBunCliLauncher(params: {
+  root: string;
+  owner: NonNullable<ReturnType<typeof resolveBunGlobalInstallOwner>>;
+}) {
+  const binDir = resolveBunGlobalBinDir({
+    bunPath: process.execPath,
+    cwd: params.owner.globalProjectRoot,
+    env: {
+      ...process.env,
+      BUN_INSTALL_GLOBAL_DIR: params.owner.globalProjectRoot,
+      ...(params.owner.bunInstall ? { BUN_INSTALL: params.owner.bunInstall } : {}),
+    },
+  });
+  const launcher = { packageRoot: params.root, bunPath: process.execPath, binDir };
+  return { launcher, inspection: inspectBunCliLauncher(launcher) };
+}
+
+/** Read-only: whether {@link noteBunCliLauncherIssues} would rewrite the launcher. */
+export function checkBunCliLauncherPending(params: {
+  root: string | null;
+  prompter: Pick<DoctorPrompter, "repairMode">;
+}): DoctorMaintenancePending {
+  const owned = resolveBunCliLauncherOwner(params);
+  if (!owned || "pathIssue" in owned) {
+    return "none";
+  }
+  const { inspection } = inspectOwnedBunCliLauncher(owned);
+  if (inspection.state === "current" || inspection.state === "conflict") {
+    return "none";
+  }
+  const mode = params.prompter.repairMode;
+  return shouldAutoApproveDoctorFix(mode) ? "work" : mode.canPrompt ? "undecidable" : "none";
+}
+
+export async function noteBunCliLauncherIssues(params: {
+  root: string | null;
+  prompter: Pick<DoctorPrompter, "confirmAutoFix" | "repairMode">;
+}): Promise<void> {
+  const owned = resolveBunCliLauncherOwner(params);
+  if (!owned) {
+    return;
+  }
+  if ("pathIssue" in owned) {
+    note(owned.pathIssue, "Bun CLI launcher");
+    return;
+  }
+  try {
+    const { launcher, inspection } = inspectOwnedBunCliLauncher(owned);
+    if (inspection.state === "current") {
+      return;
+    }
+    if (inspection.state === "conflict") {
+      note(
+        `The openclaw command at ${inspection.path} belongs to another installation. Resolve the conflicting command before repairing this Bun installation.`,
+        "Bun CLI launcher",
+      );
+      return;
+    }
+    note(
+      `The Bun CLI launcher is ${inspection.state}: ${inspection.path}. The openclaw command needs a launcher that uses this installation's Bun executable.`,
+      "Bun CLI launcher",
+    );
+    if (
+      !(await params.prompter.confirmAutoFix({
+        message: "Repair the openclaw command for this Bun installation?",
+        initialValue: false,
+      }))
+    ) {
+      return;
+    }
+    const installed = installBunCliLauncher(launcher);
+    note(`Repaired the Bun CLI launcher: ${installed.path}`, "Bun CLI launcher");
+  } catch (error) {
+    note(
+      `Could not repair the Bun CLI launcher: ${error instanceof Error ? error.message : String(error)}. Run Doctor with --fix through this package's Bun entry point after resolving the problem.`,
+      "Bun CLI launcher",
+    );
+  }
+}

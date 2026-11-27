@@ -32,8 +32,6 @@ func (docChunkTranslator) TranslateRaw(_ context.Context, text, _, _ string) (st
 	}
 }
 
-func (docChunkTranslator) Close() {}
-
 type docLeafFallbackTranslator struct{}
 
 func (docLeafFallbackTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -51,8 +49,6 @@ func (docLeafFallbackTranslator) TranslateRaw(_ context.Context, text, _, _ stri
 	return text, nil
 }
 
-func (docLeafFallbackTranslator) Close() {}
-
 type docFrontmatterTranslator struct{}
 
 func (docFrontmatterTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -67,8 +63,6 @@ func (docFrontmatterTranslator) Translate(_ context.Context, text, _, _ string) 
 func (docFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	return "extra text outside tagged sections", nil
 }
-
-func (docFrontmatterTranslator) Close() {}
 
 type docFrontmatterFallbackTranslator struct{}
 
@@ -101,8 +95,6 @@ func (docFrontmatterFallbackTranslator) TranslateRaw(_ context.Context, text, _,
 	return text, nil
 }
 
-func (docFrontmatterFallbackTranslator) Close() {}
-
 type docWrappedLeafTranslator struct{}
 
 func (docWrappedLeafTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -121,8 +113,6 @@ func (docWrappedLeafTranslator) TranslateRaw(_ context.Context, text, _, _ strin
 	}, "\n"), nil
 }
 
-func (docWrappedLeafTranslator) Close() {}
-
 type docComponentLeafFallbackTranslator struct{}
 
 func (docComponentLeafFallbackTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -135,8 +125,6 @@ func (docComponentLeafFallbackTranslator) TranslateRaw(_ context.Context, text, 
 	}
 	return text, nil
 }
-
-func (docComponentLeafFallbackTranslator) Close() {}
 
 type docPromptBudgetTranslator struct {
 	rawInputs []string
@@ -155,8 +143,6 @@ func (t *docPromptBudgetTranslator) TranslateRaw(_ context.Context, text, _, _ s
 	return replacer.Replace(text), nil
 }
 
-func (t *docPromptBudgetTranslator) Close() {}
-
 type boundaryWrapperTranslator struct{}
 
 func (boundaryWrapperTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -170,8 +156,6 @@ func (boundaryWrapperTranslator) TranslateRaw(_ context.Context, text, _, _ stri
 	return strings.NewReplacer("First item", "Erster Eintrag", "Second item", "Zweiter Eintrag").Replace(text), nil
 }
 
-func (boundaryWrapperTranslator) Close() {}
-
 type oversizedBlockTranslator struct {
 	rawInputs []string
 }
@@ -184,8 +168,6 @@ func (t *oversizedBlockTranslator) TranslateRaw(_ context.Context, text, _, _ st
 	t.rawInputs = append(t.rawInputs, text)
 	return strings.ReplaceAll(text, "Line ", "Translated line "), nil
 }
-
-func (t *oversizedBlockTranslator) Close() {}
 
 type singletonFenceRetryTranslator struct {
 	rawInputs []string
@@ -202,8 +184,6 @@ func (t *singletonFenceRetryTranslator) TranslateRaw(_ context.Context, text, _,
 	}
 	return strings.ReplaceAll(text, "Line ", "Translated line "), nil
 }
-
-func (t *singletonFenceRetryTranslator) Close() {}
 
 type fencedLiteralMaskingTranslator struct {
 	rawInputs []string
@@ -226,8 +206,6 @@ func (t *fencedLiteralMaskingTranslator) TranslateRaw(_ context.Context, text, _
 	).Replace(text), nil
 }
 
-func (t *fencedLiteralMaskingTranslator) Close() {}
-
 type docSyntaxMaskingTranslator struct {
 	rawInputs []string
 }
@@ -243,8 +221,6 @@ func (t *docSyntaxMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ 
 	return translated, nil
 }
 
-func (t *docSyntaxMaskingTranslator) Close() {}
-
 type accidentalListMarkerTranslator struct{}
 
 func (accidentalListMarkerTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -255,8 +231,6 @@ func (accidentalListMarkerTranslator) TranslateRaw(_ context.Context, text, _, _
 	return strings.ReplaceAll(text, "September begins the standard rate.", "1. September beginnt der Standardtarif."), nil
 }
 
-func (accidentalListMarkerTranslator) Close() {}
-
 type translatedOrdinalTranslator struct{}
 
 func (translatedOrdinalTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -266,8 +240,6 @@ func (translatedOrdinalTranslator) Translate(_ context.Context, text, _, _ strin
 func (translatedOrdinalTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	return strings.NewReplacer("1st failure", "1. Fehler", "2nd failure", "2. Fehler").Replace(text), nil
 }
-
-func (translatedOrdinalTranslator) Close() {}
 
 type duplicateFirstFencedPlaceholderTranslator struct {
 	rawCalls int
@@ -287,8 +259,6 @@ func (t *duplicateFirstFencedPlaceholderTranslator) TranslateRaw(_ context.Conte
 	}
 	return strings.ReplaceAll(text, "Human prose.", "Prosa humana."), nil
 }
-
-func (t *duplicateFirstFencedPlaceholderTranslator) Close() {}
 
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()
@@ -573,15 +543,18 @@ func TestValidateDocBodyFencedLiteralsRejectsRestoredPlaceholderLeak(t *testing.
 	t.Parallel()
 
 	source := "Before.\n\n```ts\nconst value = \"<user-id>\";\n```\n\nAfter.\n"
-	translated := "До.\n\n__OC_I18N_900014__\n\nПосле.\n"
+	translated := "До.\n\n```ts\nconst value = \"<user-id>\";\n```\n\n__OC_I18N_900014__\n\nПосле.\n"
 
 	err := validateDocBodyFencedLiterals(source, translated)
 	if err == nil {
 		t.Fatal("expected restored placeholder leak to be rejected")
 	}
+	if !strings.Contains(err.Error(), "i18n placeholder mismatch") {
+		t.Fatalf("expected placeholder mismatch, got %v", err)
+	}
 }
 
-func TestFinalDocOutputRejectsI18NPlaceholderLeak(t *testing.T) {
+func TestSameI18NProtocolMarkersRejectsInventedMarkers(t *testing.T) {
 	t.Parallel()
 
 	if sameI18NProtocolMarkers("Regular prose.\n", "Обычный текст.\n__OC_I18N_900014__\n") {
@@ -878,9 +851,7 @@ func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 		"",
 	}, "\n")
 	state := NewPlaceholderState(source)
-	placeholders := []string{}
-	mapping := map[string]string{}
-	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+	masked := maskMarkdownDocSyntax(source, state)
 
 	wantLiterals := []string{"`command`", "`` label: `command` ``", "`callback`", "`value`", "`C:\\`"}
 	for _, literal := range wantLiterals {
@@ -894,7 +865,7 @@ func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 		}
 	}
 	maskedLiterals := []string{}
-	for _, value := range mapping {
+	for _, value := range state.mapping {
 		if strings.HasPrefix(value, "`") {
 			maskedLiterals = append(maskedLiterals, value)
 		}
@@ -902,7 +873,7 @@ func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 	if !sameStringMultiset(wantLiterals, maskedLiterals) {
 		t.Fatalf("masked inline literals = %v, want %v", maskedLiterals, wantLiterals)
 	}
-	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+	if restored := unmaskMarkdown(masked, state.placeholders, state.mapping); restored != source {
 		t.Fatalf("inline-code round trip changed source:\n%s\nwant:\n%s", restored, source)
 	}
 }
@@ -920,9 +891,7 @@ func TestMaskMarkdownDocSyntaxProtectsProductLinksInsideRawHTML(t *testing.T) {
 		"",
 	}, "\n")
 	state := NewPlaceholderState(source)
-	placeholders := []string{}
-	mapping := map[string]string{}
-	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+	masked := maskMarkdownDocSyntax(source, state)
 
 	if strings.Contains(masked, "[Discord](/channels/discord)") {
 		t.Fatalf("expected protected link %q to be masked:\n%s", "Discord", masked)
@@ -936,7 +905,7 @@ func TestMaskMarkdownDocSyntaxProtectsProductLinksInsideRawHTML(t *testing.T) {
 	if !strings.Contains(masked, "[Render](/guides/pre-render)") {
 		t.Fatalf("expected contextual ordinary-word label to remain translatable:\n%s", masked)
 	}
-	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+	if restored := unmaskMarkdown(masked, state.placeholders, state.mapping); restored != source {
 		t.Fatalf("protected-link round trip changed source:\n%s\nwant:\n%s", restored, source)
 	}
 }
@@ -946,9 +915,7 @@ func TestMaskMarkdownDocSyntaxKeepsProtectedLinkAssociationOpaque(t *testing.T) 
 
 	source := "Read [Slack](/channels/slack) and nearby Slack setup notes.\n"
 	state := NewPlaceholderState(source)
-	placeholders := []string{}
-	mapping := map[string]string{}
-	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+	masked := maskMarkdownDocSyntax(source, state)
 
 	if strings.Contains(masked, "[Slack]") || strings.Contains(masked, "/channels/slack") {
 		t.Fatalf("expected protected link label and destination to share one opaque placeholder:\n%s", masked)
@@ -956,10 +923,10 @@ func TestMaskMarkdownDocSyntaxKeepsProtectedLinkAssociationOpaque(t *testing.T) 
 	if !strings.Contains(masked, "nearby Slack setup notes") {
 		t.Fatalf("expected ordinary surrounding product prose to remain visible:\n%s", masked)
 	}
-	if len(placeholders) != 1 || mapping[placeholders[0]] != "[Slack](/channels/slack)" {
-		t.Fatalf("unexpected protected-link placeholder mapping: placeholders=%v mapping=%v", placeholders, mapping)
+	if len(state.placeholders) != 1 || state.mapping[state.placeholders[0]] != "[Slack](/channels/slack)" {
+		t.Fatalf("unexpected protected-link placeholder mapping: placeholders=%v mapping=%v", state.placeholders, state.mapping)
 	}
-	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+	if restored := unmaskMarkdown(masked, state.placeholders, state.mapping); restored != source {
 		t.Fatalf("protected-link round trip changed source:\n%s\nwant:\n%s", restored, source)
 	}
 }
@@ -1310,7 +1277,7 @@ func TestValidateDocChunkTranslationRejectsTranslatedFencedProtocolMarkers(t *te
 		"",
 		"    ```text",
 		"    [<sender>에게 답장 중 id:<stanzaId>]",
-		"    <인용된 본문 또는 미디어 자리표시자>",
+		"    <quoted body or media placeholder>",
 		"    [/답장 중]",
 		"    ```",
 		"",
@@ -1321,8 +1288,8 @@ func TestValidateDocChunkTranslationRejectsTranslatedFencedProtocolMarkers(t *te
 	if err == nil {
 		t.Fatal("expected translated fenced protocol markers to be rejected")
 	}
-	if !strings.Contains(err.Error(), "fenced placeholder mismatch") && !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
-		t.Fatalf("expected fenced literal mismatch, got %v", err)
+	if !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
+		t.Fatalf("expected fenced protocol marker mismatch, got %v", err)
 	}
 }
 
@@ -1892,7 +1859,7 @@ func TestValidateDocChunkTranslationStopsFencedLiteralsAtContainerBoundary(t *te
 func TestTranslateDocBodyChunkedPreservesMarkersAfterSplit(t *testing.T) {
 	body := strings.Join([]string{
 		"```text",
-		"Line 01",
+		"Human prose.",
 		"Line 02",
 		"Line 03",
 		"Line 04",
@@ -1908,7 +1875,13 @@ func TestTranslateDocBodyChunkedPreservesMarkersAfterSplit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected split translation to preserve masked protocol markers, got %v", err)
 	}
-	if !strings.Contains(translated, "[Notice kind=system]") || !strings.Contains(translated, "[/Notice]") {
+	if len(translator.rawInputs) < 2 {
+		t.Fatalf("expected multiple split translation calls, got %d", len(translator.rawInputs))
+	}
+	if !strings.Contains(translated, "Prosa humana.") {
+		t.Fatalf("expected translated prose after splitting:\n%s", translated)
+	}
+	if strings.Count(translated, "[Notice kind=system]") != 1 || strings.Count(translated, "[/Notice]") != 1 {
 		t.Fatalf("expected original protocol markers after split translation:\n%s", translated)
 	}
 	if strings.Contains(translated, "[Aviso kind=system]") {
@@ -2324,8 +2297,8 @@ func TestTranslateDocBodyChunkedSplitsOversizedSingletonBlock(t *testing.T) {
 }
 
 func TestTranslateDocBodyChunkedSplitsSingletonBlockWhenPromptBudgetExceeded(t *testing.T) {
-	lineA := "Alpha chunk with { braces }\n"
-	lineB := "Beta chunk with | pipes |\n"
+	lineA := "Line Alpha chunk with { braces }\n"
+	lineB := "Line Beta chunk with | pipes |\n"
 	body := lineA + lineB + "\n"
 	budget := max(estimateDocPromptCost(lineA), estimateDocPromptCost(lineB)) + 1
 	if estimateDocPromptCost(body) <= budget {
@@ -2347,8 +2320,9 @@ func TestTranslateDocBodyChunkedSplitsSingletonBlockWhenPromptBudgetExceeded(t *
 			t.Fatalf("expected split chunk under prompt budget, got cost=%d budget=%d:\n%s", estimateDocPromptCost(input), budget, input)
 		}
 	}
-	if !strings.Contains(translated, "Alpha chunk") || !strings.Contains(translated, "Beta chunk") {
-		t.Fatalf("expected translated singleton parts to be reassembled:\n%s", translated)
+	want := "Translated line Alpha chunk with { braces }\nTranslated line Beta chunk with | pipes |\n\n"
+	if translated != want {
+		t.Fatalf("expected translated singleton parts to be reassembled\nwant:\n%s\ngot:\n%s", want, translated)
 	}
 }
 
@@ -2375,13 +2349,14 @@ func TestTranslateDocBodyChunkedSplitsOversizedFenceBeforeTrailingProse(t *testi
 	}
 	for _, input := range translator.rawInputs {
 		if strings.Contains(input, "Line 01") || strings.Contains(input, "Line 02") || strings.Contains(input, "Line 03") || strings.Contains(input, "Line 04") {
-			if !strings.Contains(input, "```md") || !strings.Contains(input, "```") {
+			if !strings.HasPrefix(input, "```md\n") || !strings.HasSuffix(strings.TrimSpace(input), "\n```") {
 				t.Fatalf("expected fenced split input to keep matched fence wrappers:\n%s", input)
 			}
 		}
 	}
-	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Trailing paragraph after the fence.") {
-		t.Fatalf("expected fence content and trailing prose to survive split:\n%s", translated)
+	want := "```md\nTranslated line 01\nTranslated line 02\nTranslated line 03\nTranslated line 04\n```\nTrailing paragraph after the fence.\n"
+	if translated != want {
+		t.Fatalf("expected fence content and trailing prose to survive split\nwant:\n%s\ngot:\n%s", want, translated)
 	}
 }
 
@@ -2464,7 +2439,7 @@ func TestTranslateDocBodyChunkedEscapesModelInventedListMarker(t *testing.T) {
 }
 
 func TestTranslateDocBodyChunkedRetriesSingletonFenceAfterValidationFailure(t *testing.T) {
-	body := strings.Join([]string{
+	fencedBody := strings.Join([]string{
 		"```md",
 		"Line 01",
 		"Line 02",
@@ -2477,29 +2452,38 @@ func TestTranslateDocBodyChunkedRetriesSingletonFenceAfterValidationFailure(t *t
 	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
 	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_PROMPT_BUDGET", "4096")
 
-	translator := &singletonFenceRetryTranslator{}
-	translated, err := translateDocBodyChunked(context.Background(), translator, "gateway/configuration-reference.md", body, "en", "zh-CN")
-	if err != nil {
-		t.Fatalf("translateDocBodyChunked returned error: %v", err)
-	}
-	if len(translator.rawInputs) < 3 {
-		t.Fatalf("expected singleton fence retry to split after validation failure, saw %d input(s)", len(translator.rawInputs))
-	}
-	if !strings.Contains(translator.rawInputs[0], "Line 01") || !strings.Contains(translator.rawInputs[0], "Line 04") {
-		t.Fatalf("expected first raw attempt to include the original fenced block:\n%s", translator.rawInputs[0])
-	}
-	for _, input := range translator.rawInputs[1:] {
-		if strings.Contains(input, "Line 01") || strings.Contains(input, "Line 02") || strings.Contains(input, "Line 03") || strings.Contains(input, "Line 04") {
-			if !strings.Contains(input, "```md") || !strings.Contains(input, "```") {
-				t.Fatalf("expected split retry inputs to preserve fence wrappers:\n%s", input)
+	for _, tc := range []struct {
+		name     string
+		trailing string
+	}{
+		{name: "singleton"},
+		{name: "trailing blank block", trailing: "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fencedBody + tc.trailing
+			translator := &singletonFenceRetryTranslator{}
+			translated, err := translateDocBodyChunked(context.Background(), translator, "gateway/configuration-reference.md", body, "en", "zh-CN")
+			if err != nil {
+				t.Fatalf("translateDocBodyChunked returned error: %v", err)
 			}
-		}
-	}
-	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Translated line 04") {
-		t.Fatalf("expected singleton fence retry to reassemble translated output:\n%s", translated)
-	}
-	if sourceCount, translatedCount := summarizeDocChunkStructure(body).fenceCount, summarizeDocChunkStructure(translated).fenceCount; sourceCount != translatedCount {
-		t.Fatalf("expected singleton fence retry to preserve one fenced block, source=%d translated=%d:\n%s", sourceCount, translatedCount, translated)
+			if len(translator.rawInputs) < 3 {
+				t.Fatalf("expected singleton fence retry to split after validation failure, saw %d input(s)", len(translator.rawInputs))
+			}
+			if !strings.Contains(translator.rawInputs[0], "Line 01") || !strings.Contains(translator.rawInputs[0], "Line 04") {
+				t.Fatalf("expected first raw attempt to include the original fenced block:\n%s", translator.rawInputs[0])
+			}
+			for _, input := range translator.rawInputs[1:] {
+				if strings.Contains(input, "Line 01") || strings.Contains(input, "Line 02") || strings.Contains(input, "Line 03") || strings.Contains(input, "Line 04") {
+					if !strings.Contains(input, "```md") || !strings.Contains(input, "```") {
+						t.Fatalf("expected split retry inputs to preserve fence wrappers:\n%s", input)
+					}
+				}
+			}
+			want := "```md\nTranslated line 01\nTranslated line 02\nTranslated line 03\nTranslated line 04\n```\n" + tc.trailing
+			if translated != want {
+				t.Fatalf("expected one reassembled fence with all translated lines\nwant:\n%s\ngot:\n%s", want, translated)
+			}
+		})
 	}
 }
 

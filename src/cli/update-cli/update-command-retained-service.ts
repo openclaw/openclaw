@@ -11,35 +11,8 @@ import {
   captureUpdateCommandExecutorAuthority,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
-
-// This loaded source literal survives package replacement. It only gates a native
-// argv on its private pipe; it does not load A/B modules or interpret update grants.
-// The gate and controller share the process group owned by the existing runner.
-const nativeCommandGate = `
-  const { spawn } = await import("node:child_process");
-  let input = "";
-  for await (const chunk of process.stdin) {
-    input += chunk;
-    if (input.length > 36) process.exit(1);
-  }
-  if (!/^[0-9a-f-]{36}$/.test(input)) process.exit(1);
-  const child = spawn(process.argv[1], process.argv.slice(2), {
-    stdio: ["ignore", "inherit", "inherit"], detached: false, windowsHide: true,
-  });
-  let spawnFailed = false;
-  child.once("error", (error) => {
-    spawnFailed = true;
-    const code = typeof error.code === "string" && /^[A-Z0-9_]+$/.test(error.code) ? error.code : "_";
-    process.stderr.write("native-spawn-error:" + input + ":" + code);
-    process.exitCode = 1;
-  });
-  child.once("close", (code, signal) => {
-    if (spawnFailed) return;
-    if (signal) process.kill(process.pid, signal);
-    else process.exitCode = code ?? 1;
-  });
-`;
+import { prepareUpdateCommandNativeGate } from "./update-command-native-gate.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 /** Real retained admission plus native-controller custody, never service health. */
 export async function withRetainedUpdateServiceAuthority<T>(
@@ -58,7 +31,8 @@ export async function withRetainedUpdateServiceAuthority<T>(
       "Retained native recovery requires Windows Job custody.",
     );
   }
-  const { run, root, signal } = params;
+  const { run, root } = params;
+  const signal = run.deadline?.signal ?? params.signal;
   const executor = run.executorFence;
   const assertCaller = params.assertCurrent;
   const assertCurrent = () => {
@@ -83,25 +57,29 @@ export async function withRetainedUpdateServiceAuthority<T>(
       executor,
       candidateRoot,
       async (_grant, bind) => {
-        const nativeResult = await runCommandWithTimeout(
-          [process.execPath, "--input-type=module", "-e", nativeCommandGate, "--", ...command],
-          {
-            ...nativeOptions,
-            signal:
-              signal && nativeOptions.signal
-                ? AbortSignal.any([signal, nativeOptions.signal])
-                : (signal ?? nativeOptions.signal),
-            input: ticket,
-            beforeInput: (pid) => {
-              signal?.throwIfAborted();
-              // The parent fence is suspended. bind checks the same original A/B
-              // owners internally, then binds both child rows before opening stdin.
-              bind(pid);
-            },
-            killProcessTree: true,
-            requireProcessTreeExtinction: true,
+        const gate = prepareUpdateCommandNativeGate(ticket, [
+          nativeOptions.baseEnv,
+          nativeOptions.env,
+        ]);
+        const nativeResult = await runCommandWithTimeout([...gate.argv, ...command], {
+          ...nativeOptions,
+          baseEnv: {},
+          env: gate.env,
+          signal:
+            signal && nativeOptions.signal
+              ? AbortSignal.any([signal, nativeOptions.signal])
+              : (signal ?? nativeOptions.signal),
+          input: gate.input,
+          beforeInput: (pid) => {
+            signal?.throwIfAborted();
+            // The parent fence is suspended. bind checks the same original A/B
+            // owners internally, then binds both child rows before opening stdin.
+            bind(pid);
+            nativeOptions.beforeInput?.(pid, command);
           },
-        );
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+        });
         // Classify inside child custody: neither root may be released until
         // a failed or successful native writer has settled safely.
         if (nativeResult.cleanup === "uncertain" || nativeResult.cleanup === "forced") {
@@ -121,8 +99,6 @@ export async function withRetainedUpdateServiceAuthority<T>(
       result.termination === "exit" &&
       result.code === 1 &&
       result.stdout === "" &&
-      result.cleanup !== "uncertain" &&
-      result.cleanup !== "forced" &&
       !result.stdoutTruncatedBytes &&
       !result.stderrTruncatedBytes &&
       result.stderr.startsWith(prefix)

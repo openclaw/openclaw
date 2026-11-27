@@ -1,5 +1,5 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { listAgentIds } from "../../agents/agent-scope-config.js";
+import { listAgentIds } from "../../agents/agent-roster.js";
 import { classifySessionKeyShape } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {

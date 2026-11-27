@@ -11,6 +11,7 @@ export function createProcessVitestConfig(
     env,
     exclude: databaseWorkerCoreTestFiles,
     includeOpenClawRuntimeSetup: false,
+    intersectIncludeFile: true,
     name: "process",
     passWithNoTests: true,
   });

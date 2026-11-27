@@ -1,5 +1,10 @@
 {
   "id": "logbook",
+  "backupResources": [
+    { "disposition": "include", "scope": "state", "relativePath": "logbook/logbook.sqlite" },
+    { "disposition": "include", "scope": "state", "relativePath": "logbook/frames" }
+  ],
+  "uiCapabilities": ["page", "navigation"],
   "categories": ["productivity"],
   "name": "Logbook",
   "description": "Automatic work journal: captures periodic screen snapshots from a paired node and turns them into a reviewable timeline of your day.",
@@ -106,5 +111,9 @@
         "default": 14
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me decide whether to enable Logbook and understand its privacy and retention settings.",
+    "Draft a standup from a day already tracked in Logbook without starting capture or sending it."
+  ]
 }

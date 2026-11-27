@@ -1,0 +1,87 @@
+import fs from "node:fs";
+import path from "node:path";
+import {
+  matchRootFileOpenFailure,
+  openRootFileSync,
+  readFileWindowFullySync,
+} from "@openclaw/fs-safe/advanced";
+
+const CONTROL_UI_COMPRESSIBLE_EXTENSIONS = new Set([
+  ".css",
+  ".html",
+  ".js",
+  ".json",
+  ".svg",
+  ".txt",
+  ".wasm",
+  ".webmanifest",
+]);
+
+export function isControlUiCompressibleAsset(filePath: string): boolean {
+  return CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+export type ControlUiFileRead = {
+  rootPath: string;
+  rootRealPath?: string;
+  filePath: string;
+  rejectHardlinks: boolean;
+  readBody: boolean;
+};
+
+export type ControlUiFileSnapshot = {
+  path: string;
+  size: number;
+  mtimeMs: number;
+  body?: Uint8Array;
+};
+
+export type ControlUiPreparedFile = Omit<ControlUiFileSnapshot, "body"> & { body?: Buffer };
+export type ControlUiRootAsset = {
+  file: ControlUiPreparedFile;
+  br?: ControlUiPreparedFile | Error | null;
+  gzip?: ControlUiPreparedFile | Error | null;
+};
+
+export function readControlUiFile(input: ControlUiFileRead): ControlUiFileSnapshot | null {
+  const opened = openRootFileSync({
+    absolutePath: input.filePath,
+    rootPath: input.rootPath,
+    rootRealPath: input.rootRealPath,
+    boundaryLabel: "control ui root",
+    skipLexicalRootCheck: true,
+    // Preserve in-root aliases while fs-safe rejects canonical targets outside the root.
+    rejectSymlinks: false,
+    rejectHardlinks: input.rejectHardlinks,
+  });
+  if (!opened.ok) {
+    return matchRootFileOpenFailure(opened, {
+      io: (failure) => {
+        throw failure.error;
+      },
+      fallback: () => null,
+    });
+  }
+  try {
+    const snapshot: ControlUiFileSnapshot = {
+      path: opened.path,
+      size: opened.stat.size,
+      mtimeMs: opened.stat.mtimeMs,
+    };
+    if (!input.readBody) {
+      return snapshot;
+    }
+    if (opened.stat.size > 2 ** 31 - 1) {
+      throw Object.assign(new RangeError("Control UI file exceeds the 2 GiB read limit"), {
+        code: "ERR_FS_FILE_TOO_LARGE",
+      });
+    }
+    // An independent backing buffer transfers without copying pooled Buffer memory.
+    const body = new Uint8Array(opened.stat.size);
+    const offset = readFileWindowFullySync(opened.fd, Buffer.from(body.buffer), 0);
+    snapshot.body = offset === body.length ? body : body.slice(0, offset);
+    return snapshot;
+  } finally {
+    fs.closeSync(opened.fd);
+  }
+}

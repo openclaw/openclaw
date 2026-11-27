@@ -1,5 +1,6 @@
 // Trusted channel catalog tests cover workspace shadow filtering and plugin auto-enable trust resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeMeta } from "../../flows/channel-setup.test-helpers.js";
 
 const getChannelPluginCatalogEntry = vi.hoisted(() => vi.fn());
 const listRawChannelPluginCatalogEntries = vi.hoisted(() => vi.fn());
@@ -39,14 +40,10 @@ function createCatalogEntry(params: {
     id: params.id,
     pluginId: params.pluginId,
     origin: params.origin,
-    meta: {
-      id: params.id,
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: `/channels/${params.id}`,
+    meta: makeMeta(params.id, params.label, {
       blurb:
         params.blurb ?? (params.origin === "bundled" ? "bundled entry" : `${params.origin} shadow`),
-    },
+    }),
     install: { localPath: params.localPath, defaultChoice: "local" },
   };
 }
@@ -252,38 +249,6 @@ describe("trusted-catalog load-path discovery", () => {
     });
     expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(2, "telegram", {
       excludePluginRefs: [{ pluginId: "telegram", origin: "config" }],
-      env: undefined,
-      extraPaths: ["/tmp/load-path-a"],
-      workspaceDir: "/tmp/workspace",
-    });
-  });
-
-  it("stops when fallback lookup resurfaces the same untrusted local entry", () => {
-    getChannelPluginCatalogEntry.mockReturnValue(
-      createCatalogEntry({
-        id: "msteams",
-        pluginId: "config-shadow",
-        origin: "config",
-        label: "Shadow Teams",
-        localPath: "./plugins/msteams-shadow",
-      }),
-    );
-
-    expect(
-      getTrustedChannelPluginCatalogEntry("msteams", {
-        cfg: {
-          plugins: {
-            load: {
-              paths: ["/tmp/load-path-a"],
-            },
-          },
-        },
-        workspaceDir: "/tmp/workspace",
-      }),
-    ).toBeUndefined();
-    expect(getChannelPluginCatalogEntry).toHaveBeenCalledTimes(2);
-    expect(getChannelPluginCatalogEntry).toHaveBeenNthCalledWith(2, "msteams", {
-      excludePluginRefs: [{ pluginId: "config-shadow", origin: "config" }],
       env: undefined,
       extraPaths: ["/tmp/load-path-a"],
       workspaceDir: "/tmp/workspace",

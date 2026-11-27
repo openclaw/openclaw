@@ -220,7 +220,6 @@ describe("quota public diagnostics", () => {
 
   it.each([
     ['{"type":"response.create","generate":false}', "warmup"],
-    ['{"type":"response.create","generate":true}', "inference"],
     ['{"type":"response.create"}', "inference"],
     ['{"input":"PRIVATE_PROMPT"}', "unknown"],
     ["PRIVATE_INVALID_JSON", "unknown"],

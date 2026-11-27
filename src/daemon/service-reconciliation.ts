@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -8,6 +9,7 @@ import { captureGatewayServiceDefinitionBackup } from "./service-definition-back
 import {
   gatewayServiceCommandMatchesRoot,
   resolveGatewayServiceInstallationRefreshRoot,
+  resolveServiceEntrypoint,
 } from "./service-layout.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { settleGatewayServiceRebind } from "./service-rebind.js";
@@ -63,6 +65,7 @@ export async function reconcileGatewayServiceDefinition(params: {
     }
     const inspectHint = `Run ${formatCliCommand("openclaw gateway status --deep", params.env)} before retrying after the active maintenance or update finishes.`;
     let keys: string[] = [];
+    let preservePolicy: string[] = [];
     const transaction = await captureGatewayServiceDefinitionBackup({
       env: params.env,
       command,
@@ -82,7 +85,19 @@ export async function reconcileGatewayServiceDefinition(params: {
           roots.map((root) => gatewayServiceCommandMatchesRoot(root, command)),
         );
         assertCurrent();
-        if (!ownership.includes(true)) {
+        let matchesInstallation = ownership.includes(true);
+        const entrypoint = resolveServiceEntrypoint(command);
+        if (!matchesInstallation && params.root && entrypoint) {
+          // pnpm can delete the generation named by an older service definition.
+          const { isRetiredPnpmGenerationOfInstall } =
+            await import("../infra/update-global-pnpm-retired.js");
+          matchesInstallation = await isRetiredPnpmGenerationOfInstall({
+            entrypoint,
+            activeRoot: params.root,
+          });
+          assertCurrent();
+        }
+        if (!matchesInstallation) {
           const state = await readGatewayServiceState(resolveGatewayService(), {
             env: params.env,
             requireEffective: true,
@@ -109,6 +124,13 @@ export async function reconcileGatewayServiceDefinition(params: {
           expectedCommand: params.expectedCommand,
         });
         assertCurrent();
+        preservePolicy = [];
+        for (const fact of audit.definitionDrift ?? []) {
+          if (fact.kind === "preserved") {
+            preservePolicy.push(fact.key);
+            warn(fact.message);
+          }
+        }
         const edits =
           audit.definitionDrift?.filter(
             (fact) =>
@@ -129,9 +151,16 @@ export async function reconcileGatewayServiceDefinition(params: {
               .join(" "),
           );
         }
+        const preserveExecDelegation =
+          isUpdateOwnedGatewayServiceCommand() ||
+          isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
         keys =
           audit.definitionDrift
-            ?.filter((fact) => fact.kind === "outdated")
+            ?.filter(
+              (fact) =>
+                fact.kind === "outdated" &&
+                !(preserveExecDelegation && fact.key.startsWith("Service.Delegate")),
+            )
             .map((fact) => fact.key) ?? [];
       },
     }).catch((error: unknown) => {
@@ -154,7 +183,7 @@ export async function reconcileGatewayServiceDefinition(params: {
       try {
         return await withGatewayServiceInstallationRecovery(
           async () => {
-            await params.install(transaction.hooks);
+            await params.install({ ...transaction.hooks, preservePolicy });
             assertCurrent();
             const receipt = await transaction.finish();
             warn(
@@ -191,9 +220,12 @@ export async function reconcileGatewayServiceDefinition(params: {
           warn(
             `Service definition refresh failed: ${String(error)}. Recovery could not be verified: ${String(recoveryError)}; backups retained: ${transaction.backupPaths.join(", ")}`,
           );
-          throw new Error(
-            `UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: ${String(recoveryError)}`,
-            { cause: error },
+          throw new GatewayServiceAuthorityError(
+            new Error(
+              `UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: ${String(recoveryError)}`,
+              { cause: error },
+            ),
+            "recovery-pending",
           );
         }
         return deny(

@@ -1,31 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
+import { bindDeliveryQueueEntry } from "./delivery-queue-sqlite-bound.js";
 import type { QueuedSessionDelivery } from "./session-delivery-queue.records.js";
-import type { SessionDeliveryWorkerOperations } from "./session-delivery-queue.worker-contract.js";
-import { executeSessionDeliveryCommand } from "./session-delivery-queue.worker.js";
+import { sessionDeliveryOperations } from "./session-delivery-queue.worker.js";
 
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
   upsert: vi.fn(),
   complete: vi.fn(),
-  notFound: vi.fn(),
   owners: vi.fn(),
-  loadEntries: vi.fn(),
   prepareTerminal: vi.fn(),
   terminalize: vi.fn(),
   update: vi.fn(),
 }));
 
-vi.mock("./delivery-queue-sqlite-bound.js", () => ({
+vi.mock(import("./delivery-queue-sqlite-bound.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   loadDeliveryQueueEntryInDatabase: mocks.load,
   upsertBoundDeliveryQueueEntryInDatabase: mocks.upsert,
 }));
 
-vi.mock("./delivery-queue-sqlite.kernel.js", () => ({
+vi.mock(import("./delivery-queue-sqlite.kernel.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   completeDeliveryQueueEntryInDatabase: mocks.complete,
-  deliveryQueueEntryNotFoundError: mocks.notFound,
   getDeliveryQueueEntryOwnersInDatabase: mocks.owners,
-  loadDeliveryQueueEntriesInDatabase: mocks.loadEntries,
   prepareDeliveryQueueTerminalEntry: mocks.prepareTerminal,
   terminalizePendingDeliveryQueueEntryInDatabase: mocks.terminalize,
   updateDeliveryQueueEntryInDatabase: mocks.update,
@@ -49,30 +48,16 @@ const entry: QueuedSessionDelivery = {
   enqueuedAt: 1,
   retryCount: 0,
 };
-const settlement: SessionDeliveryWorkerOperations["sessionDelivery.markSettlement"]["input"] = {
-  insertOnly: false,
-  updatePendingOnly: true,
-  completeExisting: false,
-  row: {
-    queue_name: "session",
-    id,
-    status: "pending",
-    entry_kind: "systemEvent",
-    session_key: "agent:main:main",
-    channel: null,
-    target: null,
-    account_id: null,
-    retry_count: 0,
-    last_attempt_at: null,
-    last_error: null,
-    recovery_state: null,
-    platform_send_started_at: null,
-    entry_json: JSON.stringify(entry),
-    enqueued_at: 1,
-    updated_at: 1,
-    failed_at: null,
-  },
+const context: WorkerWriteOperationContext = {
+  open: () => database,
+  stateOptions: () => ({ path: database.path, env: {} }),
+  write: (operation) => operation(database),
+  writeAdmitted: (operation) => operation(database),
 };
+const settlement = bindDeliveryQueueEntry(
+  { queueName: "session", entry, updatePendingOnly: true },
+  1,
+);
 const terminalEntry = {
   queueName: "session",
   id,
@@ -84,7 +69,8 @@ const terminalEntry = {
 };
 const transitions = [
   {
-    command: { type: "sessionDelivery.markSettlement", input: settlement },
+    name: "sessionDelivery.markSettlement",
+    run: () => sessionDeliveryOperations["sessionDelivery.markSettlement"](settlement, context),
     write: mocks.upsert,
     args: [settlement, database],
     databaseIndex: 1,
@@ -92,7 +78,8 @@ const transitions = [
     opposite: "failed",
   },
   {
-    command: { type: "sessionDelivery.complete", input: { id } },
+    name: "sessionDelivery.complete",
+    run: () => sessionDeliveryOperations["sessionDelivery.complete"]({ id }, context),
     write: mocks.complete,
     args: [database, "session", id],
     databaseIndex: 0,
@@ -100,7 +87,8 @@ const transitions = [
     opposite: "failed",
   },
   {
-    command: { type: "sessionDelivery.moveToFailed", input: { id } },
+    name: "sessionDelivery.moveToFailed",
+    run: () => sessionDeliveryOperations["sessionDelivery.moveToFailed"]({ id }, context),
     write: mocks.terminalize,
     args: [database, terminalEntry],
     databaseIndex: 0,
@@ -145,7 +133,7 @@ function failTransition(write: typeof mocks.upsert) {
 }
 
 for (const transition of transitions) {
-  describe(transition.command.type, () => {
+  describe(transition.name, () => {
     it(`accepts the failed transition when durable state is ${transition.terminal}`, () => {
       failTransition(transition.write);
       mocks.owners.mockImplementationOnce(() => {
@@ -153,7 +141,7 @@ for (const transition of transitions) {
         return new Map([["session", { status: transition.terminal }]]);
       });
 
-      expect(executeSessionDeliveryCommand(transition.command, database)).toBeUndefined();
+      expect(transition.run()).toBeUndefined();
 
       expect(order).toEqual(["transition", "status"]);
       expectOneWrite(transition);
@@ -178,7 +166,7 @@ for (const transition of transitions) {
         let thrown: unknown;
 
         try {
-          executeSessionDeliveryCommand(transition.command, database);
+          transition.run();
         } catch (error) {
           thrown = error;
         }
@@ -191,7 +179,7 @@ for (const transition of transitions) {
     );
 
     it("does not reconcile status after a successful transition", () => {
-      expect(executeSessionDeliveryCommand(transition.command, database)).toBeUndefined();
+      expect(transition.run()).toBeUndefined();
 
       expectOneWrite(transition);
       expectStatusReads(0);
@@ -214,7 +202,7 @@ it("rechecks settlement status after the initial read still reports pending", ()
       return new Map([["session", { status: "completed" }]]);
     });
 
-  expect(executeSessionDeliveryCommand(transitions[0].command, database)).toBeUndefined();
+  expect(transitions[0].run()).toBeUndefined();
 
   expect(order).toEqual(["transition", "initial status", "reconciliation status"]);
   expectOneWrite(transitions[0]);

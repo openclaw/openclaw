@@ -1,5 +1,10 @@
-/** Public Markdown parsing, rendering, chunking, and table-conversion utilities. */
-export * from "./chunk-text.js";
+export {
+  avoidTrailingHighSurrogateBreak,
+  chunkText,
+  chunkTextRanges,
+  type ChunkTextRangesOptions,
+  type TextChunkRange,
+} from "./chunk-text.js";
 export * from "./code-spans.js";
 export * from "./fences.js";
 export * from "./frontmatter.js";

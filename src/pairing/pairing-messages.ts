@@ -1,4 +1,3 @@
-// Formats pairing challenge replies and setup instructions.
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PairingChannel } from "./pairing-store.types.js";
 

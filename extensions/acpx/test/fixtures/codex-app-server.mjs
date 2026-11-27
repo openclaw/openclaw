@@ -140,6 +140,11 @@ async function handle(method, params) {
           return;
         }
         state.pendingElicitationRequestId = null;
+        // Empty tool answers do not finish this held fixture turn. Its matching
+        // interrupt still owns cancellation and the terminal notification.
+        if (Object.keys(answers.answers).length === 0) {
+          return;
+        }
         const text = JSON.stringify(answers);
         const item = { type: "agentMessage", id: "message-process", text };
         state.turn = { ...turn, items: [item], status: "completed" };

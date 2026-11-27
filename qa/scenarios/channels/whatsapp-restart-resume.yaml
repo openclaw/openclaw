@@ -23,7 +23,7 @@ scenario:
     config:
       conversationKind: direct
       conversationId: 15550000001@s.whatsapp.net
-      senderId: 15550000002@s.whatsapp.net
+      senderId: 15550000001@s.whatsapp.net
       mentionPrefix: ""
       firstPrefix: WHATSAPP_QA_RESTART_BEFORE
       secondPrefix: WHATSAPP_QA_RESTART_AFTER

@@ -88,20 +88,27 @@ class DocsSource {
     }
     const origins = [];
     let end = 0;
+    let changed = false;
     this.text = this.text.replace(pattern, (...args) => {
       const offset = args.at(-2);
       const value = typeof replacement === "function" ? replacement(...args) : replacement;
+      if (value === args[0]) {
+        return value;
+      }
+      changed = true;
       for (let i = end; i < offset; i++) {
         origins.push(this.origins[i]);
       }
-      for (let i = 0; i < value.length; i++) {
-        origins.push(
-          value === args[0] ? this.origins[offset + i] : mapped ? this.origins[offset] : undefined,
-        );
+      // Replacement offsets count UTF-16 code units, including both surrogate halves.
+      for (let codeUnits = value.length; codeUnits > 0; codeUnits--) {
+        origins.push(mapped ? this.origins[offset] : undefined);
       }
       end = offset + args[0].length;
       return value;
     });
+    if (!changed) {
+      return this;
+    }
     for (let i = end; i < this.origins.length; i++) {
       origins.push(this.origins[i]);
     }
@@ -257,6 +264,7 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   let literalLine = 0;
   let depth = 0;
   let fenceEndLine = 0;
+  let fenceIndent = 0;
   const projectionLines = [];
   const recordLine = (line, projection = line) => {
     projectionLines.push(projection);
@@ -266,12 +274,13 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   let text = new DocsSource(input, firstLine).replace(
     /(?<=^|\n)[^\n]*/g,
     (line, offset, source) => {
-      const insideLiteral = offset < literalEnd;
-      let normalized =
-        depth && (!insideLiteral || inlineCode)
-          ? line.replace(new RegExp(`^ {1,${depth * 2}}`), "")
-          : line;
       const lineIndex = projectionLines.length;
+      const insideLiteral = offset < literalEnd;
+      const indent = lineIndex < fenceEndLine ? fenceIndent : depth * 2;
+      let normalized =
+        indent && (!insideLiteral || inlineCode)
+          ? line.replace(new RegExp(`^ {1,${indent}}`), "")
+          : line;
       if (insideLiteral && !inlineCode) {
         literalContinuationLines.add(lineIndex);
       }
@@ -280,18 +289,22 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
       }
       if (!insideLiteral && /`{3,}|~{3,}/.test(normalized)) {
         const suffix = source.slice(offset + line.length);
-        // Keep the processed prefix for list/quote context. Component depth is
-        // fixed inside this fence; CommonMark owns its closing/container boundary.
+        const openingIndent = line.length - normalized.length;
+        // Remove only the opener's component indentation from literal content.
+        // CommonMark still owns list/quote context and the closing boundary.
         const projection = [
           ...projectionLines,
           normalized +
-            (depth ? suffix.replace(new RegExp(`^ {1,${depth * 2}}`, "gm"), "") : suffix),
+            (openingIndent
+              ? suffix.replace(new RegExp(`^ {1,${openingIndent}}`, "gm"), "")
+              : suffix),
         ].join("\n");
         const token = codeParser
           .parse(projection, {})
           .find((entry) => entry.type === "fence" && entry.map[0] === lineIndex);
         if (token) {
           fenceEndLine = token.map[1];
+          fenceIndent = openingIndent;
           return recordLine(normalized);
         }
       }
@@ -420,24 +433,53 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   return text.replace(placeholder, (_, index) => saved[Number(index)], false);
 }
 
-// mint@4.2.808/common@1.0.1096 published these suffixes before counting.
-// Keep apostrophes as separators so slugify 2.2.1 cannot join them early
-// and change existing heading or component links.
-function mintBaseSlug(title, options) {
-  return slugify(title, { ...options, customReplacements: [["'", "-"]] }).replace(
-    /([a-zA-Z\d]+)-([ts])(-|$)/g,
-    "$1$2$3",
-  );
+// Published documentation anchors retain these transliterations across slugify upgrades.
+const publishedSlugReplacements = [
+  ["'", "-"],
+  ["إ", "i"],
+  ["Ə", "-"],
+  ["ə", "-"],
+  ["Œ", "-"],
+  ["œ", "-"],
+  ["ẞ", "SS"],
+  ["ու", "vo-"],
+  ["ՈՒ", "Vo-"],
+  ["Ու", "Vo-"],
+  ["𝓀", "h"],
+  ["𝕆", "N"],
+  ["ⓒ", "(b)"],
+  ["ⓓ", "(c)"],
+];
+
+function publishedBaseSlug(title, options) {
+  let value = slugify(title, {
+    ...options,
+    lowercase: false,
+    decamelize: false,
+    customReplacements: publishedSlugReplacements,
+  });
+  if (options.decamelize) {
+    // The published acronym rule keeps APIUsage joined but splits APISection.
+    value = value
+      .replace(/([A-Z]{2})(\d)/g, "$1-$2")
+      .replace(/([a-z\d])([A-Z])/g, "$1-$2")
+      .replace(/([A-Z])([A-Z][a-rt-z\d]+)/g, "$1-$2");
+  }
+  if (options.lowercase !== false) {
+    value = value.toLowerCase();
+  }
+  // Published anchors join these suffixes before counting duplicates.
+  return value.replace(/([a-zA-Z\d]+)-([ts])(-|$)/g, "$1$2$3");
 }
-function mintSlug(title, counter = slugifyWithCounter()) {
+function publishedSlug(title, counter = slugifyWithCounter()) {
   const encoded = anchor.defaults.slugify(title);
   const options = /%[0-9A-F]{2}/.test(encoded)
     ? { decamelize: false, preserveCharacters: ["%", "_"], lowercase: false }
     : { decamelize: false, preserveCharacters: ["_"] };
-  const base = mintBaseSlug(encoded, options);
+  const base = publishedBaseSlug(encoded, options);
   return counter(base, options);
 }
-function cleanMintId(id) {
+function cleanPublishedId(id) {
   return decodeURIComponent(id.replace(/%(?![0-9A-Fa-f]{2})/g, "%25"))
     .replace(/[?,;:!'"()[\]{}]/g, "")
     .replace(
@@ -445,7 +487,7 @@ function cleanMintId(id) {
       "",
     );
 }
-function deduplicateMintId(id, seen) {
+function deduplicatePublishedId(id, seen) {
   const count = seen.get(id) ?? 0;
   seen.set(id, count + 1);
   if (!count) {
@@ -561,7 +603,7 @@ export function parseDocsDocument(markdown, md = createDocsMarkdown(), options =
         Number(token.tag.slice(1)) <= 4 &&
         !/\{[^}]*\}/.test(tokens[i + 1].content)
       ) {
-        let alias = mintSlug(
+        let alias = publishedSlug(
           tokens[i + 1].children
             .map((child) =>
               child.type === "softbreak"
@@ -578,7 +620,7 @@ export function parseDocsDocument(markdown, md = createDocsMarkdown(), options =
             ["accordionOpen", "accordion-group", "Update", "promptOpen"].includes(kind),
           )
         ) {
-          alias = deduplicateMintId(cleanMintId(alias), toc);
+          alias = deduplicatePublishedId(cleanPublishedId(alias), toc);
         }
         candidates.push({ token, id, alias });
       }
@@ -615,21 +657,21 @@ export function parseDocsDocument(markdown, md = createDocsMarkdown(), options =
         if (!attrs.id) {
           const title = attrs.title;
           if (kind === "tabOpen" && title) {
-            component.alias = mintSlug(title, tabs);
+            component.alias = publishedSlug(title, tabs);
           } else if (kind === "stepOpen" && title && !["", "true"].includes(attrs.noAnchor)) {
             const parent = stack.at(-2);
             const size =
               attrs.titleSize ??
               (parent?.kind === "stepsOpen" ? parent.attrs.titleSize : undefined);
             component.alias = ["h2", "h3"].includes(size)
-              ? deduplicateMintId(mintSlug(title), toc)
-              : mintSlug(title);
+              ? deduplicatePublishedId(publishedSlug(title), toc)
+              : publishedSlug(title);
           } else if (kind === "accordionOpen" && title) {
-            component.alias = mintBaseSlug(title.replace(":", "-"), { decamelize: false });
+            component.alias = publishedBaseSlug(title.replace(":", "-"), { decamelize: false });
           } else if (kind === "paramOpen") {
             const name = attrs.query ?? attrs.path ?? attrs.body ?? attrs.header ?? attrs.name;
             if (name) {
-              component.alias = mintBaseSlug(`param-${name}`, { decamelize: true });
+              component.alias = publishedBaseSlug(`param-${name}`, { decamelize: true });
             }
           }
         }
@@ -720,7 +762,7 @@ export function parseFrontmatter(source) {
 
   const frontmatterStart = opening[0].length;
   const closing = closingDelimiter.exec(input.slice(frontmatterStart));
-  if (!closing || closing.index === undefined) {
+  if (!closing) {
     return { data: {}, content: input };
   }
 

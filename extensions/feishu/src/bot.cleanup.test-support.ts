@@ -10,7 +10,7 @@ afterAll(() => {
   vi.doUnmock("./reasoning-preview.js");
   vi.doUnmock("./send.js");
   vi.doUnmock("./media.js");
-  vi.doUnmock("./audio-preflight.runtime.js");
+  vi.doUnmock("openclaw/plugin-sdk/media-runtime");
   vi.doUnmock("./client.js");
   vi.doUnmock("./bot-name.js");
   vi.doUnmock("openclaw/plugin-sdk/conversation-runtime");

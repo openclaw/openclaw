@@ -1,12 +1,13 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { publishSettledUpdateCommandResult } from "./update-command-terminal-publication.js";
 
 const terminal = vi.hoisted(() => ({ settle: vi.fn(), publish: vi.fn() }));
-vi.mock("./update-command-terminal.js", () => ({
+vi.mock("./update-command-terminal.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-terminal.js")>()),
   resolveSettledUpdateCommandResult: terminal.settle,
-  publishUpdateCommandTerminalResult: terminal.publish,
+  prepareUpdateCommandTerminalResult: terminal.publish,
 }));
 
 const result: UpdateRunResult = { status: "ok", mode: "git", steps: [], durationMs: 0 };
@@ -19,7 +20,7 @@ type ReportingState = {
 };
 beforeEach(() => {
   vi.clearAllMocks();
-  terminal.publish.mockImplementation((_params, value: UpdateRunResult) => value);
+  terminal.publish.mockImplementation((_params, value: UpdateRunResult) => () => value);
 });
 
 it("reads notification and completed downtime after settlement finishes", async () => {

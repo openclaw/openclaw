@@ -12,9 +12,11 @@ describe("MSTeams SQLite mutation lock", () => {
   beforeEach(() => {
     setMSTeamsRuntime(msteamsRuntimeStub);
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-msteams-lock-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
@@ -22,7 +24,7 @@ describe("MSTeams SQLite mutation lock", () => {
     let releaseFirst: (() => void) | undefined;
     const firstEntered = vi.fn();
     const secondEntered = vi.fn();
-    const first = withMSTeamsSqliteMutationLock({ stateDir }, "polls", async () => {
+    const first = withMSTeamsSqliteMutationLock("polls", async () => {
       firstEntered();
       await new Promise<void>((resolve) => {
         releaseFirst = resolve;
@@ -30,7 +32,7 @@ describe("MSTeams SQLite mutation lock", () => {
       return "first";
     });
     await vi.waitFor(() => expect(firstEntered).toHaveBeenCalledOnce());
-    const second = withMSTeamsSqliteMutationLock({ stateDir }, "polls", async () => {
+    const second = withMSTeamsSqliteMutationLock("polls", async () => {
       secondEntered();
       return "second";
     });

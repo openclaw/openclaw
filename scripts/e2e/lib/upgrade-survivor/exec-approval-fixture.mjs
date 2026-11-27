@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { readDatabase } from "./observations.mjs";
 
 function expectedPolicy() {
   return {
@@ -79,16 +79,13 @@ export function assertExecApprovalPolicySurvived(stateDir, stage) {
     // could create default state and conceal an import missed by the first update.
     const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
     assert(fs.existsSync(dbPath), "exec approval canonical database missing after update");
-    const db = new DatabaseSync(dbPath, { readOnly: true });
-    try {
+    policy = readDatabase(dbPath, (db) => {
       const row = db
         .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = ?")
         .get("current");
       assert(row, "exec approval canonical policy missing after update");
-      policy = parsePolicy(row.raw_json);
-    } finally {
-      db.close();
-    }
+      return parsePolicy(row.raw_json);
+    });
   }
   const expected = stage === "baseline" ? legacyPolicy() : expectedPolicy();
   // Socket credentials are runtime-owned; compare the complete authored policy

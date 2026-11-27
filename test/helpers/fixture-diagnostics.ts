@@ -26,21 +26,20 @@ function captureLinuxProcessTree(pid: number | undefined) {
   if (process.platform !== "linux" || pid === undefined || pid <= 0) {
     return undefined;
   }
-  const pending = [pid];
-  const seen = new Set(pending);
-  const processes: Array<{
-    pid: number;
-    parentPid?: number;
-    category?: "node" | "npm" | "esbuild" | "other";
-    unavailable?: boolean;
-    threads: Array<{ tid: number; state?: string; waitChannel?: string }>;
-  }> = [];
+  const processes = new Map<
+    number,
+    {
+      pid: number;
+      parentPid?: number;
+      category?: "node" | "npm" | "esbuild" | "other";
+      unavailable?: boolean;
+      threads: Array<{ tid: number; state?: string; waitChannel?: string }>;
+    }
+  >([[pid, { pid, threads: [] }]]);
   let truncated = false;
-  for (const currentPid of pending) {
+  for (const [currentPid, entry] of processes) {
     const root = `/proc/${currentPid}`;
-    const threads: (typeof processes)[number]["threads"] = [];
-    const entry: (typeof processes)[number] = { pid: currentPid, threads };
-    processes.push(entry);
+    const { threads } = entry;
     const comm = readProcFile(`${root}/comm`)?.trim();
     // Only fixed categories escape this helper; process titles can contain arguments.
     entry.category =
@@ -83,15 +82,14 @@ function captureLinuxProcessTree(pid: number | undefined) {
             continue;
           }
           const childPid = Number(child);
-          if (seen.has(childPid)) {
+          if (processes.has(childPid)) {
             continue;
           }
-          if (seen.size === MAX_PROCESSES) {
+          if (processes.size === MAX_PROCESSES) {
             truncated = true;
             break;
           }
-          seen.add(childPid);
-          pending.push(childPid);
+          processes.set(childPid, { pid: childPid, threads: [] });
         }
       }
     } catch {
@@ -100,7 +98,7 @@ function captureLinuxProcessTree(pid: number | undefined) {
       directory?.closeSync();
     }
   }
-  return { processes, truncated };
+  return { processes: [...processes.values()], truncated };
 }
 
 type ChildObservation = Pick<ChildProcess, "pid" | "exitCode" | "signalCode"> & {

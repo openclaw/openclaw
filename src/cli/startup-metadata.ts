@@ -6,17 +6,13 @@ import { fileURLToPath } from "node:url";
 const STARTUP_METADATA_FILE = "cli-startup-metadata.json";
 const startupMetadataByPath = new Map<string, Record<string, unknown> | null>();
 
-function resolveStartupMetadataPathCandidates(moduleUrl: string): string[] {
-  const moduleDir = path.dirname(fileURLToPath(moduleUrl));
-  return [
-    path.resolve(moduleDir, STARTUP_METADATA_FILE),
-    path.resolve(moduleDir, "..", STARTUP_METADATA_FILE),
-  ];
-}
-
 export function readCliStartupMetadata(moduleUrl: string): Record<string, unknown> | null {
   // Check both source and bundled layouts; cache misses too so repeated help stays cheap.
-  for (const metadataPath of resolveStartupMetadataPathCandidates(moduleUrl)) {
+  const moduleDir = path.dirname(fileURLToPath(moduleUrl));
+  for (const metadataPath of [
+    path.resolve(moduleDir, STARTUP_METADATA_FILE),
+    path.resolve(moduleDir, "..", STARTUP_METADATA_FILE),
+  ]) {
     const cached = startupMetadataByPath.get(metadataPath);
     if (cached !== undefined) {
       if (cached) {

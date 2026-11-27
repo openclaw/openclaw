@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, expect, it, vi } from "vitest";
 
 afterEach(() => {
@@ -17,6 +18,8 @@ it("constructs the provider without importing the broad transcription SDK", asyn
     await import("./realtime-transcription-provider-factory.js");
   const provider = buildDeepgramRealtimeTranscriptionProvider({
     createRealtimeTranscriptionWebSocketSession,
+    isProviderAuthProfileConfiguredAsync: async () => false,
+    resolveProviderAuthProfileApiKey: async () => undefined,
   });
   expect(provider.id).toBe("deepgram");
   expect(provider.aliases).toContain("deepgram-realtime");

@@ -4,7 +4,7 @@ These internal hooks ship with OpenClaw. They subscribe to colon-separated event
 such as `command:new`; they are not typed plugin hooks or HTTP webhooks.
 
 For setup, custom hook authoring, event payloads, discovery precedence, and
-troubleshooting, use the canonical [Hooks guide](https://docs.openclaw.ai/automation/hooks).
+troubleshooting, use the [Hooks guide](https://docs.openclaw.ai/automation/hooks).
 For command flags and Gateway targeting, see the
 [hooks CLI reference](https://docs.openclaw.ai/cli/hooks).
 

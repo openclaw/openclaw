@@ -4,7 +4,6 @@ import { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } from "@ope
 import type { z } from "zod";
 import { resolveActiveManagedProxyTlsOptions } from "../infra/net/proxy/managed-proxy-undici.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
@@ -22,10 +21,6 @@ type PassiveChannelStatusSnapshot = {
 type TrafficStatusSnapshot = {
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
-};
-
-type StoppableMonitor = {
-  stop: () => void;
 };
 
 type RequireOpenAllowFromFn = (params: {
@@ -73,23 +68,6 @@ export function buildTrafficStatusSummary(snapshot?: TrafficStatusSnapshot | nul
     lastInboundAt: snapshot?.lastInboundAt ?? null,
     lastOutboundAt: snapshot?.lastOutboundAt ?? null,
   };
-}
-
-/**
- * Runs a passive monitor until the supplied abort signal fires, then calls `stop()`.
- * This adapts simple plugin monitors to the shared passive account lifecycle.
- */
-export async function runStoppablePassiveMonitor<TMonitor extends StoppableMonitor>(params: {
-  abortSignal: AbortSignal;
-  start: () => Promise<TMonitor>;
-}): Promise<void> {
-  await runPassiveAccountLifecycle({
-    abortSignal: params.abortSignal,
-    start: params.start,
-    stop: async (monitor) => {
-      monitor.stop();
-    },
-  });
 }
 
 /**

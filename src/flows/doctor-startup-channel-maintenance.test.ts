@@ -1,5 +1,17 @@
-// Doctor startup maintenance tests cover channel preview warnings and startup repair flow.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import * as startup from "../channels/plugins/lifecycle-startup.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createDoctorHealthFlowContext,
+  createDoctorPrompterFixture,
+  decideDoctorContributionPending,
+} from "./doctor-health-context.test-support.js";
+import { resolveDoctorHealthContributions } from "./doctor-health-contributions.test-support.js";
 import {
   collectChannelPreviewWarningHealthFindings,
   maybeRunDoctorStartupChannelMaintenance,
@@ -12,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   })),
   collectChannelDoctorPreviewWarnings: vi.fn(async (): Promise<string[]> => []),
 }));
+const cfg = { channels: { matrix: { enabled: true } } };
 
 vi.mock("../commands/doctor/shared/preview-warnings.js", () => ({
   resolveDoctorChannelPreviewConfig: mocks.resolveDoctorChannelPreviewConfig,
@@ -21,118 +34,93 @@ vi.mock("../commands/doctor/shared/channel-doctor.js", () => ({
   collectChannelDoctorPreviewWarnings: mocks.collectChannelDoctorPreviewWarnings,
 }));
 
-describe("doctor startup channel maintenance", () => {
-  beforeEach(() => {
-    mocks.resolveDoctorChannelPreviewConfig.mockReset().mockImplementation(async (params) => ({
-      cfg: params.cfg,
-      diagnostics: [],
-    }));
-    mocks.collectChannelDoctorPreviewWarnings.mockReset().mockResolvedValue([]);
-  });
+beforeEach(() => {
+  vi.restoreAllMocks();
+  mocks.resolveDoctorChannelPreviewConfig.mockClear();
+  mocks.collectChannelDoctorPreviewWarnings.mockReset().mockResolvedValue([]);
+});
 
-  it("maps channel doctor preview warnings to structured findings", async () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          enabled: true,
+it("maps channel doctor preview warnings to structured findings", async () => {
+  mocks.collectChannelDoctorPreviewWarnings.mockResolvedValue([
+    "- channels.matrix: stale config needs startup maintenance.",
+  ]);
+
+  await expect(
+    collectChannelPreviewWarningHealthFindings({ cfg, allowExec: true }),
+  ).resolves.toEqual([
+    expect.objectContaining({
+      severity: "warning",
+      message: "channels.matrix: stale config needs startup maintenance.",
+      path: "channels.matrix",
+      fixHint: expect.stringContaining("openclaw doctor --fix"),
+    }),
+  ]);
+  expect(mocks.resolveDoctorChannelPreviewConfig).toHaveBeenCalledWith({
+    cfg,
+    env: process.env,
+    allowExec: true,
+  });
+});
+
+it.each([false, true])("runs Matrix startup migration only for repair=%s", async (shouldRepair) => {
+  const runtime = { log: vi.fn(), error: vi.fn() };
+  const run = vi.spyOn(startup, "runChannelPluginStartupMaintenance").mockResolvedValue(undefined);
+  await maybeRunDoctorStartupChannelMaintenance({ cfg, runtime, shouldRepair });
+
+  if (!shouldRepair) {
+    expect(run).not.toHaveBeenCalled();
+    return;
+  }
+  expect(run).toHaveBeenCalledOnce();
+  const call = run.mock.calls[0]![0];
+  expect(call.cfg).toBe(cfg);
+  expect(call.env).toBe(process.env);
+  expect(call.trigger).toBe("doctor-fix");
+  call.log.info?.("migrated");
+  call.log.warn?.("needs attention");
+  expect(runtime.log).toHaveBeenCalledExactlyOnceWith("migrated");
+  expect(runtime.error).toHaveBeenCalledExactlyOnceWith("needs attention");
+});
+
+it("has pending work only when a loaded channel plugin declares startup maintenance", async () => {
+  const contribution = resolveDoctorHealthContributions().find(
+    (entry) => entry.id === "doctor:startup-channel-maintenance",
+  )!;
+  const ctx = (shouldRepair: boolean) =>
+    createDoctorHealthFlowContext({
+      cfg,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompterFixture(shouldRepair),
+    });
+  const previous = captureActivePluginRegistrySnapshot();
+  try {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "plain", plugin: createChannelTestPluginBase({ id: "plain" }), source: "test" },
+      ]),
+    );
+    await expect(decideDoctorContributionPending(contribution, ctx(true))).resolves.toBe("none");
+
+    const runStartupMaintenance = vi.fn(async () => {});
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "maintained",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "maintained" }),
+            lifecycle: { runStartupMaintenance },
+          },
+          source: "test",
         },
-      },
-    };
-    mocks.collectChannelDoctorPreviewWarnings.mockResolvedValue([
-      "- channels.matrix: stale config needs startup maintenance.",
-    ]);
-
-    await expect(
-      collectChannelPreviewWarningHealthFindings({
-        cfg,
-        doctorFixCommand: "openclaw doctor --fix --dry-run",
-        env: { OPENCLAW_TEST: "1" },
-        allowExec: true,
-      }),
-    ).resolves.toEqual([
-      {
-        checkId: "core/doctor/channel-preview-warnings",
-        severity: "warning",
-        message: "channels.matrix: stale config needs startup maintenance.",
-        path: "channels.matrix",
-        requirement: "Configured channels should not emit doctor preview warnings.",
-        fixHint:
-          "Run `openclaw doctor --fix --dry-run` if the channel warning recommends repair, or update the affected channel config manually.",
-      },
-    ]);
-    expect(mocks.resolveDoctorChannelPreviewConfig).toHaveBeenCalledWith({
-      cfg,
-      env: { OPENCLAW_TEST: "1" },
-      allowExec: true,
-    });
-    expect(mocks.collectChannelDoctorPreviewWarnings).toHaveBeenCalledWith({
-      cfg,
-      doctorFixCommand: "openclaw doctor --fix --dry-run",
-      env: { OPENCLAW_TEST: "1" },
-    });
-  });
-
-  it("runs Matrix startup migration during repair flows", async () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "tok-123",
-        },
-      },
-    };
-    const calls: unknown[] = [];
-    const runtimeCalls: string[] = [];
-    const runtime = {
-      log: (message: string) => runtimeCalls.push(`log:${message}`),
-      error: (message: string) => runtimeCalls.push(`error:${message}`),
-    };
-
-    await maybeRunDoctorStartupChannelMaintenance({
-      cfg,
-      env: { OPENCLAW_TEST: "1" },
-      runChannelPluginStartupMaintenance: async (input) => {
-        calls.push(input);
-      },
-      runtime,
-      shouldRepair: true,
-    });
-
-    expect(calls).toHaveLength(1);
-    const [call] = calls as Array<{
-      cfg: typeof cfg;
-      env: { OPENCLAW_TEST: string };
-      log: { info: (message: string) => void; warn: (message: string) => void };
-      trigger: string;
-      logPrefix: string;
-    }>;
-    if (!call) {
-      throw new Error("Expected startup maintenance call");
-    }
-    expect(call.cfg).toBe(cfg);
-    expect(call.env).toEqual({ OPENCLAW_TEST: "1" });
-    expect(call.trigger).toBe("doctor-fix");
-    expect(call.logPrefix).toBe("doctor");
-    expect(call.log.info).toBeTypeOf("function");
-    expect(call.log.warn).toBeTypeOf("function");
-    call.log.info("migrated");
-    call.log.warn("needs attention");
-    expect(runtimeCalls).toEqual(["log:migrated", "error:needs attention"]);
-  });
-
-  it("skips startup migration outside repair flows", async () => {
-    const calls: unknown[] = [];
-
-    await maybeRunDoctorStartupChannelMaintenance({
-      cfg: { channels: { matrix: {} } },
-      runChannelPluginStartupMaintenance: async (input) => {
-        calls.push(input);
-      },
-      runtime: { log() {}, error() {} },
-      shouldRepair: false,
-    });
-
-    expect(calls).toStrictEqual([]);
-  });
+      ]),
+    );
+    await expect(decideDoctorContributionPending(contribution, ctx(false))).resolves.toBe("none");
+    const repair = ctx(true);
+    await expect(decideDoctorContributionPending(contribution, repair)).resolves.toBe("work");
+    expect(runStartupMaintenance).not.toHaveBeenCalled();
+    await contribution.run(repair);
+    expect(runStartupMaintenance).toHaveBeenCalledOnce();
+  } finally {
+    restoreActivePluginRegistrySnapshot(previous);
+  }
 });

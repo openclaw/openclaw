@@ -1,5 +1,4 @@
-// Agent config mutation helpers wrap retrying config writes for create/update/
-// delete flows and surface typed precondition failures to gateway handlers.
+import { createAgent } from "../../agents/agent-create.js";
 import { hasAgentRosterProperty, tryResolveSoleAgentId } from "../../agents/agent-roster.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
@@ -9,10 +8,11 @@ import {
   listAgentEntries,
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
-import { mutateConfigFileWithRetry } from "../../config/config.js";
+import { mutateConfigFileWithRetry, transformConfigFileWithRetry } from "../../config/config.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
+import { copyRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
 import type { AgentConfig } from "../../config/types.agents.js";
-import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 type AgentDeleteMutationResult = {
@@ -22,18 +22,12 @@ type AgentDeleteMutationResult = {
   removedBindings: number;
 };
 
-/** Typed precondition failure surfaced by agent mutation handlers as gateway errors. */
 export class AgentConfigPreconditionError extends Error {}
 
 export class AgentModelSelectionError extends Error {}
 
-type AgentConfigUpdate = {
-  agentId: string;
-  name?: string;
-  workspace?: string;
-  model?: string | null;
+type AgentConfigUpdate = Omit<Parameters<typeof applyAgentConfig>[1], "agentDir"> & {
   agentRuntime?: string;
-  identity?: IdentityConfig;
 };
 
 function isModelOnlyUpdate(params: AgentConfigUpdate): boolean {
@@ -65,7 +59,6 @@ export function validateAgentModelSelectionUpdate(
   return undefined;
 }
 
-/** Checks the current config snapshot for a concrete agent entry. */
 export function isConfiguredAgent(cfg: OpenClawConfig, agentId: string): boolean {
   return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
 }
@@ -82,12 +75,24 @@ export function isImplicitAgentModelUpdate(
   );
 }
 
-/** Updates an existing agent entry while preserving omitted fields. */
-export async function updateAgentConfigEntry(params: AgentConfigUpdate): Promise<void> {
-  const selectionError = validateAgentModelSelectionUpdate(params);
-  if (selectionError) {
-    throw new AgentModelSelectionError(selectionError);
-  }
+export function createAgentConfigEntry(
+  params: Omit<Parameters<typeof createAgent>[0], "transformConfig">,
+  writeOptions?: ConfigWriteOptions,
+) {
+  return createAgent({
+    ...params,
+    transformConfig: (mutation) =>
+      transformConfigFileWithRetry({
+        ...mutation,
+        writeOptions: copyRuntimeConfigWriteApplication(writeOptions, mutation.writeOptions ?? {}),
+      }),
+  });
+}
+
+export async function updateAgentConfigEntry(
+  params: AgentConfigUpdate & { assertCurrent?: () => void },
+  writeOptions?: ConfigWriteOptions,
+): Promise<void> {
   const selectionModules = params.agentRuntime
     ? await Promise.all([
         import("../../agents/model-runtime-choice.js"),
@@ -99,15 +104,16 @@ export async function updateAgentConfigEntry(params: AgentConfigUpdate): Promise
   await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
     // Identity replacement may intentionally reduce the configuration size.
-    writeOptions: {
+    writeOptions: copyRuntimeConfigWriteApplication(writeOptions, {
       ...(params.identity ? { allowConfigSizeDrop: true } : {}),
       assertConfigPathForWrite: () => {
+        params.assertCurrent?.();
         const error = validateSelection?.();
         if (error) {
           throw new AgentModelSelectionError(error);
         }
       },
-    },
+    }),
     mutate: async (draft) => {
       validateSelection = undefined;
       const configured = isConfiguredAgent(draft, params.agentId);
@@ -154,24 +160,24 @@ export async function updateAgentConfigEntry(params: AgentConfigUpdate): Promise
 export async function deleteAgentConfigEntry(params: {
   agentId: string;
   validate?: (agent: AgentConfig) => void;
-  validateConfig?: (config: OpenClawConfig) => void;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   allowMissing?: boolean;
-  allowConfigSizeDrop?: boolean;
-  fallbackWorkspace?: string;
+  writeOptions?: ConfigWriteOptions;
 }): Promise<{
   nextConfig: OpenClawConfig;
   result: AgentDeleteMutationResult | undefined;
 }> {
   const committed = await mutateConfigFileWithRetry<AgentDeleteMutationResult | undefined>({
     afterWrite: { mode: "auto" },
-    writeOptions: {
+    writeOptions: copyRuntimeConfigWriteApplication(params.writeOptions, {
       allowedAgentRosterRemovals: [params.agentId],
       assertConfigPathForWrite: params.assertCurrent,
-      ...(params.allowConfigSizeDrop ? { allowConfigSizeDrop: true } : {}),
-    },
+      beforeCommit: params.assertCurrentAsync,
+      allowConfigSizeDrop: true,
+    }),
     mutate: (draft) => {
-      params.validateConfig?.(draft);
+      params.assertCurrent?.();
       const configured = isConfiguredAgent(draft, params.agentId);
       if (!configured && !params.allowMissing) {
         throw new AgentConfigPreconditionError(`agent "${params.agentId}" not found`);
@@ -180,9 +186,7 @@ export async function deleteAgentConfigEntry(params: {
       if (agent) {
         params.validate?.(agent);
       }
-      const workspaceDir = agent
-        ? resolveAgentWorkspaceDir(draft, params.agentId)
-        : (params.fallbackWorkspace ?? "");
+      const workspaceDir = agent ? resolveAgentWorkspaceDir(draft, params.agentId) : "";
       const agentDir = resolveAgentDir(draft, params.agentId);
       const sessionsDir = resolveSessionTranscriptsDirForAgent(params.agentId);
       const result = pruneAgentConfig(draft, params.agentId);

@@ -1,317 +1,114 @@
-/** Accepted cancellation retains exact task, actor, and late-runtime custody. */
-import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+/** Accepted cancellation retains exact turn, actor, and late-runtime custody. */
 import { describe, expect, it } from "vitest";
-import {
-  requireTaskByRunId,
-  withAcpManagerTaskStateDir,
-} from "../../../test/helpers/acp-manager-task-state.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
-import { withTaskCancellationControl } from "../../tasks/task-cancellation-context.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 import {
-  AcpSessionManager,
+  cancelledEvent,
+  createAcceptedFixture as fixture,
+  gate,
+} from "./manager.ownership.test-support.js";
+import {
   baseCfg,
-  createRuntime,
   disposeAcpSessionManagerInstance,
   extractStatesFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  mockParentedAcpSessionEntries,
-  readySessionMeta,
 } from "./manager.test-helpers.js";
 
-function fixture(sessionKey = "agent:codex:acp:accepted-ownership") {
-  const runtime = createRuntime();
-  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: runtime.runtime });
-  hoisted.readAcpSessionEntryMock.mockReturnValue({ sessionKey, acp: readySessionMeta() });
-  const manager = new AcpSessionManager();
-  return { ...runtime, manager, target: { cfg: baseCfg, sessionKey } };
-}
+const cancelFailure = { message: "cancel transport failure" };
+const rejectedCancellation = [{ status: "rejected", reason: cancelFailure }];
+const rejectedStop = [
+  {
+    status: "rejected",
+    reason: { message: "Session source cleanup failed", errors: [cancelFailure] },
+  },
+];
 
 describe("ACP accepted cancellation ownership", () => {
   installAcpSessionManagerTestLifecycle();
 
-  it("cancels only the accepted snapshot and records queued tasks before releasing the actor", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const state = fixture();
-      mockParentedAcpSessionEntries({
-        childSessionKey: state.target.sessionKey,
-        parentSessionKey: "agent:main:main",
-      });
-      const entered = createDeferred();
-      const release = createDeferred();
+  it("cancels only the accepted snapshot and records queued cancellation signals before releasing the actor", async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
+      const state = fixture({ parented: true });
+      const actorGate = gate();
       state.getStatus.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
+        await actorGate.wait();
         return { summary: "ready" };
       });
       const actor = state.manager.getSessionStatus(state.target);
-      await entered.promise;
-      const events: AcpRuntimeEvent[][] = [[], []];
-      const cancelled = events.map((row, index) =>
-        state.manager.runTurn({
-          ...state.target,
-          provenance: "system",
-          mode: "prompt",
+      await actorGate.entered;
+      const snapshot = [0, 1].map((index) =>
+        state.startTurn(`snapshot-${index}`, {
           text: "cancelled",
-          requestId: `snapshot-${index}`,
-          onEvent: (event) => {
-            row.push(event);
-          },
+          admittedRunContext: createTestAdmittedRunContext(`snapshot-${index}`),
         }),
       );
-      const cancellation = state.manager.cancelSession(state.target);
-      const later = state.manager.runTurn({
-        ...state.target,
-        provenance: "system",
-        mode: "prompt",
-        text: "survivor",
-        requestId: "later",
-      });
+      const cancelled = snapshot.map(({ turn }) => turn);
+      const events = snapshot.map((accepted) => accepted.events);
+      const cancellation = stopAcpControllerTurns(state.target);
+      const { turn: later } = state.startTurn("later", { text: "survivor" });
       try {
         await Promise.all([...cancelled, cancellation]);
         expect(state.runTurn).not.toHaveBeenCalled();
-        expect(events).toEqual(
-          Array.from({ length: 2 }, () => [
-            { type: "done", status: "cancelled", stopReason: "cancel" },
-          ]),
-        );
-        expect(requireTaskByRunId("snapshot-0").status).toBe("cancelled");
-        expect(requireTaskByRunId("snapshot-1").status).toBe("cancelled");
+        expect(events).toEqual([[cancelledEvent], [cancelledEvent]]);
+        expect(
+          (await state.recordedEvents())
+            .map(({ kind, runId, payload }) => ({ kind, runId, payload }))
+            .toSorted((left, right) => String(left.runId).localeCompare(String(right.runId))),
+        ).toMatchObject([
+          { kind: "run_failed", runId: "snapshot-0", payload: { outcome: "cancelled" } },
+          { kind: "run_failed", runId: "snapshot-1", payload: { outcome: "cancelled" } },
+        ]);
       } finally {
-        release.resolve();
+        actorGate.release();
         await Promise.allSettled([actor, ...cancelled, cancellation, later]);
       }
       expect(state.runTurn).toHaveBeenCalledOnce();
       expect(state.runTurn.mock.calls[0]?.[0].text).toBe("survivor");
-      expect(requireTaskByRunId("later").status).toBe("succeeded");
     });
   });
 
   it("cancels a queued exact instance without terminalizing its same-id predecessor", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const state = fixture();
-      mockParentedAcpSessionEntries({
-        childSessionKey: state.target.sessionKey,
-        parentSessionKey: "agent:main:main",
-      });
-      const entered = createDeferred();
-      const release = createDeferred();
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
+      const state = fixture({ parented: true });
+      const turnGate = gate();
       let activeSignal: AbortSignal | undefined;
       state.runTurn.mockImplementationOnce(async function* (input) {
         activeSignal = input.signal;
-        entered.resolve();
-        await release.promise;
+        await turnGate.wait();
         yield { type: "done", stopReason: "end_turn" };
       });
-      const first = state.manager.runTurn({
-        ...state.target,
-        provenance: "system",
-        mode: "prompt",
-        text: "predecessor",
-        requestId: "same-id",
-      });
-      await entered.promise;
-      const before = requireTaskByRunId("same-id");
-      const context = createTestAdmittedRunContext("same-id");
-      const events: AcpRuntimeEvent[] = [];
-      const queued = state.manager.runTurn({
-        ...state.target,
-        provenance: "system",
-        mode: "prompt",
+      const { turn: first } = state.startTurn("same-id", { text: "predecessor" });
+      await turnGate.entered;
+      const cancellation = new AbortController();
+      const { turn: queued, events } = state.startTurn("same-id", {
         text: "successor",
-        requestId: "same-id",
-        admittedRunContext: context,
-        onEvent: (event) => {
-          events.push(event);
-        },
+        admittedRunContext: createTestAdmittedRunContext("same-id"),
+        signal: cancellation.signal,
       });
       try {
-        await state.manager.cancelSession({
-          ...state.target,
-          expectedRunId: "same-id",
-          expectedInstanceId: context.operationalRunInstance.instanceId,
-          expectedOwnerKey: "agent:main:main",
-        });
+        cancellation.abort();
         await queued;
-        expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
-        expect(requireTaskByRunId("same-id")).toEqual(before);
+        expect(events).toEqual([cancelledEvent]);
         expect(extractStatesFromUpserts().at(-1)).toBe("running");
         expect(activeSignal?.aborted).toBe(false);
         expect(state.cancel).not.toHaveBeenCalled();
+        expect(await state.recordedEvents()).toEqual([]);
       } finally {
-        release.resolve();
+        turnGate.release();
         await Promise.allSettled([first, queued]);
       }
       expect(state.runTurn).toHaveBeenCalledOnce();
-    });
-  });
-
-  it("refuses stale caller authority before aborting an accepted turn", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const state = fixture();
-      mockParentedAcpSessionEntries({
-        childSessionKey: state.target.sessionKey,
-        parentSessionKey: "agent:main:main",
-      });
-      const entered = createDeferred();
-      const release = createDeferred();
-      let activeSignal: AbortSignal | undefined;
-      state.runTurn.mockImplementationOnce(async function* (input) {
-        activeSignal = input.signal;
-        entered.resolve();
-        await release.promise;
-        yield { type: "done", stopReason: "end_turn" };
-      });
-      const admitted = createTestAdmittedRunContext("caller-revoked");
-      const turn = state.manager.runTurn({
-        ...state.target,
-        provenance: "system",
-        mode: "prompt",
-        text: "keep working",
-        requestId: "caller-revoked",
-        admittedRunContext: admitted,
-      });
-      try {
-        await entered.promise;
-        await expect(
-          withTaskCancellationControl(
-            {
-              assertCurrent: () => {
-                throw new Error("Caller no longer controls this task.");
-              },
-            },
-            () =>
-              state.manager.cancelSession({
-                ...state.target,
-                expectedRunId: "caller-revoked",
-                expectedInstanceId: admitted.operationalRunInstance.instanceId,
-                expectedOwnerKey: "agent:main:main",
-              }),
-          ),
-        ).rejects.toThrow("Caller no longer controls this task.");
-        expect(activeSignal?.aborted).toBe(false);
-        expect(state.cancel).not.toHaveBeenCalled();
-        expect(requireTaskByRunId("caller-revoked").status).toBe("running");
-      } finally {
-        release.resolve();
-        await turn;
-      }
-      expect(requireTaskByRunId("caller-revoked").status).toBe("succeeded");
-    });
-  });
-
-  it("joins accepted late-handle cancellation after caller authority is revoked", async () => {
-    const state = fixture();
-    const ensureEntered = createDeferred();
-    const ensureRelease = createDeferred();
-    const cancelEntered = createDeferred();
-    const cancelRelease = createDeferred();
-    state.ensureSession.mockImplementationOnce(async () => {
-      ensureEntered.resolve();
-      await ensureRelease.promise;
-      return {
-        sessionKey: state.target.sessionKey,
-        backend: "acpx",
-        runtimeSessionName: "late-exact",
-      };
-    });
-    state.cancel.mockImplementationOnce(async () => {
-      cancelEntered.resolve();
-      await cancelRelease.promise;
-    });
-    const events: AcpRuntimeEvent[] = [];
-    const turn = state.manager.runTurn({
-      ...state.target,
-      provenance: "system",
-      mode: "prompt",
-      text: "late",
-      requestId: "late",
-      onEvent: (event) => {
-        events.push(event);
-      },
-    });
-    await ensureEntered.promise;
-    let settled = false;
-    let callerCurrent = true;
-    const cancel = withTaskCancellationControl(
-      {
-        assertCurrent: () => {
-          if (!callerCurrent) {
-            throw new Error("Caller no longer controls this task.");
-          }
-        },
-      },
-      () => state.manager.cancelSession({ ...state.target, expectedRunId: "late" }),
-    ).then(() => {
-      settled = true;
-    });
-    const settlement = Promise.all([turn, cancel]);
-    callerCurrent = false;
-    ensureRelease.resolve();
-    try {
-      await Promise.race([
-        cancelEntered.promise,
-        settlement.then(() => {
-          throw new Error("Cancellation settled before backend acknowledgement.");
-        }),
+      expect(await state.recordedEvents()).toMatchObject([
+        { kind: "run_completed", runId: "same-id" },
       ]);
-      expect(settled).toBe(false);
-      expect(events).toEqual([]);
-      expect(state.runTurn).not.toHaveBeenCalled();
-      expect(state.cancel.mock.calls[0]?.[0].handle.runtimeSessionName).toBe("late-exact");
-    } finally {
-      cancelRelease.resolve();
-      await Promise.allSettled([turn, cancel]);
-    }
-    await settlement;
-    expect(state.cancel).toHaveBeenCalledOnce();
-    expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
-  });
-
-  it("preserves late runtime cancellation failure instead of claiming a cancelled terminal", async () => {
-    const state = fixture();
-    const entered = createDeferred();
-    const release = createDeferred();
-    state.ensureSession.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return {
-        sessionKey: state.target.sessionKey,
-        backend: "acpx",
-        runtimeSessionName: "late-failed",
-      };
     });
-    state.cancel.mockRejectedValue(new Error("cancel transport failure"));
-    const events: AcpRuntimeEvent[] = [];
-    const turn = state.manager.runTurn({
-      ...state.target,
-      provenance: "system",
-      mode: "prompt",
-      text: "late",
-      requestId: "failed",
-      onEvent: (event) => {
-        events.push(event);
-      },
-    });
-    const turnResult = Promise.allSettled([turn]);
-    await entered.promise;
-    const cancel = state.manager.cancelSession(state.target);
-    const cancelResult = Promise.allSettled([cancel]);
-    release.resolve();
-    expect(await turnResult).toMatchObject([
-      { status: "rejected", reason: { message: "cancel transport failure" } },
-    ]);
-    expect(await cancelResult).toMatchObject([
-      { status: "rejected", reason: { message: "cancel transport failure" } },
-    ]);
-    expect(events).toEqual([]);
-    expect(state.runTurn).not.toHaveBeenCalled();
-    expect(state.cancel).toHaveBeenCalledOnce();
   });
 
   it("keeps a different agent's identical logical session outside cancellation", async () => {
-    const state = fixture("shared-session");
+    const state = fixture({ sessionKey: "shared-session" });
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
       runtime: { ...state.runtime, ownerAwareSessions: 1 },
@@ -320,125 +117,102 @@ describe("ACP accepted cancellation ownership", () => {
       ...baseCfg,
       agents: { ownership: "explicit" as const, entries: { alpha: {}, beta: {} } },
     };
-    const entered = createDeferred();
-    const release = createDeferred();
+    const actorGate = gate();
     state.getStatus.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
+      await actorGate.wait();
       return { summary: "ready" };
     });
     const alpha = { cfg, sessionKey: "shared-session", agentId: "alpha" };
     const beta = { cfg, sessionKey: "shared-session", agentId: "beta" };
     const actor = state.manager.getSessionStatus(alpha);
-    await Promise.race([
-      entered.promise,
-      actor.then(() => {
-        throw new Error("status ended before partition gate");
-      }),
-    ]);
-    const cancelled = state.manager.runTurn({
+    await awaitGateBeforeSettlement(actorGate.entered, actor, "status ended before partition gate");
+    const { turn: cancelled } = state.startTurn("alpha", {
       ...alpha,
-      provenance: "system",
-      mode: "prompt",
-      text: "alpha",
-      requestId: "alpha",
+      admittedRunContext: createTestAdmittedRunContext("alpha"),
     });
-    const live = state.manager.runTurn({
-      ...beta,
-      provenance: "system",
-      mode: "prompt",
-      text: "beta",
-      requestId: "beta",
-    });
+    const { turn: live } = state.startTurn("beta", beta);
     try {
-      await Promise.all([cancelled, state.manager.cancelSession(alpha), live]);
+      await Promise.all([cancelled, stopAcpControllerTurns(alpha), live]);
     } finally {
-      release.resolve();
+      actorGate.release();
       await Promise.allSettled([actor, cancelled, live]);
     }
     expect(state.runTurn).toHaveBeenCalledOnce();
     expect(state.runTurn.mock.calls[0]?.[0].text).toBe("beta");
   });
 
-  it("revalidates task ownership before queued cancellation writes a terminal task", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const state = fixture();
-      mockParentedAcpSessionEntries({
-        childSessionKey: state.target.sessionKey,
-        parentSessionKey: "agent:main:main",
+  it("settles cancellation after disposal before actor admission without setup", async () => {
+    const state = fixture();
+    await disposeAcpSessionManagerInstance(state.manager, "shutdown");
+    const { turn, events } = state.startTurn("disposed");
+    await turn;
+    expect(state.ensureSession).not.toHaveBeenCalled();
+    expect(state.runTurn).not.toHaveBeenCalled();
+    expect(events).toEqual([cancelledEvent]);
+  });
+
+  it("preserves late runtime cancellation failure instead of claiming a cancelled terminal", async () => {
+    const state = fixture();
+    const setupGate = gate();
+    state.ensureSession.mockImplementationOnce(async () => {
+      await setupGate.wait();
+      return {
+        sessionKey: state.target.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: "late-failed",
+      };
+    });
+    state.cancel.mockRejectedValue(new Error("cancel transport failure"));
+    const { turn, events } = state.startTurn("failed");
+    const turnResult = Promise.allSettled([turn]);
+    await setupGate.entered;
+    const cancel = stopAcpControllerTurns(state.target);
+    const cancelResult = Promise.allSettled([cancel]);
+    setupGate.release();
+    expect(await turnResult).toMatchObject(rejectedCancellation);
+    expect(await cancelResult).toMatchObject(rejectedStop);
+    expect(events).toEqual([]);
+    expect(state.runTurn).not.toHaveBeenCalled();
+    expect(state.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("keeps failed backend cancellation attached to Stop until the producer settles", async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
+      const state = fixture({ parented: true });
+      const turnGate = gate();
+      const cancelEntered = createDeferred();
+      state.runTurn.mockImplementationOnce(async function* () {
+        await turnGate.wait();
+        yield { type: "done", status: "cancelled" };
       });
-      const entered = createDeferred();
-      const release = createDeferred();
-      state.getStatus.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return { summary: "ready" };
+      state.cancel.mockImplementationOnce(async () => {
+        cancelEntered.resolve();
+        throw new Error("cancel transport failure");
       });
-      const actor = state.manager.getSessionStatus(state.target);
-      await entered.promise;
-      const events: AcpRuntimeEvent[] = [];
-      const turn = state.manager.runTurn({
-        ...state.target,
-        provenance: "system",
-        mode: "prompt",
-        text: "queued",
-        requestId: "owner-race",
-        onEvent: (event) => {
-          events.push(event);
-        },
-      });
+      const { turn } = state.startTurn("active-cancel-failed");
       const turnResult = Promise.allSettled([turn]);
-      const cancel = state.manager.cancelSession({
-        ...state.target,
-        expectedOwnerKey: "agent:main:main",
-      });
-      const cancelResult = Promise.allSettled([cancel]);
-      mockParentedAcpSessionEntries({
-        childSessionKey: state.target.sessionKey,
-        parentSessionKey: "agent:main:other",
-      });
+      await turnGate.entered;
+      let stopSettled = false;
+      const stopResult = Promise.allSettled([stopAcpControllerTurns(state.target)]).then(
+        (result) => {
+          stopSettled = true;
+          return result;
+        },
+      );
       try {
-        expect(await turnResult).toMatchObject([
-          { status: "rejected", reason: { message: "ACP task owner could not be verified." } },
-        ]);
-        expect(await cancelResult).toMatchObject([
-          { status: "rejected", reason: { message: "ACP task owner could not be verified." } },
-        ]);
-        expect(events).toEqual([]);
-        expect(() => requireTaskByRunId("owner-race")).toThrow("Expected task for run owner-race");
-        expect(state.runTurn).not.toHaveBeenCalled();
+        await cancelEntered.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stopSettled).toBe(false);
+        turnGate.release();
+        expect(await turnResult).toMatchObject(rejectedCancellation);
+        expect(await stopResult).toMatchObject(rejectedStop);
+        expect(state.cancel).toHaveBeenCalledOnce();
       } finally {
-        release.resolve();
-        await Promise.allSettled([actor, turn, cancel]);
+        turnGate.release();
+        await Promise.all([turnResult, stopResult]);
       }
     });
   });
-
-  it.each(["caller", "disposed"] as const)(
-    "settles %s cancellation before actor admission without setup",
-    async (reason) => {
-      const state = fixture();
-      const controller = new AbortController();
-      if (reason === "caller") {
-        controller.abort();
-      } else {
-        await disposeAcpSessionManagerInstance(state.manager, "shutdown");
-      }
-      const events: AcpRuntimeEvent[] = [];
-      await state.manager.runTurn({
-        ...state.target,
-        provenance: "system",
-        mode: "prompt",
-        text: "not submitted",
-        requestId: reason,
-        signal: controller.signal,
-        onEvent: (event) => {
-          events.push(event);
-        },
-      });
-      expect(state.ensureSession).not.toHaveBeenCalled();
-      expect(state.runTurn).not.toHaveBeenCalled();
-      expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
-    },
-  );
 });

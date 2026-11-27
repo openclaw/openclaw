@@ -17,7 +17,6 @@ defineDiscordVoiceTests(
     lastAgentCommandArgs,
     lastRealtimeBridge,
     realtimeBridgeAt,
-    logVerboseMock,
     loggerWarnMock,
     sentUserMessages,
     createClient,
@@ -36,12 +35,11 @@ defineDiscordVoiceTests(
         providerConfig: { model: "gpt-live-1", voice: "marin" },
       });
 
-    it("keeps streaming events at debug while preserving lifecycle info logs", async () => {
+    it("reports lifecycle changes without promoting streaming events to info", async () => {
       const { loggerInfoMock } = voiceTestMocks;
       const { manager, bridgeParams } = await createJoinedAgentProxyFixture();
       try {
         loggerInfoMock.mockClear();
-        logVerboseMock.mockClear();
         for (const type of [
           "session.output_audio.delta",
           "session.output_audio.done",
@@ -52,9 +50,6 @@ defineDiscordVoiceTests(
           "session.commentary.append",
         ]) {
           bridgeParams.onEvent?.({ direction: "server", type, detail: "stream detail" });
-          expect(logVerboseMock).toHaveBeenCalledWith(
-            `discord voice: realtime server:${type} stream detail`,
-          );
         }
         expect(loggerInfoMock).not.toHaveBeenCalled();
 
@@ -110,7 +105,7 @@ defineDiscordVoiceTests(
             text: "Agenda checked.",
           });
           expect(agentCommandArgsAt(index)).toMatchObject({
-            senderIsOwner: index === 1,
+            runContext: { senderId: index === 1 ? "owner" : "guest" },
             sessionKey: "discord:g1:c1",
             abortSignal: expect.any(AbortSignal),
           });
@@ -209,7 +204,6 @@ defineDiscordVoiceTests(
               text: "Summarize the agenda.",
               id: "guest",
               label: "Ada",
-              owner: false,
               prompt: "Guest room context.",
             },
             {
@@ -217,7 +211,6 @@ defineDiscordVoiceTests(
               text: "Read the next appointment.",
               id: "owner",
               label: "Grace",
-              owner: true,
               prompt: "Owner room context.",
             },
           ];
@@ -227,7 +220,7 @@ defineDiscordVoiceTests(
           for (const [index, turn] of turns.entries()) {
             await emitFinalRealtimeUserTranscript(turn.source.bridgeParams, turn.text);
             expect(agentCommandArgsAt(index)).toMatchObject({
-              senderIsOwner: turn.owner,
+              runContext: { senderId: turn.id },
               extraSystemPrompt: turn.prompt,
               agentId: "agent-1",
               sessionKey: "discord:g1:c1",
@@ -262,7 +255,7 @@ defineDiscordVoiceTests(
         expect(agentCommandMock).not.toHaveBeenCalled();
         await emitFinalRealtimeUserTranscript(owner.bridgeParams, "Read my agenda.");
         expect(agentCommandMock).toHaveBeenCalledOnce();
-        expect(lastAgentCommandArgs().senderIsOwner).toBe(true);
+        expect(lastAgentCommandArgs()).toMatchObject({ runContext: { senderId: "u-owner" } });
       } finally {
         await manager.destroy();
       }
@@ -283,7 +276,7 @@ defineDiscordVoiceTests(
         expect(agentCommandMock).toHaveBeenCalledTimes(2);
         for (const index of [0, 1]) {
           expect(agentCommandArgsAt(index)).toMatchObject({
-            senderIsOwner: false,
+            runContext: { senderId: "u-guest" },
             extraSystemPrompt: "Guest context.",
           });
         }
@@ -306,7 +299,7 @@ defineDiscordVoiceTests(
         expect(agentCommandMock).not.toHaveBeenCalled();
         await emitFinalRealtimeUserTranscript(owner.bridgeParams, "Read my agenda.");
         expect(agentCommandMock).toHaveBeenCalledOnce();
-        expect(lastAgentCommandArgs().senderIsOwner).toBe(true);
+        expect(lastAgentCommandArgs()).toMatchObject({ runContext: { senderId: "u-owner" } });
       } finally {
         await manager.destroy();
       }
@@ -333,7 +326,7 @@ defineDiscordVoiceTests(
         expect(guest.session.close).not.toHaveBeenCalled();
         expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledOnce();
         expect(lastAgentCommandArgs()).toMatchObject({
-          senderIsOwner: false,
+          runContext: { senderId: "u-guest" },
           extraSystemPrompt: "Updated roster.",
         });
       } finally {
@@ -364,7 +357,7 @@ defineDiscordVoiceTests(
         expect(agentCommandMock).not.toHaveBeenCalled();
         await emitFinalRealtimeUserTranscript(owner.bridgeParams, "Fresh owner question.");
         expect(agentCommandMock).toHaveBeenCalledOnce();
-        expect(lastAgentCommandArgs().senderIsOwner).toBe(true);
+        expect(lastAgentCommandArgs()).toMatchObject({ runContext: { senderId: "same-user" } });
       } finally {
         await manager.destroy();
       }
@@ -431,14 +424,14 @@ defineDiscordVoiceTests(
       let leaving: ReturnType<typeof manager.leave> | undefined;
       try {
         pendingProvider.close.mockReturnValueOnce(pending.promise);
-        close.mockImplementationOnce(
-          function (this: InstanceType<typeof DiscordRealtimeSpeakerSession>) {
-            close.mockRestore();
-            return Promise.resolve(this.close()).then(() => {
-              throw new Error("Speaker cleanup failed");
-            });
-          },
-        );
+        close.mockImplementationOnce(function (
+          this: InstanceType<typeof DiscordRealtimeSpeakerSession>,
+        ) {
+          close.mockRestore();
+          return Promise.resolve(this.close()).then(() => {
+            throw new Error("Speaker cleanup failed");
+          });
+        });
         leaving = manager.leave({ guildId: entry.guildId });
         await vi.waitFor(() =>
           expect(loggerWarnMock).toHaveBeenCalledWith(
@@ -477,7 +470,7 @@ defineDiscordVoiceTests(
         ).toBe(true);
         await emitFinalRealtimeUserTranscript(owner.bridgeParams, "Read my agenda.");
         expect(agentCommandMock).toHaveBeenCalledOnce();
-        expect(lastAgentCommandArgs().senderIsOwner).toBe(true);
+        expect(lastAgentCommandArgs()).toMatchObject({ runContext: { senderId: "u-owner" } });
       } finally {
         await manager.destroy();
       }
@@ -512,7 +505,7 @@ defineDiscordVoiceTests(
         expect(agentCommandMock).not.toHaveBeenCalled();
         await emitFinalRealtimeUserTranscript(owner.bridgeParams, "Fresh owner question.");
         expect(agentCommandMock).toHaveBeenCalledOnce();
-        expect(lastAgentCommandArgs().senderIsOwner).toBe(true);
+        expect(lastAgentCommandArgs()).toMatchObject({ runContext: { senderId: "owner" } });
       } finally {
         clock.mockRestore();
         await manager.destroy();

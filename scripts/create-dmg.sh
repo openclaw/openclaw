@@ -10,7 +10,7 @@ set -euo pipefail
 #   DMG_VOLUME_NAME        default: CFBundleName
 #   DMG_BACKGROUND_PATH    default: apps/macos/Packaging/dmg-background.png
 #   DMG_BACKGROUND_SMALL   default: apps/macos/Packaging/dmg-background-small.png (recommended)
-#   DMG_WINDOW_BOUNDS      default: "400 100 1080 530" (680x430)
+#   DMG_WINDOW_BOUNDS      default: "400 100 1080 578" (680x478, including title bar)
 #   DMG_ICON_SIZE          default: 144
 #   DMG_APP_POS            default: "170 305"
 #   DMG_APPS_POS           default: "510 305"
@@ -31,6 +31,7 @@ fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/mac-disk-image.sh"
 
 BUILD_DIR="$ROOT_DIR/dist"
 mkdir -p "$BUILD_DIR"
@@ -43,7 +44,11 @@ DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-$APP_NAME}"
 DMG_BACKGROUND_SMALL="${DMG_BACKGROUND_SMALL:-$ROOT_DIR/apps/macos/Packaging/dmg-background-small.png}"
 DMG_BACKGROUND_PATH="${DMG_BACKGROUND_PATH:-$ROOT_DIR/apps/macos/Packaging/dmg-background.png}"
 
-DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 1080 530}"
+# Show the full 680x446 background below Finder's 32-point title bar. Finder counts
+# each 144-point icon with its label down to about 131 points below the icon's
+# center, so icons at y=305 need at least 436 points of content or Finder adds a
+# vertical scroll bar over the artwork.
+DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 1080 578}"
 DMG_ICON_SIZE="${DMG_ICON_SIZE:-144}"
 DMG_APP_POS="${DMG_APP_POS:-170 305}"
 DMG_APPS_POS="${DMG_APPS_POS:-510 305}"
@@ -124,10 +129,16 @@ DMG_RW_PATH="$DMG_TEMP/image-rw.dmg"
 DMG_OUTPUT_TEMP=""
 DMG_FINAL_PATH=""
 MOUNTED=0
+DMG_DEVICE=""
+
+dmg_attached() {
+  # mount(8) prints resolved paths; the run-private mount suffix still matches.
+  mount | grep -F -e "$MOUNT_POINT" -e "${DMG_DEVICE:-$MOUNT_POINT} on " >/dev/null
+}
 
 cleanup_dmg() {
   if [[ "$MOUNTED" == "1" ]]; then
-    if hdiutil detach "$MOUNT_POINT" -force 2>/dev/null; then
+    if hdiutil detach "${DMG_DEVICE:-$MOUNT_POINT}" -force 2>/dev/null || ! dmg_attached; then
       MOUNTED=0
     else
       echo "WARN: Preserving DMG temp root because mount is still attached: $DMG_TEMP" >&2
@@ -137,6 +148,11 @@ cleanup_dmg() {
   if [[ -n "$DMG_OUTPUT_TEMP" ]]; then
     rm -rf "$DMG_OUTPUT_TEMP" 2>/dev/null || true
   fi
+  # A failed attach can leave the RW image's devices attached without a mount.
+  if [[ -e "$DMG_RW_PATH" ]] && ! detach_disk_image "$DMG_RW_PATH"; then
+    echo "Error: Preserving DMG temp root because its RW image is still attached: $DMG_TEMP" >&2
+    exit 1
+  fi
   rm -rf "$DMG_TEMP" 2>/dev/null || true
 }
 trap cleanup_dmg EXIT
@@ -145,17 +161,25 @@ detach_dmg() {
   local delay
   # Mount writers have exited and the shell never enters MOUNT_POINT.
   # Flush writes, then give Finder/Spotlight up to 54s to release the volume.
+  # A volume that vanished on its own (diskarbitration ejected it) is detached.
   sync
   for delay in 2 3 4 5 6 7 8 9 10; do
     sleep "$delay"
-    if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null; then
+    if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || ! dmg_attached; then
       MOUNTED=0
       return
     fi
   done
   echo "WARN: DMG mount still busy; forcing detach: $MOUNT_POINT" >&2
-  hdiutil detach "$MOUNT_POINT" -force || return 1
-  MOUNTED=0
+  for delay in 2 4 8; do
+    hdiutil detach "${DMG_DEVICE:-$MOUNT_POINT}" -force || hdiutil detach "$MOUNT_POINT" -force || true
+    if ! dmg_attached; then
+      MOUNTED=0
+      return
+    fi
+    sleep "$delay"
+  done
+  return 1
 }
 
 mkdir -p "$DMG_SOURCE" "$MOUNT_POINT"
@@ -164,15 +188,41 @@ ln -s /Applications "$DMG_SOURCE/Applications"
 
 # Let -srcfolder account for filesystem overhead; du plus fixed slack can
 # underallocate bundles containing many small runtime files.
-hdiutil create \
-  -volname "$DMG_VOLUME_NAME" \
-  -srcfolder "$DMG_SOURCE" \
-  -ov \
-  -format UDRW \
-  "$DMG_RW_PATH"
+create_dmg_image() {
+  local attempt=1
+  local status=0
+  local stderr_path="$DMG_TEMP/create.stderr"
+  while true; do
+    if hdiutil create \
+      -volname "$DMG_VOLUME_NAME" \
+      -srcfolder "$DMG_SOURCE" \
+      -ov \
+      -format UDRW \
+      "$DMG_RW_PATH" 2>"$stderr_path"; then
+      cat "$stderr_path" >&2
+      rm -f "$stderr_path"
+      return 0
+    else
+      status=$?
+    fi
+    cat "$stderr_path" >&2
+    if [[ "$attempt" -ge 3 ]] || ! grep -Fq "Resource busy" "$stderr_path"; then
+      return "$status"
+    fi
+    echo "WARN: hdiutil create reported Resource busy; retrying ($attempt/2)" >&2
+    rm -f "$DMG_RW_PATH"
+    sleep "$attempt"
+    attempt=$((attempt + 1))
+  done
+}
 
-hdiutil attach "$DMG_RW_PATH" -mountpoint "$MOUNT_POINT" -nobrowse
+create_dmg_image
+
+DMG_ATTACH_OUTPUT="$(hdiutil attach "$DMG_RW_PATH" -mountpoint "$MOUNT_POINT" -nobrowse)"
 MOUNTED=1
+echo "$DMG_ATTACH_OUTPUT"
+# Detach by device node survives the mount path disappearing under hdiutil.
+DMG_DEVICE="$(awk -v mount="$MOUNT_POINT" 'index($0, mount) && $1 ~ /^\/dev\/disk/ { print $1; exit }' <<<"$DMG_ATTACH_OUTPUT")"
 
 if [[ "${SKIP_DMG_STYLE:-0}" != "1" ]]; then
   mkdir -p "$MOUNT_POINT/.background"
@@ -184,7 +234,6 @@ if [[ "${SKIP_DMG_STYLE:-0}" != "1" ]]; then
     echo "WARN: DMG background missing: $DMG_BACKGROUND_SMALL / $DMG_BACKGROUND_PATH" >&2
   fi
 
-  # Volume icon: reuse the app icon if available.
   ICON_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns"
   if [[ -f "$ICON_SRC" ]]; then
     cp "$ICON_SRC" "$MOUNT_POINT/.VolumeIcon.icns"

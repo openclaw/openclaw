@@ -1,0 +1,478 @@
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { loadPersistedPluginModelCatalogs } from "../agents/plugin-model-catalog-execution.js";
+import { preparePluginModelCatalogSave } from "../agents/plugin-model-catalog-save.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
+} from "../agents/plugin-model-catalog.js";
+import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import * as sessionInputActors from "../config/sessions/session-input-actor.js";
+import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
+import { recordSessionParticipantInWorker } from "../config/sessions/session-sharing-store.async.js";
+import { clearAgentRunContext } from "../infra/agent-run-registry.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { readLoggingConfig } from "../logging/config.js";
+import { applyLoggingConfig } from "../logging/logger.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSource,
+  requestRpcSourceCancellation,
+} from "../sessions/session-controller.rpc-sources.js";
+import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
+import type { StartChatDispatchParams } from "./server-methods/chat-send-agent-dispatch.types.js";
+import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import {
+  chatSendOwner,
+  dashboardTitleScheduleMocks,
+  setupSessionCreateTestHarness,
+} from "./server.sessions.create.test-support.js";
+import { rpcReq } from "./test-helpers.js";
+
+const dispatch = vi.hoisted(() => ({ start: vi.fn<(params: StartChatDispatchParams) => void>() }));
+const turnBoundary = vi.hoisted(() => ({
+  committing: false,
+  afterPrepare: undefined as (() => void | Promise<void>) | undefined,
+  afterCommit: undefined as (() => void) | undefined,
+}));
+vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
+  return {
+    ...actual,
+    captureOpenClawAgentDatabaseExecutionAsync: async (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecutionAsync>
+    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecutionAsync> => {
+      const owner = await actual.captureOpenClawAgentDatabaseExecutionAsync(...args);
+      return {
+        ...owner,
+        get fileIdentity() {
+          return owner.fileIdentity;
+        },
+        runExisting: (source, operation, options) =>
+          owner.runExisting(
+            source,
+            (worker) =>
+              operation({
+                execute: async (command, commandOptions) => {
+                  const committing =
+                    (command.type === "session.actor.acceptInput" ||
+                      command.type === "session.actor.adoptRun") &&
+                    typeof command.input === "object" &&
+                    command.input !== null &&
+                    "turn" in command.input &&
+                    command.input.turn !== undefined;
+                  if (!committing) {
+                    return worker.execute(command, commandOptions);
+                  }
+                  turnBoundary.committing = true;
+                  try {
+                    await turnBoundary.afterPrepare?.();
+                    const result = await worker.execute(command, commandOptions);
+                    turnBoundary.afterCommit?.();
+                    return result;
+                  } finally {
+                    turnBoundary.committing = false;
+                  }
+                },
+              }),
+            options,
+          ),
+      };
+    },
+  };
+});
+vi.mock("./server-methods/chat-send-agent-dispatch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-methods/chat-send-agent-dispatch.js")>()),
+  startChatDispatch: dispatch.start,
+}));
+const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness();
+
+beforeEach(() => {
+  dispatch.start.mockClear();
+});
+
+afterEach(() => {
+  turnBoundary.committing = false;
+  turnBoundary.afterPrepare = undefined;
+  turnBoundary.afterCommit = undefined;
+  vi.restoreAllMocks();
+});
+
+function releaseDispatches() {
+  for (const [turn] of dispatch.start.mock.calls) {
+    turn.admission.cleanupAdmittedRun();
+    clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
+  }
+}
+
+async function drainDispatches(storePath: string, identities: string[]) {
+  const released = captureSessionControllerSettlement({ scope: storePath, identities });
+  releaseDispatches();
+  await released;
+}
+
+async function matchingTranscript(scope: Parameters<typeof loadTranscriptEvents>[0], text: string) {
+  return (await loadTranscriptEvents(scope)).filter((event) =>
+    JSON.stringify(event).includes(text),
+  );
+}
+
+async function accepted<T extends Record<string, unknown>>(
+  request: ReturnType<typeof rpcReq<T>>,
+  payload: Partial<T> = {},
+) {
+  const reply = await request;
+  expect(reply, JSON.stringify(reply)).toMatchObject({ ok: true, payload });
+  return expectDefined(reply.payload, "successful RPC payload");
+}
+
+function captureInitial(key: string, beforeSend?: () => void) {
+  let initial: GatewayRequestHandlerOptions | undefined;
+  const settled = createDeferred();
+  const send = chatSendOwner.handleDirectExternalChatSend;
+  const intercept = vi
+    .spyOn(chatSendOwner, "handleDirectExternalChatSend")
+    .mockImplementation(async (options) => {
+      if (options.params.sessionKey === key) {
+        initial = options;
+        beforeSend?.();
+      }
+      try {
+        await send(options);
+      } finally {
+        if (options.params.sessionKey === key) {
+          settled.resolve();
+        }
+      }
+    });
+  return {
+    get options() {
+      return expectDefined(initial, "initial request");
+    },
+    get runId() {
+      return String(this.options.params.idempotencyKey);
+    },
+    settled: settled.promise,
+    restore: () => intercept.mockRestore(),
+  };
+}
+
+async function inputFixture(key: string, options?: Parameters<typeof openClient>[0]) {
+  const { storePath } = await createSessionStoreDir();
+  const connection = await openClient(options);
+  const target = { agentId: "main", sessionKey: key, storePath };
+  const send = (message: string, idempotencyKey: string) =>
+    rpcReq<{ status: string }>(connection.ws, "chat.send", {
+      sessionKey: key,
+      message,
+      idempotencyKey,
+    });
+  return Object.assign(connection, {
+    storePath,
+    key,
+    target,
+    create: (params: Record<string, unknown> = {}, runStarted?: boolean) =>
+      accepted(
+        rpcReq<{ sessionId: string; runStarted: boolean }>(connection.ws, "sessions.create", {
+          agentId: "main",
+          key,
+          ...params,
+        }),
+        runStarted === undefined ? {} : { runStarted },
+      ),
+    send,
+    retry: (message: string, runId: string, status = "started") =>
+      accepted(send(message, runId), { status }),
+    history: () =>
+      rpcReq<{
+        messages: unknown[];
+        pendingInputs: { items: Array<{ state: string; message: unknown }> };
+      }>(connection.ws, "chat.history", { sessionKey: key }),
+    read: () => expectDefined(loadSessionEntry(target), "persisted session"),
+    settlement: () => captureSessionControllerSettlement({ scope: storePath, identities: [key] }),
+    drain: () => drainDispatches(storePath, [key]),
+  });
+}
+
+async function expectUncommittedInput(
+  target: { agentId: string; sessionKey: string; storePath: string },
+  entry: NonNullable<ReturnType<typeof loadSessionEntry>>,
+) {
+  const scope = { ...target, sessionId: entry.sessionId };
+  expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+  expect(await loadTranscriptEvents(scope)).toEqual([
+    expect.objectContaining({ type: "session", id: entry.sessionId }),
+  ]);
+  return scope;
+}
+
+test("persists and dispatches concurrent Gateway inputs while participant writes queue", async () => {
+  dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
+  const { storePath } = await createSessionStoreDir();
+  const { ws } = await openClient();
+  const inputs = Array.from({ length: 2 }, (_, index) => ({
+    agentId: "main",
+    key: `agent:main:dashboard:concurrent-initial-${index}`,
+    message: `Persist concurrent Gateway initial input ${index}.`,
+  }));
+  const competingWrites: Promise<unknown>[] = [];
+  const intervenedInputs = new Set<string>();
+  const acquire = sessionInputActors.acquireSessionInputActor;
+  vi.spyOn(sessionInputActors, "acquireSessionInputActor").mockImplementation(async (...args) => {
+    const input = await acquire(...args);
+    if (input) {
+      const accept = input.actor.acceptInput;
+      vi.spyOn(input.actor, "acceptInput").mockImplementationOnce(async (...command) => {
+        const recordParticipant = (promptedAt: number) =>
+          recordSessionParticipantInWorker(
+            { agentId: "main", storePath, sessionKey: input.actor.target.sessionKey },
+            {
+              identity: {
+                type: "observation",
+                pluginId: null,
+                accountId: null,
+                senderKind: "unknown",
+                id: "gateway-client",
+              },
+              promptedAt,
+              sessionAgentId: "main",
+            },
+          );
+        await recordParticipant(1);
+        intervenedInputs.add(input.actor.target.sessionKey);
+        const pending = accept(...command);
+        // This independent writer must wait behind the complete input admission.
+        competingWrites.push(runOutsideStoreWriterContext(() => recordParticipant(2)));
+        return pending;
+      });
+    }
+    return input;
+  });
+  try {
+    const created = await Promise.all(
+      inputs.map((params) =>
+        rpcReq<{ sessionId: string; runStarted: boolean }>(ws, "sessions.create", params),
+      ),
+    );
+    for (const [index, response] of created.entries()) {
+      expect(response.ok, JSON.stringify(response)).toBe(true);
+      expect(response.payload?.runStarted, JSON.stringify(response)).toBe(true);
+      const input = inputs[index]!;
+      const scope = {
+        agentId: input.agentId,
+        sessionKey: input.key,
+        sessionId: expectDefined(response.payload?.sessionId, "created session ID"),
+        storePath,
+      };
+      expect(await matchingTranscript(scope, input.message)).toHaveLength(1);
+    }
+    expect(intervenedInputs).toEqual(new Set(inputs.map((input) => input.key)));
+    expect(dispatch.start).toHaveBeenCalledTimes(inputs.length);
+  } finally {
+    await Promise.all(competingWrites);
+    await drainDispatches(
+      storePath,
+      inputs.map((input) => input.key),
+    );
+    ws.close();
+  }
+});
+
+test.for([
+  "before-input",
+  "after-preparation",
+  "transaction-refused",
+  "commit-refused",
+  "revoked-after-preparation",
+  "idle-commit-refused",
+] as const)("keeps only the created session when input fails at %s", async (fault) => {
+  dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
+  const fixture = await inputFixture(`agent:main:dashboard:initial-failure-${fault}`);
+  const { key, target, ws } = fixture;
+  const message = "Only retain this initial input after its admission commits.";
+  const failure = new Error(`initial input ${fault}`);
+  const hit = vi.fn();
+  const catalogAgentDir = path.join(path.dirname(fixture.storePath), "unrelated-catalog-agent");
+  const catalog = {
+    pluginId: "durability-test",
+    contents: JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        fixture: {
+          baseUrl: "https://fixture.example/v1",
+          api: "openai-completions",
+          models: [],
+        },
+      },
+    }),
+  };
+  if (fault === "idle-commit-refused") {
+    // Warm this independent database before the fault hook observes worker admissions.
+    await replacePersistedPluginModelCatalogs({
+      agentDir: catalogAgentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath(catalog.pluginId)]: JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: {},
+        }),
+      },
+    });
+    const saveCatalog = await preparePluginModelCatalogSave(catalogAgentDir, process.env);
+    turnBoundary.afterPrepare = async () => {
+      turnBoundary.afterPrepare = undefined;
+      // Reproduce discovery settling inside the input-command interval, without timing sleeps.
+      await saveCatalog([catalog]);
+    };
+  }
+  const initial = captureInitial(key, () => {
+    if (fault === "before-input") {
+      hit();
+      throw failure;
+    }
+  });
+  const refuse = probe.admission(workerAdmission, (request, grant, callback) => {
+    const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+    // Model-catalog and other worker writes may settle while the input command waits.
+    // Refuse only this session actor, not every commit during that interval.
+    const committingInput =
+      turnBoundary.committing &&
+      isRecord(facts) &&
+      facts.kind === "session-actor-admission" &&
+      isRecord(facts.snapshot) &&
+      isRecord(facts.snapshot.target) &&
+      facts.snapshot.target.sessionKey === key;
+    if (
+      committingInput &&
+      ((fault === "transaction-refused" && request.stage === "transaction") ||
+        ((fault === "commit-refused" || fault === "idle-commit-refused") &&
+          request.stage === "commit"))
+    ) {
+      hit();
+      throw failure;
+    }
+    callback(request, grant);
+  });
+  if (fault === "after-preparation" || fault === "revoked-after-preparation") {
+    turnBoundary.afterPrepare = () => {
+      turnBoundary.afterPrepare = undefined;
+      hit();
+      if (fault === "after-preparation") {
+        throw failure;
+      }
+      const run = expectDefined(getRpcSource(initial.runId), "admitted run");
+      run.adapter.abortStopReason = "restart";
+      requestRpcSourceCancellation(run, failure);
+    };
+  }
+  try {
+    let created: Awaited<ReturnType<typeof fixture.create>> | undefined;
+    if (fault === "idle-commit-refused") {
+      created = await fixture.create();
+      expect((await fixture.send(message, fault)).ok).toBe(false);
+      await fixture.settlement();
+    } else {
+      created = await fixture.create({ message }, false);
+    }
+    expect(hit).toHaveBeenCalledOnce();
+    if (fault === "idle-commit-refused") {
+      const catalogs = await loadPersistedPluginModelCatalogs(catalogAgentDir);
+      expect(catalogs).toEqual([catalog]);
+    }
+    expect(dispatch.start).not.toHaveBeenCalled();
+    const before = fixture.read();
+    if (created) {
+      expect(before.sessionId).toBe(created.sessionId);
+    }
+    const scope = await expectUncommittedInput(target, before);
+    const described = await rpcReq<{ sessionId: string }>(ws, "sessions.describe", {
+      key,
+      agentId: "main",
+    });
+    expect(described.ok, JSON.stringify(described)).toBe(true);
+
+    // Same source identity remains retryable: no ACK transferred custody before the failure.
+    refuse.mockRestore();
+    initial.restore();
+    const runId = fault === "idle-commit-refused" ? fault : initial.runId;
+    await fixture.retry(message, runId);
+    expect(fixture.read().sessionId).toBe(before.sessionId);
+    expect(await matchingTranscript(scope, message)).toHaveLength(1);
+    if (fault === "idle-commit-refused") {
+      expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+      expect(await matchingTranscript(scope, message)).toMatchObject([
+        { message: { role: "user", content: message, idempotencyKey: `${runId}:user` } },
+      ]);
+    }
+    expect(dispatch.start).toHaveBeenCalledOnce();
+  } finally {
+    turnBoundary.afterPrepare = undefined;
+    refuse.mockRestore();
+    initial.restore();
+    await fixture.drain();
+    ws.close();
+  }
+});
+
+test("dispatches a committed initial turn once when its worker response is lost", async () => {
+  const fixture = await inputFixture("agent:main:dashboard:initial-committed-lost-worker-response");
+  const { storePath, ws, key, target } = fixture;
+  const message = "Dispatch this committed initial input exactly once.";
+  const hit = vi.fn();
+  turnBoundary.afterCommit = () => {
+    turnBoundary.afterCommit = undefined;
+    hit();
+    throw new Error("Native turn committed but its command response was lost");
+  };
+  dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
+  try {
+    const created = await fixture.create({ message }, true);
+    expect(hit).toHaveBeenCalledOnce();
+    const before = fixture.read();
+    expect(before.sessionId).toBe(created.sessionId);
+    const scope = { ...target, sessionId: before.sessionId };
+    expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+    expect(await matchingTranscript(scope, message)).toHaveLength(1);
+    expect(dispatch.start).toHaveBeenCalledOnce();
+  } finally {
+    turnBoundary.afterCommit = undefined;
+    await drainDispatches(storePath, [key]);
+    ws.close();
+  }
+});
+
+test("dispatches the original bytes of a committed initial input", async () => {
+  dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
+  const fixture = await inputFixture("agent:main:dashboard:initial-redaction");
+  const { ws } = fixture;
+  const message = "Check initial-secret before execution.";
+  const previousLogging = readLoggingConfig();
+  applyLoggingConfig({ redactPatterns: ["initial-secret"] });
+  try {
+    await fixture.create({ message }, true);
+    const turn = expectDefined(dispatch.start.mock.calls[0]?.[0], "admitted initial dispatch");
+    const persisted = expectDefined(
+      turn.userTurn.recorder.getPersistedMessage?.(),
+      "canonical input",
+    );
+    expect(persisted.content).toBe(message);
+    expect(turn.turn.ctx).toMatchObject({
+      Body: persisted.content,
+      BodyForAgent: persisted.content,
+      BodyForCommands: persisted.content,
+      RawBody: persisted.content,
+    });
+    const history = await fixture.history();
+    expect(history.ok, JSON.stringify(history)).toBe(true);
+    expect(JSON.stringify(history.payload?.messages)).toContain("initial-secret");
+    expect(JSON.stringify(history.payload?.messages)).toContain(JSON.stringify(persisted.content));
+  } finally {
+    await fixture.drain();
+    applyLoggingConfig(previousLogging);
+    ws.close();
+  }
+});

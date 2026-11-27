@@ -1,7 +1,8 @@
 import "./server-worker-free.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, expect, it, vi } from "vitest";
-import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createServer } from "node:http";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createOwnedInstance } from "../plugins/plugin-instance.test-support.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
@@ -10,20 +11,22 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { runWithProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
+import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import { sleep } from "../utils/sleep.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 
-const mocks = vi.hoisted(() => ({
-  closePluginStateDatabaseAsync: vi.fn(async () => {}),
-}));
-vi.mock("../plugin-state/plugin-state-store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugin-state/plugin-state-store.js")>()),
-  closePluginStateDatabaseAsync: mocks.closePluginStateDatabaseAsync,
-}));
+const sharedStateLifecycle = resolveGlobalMap<string, boolean>(
+  Symbol("gateway-close-cleanup-shared-state"),
+  "shared-state",
+);
 
 const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
   disposeAllBundleLspRuntimes: async () => {},
@@ -33,8 +36,137 @@ const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
   drainRetainedEmbeddingProviders: async () => {},
 });
 
+function closeGateway(
+  params = createGatewayCloseTestDeps(),
+  options: Parameters<typeof prepareGatewayClose>[1] = { reason: "test" },
+) {
+  return prepareGatewayClose(params, options).then((preparation) =>
+    completeGatewayClose(params, preparation),
+  );
+}
+
+async function observeMediaDrain(entered: Deferred) {
+  const media = await import("./server-media-cleanup-lifecycle.js");
+  const wait = media.waitForMediaCleanupDrainsToSettle;
+  vi.spyOn(media, "waitForMediaCleanupDrainsToSettle").mockImplementation(() => {
+    entered.resolve();
+    return wait();
+  });
+  return wait;
+}
+
+beforeEach(() => {
+  sharedStateLifecycle.set("open", true);
+});
+
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
+});
+
+it.each(
+  ["session persistence", "subagent settlement"].flatMap((step) =>
+    ["rejected", "slow", "timed out"].map((outcome) => ({ step, outcome })),
+  ),
+)("closes its listener and resources after $step $outcome", async ({ step, outcome }) => {
+  const { listener, releaseListener, claim } = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () => createServer(),
+  });
+  const committed = createDeferredCore();
+  const settle = async (signal?: AbortSignal) => {
+    if (outcome === "rejected") {
+      throw new Error("store refused");
+    }
+    await committed.promise;
+    signal?.throwIfAborted();
+  };
+  const marker = step === "session persistence";
+  const params = createGatewayCloseTestDeps({
+    httpServer: listener,
+    channelIds: ["telegram"],
+    persistRunningSessionsForRestart: marker ? settle : () => sleep(500),
+    terminateRunningSubagentsForShutdown: marker ? undefined : settle,
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  const markerOverrun = marker && outcome === "timed out";
+  const closing = runWithProcessCleanupBudget(
+    { deadline: performance.now() + (markerOverrun ? 85_000 : 3_000), warn() {} },
+    () => closeGateway(params).catch((error: unknown) => error),
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(
+      markerOverrun ? 9_500 : outcome === "timed out" ? 2_500 : 1_500,
+    );
+    committed.resolve();
+    const expected =
+      outcome === "rejected"
+        ? "store refused"
+        : `Shutdown ${step} did not settle within ${marker ? 10_000 : 2_500}ms`;
+    expect(await closing).toMatchObject(
+      outcome === "slow" ? { warnings: [] } : new Error(expected),
+    );
+    expect(listener.listening).toBe(false);
+    expect(params.stopChannel).toHaveBeenCalledWith("telegram");
+    expect(sharedStateLifecycle.size).toBe(0);
+  } finally {
+    committed.resolve();
+    vi.useRealTimers();
+    if (listener.listening) {
+      await releaseListener();
+    }
+    await claim.release();
+  }
+});
+
+it("finalizes capture after media drains even when stopping media cleanup fails", async () => {
+  const mediaCleanup = await import("./server-media-cleanup-lifecycle.js");
+  const releaseMedia = createDeferredCore();
+  const drainEntered = createDeferredCore();
+  mediaCleanup.registerMediaCleanupDrain(releaseMedia.promise);
+  await observeMediaDrain(drainEntered);
+  const captureEntered = createDeferredCore();
+  const releaseCapture = createDeferredCore();
+  const finalizeCapture = vi.fn(async () => {
+    captureEntered.resolve();
+    await releaseCapture.promise;
+  });
+  const unregisterCapture = registerActiveDebugProxyCapture(finalizeCapture);
+  const registry = createEmptyPluginRegistry();
+  setActivePluginRegistry(registry);
+  const owner = createPluginRegistryOwner(registry);
+  const params = createGatewayCloseTestDeps({
+    closePluginRegistry: owner.close,
+    pluginMetadata: retainGatewayPluginMetadata(createTestGatewayScheduler()),
+    stopMediaCleanup: async () => {
+      throw new Error("media cleanup stop failed");
+    },
+  });
+  let closed = false;
+  const closing = closeGateway(params).then((result) => {
+    closed = true;
+    return result;
+  });
+  try {
+    await Promise.race([drainEntered.promise, captureEntered.promise, closing]);
+    expect(finalizeCapture).not.toHaveBeenCalled();
+    expect(closed).toBe(false);
+    expect(sharedStateLifecycle.has("open")).toBe(true);
+    releaseMedia.resolve();
+    await Promise.race([captureEntered.promise, closing]);
+    expect(finalizeCapture).toHaveBeenCalledOnce();
+    expect(closed).toBe(false);
+    releaseCapture.resolve();
+    await expect(closing).resolves.toMatchObject({ warnings: ["media-cleanup"] });
+    expect(sharedStateLifecycle.size).toBe(0);
+  } finally {
+    releaseMedia.resolve();
+    releaseCapture.resolve();
+    await closing.catch(() => {});
+    unregisterCapture();
+  }
 });
 
 it("owns plugin cleanup and its descendants after the requesting connection drains", async () => {
@@ -44,16 +176,13 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const completed = vi.fn();
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "drain-cleanup", status: "loaded" });
-  registry.plugins.push(record);
-  const instance = new PluginInstance(record.id, { record, registry });
+  const { registry, record, instance } = createOwnedInstance("drain-cleanup");
   const cleanup = vi.fn(async () => {
     await trackAsyncWork(async () => {});
     void trackAsyncWork(async () => {
       entered.resolve();
       await release.promise;
-      expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(sharedStateLifecycle.has("open")).toBe(true);
       completed();
     });
   });
@@ -63,7 +192,7 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
     source: "drain-cleanup-fixture",
     lifecycle: { id: "async-cleanup", cleanup },
   });
-  const metadata = retainGatewayPluginMetadata();
+  const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
   getPluginLoaderCacheState().set("drain-cleanup", registry);
   const servingRegistry = createEmptyPluginRegistry();
   setActivePluginRegistry(servingRegistry);
@@ -72,21 +201,18 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
     closePluginRegistry: owner.close,
     pluginMetadata: metadata,
   });
-  const closing = requestContext(async () =>
-    completeGatewayClose(
-      params,
-      await prepareGatewayClose(params, { restartExpectedMs: 0, drainTimeoutMs: 0 }),
-    ),
+  const closing = requestContext(() =>
+    closeGateway(params, { restartExpectedMs: 0, drainTimeoutMs: 0 }),
   );
   try {
     await Promise.race([entered.promise, closing]);
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+    expect(sharedStateLifecycle.has("open")).toBe(true);
     release.resolve();
     await expect(closing).resolves.toMatchObject({ warnings: [] });
     expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(completed).toHaveBeenCalledOnce();
-    expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+    expect(sharedStateLifecycle.size).toBe(0);
   } finally {
     release.resolve();
     await closing.catch(() => {});

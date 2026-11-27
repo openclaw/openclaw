@@ -2,15 +2,24 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseSemver } from "semver";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { readSqliteUserVersion, writeSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
+import { publishStateSchemaVersionAdmission } from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import { CONTENT_VERSION_KEY } from "./openclaw-state-db-schema-version.js";
+import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import {
+  CONTENT_VERSION_KEY,
+  readStateSchemaContentVersion,
+} from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
 const TERMINAL_GRACE_MS = 5 * 60_000;
-type PublicationDatabase = Pick<DB, "config_machine_state" | "update_runs">;
+type PublicationDatabase = Pick<DB, "update_runs"> & {
+  config_machine_state: DB["config_machine_state"] & { min_reader?: number | null };
+};
 
 export type StateSchemaPublicationBlocker = {
   runId: string;
@@ -81,17 +90,71 @@ export function readStateSchemaPublicationBlocker(
   return blocker;
 }
 
-/** Called inside the schema write transaction, after all content migrations succeed. */
-export function resolveStateSchemaVersionToPublish(db: DatabaseSync): number {
+/** Publish header, content and reader floor in the schema owner's transaction. */
+export function resolveStateSchemaVersionToPublish(
+  db: DatabaseSync,
+  minReader = OPENCLAW_STATE_SCHEMA_VERSION,
+): number {
   const published = readSqliteUserVersion(db);
-  if (published >= OPENCLAW_STATE_SCHEMA_VERSION || !readStateSchemaPublicationBlocker(db)) {
-    return OPENCLAW_STATE_SCHEMA_VERSION;
+  if (published > OPENCLAW_STATE_SCHEMA_VERSION) {
+    return published;
   }
-  if (!tableExists(db, "config_machine_state")) {
+  const deferred =
+    published < OPENCLAW_STATE_SCHEMA_VERSION &&
+    readStateSchemaPublicationBlocker(db) !== undefined;
+  if (deferred && !tableExists(db, "config_machine_state")) {
     throw new Error(
       "Shared state schema publication cannot be deferred without config_machine_state.",
     );
   }
+  if (deferred || minReader < OPENCLAW_STATE_SCHEMA_VERSION) {
+    writeStateSchemaContentVersion(db, minReader);
+  } else {
+    advanceStateSchemaContentVersion(db, { toVersion: OPENCLAW_STATE_SCHEMA_VERSION });
+  }
+  const version = deferred ? published : OPENCLAW_STATE_SCHEMA_VERSION;
+  if (version !== published) {
+    writeSqliteUserVersion(db, version);
+  } else if (deferred) {
+    invalidateSqliteSchemaFacts(db);
+  }
+  publishStateSchemaVersionAdmission(db, {
+    userVersion: version,
+    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+    ...(minReader < OPENCLAW_STATE_SCHEMA_VERSION ? { minReader } : {}),
+  });
+  return version;
+}
+
+function stateReaderFloor(
+  db: EngineConnection,
+  version: number,
+  minReader: number,
+): { min_reader?: number | null } {
+  if (isPostgresSqlConnection(db)) {
+    return {};
+  }
+  const explicit = minReader < version;
+  if (explicit) {
+    ensureColumn(db, "config_machine_state", "min_reader INTEGER");
+  }
+  return explicit || tableHasColumn(db, "config_machine_state", "min_reader")
+    ? { min_reader: explicit ? minReader : null }
+    : {};
+}
+
+/** Persist the content marker inside the schema owner's transaction. */
+export function writeStateSchemaContentVersion(
+  db: EngineConnection,
+  minReader = OPENCLAW_STATE_SCHEMA_VERSION,
+): void {
+  if (
+    !isPostgresSqlConnection(db) &&
+    readStateSchemaContentVersion(db) > OPENCLAW_STATE_SCHEMA_VERSION
+  ) {
+    return;
+  }
+  const floor = stateReaderFloor(db, OPENCLAW_STATE_SCHEMA_VERSION, minReader);
   executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<PublicationDatabase>(db)
@@ -99,6 +162,7 @@ export function resolveStateSchemaVersionToPublish(db: DatabaseSync): number {
       .values({
         state_key: CONTENT_VERSION_KEY,
         value_json: String(OPENCLAW_STATE_SCHEMA_VERSION),
+        ...floor,
         updated_at_ms: Date.now(),
       })
       .onConflict((conflict) =>
@@ -106,10 +170,43 @@ export function resolveStateSchemaVersionToPublish(db: DatabaseSync): number {
           .column("state_key")
           .doUpdateSet({
             value_json: String(OPENCLAW_STATE_SCHEMA_VERSION),
+            ...floor,
             updated_at_ms: Date.now(),
           })
-          .where("config_machine_state.value_json", "!=", String(OPENCLAW_STATE_SCHEMA_VERSION)),
+          .where((eb) =>
+            eb.or([
+              eb("config_machine_state.value_json", "!=", String(OPENCLAW_STATE_SCHEMA_VERSION)),
+              ...(floor.min_reader === undefined
+                ? []
+                : floor.min_reader === null
+                  ? [eb("config_machine_state.min_reader", "is not", null)]
+                  : [
+                      eb("config_machine_state.min_reader", "is", null),
+                      eb("config_machine_state.min_reader", "!=", floor.min_reader),
+                    ]),
+            ]),
+          ),
       ),
   );
-  return published;
+}
+
+/** Advance an existing migration marker without changing its original timestamp. */
+export function advanceStateSchemaContentVersion(
+  db: EngineConnection,
+  versions: { fromVersion?: number; toVersion: number; minReader?: number },
+): void {
+  if (!tableExists(db, "config_machine_state")) {
+    return;
+  }
+  const floor = stateReaderFloor(db, versions.toVersion, versions.minReader ?? versions.toVersion);
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<PublicationDatabase>(db)
+      .updateTable("config_machine_state")
+      .set({ value_json: String(versions.toVersion), ...floor })
+      .where("state_key", "=", CONTENT_VERSION_KEY)
+      .$if(versions.fromVersion !== undefined, (query) =>
+        query.where("value_json", "=", String(versions.fromVersion)),
+      ),
+  );
 }

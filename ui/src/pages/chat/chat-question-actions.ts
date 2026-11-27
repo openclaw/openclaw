@@ -1,45 +1,62 @@
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { ChatProps } from "./chat-view.ts";
-
-type QuestionActionOptions = {
-  state: Pick<ChatPageHost, "sessionKey" | "connectionEpoch" | "handleSendChat" | "lastError">;
-  questionState: Parameters<typeof submitQuestionPrompt>[0];
-  canSend: boolean;
-  isCurrent: () => boolean;
-};
+import type { ChatProps } from "./chat-view.tsx";
 
 export function createChatQuestionActions({
   state,
   questionState,
+  sendActions,
   canSend,
   isCurrent,
-}: QuestionActionOptions): Pick<
+}: {
+  state: Pick<
+    ChatPageHost,
+    "sessionKey" | "connectionEpoch" | "handleSendChat" | "lastError" | "chatQueue"
+  >;
+  questionState: Parameters<typeof submitQuestionPrompt>[0];
+  sendActions: Pick<ChatProps, "onSend" | "onPermissionRetry">;
+  canSend: boolean;
+  isCurrent: () => boolean;
+}): Pick<
   ChatProps,
   | "onGatewayQuestionChange"
   | "onGatewayQuestionSubmit"
   | "onGatewayQuestionSkip"
   | "onAsyncQuestionSubmit"
+  | "onSend"
+  | "onPermissionRetry"
 > {
   const sessionKey = state.sessionKey;
   const connectionEpoch = state.connectionEpoch;
   const ownsSubmission = () =>
     state.sessionKey === sessionKey && state.connectionEpoch === connectionEpoch && isCurrent();
   return {
+    ...sendActions,
+    onSend: async (...args) => {
+      if (ownsSubmission()) {
+        return sendActions.onSend(...args);
+      }
+    },
     onGatewayQuestionChange: questionState.onChange,
     onGatewayQuestionSubmit: (id, answers) => submitQuestionPrompt(questionState, id, answers),
     onGatewayQuestionSkip: (id) => cancelQuestionPrompt(questionState, id),
     onAsyncQuestionSubmit: canSend
-      ? async (message) => {
+      ? async (message, itemId, sourceMessageId) => {
           if (!ownsSubmission()) {
             return false;
+          }
+          if (itemId && state.chatQueue.some((item) => item.asyncQuestionItemId === itemId)) {
+            return true;
           }
           let outboxAdmitted = false;
           let accepted: boolean | void = undefined;
           try {
             accepted = await state.handleSendChat(message, {
               followUpMode: "steer",
-              replyTargetOverride: null,
+              asyncQuestionItemId: itemId,
+              replyTargetOverride: sourceMessageId
+                ? { messageId: sourceMessageId, sourceMessageId, text: "" }
+                : null,
               onOutboxAdmitted: () => {
                 outboxAdmitted = true;
               },
