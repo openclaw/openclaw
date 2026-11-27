@@ -62,6 +62,7 @@ import {
   isReplyOperationStalledBeforeOutput,
   resolveStalledTurnNoticeText,
 } from "./stalled-turn-recovery.js";
+import { createTypingController } from "./typing.js";
 
 type FollowupDrainDisposition = { kind: "consumed" } | { kind: "retry"; error: unknown };
 
@@ -112,7 +113,7 @@ function resolveFollowupCompletion(
 }
 
 export function createFollowupRunner(
-  initialDefaults: FollowupRunnerParams,
+  initialDefaults: Omit<FollowupRunnerParams, "typing">,
 ): (queued: FollowupRun) => Promise<void> {
   const resolveGatewayContext = Object.hasOwn(initialDefaults, "resolveGatewayContext")
     ? initialDefaults.resolveGatewayContext
@@ -125,7 +126,18 @@ export function createFollowupRunner(
         runWithAgentWorkspaceReadiness(undefined, () =>
           withPluginRuntimeGatewayContextResolver(
             resolveGatewayContext,
-            () => executeFollowup(queued),
+            // The source dispatch sealed its typing when it returned; each turn owns a fresh one.
+            () =>
+              executeFollowup(queued, {
+                ...defaults,
+                typing: createTypingController({
+                  onReplyStart: defaults.opts?.onReplyStart,
+                  onCleanup: defaults.opts?.onTypingCleanup,
+                  typingIntervalSeconds: queued.run.config.agents?.defaults?.typingIntervalSeconds,
+                  keepalive: defaults.opts?.typingKeepalive ?? true,
+                  log: defaultRuntime.log,
+                }),
+              }),
             {
               inheritRequestScope: false,
             },
@@ -133,7 +145,10 @@ export function createFollowupRunner(
         ),
       ),
     );
-  const executeFollowup = async (queued: FollowupRun): Promise<void> => {
+  const executeFollowup = async (
+    queued: FollowupRun,
+    defaults: FollowupRunnerParams,
+  ): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
     let admittedTurn: AdmittedFollowupTurn | undefined;
@@ -669,7 +684,6 @@ export function createFollowupRunner(
         await admittedTurn?.releaseSourceAdmission?.();
       } finally {
         operation?.complete();
-        defaults.typing.releaseQueuedFollowupHold?.();
         defaults.typing.markRunComplete();
         defaults.typing.markDispatchIdle();
       }

@@ -1511,8 +1511,8 @@ describe("runReplyAgent admission and cleanup", () => {
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(typing.holdForQueuedFollowup).toHaveBeenCalledTimes(1);
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
+    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
     expect(typing.cleanup).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
     active.complete();
@@ -1535,8 +1535,7 @@ describe("runReplyAgent admission and cleanup", () => {
     expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(typing.holdForQueuedFollowup).toHaveBeenCalledTimes(1);
-    expect(typing.cleanup).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it.each([

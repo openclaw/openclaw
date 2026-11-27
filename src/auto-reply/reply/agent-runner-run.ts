@@ -86,6 +86,7 @@ export async function runReplyAgent(
     shouldFollowup,
     hasQueuedFollowups = false,
     isActive,
+    isRunActive,
     opts,
     typing,
     sessionEntry,
@@ -246,7 +247,6 @@ export async function runReplyAgent(
     const queuedRunFollowupTurn = createFollowupRunner({
       resolveGatewayContext,
       opts,
-      typing,
       typingMode,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
@@ -370,10 +370,13 @@ export async function runReplyAgent(
       } else {
         scheduleFollowupDrain(queueKey, queuedRunFollowupTurn, controllerInput.mailbox.owner);
       }
-      // The source dispatch seals this controller when it returns. Leave it open
-      // so the queued turn can show typing, and let that turn stop it.
-      typing.holdForQueuedFollowup?.();
+      const queuedBehindActiveRun = (await isRunActive?.()) === true;
       await touchActiveSessionEntry();
+      if (queuedBehindActiveRun) {
+        await typingSignals.signalToolStart();
+      } else {
+        typing.cleanup();
+      }
       return undefined;
     }
 

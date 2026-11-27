@@ -685,10 +685,6 @@ export function createReplyDispatcherWithTyping(
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
     onIdle: async () => {
-      if (typingController?.isHeldForQueuedFollowup?.()) {
-        await onSettled?.();
-        return;
-      }
       typingController?.markDispatchIdle();
       const idle = resolvedOnIdle?.();
       if (idle) {
@@ -708,16 +704,10 @@ export function createReplyDispatcherWithTyping(
       },
     },
     markDispatchIdle: () => {
-      if (typingController?.isHeldForQueuedFollowup?.()) {
-        return;
-      }
       typingController?.markDispatchIdle();
       resolvedOnIdle?.();
     },
     markRunComplete: () => {
-      if (typingController?.isHeldForQueuedFollowup?.()) {
-        return;
-      }
       typingController?.markRunComplete();
     },
   };

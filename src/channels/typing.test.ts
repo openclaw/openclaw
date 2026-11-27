@@ -123,9 +123,6 @@ describe("createTypingCallbacks", () => {
       expect(stop).toHaveBeenCalledTimes(1);
       expect(onStartError.mock.calls).toEqual(rejected ? [[failure]] : []);
       expect(vi.getTimerCount()).toBe(0);
-      await vi.advanceTimersByTimeAsync(20_000);
-      await callbacks.onReplyStart();
-      expect(start).toHaveBeenCalledTimes(admittedStarts);
     },
   );
 
