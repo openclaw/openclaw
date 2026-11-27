@@ -8,16 +8,13 @@ import {
   isDashboardSessionKey,
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
-import { prioritizeInitialSessionsTable } from "../lib/sessions/session-requests.ts";
 import { prewarmChatSnapshot } from "../pages/chat/chat-snapshot-prewarm.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
 import { finishBootFrame } from "./boot-composer.ts";
 import type { BootRecord } from "./boot-record.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
-import type { EarlyApplicationGateway } from "./early-gateway.ts";
 import { readCredentialBootRecord } from "./gateway-store.credentials.ts";
-import type { ApplicationGateway } from "./gateway.ts";
 import { hasEmbedderTransport, isRemoteControlUiIngress } from "./remote-ingress.ts";
 import {
   loadGatewaySessionSelection,
@@ -163,23 +160,5 @@ export function prepareApplicationStartup() {
     prioritizeSessionsTable,
     ownsWarmBoot,
     hasPendingGateway,
-  };
-}
-
-export function startApplicationGatewayConnection(
-  gateway: ApplicationGateway,
-  earlyGateway: EarlyApplicationGateway | undefined,
-  prioritizeSessionsTable: boolean,
-): () => void {
-  gateway.start();
-  const client = gateway.snapshot.client;
-  if (prioritizeSessionsTable && client) {
-    prioritizeInitialSessionsTable(client);
-  }
-  return () => {
-    if (earlyGateway && !earlyGateway.credentials && !gateway.snapshot.client) {
-      earlyGateway.transport.client.stop();
-    }
-    gateway.stop();
   };
 }

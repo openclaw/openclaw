@@ -7,8 +7,8 @@ import {
   createSubscriptionHydrationHarness,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { prioritizeInitialSessionsTable } from "./session-requests.ts";
 import { coordinated, listRequest, rosterFixture } from "./session-roster-refresh.test-support.ts";
+import { prioritizeInitialSessionsTable } from "./session-table-priority.ts";
 import type { SessionListScope, SessionListSnapshot } from "./session-types.ts";
 
 const query = {
