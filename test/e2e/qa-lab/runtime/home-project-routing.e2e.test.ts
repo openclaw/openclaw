@@ -19,7 +19,7 @@ it(
     const request = "Let's work on Juniper.";
     const modelId = "project-local";
     const model = `mock-openai/${modelId}`;
-    let pending = false;
+    let pendingRequest: string | undefined;
     let stale = false;
     let projectId = "";
     let action = "";
@@ -38,10 +38,7 @@ it(
         .filter((m) => m.role === "system" || m.role === "developer")
         .map(messageText)
         .join("\n");
-      const user = body.messages
-        .filter((m) => m.role === "user")
-        .map(messageText)
-        .join("\n");
+      const userText = body.messages.filter((m) => m.role === "user").map(messageText);
       for (const message of body.messages) {
         const receipt = messageText(message)
           .split("\n")
@@ -52,12 +49,9 @@ it(
           handoff = receipt.slice(0, 700);
         }
       }
-      if (
-        pending &&
-        body.tools?.length &&
-        user.includes(stale ? "Replay the old tool call" : request)
-      ) {
-        pending = false;
+      const wanted = pendingRequest;
+      if (wanted && body.tools?.length && userText.some((text) => text.includes(wanted))) {
+        pendingRequest = undefined;
         const move = stale || system.includes("call session_project with action move");
         if (!stale) {
           expect(system).toContain(JSON.stringify({ id: projectId, name: "Juniper" }));
@@ -211,10 +205,11 @@ it(
         const homeFiles = () => gateway.call("sessions.files.list", { sessionKey: home, path: "" });
         await expect(homeFiles()).resolves.toMatchObject({ root: gateway.workspaceDir });
         expect(before.worktree).toBeUndefined();
-        pending = true;
+        pendingRequest = request;
         await send(home, request);
+        expect(pendingRequest).toBeUndefined();
         await expect
-          .poll(async () => (await trees()).length, { timeout: 30_000, message: handoff })
+          .poll(async () => (await trees()).length || handoff, { timeout: 30_000 })
           .toBe(1);
         const [childTree] = await trees();
         expect.assert(childTree);
@@ -249,9 +244,10 @@ it(
           expect((await trees()).some((t) => t.ownerId === home)).toBe(false);
         };
         await assertHome();
-        stale = pending = true;
-        await send(home, "Replay the old tool call.");
-        expect(pending).toBe(false);
+        stale = true;
+        pendingRequest = "Replay the old tool call.";
+        await send(home, pendingRequest);
+        expect(pendingRequest).toBeUndefined();
         await assertHome();
         stale = false;
         await gateway.call("sessions.create", {
@@ -259,12 +255,15 @@ it(
           key: ordinary,
           label: "Ordinary control",
         });
-        pending = true;
-        await send(ordinary, request);
-        await expect
-          .poll(async () => (await row(ordinary)).projectId, { timeout: 30_000 })
-          .toBe(projectId);
+        // A late Home follow-up still contains its earlier request; only this turn
+        // may consume the ordinary-session control.
+        pendingRequest = "Let’s work on Juniper in this conversation.";
+        await send(ordinary, pendingRequest);
+        expect(pendingRequest).toBeUndefined();
         expect(action).toBe("session_project");
+        await expect
+          .poll(async () => (await row(ordinary)).projectId ?? handoff, { timeout: 30_000 })
+          .toBe(projectId);
         await assertHome();
         expect(
           await gateway.call("projects.moveSessionOptions", { sessionKey: home }),

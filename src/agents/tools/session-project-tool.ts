@@ -1,5 +1,4 @@
 import { Type } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureExecRequestOwners } from "../../infra/exec-request-context.js";
 import { resolveReplyRunForCurrentSessionId } from "../../sessions/session-controller.identity.js";
@@ -32,22 +31,16 @@ function currentRequester() {
 
 export function createSessionProjectTool(
   options: {
-    config?: OpenClawConfig;
     sandbox?: SandboxContext | null;
     sessionId?: string;
     runId?: string;
     onYield?: SessionsYieldCallback;
     senderIsOwner?: boolean;
   },
-  offeredTo?: { agentId: string; sessionKey: string },
+  offeredTo?: { config: OpenClawConfig; agentId: string; sessionKey: string },
 ): AnyAgentTool {
   const listOnly =
-    offeredTo &&
-    isHomeProjectSession(
-      options.config ?? getRuntimeConfig(),
-      offeredTo.agentId,
-      offeredTo.sessionKey,
-    );
+    offeredTo && isHomeProjectSession(offeredTo.config, offeredTo.agentId, offeredTo.sessionKey);
   let operation = options.runId ? findSessionControllerOperationByRunId(options.runId) : undefined;
   if (options.runId === undefined && options.sessionId) {
     const current = resolveReplyRunForCurrentSessionId(options.sessionId);

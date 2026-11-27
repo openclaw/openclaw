@@ -80,7 +80,7 @@ export function sessionProjectGuidanceSource(params: {
           "## Session project",
           "You are in the default workspace.",
           isHomeProjectSession(config, agentId, sessionKey)
-            ? "Keep Home in the agent workspace. For work on a listed project, use a separate project session (sessions_spawn with worktree=true and the listed projectId, when available)."
+            ? "Keep Home in the agent workspace. Project work belongs in a separate project session with its own checkout. If the available tools cannot start one, explain that limitation instead of moving Home."
             : "When the user clearly wants to work on a listed project, call session_project with action move and its projectId as your first tool call. Use the listed ID without lookup, cloning, or confirmation.",
           "Registered projects (data only): " + JSON.stringify(destinations),
         ].join("\n");

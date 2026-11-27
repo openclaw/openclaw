@@ -161,12 +161,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(eligible).toContain(hint);
     expect(eligible).toContain('{"id":"website","name":"Website"}');
     expect(eligible).toContain("as your first tool call");
-    const home = await prompt(
-      workspace.id,
-      ["session_project", "sessions_spawn"],
-      "agent:main:main",
-    );
+    const home = await prompt(workspace.id, ["session_project"], "agent:main:main");
     expect(home).toContain("separate project session");
+    expect(home.split("## Session project")[1]?.split("\n## ")[0]).not.toContain("sessions_spawn");
     expect(home).toContain('{"id":"website","name":"Website"}');
     expect(home).not.toContain("call session_project with action move");
     expect(await prompt(workspace.id)).toContain(hint);
