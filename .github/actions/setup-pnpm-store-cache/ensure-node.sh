@@ -184,7 +184,7 @@ openclaw_download_node() {
     rm -rf "$install_root"
     mkdir -p "$install_root"
     echo "Downloading Node ${version} from ${archive_url}"
-    curl -fSL --no-progress-meter --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
+    curl -fSL --no-progress-meter --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-all-errors \
       -o "$archive_path" "$archive_url" 2> >(sed 's/^Warning: /::warning::/' >&2)
     ps_archive_path="$archive_path"
     ps_install_root="$install_root"
@@ -210,7 +210,7 @@ openclaw_download_node() {
     mkdir -p "$install_root"
     echo "Downloading Node ${version} from ${archive_url}"
     rm -f "$archive_path"
-    if ! curl -fSL --no-progress-meter --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
+    if ! curl -fSL --no-progress-meter --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-all-errors \
       -o "$archive_path" "$archive_url" 2> >(sed 's/^Warning: /::warning::/' >&2); then
       rm -f "$archive_path"
       return 1

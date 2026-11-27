@@ -10,10 +10,11 @@ const onIncompleteUsageExhausted = vi.fn();
 let policy: UsageRefreshPolicy;
 let loading = false;
 
-async function exhaustRetries(connection?: object) {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    policy.setLastLoadedAtMs(Date.now(), { incomplete: true, connection });
+async function exhaustRetries() {
+  policy.markProviderLoaded(null);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
+    policy.markProviderLoaded(null);
   }
 }
 
@@ -21,7 +22,12 @@ beforeEach(() => {
   loading = false;
   reload.mockClear();
   onIncompleteUsageExhausted.mockClear();
-  policy = new UsageRefreshPolicy({ isLoading: () => loading, reload, onIncompleteUsageExhausted });
+  policy = new UsageRefreshPolicy({
+    isSessionLoading: () => loading,
+    isProviderLoading: () => false,
+    reload,
+    onIncompleteUsageExhausted,
+  });
   vi.useFakeTimers();
   vi.setSystemTime(NOW_MS);
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -36,7 +42,8 @@ afterEach(() => {
 it.each([false, true])("defers hidden work until visible (interrupted: %s)", (interrupted) => {
   loading = interrupted;
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-  policy.setLastLoadedAtMs(interrupted ? NOW_MS : NOW_MS - USAGE_PAYLOAD_TTL_MS);
+  policy.markSessionsLoaded(interrupted ? NOW_MS : NOW_MS - USAGE_PAYLOAD_TTL_MS);
+  policy.markProviderLoaded(NOW_MS);
   if (interrupted) {
     policy.interrupt();
     loading = false;
@@ -48,64 +55,65 @@ it.each([false, true])("defers hidden work until visible (interrupted: %s)", (in
   visibility.mockReturnValue("visible");
   void policy.request("focus");
   expect(reload).toHaveBeenCalledOnce();
+  expect(reload).toHaveBeenLastCalledWith({ sessions: true, provider: false });
 });
 
-it.each(["manual", "focus", "connection"] as const)(
+it("refreshes an expired provider plan without rereading fresh sessions", async () => {
+  policy.markSessionsLoaded(NOW_MS);
+  policy.markProviderLoaded(NOW_MS - USAGE_PAYLOAD_TTL_MS);
+
+  await policy.request("focus");
+
+  expect(reload).toHaveBeenCalledExactlyOnceWith({ sessions: false, provider: true });
+});
+
+it.each(["manual", "focus", "reconnect"] as const)(
   "restarts an exhausted retry budget: %s",
   async (reset) => {
-    await exhaustRetries(reset === "connection" ? {} : undefined);
+    await exhaustRetries();
     expect(reload).toHaveBeenCalledTimes(3);
     expect(policy.incompleteUsageExhausted).toBe(true);
-    if (reset !== "connection") {
-      policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
-      expect(onIncompleteUsageExhausted).toHaveBeenCalledOnce();
-      await policy.request(reset);
-    }
-    policy.setLastLoadedAtMs(Date.now(), {
-      incomplete: true,
-      ...(reset === "connection" ? { connection: {} } : {}),
-    });
+    policy.markProviderLoaded(null);
+    expect(onIncompleteUsageExhausted).toHaveBeenCalledOnce();
+    await policy.request(reset);
+    policy.markProviderLoaded(null);
     expect(policy.incompleteUsageExhausted).toBe(false);
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(reload).toHaveBeenCalledTimes(reset === "connection" ? 4 : 5);
+    expect(reload).toHaveBeenCalledTimes(5);
   },
 );
 
-it.each(["completion", "connection", "disposal"] as const)(
+it.each(["completion", "identity change", "disposal"] as const)(
   "cancels the previous retry timer on %s",
   async (reason) => {
-    const connection = {};
-    policy.setLastLoadedAtMs(Date.now(), { incomplete: true, connection });
+    policy.markProviderLoaded(null);
     await vi.advanceTimersByTimeAsync(1_000);
     if (reason === "disposal") {
       policy.dispose();
+    } else if (reason === "identity change") {
+      policy.resetPayload();
     } else {
-      policy.setLastLoadedAtMs(Date.now(), {
-        incomplete: reason === "connection",
-        connection: reason === "connection" ? {} : connection,
-      });
+      policy.markProviderLoaded(Date.now());
     }
     await vi.advanceTimersByTimeAsync(4_000);
     expect(reload).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(reload).toHaveBeenCalledTimes(reason === "connection" ? 1 : 0);
+    expect(reload).not.toHaveBeenCalled();
   },
 );
 
-it.each(["poll", "focus"] as const)(
-  "replays the highest-priority deferred reason: %s",
-  async (reason) => {
+it.each([false, true])(
+  "replays a provider poll without forcing a session read (publication: %s)",
+  async (publication) => {
     loading = true;
     await policy.request("poll");
-    if (reason === "focus") {
-      await policy.request("focus");
-      await policy.request("poll");
+    if (publication) {
+      await policy.request("publication");
     }
     expect(reload).not.toHaveBeenCalled();
     loading = false;
-    policy.flushPending();
-    await vi.advanceTimersByTimeAsync(0);
+    await policy.flushPending();
     expect(reload).toHaveBeenCalledTimes(1);
-    expect(reload).toHaveBeenLastCalledWith(reason);
+    expect(reload).toHaveBeenLastCalledWith({ sessions: publication, provider: true });
   },
 );

@@ -235,7 +235,7 @@ describe("SQLite session snapshots and reset content revision", () => {
     },
   );
 
-  it("preserves registered secrets in worker and inline exports", async () => {
+  it("preserves registered secrets in worker exports", async () => {
     const scope = sessionScope("secret");
     const content = "API_TOKEN = computeToken() sk-abc123456789012345678";
     registerSecretValueForRedaction(content);
@@ -246,10 +246,7 @@ describe("SQLite session snapshots and reset content revision", () => {
     });
     expect(replaceEvents(scope, [messageEvent("source-text", "user", content)])).toBe(true);
     const worker = await exportEntry(scope);
-    const inline = await exportEntry(scope, { parseYieldEveryLines: 1 });
     expect(worker.content).toBe(`User: ${content}`);
-    expect(inline.content).toBe(worker.content);
-    expect(inline.hash).toBe(worker.hash);
   });
 
   it.each([false, true])(

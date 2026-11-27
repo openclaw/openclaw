@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { Socket } from "node:net";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
@@ -19,6 +20,7 @@ it.for([
   { mode: "close", message: /synthetic close/ },
   { mode: "deadline", message: /deadline|timed out/i },
   { mode: "factory", message: /synthetic catalog capture refusal/ },
+  { mode: "socket", message: /synthetic catalog socket refusal/ },
 ])(
   "joins catalog root preparation after %s without invoking the cancelled input",
   async ({ mode, message }, { signal }) => {
@@ -29,6 +31,12 @@ it.for([
       const resume = createDeferredCore();
       vi.spyOn(source, "captureIndependentResource").mockImplementation(async (...args) => {
         entered.resolve();
+        if (mode === "socket") {
+          vi.spyOn(Socket.prototype, "connect").mockImplementationOnce(() => {
+            throw new Error("synthetic catalog socket refusal");
+          });
+          return create(...args);
+        }
         if (mode === "factory") {
           return create(
             new URL(
@@ -62,14 +70,10 @@ it.for([
         expect(pool.isClosed).toBe(true);
       } finally {
         resume.resolve();
-        if (mode === "factory") {
-          await expect(pool.close()).rejects.toThrow("synthetic catalog capture refusal");
-        } else {
-          await pool.close();
-        }
+        await pool.close();
       }
       expect(input).not.toHaveBeenCalled();
-      if (mode !== "factory") {
+      if (mode === "close" || mode === "deadline") {
         expect(await fs.readdir(path.join(state.stateDir, "tmp", "plugin-captures"))).toEqual([]);
       }
       expect(await source.retireIdleBroker()).toBe(true);

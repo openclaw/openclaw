@@ -680,7 +680,7 @@ describe("loadOpenClawPlugins", () => {
           scenario: Parameters<typeof expectPluginSourcePrecedence>[1],
         ) => {
           expectPluginSourcePrecedence(registry, scenario);
-          expect(registry.agentToolResultMiddlewareOwners).toEqual([]);
+          expect(registry.agentToolResultMiddlewares).toEqual([]);
         },
       },
       {

@@ -40,6 +40,19 @@ points into a temporary copy is refreshed by the next `openclaw gateway install`
 the state directory is missing or does not match, it keeps the service's current
 OpenClaw and prints the install command to run.
 
+On macOS and Linux, a successful install can also create a managed terminal CLI in
+the profile’s `bin` directory. When no existing command or configured profile
+already owns the terminal default, the first installation makes it discoverable
+as `openclaw` in new Bash, zsh, fish, and POSIX sh shells. A fresh named-profile
+install supplies that profile as the launcher default; explicit `--profile` and
+`OPENCLAW_PROFILE` still win. Later installs preserve existing commands and
+configured profiles, including offline Gateways, rather than changing the
+terminal default. When selection is ambiguous or shell integration cannot be
+written, installation reports the contextual command or manual PATH step. Custom
+state/config paths retain their explicit environment setup. Additive shell setup
+respects `ZDOTDIR` and `XDG_CONFIG_HOME`. This does not follow
+the macOS app’s changing primary connection or migrate Gateway state.
+
 Queued native service commands use elapsed-time deadlines, so system-clock
 corrections do not prematurely expire or extend their admission budgets.
 

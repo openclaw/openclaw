@@ -137,6 +137,7 @@ export function createPriorCiFixtureState(head: string) {
 }
 
 export const priorCiSecurityFixtureSource = String.raw`
+const securityFiles=()=>s.priorCi.security.dependencyApproval?[{filename:"pnpm-workspace.yaml"}]:[];
 const securityStatuses=()=>{
   const config=s.priorCi.security;
   const common={creator:{id:41898282,login:"github-actions[bot]",type:"Bot"},
@@ -198,6 +199,8 @@ const securityResponse=()=>{
     reply({base_commit:{sha:source},merge_base_commit:{sha:config.fault==="untrusted-publisher-source"?"0".repeat(40):source},status:endpoint.includes("..."+source+"?")?"identical":"ahead"});
   } else if(endpoint==="repos/fixture/repo/pulls/152415") {
     reply({number:152415,base:{ref:"main",repo:{full_name:s.repo.nameWithOwner}},state:"closed",merged:true,merged_at:"2026-09-01T00:00:00Z",merge_commit_sha:source});
+  } else if(endpoint.startsWith("repos/fixture/repo/pulls/123/files?")) {
+    reply(securityFiles());
   } else if(endpoint.includes("/collaborators/")) {
     reply({role_name:config.role});
   } else if(endpoint.startsWith("repos/fixture/repo/issues/123/comments?")&&args.includes("--include")) {

@@ -90,7 +90,7 @@ it("keeps failure feedback scoped to its displayed run without replacing error o
   await waitForSolid(() => expect(contexts.at(-1)?.props.sessionKey).toBe("agent:example:two"));
   expect(second.signal.aborted).toBe(true);
   runtime.select();
-  await waitForSolid(() => expect(view.queryByText("Report a bug")).not.toBeNull());
+  await waitForSolid(() => expect(view.queryByText("Plugin receipt: pending")).toBeNull());
   expect(view.container.querySelector(".chat-run-failure__log")?.textContent).toBe(
     "Original error details",
   );
@@ -99,7 +99,7 @@ it("keeps failure feedback scoped to its displayed run without replacing error o
   expect(runtime.listeners.size).toBe(0);
 });
 
-it("restores the built-in report link when a failure-feedback mount fails", async () => {
+it("keeps the error details when a failure-feedback mount fails", async () => {
   const runtime = createViewRuntime({
     id: "broken",
     label: "Broken feedback",
@@ -126,7 +126,7 @@ it("restores the built-in report link when a failure-feedback mount fails", asyn
     { wrapper: provider.wrapper },
   );
   await waitForSolid(() => expect(runtime.reportError).toHaveBeenCalledOnce());
-  expect(view.getByText("Report a bug")).toBeDefined();
+  expect(view.queryByText("Report a bug")).toBeNull();
   expect(view.container.querySelector(".chat-run-failure__log")?.textContent).toBe(
     "Original error details",
   );

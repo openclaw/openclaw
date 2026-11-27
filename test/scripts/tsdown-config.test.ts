@@ -11,13 +11,16 @@ import {
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { RELEASED_READER_ENTRIES } from "../../scripts/lib/catalog-compare-released-gate.mts";
 import { createCompactModuleLabelsPlugin } from "../../scripts/lib/compact-module-labels.mts";
+import { visitJavaScriptStatements } from "../../scripts/lib/javascript-statements.mjs";
 import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
 } from "../../scripts/lib/package-dist-imports.mjs";
 import { collectRuntimeDependencySpecs } from "../../scripts/lib/plugin-package-dependencies.mts";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
+import { standaloneRuntimeProcessBuildEntries } from "../../scripts/lib/runtime-process-core-build-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -61,6 +64,25 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
   }
   return (entry as Record<string, unknown>)[name] === source;
 }
+
+// Renaming or dropping one of these entries would fail the catalog publish gate for
+// the release that ships it, long after this PR merged.
+it("ships the stable entries the catalog publish gate runs released readers from", async () => {
+  for (const [reader, name] of Object.entries(RELEASED_READER_ENTRIES)) {
+    const source = configs
+      .map((config) => config.entry)
+      .find(
+        (entry): entry is Record<string, string> =>
+          typeof entry === "object" && entry !== null && !Array.isArray(entry) && name in entry,
+      )?.[name];
+    expect(source, `dist entry ${name}`).toBeTypeOf("string");
+    const module = (await import(pathToFileURL(path.resolve(source ?? "")).href)) as Record<
+      string,
+      unknown
+    >;
+    expect(module[reader], `${source} exports ${reader}`).toBeTypeOf("function");
+  }
+});
 
 it("keeps retirement reads outside the Doctor restoration graph", async () => {
   const selected = configs.find((config) =>
@@ -300,6 +322,56 @@ const isWorkerBuildConfig = (config: TsdownConfig) =>
 function findWorkerBuildConfig(target: string) {
   const selected = workerBuildTargets.find(([name]) => name === target);
   return selected && configs.find((config) => hasWorkerEntry(config, selected[1], selected[2]));
+}
+
+function listBindinglessPackageImports(source: string): string[] {
+  const specifiers: string[] = [];
+  visitJavaScriptStatements(source, { sourceType: "module", allowHashBang: true }, (statements) => {
+    for (const statement of statements) {
+      if (
+        statement.type === "ImportDeclaration" &&
+        statement.specifiers.length === 0 &&
+        typeof statement.source.value === "string" &&
+        !statement.source.value.startsWith(".") &&
+        !isBuiltin(statement.source.value)
+      ) {
+        specifiers.push(statement.source.value);
+      }
+    }
+  });
+  return specifiers;
+}
+
+const SERVICE_RELAY_ENTRY = "process/supervisor/service-child-relay";
+const HOOK_RELAY_ENTRY = "agents/harness/native-hook-relay-client.worker";
+
+async function buildRelayImports(entryName: string, fixture?: string) {
+  const entrySource = standaloneRuntimeProcessBuildEntries[entryName];
+  const selected =
+    entrySource && configs.find((config) => hasWorkerEntry(config, entryName, entrySource));
+  if (!selected) {
+    throw new Error("Missing standalone runtime process build config");
+  }
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    ...(fixture ? { entry: { [entryName]: fixture } } : {}),
+    outDir: fs.realpathSync(createTempDir("openclaw-standalone-helper-")),
+    logLevel: "silent",
+  });
+  try {
+    const chunk = bundles
+      .flatMap((bundle) => bundle.chunks)
+      .find((output) => output.type === "chunk" && output.fileName === `${entryName}.js`);
+    if (chunk?.type !== "chunk") {
+      throw new Error(`Missing standalone helper chunk: ${entryName}`);
+    }
+    return { bare: listBindinglessPackageImports(chunk.code), all: chunk.imports };
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
 }
 
 const FS_SAFE_CALLER_PROBE = `
@@ -1274,6 +1346,66 @@ console.log("relocated session card renders with bundled fonts");
     }
   });
 
+  it("loads source workers through the relocated runtime loader artifact", async () => {
+    const root = fs.realpathSync(createTempDir("openclaw-tsdown-worker-loader-"));
+    const loader = "infra/runtime-worker-loader";
+    const selected = configs.find((config) =>
+      hasWorkerEntry(config, loader, path.resolve(`src/${loader}.mjs`)),
+    );
+    if (!selected) {
+      throw new Error("Missing runtime worker loader build entry");
+    }
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      entry: {
+        [loader]: path.resolve(`src/${loader}.mjs`),
+        "worker-argv": path.resolve("src/infra/runtime-worker-url.ts"),
+      },
+      outDir: path.join(root, "dist"),
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+      fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+      const cwd = path.join(root, "foreign-cwd");
+      fs.mkdirSync(cwd);
+      const worker = path.join(cwd, "worker.mts");
+      fs.writeFileSync(
+        worker,
+        'import { parentPort } from "node:worker_threads"; enum Answer { value = 42 }; parentPort.postMessage(Answer.value);',
+      );
+      const result = await runNodeFixture(
+        [
+          "--input-type=module",
+          "--eval",
+          `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
+const { resolveRuntimeWorkerThreadExecArgv } = await import(pathToFileURL(process.argv[1]).href);
+const url = pathToFileURL(process.argv[2]);
+assert.deepEqual(resolveRuntimeWorkerThreadExecArgv(new URL("worker.js", url)), []);
+assert.deepEqual(resolveRuntimeWorkerThreadExecArgv(url, "bun"), []);
+const worker = new Worker(url, { execArgv: resolveRuntimeWorkerThreadExecArgv(url) });
+worker.once("error", error => { throw error; });
+worker.once("message", value => { assert.equal(value, 42); console.log("relocated loader ran source worker"); });
+`,
+          path.join(root, "dist", "worker-argv.js"),
+          worker,
+        ],
+        { cwd, timeout: 10_000 },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      expect(result.stdout.trim()).toBe("relocated loader ran source worker");
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it.each(["runtime", "worker"])(
     "keeps service relay dependencies inside the emitted %s artifact closure",
     async (target) => {
@@ -1787,6 +1919,31 @@ console.log("relocated session card renders with bundled fonts");
     }
   });
 
+  it.each([SERVICE_RELAY_ENTRY, HOOK_RELAY_ENTRY])(
+    "omits unused fs-safe and proc-safe imports from %s",
+    async (entry) => {
+      const { bare } = await buildRelayImports(entry);
+      expect(bare.filter((id) => /^@openclaw\/(?:fs-safe|proc-safe)\//u.test(id))).toEqual([]);
+    },
+  );
+
+  it("preserves relay imports with live bindings and third-party side effects", async () => {
+    const require = createRequire(import.meta.url);
+    for (const dependency of ["@openclaw/fs-safe", "@openclaw/proc-safe"]) {
+      expect(require(`${dependency}/package.json`)).toMatchObject({ sideEffects: false });
+    }
+    const root = fs.realpathSync(createTempDir("openclaw-relay-imports-"));
+    fs.symlinkSync(fs.realpathSync("node_modules"), path.join(root, "node_modules"), "dir");
+    const entry = path.join(root, "relay.ts");
+    fs.writeFileSync(
+      entry,
+      'import "dotenv/config";\nimport "@openclaw/ai/internal/runtime";\nimport "@openclaw/fs-safe/walk";\nexport { readProcessIdentity } from "@openclaw/proc-safe/identity";\n',
+    );
+    const { bare, all } = await buildRelayImports(SERVICE_RELAY_ENTRY, entry);
+    expect(bare.toSorted()).toEqual(["@openclaw/ai/internal/runtime", "dotenv/config"]);
+    expect(all).toContain("@openclaw/proc-safe/identity");
+  });
+
   it("keeps excluded plugins out of the unified graph without dropping host helpers", () => {
     const runtime = configs.find((entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP);
     const entries = runtime?.entry as Record<string, string>;
@@ -1865,9 +2022,12 @@ console.log("relocated session card renders with bundled fonts");
           [entry]: source,
           ...(target === "worker"
             ? {
-                "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
-                "worker/worker-chunk-fs-safe-watch-io":
+                "worker/worker-chunk-highlight": path.resolve(
+                  "node_modules/highlight.js/lib/index.js",
+                ),
+                "worker/worker-chunk-fs-safe-watch-io": path.resolve(
                   "node_modules/@openclaw/fs-safe/dist/watch-io-worker.js",
+                ),
               }
             : {}),
         });
@@ -1919,6 +2079,7 @@ console.log("relocated session card renders with bundled fonts");
     for (const config of [receiverConfig, relayConfig, anchorConfig]) {
       expect(config?.alias).toBeUndefined();
       expect(config?.plugins).toEqual([
+        expect.objectContaining({ name: "openclaw:empty-runtime-chunks" }),
         expect.objectContaining({ name: "openclaw:standalone-source-module-urls" }),
       ]);
       expect(config?.outputOptions).toEqual({ codeSplitting: false });

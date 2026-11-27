@@ -34,7 +34,8 @@ export type DevicePairSetupLifecycle = { access: DevicePairSetupAccess } & (
   | { phase: "loading" }
   | { phase: "waiting"; setup: DevicePairSetup }
   | { phase: "reconciling"; setupId: string }
-  | { phase: "error"; source: "create"; message: string }
+  // The dialog formats the failure and recognizes the loopback-only refusal.
+  | { phase: "error"; source: "create"; error: unknown }
   | { phase: "error"; source: "status"; setupId: string; message: string }
   | { phase: "success"; deviceName?: string }
   | { phase: "delivery-uncertain" }
@@ -361,12 +362,7 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
       state.client === client &&
       state.devicePairSetupOpen
     ) {
-      state.devicePairSetupLifecycle = {
-        phase: "error",
-        source: "create",
-        access,
-        message: formatUiError(err),
-      };
+      state.devicePairSetupLifecycle = { phase: "error", source: "create", access, error: err };
     }
   } finally {
     if (devicePairSetupRequests.get(state) === requestToken) {

@@ -22,6 +22,7 @@ import { parseArgs } from "node:util";
 import type { AuthProfileStore } from "../../src/agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { BuildModelsListResultParams } from "../../src/gateway/server-methods/models-list-context.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -150,12 +151,7 @@ try {
   const hostLoadStart = loadavg();
   const memoryStart = process.memoryUsage();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const samples: number[] = [];
   const cpuStart = process.threadCpuUsage();

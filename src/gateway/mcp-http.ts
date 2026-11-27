@@ -24,7 +24,6 @@ import { logDebug, logWarn } from "../logger.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
-  withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -37,6 +36,10 @@ import {
   registerMcpLoopbackClientGrantRevocationListener,
   revokeMcpLoopbackClientGrantsForRuntime,
 } from "./mcp-grant-store.js";
+import {
+  resolveInMcpGrantRequestScope,
+  runInMcpGrantRequestScope,
+} from "./mcp-http.grant-generation.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
   getActiveMcpLoopbackRuntime,
@@ -150,7 +153,6 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
     import("./tool-resolution-completion.js"),
   ]);
   const ownerToken = crypto.randomBytes(32).toString("hex");
-  const nonOwnerToken = crypto.randomBytes(32).toString("hex");
   const toolCache = new McpLoopbackToolCache();
   // GET notification streams are intentionally long-lived; shutdown must end
   // them itself before waiting for httpServer.close() to drain active responses.
@@ -184,7 +186,6 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
       req,
       res,
       ownerToken,
-      nonOwnerToken,
       onSseResponse: trackSseResponse,
     });
     if (!auth) {
@@ -251,16 +252,15 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
           { retain: true },
         );
         async function handlePreparedRequest() {
-          // A completion grant is current only while its requester lineage verifies. The
-          // child entry can go away while preparation, hooks or approvals await, so the
-          // dispatch authorization and the tools' source-effect guard both re-check it.
+          // A completion grant is current only while its grant row and requester lineage
+          // verify. Each tool call checks both at dispatch; a started call finishes, and
+          // Stop reaches it through the grant's abort signal.
           const lineage = createCompletionGrantLineageAdmission({ cfg, context: requestContext });
-          const isGrantAndLineageCurrent = () =>
-            (boundClientGrant?.isCurrent() ?? true) && lineage.isCurrent();
           const authorizeToolCall = () =>
             !work.isClosing &&
             getActiveMcpLoopbackRuntime()?.ownerToken === ownerToken &&
-            isGrantAndLineageCurrent();
+            (boundClientGrant?.isCurrent() ?? true) &&
+            lineage.isCurrent();
           const harnessEntry = isAgentHarnessSessionKey(requestContext.sessionKey)
             ? await readResolvedSessionEntryInWorker({ cfg, sessionKey: requestContext.sessionKey })
             : undefined;
@@ -294,9 +294,8 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
             const callerIdentity = boundClientGrant
               ? createAdmittedGatewayToolCallerIdentity({
                   admittedRunContext: boundClientGrant.admittedRunContext,
-                  receiptAuthority: isGrantAndLineageCurrent,
                   receiptAdmission: lineage.admission,
-                  cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
+                  approvalSignals: boundClientGrant.abortSignal && [boundClientGrant.abortSignal],
                   // Management binding needs the admitted identity, not execution's issuer.
                   mintCronRequesterGrant:
                     phase === "execution" ? boundClientGrant.mintCronRequesterGrant : undefined,
@@ -362,9 +361,10 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   withManagementScope(resolveTools),
                 );
               scopedTools = await (boundClientGrant.requestScope
-                ? withPluginRuntimeGatewayRequestScope(
+                ? resolveInMcpGrantRequestScope(
                     boundClientGrant.requestScope,
                     constructAsCaller,
+                    requestAbort.signal,
                   )
                 : constructAsCaller());
             } else {
@@ -498,7 +498,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   ),
                 );
               response = await (runRequestScope
-                ? withPluginRuntimeGatewayRequestScope(runRequestScope, handleAsCaller)
+                ? runInMcpGrantRequestScope(runRequestScope, handleAsCaller)
                 : handleAsCaller());
             } finally {
               markMcpLoopbackToolCallFinished(cliCaptureHandle);
@@ -604,7 +604,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
   });
   // Register tokens only after the TCP listener is live so clients never learn
   // a bearer token for a server that failed to bind.
-  setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
+  setActiveMcpLoopbackRuntime({ port: address.port, ownerToken });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
   let cleanupDone = false;

@@ -100,7 +100,7 @@ it("refuses archived restoration when its database is replaced at the commit gra
     const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
     const fixture = await createSessionColdStorageFixture(storePath);
     await runSessionColdStorageMaintenance({ config: maintenanceConfig(storePath) });
-    const before = fixture.snapshot();
+    let before = fixture.snapshot();
     const detached = storePath + ".detached";
     let replaced = false;
     const original = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
@@ -112,6 +112,7 @@ it("refuses archived restoration when its database is replaced at the commit gra
             ? {
                 ...params,
                 onCommitRequest() {
+                  before = fixture.snapshot();
                   fs.renameSync(storePath, detached);
                   fs.writeFileSync(storePath, "replacement");
                   replaced = true;
@@ -124,6 +125,7 @@ it("refuses archived restoration when its database is replaced at the commit gra
     try {
       await expect(restoreSessionColdTranscript(fixture.scope)).rejects.toThrow();
       expect(replaced).toBe(true);
+      expect(fs.readFileSync(storePath, "utf8")).toBe("replacement");
     } finally {
       spy.mockRestore();
       if (replaced) {

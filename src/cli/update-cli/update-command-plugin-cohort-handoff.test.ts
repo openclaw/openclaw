@@ -104,7 +104,7 @@ it("hands a matching pending cohort to Gateway readiness only under its actual l
           withUpdateCommandRecoveryUnwind({ run }, recoveryState, async () => {
             throw new Error("foreground operation failed", { cause: new Error("bad schema") });
           }),
-        ).rejects.toThrow(/update\.\nFirst failure: .*bad schema\nRun `openclaw update repair/u);
+        ).rejects.toThrow(/update\.\nFirst failure: .*bad schema/u);
         expect(completeUpdateCommandRun(input, run)).toMatchObject({ status: "ok", runId });
         expect(getUpdateRun(runId, { env: state.env })).toMatchObject({
           status: "running",

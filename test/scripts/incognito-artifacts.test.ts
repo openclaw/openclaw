@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { gzipSync, zstdCompressSync } from "node:zlib";
-import { c as createTar } from "tar";
+import { c as createTar } from "tar/raw";
 import { afterEach, expect, test } from "vitest";
 import { assertNoIncognitoArtifacts } from "../../scripts/e2e/lib/upgrade-survivor/incognito-artifacts.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";

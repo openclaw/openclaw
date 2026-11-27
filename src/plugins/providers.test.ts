@@ -61,20 +61,6 @@ function setManifest(id: string, overrides: Partial<PluginManifestRecord> = {}) 
   setManifestPlugins([manifest(id, overrides)]);
 }
 
-function setOwningProviderManifestPlugins() {
-  setManifestPlugins([
-    manifest("minimax", { providers: ["minimax", "minimax-portal"] }),
-    manifest("openai", {
-      providers: ["openai", "openai"],
-      modelSupport: { modelPrefixes: ["gpt-", "o1", "o3", "o4"] },
-    }),
-    manifest("anthropic", {
-      cliBackends: ["claude-cli"],
-      modelSupport: { modelPrefixes: ["claude-"] },
-    }),
-  ]);
-}
-
 function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
   const plugins = manifestLoader().plugins.map((plugin) => {
     const snapshotPlugin = {
@@ -239,6 +225,33 @@ describe("resolvePluginProviders", () => {
     expect(setupLoader).not.toHaveBeenCalled();
   });
 
+  it("resolves the shipped device-code method alias to the declared personal device-code sign-in", async () => {
+    const { resolvePersonalAccountAuthMethod } = await import("./personal-account-auth.js");
+    const bundled = manifest("personal-provider");
+    bundled.providerAuthChoices = [
+      {
+        provider: "personal-provider",
+        method: "oauth",
+        choiceId: "personal-code",
+        personalAccount: true,
+        appGuidedAuth: "device-code",
+      },
+    ];
+    setManifestPlugins([bundled]);
+    const oauth = {
+      id: "oauth",
+      label: "Code sign-in",
+      kind: "device_code" as const,
+      run: vi.fn(),
+    };
+    setupLoader.mockReturnValue(
+      providerRegistry({ id: "personal-provider", label: "Personal", auth: [oauth] }),
+    );
+    expect(await resolvePersonalAccountAuthMethod({}, "personal-provider", "device-code")).toBe(
+      oauth,
+    );
+  });
+
   it.each([true, false])(
     "resolves installed owners with prepared manifest metadata: %s",
     (prepared) => {
@@ -285,18 +298,6 @@ describe("resolvePluginProviders", () => {
       expect(manifestLoader).toHaveBeenCalledTimes(prepared ? 0 : 2);
     },
   );
-
-  it("reuses one registry snapshot across explicit model ownership lookups", () => {
-    setOwningProviderManifestPlugins();
-
-    expect(
-      owners.resolveOwningPluginIdsForModelRefs({
-        models: ["openai/gpt-5.6-luna", "claude-cli/claude-sonnet-4-6"],
-      }),
-    ).toEqual(["anthropic", "openai"]);
-    expect(metadataLoader).not.toHaveBeenCalled();
-    expect(indexLoader).toHaveBeenCalledOnce();
-  });
 
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());

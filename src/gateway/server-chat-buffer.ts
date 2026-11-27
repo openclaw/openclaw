@@ -31,6 +31,8 @@ export type ChatRunBufferState = {
     current: ReturnType<ReturnType<typeof createLiveAssistantTextProjection>["replace"]>;
     pendingRawDelta?: string | null;
     reset?: boolean;
+    textScope?: AssistantTextSnapshot["scope"];
+    toolTextAfterSeq?: number;
     unsentDelta: string | null;
     sentText?: string;
   };

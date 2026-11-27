@@ -2,6 +2,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   applyConfigEnvVars,
   collectConfigRuntimeEnvOwnership,
@@ -86,6 +87,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("replaces an equal mutable publication with an immutable owner snapshot", () => {
+  const initial = portConfig(18789);
+  setSnapshot(initial, initial);
+  const frozen = freezeJsonSnapshot(structuredClone(initial));
+  setSnapshot(frozen, frozen);
+  expect(getSnapshot()).toBe(frozen);
+  initial.gateway.port = 19001;
+  expect(getSnapshot()?.gateway?.port).toBe(18789);
+  const revision = getMetadata()?.revision;
+  setSnapshot(freezeJsonSnapshot(structuredClone(frozen)), frozen);
+  expect(getSnapshot()).toBe(frozen);
+  expect(getMetadata()?.revision).toBe(revision);
+});
+
 it("pins the first successful load in memory until the snapshot is cleared", () => {
   let freshPort = 18789;
   const loadFresh = vi.fn(() => portConfig(freshPort));
@@ -134,6 +149,7 @@ it("keeps model projections across display writes but invalidates authored value
     ...initial,
     ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
     meta: { lastTouchedVersion: "2026.10.11" },
+    browser: { profiles: { temporary: { cdpPort: 18801, color: "#123456" } } },
   };
   setSnapshot(display, display);
   expect(resolveRuntimeConfigCacheKey(display)).not.toBe(configKey);

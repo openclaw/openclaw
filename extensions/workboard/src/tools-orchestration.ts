@@ -73,7 +73,7 @@ const toolSchemas = {
     boardId: Type.Optional(Type.String({ description: "Optional board id filter." })),
   }),
   specify: strictObject({
-    id: Type.String({ description: "Workboard card id." }),
+    id: cardIdField(),
     title: Type.Optional(Type.String({ description: "Clarified title." })),
     notes: Type.Optional(Type.String({ description: "Clarified notes or acceptance criteria." })),
     agentId: Type.Optional(Type.String({ description: "Assigned agent id." })),
@@ -89,7 +89,7 @@ const toolSchemas = {
     token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
   }),
   decompose: strictObject({
-    id: Type.String({ description: "Parent Workboard card id." }),
+    id: cardIdField(),
     token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
     summary: Type.Optional(Type.String({ description: "Decomposition summary." })),
     completeParent: Type.Optional(
@@ -239,7 +239,8 @@ export function createWorkboardOrchestrationTools(params: {
       parameters: CardIdSchema,
       execute: async (_toolCallId, rawParams) => {
         const id = readStringParam(asNonArrayRecord(rawParams), "id", { required: true });
-        const result = await store.runs(id);
+        const card = await store.requireCardByIdOrPrefix(id);
+        const result = await store.runs(card.id);
         return jsonResult({ ...result, card: redactClaimToken(result.card) });
       },
     },

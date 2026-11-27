@@ -32,7 +32,8 @@ vi.mock("../infra/control-ui-assets.js", async (importOriginal) => ({
   ensureControlUiAssetsBuilt: mocks.ensureControlUiAssetsBuilt,
 }));
 
-import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
+import { resolveDoctorRepairMode } from "./doctor-repair-mode.js";
+import { checkUiProtocolFreshnessPending, maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 
 const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 let prompter: DoctorPrompter;
@@ -126,6 +127,20 @@ it("skips a disabled Control UI during an update without the restricted source r
     "Control UI is disabled (gateway.controlUi.enabled: false), so asset repair was skipped.",
     "UI",
   );
+});
+
+it("does not count a disabled Control UI as pending build work during an update", async () => {
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify({ gateway: { controlUi: { enabled: false } } })}\n`,
+  );
+
+  await withUpdateInProgress(async () => {
+    const pending = await checkUiProtocolFreshnessPending(
+      resolveDoctorRepairMode({ repair: true, nonInteractive: true }),
+    );
+    expect(pending).toBe("none");
+  });
 });
 
 it("skips Control UI asset repair when the web app is disabled", async () => {

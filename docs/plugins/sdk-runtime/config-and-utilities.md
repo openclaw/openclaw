@@ -353,11 +353,16 @@ CLI logs render these diagnostics automatically; successful runs remain quiet.
 Native RPC error messages retain their original text; `agent.wait` renders the
 supplemental diagnostic at its terminal result boundary.
 
-Channel plugins must admit authenticated agent turns through their injected
-`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
-accepts owner authority only from the exact active, trusted plugin registered for
-`options.messageChannel`; guest turns retain their non-owner identity. The public
-`agentCommandFromIngress` SDK helper never accepts a caller-supplied owner claim.
+Channel plugins run agent turns for their senders through the injected
+`api.runtime.agent.runCommandFromIngress(options, runtime)` capability. Only the
+active plugin registered for `options.messageChannel` can call it. Pass the
+sender as `runContext.senderId` and the channel account as `accountId`: the host
+makes the turn an owner turn exactly when `commands.ownerAllowFrom` lists that
+sender, the same rule as a text message from that channel. Any other sender runs
+as a non-owner.
+`options.senderIsOwner` is deprecated and ignored; passing `true` logs one
+deprecation warning per plugin. The public `agentCommandFromIngress` SDK helper
+never makes a turn an owner turn.
 
 Model-picker integrations use two focused runtime subpaths. Import the typed
 `ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from

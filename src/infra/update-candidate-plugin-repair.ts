@@ -41,11 +41,11 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   }
   const privateRoot = await fs.realpath(rehearsalRoot);
   const signal = getAsyncWorkSignal();
-  const assertPrivate = (file: string) => {
+  const assertContained = (file: string, roots = [privateRoot]) => {
     signal?.throwIfAborted();
+    const resolved = resolvePathViaExistingAncestorSync(file);
     if (
-      !isPathInside(privateRoot, path.resolve(file)) ||
-      !isPathInside(privateRoot, resolvePathViaExistingAncestorSync(file))
+      !roots.some((root) => isPathInside(root, path.resolve(file)) && isPathInside(root, resolved))
     ) {
       throw new Error(`Plugin dependency is outside the temporary update copy: ${file}`);
     }
@@ -78,6 +78,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   if (!candidateRoot) {
     throw new Error("Cannot locate the staged OpenClaw installation for plugin setup");
   }
+  const dependencyRoots = [privateRoot, await fs.realpath(candidateRoot)];
   const discovery = discoverConfiguredPluginLoadPaths({
     loadPaths: [...sources],
     deduplicate: true,
@@ -95,8 +96,8 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   const project = (source: string) =>
     resolveUpdateCandidatePluginPath(privateRoot, privateRoot, source);
   for (const entry of entries) {
-    assertPrivate(entry.rootDir);
-    assertPrivate(entry.entryFile);
+    assertContained(entry.rootDir);
+    assertContained(entry.entryFile);
     const copiedGraph = await inspectUpdateCandidatePluginSourceAsync(entry, warnings, {
       root: privateRoot,
       onUnresolvable: (name, importer) => {
@@ -110,16 +111,16 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
         }
       },
     });
-    assertPrivate(entry.rootDir);
-    assertPrivate(entry.entryFile);
+    assertContained(entry.rootDir);
+    assertContained(entry.entryFile);
     if (!copiedGraph) {
       continue;
     }
     for (const reference of copiedGraph.references) {
-      // Explicit external imports retain their source semantics. Lookups naming
-      // private paths must not escape through a symlink, including absolute paths.
+      // Only the private plugin copy is constrained. Explicit external imports
+      // and the trusted candidate's own dependency resolution retain their semantics.
       if (isPathInside(privateRoot, reference.source) && isPrivateLookup(reference.specifier)) {
-        assertPrivate(reference.target);
+        assertContained(reference.target, dependencyRoots);
       }
     }
     const unresolvedPrivate = copiedGraph.unresolved.filter(
@@ -191,7 +192,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   const missing: typeof plan.entries = [];
   for (const entry of plan.entries) {
     const destination = project(entry.path);
-    assertPrivate(destination);
+    assertContained(destination);
     const existing = await fs.lstat(destination).catch(ignoreMissingUpdateCandidateFile);
     if (!existing) {
       missing.push(entry);

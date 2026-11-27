@@ -86,13 +86,15 @@ If an adopted session's upstream source is deleted externally, three consecutive
 
 ## Notices: one, not many
 
-When a notify-eligible event lands and a watcher's cursor is behind, the watcher receives one system notice on its next turn:
+When a notify-eligible event lands and a watcher's cursor is behind, the agent receives one internal notice on its next turn:
 
 ```
 Session "agent:main:subagent:child" changed (other actor). Reconcile before acting: session_status sessionKey "agent:main:subagent:child" changesSince 12.
 ```
 
 Live notices for explicit watchers coalesce for 20 seconds before starting a session event. Nested sub-agent and ambient group watchers receive context on their next ordinary turn.
+
+These notices are model-only context, not chat messages or new human requests. The agent reconciles silently and continues authorized work; it reports only useful outcomes or blockers. A successful reconciliation with nothing useful to report may finish with `NO_REPLY`. Internal notices remain in the canonical transcript but do not appear in pending input, live chat, or reloaded chat history.
 
 The protocol is deliberately anti-spam:
 

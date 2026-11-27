@@ -34,6 +34,7 @@ import { retireSqliteDatabaseAdmissionForPath as retireAdmission } from "../infr
 import { migrateHistoricalTranscriptDirectives } from "../infra/state-migrations.transcript-directives.js";
 import { readUpdateDatabaseGenerationsIsolated } from "../infra/update-candidate-state.js";
 import { createNonExitingRuntime } from "../runtime.js";
+import { readOpenVoiceSessions } from "../talk/client-voice-session-lookup.worker.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION as schemaVersion } from "./openclaw-agent-db-contract.js";
 import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
@@ -163,6 +164,56 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     await client.query("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public");
   });
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
+
+  it("uses the partial indexes for PostgreSQL voice-session lookups", () => {
+    const options = { agentId: "voice-plans" };
+    const sessionKey = "agent:voice-plans:target";
+    const scope = "talk-client-voice-sessions";
+    using database = openDatabase(options);
+    const db = database.db;
+    assert(isPostgresSqlConnection(db));
+    database.write(
+      `INSERT INTO cache_entries (scope, key, value_json, updated_at)
+       SELECT ?, n::text, json_build_object(
+         'version', 1, 'agentId', 'voice-plans', 'voiceSessionId', n::text,
+         'sessionKey', CASE WHEN n = 1 THEN ? ELSE 'agent:voice-plans:other-' || n END,
+         'origin', 'client', 'status', CASE WHEN n <= 300 THEN 'open' ELSE 'closed' END,
+         'createdAt', n, 'updatedAt', n
+       )::text, n
+       FROM generate_series(1, 3000) AS n`,
+      scope,
+      sessionKey,
+    );
+    database.write(
+      "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
+      scope,
+      "malformed",
+      "{broken",
+      1,
+    );
+    admit(() => db.exec("ANALYZE cache_entries"));
+
+    const plans = [];
+    using query = vi.spyOn(db, "query");
+    for (const input of [
+      { kind: "legacy", ...options, sessionKey },
+      { kind: "stale", ...options, updatedBefore: 2, excludeVoiceSessionId: "2" },
+    ] as const) {
+      query.mockClear();
+      expect(admit(() => readOpenVoiceSessions(options, input)).matches).toEqual([
+        { voiceSessionId: "1", sessionKey },
+      ]);
+      const lookup = query.mock.calls.find(([sql]) => sql.includes('from "cache_entries"'));
+      assert(lookup, `expected ${input.kind} lookup on the admitted store`);
+      const [statement, parameters] = lookup;
+      const explained = admit(() => db.query(`EXPLAIN ${statement}`, parameters));
+      plans.push(explained.rows.map((row) => row["QUERY PLAN"]).join("\n"));
+    }
+    expect(plans).toEqual([
+      expect.stringContaining("idx_agent_voice_session_open_scope"),
+      expect.stringContaining("idx_agent_voice_session_open_updated"),
+    ]);
+  });
 
   it("inspects clean PostgreSQL transcripts and preserves history requiring a file repair backup", async () => {
     const target = await createSession("doctor-transcript", "doctor-transcripts", "main");

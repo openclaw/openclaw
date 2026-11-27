@@ -22,7 +22,6 @@ const mocks = vi.hoisted(() => ({
   admit: vi.fn<(write: () => void | Promise<void>) => Promise<void>>(),
   owned: vi.fn(),
   fence: vi.fn<() => SessionTranscriptWriterFence | undefined>(),
-  writer: vi.fn(),
   patch: vi.fn(),
   read: vi.fn(),
   cloneEnv: vi.fn(),
@@ -36,9 +35,6 @@ vi.mock("../../config/config-env-vars.js", () => ({
   cloneEnvWithPlatformSemantics: () => mocks.cloneEnv(),
 }));
 vi.mock("../../config/sessions/paths.js", () => ({ resolveSessionStorePathCore: vi.fn() }));
-vi.mock("../../config/sessions/cli-history-boundary.js", () => ({
-  getCliHistoryWriter: () => ({ assertCurrent: mocks.writer }),
-}));
 // mock-isolation: Admission fixtures control transcript paths and patch settlement independently of storage.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: mocks.patch,
@@ -276,16 +272,14 @@ it.each([
 });
 
 it.each(["native", "supplied"] as const)(
-  "rechecks captured %s source and CLI writer after waiting",
+  "rechecks captured %s source after waiting",
   async (branch) => {
-    for (const authority of [mocks.owned, mocks.writer]) {
-      await during(branch, () => {
-        authority.mockImplementationOnce(() => {
-          throw new Error("Retired source");
-        });
+    await during(branch, () => {
+      mocks.owned.mockImplementationOnce(() => {
+        throw new Error("Retired source");
       });
-      expect(mocks.append).not.toHaveBeenCalled();
-    }
+    });
+    expect(mocks.append).not.toHaveBeenCalled();
   },
 );
 
@@ -295,7 +289,6 @@ it("keeps a supplied detached manager targetless", async () => {
   expect(mocks.admit).not.toHaveBeenCalled();
   expect(mocks.read).not.toHaveBeenCalled();
   expect(mocks.owned).not.toHaveBeenCalled();
-  expect(mocks.writer).not.toHaveBeenCalled();
   expect(mocks.append).toHaveBeenCalledOnce();
 });
 

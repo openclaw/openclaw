@@ -83,7 +83,7 @@ describe("OpenClaw ID member role preset activation", () => {
     await f.service.reconcileRuntimePolicy();
     expect((await f.read()).gateway?.roles).toEqual({
       ...roles,
-      definitions: { ...roles.definitions, viewer: presets.viewer },
+      definitions: { ...roles.definitions, admin: presets.admin, viewer: presets.viewer },
     });
     const seeded = await f.read();
     await f.save({ ...seeded, gateway: { ...seeded.gateway, openclawId: { enabled: false } } });
@@ -176,4 +176,41 @@ describe("OpenClaw ID member role preset activation", () => {
     expect((await f.read()).gateway?.roles).toEqual({ definitions: presets });
     expect(f.log.warn).not.toHaveBeenCalled();
   });
+});
+
+it.each([false, true])(
+  "warns once without rewriting hand-enabled Access-blocked config (read-only=%s)",
+  async (readOnly) => {
+    const f = await fixture({
+      plugins: { allow: ["browser"] },
+      gateway: { openclawId: { enabled: false } },
+    });
+    await f.service.reconcileRuntimePolicy();
+    await f.save({ plugins: { allow: ["browser"] }, gateway: { openclawId: { enabled: true } } });
+    const before = await fs.readFile(f.configPath, "utf8");
+    if (readOnly) {
+      vi.stubEnv("OPENCLAW_CONFIG_READONLY", "1");
+    }
+    await f.service.reconcileRuntimePolicy();
+    await f.service.reconcileRuntimePolicy();
+    expect(await fs.readFile(f.configPath, "utf8")).toBe(before);
+    expect(f.log.warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/Access page stays off.*plugins.allow.*doctor/),
+    );
+  },
+);
+
+it("finishes role activation after Doctor unblocks Access without an off/on cycle", async () => {
+  const f = await fixture({
+    plugins: { allow: ["browser"] },
+    gateway: { openclawId: { enabled: true } },
+  });
+  await f.service.reconcileRuntimePolicy();
+  expect((await f.read()).gateway?.roles).toBeUndefined();
+  await f.save({
+    plugins: { allow: ["browser", "openclaw-id-access"] },
+    gateway: { openclawId: { enabled: true } },
+  });
+  await f.service.reconcileRuntimePolicy();
+  expect((await f.read()).gateway?.roles).toEqual({ definitions: presets });
 });

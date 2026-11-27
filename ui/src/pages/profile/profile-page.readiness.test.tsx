@@ -53,6 +53,7 @@ it("reveals identity and following settings before preferences finish, then enab
     await waitForSolid(() => {
       expect(request).toHaveBeenCalledWith("users.self", {});
       expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada");
+      expect(page.querySelector("#settings-profile-access")).toBeNull();
       expect(page.querySelector("openclaw-model-accounts")).toBeNull();
       expect(page.querySelector("button.settings-row--nav")).toBeNull();
     });
@@ -66,6 +67,7 @@ it("reveals identity and following settings before preferences finish, then enab
         ],
       });
       expect(page.textContent).toContain("ada@example.test");
+      expect(page.querySelector("#settings-profile-access")).not.toBeNull();
       expect(page.querySelector("openclaw-model-accounts")).not.toBeNull();
       expect(page.querySelector("button.settings-row--nav")?.textContent).toContain(
         "Usage statistics",

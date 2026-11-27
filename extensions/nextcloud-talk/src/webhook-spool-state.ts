@@ -1,7 +1,11 @@
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { PersistentDedupeEntry } from "openclaw/plugin-sdk/persistent-dedupe";
-import type { NextcloudTalkInboundAttachment, NextcloudTalkInboundQuote } from "./types.js";
+import { z } from "zod";
+import type {
+  NextcloudTalkInboundAttachment,
+  NextcloudTalkInboundMessage,
+  NextcloudTalkInboundQuote,
+} from "./types.js";
 
 export const NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION = 1;
 
@@ -25,7 +29,7 @@ export class NextcloudTalkWebhookPayloadError extends Error {
   }
 }
 
-export function parseRawObject(rawEvent: string): Record<string, unknown> {
+function parseRawObject(rawEvent: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawEvent);
@@ -40,7 +44,7 @@ export function parseRawObject(rawEvent: string): Record<string, unknown> {
   return parsed;
 }
 
-export function requiredString(value: unknown, field: string): string {
+function requiredString(value: unknown, field: string): string {
   if (typeof value === "string" && value.trim()) {
     return value.trim();
   }
@@ -48,7 +52,7 @@ export function requiredString(value: unknown, field: string): string {
 }
 
 /** Read one optional signed parent without rejecting an otherwise valid current message. */
-export function parseNextcloudTalkQuotedReply(
+function parseNextcloudTalkQuotedReply(
   envelope: Record<string, unknown>,
 ): NextcloudTalkInboundQuote | undefined {
   const object = isRecord(envelope.object) ? envelope.object : null;
@@ -149,7 +153,7 @@ function parseFileAttachment(value: unknown): NextcloudTalkInboundAttachment | u
 }
 
 /** Recognize Talk's file-bearing message Activity without admitting other system events. */
-export function parseNextcloudTalkFileSharedActivity(
+function parseNextcloudTalkFileSharedActivity(
   envelope: Record<string, unknown>,
 ): ParsedNextcloudTalkFileShare | null {
   if (envelope.type !== "Activity") {
@@ -213,44 +217,71 @@ export function inspectNextcloudTalkWebhookEnvelope(
   };
 }
 
-function parseLegacyReplayKey(key: string): { messageId: string; roomId: string } | null {
-  const separator = key.lastIndexOf(":");
-  const roomId = key.slice(0, separator).trim();
-  const messageId = key.slice(separator + 1).trim();
-  return separator > 0 && roomId && messageId ? { messageId, roomId } : null;
+// Activity Streams payload: https://nextcloud-talk.readthedocs.io/en/latest/bots/
+const NextcloudTalkWebhookPayloadSchema = z.object({
+  type: z.enum(["Create", "Update", "Delete", "Activity"]),
+  actor: z.object({
+    type: z.literal("Person"),
+    id: z.string().min(1),
+    name: z.string(),
+  }),
+  object: z.object({
+    type: z.literal("Note"),
+    id: z.string().min(1),
+    name: z.string(),
+    content: z.string(),
+    mediaType: z.string(),
+  }),
+  target: z.object({
+    type: z.literal("Collection"),
+    id: z.string().min(1),
+    name: z.string(),
+  }),
+});
+
+export function parseClaimedMessage(payload: NextcloudTalkIngressPayload, claimedId: string) {
+  const rawEnvelope = parseRawObject(payload.rawEvent);
+  const result = NextcloudTalkWebhookPayloadSchema.safeParse(rawEnvelope);
+  const fileShare = parseNextcloudTalkFileSharedActivity(rawEnvelope);
+  if (!result.success) {
+    throw new NextcloudTalkWebhookPayloadError(
+      `Nextcloud Talk ingress row ${claimedId} has invalid message identity.`,
+    );
+  }
+  const webhook = result.data;
+  const isSupportedEvent =
+    webhook.type === "Create" || (webhook.type === "Activity" && fileShare !== null);
+  if (!isSupportedEvent || webhook.object.id !== claimedId) {
+    throw new NextcloudTalkWebhookPayloadError(
+      `Nextcloud Talk ingress row ${claimedId} has invalid message identity.`,
+    );
+  }
+  const roomId = requiredString(webhook.target.id, "target.id");
+  const quote = parseNextcloudTalkQuotedReply(rawEnvelope);
+  const message: NextcloudTalkInboundMessage = {
+    messageId: webhook.object.id,
+    roomToken: roomId,
+    roomName: webhook.target.name,
+    senderId: webhook.actor.id,
+    senderName: webhook.actor.name,
+    text: fileShare ? fileShare.text : webhook.object.content || webhook.object.name,
+    ...(fileShare ? { mentionText: fileShare.mentionText } : {}),
+    mediaType: webhook.object.mediaType || "text/plain",
+    timestamp: payload.receivedAt,
+    // Activity Streams does not distinguish Talk room kinds. Runtime lookup refines this.
+    isGroupChat: true,
+    ...(fileShare?.attachment ? { attachment: fileShare.attachment } : {}),
+    ...(fileShare?.attachmentIssue ? { attachmentIssue: fileShare.attachmentIssue } : {}),
+    ...(quote ? { quote } : {}),
+  };
+  return message;
 }
 
-/** Convert the shipped replay guard's live window into durable completion tombstones. */
-export async function migrateNextcloudTalkLegacyReplayState(params: {
-  queue: ChannelIngressQueue<NextcloudTalkIngressPayload>;
-  store: NextcloudTalkLegacyReplayStore;
-}): Promise<void> {
-  const entries = await params.store.entries();
-  for (const entry of entries) {
-    const identity = parseLegacyReplayKey(entry.value.key);
-    if (!identity || !Number.isFinite(entry.value.seenAt)) {
-      continue;
-    }
-    const marker: NextcloudTalkIngressPayload = {
-      version: NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION,
-      receivedAt: entry.value.seenAt,
-      rawEvent: "",
-    };
-    const result = await params.queue.enqueue(identity.messageId, marker, {
-      receivedAt: entry.value.seenAt,
-      laneKey: `room:${identity.roomId}`,
-    });
-    const ownsMarker =
-      result.kind === "accepted" ||
-      (result.kind === "pending" && result.record.payload.rawEvent === "");
-    if (ownsMarker) {
-      const completed = await params.queue.complete(identity.messageId, {
-        completedAt: entry.value.seenAt,
-      });
-      if (!completed) {
-        throw new Error(`Failed to migrate Nextcloud Talk replay key ${entry.value.key}.`);
-      }
-    }
-  }
-  await params.store.clear();
+export function describeIgnoredWebhookEvent(rawEvent: string): string {
+  // Admission already parsed ignored envelopes; this read selects bounded log fields only.
+  const envelope = parseRawObject(rawEvent);
+  const type = typeof envelope.type === "string" ? envelope.type : "unknown";
+  const object = isRecord(envelope.object) ? envelope.object : null;
+  const objectType = typeof object?.type === "string" ? object.type : "unknown";
+  return `type=${type} objectType=${objectType}`;
 }

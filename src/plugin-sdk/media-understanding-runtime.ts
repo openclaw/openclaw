@@ -111,7 +111,10 @@ export function createChannelPreflightAudio<TAudio>(params: {
   };
 }
 
+export type { RunMediaUnderstandingFileResult } from "../../packages/media-understanding-common/src/types.js";
+
 export {
+  createAudioInputBudgetReader,
   describeImageFile,
   describeImageFileWithModel,
   describeVideoFile,
@@ -120,5 +123,4 @@ export {
   transcribeAudioFile,
   type ExtractStructuredWithModelParams,
   type RunMediaUnderstandingFileParams,
-  type RunMediaUnderstandingFileResult,
 } from "../media-understanding/runtime.js";

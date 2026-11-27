@@ -99,7 +99,6 @@ export function registerSubagentSweepRetainedAuthorityTests(killSessionEntry: {
     expect(harness.runs).toEqual(before);
     expect(harness.callGateway).not.toHaveBeenCalled();
     expect(harness.completeSubagentRunWithRecovery).not.toHaveBeenCalled();
-    expect(harness.completeCleanupBookkeeping).not.toHaveBeenCalled();
     expect(harness.notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
   });
 

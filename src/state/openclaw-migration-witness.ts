@@ -34,6 +34,7 @@ import { AGENT_TOOL_USAGE_SCHEMA_VERSION } from "./openclaw-agent-tool-usage-sch
 import { assertMigrationWitnessRegistryPreserved } from "./openclaw-migration-witness-registry.js";
 import {
   type OpenClawMigrationWitness,
+  agentSchemaVersions,
   registryRowSchema,
   witnessIdentifierSchema as identifier,
   witnessSchema,
@@ -44,9 +45,6 @@ import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-versio
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 
 type OpenClawMigrationWitnessOwner = { role: "agent"; agentId: string } | { role: "global" };
-const agentSchemaVersions = new Set([
-  24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,
-]);
 
 const ADDITIVE_AGENT_TABLES = new Map([
   ["session_transcript_cold_archive_chunks", AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION],
@@ -58,8 +56,11 @@ const ADDITIVE_AGENT_TABLES = new Map([
 const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
   Object.entries({
     ...AGENT_JSON_PREDICATE_COLUMNS,
+    session_nodes: [...AGENT_JSON_PREDICATE_COLUMNS.session_nodes, "archive_undo_marker"],
     session_windows: ["row_transcript_json", "row_transcript_updated_at"],
     trajectory_runtime_events: ["event_utf8_bytes", "event_payload", "event_codec"],
+    session_pending_inputs: ["end_cause", "origin_source_json"],
+    session_members: ["access"],
   }).map(([table, columns]) => [table, new Set<string>(columns)]),
 );
 
@@ -131,13 +132,13 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   return witness;
 }
 
-// Schemas 25 and 26 change these derived facts only. persistAgentSchemaMetadata also
-// publishes the target app version and timestamp; payload and creation time stay exact.
+// Versioned projections and new additive facts may change across migration.
+// Metadata also publishes the target app version/time; accepted payload bytes stay exact.
 function migrationColumn(role: OpenClawMigrationWitness["role"], table: string, column: string) {
   return !(
     role === "agent" &&
     ((table === "schema_meta" &&
-      ["schema_version", "app_version", "updated_at"].includes(column)) ||
+      ["schema_version", "min_reader", "app_version", "updated_at"].includes(column)) ||
       (table === "session_key_contract" && column === "canonical_ready") ||
       derivedMigrationColumns.get(table)?.has(column))
   );
@@ -224,6 +225,16 @@ function captureTable(
       !(role === "agent" && table === "memory_entry_origins" && !withoutRowid && index === 0) &&
       migrationColumn(role, table, name),
   );
+  // Added nullable authority fields carry no historical intent. Missing and NULL are
+  // equivalent across the migration, but a stored grant or verifier must match.
+  const authorityIndex =
+    role !== "agent"
+      ? -1
+      : table === "session_nodes"
+        ? names.indexOf("archive_undo_marker")
+        : table === "session_members"
+          ? names.indexOf("access")
+          : -1;
   const sha256 = createHash("sha256").update(JSON.stringify(names));
   const migrationSha256 =
     retained.every(Boolean) && !registry
@@ -322,7 +333,10 @@ function captureTable(
       if (registryRowHash) {
         hashCell(registryRowHash, row[`type_${index}`], row[`value_${index}`]);
       }
-      if (retained[index] && migrationSha256) {
+      if (
+        migrationSha256 &&
+        (retained[index] || (index === authorityIndex && row[`value_${index}`] !== null))
+      ) {
         if (
           migratingRegistration &&
           ["schema_version", "last_seen_at", "size_bytes"].includes(names[index]!)
@@ -527,7 +541,8 @@ export function captureOpenClawMigrationWitness(
       if (
         role === "agent" &&
         object.type === "table" &&
-        (object.name === "session_key_contract" ||
+        (object.name === "schema_meta" ||
+          object.name === "session_key_contract" ||
           object.name === "memory_entry_origins" ||
           derivedMigrationColumns.has(object.name))
       ) {

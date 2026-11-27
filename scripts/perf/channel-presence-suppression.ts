@@ -19,6 +19,7 @@ import { listPotentialConfiguredChannelPresenceSignals } from "../../src/channel
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { PluginDiscoveryResult } from "../../src/plugins/discovery.types.js";
 import { writeBenchmarkJson } from "../lib/benchmark-harness.mts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -89,12 +90,7 @@ const cpuUsage = (previous?: NodeJS.CpuUsage) =>
     : process.cpuUsage(previous);
 try {
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else {
     observer.observe({ entryTypes: ["gc"] });
   }

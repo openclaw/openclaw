@@ -18,8 +18,8 @@ import {
   type StatelessTemplateAddOptions,
 } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
-import { withResolvedClawHubSource } from "./clawhub-source.js";
-import type { TemplateSetupReport } from "./conversation.js";
+import { withResolvedClawHubSource, type PrefetchedClawHubSource } from "./clawhub-source.js";
+import { readTemplateSetupDeclarations, type TemplateSetupReport } from "./conversation.js";
 import {
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
@@ -128,6 +128,7 @@ export async function createTemplateAgentFromChat(
   admitted: AdmittedTemplateAgent | undefined,
   sessionKey: string | undefined,
   stateContext: OpenClawStateWorkerContext,
+  prefetched?: PrefetchedClawHubSource,
 ): Promise<GatewayTemplateAddApplyResult> {
   if (!admitted || !sessionKey) {
     throw new Error("Chat-based Template Add requires an agent id and a chat owner.");
@@ -268,6 +269,7 @@ export async function createTemplateAgentFromChat(
       ...(input.token ? { token: input.token } : {}),
       ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
       ...(input.stateDir ? { stateDir: input.stateDir } : {}),
+      ...(prefetched ? { prefetched } : {}),
       run: async (_extracted, _trust, persistSource) =>
         await withOpenClawStateLeaseAsync(
           {
@@ -290,11 +292,16 @@ export async function createTemplateAgentFromChat(
             );
             preparedSource = source;
             configured = true;
+            const declared = readTemplateSetupDeclarations(source.manifest);
             await measureTemplateAddStage(
               "session.finalize",
               async () =>
                 await admitted.chat.complete?.({
                   source: input.source,
+                  requiredAutomationIds: source.manifest.automations.map(({ id }) => id),
+                  // The first turn acts on these; handing them over saves it a manifest read.
+                  ...(declared ? { declared } : {}),
+                  ...(admitted.deviceTimeZone ? { deviceTimeZone: admitted.deviceTimeZone } : {}),
                   report,
                   dependenciesPending: true,
                 }),

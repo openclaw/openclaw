@@ -3,7 +3,7 @@ import { isQuestionThumbnail } from "../../../packages/gateway-protocol/src/ques
 import type { McpAppIcon as AppIcon } from "../../../src/shared/mcp-app-extensions.js";
 import { Icon } from "./solid/icon.tsx";
 
-const PluginIcon = lazy(() => import("./mcp-app-plugin-icon.tsx"));
+const PluginIcon = lazy(() => import("./plugin-artwork.tsx"));
 
 type IconProps = { icons: readonly AppIcon[]; class?: string; pluginId?: string };
 
@@ -33,7 +33,11 @@ export function McpAppIcon(props: IconProps) {
     <Show when={props.pluginId} fallback={<AdvertisedIcon {...props} />}>
       {(id) => (
         <Loading fallback={<AdvertisedIcon {...props} />}>
-          <PluginIcon pluginId={id()} icons={props.icons} class={props.class} />
+          <PluginIcon
+            pluginId={id()}
+            fallback={<AdvertisedIcon {...props} />}
+            class={props.class ?? "mcp-app-icon"}
+          />
         </Loading>
       )}
     </Show>

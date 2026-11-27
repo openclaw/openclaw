@@ -7,7 +7,6 @@ import {
   hasSessionAutoModelFallbackProvenance,
 } from "../../agents/agent-scope.js";
 import {
-  createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
   isFreshChannelCronAuthorityTurn,
 } from "../../agents/cron-creator-authority-context.js";
@@ -23,11 +22,10 @@ import {
 } from "../../agents/tool-policy.js";
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { copyChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity-inbound.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
-import { normalizeAccountId } from "../../routing/account-id.js";
 import {
   isSessionPersonalBootstrapTurn,
   readSessionInputProfileId,
@@ -41,8 +39,8 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
-import { isConfiguredCommandOwner } from "../command-auth.js";
 import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
+import { getCommandSenderAuthority } from "../command-sender-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { getRequesterProfile, transferRequesterProfile } from "../requester-profile.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -55,9 +53,14 @@ import {
   suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
+import {
+  createReplyCronAuthorityFactory,
+  logReplyCronOwnerWithoutAuthority,
+} from "./get-reply-run.cron-requester.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { replyCallbackCustody } from "./reply-callback-custody.js";
 import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
@@ -263,10 +266,7 @@ export async function executePreparedReplyRun(
     imageSourceIndexes: currentTurnImages.imageSourceIndexes,
   });
   const promptMediaSourceIndexes = currentTurnImages.imageSourceIndexes?.map((sourceIndex) => {
-    if (sourceIndex === undefined) {
-      return undefined;
-    }
-    const promptIndex = inboundMediaIndexes.indexOf(sourceIndex);
+    const promptIndex = sourceIndex === undefined ? -1 : inboundMediaIndexes.indexOf(sourceIndex);
     return promptIndex >= 0 ? promptIndex : undefined;
   });
   const promptMediaImageLayout = buildPersistedMediaImageLayout({
@@ -348,6 +348,8 @@ export async function executePreparedReplyRun(
     (userTurnInput
       ? createUserTurnTranscriptRecorder({
           input: userTurnInput,
+          // This recorder is made after the channel input's session initialization.
+          inputAlreadyAccepted: true,
           // An unstarted occurrence may be re-admitted after a policy publication.
           // Existing completion custody permits that exact source input to resume.
           trackInputCompletion: opts?.internalEventExecution ? true : undefined,
@@ -399,43 +401,29 @@ export async function executePreparedReplyRun(
     InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
     InputProvenance: inputProvenance,
   });
-  const channelOwnerAuthority = getCommandOwnerAuthority(sessionCtx);
+  const channelOwnerAuthority = getCommandOwnerAuthority(ctx);
+  const { senderIsOwner } = command;
   const authorityRunId =
     freshChannelCronAuthorityTurn && command.senderIsOwner
       ? (opts?.runId ?? crypto.randomUUID())
       : undefined;
-  const channelRequester =
-    freshChannelCronAuthorityTurn && messageProvider === "discord" && sessionCtx.SenderId
-      ? {
-          version: 1 as const,
-          channel: messageProvider,
-          accountId: normalizeAccountId(replyRoute.accountId),
-          senderId: sessionCtx.SenderId,
-        }
-      : undefined;
   const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
-  const cronOwner = {
-    channel: messageProvider,
-    accountId: replyRoute.accountId,
-    senderId: normalizeOptionalString(command.senderId),
-  };
-  const isCurrentChannelOwner = () =>
-    channelOwnerAuthority?.isCurrent() ?? isConfiguredCommandOwner(getRuntimeConfig(), cronOwner);
-  // Capture the authenticated source, never the later drain runner's identity.
-  // Queued input resolves ownership at its new admission, including owner promotion.
   const createChannelCronAuthority =
     !inheritedCronCreatorAuthorityCapability && freshChannelCronAuthorityTurn && messageProvider
-      ? (runId: string, isCurrentOwner = isCurrentChannelOwner) =>
-          createCronCreatorAuthorityCapability(
-            runId,
-            { kind: "external", channel: messageProvider },
-            { source: "channel-owner", isCurrent: isCurrentOwner },
-            undefined,
-            channelRequester,
-            { isCurrent: isCurrentOwner, ...cronOwner },
-          )
+      ? createReplyCronAuthorityFactory(sessionCtx, {
+          channel: messageProvider,
+          senderId: sessionCtx.SenderId,
+          accountId: ctx.AccountId ?? sessionCtx.AccountId,
+        })
       : undefined;
+  if (authorityRunId && !inheritedCronCreatorAuthorityCapability && !createChannelCronAuthority) {
+    logReplyCronOwnerWithoutAuthority(sessionCtx, {
+      channel: messageProvider,
+      accountId: ctx.AccountId ?? sessionCtx.AccountId,
+    });
+  }
   const followupRun = {
+    disableCollectBatching: Boolean(opts?.operatorAuthority?.participationCeiling),
     createChannelCronAuthority,
     prompt: queuedBody,
     readAdmissionConfig,
@@ -458,6 +446,7 @@ export async function executePreparedReplyRun(
     explicitSkillSelections: params.explicitSkillSelections,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
+    [replyCallbackCustody]: opts?.[replyCallbackCustody],
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     runObservers: {
       awaitSessionDiffBaseline: opts?.awaitSessionDiffBaseline,
@@ -551,20 +540,27 @@ export async function executePreparedReplyRun(
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),
       // Queued system events are prompt content in the same trusted session;
       // they do not rewrite the sender identity used by command/action auth.
-      senderIsOwner: command.senderIsOwner,
+      senderIsOwner,
       gitContributorProfileId: getRequesterProfile(ctx)?.id ?? readSessionInputProfileId(ctx),
-      traceAuthorized:
-        command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+      mcpRequesterProfileId:
+        !ctx.InternalTurnSource && (!inputProvenance || inputProvenance.kind === "external_user")
+          ? getCommandSenderAuthority(ctx)?.()
+          : undefined,
+      traceAuthorized: senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       traceLevelOverride: params.directives.traceLevel,
       verboseLevelOverride: params.directives.verboseLevel,
-      approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
+      approvalReviewerDeviceId: opts?.operatorAuthority?.participationCeiling
+        ? undefined
+        : normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       cwd:
         normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??
         resolveAgentRunCwd(cfg, agentId),
       permissionMode: admittedSessionSettings?.permissionMode,
-      sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
+      sessionRoot:
+        opts?.operatorAuthority?.participationCeiling?.source?.root ??
+        normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       blindPrompt: preparedSessionState.sessionEntry?.blindPrompt,
       config: cfg,
       toolOverrides: admittedSessionSettings?.toolOverrides,
@@ -660,14 +656,14 @@ export async function executePreparedReplyRun(
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
   if (!inputProvenance || inputProvenance.kind === "external_user") {
-    transferRequesterProfile(ctx, followupRun);
+    transferRequesterProfile(ctx, followupRun, followupRun.run);
     bindReplyInputChannel(
       followupRun.run,
       ctx.SenderIsBot ? undefined : (ctx.Provider ?? ctx.Surface),
     );
   }
   copyChildSessionPublication(sessionCtx, followupRun.run);
-  if (command.senderIsOwner && channelOwnerAuthority) {
+  if (channelOwnerAuthority) {
     bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);
   }
   if (sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin) {
@@ -702,9 +698,11 @@ export async function executePreparedReplyRun(
       transcriptCommandBody,
       followupRun,
       queueKey,
-      resolvedQueue,
-      shouldSteer,
-      shouldFollowup,
+      resolvedQueue: opts?.operatorAuthority?.participationCeiling
+        ? { ...resolvedQueue, mode: "followup" }
+        : resolvedQueue,
+      shouldSteer: opts?.operatorAuthority?.participationCeiling ? false : shouldSteer,
+      shouldFollowup: opts?.operatorAuthority?.participationCeiling ? true : shouldFollowup,
       hasQueuedFollowups,
       isActive,
       isRunActive,

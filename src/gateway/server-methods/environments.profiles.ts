@@ -1,6 +1,28 @@
+import {
+  ADMIN_SCOPE,
+  WRITE_SCOPE,
+  authorizeOperatorScopesForRequiredScope,
+} from "../method-scopes.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { workerInferenceMetadata } from "../worker-environments/inference-placement.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+
+export function dispatchableWorkerProfileIds(
+  profiles: readonly { id: string }[],
+  { context, client }: Pick<GatewayRequestHandlerOptions, "context" | "client">,
+) {
+  const role = resolveOperatorRolePolicy(client ?? null, context.getRuntimeConfig());
+  const scopes = client?.connect.scopes ?? [];
+  const administrator =
+    scopes.includes(ADMIN_SCOPE) && (!role || role.scopes.includes(ADMIN_SCOPE));
+  const canWrite =
+    authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes).allowed &&
+    (!role || authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, role.scopes).allowed);
+  return profiles
+    .filter((profile) => canWrite && (administrator || role?.workerProfiles?.includes(profile.id)))
+    .map((profile) => profile.id);
+}
 
 export function listWorkerProfiles(context: GatewayRequestContext) {
   if (!context.workerEnvironmentService || !context.workerPlacementDispatchService) {

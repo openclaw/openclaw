@@ -15,11 +15,11 @@ import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { CronService, type CronEvent } from "../service.js";
-import { createNoopLogger } from "../service.test-harness.js";
+import type { CronEvent, CronService } from "../service.js";
+import { createCronServiceWithStateForTest, createNoopLogger } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { createHeldCronRunner } from "./ops.test-support.js";
-import type { CronServiceDeps } from "./state.js";
+import type { CronServiceDeps, CronServiceState } from "./state.js";
 
 export type CronGatewayFixture = Parameters<Parameters<typeof withCronGatewayState>[0]>[0];
 
@@ -29,6 +29,7 @@ export async function withCronGatewayState(
     context: GatewayRequestContext;
     storePath: string;
     cron: CronService;
+    state: CronServiceState;
     logger: ReturnType<typeof createNoopLogger>;
     runIsolatedAgentJob: CronServiceDeps["runIsolatedAgentJob"];
     finished: (jobId: string) => Promise<CronEvent>;
@@ -73,7 +74,7 @@ export async function withCronGatewayState(
       return entry;
     };
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const cron = new CronService({
+    const { cron, state: cronState } = createCronServiceWithStateForTest({
       scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: false,
@@ -106,6 +107,7 @@ export async function withCronGatewayState(
         context,
         storePath,
         cron,
+        state: cronState,
         logger,
         runIsolatedAgentJob,
         finished: (id) => finished(id).promise,
@@ -131,6 +133,8 @@ export async function occupyWorkers(
     createDueIsolatedJob({ id: `capacity-${index}`, nowMs: now, nextRunAtMs: now }),
   );
   await saveCronStore(fixture.storePath, { version: 1, jobs: [...blockerJobs, job] });
+  // No spare memory, so exactly the default run slots fill.
+  fixture.state.readAvailableMemoryBytes = () => 0;
   const held = createHeldCronRunner(blockerJobs.length);
   vi.mocked(fixture.runIsolatedAgentJob).mockImplementation((input) =>
     input.job.id === job.id ? runTarget(input) : held.runner(input),

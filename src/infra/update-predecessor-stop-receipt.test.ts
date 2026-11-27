@@ -1,7 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { recordUpdateDatabaseWrites } from "../cli/update-cli/update-command-database-receipts.js";
+import { withGatewayMaintenanceDrain } from "../cli/update-cli/update-command-service-drain.js";
 import * as serviceMaintenance from "../cli/update-cli/update-command-service-maintenance.js";
+import * as stopPolicy from "../daemon/systemd-stop-policy.js";
+import * as gatewayCall from "../gateway/call.js";
+import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -11,6 +15,10 @@ import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-mai
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
+import {
+  GATEWAY_SERVICE_STOP_TIMEOUT_MS,
+  GATEWAY_SHUTDOWN_TIMEOUT_MS,
+} from "./gateway-shutdown-budget.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
@@ -33,8 +41,31 @@ it
   ] as const)(
   "retains rollback safety through a predecessor stop receipt (%s)",
   async (interference) => {
-    await withOpenClawTestState({ scenario: "minimal", applyEnv: true }, async ({ env }) => {
+    await withOpenClawTestState({ scenario: "minimal", applyEnv: true }, async (state) => {
+      const { env, writeConfig } = state;
+      const token = "synthetic-maintenance-probe-token"; // pragma: allowlist secret
+      if (interference === "none") {
+        await writeConfig({
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: { source: "store", provider: "default", id: "PROBE_TOKEN" },
+            },
+          },
+        });
+      }
       const pathname = openOpenClawStateDatabase({ env }).path;
+      if (interference === "none") {
+        await writeSecretStoreEntry({
+          scope: { kind: "team" },
+          name: "PROBE_TOKEN",
+          value: token,
+          kind: "secret",
+          updatedBy: "test",
+          database: { env },
+        });
+      }
       const { runId } = createUpdateRun({ trigger: "control-ui" }, { env });
       await closeOpenClawStateDatabaseAsync();
       const predecessor =
@@ -82,6 +113,37 @@ it
               refreshDefinition: false,
             },
           };
+          if (interference === "none") {
+            // Keep the credential read real: its warm worker used to block the receipt's EXCLUSIVE lock.
+            vi.spyOn(stopPolicy, "readSystemdGatewayStopTimeout").mockResolvedValue(
+              GATEWAY_SERVICE_STOP_TIMEOUT_MS,
+            );
+            const call = vi.spyOn(gatewayCall, "callGatewayCli").mockResolvedValue({
+              pid: 631,
+              shutdownBudget: { timeoutMs: GATEWAY_SHUTDOWN_TIMEOUT_MS },
+            });
+            return withGatewayMaintenanceDrain(
+              {
+                state: {
+                  installed: true,
+                  loadState: { status: "loaded" },
+                  running: true,
+                  env,
+                  command: null,
+                  runtime: { status: "running", pid: 631 },
+                },
+                assertCurrent() {},
+                warn: vi.fn(),
+              },
+              async () => {
+                expect(call).toHaveBeenCalledExactlyOnceWith(
+                  expect.objectContaining({ method: "status", token }),
+                );
+                options.onStopped?.(stopped);
+                return stopped;
+              },
+            );
+          }
           options.onStopped?.(stopped);
           return stopped;
         });
@@ -102,7 +164,12 @@ it
         await capture.admit();
         const preparing = stopSupervisedPredecessorGateway(
           { runId, repair: true },
-          { root: process.cwd(), assertCurrent() {}, warn: vi.fn(), databaseWriteCapture: capture },
+          {
+            root: process.cwd(),
+            assertCurrent() {},
+            warn: vi.fn(),
+            databaseWriteCapture: capture,
+          },
         );
         const preCustodyDrift =
           interference === "predecessor release" || interference === "before custody";

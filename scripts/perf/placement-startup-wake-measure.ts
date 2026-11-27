@@ -3,24 +3,30 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/placement-startup-wake-measure.ts
  * Optional first argument: alternate owner module (preserve its relative imports).
  * Add --legacy-map as the second argument for the pre-change Map/dirty-Set shape.
+ * Add --registry-leases to publish worktree lease tombstones instead of session facts.
  * Measures real session publications with 1,000 parked startup workspaces, then
  * a completed pass. Run unchanged workload on base/candidate in ABBA order.
  * Allocation is sampled separately from CPU; includes objects collected by GC.
  */
 import assert from "node:assert/strict";
 import { Session } from "node:inspector/promises";
+import { loadavg } from "node:os";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { worktreeRegistryPublication } from "../../src/agents/worktrees/registry-publication.js";
 import type { PendingWorkspaceResultOrphanCleanup } from "../../src/gateway/worker-environments/placement-dispatch-orphan-cleanup.js";
 import { sessionChanges } from "../../src/sessions/session-row-changes.js";
+import { openTrackedStateDatabase } from "../../src/state/openclaw-state-db-handle.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 assert(global.gc, "requires --expose-gc");
-const source = process.argv[2]
-  ? pathToFileURL(resolve(process.argv[2])).href
-  : new URL(
-      "../../src/gateway/worker-environments/placement-dispatch-orphan-cleanup.ts",
-      import.meta.url,
-    ).href;
+const source =
+  process.argv[2] && !process.argv[2].startsWith("--")
+    ? pathToFileURL(resolve(process.argv[2])).href
+    : new URL(
+        "../../src/gateway/worker-environments/placement-dispatch-orphan-cleanup.ts",
+        import.meta.url,
+      ).href;
 // The selected historical owner consumes the matching fixture representation below.
 const owner: {
   subscribeWorkspaceResultOrphanChanges: (getPass: () => unknown) => () => void;
@@ -33,6 +39,9 @@ type LegacyPass = Omit<PendingWorkspaceResultOrphanCleanup, "placements" | "unre
 };
 const notifications = 5000;
 const timedNotifications = 50_000;
+const registryLeases = process.argv.includes("--registry-leases");
+const db = registryLeases ? openTrackedStateDatabase(":memory:") : undefined;
+const leases = [{ scope: "worktree-run:unrelated", lease_key: "synthetic-run" }];
 const common = {
   placements: [],
   initialDiscoveryPending: false,
@@ -54,6 +63,7 @@ for (let index = 0; index < 1000; index++) {
     sessionKey: identity.sessionKey,
     agentId: "main",
     storePath: "/synthetic/sessions.sqlite",
+    worktreeId: `parked-worktree-${index}`,
   };
   if (pass.unresolved instanceof Map) {
     pass.unresolved.set(identity, target);
@@ -65,7 +75,11 @@ const stop = owner.subscribeWorkspaceResultOrphanChanges(() => pass);
 const change = { sessionKey: "agent:main:unrelated", scope: "session-entry" as const };
 const publish = (count = notifications) => {
   for (let i = 0; i < count; i++) {
-    sessionChanges.emit(change);
+    if (db) {
+      worktreeRegistryPublication.deleted(db, leases);
+    } else {
+      sessionChanges.emit(change);
+    }
   }
 };
 try {
@@ -85,12 +99,7 @@ try {
     const used = process.threadCpuUsage(cpu);
     global.gc();
     const inspector = new Session();
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
     publish();
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
     inspector.disconnect();
@@ -105,6 +114,8 @@ try {
     console.log(
       JSON.stringify({
         state,
+        publication: registryLeases ? "registry-lease" : "session",
+        loadavg: loadavg(),
         notifications,
         timedNotifications,
         elapsedMs,
@@ -115,4 +126,5 @@ try {
   }
 } finally {
   stop();
+  db?.close();
 }

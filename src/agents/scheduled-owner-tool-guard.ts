@@ -1,18 +1,12 @@
 /**
  * Owner-only tools whose eligibility comes from a retained requester or operator.
  * A run's tools are built once, so each call rechecks that authority before
- * the tool runs, and the call's Gateway caller carries the same check as a
- * receipt fence: every dispatch and commit inside the call rechecks it, so a
- * requester revoked while the tool awaits is refused before the effect.
+ * the tool runs. A started call finishes; Stop still cancels it.
  */
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import { wrapAgentToolExecutionContext } from "./agent-tool-metadata.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 import type { AnyAgentTool } from "./tools/common.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "./tools/gateway-caller-context.js";
 
 const OWNER_ONLY_TOOLS: ReadonlySet<string> = new Set(GATEWAY_OWNER_ONLY_CORE_TOOLS);
 
@@ -27,21 +21,7 @@ export function guardOwnerTool<T extends AnyAgentTool>(tool: T, assertOwnerCurre
   }
   const run = async <R>(operation: () => Promise<R>): Promise<R> => {
     assertOwnerCurrent();
-    const caller = getGatewayToolCallerIdentity();
-    if (!caller) {
-      return await operation();
-    }
-    // Same-run caller wrappers compose receipt fences, so this narrows the
-    // run's existing authority for this call without replacing it.
-    return await withGatewayToolCallerIdentity(
-      {
-        agentId: caller.agentId,
-        sessionKey: caller.sessionKey,
-        operationalRunInstance: caller.operationalRunInstance,
-        receiptAuthority: assertOwnerCurrent,
-      },
-      operation,
-    );
+    return await operation();
   };
   return wrapAgentToolExecutionContext(
     tool,

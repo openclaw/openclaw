@@ -132,7 +132,7 @@ it.each([
         );
       };
       const revokeIntegrity = () => {
-        invalidateOpenClawAgentDatabaseValidation(database.path);
+        invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
         revokeSqliteDatabaseAdmissionsForPath(database.path);
         expect(readSqliteDatabaseIntegrityVerification(database.path)).toBeUndefined();
       };

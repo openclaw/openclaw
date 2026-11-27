@@ -167,9 +167,6 @@ export async function createTestSession(options: TestSessionOptions = {}) {
     settingsManager,
     modelRegistry,
     contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner ?? "session",
-    cleanupProviderSessionResourcesOnDispose: !(
-      options.contextOverflowRecoveryOwner || options.resolveCompactionThinkingLevel
-    ),
   });
   sessions.push(result.session);
   return { ...result, modelRegistry, settingsManager, sessionManager };

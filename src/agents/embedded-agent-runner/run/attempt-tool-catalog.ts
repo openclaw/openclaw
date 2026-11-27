@@ -4,10 +4,11 @@ import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
-import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { classifyAgentToolSource, getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import {
   finalizeAgentToolAvailability,
   gateAgentToolExecution,
+  isAgentToolRunPolicyDenied,
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
@@ -26,6 +27,7 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
+import { isOnDemandCatalogTool, selectDirectMcpToolNames } from "../../tool-search-catalog.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import { createToolSearchSelectionMatcher } from "../../tool-search-selection.js";
 import {
@@ -217,9 +219,18 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         }
       }
     }
+    // An on-demand tool is called by name before its definition is sent, so the stream knows it.
+    // Without one, live names stay the visible set itself, as before.
+    const onDemandNames = (
+      preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef?.current?.entries ?? []
+    )
+      .filter((entry) => entry.onDemand && !entry.requiresExactId)
+      .map((entry) => normalizeToolPolicyName(entry.name));
     const liveAllowedToolNames = deferredDirectoryToolsCallable
       ? collectUniqueCatalogToolNames(uncompactedEffectiveTools)
-      : visibleAllowedToolNames;
+      : onDemandNames.length > 0
+        ? new Set([...visibleAllowedToolNames, ...onDemandNames])
+        : visibleAllowedToolNames;
     if (deferredDirectoryToolsCallable) {
       // Hidden Tool Search controls are not deferred catalog entries.
       for (const controlName of TOOL_SEARCH_CONTROL_TOOL_NAMES) {
@@ -252,16 +263,24 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     const explicitlyAllowedClientTool = (clientTools ?? []).some(({ function: fn }) =>
       Boolean(fn?.name?.trim() && clientToolMatchers.some((matches) => matches(fn.name))),
     );
+    // Run-policy refusals (absent on main) and auto-added controls cannot hide an empty allowlist.
+    const runPolicyDenied = collectAllowedToolNames({
+      tools: uncompactedEffectiveTools.filter(isAgentToolRunPolicyDenied),
+    });
     const emptyAllowlistVisibleToolNames = deferredDirectoryToolsCallable
       ? collectAllowedToolNames({ tools: effectiveTools })
       : visibleAllowedToolNames;
-    // Auto-added controls cannot conceal an explicit allowlist that matched nothing.
     const hasCallableTools =
       preparedToolBase.hasNativeWebSearch ||
-      toolSearch.catalogToolCount > 0 ||
+      toolSearch.catalogToolCount >
+        (preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef?.current?.entries ?? []).filter(
+          (entry) => runPolicyDenied.has(normalizeToolPolicyName(entry.name)),
+        ).length ||
       ((catalogedClientToolNames.size > 0 || deferredDirectoryToolsCallable) &&
         explicitlyAllowedClientTool) ||
-      [...emptyAllowlistVisibleToolNames].some((toolName) => !nonTaskControlNames.has(toolName));
+      [...emptyAllowlistVisibleToolNames].some(
+        (toolName) => !nonTaskControlNames.has(toolName) && !runPolicyDenied.has(toolName),
+      );
     const toolSearchRunPlan = {
       visibleAllowedToolNames,
       replayAllowedToolNames,
@@ -353,10 +372,39 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     current.toolSearchRunPlan.hasCallableTools = next.toolSearchRunPlan.hasCallableTools;
   };
   return Object.assign(current, {
-    installToolListingPin: async (pin: NonNullable<typeof pinToolListing>) => {
+    /**
+     * Installs the session's GitHub listing pin and keeps on-demand and MCP tools the session pin
+     * already sends direct. Rebuilds the catalog once when either changes the surface.
+     */
+    installToolListingPin: async (
+      pin: NonNullable<typeof pinToolListing>,
+      readPinnedToolNames?: () => ReadonlySet<string> | undefined,
+    ) => {
       pinToolListing = pin;
       const tools = input.bundleTools.uncompactedEffectiveTools;
-      if (pin(tools, false) === tools) {
+      const catalogRef = input.preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef;
+      const onDemand = tools.filter(isOnDemandCatalogTool);
+      const hasMcp = tools.some((tool) => classifyAgentToolSource(tool).source === "mcp");
+      // Read the transcript pin only when it could keep a cataloged tool direct.
+      const pinnedNames =
+        catalogRef?.current && (onDemand.length > 0 || hasMcp)
+          ? readPinnedToolNames?.()
+          : undefined;
+      const promoted = onDemand.filter((tool) => pinnedNames?.has(tool.name)).map((t) => t.name);
+      let mcpChanged = false;
+      if (catalogRef && pinnedNames && hasMcp) {
+        // Before a pin the first request chose direct MCP tools by size; the pin now owns that set.
+        catalogRef.sessionPinnedToolNames = pinnedNames;
+        const pinnedMcp = selectDirectMcpToolNames(tools, pinnedNames);
+        const builtMcp = current.effectiveTools.filter(
+          (tool) => classifyAgentToolSource(tool).source === "mcp",
+        );
+        mcpChanged =
+          pinnedMcp.size !== builtMcp.length || builtMcp.some((tool) => !pinnedMcp.has(tool.name));
+      }
+      if (catalogRef && promoted.length > 0) {
+        catalogRef.promotedToolNames = new Set(promoted);
+      } else if (!mcpChanged && pin(tools, false) === tools) {
         return false;
       }
       await withRuntimeToolSchemaQuarantine((record) => refreshTools(record, false));

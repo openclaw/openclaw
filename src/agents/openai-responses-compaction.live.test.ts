@@ -70,35 +70,24 @@ live(
     const serialized = JSON.stringify(saved);
     const storedIds: string[] = [];
     try {
-      // Establish the old wire contract's first success, then its deterministic failure.
+      // Store the checkpoint once before proving stateless replay; repeated storage may succeed.
       const wireOutput = compact.output;
       if (!wireOutput.every((item) => item.type === "message" || item.type === "compaction")) {
         throw new Error("Unexpected compact endpoint output item");
       }
       const input = [...wireOutput, { role: "user" as const, content: "Reply exactly ACK." }];
-      for (const attempt of [0, 1]) {
-        const stream = await client.responses.create({
-          model: model.id,
-          input,
-          store: true,
-          stream: true,
-          reasoning: { effort: "low" },
-          max_output_tokens: 256,
-        });
-        let conflict = false;
-        try {
-          for await (const event of stream) {
-            if (event.type === "response.completed") {
-              storedIds.push(event.response.id);
-            }
-          }
-        } catch (error) {
-          if (!(error instanceof OpenAI.APIError) || error.code !== "item_conflict") {
-            throw error;
-          }
-          conflict = true;
+      const stream = await client.responses.create({
+        model: model.id,
+        input,
+        store: true,
+        stream: true,
+        reasoning: { effort: "low" },
+        max_output_tokens: 256,
+      });
+      for await (const event of stream) {
+        if (event.type === "response.completed") {
+          storedIds.push(event.response.id);
         }
-        expect(conflict).toBe(attempt === 1);
       }
       expect(storedIds).toHaveLength(1);
       for (let reload = 0; reload < 3; reload++) {
@@ -118,7 +107,6 @@ live(
                 createOpenAIResponsesTransportStreamFn()(selectedModel, context, {
                   ...options,
                   // A later payload hook must not undo stateless checkpoint replay.
-                  // Reusing this stored checkpoint otherwise fails after streaming output.
                   onPayload: (payload) => {
                     if (!isRecord(payload) || !Array.isArray(payload.input)) {
                       throw new Error("Expected a Responses input");

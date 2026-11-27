@@ -177,7 +177,7 @@ function hook<T extends (...args: never[]) => unknown>(value: T | { handler: T }
   return typeof value === "function" ? value : value?.handler;
 }
 
-async function localeHooks(aliases: Alias[] = []) {
+async function localeHooks(aliases: Alias[] = [], building = false) {
   const plugin = controlUiLocaleModulesPlugin();
   const configResolved = hook(plugin.configResolved);
   const alias = [
@@ -185,7 +185,10 @@ async function localeHooks(aliases: Alias[] = []) {
     ...resolveSourcePackageAliasesForVite(),
     ...resolveTsconfigPathAliasesForVite(),
   ];
-  await configResolved?.call({} as never, { resolve: { alias } } as never);
+  await configResolved?.call(
+    {} as never,
+    { command: building ? "build" : "serve", resolve: { alias } } as never,
+  );
   const resolveId = hook(plugin.resolveId);
   const load = hook(plugin.load);
   const watchChange = hook(plugin.watchChange);
@@ -741,6 +744,62 @@ it("keeps namespace URLs in one immutable locale generation across rebuilds", as
   expect(new Set(first.map((file) => file.slice(-11, -3))).size).toBe(1);
   expect(repeated).toEqual(first);
   expect(changed.every((file) => !first.includes(file))).toBe(true);
+});
+
+it("packs small optional dictionaries without installing their siblings", async () => {
+  const source = {
+    common: { health: "Ready" },
+    chat: { title: "Chat" },
+    activity: { title: "Activity ".repeat(500) },
+    skillGroups: { title: "Groups ".repeat(300) },
+    skillStatus: { title: "Status ".repeat(300) },
+    nativeLinkMenu: { title: "Links ".repeat(400) },
+    templatesTrustWarning: { title: "Trust ".repeat(400) },
+  };
+  await withSourceImport(
+    async () => catalogImport(source),
+    async () => {
+      const { load } = await localeHooks([], true);
+      const assets = new Map<string, { fileName: string; source: string }>();
+      const result = await load.call(
+        {
+          addWatchFile: vi.fn(),
+          emitFile(asset: { fileName: string; source: string }) {
+            const ref = `asset${assets.size}`;
+            assets.set(ref, asset);
+            return ref;
+          },
+        } as never,
+        baseLocaleId,
+        {} as never,
+      );
+      if (typeof result !== "string") {
+        throw new Error("Expected generated locale source");
+      }
+      // Six dictionaries need four files: one bounded group, one remaining small
+      // dictionary, and the independent Chat and large Activity dictionaries.
+      expect(assets.size).toBe(4);
+      let executable = result;
+      for (const [ref, asset] of assets) {
+        if (asset.fileName.includes("-group-")) {
+          expect(Buffer.byteLength(asset.source)).toBeLessThanOrEqual(8 * 1024);
+        }
+        executable = executable.replaceAll(
+          `import.meta.ROLLUP_FILE_URL_${ref}`,
+          JSON.stringify(dataModuleUrl(asset.source)),
+        );
+      }
+      const { catalog, loadNamespace, loadAll } = await executeLocale(load, executable, true);
+      expect(catalog).toEqual({ common: source.common });
+      await loadNamespace("skillGroups");
+      expect(catalog.skillGroups).toEqual(source.skillGroups);
+      expect(catalog.skillStatus).toBeUndefined();
+      expect(catalog.chat).toBeUndefined();
+      expect(catalog.activity).toBeUndefined();
+      await loadAll();
+      expect(catalog).toEqual(source);
+    },
+  );
 });
 
 it("defers page and config-hint translations until their namespace loads", async () => {

@@ -24,7 +24,7 @@ import {
 } from "./sqlite-source-fence-contract.js";
 import type { SynchronousSqliteCallback } from "./sqlite-transaction-types.js";
 import { assertTransactionUsable, runSqliteReservedTransactionSync } from "./sqlite-transaction.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { readSqliteWorkerMonotonicNs, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { assertDatabasePathIdentity } from "./sqlite-worker-identity.js";
 import {
   assertSqliteWorkerCommitReceiptPending,
@@ -95,7 +95,8 @@ function readGrant(): SqliteSourceFenceGrant {
     value.decision.byteLength !== 4 ||
     !isRecord(value.destination) ||
     !Array.isArray(value.sources) ||
-    typeof value.deadlineNs !== "bigint"
+    !(value.remainingNs instanceof SharedArrayBuffer) ||
+    value.remainingNs.byteLength !== BigInt64Array.BYTES_PER_ELEMENT
   ) {
     throw new SqliteWorkerError("SQLite source fence grant is unavailable", "closed");
   }
@@ -198,7 +199,7 @@ export async function runSqliteSourceFence<T>(
   const assertReady = () => {
     if (
       Atomics.load(decision, 0) !== SOURCE_FENCE_READY ||
-      process.hrtime.bigint() >= grant.deadlineNs
+      readSqliteWorkerMonotonicNs() >= deadlineNs
     ) {
       throw new SqliteWorkerError("SQLite source fence authority expired", "closed");
     }
@@ -213,6 +214,11 @@ export async function runSqliteSourceFence<T>(
   inOperation(() =>
     requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: "sqlite-source-fence" }),
   );
+  // The host refreshes the remaining budget at its final preparation grant.
+  // Message delivery is outside this local monotonic interval; owner revocation
+  // remains shared through the decision word.
+  const deadlineNs =
+    readSqliteWorkerMonotonicNs() + Atomics.load(new BigInt64Array(grant.remainingNs), 0);
   for (;;) {
     let entered = false;
     try {
@@ -316,7 +322,7 @@ export async function runSqliteSourceFence<T>(
         throw error;
       }
       assertReady();
-      const remainingMs = Number(grant.deadlineNs - process.hrtime.bigint()) / 1_000_000;
+      const remainingMs = Number(deadlineNs - readSqliteWorkerMonotonicNs()) / 1_000_000;
       await sleep(Math.min(25, Math.max(0, remainingMs)));
     }
   }

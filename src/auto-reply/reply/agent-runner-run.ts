@@ -6,6 +6,7 @@ import {
 } from "../../agents/reply-completion.js";
 import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
+import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { logVerbose } from "../../globals.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -122,7 +123,6 @@ export async function runReplyAgent(
   const preparationResources: { stopBlockReply?: () => void } = {};
   const inputGeneration = getAgentEventLifecycleGeneration();
   try {
-    followupRun.operatorAuthority?.assertCurrent();
     const resolveGatewayContext = providedReplyOperation
       ? getGatewayContextResolver(providedReplyOperation)
       : (readChannelContextGatewayContextResolver(sessionCtx) ??
@@ -247,7 +247,6 @@ export async function runReplyAgent(
     const queuedRunFollowupTurn = createFollowupRunner({
       resolveGatewayContext,
       opts,
-      typing,
       typingMode,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
@@ -307,10 +306,7 @@ export async function runReplyAgent(
         input: controllerInput,
         followupRun,
         runId,
-        assertCurrent: () => {
-          assertAgentRunLifecycleGenerationCurrent(inputGeneration);
-          followupRun.operatorAuthority?.assertCurrent();
-        },
+        assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(inputGeneration),
         enqueue: () =>
           enqueueFollowupRun(
             queueKey,
@@ -545,6 +541,7 @@ export async function runReplyAgent(
     const { admitUserTurn, recordPendingDelivery } = createReplyInputAdmission({
       followupRun,
       replyOperation,
+      runId: turn.runId,
       sourceTurnId,
       sessionKey,
       storePath,
@@ -556,7 +553,8 @@ export async function runReplyAgent(
       },
     });
     try {
-      if (turn.preflightError) {
+      // Channel admission rethrows its memoized preflight failure in the execution handler.
+      if (turn.preflightError && !isChannelRunAuthorizationError(turn.preflightError)) {
         throw turn.preflightError;
       }
       await replyOperation.bindToolAuthoritySnapshotAsync(

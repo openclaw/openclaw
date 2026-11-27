@@ -9,7 +9,6 @@ import {
   canAutoscrubPullRequest,
   createAutoscrubCommit,
   dependencyGuardCommentAuthors,
-  dependencyFieldChanges,
   githubApi,
   isAutoscrubbedDependencyComment,
   isDependencyGuardMarkerComment,
@@ -20,6 +19,7 @@ import {
   renderRemovalOnlyDependencyComment,
   shouldAutoscrubDependencyLockfiles,
 } from "../../scripts/github/dependency-guard.mjs";
+import { dependencyFieldChanges } from "../../scripts/github/dependency-manifests.mjs";
 import { loadSecurityReviewPolicy } from "../../scripts/github/security-review-policy.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -288,6 +288,160 @@ describe("dependency guard script", () => {
         );
         expect(result.stdout).toContain("<!-- openclaw:approval-request ");
       }
+    }
+  });
+
+  it("allows Maintain authors to align existing release manifests alongside source changes", () => {
+    const manifests = [
+      "package.json",
+      ...["ai", "gateway-client", "gateway-protocol"].map(
+        (name) => `packages/${name}/package.json`,
+      ),
+      "extensions/example/package.json",
+      "extensions/floor-only/package.json",
+    ];
+    const files = [...manifests, "src/example.ts"].map((filename) => ({ filename }));
+    const routes: Record<string, unknown> = {
+      [`GET ${pullPath}`]: { ...pullRequest, changed_files: files.length },
+      [`GET ${pullPath}/files`]: files,
+      [`GET ${contributorPermission}`]: { role_name: "maintain" },
+      [`GET ${graphPath}`]: [],
+    };
+    for (const filename of manifests) {
+      for (const [ref, version] of [
+        [staleSha, "2026.11.5-beta.1"],
+        [headSha, "2026.11.4"],
+      ]) {
+        routes[`GET ${contentsPath}/${filename}?ref=${ref}`] = contentFile(
+          JSON.stringify({
+            version: filename.includes("floor-only") ? "2026.10.4" : version,
+            ...(filename.startsWith("extensions/")
+              ? {
+                  devDependencies: { openclaw: `>=${version}`, example: "1" },
+                  peerDependencies: { openclaw: `>=${version}` },
+                }
+              : {}),
+            description: ref === headSha ? "Updated metadata" : "Original metadata",
+          }),
+        );
+      }
+    }
+    const result = runDependencyGuard(routes);
+    expectGuard(result, ["pending", "success"]);
+    expect(result.stdout).toContain("release-version alignment");
+  });
+
+  it("keeps other dependency changes and authors outside the release exemption", () => {
+    const base = {
+      version: "2026.11.4",
+      peerDependencies: { openclaw: ">=2026.11.4", example: "1" },
+    };
+    const aligned = { ...base, version: "2026.11.5" };
+    type Case = {
+      name: string;
+      filename?: string;
+      head?: object | null;
+      base?: object | null;
+      previous_filename?: string;
+      other?: string;
+      otherStatus?: "added" | "removed" | "copied";
+      role?: string;
+      bot?: boolean;
+      commenter?: boolean;
+    };
+    const cases: Case[] = [
+      { name: "other package", filename: "packages/other/package.json" },
+      { name: "nested extension", filename: "extensions/example/nested/package.json" },
+      { name: "dependency added", head: { ...aligned, dependencies: { added: "1" } } },
+      { name: "dependency removed", head: { version: aligned.version } },
+      {
+        name: "other dependency updated",
+        head: { ...aligned, peerDependencies: { ...base.peerDependencies, example: "2" } },
+      },
+      {
+        name: "openclaw source changed",
+        head: {
+          ...aligned,
+          peerDependencies: { ...base.peerDependencies, openclaw: "npm:other@1" },
+        },
+      },
+      { name: "openclaw floor added", base: { version: base.version } },
+      {
+        name: "invalid old floor",
+        base: { ...base, peerDependencies: { ...base.peerDependencies, openclaw: "*" } },
+      },
+      { name: "non-release version", head: { ...aligned, version: "1.2.3" } },
+      { name: "invalid old version", base: { ...base, version: "1.2.3" } },
+      {
+        name: "root peer floor",
+        filename: "package.json",
+        head: {
+          ...aligned,
+          peerDependencies: { ...base.peerDependencies, openclaw: ">=2026.11.5" },
+        },
+      },
+      { name: "added manifest", base: null },
+      { name: "removed manifest", head: null },
+      { name: "renamed manifest", previous_filename: "extensions/previous/package.json" },
+      ...["pnpm-lock.yaml", "pnpm-workspace.yaml", "patches/example.patch"].map((other) => ({
+        name: other,
+        other,
+      })),
+      { name: "other manifest alongside alignment", other: "packages/other/package.json" },
+      ...(["added", "removed", "copied"] as const).map((otherStatus) => ({
+        name: `${otherStatus} metadata-only manifest alongside alignment`,
+        other: "extensions/metadata/package.json",
+        otherStatus,
+      })),
+      { name: "write author", role: "write" },
+      { name: "bot author", bot: true },
+      { name: "Maintain commenter", role: "write", commenter: true },
+    ];
+    for (const test of cases) {
+      const filename = test.filename ?? "extensions/example/package.json";
+      const files = [
+        { filename, previous_filename: test.previous_filename },
+        ...(test.other ? [{ filename: test.other, status: test.otherStatus }] : []),
+      ];
+      const manifest = (value: object | null) =>
+        value === null ? { httpError: 404 } : contentFile(JSON.stringify(value));
+      const result = runDependencyGuard({
+        [`GET ${pullPath}`]: {
+          ...pullRequest,
+          changed_files: files.length,
+          user: { ...pullRequest.user, type: test.bot ? "Bot" : "User" },
+        },
+        [`GET ${pullPath}/files`]: files,
+        [`GET ${contributorPermission}`]: { role_name: test.role ?? "maintain" },
+        [`GET ${contentsPath}/${test.previous_filename ?? filename}?ref=${staleSha}`]: manifest(
+          test.base === undefined ? base : test.base,
+        ),
+        [`GET ${contentsPath}/${filename}?ref=${headSha}`]: manifest(
+          test.head === undefined ? aligned : test.head,
+        ),
+        ...(test.other?.endsWith("package.json")
+          ? {
+              [`GET ${contentsPath}/${test.other}?ref=${staleSha}`]: manifest(
+                test.otherStatus
+                  ? test.otherStatus === "removed"
+                    ? { private: true, type: "module" }
+                    : null
+                  : base,
+              ),
+              [`GET ${contentsPath}/${test.other}?ref=${headSha}`]: manifest(
+                test.otherStatus
+                  ? test.otherStatus === "removed"
+                    ? null
+                    : { private: true, type: "module" }
+                  : aligned,
+              ),
+            }
+          : {}),
+        [`GET ${graphPath}`]: [],
+        [`GET ${issuePath}/comments`]: test.commenter ? [approvalNotice, approval] : [],
+        [`GET ${maintainerPermission}`]: { role_name: "maintain" },
+      });
+      expectGuard(result, ["pending", "pending"], 0, test.name);
     }
   });
 

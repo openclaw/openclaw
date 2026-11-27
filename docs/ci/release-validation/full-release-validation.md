@@ -81,9 +81,9 @@ gh workflow run openclaw-release-publish.yml \
 **Native publication:**
 
 - Windows is optional: provide both exact `windows_node_tag` and candidate-approved `windows_node_installer_digests` for signed installers after GitHub release finalization; omit both to skip.
-- npm-stable Android: matching tagged `apps/android/version.json` and stable base version starts separate exact-release-SHA full CI with Android. Revalidate success after core publication before creating the existing approval receipt and dispatching tag-owned APK.
+- Legacy npm-stable Android: matching tagged `apps/android/version.json` and stable base version starts separate exact-release-SHA full CI with Android. Revalidate success after core publication before creating the existing approval receipt and dispatching tag-owned APK.
 - Native failure blocks Android approval, not core npm/GitHub finalization; the parent may remain active afterward. Existing full evidence and independent macOS qualification are unchanged.
-- Mismatched Android pin skips qualification/APK; summary/proof record pin, train, and `pnpm android:version:pin -- --from-gateway` remedy.
+- Current source has no Android version manifest, so Gateway publication skips Android; current Android releases use the independent Play workflow. Legacy tagged-source recovery retains its eligibility, qualification, protected approval, signing, and verification requirements. A mismatched legacy pin skips qualification/APK.
 
 ### Dispatch and recover
 
