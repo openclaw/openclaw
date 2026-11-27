@@ -67,13 +67,13 @@ describe("prepared trajectory snapshots", () => {
         encoded[0]!.data!.index = 9;
       }
       if (mutation === "digest") {
-        encoded[0]!.data!.sha256 = "0".repeat(64);
+        encoded[0]!.data!.integrityToken = "0".repeat(64);
       }
       const decoded = restoreTrajectorySnapshots(encoded);
       expect(decoded, mutation).toHaveLength(1);
       expect(decoded.at(-1)?.data?.truncated, mutation).toBe(true);
       expect(decoded.at(-1)?.data?.messagesSnapshot, mutation).toBeUndefined();
-      expect(JSON.stringify(decoded)).not.toContain('"sha256"');
+      expect(JSON.stringify(decoded)).not.toContain('"integrityToken"');
       expect(JSON.stringify(decoded)).not.toContain('"messagesSnapshotFragments"');
     }
   });

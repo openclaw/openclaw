@@ -1,7 +1,9 @@
+import { hash } from "node:crypto";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { sanitizeTrajectoryExportPayload } from "../agents/payload-redaction.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -68,4 +70,10 @@ it("exports a complete large snapshot through the recorder and bounded SQLite ro
   expect(completed?.data?.messagesSnapshot, "snapshot payload was not preserved").toEqual(snapshot);
   expect(completed?.data?.truncated).toBeUndefined();
   expect(bundle.manifest.runtimeEventCount).toBe(1);
+  const privateChecksum = hash("sha256", JSON.stringify(snapshot));
+  expect(JSON.stringify(stored)).toContain(privateChecksum);
+  expect(
+    JSON.stringify(sanitizeTrajectoryExportPayload(stored)),
+    "legacy export exposed snapshot checksum",
+  ).not.toContain(privateChecksum);
 });

@@ -33,7 +33,8 @@ export function fragmentTrajectorySnapshot(
     const json = JSON.stringify(value) ?? "null";
     return { value, json, bytes: Buffer.byteLength(json) };
   });
-  let sha256 = "0".repeat(64);
+  // Older exporters omit credential-classified fields, including this private content checksum.
+  let integrityToken = "0".repeat(64);
   const fragment = (chunk: unknown[], index: number, count: number): TrajectoryEvent => ({
     ...event,
     type: TRAJECTORY_SNAPSHOT_FRAGMENT,
@@ -45,7 +46,7 @@ export function fragmentTrajectorySnapshot(
       snapshotId: id,
       index,
       count,
-      sha256,
+      integrityToken,
       messagesSnapshot: chunk,
     },
   });
@@ -85,7 +86,7 @@ export function fragmentTrajectorySnapshot(
       originalBytes,
       limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
       droppedFields: ["messagesSnapshot"],
-      messagesSnapshotFragments: { id, count: groups.length, sha256 },
+      messagesSnapshotFragments: { id, count: groups.length, integrityToken },
     },
   };
   const sizes = groups.map(
@@ -102,8 +103,8 @@ export function fragmentTrajectorySnapshot(
   ) {
     return undefined;
   }
-  sha256 = hash("sha256", `[${messages.map(({ json }) => json).join(",")}]`);
-  parent.data!.messagesSnapshotFragments = { id, count: groups.length, sha256 };
+  integrityToken = hash("sha256", `[${messages.map(({ json }) => json).join(",")}]`);
+  parent.data!.messagesSnapshotFragments = { id, count: groups.length, integrityToken };
   const records = groups.map((chunk, index) => {
     const entry = fragment(
       chunk.map(({ value }) => value),
@@ -162,7 +163,7 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
     ) {
       continue;
     }
-    const { id, count, sha256 } = reference;
+    const { id, count, integrityToken } = reference;
     parents.add(id);
     const fragments = typeof id === "string" ? groups.get(id) : undefined;
     if (
@@ -170,8 +171,8 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
       !Number.isSafeInteger(count) ||
       Number(count) < 1 ||
       fragments.length !== count ||
-      typeof sha256 !== "string" ||
-      !/^[a-f0-9]{64}$/.test(sha256)
+      typeof integrityToken !== "string" ||
+      !/^[a-f0-9]{64}$/.test(integrityToken)
     ) {
       continue;
     }
@@ -188,7 +189,7 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
         part.data.reason !== "trajectory-snapshot-fragment" ||
         part.data.index !== index ||
         part.data.count !== count ||
-        part.data.sha256 !== sha256 ||
+        part.data.integrityToken !== integrityToken ||
         (part.sourceSeq ?? part.seq) !== parentSeq - count + index ||
         !Array.isArray(part.data.messagesSnapshot)
       ) {
@@ -202,7 +203,7 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
     if (!complete) {
       continue;
     }
-    if (hash("sha256", JSON.stringify(messages)) !== sha256) {
+    if (hash("sha256", JSON.stringify(messages)) !== integrityToken) {
       continue;
     }
     const restored: Record<string, unknown> = { ...data, messagesSnapshot: messages };
