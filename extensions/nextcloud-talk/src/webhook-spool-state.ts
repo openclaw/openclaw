@@ -153,7 +153,7 @@ function parseFileAttachment(value: unknown): NextcloudTalkInboundAttachment | u
 }
 
 /** Recognize Talk's file-bearing message Activity without admitting other system events. */
-export function parseNextcloudTalkFileSharedActivity(
+function parseNextcloudTalkFileSharedActivity(
   envelope: Record<string, unknown>,
 ): ParsedNextcloudTalkFileShare | null {
   if (envelope.type !== "Activity") {
