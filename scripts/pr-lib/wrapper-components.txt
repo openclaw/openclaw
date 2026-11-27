@@ -2296,6 +2296,7 @@ src/state/openclaw-state-db-read-connection.ts
 src/state/openclaw-state-db-read-schema.ts
 src/state/openclaw-state-db-readonly-reuse.ts
 src/state/openclaw-state-db-readonly.ts
+src/state/openclaw-state-db-repair-pending.ts
 src/state/openclaw-state-db-repair.ts
 src/state/openclaw-state-db-schema-additive.ts
 src/state/openclaw-state-db-schema-discovery.ts
