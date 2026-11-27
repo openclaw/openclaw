@@ -1,9 +1,10 @@
-import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
+import type { SessionRow } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 
 const MAX_ACTIVE_GROUPS = 4;
 type SwarmSummary = NonNullable<SessionRow["swarm"]>;
 type Member = NonNullable<SwarmSummary["groups"][number]["children"]>[number];
+type Group = SwarmSummary["groups"][number] & { members?: Array<Member & { createdAt: number }> };
 const STATUS_RANK = { running: 0, queued: 1, failed: 2, done: 3 } as const;
 
 /** Counts requester-owned operations, including tombstones whose child sessions were deleted. */
@@ -13,27 +14,24 @@ export function buildSessionSwarmSummary(
   agentId: string,
   options: { includeChildren?: boolean } = {},
 ): SwarmSummary | undefined {
-  const groups = new Map<string, SwarmSummary["groups"][number]>();
-  const members = options.includeChildren
-    ? new Map<string, Array<Member & { createdAt: number }>>()
-    : undefined;
+  const groups = new Map<string, Group>();
   for (const run of runs) {
-    const requester = run.swarmRequesterSessionKey;
     if (
       !run.collect ||
       !run.groupId ||
-      requester !== sessionKey ||
+      run.swarmRequesterSessionKey !== sessionKey ||
       run.requesterAgentId !== agentId
     ) {
       continue;
     }
-    const group = groups.get(run.groupId) ?? {
+    const group: Group = groups.get(run.groupId) ?? {
       groupId: run.groupId,
       createdAt: run.createdAt,
       queued: 0,
       running: 0,
       done: 0,
       failed: 0,
+      ...(options.includeChildren ? { members: [] } : {}),
     };
     group.createdAt = Math.min(group.createdAt, run.createdAt);
     // Completion is frozen by the collector owner only after its result settles.
@@ -48,11 +46,7 @@ export function buildSessionSwarmSummary(
         : "running";
     group[status] += 1;
     groups.set(run.groupId, group);
-    if (members) {
-      const children = members.get(run.groupId) ?? [];
-      children.push({ sessionKey: run.childSessionKey, status, createdAt: run.createdAt });
-      members.set(run.groupId, children);
-    }
+    group.members?.push({ sessionKey: run.childSessionKey, status, createdAt: run.createdAt });
   }
   if (groups.size === 0) {
     return undefined;
@@ -64,12 +58,12 @@ export function buildSessionSwarmSummary(
   const active = ordered.filter((group) => group.queued + group.running > 0);
   const terminal = ordered.find((group) => group.queued + group.running === 0);
   const selected = [...active.slice(0, MAX_ACTIVE_GROUPS), ...(terminal ? [terminal] : [])];
-  if (members) {
+  if (options.includeChildren) {
     // Only a selected-parent read carries member detail; ordinary rosters stay compact.
     for (const group of selected) {
-      group.children = (members.get(group.groupId) ?? [])
+      group.children = group.members
         // oxlint-disable-next-line unicorn/no-array-sort -- Member arrays are private to this summary invocation.
-        .sort(
+        ?.sort(
           (left, right) =>
             STATUS_RANK[left.status] - STATUS_RANK[right.status] ||
             left.createdAt - right.createdAt ||
@@ -77,6 +71,7 @@ export function buildSessionSwarmSummary(
         )
         .slice(0, 64)
         .map(({ sessionKey: childKey, status }) => ({ sessionKey: childKey, status }));
+      delete group.members;
     }
   }
   return {

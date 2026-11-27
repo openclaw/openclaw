@@ -6,6 +6,7 @@ import {
 } from "../../accepted-session-spawn.js";
 import type { OperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { resumeSubagentRun, settleRequesterAfterSessionSpawns } from "./subagent-registry.js";
@@ -29,8 +30,7 @@ export async function acknowledgeSubagentResultForRequesterTurn(params: {
         entry.requesterAgentId !== params.requesterAgentId ||
         entry.requesterTurnRunId !== params.requesterTurnRunId ||
         entry.requesterTurnYielded ||
-        entry.killIntent ||
-        entry.killReconciliation
+        hasSubagentKill(entry)
       ) {
         throw new Error("Inline child result no longer belongs to its requester turn.");
       }

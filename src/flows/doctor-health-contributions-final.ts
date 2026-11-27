@@ -86,14 +86,25 @@ async function collectWorkspaceStatusPluginVersionReadiness(params: {
 const CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID =
   "core/doctor/channel-package-state-capabilities";
 
-async function runHeartbeatRetirementHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeMigrateHeartbeatCadenceToCron } =
-    await import("../commands/doctor-heartbeat-retirement.js");
-  await maybeMigrateHeartbeatCadenceToCron({
+function heartbeatRetirementInputs(ctx: DoctorHealthFlowContext) {
+  return {
     cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
     shouldRepair: ctx.prompter.shouldRepair,
     env: ctx.env,
-  });
+  };
+}
+
+async function runHeartbeatRetirementHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateHeartbeatCadenceToCron } =
+    await import("../commands/doctor-heartbeat-retirement.js");
+  await maybeMigrateHeartbeatCadenceToCron(heartbeatRetirementInputs(ctx));
+}
+
+/** Both heartbeat contributions run the same retirement; the second finds the first's result. */
+async function checkHeartbeatRetirementContributionPending(ctx: DoctorHealthFlowContext) {
+  const { checkHeartbeatRetirementPending } =
+    await import("../commands/doctor-heartbeat-retirement.js");
+  return checkHeartbeatRetirementPending(heartbeatRetirementInputs(ctx));
 }
 
 export function resolveFinalDoctorHealthContributions(params: {
@@ -449,6 +460,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatCadenceMigrationFindings(ctx.cfg, ctx.env);
           },
         },
+        pending: checkHeartbeatRetirementContributionPending,
         run: runHeartbeatRetirementHealth,
       },
     ),
@@ -465,6 +477,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatScratchMigrationFindings(ctx.cfg, ctx.env);
           },
         },
+        pending: checkHeartbeatRetirementContributionPending,
         run: runHeartbeatRetirementHealth,
       },
     ),
@@ -504,6 +517,15 @@ export function resolveFinalDoctorHealthContributions(params: {
               await import("../commands/doctor-heartbeat-task-migration.js");
             return collectHeartbeatTaskMigrationFindings(ctx.cfg, ctx.env);
           },
+        },
+        async pending(ctx) {
+          const { checkHeartbeatTaskMigrationPending } =
+            await import("../commands/doctor-heartbeat-task-migration.js");
+          return checkHeartbeatTaskMigrationPending({
+            cfg: ctx.cfg,
+            shouldRepair: ctx.prompter.shouldRepair,
+            env: ctx.env,
+          });
         },
         async run(ctx) {
           const { maybeMigrateHeartbeatTasksToCron } =

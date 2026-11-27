@@ -71,4 +71,38 @@ suite.define(() => {
     });
     await expect.poll(() => composer.inputValue(), { timeout: 10_000 }).toBe("");
   });
+  it("starts an idle conversation normally after accepting input during history loading", async () => {
+    const page = await newChatPage(suite);
+    const sessionKey = "agent:main:main";
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      subscriptionInitialHistory: false,
+      deferredMethods: ["chat.startup"],
+      historyMessages: [],
+    });
+    await page.goto(`${suite.server.baseUrl}settings/appearance`);
+    await page.locator("[data-settings-follow-up-mode]").selectOption("steer");
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await gateway.waitForRequest("chat.startup");
+    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    await composer.fill("Start the next task");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect.poll(() => composer.inputValue()).toBe("");
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    await gateway.resolveDeferred("chat.startup", {
+      messages: [],
+      sessionId: "idle-session",
+      sessionInfo: {
+        key: sessionKey,
+        sessionId: "idle-session",
+        kind: "direct",
+        status: "done",
+        hasActiveRun: false,
+        updatedAt: 1,
+      },
+    });
+    const request = await gateway.waitForRequest("chat.send");
+    expect(request.params).toMatchObject({ sessionKey, message: "Start the next task" });
+    expect(request.params).not.toHaveProperty("queueMode");
+  });
 });
