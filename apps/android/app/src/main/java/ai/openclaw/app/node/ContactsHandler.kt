@@ -1,7 +1,7 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.asStringOrNull
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.ContentProviderOperation
@@ -292,7 +292,7 @@ class ContactsHandler internal constructor(
   appContext: Context,
   private val dataSource: ContactsDataSource = SystemContactsDataSource(appContext),
 ) {
-  fun handleContactsSearch(paramsJson: String?): GatewaySession.InvokeResult {
+  fun handleContactsSearch(paramsJson: String?): InvokeResult {
     if (!dataSource.hasReadPermission()) {
       return nodeInvokeError("CONTACTS_PERMISSION_REQUIRED", "grant Contacts permission")
     }
@@ -304,7 +304,7 @@ class ContactsHandler internal constructor(
     }
   }
 
-  fun handleContactsAdd(paramsJson: String?): GatewaySession.InvokeResult {
+  fun handleContactsAdd(paramsJson: String?): InvokeResult {
     if (!dataSource.hasWritePermission()) {
       return nodeInvokeError("CONTACTS_PERMISSION_REQUIRED", "grant Contacts permission")
     }
