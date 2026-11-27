@@ -75,8 +75,82 @@ struct ChatMermaidRendererTests {
         #expect(cacheImage?.image === image.image)
     }
 
-    private func request(_ source: String) -> ChatMermaidRequest {
-        ChatMermaidRequest(source: source, width: 320, displayScale: 2, theme: self.theme)
+    @Test func `entry pressure evicts only the least recently used diagram`() async throws {
+        let renderer = ChatMermaidRenderer()
+        let requests = (0..<33).map {
+            self.request("flowchart LR\nA-->B\n%% diagram \($0)", width: 80, scale: 1)
+        }
+        var images: [ChatMermaidRenderedImage] = []
+        for request in requests.prefix(32) {
+            let result = await self.render(request, using: renderer)
+            images.append(try result.get())
+        }
+        #expect(self.cachedImage(requests[0], using: renderer)?.image === images[0].image)
+        let result = await self.render(requests[32], using: renderer)
+        images.append(try result.get())
+        // Keep this a count-limit regression, independent of WebKit's bitmap stride.
+        try #require(images.reduce(0) { $0 + $1.byteCount } < 12 * 1024 * 1024)
+        for index in requests.indices where index != 1 {
+            #expect(self.cachedImage(requests[index], using: renderer)?.image === images[index].image)
+        }
+        #expect(self.cachedImage(requests[1], using: renderer) == nil)
+    }
+
+    @Test func `byte pressure evicts enough old diagrams without dropping recent or oversized results`() async throws {
+        let source = "flowchart LR\nA-->B"
+        let probe = await self.render(self.request(source, scale: 1), using: ChatMermaidRenderer())
+        let size = try probe.get().size
+        // Choose scales from the real layout, then check actual bitmap + SVG + source costs.
+        let bytesAtScaleOne = Double(size.width * size.height) * 4
+        let renderer = ChatMermaidRenderer()
+        let requests = (0..<3).map {
+            self.request("\(source)\n%% diagram \($0)", scale: sqrt(3 * 1024 * 1024 / bytesAtScaleOne))
+        }
+        var images: [ChatMermaidRenderedImage] = []
+        for request in requests {
+            let result = await self.render(request, using: renderer)
+            images.append(try result.get())
+        }
+        let limit = 12 * 1024 * 1024
+        try #require(images.reduce(0) { $0 + $1.byteCount } < limit)
+        #expect(self.cachedImage(requests[0], using: renderer)?.image === images[0].image)
+
+        let large = self.request(source, scale: sqrt(8 * 1024 * 1024 / bytesAtScaleOne))
+        let largeResult = await self.render(large, using: renderer)
+        let largeImage = try largeResult.get()
+        try #require(images[0].byteCount + largeImage.byteCount <= limit)
+        for image in images.dropFirst() {
+            try #require(images[0].byteCount + image.byteCount + largeImage.byteCount > limit)
+        }
+        // Both untouched entries must leave, but the touched entry and new result still fit.
+        #expect(self.cachedImage(requests[0], using: renderer)?.image === images[0].image)
+        #expect(self.cachedImage(large, using: renderer)?.image === largeImage.image)
+        for request in requests.dropFirst() {
+            #expect(self.cachedImage(request, using: renderer) == nil)
+        }
+
+        let oversized = self.request(source, scale: sqrt(14 * 1024 * 1024 / bytesAtScaleOne))
+        let oversizedResult = await self.render(oversized, using: renderer)
+        let oversizedImage = try oversizedResult.get()
+        try #require(oversizedImage.byteCount > limit)
+        #expect(self.cachedImage(oversized, using: renderer) == nil)
+        #expect(self.cachedImage(requests[0], using: renderer)?.image === images[0].image)
+        #expect(self.cachedImage(large, using: renderer)?.image === largeImage.image)
+    }
+
+    private func request(_ source: String, width: Int = 320, scale: Double = 2) -> ChatMermaidRequest {
+        ChatMermaidRequest(source: source, width: width, displayScale: scale, theme: self.theme)
+    }
+
+    private func cachedImage(
+        _ request: ChatMermaidRequest,
+        using renderer: ChatMermaidRenderer) -> ChatMermaidRenderedImage?
+    {
+        var image: ChatMermaidRenderedImage?
+        if let token = renderer.render(request, completion: { image = try? $0.get() }) {
+            renderer.cancel(token)
+        }
+        return image
     }
 
     private func render(

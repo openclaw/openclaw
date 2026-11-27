@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { assertAgentInitializationCompleteInWorker } from "../config/sessions/agent-initialization.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
@@ -14,7 +16,6 @@ import {
 } from "../process/gateway-work-admission.js";
 import { runWithAsyncStore } from "../shared/async-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import {
   agentWorkAdmissionIdentity,
   type AgentWorkAdmissionTarget,
@@ -30,7 +31,10 @@ import type {
   SessionControllerInput,
 } from "./session-controller.contracts.js";
 import { createSessionControllerPhaseLogger } from "./session-controller.diagnostics.js";
-import { assertAgentControllerAdmissionOpen } from "./session-controller.lifecycle-agent.js";
+import {
+  assertAgentControllerAdmissionOpen,
+  assertAgentControllerDeletionAdmissionOpen,
+} from "./session-controller.lifecycle-agent.js";
 import {
   createLifecycleDiagnosticOperation,
   type SessionLifecycleDiagnosticLabel,
@@ -578,16 +582,7 @@ export async function beginSessionEffect(
     );
     signal.throwIfAborted();
     if (effect.agent) {
-      const journal = await readAgentDeletionJournalStatusInWorker(
-        effect.agent.agentId,
-        { path: effect.agent.statePath, env: params.env },
-        signal,
-      );
-      if (journal !== "absent") {
-        throw new Error(
-          "Agent " + effect.agent.agentId + " deletion is in progress; new work is unavailable.",
-        );
-      }
+      await assertAgentControllerDeletionAdmissionOpen(effect.agent, params.env, signal);
       assertAgentControllerAdmissionOpen(effect);
       signal.throwIfAborted();
     }
@@ -638,6 +633,13 @@ export async function beginSessionEffect(
             await params.revalidateAllowed();
           } else {
             await params.assertAllowed?.(signal);
+          }
+          if (effect.agent && params.run) {
+            await assertAgentInitializationCompleteInWorker(
+              getRuntimeConfigSnapshot() ?? {},
+              effect.agent.agentId,
+              () => signal.throwIfAborted(),
+            );
           }
         });
         signal.throwIfAborted();

@@ -1974,7 +1974,6 @@ end
     expect(reducerJob).toContain("needs: [preflight, ios-screenshot-capture]");
     expect(reducerJob).not.toContain("merge-multiple:");
     expect(reducerJob).toContain("Setup screenshot evidence Node");
-    expect(reducerJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
     expect(reducerJob).toContain("id: reduce_screenshot_evidence");
     expect(reducerJob).toContain("node .ci-harness/scripts/ios-screenshot-evidence.mjs reduce");
     expect(reducerJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");

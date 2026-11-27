@@ -1,10 +1,21 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { convertPcmToMulaw8k } from "../talk/audio-codec.js";
+import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import { createBrowserMeetingRealtimeAudioTransport } from "./realtime-browser-audio-transport.js";
 
-async function setup(received = vi.fn(), fatal = vi.fn()) {
+async function setup(
+  audioFormat: MeetingRealtimeAudioFormat = "pcm16-24khz",
+  received = vi.fn<(audio: Buffer) => void>(),
+  fatal = vi.fn(),
+) {
   const startInput = vi.fn<MeetingRealtimeAudioTransport["startInput"]>();
   const nativeTransport = {
     onFatal: vi.fn(),
@@ -19,6 +30,9 @@ async function setup(received = vi.fn(), fatal = vi.fn()) {
     nativeTransport,
     hasConfiguredInputCommand: false,
     callBrowser: async ({ body: requestBody }) => {
+      if (getPluginRuntimeGatewayRequestScope()?.hasCurrentClientAuthority?.() === false) {
+        throw new Error("Browser requester is no longer active");
+      }
       const body = requestBody as { fn: string };
       const { action, captureId } = JSON.parse(body.fn) as { action: string; captureId: string };
       if (action === "pull") {
@@ -33,7 +47,7 @@ async function setup(received = vi.fn(), fatal = vi.fn()) {
     meetingSessionId: "session-1",
     meetingUrl: "https://meet.google.com/abc-defg-hij",
     targetId: "tab-1",
-    audioFormat: "pcm16-24khz",
+    audioFormat,
     logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   });
   transport.onFatal(fatal);
@@ -41,6 +55,7 @@ async function setup(received = vi.fn(), fatal = vi.fn()) {
   await setImmediate();
   return {
     resolvePull: (result: Record<string, unknown>) => pulls.shift()!.resolve(result),
+    pendingPulls: () => pulls.length,
     nativeTransport,
     nativeInput: (audio: Buffer) => startInput.mock.calls.at(-1)?.[0](audio),
     transport,
@@ -66,6 +81,33 @@ it("feeds remote playback to the provider while native microphone injection stay
   await transport.stop();
 });
 
+it("preserves G.711 audio across browser pulls including the final filter samples", async () => {
+  const { transport, received, resolvePull } = await setup("g711-ulaw-8khz");
+  const frame = Buffer.alloc(512 * 2);
+  for (let i = 0; i < 512; i++) {
+    frame.writeInt16LE(((i % 29) - 14) * 700, i * 2);
+  }
+  const pull = { isolated: true, base64: frame.toString("base64") };
+  try {
+    resolvePull(pull);
+    await setImmediate();
+    await vi.advanceTimersByTimeAsync(50);
+    resolvePull(pull);
+    await setImmediate();
+    const chunks = received.mock.calls.map(([audio]) => audio);
+    const tail = transport.drainInput?.();
+    if (tail?.length) {
+      chunks.push(tail);
+    }
+    expect(Buffer.concat(chunks)).toEqual(
+      convertPcmToMulaw8k(Buffer.concat([frame, frame]), 24_000),
+    );
+    expect(transport.drainInput?.()?.length ?? 0).toBe(0);
+  } finally {
+    await transport.stop();
+  }
+});
+
 it("discards a pull after stop and rejects an expired browser capture", async () => {
   const { transport, received, fatal, resolvePull } = await setup();
   // Retire host input before the serialized page read finishes.
@@ -75,11 +117,31 @@ it("discards a pull after stop and rejects an expired browser capture", async ()
   expect(received).not.toHaveBeenCalled();
   expect(fatal).not.toHaveBeenCalled();
 
-  const next = await setup(received, fatal);
+  const next = await setup("pcm16-24khz", received, fatal);
   next.resolvePull({ closed: true });
   await setImmediate();
   expect(fatal).toHaveBeenCalledOnce();
   expect(received).not.toHaveBeenCalled();
   expect(next.nativeTransport.stop).toHaveBeenCalledOnce();
   await next.transport.stop();
+});
+
+it("keeps pulling after the joining request has responded", async () => {
+  vi.useRealTimers(); // Fake timers drop the async context the pull timer inherits.
+  let responded = false;
+  const join = {
+    isWebchatConnect: () => false,
+    signal: new AbortController().signal,
+    hasCurrentClientAuthority: () => !responded,
+  };
+  const owner = createOwnedTestInstance("meeting-owner");
+  const fixture = await withPluginRuntimeGatewayRequestScope(join, () => owner.run(() => setup()));
+  await vi.waitFor(() => expect(fixture.pendingPulls()).toBe(1));
+  responded = true;
+  fixture.resolvePull({ isolated: true });
+  await vi.waitFor(() => expect(fixture.pendingPulls()).toBe(1));
+  expect(fixture.fatal).not.toHaveBeenCalled();
+  const stopping = fixture.transport.stop();
+  fixture.resolvePull({ isolated: true });
+  await stopping;
 });

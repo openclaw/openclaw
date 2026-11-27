@@ -46,6 +46,7 @@ function attachHost(host: MessagePort) {
 // pgjdbc's preparedStatementCacheQueries default; bounds server memory per connection.
 const STATEMENT_LIMIT = 256;
 const CACHED_PLAN_RESULT_CHANGED = "0A000";
+const TRANSPORT_TIMEOUT_MS = 10_000;
 
 /**
  * Reuses server-side prepared statements on one connection, so PostgreSQL parses each
@@ -169,6 +170,8 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
     client = new pg.Client({
       connectionString: url,
       connectionTimeoutMillis: connectTimeoutMs,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: TRANSPORT_TIMEOUT_MS,
       types: {
         // Store decoders own JSON parsing, including malformed legacy payload handling.
         getTypeParser: (oid, format) =>
@@ -183,20 +186,27 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
       connectionError = error;
     });
     await client.connect();
-    await client.query(
-      "SELECT set_config('lock_timeout', $1, false), " +
+    const setup = {
+      text:
+        "SELECT set_config('lock_timeout', $1, false), " +
         "set_config('statement_timeout', $2, false), set_config('search_path', $3, false)",
-      [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`, searchPath],
-    );
+      values: [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`, searchPath],
+      query_timeout: TRANSPORT_TIMEOUT_MS,
+    };
+    await client.query(setup);
     if (data.readOnly) {
-      await client.query("SET default_transaction_read_only = on");
+      const readOnly = {
+        text: "SET default_transaction_read_only = on",
+        query_timeout: TRANSPORT_TIMEOUT_MS,
+      };
+      await client.query(readOnly);
     }
     schema = namespace;
   }
 
   async function useSchema(namespace: string, reconnectIfIdle: boolean, validateIfIdle: boolean) {
     if (connectionError) {
-      // Only a returned transport can reconnect before its new borrower starts work.
+      // Reconnect only before caller SQL, using the last completed idle status.
       if (!reconnectIfIdle || client.getTransactionStatus() !== "I") {
         throw connectionError;
       }
@@ -210,14 +220,14 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
       throw new Error("Cannot switch PostgreSQL schemas inside a transaction");
     }
     try {
-      if (schema === namespace) {
-        await client.query("SELECT 1");
-      } else {
-        // Switching schemas also validates the transport before any borrower statement.
-        await client.query("SELECT set_config('search_path', $1, false)", [
-          `"${namespace.replaceAll('"', '""')}"`,
-        ]);
-      }
+      // Bound validation separately: a silent idle socket still needs time to
+      // reconnect within the host's request deadline, before any caller SQL.
+      const validation = {
+        text: schema === namespace ? "SELECT 1" : "SELECT set_config('search_path', $1, false)",
+        values: schema === namespace ? [] : [`"${namespace.replaceAll('"', '""')}"`],
+        query_timeout: TRANSPORT_TIMEOUT_MS,
+      };
+      await client.query(validation);
       schema = namespace;
     } catch {
       // No user statement ran; discard the failed setup before opening a fresh transport.
@@ -254,6 +264,13 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
 
   async function handleRequest(request: BridgeRequest) {
     let reply: BridgeReply;
+    // The host deadline is the statement timeout plus 30s. Ending this client 20s
+    // early leaves time for the server's own timeout reply, and fails only this
+    // connection before the host resets the whole service.
+    const cutoff =
+      request.operation === "query" || request.operation === "recovery-generation"
+        ? setTimeout(() => void client.end().catch(() => {}), request.deadlineMs - 20_000)
+        : undefined;
     try {
       if (request.operation === "connect") {
         await connect(request.schema);
@@ -365,6 +382,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
       }
       reply = { id: request.id, error: details };
     }
+    clearTimeout(cutoff);
     send(reply);
     if (
       request.operation === "close" ||

@@ -10,9 +10,8 @@ export async function resumeStoredChatOutboxes(host: ChatHost, event?: GatewayEv
     return;
   }
   const connectionIsCurrent = captureChatConnectionOwner(host);
-  const [{ resumeStoredChatOutboxes: resume }, { chatOutboxDrainDependencies }] = await Promise.all(
-    [import("./chat-outbox-drain.ts"), import("./chat-send-delivery.runtime.ts")],
-  );
+  const { resumeStoredChatOutboxes: resume, chatOutboxDrainDependencies } =
+    await import("./chat-send-delivery.runtime.ts");
   if (connectionIsCurrent()) {
     await resume(host, chatOutboxDrainDependencies, event);
   }
@@ -27,10 +26,8 @@ export async function flushChatQueueForEvent(host: ChatHost) {
     return;
   }
   const connectionIsCurrent = captureChatConnectionOwner(host);
-  const [{ flushStoredChatOutbox }, { chatOutboxDrainDependencies }] = await Promise.all([
-    import("./chat-outbox-drain.ts"),
-    import("./chat-send-delivery.runtime.ts"),
-  ]);
+  const { flushStoredChatOutbox, chatOutboxDrainDependencies } =
+    await import("./chat-send-delivery.runtime.ts");
   if (connectionIsCurrent()) {
     await flushStoredChatOutbox(host, chatOutboxDrainDependencies);
   }

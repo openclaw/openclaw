@@ -8,6 +8,7 @@ import {
 import { BoundaryInputSnapshot } from "../../scripts/lib/extension-boundary-inputs.mts";
 import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-runtime.mts";
 import { compileNativeProject } from "../../scripts/lib/native-declaration-emitter.mts";
+import type { DeclarationLookup } from "../../scripts/lib/native-declaration-filesystem.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { materializeNativeCompiler, writeNativeFixtureFile } from "./native-boundary-fixture.js";
 
@@ -71,8 +72,17 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
     write(receipt, `${JSON.stringify({ inputs, lookups: result.lookups })}\n`);
     return new BoundaryInputSnapshot(root).record(config, args, receipt, [receipt]);
   };
+  const mismatches: string[] = [];
   const matches = (record: ArtifactRecord) =>
-    new BoundaryInputSnapshot(root).matchesReceipt(record, config, args, [receipt], receipt);
+    new BoundaryInputSnapshot(root).matchesReceipt(
+      record,
+      config,
+      args,
+      [receipt],
+      receipt,
+      undefined,
+      (reason) => mismatches.push(reason),
+    );
   const record = await publish();
   const edit = async (file: string, text: string | null, valid: boolean, diagnostic?: RegExp) => {
     if (text === null) {
@@ -86,6 +96,7 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
     }
   };
   expect(matches(record)).toBe(true);
+  expect(mismatches).toEqual([]);
   const captured = new BoundaryInputSnapshot(root);
   expect(captured.matchesReceipt(record, config, args, [receipt], receipt)).toBe(true);
   expect(captured.matchesReceipt(record, config, args, [receipt], receipt)).toBe(true);
@@ -108,9 +119,52 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
   expect(matches(record)).toBe(true);
 
   const originalReceipt = fs.readFileSync(path.join(root, receipt), "utf8");
+  const receiptData: { inputs: string[]; lookups: DeclarationLookup[] } =
+    JSON.parse(originalReceipt);
+  const withLookup = (lookup: DeclarationLookup) =>
+    [...receiptData.lookups, lookup].toSorted((left, right) => {
+      const a = `${left.kind}\0${left.path}`;
+      const b = `${right.kind}\0${right.path}`;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+  const aliasTarget = path.join(root, "receipt-target");
+  const aliasOutside = path.join(parent, "receipt-outside");
+  const receiptAlias = path.join(root, "receipt-alias");
+  fs.mkdirSync(aliasTarget);
+  fs.mkdirSync(aliasOutside);
+  fs.symlinkSync(aliasTarget, receiptAlias, linkType);
+  const phase = new BoundaryInputSnapshot(root);
+  const firstReceipt = ".artifacts/first-lookup.inputs.json";
+  write(
+    firstReceipt,
+    JSON.stringify({
+      ...receiptData,
+      lookups: withLookup({ kind: "fileExists", path: "receipt-alias", result: false }),
+    }),
+  );
+  phase.record(config, args, firstReceipt, [firstReceipt]);
+  fs.unlinkSync(receiptAlias);
+  fs.symlinkSync(aliasOutside, receiptAlias, linkType);
+  const nextReceipt = ".artifacts/next-lookup.inputs.json";
+  write(
+    nextReceipt,
+    JSON.stringify({
+      ...receiptData,
+      lookups: withLookup({ kind: "realpath", path: "receipt-alias", result: "receipt-target" }),
+    }),
+  );
+  expect(() => phase.record(config, args, nextReceipt, [nextReceipt])).toThrow(
+    /Declaration input escapes checkout/,
+  );
+  fs.unlinkSync(receiptAlias);
+  fs.rmdirSync(aliasTarget);
+  fs.rmdirSync(aliasOutside);
   for (const contents of [
     JSON.stringify({ inputs: record.inputs }),
     JSON.stringify({ inputs: record.inputs, lookups: [] }),
+    ...[[], [null], ["../outside.ts"], [...receiptData.inputs, receiptData.inputs[0]]].map(
+      (inputs) => JSON.stringify({ inputs, lookups: receiptData.lookups }),
+    ),
   ]) {
     write(receipt, contents);
     const forgedOutput = {
@@ -119,6 +173,31 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
     };
     expect(matches(forgedOutput)).toBe(false);
   }
+  for (const lookup of [
+    { kind: "fileExists", path: "../outside.ts", result: false },
+    { kind: "fileExists", path: "src/../outside.ts", result: false },
+    { kind: "realpath", path: ".", result: "../outside" },
+  ]) {
+    write(receipt, JSON.stringify({ ...receiptData, lookups: [...receiptData.lookups, lookup] }));
+    expect(() =>
+      new BoundaryInputSnapshot(root).record(config, args, receipt, [receipt]),
+    ).toThrow();
+  }
+  const outside = path.join(parent, "outside");
+  fs.mkdirSync(outside);
+  const external = path.join(root, "external");
+  fs.symlinkSync(outside, external, linkType);
+  const escaped: DeclarationLookup = {
+    kind: "fileExists",
+    path: "external/missing.ts",
+    result: false,
+  };
+  const escapedLookups = withLookup(escaped);
+  write(receipt, JSON.stringify({ ...receiptData, lookups: escapedLookups }));
+  expect(() => new BoundaryInputSnapshot(root).record(config, args, receipt, [receipt])).toThrow(
+    /Declaration input escapes checkout/,
+  );
+  fs.unlinkSync(external);
   write(receipt, originalReceipt);
   expect(matches({ ...record, inputs: [] })).toBe(false);
   expect(matches(record)).toBe(true);
@@ -128,6 +207,9 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
   await edit("src/fallback.ts", marker("number"), false, /TS2322/u);
   await edit("src/fallback.ts", marker(), true);
   await edit("src/preferred.ts", marker("number"), false, /TS2322/u);
+  expect(mismatches.at(-1)).toMatch(
+    /compiler resolution lookup changed: .+ "src(?:\/preferred\.ts)?"/u,
+  );
   await edit("src/preferred.ts", null, true);
   await edit("src/package.json", '{"type":"commonjs"}\n', false, /TS1470/u);
   fs.unlinkSync(path.join(root, "src/package.json"));

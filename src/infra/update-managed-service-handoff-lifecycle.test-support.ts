@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { buildRestartSentinelRow } from "./restart-sentinel-store.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import type { UpdateRequester } from "./update-requester-authority.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
@@ -26,6 +27,7 @@ type ManagedSystemdPostExitState = {
 
 export type ManagedServiceManagerBoundaryOptions = {
   ledger?: boolean;
+  operatorRestart?: "before-recovery" | "service-inspection";
   rollbackRestoration?: boolean;
   cancelAfterPark?: boolean;
   parentExitTimeoutMs?: number;
@@ -253,6 +255,26 @@ void (async () => {
   const { isPidDefinitelyDead } = action === ${JSON.stringify(kind === "systemd" ? "stop" : "print")}
     ? await import(${JSON.stringify(new URL("../shared/pid-alive.ts", import.meta.url).href)})
     : {};
+  ${
+    options?.operatorRestart === "service-inspection"
+      ? `
+  if (action === "show") {
+    const state = fs.existsSync(${JSON.stringify(statePath)})
+      ? JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8")) : {};
+    if (state.interruptedRunId && !state.operatorRestarted) {
+      try {
+        const ledger = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)});
+        ledger.recordUpdateRunStep(state.interruptedRunId, { step: "service-start", status: "completed", endedAtMs: Date.now() },
+          { env: { ...process.env, OPENCLAW_STATE_DIR: ${JSON.stringify(path.dirname(params.configPath))} } });
+        ${update("state.operatorRestarted = true")};
+      } catch (error) {
+        ${update("state.operatorRestartError = String(error)")};
+      }
+    }
+  }
+  `
+      : ""
+  }
   if (${JSON.stringify(kind)} === "systemd" && action === "stop") {
     ${update("state.parked = true")};
     while (!isPidDefinitelyDead(${parentPid})) sleep(10);
@@ -396,9 +418,20 @@ export function createManagedServiceUpdaterFixtureScript(params: {
           },
         })
       : null;
-  // Use the canonical row shape without moving publication ahead of the child.
+  // The child publishes this row; the Gateway decodes it from the typed columns.
   const notificationRow = notification
-    ? buildRestartSentinelRow(notification, notification.ts)
+    ? {
+        sentinel_key: "current",
+        version: 1,
+        kind: notification.kind,
+        status: notification.status,
+        ts: notification.ts,
+        message: notification.message ?? null,
+        doctor_hint: notification.doctorHint ?? null,
+        stats_json: notification.stats ? JSON.stringify(notification.stats) : null,
+        payload_json: JSON.stringify(notification),
+        updated_at_ms: notification.ts,
+      }
     : null;
   const consume =
     options?.updaterNotification === "consumed-before-exit" ||

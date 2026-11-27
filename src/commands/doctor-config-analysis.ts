@@ -1,4 +1,5 @@
 import path from "node:path";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
@@ -18,8 +19,11 @@ import { OpenClawSchema } from "../config/zod-schema.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveCliModelEntry } from "../media-understanding/resolve.js";
+import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { isRecord } from "../utils.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
+import { createDoctorModelRefResolver } from "./doctor/shared/model-reference-resolver.js";
 
 const configLog = createSubsystemLogger("config");
 
@@ -262,6 +266,45 @@ export async function noteConfigAdvisories(
   noteMcpOriginWarning(cfg);
   noteMediaCliModelWarnings(cfg);
   noteMissingDefaultAgentOwner(cfg);
+  noteDeprecatedConfiguredModels(cfg, runWithCurrentPluginMetadata);
+}
+
+/** Warns about configured refs whose catalog row is deprecated with a reason. Never rewrites. */
+function noteDeprecatedConfiguredModels(
+  cfg: OpenClawConfig,
+  runWithCurrentPluginMetadata: <T>(config: OpenClawConfig, run: () => T) => T,
+): void {
+  const resolve = createDoctorModelRefResolver(cfg);
+  const pathsByRef = new Map<string, string[]>();
+  for (const ref of collectConfiguredModelRefs(cfg)) {
+    const agentId = /^agents\.entries\.([^.]+)\./u.exec(ref.path)?.[1];
+    const modelRef = resolve(ref.value, agentId);
+    if (modelRef) {
+      pathsByRef.set(modelRef, [...(pathsByRef.get(modelRef) ?? []), ref.path]);
+    }
+  }
+  if (pathsByRef.size === 0) {
+    return;
+  }
+  const { rows } = runWithCurrentPluginMetadata(cfg, () =>
+    planEffectiveModelCatalogRows({
+      registry: loadManifestMetadataSnapshot({ config: cfg, env: process.env }).manifestRegistry,
+      config: cfg,
+      providerFilters: [
+        ...new Set([...pathsByRef.keys()].map((ref) => ref.slice(0, ref.indexOf("/")))),
+      ],
+    }),
+  );
+  const warnings: string[] = [];
+  for (const row of rows) {
+    const paths = pathsByRef.get(`${row.provider}/${row.id}`);
+    if (paths && row.status === "deprecated" && row.statusReason) {
+      warnings.push(`- ${row.provider}/${row.id} (${paths.join(", ")}): ${row.statusReason}`);
+    }
+  }
+  if (warnings.length > 0) {
+    note(sanitizeDoctorNote(warnings.join("\n")), "Doctor warnings");
+  }
 }
 
 /** Warns when legacy OpenCode overrides shadow an active plugin-provided catalog. */

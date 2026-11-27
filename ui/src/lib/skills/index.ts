@@ -237,6 +237,7 @@ export async function loadSkills(
   state: SkillsState,
   options?: {
     clearMessages?: boolean;
+    reportRead?: Promise<SkillStatusReport | undefined>;
     operation?: Exclude<SkillOperation, null>;
   },
 ) {
@@ -267,7 +268,7 @@ export async function loadSkills(
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = await loadSkillStatusReport(client, agentId);
+    const res = await (options?.reportRead ?? loadSkillStatusReport(client, agentId));
     if (!isCurrent()) {
       return;
     }
@@ -292,7 +293,7 @@ export async function loadSkills(
   }
 }
 
-export function acceptSkillsReport(state: SkillsState, report: SkillStatusReport) {
+function acceptSkillsReport(state: SkillsState, report: SkillStatusReport) {
   state.skillsReport = report;
   const result = state.clawhubInstallMessage;
   if (
@@ -612,6 +613,7 @@ async function runSkillConfigUpdate(
   patch: { enabled: boolean } | { apiKey: string },
   message: string,
   canDispatch: () => boolean,
+  dispatchError = "Access changed before the skill update started.",
 ) {
   await runSkillMutation(state, { kind: "skill", skillKey }, async (client) => {
     const configPatch = { skillKey, ...patch };
@@ -621,15 +623,17 @@ async function runSkillConfigUpdate(
       state.runtimeConfig,
       client,
       (current) => current.request("skills.update", configPatch),
-      { canDispatch, dispatchError: "Access changed before the skill update started." },
+      { canDispatch, dispatchError },
     );
     return { kind: "success", message: refreshError ? `${message}\n${refreshError}` : message };
   });
 }
 
+/** `replaceable` says whether the stored key may be typed over; undefined until it is known. */
 export async function saveSkillApiKey(
   state: SkillsState,
   skillKey: string,
+  replaceable: () => boolean | undefined,
   canDispatch: () => boolean = () => true,
 ) {
   // Blank skills.update API keys clear credentials; this UI only replaces them.
@@ -637,12 +641,25 @@ export async function saveSkillApiKey(
   if (!apiKey) {
     return;
   }
+  const current = replaceable();
+  if (current !== true) {
+    setSkillMessage(state, skillKey, {
+      kind: "error",
+      message:
+        current === undefined
+          ? "API key not saved — the configuration hasn't loaded yet. Reopen the skill and try again."
+          : `API key not saved — skills.entries.${skillKey}.apiKey is set by a SecretRef or environment variable. Change it in Settings Raw mode or openclaw.json.`,
+    });
+    return;
+  }
   await runSkillConfigUpdate(
     state,
     skillKey,
     { apiKey },
     `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
-    canDispatch,
+    // Rechecked right before dispatch: a flushed Settings draft may have stored a reference.
+    () => canDispatch() && replaceable() === true,
+    "API key not saved — access or the stored key changed while saving. Reopen the skill to see how the key is stored; change a SecretRef or environment key in Settings Raw mode.",
   );
 }
 

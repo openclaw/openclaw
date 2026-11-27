@@ -29,6 +29,12 @@ export async function stopGatewayForCleanup(
   const service = resolveGatewayService();
   let loaded;
   try {
+    // Unloaded is not absent: installed definitions still need teardown.
+    // Data cleanup independently checks for a live, unmanaged state owner.
+    if (uninstall && (await service.isAbsent?.({ env: process.env }))) {
+      runtime.error("No Gateway service to remove. Continuing uninstall.");
+      return true;
+    }
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
     reportFailure("Gateway service check failed", err, "for service diagnostics");

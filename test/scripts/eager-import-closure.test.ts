@@ -27,6 +27,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import {
+  anchoredStdio,
   copyPrRoutingWrapperSources,
   copyPrWrapperSources,
   linkPrWrapperDependencies,
@@ -109,6 +110,15 @@ it("keeps packaged scripts closed over runtime imports", () => {
     closure.filter((file) => !files.includes(file)),
     "Package lifecycle scripts must ship their guarded imports and transitive dependencies.",
   ).toEqual([]);
+});
+
+it("keeps update lease payload schemas out of Gateway ownership checks", () => {
+  const files = collectRuntimeImportClosure(process.cwd(), [
+    "src/infra/gateway-state-owner-heartbeat.runtime.ts",
+    "src/infra/state-lease-process-owner.ts",
+  ]);
+  expect(files).toContain("src/infra/update-managed-service-handoff-boot-schema.ts");
+  expect(files).not.toContain("src/infra/update-managed-service-handoff-schema.ts");
 });
 
 it("keeps the PR wrapper inventory closed over runtime imports", () => {
@@ -333,7 +343,7 @@ itPosix.each(["empty", "legacy", "outdated"])(
               OPENCLAW_PR_ANCHOR_CREATOR_PID: String(process.pid),
               OPENCLAW_PR_ANCHOR_FD: "9",
             },
-            stdio: ["ignore", "pipe", "pipe", ...Array<"ignore">(6).fill("ignore"), descriptor],
+            stdio: anchoredStdio(descriptor),
           },
         );
       const result = materialize();
@@ -634,6 +644,15 @@ const sessionMemoryOwners: string[] = [
 ];
 
 const deferredOwnerCases: Array<[string, string[], string[], boolean?]> = [
+  [
+    "persisted operator recovery schemas",
+    ["src/gateway/operator-run-recovery-source.codec.ts", "src/cron/store/read-only.worker.ts"],
+    [
+      "src/config/zod-schema.gateway.ts",
+      "src/config/zod-schema.root-support.ts",
+      "src/config/zod-schema.memory-search.ts",
+    ],
+  ],
   [
     "operator role policy",
     ["src/gateway/operator-role-policy.ts"],

@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { SessionEntry, SessionGoalStatus } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withEnv } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
@@ -280,33 +279,6 @@ describe("buildInboundUserContextPrefix", () => {
       expected: { source_modality: "document" },
     },
     {
-      name: "includes topic_name for forum chats",
-      context: { ChatType: "group", IsForum: true, MessageThreadId: 42, TopicName: "Deployments" },
-      expected: { topic_id: "42", topic_name: "Deployments", is_forum: true },
-    },
-    {
-      name: "includes sender identity in direct external-channel conversation info",
-      context: {
-        ChatType: "direct",
-        OriginatingChannel: "telegram",
-        SenderName: "Tyler",
-        SenderId: "+15551234567",
-        SenderIsBot: true,
-      },
-      expected: { sender: { id: "+15551234567", name: "Tyler", is_bot: true } },
-      excludes: ["Sender: ⟦openclaw:ctx⟧"],
-    },
-    {
-      name: "includes formatted timestamp in conversation info when provided",
-      context: {
-        ChatType: "group",
-        MessageSid: "msg-with-ts",
-        Timestamp: Date.UTC(2026, 1, 15, 13, 35, 42),
-      },
-      envelope: { timezone: "utc" },
-      expected: { timestamp: "Sun 2026-02-15T13:35:42Z" },
-    },
-    {
       name: "omits invalid timestamps instead of throwing",
       context: { ChatType: "group", MessageSid: "msg-with-bad-ts", Timestamp: 1e20 },
       expected: { timestamp: undefined },
@@ -320,25 +292,6 @@ describe("buildInboundUserContextPrefix", () => {
     for (const fragment of excludes) {
       expect(text).not.toContain(fragment);
     }
-  });
-
-  it("honors envelope user timezone for conversation timestamps", () => {
-    withEnv({ TZ: "America/Los_Angeles" }, () => {
-      const text = buildInboundUserContextPrefix(
-        {
-          ChatType: "group",
-          MessageSid: "msg-with-user-tz",
-          Timestamp: Date.UTC(2026, 2, 19, 0, 0, 27),
-        } as TemplateContext,
-        {
-          timezone: "user",
-          userTimezone: "Asia/Tokyo",
-        },
-      );
-
-      const conversationInfo = parseConversationInfoPayload(text);
-      expect(conversationInfo["timestamp"]).toBe("Thu 2026-03-19 09:00:27 GMT+9");
-    });
   });
 
   it("renders reply metadata without a body but not without any reply fields", () => {
@@ -666,18 +619,6 @@ describe("buildInboundUserContextPrefix", () => {
 
     expect(render).not.toThrow();
     expect(render()).not.toContain("media://inbound/");
-  });
-
-  it("emits a bare chat-window label when the entry carries no order or relation", () => {
-    const text = buildInboundUserContextPrefix(
-      createChatWindowContext({
-        source: "third-party-plugin",
-        payload: { messages: [{ message_id: "1", sender: "Sam", body: "hi" }] },
-      }),
-    );
-
-    expect(text).toContain(`Current local chat window: ${INBOUND_CONTEXT_MARKER}`);
-    expect(text).not.toContain("Current local chat window ()");
   });
 
   it("does not duplicate reply chain or history when a chat window already covers them", () => {

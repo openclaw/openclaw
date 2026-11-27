@@ -14,7 +14,10 @@ import {
   listDirectoryTreeStrict,
   listDirectoryTreeStrictSync,
 } from "../../../src/infra/directory-walk.js";
-import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
+import {
+  controlUiBootManifestKey,
+  controlUiCodeSplitting,
+} from "../../config/control-ui-chunking.ts";
 import { controlUiPluginDistributionsPlugin } from "../../config/control-ui-plugin-distributions.ts";
 import controlUiViteConfig from "../../vite.config.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
@@ -143,6 +146,8 @@ afterEach(async () => {
 it("keeps inline recovery executable and its DOM intact after document compaction", async () => {
   const source = `<style>/* fallback */ h1 { color: rgb(255, 0, 0); }</style>
     <h1>Still loading</h1><button>Retry</button>
+    <p><span>Keep</span>
+      <span>spacing</span></p><pre>  code\n  next</pre><textarea>  draft\n  next</textarea>
     <script data-cfasync="false">/* recovery */
       document.querySelector("button").addEventListener("click", function () {
         document.querySelector("h1").textContent = "Retrying";
@@ -161,6 +166,9 @@ it("keeps inline recovery executable and its DOM intact after document compactio
     /[=]>|\b(?:let|const)\b/u,
   );
   expect(compact).not.toContain("/* recovery */");
+  expect(document.querySelector("p")?.textContent).toBe("Keep spacing");
+  expect(document.querySelector("pre")?.textContent).toBe("  code\n  next");
+  expect(document.querySelector("textarea")?.value).toBe("  draft\n  next");
   dom.window.close();
 });
 
@@ -286,47 +294,15 @@ it("fetches a locale's co-registered error catalogs in one lazy request", async 
   expect(html).not.toContain(errorsChunk.fileName);
 });
 
-it("preloads only the selected locale's late Chat catalogs before body parsing", async () => {
+it("preloads only the selected locale's Chat catalogs after the entry graph is admitted", async () => {
   const config = createConfig();
-  const namespaces = [
-    "runtimeErrors",
-    "filePreview",
-    "mcpApp",
-    "worktrees",
-    "newSession",
-    "sessionsView",
-    "mcpServers",
-    "mcpPage",
-    "profilePage",
-    "connection",
-    "attention",
-    "chat",
-  ];
-  const filename = (locale: string, namespace: string) =>
-    namespace === "runtimeErrors"
-      ? `locale-errors-${locale}`
-      : `locale-namespace-${locale}-${namespace}`;
-  await writeRoot("lazy-catalog.js", "export const createCatalog = (value) => value;");
-  for (const locale of ["de", "ar"]) {
-    for (const namespace of namespaces) {
-      await writeRoot(
-        `${filename(locale, namespace)}.js`,
-        `export default "${locale}/${namespace}";`,
-      );
-    }
-    await writeRoot(
-      `${locale}.js`,
-      `import { createCatalog } from "./lazy-catalog.js";
-export default createCatalog({${namespaces.map((namespace) => `${namespace}: () => import("./${filename(locale, namespace)}.js")`).join(",")}});`,
-    );
-  }
   await writeRoot(
     "main.js",
-    'globalThis.locales = [() => import("./de.js"), () => import("./ar.js")];',
+    `globalThis.locales = [${["de", "ar"].map((locale) => `() => import(${JSON.stringify(fileURLToPath(new URL(`../i18n/locales/${locale}.ts`, import.meta.url)))})`).join(",")}];`,
   );
   await writeRoot(
     "index.html",
-    `<html><head><script>globalThis.beforeBody = { body: document.body, hints: [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.getAttribute("href")) };</script></head><body><script type="module" src="./main.js"></script></body></html>`,
+    `<html><head><script>globalThis.beforeBody = { body: document.body, hints: [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.getAttribute("href")) };document.addEventListener("readystatechange",()=>{globalThis.afterParse = { state: document.readyState, hints: [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.getAttribute("href")) };},{once:true});</script></head><body><script type="module" src="./main.js"></script></body></html>`,
   );
   const { html, output } = await buildOutput(config);
   const emitted = new Set(output.map((asset) => asset.fileName));
@@ -355,7 +331,13 @@ export default createCatalog({${namespaces.map((namespace) => `${namespace}: () 
     try {
       const beforeBody = Reflect.get(page.window, "beforeBody");
       expect(beforeBody.body).toBeNull();
-      const hints = beforeBody.hints.filter((href: string) => !href.includes("/index-"));
+      expect(beforeBody.hints.filter((href: string) => !href.includes("/index-"))).toEqual([]);
+      await new Promise<void>((resolve) => {
+        page.window.document.addEventListener("DOMContentLoaded", () => resolve(), { once: true });
+      });
+      const afterParse = Reflect.get(page.window, "afterParse");
+      expect(afterParse.state).toBe("interactive");
+      const hints = afterParse.hints.filter((href: string) => href.startsWith(`${base}/assets/`));
       expect(hints).toHaveLength(expected ? 14 : 0);
       for (const href of hints) {
         expect(href.startsWith(`${base}/assets/`)).toBe(true);
@@ -794,4 +776,60 @@ it("does not count an asset or report completion when its second sidecar write f
   expect(startedAssets).toBeLessThanOrEqual(4);
   expect(emitted.filter((name) => name.endsWith(".gz"))).toHaveLength(0);
   await missingOutput("sw.js");
+});
+
+it("consolidates shared boot without pulling in the chat route or optional panels", () => {
+  // Recursive inclusion is a correctness requirement for this group: merging
+  // the lazy boot graph without it emitted chunks whose execution order broke
+  // at application start.
+  const sharedGroup = controlUiCodeSplitting.groups.find(
+    (group) => group.name === "control-ui-boot-shared",
+  );
+  expect(sharedGroup).toMatchObject({ includeDependenciesRecursively: true });
+  const bootGroup = sharedGroup as {
+    test: (id: string) => boolean;
+  };
+  const repoRoot = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
+  // Representative always-loaded boot surface and a lazy island that must
+  // keep its own chunk (terminal runtime is not part of the default boot).
+  expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar.tsx`)).toBe(true);
+  // Chat reaches narration through a dynamic import without a request of its own.
+  expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar-session-narration.ts`)).toBe(
+    true,
+  );
+  // Provider account labels belong to the opened picker, not either route's boot.
+  expect(bootGroup.test(`${repoRoot}/ui/src/lib/model-provider-auth-label.ts`)).toBe(false);
+  expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.tsx`)).toBe(false);
+  expect(bootGroup.test(`${repoRoot}/ui/src/pages/cron/cron-page.tsx`)).toBe(false);
+  expect(bootGroup.test(`${repoRoot}/ui/src/pages/plugins/plugins-page.tsx`)).toBe(false);
+  // Fetched shared chunks once co-located the chat view with modules New Session needs.
+  expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-view.ts`)).toBe(false);
+  expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
+  expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel-content-solid.tsx`)).toBe(
+    false,
+  );
+  // Opening state stays cheap; rendering the debug overlay belongs to its lazy graph.
+  expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-state.ts`)).toBe(true);
+  expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-content.ts`)).toBe(false);
+  expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay.ts`)).toBe(false);
+  expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-frame.ts`)).toBe(false);
+  expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-loading.ts`)).toBe(false);
+  expect(bootGroup.test(`${repoRoot}/node_modules/ghostty-web/dist/index.js`)).toBe(false);
+});
+
+it("derives stable manifest keys across pnpm layouts and platforms", () => {
+  expect(
+    controlUiBootManifestKey(
+      "/repo/node_modules/.pnpm/nanoid@5.0.0/node_modules/nanoid/index.browser.js",
+    ),
+  ).toBe("node_modules/nanoid/index.browser.js");
+  expect(
+    controlUiBootManifestKey(
+      "/repo/node_modules/@example/control/node_modules/nanoid/index.browser.js",
+    ),
+  ).toBe("node_modules/nanoid/index.browser.js");
+  expect(controlUiBootManifestKey("/repo/ui/src/main.ts?html-proxy&index=0.js")).not.toContain("?");
+  expect(controlUiBootManifestKey(String.raw`C:\repo\node_modules\nanoid\index.browser.js`)).toBe(
+    "node_modules/nanoid/index.browser.js",
+  );
 });

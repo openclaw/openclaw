@@ -13,6 +13,7 @@ import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isCodeModeControlTool } from "./code-mode-control-tools.js";
 import { markToolExecutionNotStarted as registerTrustedToolNoStartError } from "./tool-effect-receipt.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 export type ToolTurnHandoff = { readonly code: "sessions_yield"; readonly turnHandoff: true };
 type ToolTurnHandoffReceipt = { status: "started"; async: true; yielded?: true; message: string };
@@ -101,7 +102,11 @@ function isTurnYieldCall(tool: AnyAgentTool, args: unknown): boolean {
     (tool.name === "plugins" && input?.action === "reloadAndResume") ||
     (tool.name === "github_publish" &&
       (input?.action === "prepare_pr" ||
-        ((input?.action ?? "publish") === "publish" && typeof input?.workspacePath === "string")))
+        ((input?.action ?? "publish") === "publish" &&
+          // A participant's publication always hands off, even without a workspace path.
+          (typeof input?.workspacePath === "string" ||
+            getGatewayToolCallerIdentity()?.operatorAuthority?.participationCeiling !==
+              undefined))))
   );
 }
 

@@ -1,7 +1,7 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.LocationMode
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.Context
@@ -49,7 +49,7 @@ class LocationHandler internal constructor(
   )
 
   /** Handles location.get with foreground, permission, and user precision gates applied. */
-  suspend fun handleLocationGet(paramsJson: String?): GatewaySession.InvokeResult {
+  suspend fun handleLocationGet(paramsJson: String?): InvokeResult {
     if (!isForeground() && !allowsBackgroundLocation()) {
       // Android foreground restrictions and user expectation keep live location tied to the visible app.
       return nodeInvokeError("LOCATION_BACKGROUND_UNAVAILABLE", "choose Always and grant background location access")
@@ -72,14 +72,14 @@ class LocationHandler internal constructor(
           put("isPrecise", isPrecise)
           put("source", location.provider)
         }
-      return GatewaySession.InvokeResult.ok(payload.toString())
+      return InvokeResult.ok(payload.toString())
     } catch (err: TimeoutCancellationException) {
       return nodeInvokeError("LOCATION_TIMEOUT", "no fix in time")
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
       val message = err.message ?: "LOCATION_UNAVAILABLE: no fix"
-      return GatewaySession.InvokeResult.error(code = "LOCATION_UNAVAILABLE", message = message)
+      return InvokeResult.error(code = "LOCATION_UNAVAILABLE", message = message)
     }
   }
 

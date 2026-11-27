@@ -95,14 +95,16 @@ function pauseRows(
 ) {
   const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
   let captured = false;
-  return vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((options) => {
-    const reader = prepare(options);
-    if (options.databasePath !== databasePath || (once && captured)) {
-      return reader;
-    }
-    captured = true;
-    return { ...reader, read: () => pause(reader.read()) };
-  });
+  return vi
+    .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
+    .mockImplementation(async (options) => {
+      const reader = await prepare(options);
+      if (options.databasePath !== databasePath || (once && captured)) {
+        return reader;
+      }
+      captured = true;
+      return { ...reader, read: () => pause(reader.read()) };
+    });
 }
 
 function personalAccountFixture() {

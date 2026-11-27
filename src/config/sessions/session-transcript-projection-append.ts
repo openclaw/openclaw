@@ -86,7 +86,8 @@ export function extractTranscriptIndexEntry(
   if (!id || (role !== "user" && role !== "assistant")) {
     return undefined;
   }
-  const text = readMessageText(message);
+  // Derived search text only: PostgreSQL text cannot hold NUL, and both engines index alike.
+  const text = readMessageText(message)?.replaceAll("\0", " ");
   if (!text) {
     return undefined;
   }
@@ -112,6 +113,17 @@ export function hasTranscriptMessage(event: unknown): boolean {
 export function transcriptEventContextEligibility(event: unknown): 0 | 1 {
   const message = isRecord(event) && (event.type === "custom_message" ? event : event.message);
   return isRecord(message) && message.excludeFromContext === true ? 0 : 1;
+}
+
+/**
+ * Context byte accounting charges what can reach the model. A `custom` entry holds host or
+ * plugin state (for example the saved system-prompt checkpoint) and never projects into a
+ * model message, so it stays in bounded acquisition but is not charged.
+ */
+export function transcriptEventChargesContextBytes(event: unknown): boolean {
+  return (
+    transcriptEventContextEligibility(event) === 1 && !(isRecord(event) && event.type === "custom")
+  );
 }
 
 export function shouldProjectActiveEvent(event: unknown): boolean {

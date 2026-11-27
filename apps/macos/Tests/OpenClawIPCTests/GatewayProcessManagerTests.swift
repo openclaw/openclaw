@@ -2498,7 +2498,7 @@ struct GatewayProcessManagerTests {
     }
 
     @Test(arguments: ["ready", "failed", "cancelled"])
-    func `first-run handoff survives supervised startup retries`(outcome: String) async throws {
+    func `readiness wait survives supervised startup retries`(outcome: String) async throws {
         try await self.withLaunchAgentEnvironment {
             let retryClock = ManualTestClock()
             let waiterClock = ManualTestClock()
@@ -2526,13 +2526,13 @@ struct GatewayProcessManagerTests {
             {
                 GatewayTestWebSocketTask()
             }
-            var firstRun: Task<OnboardingFirstRun.Fallback?, Never>?
+            var readiness: Task<Bool, Never>?
             let cleanup = {
-                firstRun?.cancel()
+                readiness?.cancel()
                 manager.desiredActive = false
                 await supervisor.stop()
                 await manager.waitForStartupAttempt()
-                _ = await firstRun?.value
+                _ = await readiness?.value
                 await connection.shutdown()
             }
             do {
@@ -2554,26 +2554,14 @@ struct GatewayProcessManagerTests {
                 }
                 manager.beginGatewayStartTask(generation: generation) { await exits[0].wait() }
                 let waiting = AsyncTestGate()
-                var configWritten = false
-                var handoffs = 0
-                var completed = 0
                 var settled = false
                 let run = Task {
-                    let fallback = await OnboardingFirstRun.run(
-                        selectLocal: { configWritten = true }, prepareRuntime: {},
-                        startGateway: {
-                            waiting.open()
-                            guard await manager.waitForGatewayReady(timeout: 0.01) else {
-                                throw CancellationError()
-                            }
-                        },
-                        supportsAutomaticSetup: { true },
-                        openDashboard: { handoffs += 1 },
-                        markComplete: { completed += 1 })
+                    waiting.open()
+                    let ready = await manager.waitForGatewayReady(timeout: 0.01)
                     settled = true
-                    return fallback
+                    return ready
                 }
-                firstRun = run
+                readiness = run
                 await waiting.wait()
                 await waiterClock.waitForSleep(until: waiterClock.now.advanced(by: .milliseconds(100)))
                 for attempt in 0..<2 {
@@ -2584,9 +2572,7 @@ struct GatewayProcessManagerTests {
                     waiterClock.advance(by: .milliseconds(100))
                     await waiterClock.waitForSleep(
                         until: waiterClock.now.advanced(by: .milliseconds(100)), after: registration)
-                    #expect(configWritten)
                     #expect(!settled)
-                    #expect(handoffs == 0)
                     retryClock.advance(by: .seconds(1 << attempt))
                     await started[attempt + 1].wait()
                 }
@@ -2596,10 +2582,8 @@ struct GatewayProcessManagerTests {
                 default: run.cancel()
                 }
                 waiterClock.advance(by: .milliseconds(100))
-                let fallback = await run.value
-                #expect((fallback == nil) == (outcome == "ready"))
-                #expect(handoffs == (outcome == "ready" ? 1 : 0))
-                #expect(completed == handoffs)
+                let ready = await run.value
+                #expect(ready == (outcome == "ready"))
                 #expect(session.snapshotMakeCount() == 0)
             } catch {
                 await cleanup()
@@ -2714,13 +2698,18 @@ struct GatewayProcessManagerTests {
         try await self.withLaunchAgentEnvironment {
             let port = GatewayEnvironment.gatewayPort()
             let url = try #require(URL(string: "ws://example.invalid"))
-            let session = GatewayTestWebSocketSession { self.gatewayTask(healthSucceedsAfter: 0) }
+            let session = GatewayTestWebSocketSession { self.gatewayTask(healthSucceedsAfter: 1) }
             let probes = Mutex(0)
+            let clock = ManualTestClock()
+            let deadline = clock.now.advanced(by: .seconds(1))
+            // The budget admits probes at 0, 300, 600, and 900 milliseconds.
+            let probeGates = (0..<4).map { _ in AsyncTestGate() }
             let connection = GatewayConnection(
                 endpointProvider: {
                     let probe = probes.withLock { $0 += 1
                         return $0
                     }
+                    await probeGates[probe - 1].wait()
                     if probe == 2 {
                         // The first real handshake could not read or create an identity.
                         #expect(session.latestTask()?.snapshotSendCount() == 0)
@@ -2733,7 +2722,7 @@ struct GatewayProcessManagerTests {
                 supportsSharedEndpointRecovery: false,
                 activationBindingKeyProvider: { nil },
                 sessionBox: WebSocketSessionBox(session: session))
-            let manager = GatewayProcessManager()
+            let manager = GatewayProcessManager(readinessClock: clock)
             manager.setTestingConnection(connection)
             manager.setTestingSkipControlChannelRefresh(true)
             manager.desiredActive = true
@@ -2742,24 +2731,30 @@ struct GatewayProcessManagerTests {
             await PortGuardian.shared.setTestingDescriptor(self.gatewayDescriptor(pid: 4242), forPort: port)
             defer { manager.desiredActive = false }
 
-            var dashboardOpened = false
-            var completed = false
-            let fallback = await DeviceIdentityStore.withStateDirectory(stateDir) {
-                await OnboardingFirstRun.run(
-                    selectLocal: {}, prepareRuntime: {},
-                    startGateway: {
-                        guard await manager.waitForGatewayReady(timeout: 1) else {
-                            throw NSError(domain: "identity-maintenance-test", code: 1)
-                        }
-                    },
-                    supportsAutomaticSetup: { true },
-                    openDashboard: { dashboardOpened = true },
-                    markComplete: { completed = true })
+            let readiness = Task {
+                await DeviceIdentityStore.withStateDirectory(stateDir) {
+                    await manager.waitForGatewayReady(timeout: 1)
+                }
             }
+            let clockDriver = Task {
+                for gate in probeGates {
+                    await clock.waitForSleep(until: deadline)
+                    guard !Task.isCancelled else { return }
+                    let probeRegistration = clock.sleepRegistrations
+                    gate.open()
+                    let retryAt = min(clock.now.advanced(by: .milliseconds(300)), deadline)
+                    // The final retry shares the probe deadline, but owns a later timer.
+                    await clock.waitForSleep(until: retryAt, after: probeRegistration)
+                    guard !Task.isCancelled else { return }
+                    clock.advance(by: clock.now.duration(to: retryAt))
+                }
+            }
+            let ready = await readiness.value
+            clockDriver.cancel()
+            probeGates.forEach { $0.open() }
+            await clockDriver.value
             #expect(probes.withLock { $0 } >= 2)
-            #expect(dashboardOpened == maintenanceFinishes)
-            #expect(completed == maintenanceFinishes)
-            #expect((fallback == nil) == maintenanceFinishes)
+            #expect(ready == maintenanceFinishes)
             #expect(!manager._testHasLaunchAgentReadinessFailure())
             #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
             #expect(FileManager.default.fileExists(atPath: credentialsURL.path) == maintenanceFinishes)

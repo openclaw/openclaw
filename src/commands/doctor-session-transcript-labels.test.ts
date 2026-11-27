@@ -17,6 +17,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveZstdCodec } from "../infra/zstd-codec.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db-lifecycle.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
 import {
   openOpenClawAgentDatabase,
@@ -27,12 +28,19 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  changedStoreFiles,
+  snapshotStoreFiles,
+} from "../test-utils/store-snapshot.test-support.js";
 
 const note = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-import { noteSessionTranscriptLabelHealth } from "./doctor-session-transcript-labels.js";
+import {
+  checkSessionTranscriptLabelRepairPending,
+  noteSessionTranscriptLabelHealth,
+} from "./doctor-session-transcript-labels.js";
 
 const AGENT_ID = "main";
 const SESSION_ID = "legacy-label-session";
@@ -63,7 +71,7 @@ function createMessageEvent({
 }
 
 function expectNote(message: unknown) {
-  expect(note).toHaveBeenCalledWith(message, "Session transcript labels");
+  expect(note).toHaveBeenCalledWith(message, "Chat history labels");
 }
 
 describe("doctor SQLite session transcript label migration", () => {
@@ -72,6 +80,8 @@ describe("doctor SQLite session transcript label migration", () => {
   let database: OpenClawAgentDatabase;
   const health = (shouldRepair: boolean) =>
     noteSessionTranscriptLabelHealth({ cfg: CFG, env: state.env, shouldRepair });
+  const pending = (shouldRepair = true) =>
+    checkSessionTranscriptLabelRepairPending({ cfg: CFG, env: state.env, shouldRepair });
   const snapshot = (sessionId = SESSION_ID) => readTranscriptSnapshot(database, sessionId);
   const messageContent = (id: string, sessionId = SESSION_ID) => {
     const event = snapshot(sessionId).events.find((entry) => isRecord(entry) && entry.id === id);
@@ -219,6 +229,12 @@ describe("doctor SQLite session transcript label migration", () => {
         .filter((name) => name.startsWith("openclaw-transcript-labels-recovery-"));
     const untouchedRows = before.rows.slice(2); // Assistant response and mid-line user text.
 
+    // The --fix check finds the same work without writing; plain Doctor never rewrites.
+    const storeBeforeCheck = snapshotStoreFiles(state.stateDir);
+    await expect(pending()).resolves.toBe("work");
+    await expect(pending(false)).resolves.toBe("none");
+    expect(changedStoreFiles(storeBeforeCheck, snapshotStoreFiles(state.stateDir))).toEqual([]);
+
     await health(false);
 
     expect(snapshot().rows).toEqual(before.rows);
@@ -282,6 +298,19 @@ describe("doctor SQLite session transcript label migration", () => {
     expect(snapshot().rows).toEqual(afterFirstRepair);
     expect(note).not.toHaveBeenCalled();
     expect(recoveryDirectories()).toEqual(backups);
+    await expect(pending()).resolves.toBe("none");
+  });
+
+  it("cannot decide while no connection holds the agent store open", async () => {
+    seedLegacyLabelTranscript();
+    closeOpenClawAgentDatabasesForTest();
+    const sidecars = () =>
+      fs.readdirSync(path.dirname(database.path)).filter((name) => /-(wal|shm)$/u.test(name));
+    expect(sidecars()).toEqual([]);
+
+    // A read-only open would create the WAL sidecars, so the check does not open the store.
+    await expect(pending()).resolves.toBe("undecidable");
+    expect(sidecars()).toEqual([]);
   });
 
   it("rejects a sibling change between detection and label repair", async () => {
@@ -423,5 +452,7 @@ describe("doctor SQLite session transcript label migration", () => {
     expectNote("- Rewrote legacy inbound-context labels in 1 session (1 event).");
 
     expect(readTranscriptEventRows(database, CORRUPT_SESSION_ID)).toEqual(corruptBefore);
+    // The repair refuses a session with a malformed sibling, so its legacy label is not work.
+    await expect(pending()).resolves.toBe("none");
   });
 });

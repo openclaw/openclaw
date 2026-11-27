@@ -86,7 +86,7 @@ flow:
                       media: { expr: "`./${filename}`" }
                   - timeoutMs: 60000
               - assert:
-                  expr: "actionSent?.ok === true && Boolean(actionSent.messageId ?? actionSent.result?.messageId)"
+                  expr: "transport.id === 'matrix' ? actionSent?.channel === 'matrix' && actionSent.deliveryStatus === 'sent' && Boolean(actionSent.result?.messageId) : actionSent?.ok === true && Boolean(actionSent.messageId ?? actionSent.result?.messageId)"
                   message: channel plugin action did not return a successful delivery receipt
               - waitForOutbound:
                   textIncludes: { expr: "`${marker}-ACTION`" }

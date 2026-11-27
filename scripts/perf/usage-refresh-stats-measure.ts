@@ -14,9 +14,15 @@
  * --sessions 5000 --events 100 --body-kib 32 produces a >10 GiB interleaved database
  * including three >600 MiB transcripts. --scenario append supplies the recorded
  * checkpoint immediately before the final event, preserving exact size/count checks.
+ * --scenario summary exercises executeUsageCostWorker with a 30-day UTC window.
+ * Run --seed-summary once after preparation to record fixture aggregates through
+ * production parsing/encoding; summary checks independent token/cost expectations
+ * and rejects transcript replay. --revision pins its worker, discovery and projection
+ * owners together. This is same-thread owner proof, excluding worker/RPC transport.
+ * Seeded checkpoints intentionally support aligned reports only, without replay anchors.
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createCipheriv, createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
@@ -47,11 +53,12 @@ const { values } = parseArgs({
     revision: { type: "string" },
     selected: { type: "string", default: "5000" },
     scenario: { type: "string", default: "stats" },
+    "seed-summary": { type: "boolean" },
   },
 });
 assert(values.root, "--root must name a synthetic fixture directory");
 assert(["timing", "allocation", "profile", "sql"].includes(values.mode));
-assert(["stats", "unchanged", "dirty", "append"].includes(values.scenario));
+assert(["stats", "unchanged", "dirty", "append", "summary"].includes(values.scenario));
 assert(!values.cold || process.platform === "linux", "--cold requires Linux posix_fadvise");
 const positive = (value: string) => {
   const number = Number(value);
@@ -68,9 +75,11 @@ const bodyBytes = positive(values["body-kib"]) * 1024;
 const root = path.resolve(values.root);
 const manifestPath = path.join(root, "usage-refresh-stats-fixture.json");
 const ownerPath =
-  values.scenario === "stats"
-    ? "src/config/sessions/session-accessor.sqlite-transcript-stats.ts"
-    : "src/infra/session-cost-usage-refresh-inputs.worker.ts";
+  values.scenario === "summary"
+    ? "src/infra/session-cost-usage-worker-overview.ts"
+    : values.scenario === "stats"
+      ? "src/config/sessions/session-accessor.sqlite-transcript-stats.ts"
+      : "src/infra/session-cost-usage-refresh-inputs.worker.ts";
 const ownerUrl = pathToFileURL(path.resolve(ownerPath)).href;
 const source = values.revision
   ? (() => {
@@ -82,12 +91,33 @@ const source = values.revision
       return result.stdout;
     })()
   : readFileSync(ownerPath, "utf8");
+const pinnedSources = new Map([[ownerUrl, source]]);
+if (values.revision && values.scenario === "summary") {
+  for (const file of [
+    "src/infra/session-cost-usage-worker.ts",
+    "src/infra/session-cost-usage-worker-refresh.ts",
+    "src/infra/session-cost-usage-refresh-inputs.worker.ts",
+    "src/infra/session-cost-usage-collection.ts",
+  ]) {
+    const result: SpawnSyncReturns<string> = spawnSync(
+      "git",
+      ["show", `${values.revision}:${file}`],
+      {
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    pinnedSources.set(pathToFileURL(path.resolve(file)).href, result.stdout);
+  }
+}
 if (values.revision) {
   registerHooks({
     load(url, context, nextLoad) {
-      return url === ownerUrl
-        ? { source, format: "module-typescript", shortCircuit: true }
-        : nextLoad(url, context);
+      const pinned = pinnedSources.get(url);
+      return pinned === undefined
+        ? nextLoad(url, context)
+        : { source: pinned, format: "module-typescript", shortCircuit: true };
     },
   });
 }
@@ -105,6 +135,7 @@ const { readTranscriptStatsBatchFromDatabase } =
   await import("../../src/config/sessions/session-accessor.sqlite-transcript-stats.js");
 const { createUsageCostCollectionAccess } =
   await import("../../src/infra/session-cost-usage-refresh-inputs.worker.js");
+const { executeUsageCostWorker } = await import("../../src/infra/session-cost-usage-worker.js");
 const { OpenClawAgentDatabaseReadOnlyScope } =
   await import("../../src/state/openclaw-agent-db-readonly-scope.js");
 const { withOpenClawAgentDatabaseReadOnly } =
@@ -275,7 +306,113 @@ if (values.prepare) {
     shapes: TranscriptShape[];
   } = JSON.parse(readFileSync(manifestPath, "utf8"));
   assert.equal(fixture.format, "openclaw-usage-refresh-stats-v1");
-  const selected = Math.min(positive(values.selected), fixture.sessions);
+  if (values["seed-summary"]) {
+    const { formatSqliteSessionFileMarker } =
+      await import("../../src/config/sessions/legacy-sqlite-marker.js");
+    const { createUsageRollupScan } =
+      await import("../../src/infra/session-cost-usage-rollup-scan.js");
+    const { parseUsageCostTranscriptRecord } =
+      await import("../../src/infra/session-cost-usage-pricing.js");
+    const { partitionUsageCostRollup, USAGE_COST_PARTITION_SCOPE, usageCostPartitionKey } =
+      await import("../../src/infra/session-cost-usage-partitions.js");
+    const { USAGE_COST_ROLLUP_SCOPE } =
+      await import("../../src/infra/session-cost-usage-rollup-codec.js");
+    const { USAGE_COST_QUARTER_SCOPE } =
+      await import("../../src/infra/session-cost-usage-quarters.js");
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+    const insert = opened.db
+      .prepare(`INSERT INTO cache_entries(scope,key,value_json,blob,updated_at)
+      VALUES(?,?,?,?,?) ON CONFLICT(scope,key) DO UPDATE SET
+      value_json=excluded.value_json,blob=excluded.blob,updated_at=excluded.updated_at`);
+    // Record the fixture's exact events through the production usage parser and rollup codec.
+    // Payload text does not affect usage; the checkpoint retains the real transcript byte count.
+    const entries = new Map<
+      number,
+      ReturnType<ReturnType<typeof createUsageRollupScan>["finish"]>
+    >();
+    for (const shape of fixture.shapes) {
+      if (entries.has(shape.maxSeq)) {
+        continue;
+      }
+      const scan = createUsageRollupScan({
+        appendOnly: false,
+        pricingFingerprint: "synthetic",
+        resolveCosts: async (pairs) => pairs.map(() => undefined),
+      });
+      const usageRecords = Array.from({ length: shape.maxSeq }, (_, index) => {
+        const seq = index + 1;
+        return parseUsageCostTranscriptRecord({
+          type: "message",
+          timestamp: new Date(fixture.now).toISOString(),
+          message: {
+            role: seq % 2 ? "user" : "assistant",
+            content: [],
+            ...(seq % 2 ? {} : { usage: { input: 100, output: 25, cost: { total: 0.001 } } }),
+          },
+        });
+      }).filter((event) => event !== null);
+      await scan.addEntries(usageRecords);
+      entries.set(
+        shape.maxSeq,
+        scan.finish({
+          kind: "sqlite",
+          generation: null,
+          maxSeq: shape.maxSeq,
+          eventCount: shape.events,
+          size: shape.bytes + shape.events - 1,
+          mtimeMs: fixture.now,
+          anchorHash: "synthetic-summary-no-replay",
+        }),
+      );
+    }
+    opened.db.exec("BEGIN IMMEDIATE");
+    for (const [index, shape] of fixture.shapes.entries()) {
+      const key = formatSqliteSessionFileMarker({
+        agentId: "main",
+        storePath: fixture.databasePath,
+        sessionId: sessionId(index),
+      });
+      const entry = entries.get(shape.maxSeq)!;
+      const encoded = partitionUsageCostRollup({
+        ...entry,
+        checkpoint: {
+          ...entry.checkpoint,
+          kind: "sqlite",
+          generation: null,
+          maxSeq: shape.maxSeq,
+          eventCount: shape.events,
+          size: shape.bytes + shape.events - 1,
+          mtimeMs: fixture.now,
+        },
+      });
+      insert.run(USAGE_COST_ROLLUP_SCOPE, key, encoded.valueJson, encoded.blob, fixture.now);
+      for (const partition of encoded.partitions) {
+        const monthKey = usageCostPartitionKey(key, partition.date);
+        insert.run(
+          USAGE_COST_PARTITION_SCOPE,
+          monthKey,
+          partition.valueJson,
+          partition.blob,
+          fixture.now,
+        );
+        insert.run(
+          USAGE_COST_QUARTER_SCOPE,
+          monthKey,
+          partition.quarters!.valueJson,
+          partition.quarters!.blob,
+          fixture.now,
+        );
+      }
+    }
+    opened.db.exec("COMMIT; PRAGMA wal_checkpoint(TRUNCATE)");
+    await closeOpenClawAgentDatabasesAsync();
+    console.log(JSON.stringify({ seededSummaries: fixture.sessions }));
+    process.exit(0);
+  }
+  const selected =
+    values.scenario === "summary"
+      ? fixture.sessions
+      : Math.min(positive(values.selected), fixture.sessions);
   const ids = Array.from({ length: selected }, (_, index) => sessionId(index));
   const samples = positive(values.samples);
   const summaries = [];
@@ -311,7 +448,9 @@ if (values.prepare) {
               apply(execute, target, bindings) {
                 const rows = Reflect.apply(execute, target, bindings);
                 if (
-                  /\b(?:transcript_events|session_windows)\b/.test(statement.sourceSQL) &&
+                  /\b(?:transcript_events|session_windows|cache_entries|transcript_rewrite_watermarks)\b/.test(
+                    statement.sourceSQL,
+                  ) &&
                   !/sqlite_schema|sqlite_master/.test(statement.sourceSQL)
                 ) {
                   statements.push(statement.expandedSQL);
@@ -321,6 +460,13 @@ if (values.prepare) {
             });
           statement.all = capture(statement.all.bind(statement));
           statement.get = capture(statement.get.bind(statement));
+          statement.iterate = new Proxy(statement.iterate.bind(statement), {
+            apply(iterate, statementReceiver, bindings) {
+              const rows = Reflect.apply(iterate, statementReceiver, bindings);
+              statements.push(statement.expandedSQL);
+              return rows;
+            },
+          });
           return statement;
         },
       });
@@ -360,6 +506,8 @@ if (values.prepare) {
       },
       target: () => database,
       readStore: async (_agentId, _storePath, read) => scope.run(database, read),
+      // Direct statistics modes measure kernels only. Summary uses the real worker's pacing.
+      yieldRead: async () => {},
       readCheckpoint: (marker) => checkpoints.get(marker.sessionId),
     });
     const markers = ids.map((id) => ({
@@ -380,9 +528,44 @@ if (values.prepare) {
     const readBefore = readThreadDiskReadBytes();
     const started = performance.now();
     const result =
-      values.scenario === "stats"
-        ? readTranscriptStatsBatchFromDatabase({ db }, ids, { includeGeneration: true })
-        : await collection.access.readSqliteStats(markers);
+      values.scenario === "summary"
+        ? await executeUsageCostWorker(
+            {
+              kind: "usage-cost",
+              databases: [database],
+              stores: [{ agentId: "main", storePath: fixture.databasePath, database }],
+              archiveStorePaths: [fixture.databasePath],
+              location: {
+                agentId: "main",
+                databasePath: fixture.databasePath,
+                storePath: fixture.databasePath,
+                env: process.env,
+              },
+              operation: {
+                kind: "summary",
+                pricingFingerprint: "synthetic",
+                startMs: Date.UTC(2026, 10, 1),
+                endMs: Date.UTC(2026, 11, 1) - 1,
+                dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+              },
+            },
+            {
+              consumeInput() {},
+              notify() {},
+              async request() {
+                throw new Error("Aligned summary must not replay transcript or write");
+              },
+            },
+            {
+              signal: new AbortController().signal,
+              runNativeSection: async (run) => run(),
+              throwIfCancelled() {},
+            },
+            async (target, read) => scope.run(target, read),
+          )
+        : values.scenario === "stats"
+          ? readTranscriptStatsBatchFromDatabase({ db }, ids, { includeGeneration: true })
+          : await collection.access.readSqliteStats(markers);
     const elapsedMs = performance.now() - started;
     const used = process.threadCpuUsage(cpu);
     const readAfter = readThreadDiskReadBytes();
@@ -398,14 +581,24 @@ if (values.prepare) {
       writeFileSync(cpuProfilePath, JSON.stringify(profile));
       inspector.disconnect();
     }
-    assert.equal(result.length, selected);
-    assert(result.every((row, index) => row?.eventCount === shapes[index]!.events));
-    assert(result.every((row, index) => row?.maxSeq === shapes[index]!.maxSeq));
-    assert(
-      result.every(
-        (row, index) => row?.sizeBytes === shapes[index]!.bytes + shapes[index]!.events - 1,
-      ),
-    );
+    if (!Array.isArray(result)) {
+      assert.equal(result.kind, "summary");
+      assert(result.kind === "summary");
+      const messages = fixture.shapes.reduce((sum, shape) => sum + Math.floor(shape.maxSeq / 2), 0);
+      assert.equal(result.summary.totals.totalTokens, messages * 125);
+      assert(Math.abs(result.summary.totals.totalCost - messages * 0.001) < 1e-7);
+      assert.equal(result.summary.cacheStatus?.status, "fresh");
+      assert.equal(result.staleSessionFiles.length, 0);
+    } else {
+      assert.equal(result.length, selected);
+      assert(result.every((row, index) => row?.eventCount === shapes[index]!.events));
+      assert(result.every((row, index) => row?.maxSeq === shapes[index]!.maxSeq));
+      assert(
+        result.every(
+          (row, index) => row?.sizeBytes === shapes[index]!.bytes + shapes[index]!.events - 1,
+        ),
+      );
+    }
     DatabaseSync.prototype.prepare = originalPrepare;
     scope.close();
     let pager: { pageMisses: number; logicalBytes: number; plans: string } | undefined;
@@ -442,14 +635,22 @@ if (values.prepare) {
       digest: createHash("sha256")
         .update(
           JSON.stringify(
-            result.map((row) => ({
-              eventCount: row?.eventCount,
-              maxSeq: row?.maxSeq,
-              sizeBytes: row?.sizeBytes,
-              lastMutationAtMs: row?.lastMutationAtMs,
-              generation: row?.generation,
-              cold: row?.cold,
-            })),
+            Array.isArray(result)
+              ? result.map((row) => ({
+                  eventCount: row?.eventCount,
+                  maxSeq: row?.maxSeq,
+                  sizeBytes: row?.sizeBytes,
+                  lastMutationAtMs: row?.lastMutationAtMs,
+                  generation: row?.generation,
+                  cold: row?.cold,
+                }))
+              : result.kind === "summary"
+                ? {
+                    totals: result.summary.totals,
+                    daily: result.summary.daily,
+                    cacheStatus: result.summary.cacheStatus,
+                  }
+                : result,
           ),
         )
         .digest("hex"),

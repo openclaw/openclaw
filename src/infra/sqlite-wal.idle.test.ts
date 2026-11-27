@@ -22,11 +22,12 @@ function fixture(options: Parameters<typeof configureSqliteWalMaintenance>[1] = 
 
 describe("idle WAL checkpoint ticks", () => {
   it("disarms clean ticks and keeps the first sibling write deadline through later writes", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const clock = sqliteSchedulerClock();
     const { writer, maintenance, sibling } = fixture();
     await clock.advanceBy(10_000);
     expect(maintenance.health?.state).toBe("complete");
-    const periodicAtMs = 1_000 + 30 * 60_000;
+    const periodicAtMs = 1_000 + 45 * 60_000;
     expect(clock.armedAtMs).toBe(periodicAtMs);
     await clock.advanceBy(10_000);
     expect(clock.armedAtMs).toBe(periodicAtMs);
@@ -51,6 +52,24 @@ describe("idle WAL checkpoint ticks", () => {
       { value: "second" },
       { value: "after-stop" },
     ]);
+  });
+
+  it("spreads first periodic passes while preserving their subsequent cadence", async () => {
+    const clock = sqliteSchedulerClock();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    const first = fixture();
+    random.mockReturnValue(0.5);
+    const second = fixture();
+    const checkpoints = [first.writer, second.writer].map(countCheckpoints);
+    const counts = () => checkpoints.map((counter) => counter.counts.checkpoint);
+    await clock.advanceBy(10_000);
+    expect(counts()).toEqual([1, 1]);
+    await clock.advanceBy(30 * 60_000 - 10_000);
+    expect(counts()).toEqual([2, 1]);
+    await clock.advanceBy(15 * 60_000);
+    expect(counts()).toEqual([2, 2]);
+    await clock.advanceBy(15 * 60_000);
+    expect(counts()).toEqual([3, 2]);
   });
 
   it("skips completed idle ticks and resumes after writes on either connection", async () => {

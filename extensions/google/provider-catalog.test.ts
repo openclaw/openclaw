@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
+import { loadGoogleLiveCatalog } from "./provider-catalog-runtime.js";
 import {
   buildGoogleStaticCatalogProvider,
   buildGoogleVertexStaticCatalogProvider,
@@ -44,13 +44,15 @@ function inventory(body: unknown): LiveModelCatalogFetchGuard {
     release: async () => undefined,
   }));
 }
-function discover(fetchGuard: LiveModelCatalogFetchGuard, strict = false) {
+async function discover(fetchGuard: LiveModelCatalogFetchGuard, strict = false) {
   vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(fetchGuard);
-  return buildGoogleLiveCatalogProvider({
-    discoveryMode: strict ? "strict" : undefined,
-    apiKey: "GEMINI_API_KEY",
-    discoveryApiKey: "resolved-google-key",
-  });
+  return (
+    await loadGoogleLiveCatalog({
+      discoveryMode: strict ? "strict" : undefined,
+      apiKey: "GEMINI_API_KEY",
+      discoveryApiKey: "resolved-google-key",
+    })
+  ).provider;
 }
 
 beforeEach(() => clearLiveCatalogCacheForTests());
@@ -136,7 +138,7 @@ it("propagates static compat to discovered id variants of the same weights", asy
   vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(
     inventory({ models: ids.map((id) => liveRow(id)) }),
   );
-  const provider = await buildGoogleLiveCatalogProvider({ apiKey: "GEMINI_API_KEY" });
+  const { provider } = await loadGoogleLiveCatalog({ apiKey: "GEMINI_API_KEY" });
   for (const id of ids) {
     const model = provider.models.find((entry) => entry.id === id);
     expect(model, id).toBeDefined();

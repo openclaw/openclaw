@@ -1,6 +1,7 @@
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { MusePool } from "./runtime.js";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { MusePool, type MuseRuntime } from "./runtime.js";
 
 type AgentHarnessSetupVerificationContext = Parameters<NonNullable<AgentHarness["verifySetup"]>>[0];
 
@@ -28,6 +29,7 @@ function museDisplayName(modelId: string, displayLabel: unknown): string {
 /** One lifecycle owner for read-only catalog hosts; every read still asks Meta for live access. */
 export class MuseCatalogReader {
   private current: { binaryPath: string; pool: MusePool } | undefined;
+  private readonly retireWhenIdle = new WeakSet<MuseRuntime>();
 
   async read(
     ctx: Pick<AgentHarnessSetupVerificationContext, "config" | "signal" | "assertCurrent">,
@@ -47,14 +49,14 @@ export class MuseCatalogReader {
     // Catalog checks do not need a workspace. The pool retires a host whenever
     // the managed credential or environment key changes, including before commit.
     const lease = await this.current.pool.acquire(undefined, undefined, true, ctx.signal);
-    const abort = () => {
-      void lease.runtime.close();
-    };
-    ctx.signal.addEventListener("abort", abort, { once: true });
     try {
       ctx.signal.throwIfAborted();
       ctx.assertCurrent();
-      const catalog = await lease.runtime.host.connection.request("model/list", {});
+      const catalog = await racePromiseWithAbortSignal(
+        lease.runtime.host.connection.request("model/list", {}),
+        ctx.signal,
+        (aborted) => aborted.reason,
+      );
       ctx.signal.throwIfAborted();
       ctx.assertCurrent();
       if (
@@ -77,8 +79,15 @@ export class MuseCatalogReader {
           : [],
       );
     } finally {
-      ctx.signal.removeEventListener("abort", abort);
+      if (ctx.signal.aborted) {
+        // MSP cannot cancel one model/list request. Retire its host only after
+        // the other readers settle, rather than failing their requests too.
+        this.retireWhenIdle.add(lease.runtime);
+      }
       lease.release();
+      if (lease.runtime.users === 0 && this.retireWhenIdle.has(lease.runtime)) {
+        await lease.runtime.close();
+      }
     }
   }
 

@@ -1,12 +1,22 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
-import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
+import {
+  runWithSqliteDatabaseAdmissionTurn,
+  type PreparedSqliteReadAdmission,
+} from "./sqlite-database-admission-turn.js";
 import type {
+  Job,
   PreparedSqliteWorkerOpen,
   SqliteWorkerInputPreparation,
   SqliteWorkerInputRetention,
 } from "./sqlite-worker-broker.types.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  SqliteWorkerError,
+  type SqliteWorkerRequest,
+} from "./sqlite-worker-contract.js";
+import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
+import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 /** Retained inputs share the broker budget before they become queued jobs. */
 export class SqliteWorkerInputAdmission {
@@ -48,6 +58,7 @@ export class SqliteWorkerInputAdmission {
     signal?: AbortSignal,
     reuse?: () => Promise<T | undefined>,
     carrierClass?: PreparedSqliteWorkerOpen["carrierClass"],
+    prepare?: () => Promise<PreparedSqliteReadAdmission>,
   ): Promise<T> {
     if (
       this.opens.size >= this.owner.maxPendingOpens ||
@@ -76,11 +87,12 @@ export class SqliteWorkerInputAdmission {
           }),
         [],
         signal,
+        prepare,
       );
-    // Unknown actors reserve their admission turn synchronously. A published actor can attach
-    // independently, but still retains its input budget and participates in drainage.
+    // Unknown actors register discovery/enqueue in invocation order before yielding. A published
+    // actor can attach independently, retaining the same input budget and drainage.
     try {
-      // Reserve before yielding, but also settle custody if path inspection throws synchronously.
+      // Discovery failures still release this original input custody.
       return await (reuse
         ? Promise.resolve()
             .then(reuse)
@@ -150,4 +162,28 @@ export class SqliteWorkerInputAdmission {
       release,
     };
   }
+}
+
+export function prepareSqliteWorkerRequest(job: Job): SqliteWorkerRequest {
+  if (
+    job.request.type !== "execute" ||
+    job.request.input.byteLength <= SQLITE_WORKER_MAX_MESSAGE_BYTES
+  ) {
+    // Bun's serializer can return shared storage; dispatch must own transferable bytes.
+    if ("input" in job.request) {
+      job.request.input = ownedWorkerBytes(job.request.input);
+    }
+    if (job.request.type === "open" && job.request.preparation) {
+      job.request.preparation = ownedWorkerBytes(job.request.preparation);
+    }
+    return job.request;
+  }
+  const { input, ...request } = job.request;
+  const producer = createSqliteWorkerTransferOwner();
+  const transfer = producer.start([{ kind: "command", serialized: input }].values(), {
+    kinds: ["command"],
+  });
+  job.inputTransfer = { id: transfer.id, producer };
+  job.request.input = new Uint8Array();
+  return { ...request, type: "execute-start", transfer };
 }

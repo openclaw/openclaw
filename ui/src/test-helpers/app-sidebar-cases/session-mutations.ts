@@ -472,6 +472,7 @@ describe("AppSidebar session mutation feedback", () => {
 
   it.each(["delete", "archive"] as const)("surfaces partial batch-%s errors", async (action) => {
     const { harness, sidebar } = await mountMutationHarness();
+    sidebar.setSessionSortMode("created");
     const toast = await mountToastHost();
     if (action === "delete") {
       harness.deleteMany.mockResolvedValueOnce({
@@ -547,6 +548,7 @@ describe("AppSidebar session mutation feedback", () => {
 
     gateway.publish({ phase: "reconnecting" });
     gateway.publish({ phase: "connected" });
+    expect(harness.sessions.archiveVisibility("agent:main:a")).toBe("pending");
     pending.resolve({
       outcomes: [
         { ok: true, key: "agent:main:a" },
@@ -554,16 +556,18 @@ describe("AppSidebar session mutation feedback", () => {
       ],
     });
     await pending.promise;
-    await new Promise<void>((resolve) => {
-      globalThis.setTimeout(resolve, 0);
-    });
+    await waitForFast(() =>
+      expect(harness.sessions.archiveVisibility("agent:main:a")).toBeUndefined(),
+    );
 
     expect(harness.patchMany).toHaveBeenCalledOnce();
     expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
   });
 
   it("does not truncate a pending batch when another mutation starts", async () => {
     const { harness, sidebar } = await mountMutationHarness();
+    sidebar.setSessionSortMode("created");
     const toast = await mountToastHost();
     toast.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
     await toast.updateComplete;

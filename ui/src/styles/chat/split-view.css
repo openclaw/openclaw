@@ -65,13 +65,16 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   color: var(--text);
 }
 
+/* Cached panes keep their mounted state without participating in rendering. */
 .chat-pane-cache__pane {
   opacity: 0;
+  content-visibility: hidden;
   grid-area: 1 / 1;
 }
 
 .chat-pane-cache__pane--visible {
   opacity: 1;
+  content-visibility: visible;
   z-index: 1;
 }
 
@@ -153,7 +156,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   padding: 3px 5px;
   margin-inline: -5px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   text-align: left;
 }
@@ -236,17 +239,6 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-/* Project icons are arbitrary artwork, so they keep their own pixels: matched to
-   the glyph box, contained rather than stretched, and deliberately unstyled —
-   no shadow, plate, or filter. Accepted tradeoff: a favicon that is one flat
-   dark color on transparency loses contrast against a dark chip. Rescuing it
-   unconditionally would cost every normal full-color icon, so if it ever
-   matters in practice the escape hatch is a plate applied conditionally, not a
-   blanket effect here. */
-.chat-pane__workspace-chip .workspace-icon-fallback {
-  display: contents;
 }
 
 .chat-pane__workspace-menu,
@@ -1016,12 +1008,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 }
 
 .chat-pane__sharing-permission .oc-menu-item__submenu-icon {
-  color: var(--muted);
-  transform: rotate(90deg);
-}
-
-.chat-pane__sharing-permission[aria-expanded="true"] .oc-menu-item__submenu-icon {
-  transform: rotate(-90deg);
+  display: none;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-permission {

@@ -63,8 +63,11 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     ownerOptions,
   );
   return {
-    run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
-      core.run(input, taskOptions),
+    run: (
+      input: WorkerTaskInput<Input>,
+      taskOptions: WorkerTaskOptions<Input> &
+        Pick<OwnedWorkerTaskOptions<Input>, "diagnosticOperation">,
+    ) => core.run(input, taskOptions),
     rotate: () => core.rotate(),
     runTask: (input: WorkerTaskInput<Input>, taskOptions: OwnedWorkerTaskOptions<Input>) =>
       core.runTask(input, taskOptions),
@@ -73,6 +76,9 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     closeResources: (key?: string) => core.startCloseResources(key).result,
     startCloseResources: (key?: string) => core.startCloseResources(key),
     startRotate: () => core.startRotate(),
+    get isClosed() {
+      return core.isClosed;
+    },
     getSnapshot: () => core.getSnapshot(),
     close: (error?: Error) => core.close(error),
   };

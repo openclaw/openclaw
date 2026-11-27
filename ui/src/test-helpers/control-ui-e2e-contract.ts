@@ -75,6 +75,7 @@ type GatewayMethods = {
     options?: { exactParams?: boolean },
   ) => number;
   getSessionRow: (key: string) => ControlUiSessionFixture;
+  setSessionRow: (row: ControlUiSessionFixture) => void;
   rejectDeferred: (
     method: string,
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },

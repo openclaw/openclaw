@@ -181,31 +181,27 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
             <Show when={hasSectionHelp()}>
               {
                 <span class="settings-section__docs">
-                  <openclaw-tooltip
-                    prop:content={t("configForm.sectionHelp", { section: meta().label })}
+                  <button
+                    ref={setDocsTrigger}
+                    id={docsTriggerId()}
+                    type="button"
+                    class="settings-section__help-button"
+                    aria-label={t("configForm.sectionHelp", { section: meta().label })}
+                    aria-controls={`settings-section-help-popover-${props.section.id}`}
+                    aria-haspopup="dialog"
+                    onClick={() => docsPopover.overlay.request(!docsPopover.overlay.open)}
                   >
-                    <button
-                      ref={setDocsTrigger}
-                      id={docsTriggerId()}
-                      type="button"
-                      class="settings-section__help-button"
-                      aria-label={t("configForm.sectionHelp", { section: meta().label })}
-                      aria-controls={`settings-section-help-popover-${props.section.id}`}
-                      aria-haspopup="dialog"
-                      onClick={() => docsPopover.overlay.request(!docsPopover.overlay.open)}
-                    >
-                      <span aria-hidden="true">
-                        <Icon name="circleQuestionMark" />
-                      </span>
-                    </button>
-                  </openclaw-tooltip>
+                    <span aria-hidden="true">
+                      <Icon name="circleQuestionMark" />
+                    </span>
+                  </button>
                   <Show when={docsTrigger()}>
                     {(trigger) => (
                       <Popover
                         ref={(handle) => (docsPopover = handle)}
                         id={`settings-section-help-popover-${props.section.id}`}
                         label={t("configForm.sectionHelp", { section: meta().label })}
-                        class="settings-section__help-popover"
+                        class="settings-section__help-popover config-section-help__popover"
                         anchor={trigger()}
                         placement="bottom-end"
                       >

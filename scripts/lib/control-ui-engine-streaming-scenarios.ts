@@ -171,6 +171,7 @@ function streamScenario(options: {
   rate?: number;
   panes?: number;
   content?: "markdown" | "tool-code" | "mixed";
+  typing?: boolean;
 }): EngineScenario {
   const messages = options.messages ?? 400;
   const reply = createControlUiStreamingReply(options.rate ?? 30, options.content);
@@ -296,7 +297,7 @@ function streamScenario(options: {
       const typing = new AbortController();
       const input = (async () => {
         let index = 0;
-        while (!typing.signal.aborted) {
+        while (options.typing !== false && !typing.signal.aborted) {
           const pane = index++ % streams.length;
           await composers.nth(pane).focus();
           await page.keyboard.press("x");
@@ -381,7 +382,9 @@ function streamScenario(options: {
       );
       if (
         retained.some(
-          (draft, i) => !characters[i] || draft !== drafts[i] + "x".repeat(characters[i]!),
+          (draft, i) =>
+            (options.typing !== false && !characters[i]) ||
+            draft !== drafts[i] + "x".repeat(characters[i]!),
         )
       ) {
         throw new Error("Streaming lost native composer input");
@@ -625,6 +628,7 @@ export function createEngineStreamingScenarios(): readonly EngineScenario[] {
     streamOnsetScenario(),
     streamOnsetScenario(400),
     streamScenario({ id: "streaming-645-deltas" }),
+    streamScenario({ id: "streaming-645-deltas-no-input", typing: false }),
     streamScenario({ id: "streaming-645-deltas-slow", rate: 15 }),
     streamScenario({ id: "streaming-large-transcript", messages: 2_000 }),
     streamScenario({ id: "streaming-two-panes", panes: 2 }),

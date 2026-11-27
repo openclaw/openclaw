@@ -72,7 +72,8 @@ sidebarTitle: "Voice and speech"
     See [Audio and voice notes](/nodes/audio#openai-transcription-alongside-chatgpt%2Fcodex-oauth)
     for selecting a separate audio API-key profile when desired.
 
-    - Default model: `gpt-4o-transcribe`
+    - Default model: `gpt-transcribe`. Earlier models such as `gpt-4o-transcribe`
+      still work when configured explicitly.
     - Endpoint: OpenAI REST `/v1/audio/transcriptions`
     - Input path: multipart audio file upload
     - Used wherever inbound audio transcription reads `tools.media.audio`,
@@ -88,7 +89,7 @@ sidebarTitle: "Voice and speech"
             {
               type: "provider",
               provider: "openai",
-              model: "gpt-4o-transcribe",
+              model: "gpt-transcribe",
               capabilities: ["audio"],
             },
           ],
@@ -101,7 +102,9 @@ sidebarTitle: "Voice and speech"
     ```
 
     Language and prompt hints are forwarded to OpenAI when supplied by the
-    shared audio media config or per-call transcription request.
+    shared audio media config or per-call transcription request. For
+    `gpt-transcribe`, the language hint is sent as the `languages` list the model
+    expects; other models receive the single `language` field.
 
   </Accordion>
 
@@ -331,6 +334,10 @@ sidebarTitle: "Voice and speech"
     falls back to Platform auth in this order: the configured realtime key, an
     `openai` API-key profile, then `OPENAI_API_KEY`. Create the OAuth profile
     with `openclaw models auth login --provider openai`.
+
+    Select `gpt-live-1.1-codex` to request GPT-Live 1.1. It uses the same
+    Codex WebRTC route and voices, but requires ChatGPT sign-in. It does not
+    fall back to a Platform API key.
 
     Discord uses this same Gateway-owned WebRTC bridge when
     `channels.discord.voice.realtime.model` is `gpt-live-1-codex`. Set

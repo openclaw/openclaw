@@ -177,6 +177,33 @@ it("recovers the exact complete child answer without preventing host event progr
     expect(old.prepared.isCurrent()).toBe(true);
   }));
 
+it("selects the child answer over a later same-run model fallback notice", () =>
+  withOpenClawTestState({ label: "transcript-fallback-notice" }, async (state) => {
+    const scope = transcriptScope(state, "fallback-child");
+    const runId = "fallback-run";
+    const answer = assistant("answer", runId, { __openclaw: { runId, runTerminal: true } });
+    const notice = assistant("notice", runId, {
+      content: "Selected model fixture/a restored (was fixture/b).",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      openclawDeliveryMirror: {
+        kind: "model-fallback",
+        phase: "restored",
+        runId,
+        fromModel: "fixture/b",
+        toModel: "fixture/a",
+      },
+    });
+    await createSessionEntryWithTranscript(scope, () => ({
+      ok: true,
+      entry: { sessionId: scope.sessionId, updatedAt: 1 },
+      transcriptEvents: [answer, notice],
+    }));
+
+    await expectMatch(scope, { kind: "visible-final", runId }, answer);
+    await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual([answer, notice]);
+  }));
+
 it("keeps match filters and active anchors authoritative across worker payload encodings", () =>
   withOpenClawTestState({ label: "transcript-match-encodings" }, async (state) => {
     await captureRuntimeConfigAsyncReader()();

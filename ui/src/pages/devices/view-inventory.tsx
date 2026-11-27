@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { PresenceEntry } from "../../api/types.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -72,7 +73,9 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
         <button
           class="btn"
           title={
-            props.connected && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : ""
+            props.connected && !props.canManagePairing
+              ? t("devices.readOnly.pairingRequiredTooltip")
+              : ""
           }
           disabled={props.inventorySaving || !props.connected || !props.canManagePairing}
           onClick={() => props.onInventoryCleanup(stale().map(toRemovalRequest))}
@@ -286,6 +289,8 @@ function InventoryEntry(props: {
     deviceDesktopEnvironment(props.devices, `node:${props.entry.id}`),
   );
   const rowConnected = () => props.entry.node?.connected ?? props.entry.connected;
+  // OpenClaw ID membership owns these browsers; the Access page removes them.
+  const managedByOpenClawId = () => props.entry.device?.managedBy === "openclaw-id";
   const warnings = createMemo(() => entryWarnings(props.entry, props.devices.gatewayVersion));
   const tokens = createMemo(() => props.entry.device?.tokens ?? []);
   const tokenRoles = createMemo(() => new Set(tokens().map((token) => token.role)));
@@ -294,7 +299,9 @@ function InventoryEntry(props: {
   const showRoles = () => props.entry.roles.some((role) => !tokenRoles().has(role));
   const showScopes = () => props.entry.scopes.some((scope) => !tokenScopes().has(scope));
   const desktopUnavailable = () =>
-    !desktopEnvironment() && props.entry.node?.commands?.includes("desktop.stream");
+    props.devices.desktopEnvironments !== undefined &&
+    !desktopEnvironment() &&
+    props.entry.node?.commands?.includes("desktop.stream");
   const liveStats = () => (rowConnected() ? props.entry.node?.hostStats : undefined);
   const hasAlerts = () =>
     warnings().length > 0 || (liveStats() !== undefined && liveStats() !== null);
@@ -337,9 +344,23 @@ function InventoryEntry(props: {
                 })
             : undefined
         }
-        onRemove={() => props.devices.onInventoryRemove(toRemovalRequest(props.entry))}
+        onRemove={
+          managedByOpenClawId()
+            ? undefined
+            : () => props.devices.onInventoryRemove(toRemovalRequest(props.entry))
+        }
       />
       <dl class="device-entry__facts">
+        <Show when={managedByOpenClawId()}>
+          <DeviceFact label={t("devices.inventory.openclawIdLabel")}>
+            {t("devices.inventory.openclawIdManaged")}{" "}
+            <a
+              href={`${pathForRoute("plugin", props.devices.basePath)}?${new URLSearchParams({ plugin: "openclaw-id-access", id: "access" })}`}
+            >
+              {t("devices.inventory.openclawIdOpen")}
+            </a>
+          </DeviceFact>
+        </Show>
         <For
           each={warnings().filter((warning) => warning.detail)}
           keyed={(warning) => warning.kind}
@@ -376,6 +397,7 @@ function InventoryEntry(props: {
                     device={{ id: props.entry.id, name: props.entry.name }}
                     tokenSummary={token()}
                     devices={props.devices}
+                    revocable={!managedByOpenClawId()}
                   />
                 )}
               </For>
@@ -570,6 +592,7 @@ function TokenRow(props: {
   device: { id: string; name: string };
   tokenSummary: DeviceTokenSummary;
   devices: DevicesProps;
+  revocable: boolean;
 }) {
   const disabled = () =>
     props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
@@ -618,7 +641,7 @@ function TokenRow(props: {
         >
           {t("devices.inventory.rotate")}
         </button>
-        {props.tokenSummary.revokedAtMs ? undefined : (
+        {props.tokenSummary.revokedAtMs || !props.revocable ? undefined : (
           <button
             class="btn btn--sm danger"
             disabled={disabled()}

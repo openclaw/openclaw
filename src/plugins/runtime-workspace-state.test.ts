@@ -7,7 +7,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runti
 function setActiveWorkspace(workspaceDir: string): void {
   setActivePluginRegistry(
     createEmptyPluginRegistry(),
-    workspaceDir,
+    "workspace-test-cache-key",
     "gateway-bindable",
     workspaceDir,
   );

@@ -27,7 +27,6 @@ import {
 import type { QueuedSessionDelivery } from "../infra/session-delivery-queue.records.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
-import { updateRunReportInputFromSentinel } from "../infra/update-run-report.js";
 import { recordUpdateRunVerificationAsync as recordUpdateRunVerification } from "../infra/update-run-write.async.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
@@ -154,10 +153,7 @@ async function loadRestartSentinelStartupTask(params: {
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
   const updateRunId = updateRun?.runId;
-  let noticeMessage =
-    payload.kind === "update"
-      ? renderUpdateRunSummary(updateRun ?? updateRunReportInputFromSentinel(payload))
-      : message;
+  let noticeMessage = updateRun ? renderUpdateRunSummary(updateRun) : message;
   const summary = summarizeRestartSentinel(payload);
 
   const run = async () => {
@@ -219,6 +215,11 @@ async function loadRestartSentinelStartupTask(params: {
     // finished-notice key now would suppress its eventual verified report.
     if (updateRun?.status === "running") {
       return { status: "skipped" as const, reason: "update-restart-pending" };
+    }
+
+    if (updateRun?.origin.noticeSurface === "app") {
+      await clearRestartSentinelIfRevision(sentinelRevision, env);
+      return { status: "ran" as const };
     }
 
     if (!routedSessionKey) {

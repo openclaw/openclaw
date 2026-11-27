@@ -482,7 +482,8 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(body).toContain("Update target: 2026.9.4");
         expect(body).toContain("Failed phase finalize-doctor: exit 23");
         expect(body).toContain(`Failing check doctor (doctor-failed): ${message}`);
-        expect(body).toContain("Recovery outcome: verified serving 2026.9.4");
+        expect(body).toContain("Recovery outcome: restart safe");
+        expect(body).toContain("Recovery version: 2026.9.4");
         expect(mocks.triage).not.toHaveBeenCalled();
       } else {
         expect(mocks.triage).toHaveBeenCalledOnce();

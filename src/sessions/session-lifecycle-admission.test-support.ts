@@ -1,39 +1,6 @@
-import { vi } from "vitest";
 import * as sessionLifecycle from "./session-controller.lifecycle.js";
 import * as rpc from "./session-controller.rpc-sources.js";
 import * as storage from "./session-controller.storage.js";
-
-type InterruptionParams = Parameters<typeof sessionLifecycle.startSessionControllerInterruption>[0];
-export function observeSessionWorkAdmissionDrain(
-  afterDrain: (params: InterruptionParams, released: boolean) => Promise<void> | void,
-): () => void {
-  const startInterruption = sessionLifecycle.startSessionControllerInterruption;
-  const waitForRelease = sessionLifecycle.waitForSessionControllerSettlement;
-  const interruptions = new WeakMap<Promise<void>, InterruptionParams>();
-  const start = vi
-    .spyOn(sessionLifecycle, "startSessionControllerInterruption")
-    .mockImplementation((params) => {
-      const interruption = startInterruption(params);
-      interruptions.set(interruption.released, params);
-      return interruption;
-    });
-  const wait = vi
-    .spyOn(sessionLifecycle, "waitForSessionControllerSettlement")
-    .mockImplementation(async (pending, timeoutMs) => {
-      const released = await waitForRelease(pending, timeoutMs);
-      const params = interruptions.get(pending);
-      if (params) {
-        interruptions.delete(pending);
-        // Fixture pauses follow the real drain, outside its production deadline.
-        await afterDrain(params, released);
-      }
-      return released;
-    });
-  return () => {
-    wait.mockRestore();
-    start.mockRestore();
-  };
-}
 
 /** Holds real effect validation for boundary race fixtures; no production test API. */
 export async function runExclusiveSessionLifecycle<T>(params: {
@@ -86,14 +53,6 @@ export function setRpcSourceIdentityForTest(
     source.input.sourceSessionId = sessionId;
     operation?.updateSessionId(sessionId);
   }
-}
-
-export function setRpcSourceTerminalProjectionForTest(
-  source: rpc.RpcSourceRef,
-  terminal: boolean,
-): void {
-  source.adapter.projectSessionTerminalPending = terminal;
-  source.adapter.projectSessionTerminalPersisted = false;
 }
 
 /** Drops test-owned controller singletons after their operations have been completed. */

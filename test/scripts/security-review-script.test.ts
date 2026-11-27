@@ -120,7 +120,8 @@ function evaluate(
         "GET /repos/openclaw/openclaw/pulls/152415": rollout,
         "GET /repos/openclaw/openclaw/issues/7/comments": [],
         "GET /repos/openclaw/openclaw/issues/7/labels": [],
-        [rolePath]: { role_name: "maintain" },
+        [rolePath]: { role_name: "admin" },
+        "GET /orgs/openclaw/teams/openclaw-secops/memberships/maintainer": { httpError: 404 },
         [runsPath]: { total_count: 1, workflow_runs: [run] },
         [jobsPath]: jobs,
         [`GET ${actions}/runs/10`]: run,
@@ -139,6 +140,7 @@ function evaluate(
       encoding: "utf8",
       env: {
         GITHUB_TOKEN: "fixture-token",
+        GH_APP_TOKEN: "fixture-members-token",
         OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN: "fixture-autoscrub-token",
         ...(deadline === undefined
           ? {}
@@ -268,6 +270,20 @@ describe("combined security review entry point", () => {
     expect(result.combined).not.toContain("success");
   });
 
+  it("does not transfer sensitive-product maintainer authority to dependency changes", () => {
+    const result = evaluate({ [rolePath]: { role_name: "maintain" } });
+    expectReview(result, "failure");
+    expect(
+      result.reviews.findLast((entry) => entry.body?.context === "openclaw/dependency-review")?.body
+        ?.state,
+    ).toBe("pending");
+    expect(
+      result.reviews.findLast(
+        (entry) => entry.body?.context === "openclaw/security-sensitive-review",
+      )?.body?.state,
+    ).toBe("success");
+  });
+
   it("shares notice inventories between both guards without sharing approval authority", () => {
     const result = evaluate();
     expectReview(result, "success");
@@ -296,7 +312,7 @@ describe("combined security review entry point", () => {
     {
       name: "body deadline",
       route: rolePath,
-      response: { role_name: "maintain" },
+      response: { role_name: "admin" },
       failure: { requestTimeout: "body" },
     },
     ...[{ httpError: 500 }, { transportError: "ECONNRESET" }].map((failure) => ({
@@ -315,7 +331,7 @@ describe("combined security review entry point", () => {
   it("rereads author authority after a read deadline instead of retaining approval", () => {
     const result = evaluate({
       [jobsPath]: { responses: [{ requestTimeout: "fetch" }, jobs] },
-      [rolePath]: settles({ role_name: "maintain" }, { role_name: "read" }),
+      [rolePath]: settles({ role_name: "admin" }, { role_name: "read" }),
     });
     expectReview(result, "failure", 0, [1_000]);
     const afterWait = afterFirstWait(result);
@@ -440,11 +456,7 @@ describe("combined security review entry point", () => {
     const result = evaluate({
       [`POST ${commentPath}`]: { httpError: 400 },
       [rolePath]: {
-        responses: [
-          { role_name: "maintain" },
-          { role_name: "maintain" },
-          { requestTimeout: "fetch" },
-        ],
+        responses: [{ role_name: "admin" }, { role_name: "admin" }, { requestTimeout: "fetch" }],
       },
     });
     expectReview(result, "failure", 1, []);
@@ -477,7 +489,7 @@ describe("combined security review entry point", () => {
       [`GET ${pullPath}/files`]: {
         responses: [files, [...files, { filename: "src/secrets/store.ts", status: "modified" }]],
       },
-      [rolePath]: settles({ role_name: "maintain" }, { role_name: "read" }),
+      [rolePath]: settles({ role_name: "admin" }, { role_name: "read" }),
     });
     expectReview(result, "failure", 0, [30_000, 30_000]);
     const afterWait = afterFirstWait(result);
@@ -650,7 +662,7 @@ describe("combined security review entry point", () => {
         responses: [{}, {}, failure, {}],
       },
       [rolePath]: {
-        responses: [{ role_name: "maintain" }, { role_name: "maintain" }, { role_name: "read" }],
+        responses: [{ role_name: "admin" }, { role_name: "admin" }, { role_name: "read" }],
       },
     });
     expectReview(result, "failure");
@@ -771,7 +783,7 @@ describe("combined security review entry point", () => {
       [`GET ${pullPath}`]: { ...pr, changed_files: 1 },
       [`GET ${pullPath}/files`]: [files[0]],
       [`POST ${commentPath}`]: { httpError: 500, recordCommentBeforeError: true },
-      [rolePath]: settles({ role_name: "maintain" }, { role_name: "read" }, 1),
+      [rolePath]: settles({ role_name: "admin" }, { role_name: "read" }, 1),
     });
     expectReview(result, "failure", 0, [1_000]);
     const notice = result.requests.findLast((entry) => entry.method === "PATCH");
@@ -1487,7 +1499,7 @@ describe("combined security review entry point", () => {
     expect(result.reviews.every((entry) => entry.body?.state === "pending")).toBe(true);
     const approved = evaluate({
       [rolePath]: { role_name: "write" },
-      "GET /repos/openclaw/openclaw/collaborators/reviewer/permission": { role_name: "maintain" },
+      "GET /repos/openclaw/openclaw/collaborators/reviewer/permission": { role_name: "admin" },
       "GET /repos/openclaw/openclaw/issues/7/comments": [
         ...notices.map((entry, index) => ({
           id: index + 1,
@@ -1513,9 +1525,9 @@ describe("combined security review entry point", () => {
     const result = evaluate({
       [rolePath]: {
         responses: [
-          { role_name: "maintain" },
-          { role_name: "maintain" },
-          { role_name: "maintain" },
+          { role_name: "admin" },
+          { role_name: "admin" },
+          { role_name: "admin" },
           { role_name: "read" },
         ],
       },

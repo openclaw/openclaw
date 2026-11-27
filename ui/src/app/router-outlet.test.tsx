@@ -187,7 +187,8 @@ describe("openclaw-router-outlet", () => {
       expect(skeleton.closest("[aria-hidden='true']")).not.toBeNull();
     }
     expect(loadingState?.getAttribute("aria-busy")).toBeNull();
-    expect(loadingState?.textContent?.trim()).toBe("Loading…");
+    // Screen readers get the status label; the skeleton shows no visible "Loading…" text.
+    expect(loadingState?.textContent?.trim()).toBe("");
     expect(outlet.textContent).not.toContain("Loading panel");
 
     routeModule.resolve({

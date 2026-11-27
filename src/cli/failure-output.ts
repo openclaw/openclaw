@@ -5,7 +5,7 @@ import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
-import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import { extractErrorCode, formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import {
@@ -20,12 +20,38 @@ import {
 import { formatCliCommand } from "./command-format.js";
 import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
+import { getCliFailureContext, installProcessFailureListener } from "./failure-context.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
 
 export { ExpectedCliError } from "./expected-cli-error.js";
 
-export function handleCliUncaughtException(error: unknown, argv?: string[]): void {
+/** A command already emitted its human diagnostic; retain its original JSON failure. */
+export class ReportedCliCommandError extends ExpectedCliError {
+  constructor(error: unknown) {
+    const message = formatCliOperatorError(error);
+    super({
+      message,
+      humanOutput: message,
+      humanOutputWritten: true,
+      machineOutput: message,
+      cause: error,
+    });
+  }
+}
+
+export function installCliUncaughtExceptionHandler(argv?: string[]): void {
+  const context = getCliFailureContext();
+  if (context && argv) {
+    context.argv = argv;
+  }
+  installProcessFailureListener("uncaughtException", handleCliUncaughtException);
+}
+
+export function handleCliUncaughtException(
+  error: unknown,
+  argv = getCliFailureContext()?.argv ?? process.argv,
+): void {
   if (isUncaughtExceptionHandled(error)) {
     return;
   }
@@ -36,13 +62,13 @@ export function handleCliUncaughtException(error: unknown, argv?: string[]): voi
     );
     return;
   }
-  if (isJsonOutputModeActive(argv ?? process.argv)) {
+  if (isJsonOutputModeActive(argv)) {
     defaultRuntime.writeJson(formatCliJsonFailure(error));
   }
   for (const line of formatCliFailureLines({
     title: "OpenClaw hit an unexpected runtime error.",
     error,
-    argv: argv ?? process.argv,
+    argv,
   })) {
     console.error(line);
   }
@@ -182,6 +208,9 @@ export function formatCliJsonFailure(
   error: unknown,
   options: CliFailureDebugOptions = {},
 ): CliJsonFailure {
+  if (error instanceof ReportedCliCommandError) {
+    return formatCliJsonFailure(error.cause, options);
+  }
   const message = isExpectedCliError(error)
     ? formatErrorMessage(resolveExpectedCliOutput(error).machineOutput.trimEnd())
     : formatCliOperatorError(error, options);
@@ -205,7 +234,7 @@ export function formatCliJsonFailure(
   };
 }
 
-function shouldShowDebugDetails(
+export function shouldShowDebugDetails(
   argv: string[] | undefined = process.argv,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
@@ -293,6 +322,10 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     }
     if (stateRefusal) {
       return [`[openclaw] ${options.title}`, reason(stateRefusal)];
+    }
+    // Engine selection throws config read failures unprinted; Doctor cannot read the file either.
+    if (extractErrorCode(options.error) === "CONFIG_READ_FAILED") {
+      return [`[openclaw] ${options.title}`, reason(options.error)];
     }
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)

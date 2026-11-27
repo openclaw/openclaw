@@ -63,6 +63,8 @@ export function formatDateStamp(nowMs: number, timeZone: string): string {
   return `${year}-${month}-${day}`;
 }
 
+export const TEMPORAL_CONTEXT_HEADING = "## Temporal Context";
+
 /** Build current turn context using the configured timezone or the canonical host fallback. */
 export function buildTemporalContextText(params: {
   configuredTimezone?: string;
@@ -70,7 +72,7 @@ export function buildTemporalContextText(params: {
 }): string {
   const userTimezone = resolveUserTimezone(params.configuredTimezone);
   return [
-    "## Temporal Context",
+    TEMPORAL_CONTEXT_HEADING,
     `Current date: ${formatDateStamp(Date.now(), userTimezone)}`,
     `Time zone: ${userTimezone}`,
     ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),

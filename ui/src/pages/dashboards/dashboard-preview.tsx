@@ -1,6 +1,7 @@
 import { createErrorBoundary } from "@solidjs/signals";
 import { createSignal, lazy, Loading, onSettled, Show } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { isStaleChunkImportError } from "../../app/stale-chunk-reload.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { observeIntersection } from "../../lib/reactive/observers.ts";
@@ -41,7 +42,9 @@ export function DashboardPreview(props: {
             ),
             (error) => (
               <div class="dashboard-preview__error">
-                {t("dashboardDocument.loadFailed", { error: formatUiError(error()) })}
+                {isStaleChunkImportError(error())
+                  ? t("lazyView.staleSubtitle")
+                  : t("dashboardDocument.loadFailed", { error: formatUiError(error()) })}
               </div>
             ),
           )}

@@ -117,6 +117,7 @@ export function createMockGatewayControls(
         return gateway.getSessionRow(sessionKey);
       }, key);
     },
+    setSessionRow: (...args) => mutate("setSessionRow", ...args),
     getSocketCount: () =>
       page.evaluate(
         () => (window as MockGatewayWindow).openclawControlUiE2eGateway?.socketCount() ?? 0,

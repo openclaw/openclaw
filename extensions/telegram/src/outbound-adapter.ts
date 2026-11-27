@@ -69,7 +69,6 @@ type CreateTelegramOutboundAdapterOptions = Pick<
   | "beforeDeliverPayload"
   | "shouldSuppressLocalPayloadPrompt"
   | "shouldTreatDeliveredTextAsVisible"
-  | "targetsMatchForReplySuppression"
   | "preferFinalAssistantVisibleText"
 > & {
   resolveSend?: ResolveTelegramSendFn;
@@ -188,13 +187,14 @@ export async function sendTelegramPayloadMessages(params: {
   payload: ReplyPayload;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "mediaUrls" | "quoteText">;
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
+  const richMessages = resolveTelegramRichMessages({
+    cfg: params.baseOpts.cfg,
+    accountId: params.baseOpts.accountId,
+    htmlTextMode: params.baseOpts.textMode === "html",
+  });
   const payload = canonicalizeTelegramPresentationPayload(params.payload, {
     allowWebAppButtons: parseTelegramTarget(params.to).chatType === "direct",
-    richTables: resolveTelegramRichMessages({
-      cfg: params.baseOpts.cfg,
-      accountId: params.baseOpts.accountId,
-      htmlTextMode: params.baseOpts.textMode === "html",
-    }),
+    richTables: richMessages,
   });
   const telegramData = payload.channelData?.telegram as TelegramPayloadData | undefined;
   const quoteText =
@@ -205,11 +205,14 @@ export async function sendTelegramPayloadMessages(params: {
     typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
   const text = resolveTelegramInteractiveTextFallback(payload) ?? "";
   const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
-  const buttons = resolveTelegramInlineButtons({
-    buttons: telegramData?.buttons,
-    presentation: payload.presentation,
-    interactive: payload.interactive,
-  });
+  const buttons = resolveTelegramInlineButtons(
+    {
+      buttons: telegramData?.buttons,
+      presentation: payload.presentation,
+      interactive: payload.interactive,
+    },
+    { supportsDisabled: richMessages },
+  );
   const replyToMessageId = parseStrictPositiveInteger(
     telegramData?.reaction?.replyToId ?? params.baseOpts.replyToMessageId,
   );
@@ -359,7 +362,6 @@ export function createTelegramOutboundAdapter(
     shouldSuppressLocalPayloadPrompt: options.shouldSuppressLocalPayloadPrompt,
     beforeDeliverPayload: options.beforeDeliverPayload,
     shouldTreatDeliveredTextAsVisible: options.shouldTreatDeliveredTextAsVisible,
-    targetsMatchForReplySuppression: options.targetsMatchForReplySuppression,
     preferFinalAssistantVisibleText: options.preferFinalAssistantVisibleText,
     normalizePayload: ({ payload }) => normalizeTelegramMetadataOnlyPayload(payload),
     normalizePayloadBatch: ({ payloads }) => normalizeTelegramFallbackPayloadBatch(payloads),

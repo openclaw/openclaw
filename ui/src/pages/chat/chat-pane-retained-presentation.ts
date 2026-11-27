@@ -484,7 +484,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.composerPrefillAttentionTarget = null;
   }
 
-  protected showComposerPrefillAttention(input: HTMLElement): void {
+  protected showComposerPrefillAttention(input?: HTMLElement | null): void {
+    if (!input) {
+      return;
+    }
     this.clearComposerPrefillAttention();
     // Force a fresh animation frame when the same mounted composer is prompted again.
     void input.offsetWidth;
@@ -589,14 +592,17 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       }
       const deferredHydrationActive = this.resumeDeferredSessionHydration();
       if (state && !deferredHydrationActive) {
-        this.markSessionRead(selectedChatSessionRow(state));
+        const row = selectedChatSessionRow(state);
+        this.markSessionRead(row);
         if (
           state.connected &&
           this.resolveChatReadTarget() &&
-          (state.chatRunId || selectedChatSessionRow(state)?.hasActiveRun)
+          (state.chatRunId ||
+            row?.hasActiveRun ||
+            (row?.lastRunId && row.lastRunId !== getAcceptedChatHistorySession(state)?.lastRunId))
         ) {
-          // Keep the retained transcript visible while reconciling the live run's
-          // authoritative start time and activity after a foreground return.
+          // A roster update can settle a hidden run without delivering its final message.
+          // Keep the retained transcript visible while catching up with that run.
           void loadChatHistory(state, { deferBranches: true });
         }
         if (

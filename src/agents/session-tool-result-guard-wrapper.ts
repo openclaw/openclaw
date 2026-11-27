@@ -6,6 +6,7 @@ import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-input.types.js";
 import {
   attachRuntimeUserTurnTranscriptRecorder,
   takeRuntimeUserTurnTranscriptContext,
@@ -14,12 +15,12 @@ import {
 import {
   mergePreparedUserTurnMessageForRuntime,
   restorePreparedUserTurnOperationalMetaForRuntime,
-  type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { isMidTurnPrecheckAssistantError } from "./embedded-agent-runner/run/midturn-precheck.js";
 import { readPersistedImageBlockFactIndexes } from "./embedded-agent-runner/run/prompt-image-metadata.js";
+import { boundToolResult } from "./embedded-agent-runner/tool-result-bound.js";
 import {
   resolveLiveToolResultMaxChars,
   truncateToolResultMessage,
@@ -73,7 +74,9 @@ function publishPersistedUserEnvelope(
   for (const key of Object.keys(runtime)) {
     Reflect.deleteProperty(runtime, key);
   }
-  Object.assign(runtime, persisted, { content });
+  // String keys only: copying the persisted copy's enumerable symbols would
+  // overwrite read-only runtime carriers (steering context) and crash the writer.
+  Object.assign(runtime, Object.fromEntries(Object.entries(persisted)), { content });
   if (imageFactIndexes) {
     runtime["__openclaw"] = {
       ...runtime["__openclaw"],
@@ -93,7 +96,6 @@ type GuardOptions = {
   privateCompletion?: true;
   allowSyntheticToolResults?: boolean;
   missingToolResultText?: string;
-  allowedToolNames?: Iterable<string>;
   trigger?: EmbeddedRunTrigger;
   preparedUserTurnMessage?: PersistedUserTurnMessage;
   preparedUserTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
@@ -408,7 +410,6 @@ export function guardSessionManager(
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: options?.allowSyntheticToolResults,
     missingToolResultText: options?.missingToolResultText,
-    allowedToolNames: options?.allowedToolNames,
     config: options?.config,
     maxToolResultChars,
     withCompactionPersistence: options?.withCompactionPersistence,
@@ -417,6 +418,7 @@ export function guardSessionManager(
   });
   setSessionToolResultPreparer(guardedSessionManager, {
     cap: (message) => truncateToolResultMessage(message, maxToolResultChars),
+    bound: (result, spill) => boundToolResult(result, maxToolResultChars, spill),
   });
   guardedSessionManager.hasPendingToolResults = guard.hasPendingToolResults;
   guardedSessionManager.flushPendingToolResults = guard.flushPendingToolResults;

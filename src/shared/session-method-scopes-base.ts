@@ -18,6 +18,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "mentions.dismiss",
   "mentions.list",
   "models.list",
+  "openclawId.status",
   "progressCard.get",
   "projects.list",
   "projects.checkoutOptions",
@@ -42,6 +43,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.search",
   "sessions.files.list",
   "sessions.files.get",
+  "sessions.files.stat",
   "sessions.files.download",
   "sessions.files.assets",
   "sessions.files.preview",
@@ -77,16 +79,20 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "chat.send",
   "chat.abort",
   "chat.steerNow",
+  "session.typing",
   "sessions.create",
   "sessions.patch",
   "sessions.patchMany",
   "sessions.fork",
   "sessions.send",
   "sessions.steer",
+  "sessions.steerTarget",
+  "sessions.steerActive",
   "sessions.processes.stop",
   "sessions.abort",
   "sessions.goal.update",
   "sessions.goal.clear",
+  "worktrees.restore",
 ]);
 
 /** Admission only: reads retain sharing policy; mutation owners must bind the caller's own row. */
@@ -120,8 +126,13 @@ export function resolveSessionMethodScope(
   if (method === "talk.session.appendAudio" || method === "talk.session.close") {
     return "operator.sessions.write";
   }
-  // Selecting a device filesystem requires the broader operator capability.
-  if (method === "sessions.create" && isRecord(params) && params.deviceFolder !== undefined) {
+  // Selecting a device filesystem, or cloning/reusing a repository by URL with the
+  // Gateway's GitHub identity, requires the broader operator capability.
+  if (
+    method === "sessions.create" &&
+    isRecord(params) &&
+    (params.deviceFolder !== undefined || params.projectGitUrl !== undefined)
+  ) {
     return undefined;
   }
   // Session readers can invoke only stored named queries. The closed RPC schema
@@ -156,6 +167,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "pinned",
   "sidebarRoot",
   "archived",
+  "requestArchiveUndo",
   "snoozedUntil",
   "unread",
   "model",
@@ -174,9 +186,11 @@ const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set(
   "expectedLifecycleRevision",
   "expectedPermissionMode",
   "expectedMarkedUnreadAt",
+  "archiveUndoToken",
   "expectedSidebarRoot",
   "expectedCategory",
   "expectedArchived",
+  "expectedArchivedAt",
   "expectedSidebarAncestors",
 ]);
 

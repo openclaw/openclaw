@@ -43,7 +43,9 @@ function expectRuntimeArgs(
     fileURLToPath(url),
   ]);
   expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
-    needsLoader ? ["--import", import.meta.resolve("tsx/esm")] : [],
+    needsLoader
+      ? ["--import", expect.stringMatching(/^file:.*\/infra\/runtime-worker-loader\.(?:mjs|js)$/)]
+      : [],
   );
   expect(runtimeNeedsTypeScriptLoader(fileURLToPath(url), runtime)).toBe(needsLoader);
 }
@@ -194,6 +196,29 @@ describe("resolveRuntimeWorkerArgv", () => {
     }
   });
 
+  it("loads a TypeScript worker thread from a foreign working directory", async () => {
+    await withTempDir("openclaw-worker-thread-cwd-", async (cwd) => {
+      const entry = path.join(cwd, "thread.mts");
+      await writeFile(
+        entry,
+        'import { parentPort } from "node:worker_threads"; enum Answer { value = 42 }; parentPort.postMessage(Answer.value);',
+      );
+      const url = pathToFileURL(entry);
+      const { stdout } = await promisify(execFile)(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          'import { Worker } from "node:worker_threads"; const worker = new Worker(new URL(process.argv[1]), { execArgv: JSON.parse(process.argv[2]) }); worker.on("message", value => console.log(value));',
+          url.href,
+          JSON.stringify(resolveRuntimeWorkerThreadExecArgv(url)),
+        ],
+        { cwd, timeout: 10_000 },
+      );
+      expect(stdout.trim()).toBe("42");
+    });
+  });
+
   it("does not preload a file loader for non-file Worker URLs", () => {
     expect(
       resolveRuntimeWorkerThreadExecArgv(new URL("data:text/javascript,postMessage(1)")),
@@ -229,6 +254,9 @@ describe("resolveRuntimeProcessEntrypointUrl", () => {
         "file:///relay/service-child-relay.mjs",
       );
       const anchor = new URL("file:///relay/service-child-group-anchor.mjs");
+      expect(resolveRuntimeProcessEntrypointUrl("serviceChildRelay")).toEqual(
+        new URL("file:///relay/service-child-relay.mjs"),
+      );
       expect(resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor")).toEqual(anchor);
       expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(originalGithub);
       registerSealedRuntimeProcessEntrypoints("worker", "file:///worker/worker.mjs");

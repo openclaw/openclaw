@@ -1,7 +1,7 @@
 import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { assertSqliteIntegrityInWorker } from "./sqlite-integrity-worker.js";
 import type { SqliteIntegrityCheck, SqliteIntegrityOperation } from "./sqlite-integrity.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 
 /** Keep the caller's connection and authority until every native reader closes. */
 export async function runSqliteIntegrityOperationInWorker<T>(
@@ -26,6 +26,7 @@ export async function runSqliteIntegrityOperationInWorker<T>(
     let step = operation.next();
     while (!step.done) {
       let failure: { error: unknown } | undefined;
+      let staleFts = false;
       try {
         await assertSqliteIntegrityInWorker(
           step.value.databaseLabel,
@@ -39,13 +40,19 @@ export async function runSqliteIntegrityOperationInWorker<T>(
             tables: step.value.tables,
             ftsSchemas: step.value.ftsSchemas,
           },
+          {
+            onToleratedFts: () => {
+              staleFts = true;
+            },
+          },
         );
       } catch (error) {
         failure = { error };
       }
       // Neither cancellation nor lost custody may resume an index/schema repair.
       beforeResume();
-      if (!failure && step.value.check !== "quick") {
+      // An FTS-tolerant pass can preserve an image, but cannot certify it as healthy.
+      if (!failure && step.value.check !== "quick" && !staleFts) {
         recordSqliteDatabaseIntegrity(step.value.database);
       }
       if (failure && options.repairIntegrityError) {

@@ -41,7 +41,8 @@ function createConsentHarness(
     listeners.add(listener);
     return () => listeners.delete(listener);
   };
-  const { gateway: applicationGateway } = createGateway(client);
+  const { gateway: applicationGateway, emit } = createGateway(client);
+  applicationGateway.subscribeEvents = (listener) => client.addEventListener(listener);
   const gateway = new GatewayPageBinding(vi.fn(), { getGateway: () => applicationGateway });
   gateway.connect();
   let result = createResult(available);
@@ -81,6 +82,10 @@ function createConsentHarness(
   });
   return {
     consent,
+    reconnect: () => {
+      emit(client, false);
+      emit(client, true);
+    },
     context,
     request,
     listeners,
@@ -162,6 +167,42 @@ it("correlates concurrent install progress and retires listeners on success and 
   expect(message(secondIdentity)?.text).toContain("registry unavailable");
   expect(listeners.size).toBe(0);
 });
+
+it.each(["transport", "saved"] as const)(
+  "retains admitted and %s outcomes across same-client reconnect",
+  async (kind) => {
+    const response = deferred<PluginMutationResult>();
+    const { consent, progress, reconnect } = createConsentHarness(async (method) => {
+      if (method === "plugins.install") {
+        return response.promise;
+      }
+      if (method === "plugins.list") {
+        return createResult(available);
+      }
+      throw new Error("Unexpected request: " + method);
+    });
+    const pending = consent.install(installRequest, rowKey);
+    const admitted = progress.get(rowKey);
+    expect(admitted).toBeDefined();
+    reconnect();
+    expect(progress.get(rowKey)).toBe(admitted);
+    response.reject(
+      kind === "saved"
+        ? new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "Saved but not activated",
+            details: { persistence: { operation: "install", pluginId: available.id } },
+          })
+        : new Error("Connection lost before the receipt"),
+    );
+    await pending;
+    const finished = progress.get(rowKey);
+    expect(finished?.failure).toBeDefined();
+    expect(finished?.canRetry).toBe(false);
+    reconnect();
+    expect(progress.get(rowKey)).toBe(finished);
+  },
+);
 
 it("blocks repeat install when saved-state reads fail, then reconciles aliases", async () => {
   let inventoryFails = true;

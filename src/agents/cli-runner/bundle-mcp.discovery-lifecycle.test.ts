@@ -107,16 +107,21 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
           expect(runtime?.peekCatalog()?.tools.map((tool) => tool.serverName) ?? []).toEqual(
             expectedServers,
           );
-          const started = (await children()).slice(before);
-          expect(started).toHaveLength(denied ? 0 : 3);
           if (!denied) {
-            expect(await runtime!.callTool("alpha", "read_note", {})).toMatchObject({
-              content: [{ type: "text", text: "session tool is still connected" }],
-            });
+            // Retained catalogs let preparation finish before background connection startup.
+            for (const server of expectedServers) {
+              expect(await runtime!.callTool(server, "read_note", {})).toMatchObject({
+                content: [{ type: "text", text: "session tool is still connected" }],
+              });
+            }
+            const started = (await children()).slice(before);
             const retained = started.filter((child) => child.server !== "excluded");
+            expect(retained.map((child) => child.server).toSorted()).toEqual(expectedServers);
             expect(retained.flatMap((child) => child.pids).every(isPidAlive)).toBe(true);
-            const excluded = started.find((child) => child.server === "excluded")!;
-            expect(excluded.pids.filter(isPidAlive)).toEqual([]);
+            const excluded = started.filter((child) => child.server === "excluded");
+            expect(excluded.flatMap((child) => child.pids).filter(isPidAlive)).toEqual([]);
+          } else {
+            expect((await children()).slice(before)).toEqual([]);
           }
           await retireSessionMcpRuntime({
             sessionId,
@@ -125,7 +130,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
           });
           expect((await children()).flatMap((child) => child.pids).filter(isPidAlive)).toEqual([]);
         }
-        expect(await children()).toHaveLength(9);
+        expect((await children()).filter((child) => child.server !== "excluded")).toHaveLength(6);
       } finally {
         for (const sessionId of sessions) {
           await retireSessionMcpRuntime({ sessionId, reason: "discovery-test-cleanup" });

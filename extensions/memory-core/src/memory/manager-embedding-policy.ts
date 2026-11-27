@@ -6,6 +6,8 @@ import {
   formatEmbeddingModelInput,
   resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
+  type MemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
@@ -13,12 +15,11 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { EmbeddingProvider, EmbeddingProviderRuntime } from "./embeddings.js";
 import type { MemoryEmbeddingBatchConfig } from "./manager-sync-base.js";
 
 export function resolveMemoryIndexConcurrency(
   batch: Pick<MemoryEmbeddingBatchConfig, "enabled" | "concurrency">,
-  runtime?: EmbeddingProviderRuntime,
+  runtime?: MemoryEmbeddingProviderRuntime,
 ): number {
   if (batch.enabled) {
     return batch.concurrency;
@@ -28,7 +29,7 @@ export function resolveMemoryIndexConcurrency(
 }
 
 export function embedMemoryQuery(
-  provider: EmbeddingProvider,
+  provider: MemoryEmbeddingProvider,
   text: string,
   settings: Pick<ResolvedMemorySearchConfig, "queryInstruction" | "inputFormat">,
   options: EmbeddingProviderCallOptions,
@@ -47,7 +48,7 @@ export function embedMemoryQuery(
 }
 
 export function embedMemoryDocuments(
-  provider: EmbeddingProvider,
+  provider: MemoryEmbeddingProvider,
   inputs: Array<string | EmbeddingInput>,
   inputFormat: ResolvedMemorySearchConfig["inputFormat"],
   options: EmbeddingProviderCallOptions,
@@ -273,6 +274,8 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 }): Promise<T> {
   const profile = MEMORY_EMBEDDING_RETRY_PROFILES[params.profile];
   let remainingWaitMs = profile.maxTotalWaitMs;
+  // The scheduler consumes this attempt's budget synchronously before the retry wait.
+  let retryBudget: MemoryEmbeddingRetryBudget | undefined;
   return await retryAsync(params.run, {
     attempts: profile.rateLimit.attempts,
     minDelayMs: profile.transient.baseDelayMs,
@@ -285,16 +288,15 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
       if (params.signal?.aborted) {
         return false;
       }
-      const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
+      retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
       return retryBudget !== undefined && attempt < retryBudget.attempts;
     },
-    delayMs: ({ attempt, err }) => {
-      const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
+    delayMs: ({ attempt }) => {
       return retryBudget
         ? Math.min(retryBudget.maxDelayMs, retryBudget.baseDelayMs * 2 ** (attempt - 1))
         : 0;
     },
-    retryAfterMs: (err) => resolveMemoryEmbeddingRetryBudget(profile, err)?.retryAfterMs,
+    retryAfterMs: () => retryBudget?.retryAfterMs,
     sleep: async (delayMs) => {
       const boundedDelayMs = Math.min(delayMs, remainingWaitMs);
       remainingWaitMs -= boundedDelayMs;
@@ -305,12 +307,14 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
   items: TInput[];
+  signal?: AbortSignal;
   maxInputsPerRequest?: number;
   run: (items: TInput[]) => Promise<TOutput[]>;
   onSuccess?: (items: TInput[], outputs: TOutput[]) => void | Promise<void>;
   waitForRetry: (delayMs: number) => Promise<void>;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
+  params.signal?.throwIfAborted();
   const split = async (splitAt: number): Promise<TOutput[]> => {
     const results: TOutput[] = [];
     for (let start = 0; start < params.items.length; start += splitAt) {
@@ -332,10 +336,12 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   try {
     outputs = await runMemoryEmbeddingRetryLoop({
       profile: "index",
+      signal: params.signal,
       run: async () => await params.run(params.items),
       waitForRetry: params.waitForRetry,
     });
   } catch (err) {
+    params.signal?.throwIfAborted();
     const message = embeddingRetryMessage(err);
     if (
       isInvalidEmbeddingResponse(err) ||

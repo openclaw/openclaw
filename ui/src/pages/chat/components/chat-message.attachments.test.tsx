@@ -22,7 +22,6 @@ import {
 } from "./chat-message-render.test-support.tsx";
 import {
   createAssistantMessage,
-  createAttachmentBlock,
   createUserMessage,
   createMediaBlock,
   createAssistantImageMessage,
@@ -266,10 +265,7 @@ describe("grouped chat attachments", () => {
     const container = document.body.appendChild(document.createElement("div"));
     let sidebarContent: unknown;
     renderReactiveAssistant(
-      () =>
-        createAssistantMessage([
-          createAttachmentBlock(source, "audio", "clip.mp3", "audio/mpeg", { artifactId }),
-        ]),
+      () => nativeAudio(source, artifactId),
       {
         resolveArtifactDownload,
         onOpenSidebar: (content) => {
@@ -307,7 +303,7 @@ describe("grouped chat attachments", () => {
 describe("grouped chat images", () => {
   const imageElement = (root: Element = harness.view) =>
     root.querySelector<HTMLImageElement>(".chat-message-image");
-  const thumbnail = (source: string) => `${source.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`;
+  const thumbnail = (source: string) => `${source.replace(/\/full$/u, "/thumbnail")}?v=5&width=480`;
 
   function mountAssistantImage(
     url: string,

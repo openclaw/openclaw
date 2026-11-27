@@ -5,12 +5,14 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
+import { readSessionDelegatedParticipation } from "../gateway/session-delegated-operator-source.js";
 import { isSubagentCoordinationInputProvenance } from "../sessions/input-provenance.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import type { prepareAgentCommandExecution } from "./command/prepare.js";
 import { loadSessionStoreRuntime } from "./command/runtime-loaders.js";
 import type { AgentCommandOpts } from "./command/types.js";
+import { intersectParticipationCeilings } from "./participation-ceiling.js";
 
 type Prepared = Awaited<ReturnType<typeof prepareAgentCommandExecution>>;
 
@@ -90,6 +92,11 @@ export async function beginAgentCommandSessionEffect(params: {
       if (archivedSessionError) {
         throw archivedSessionError;
       }
+      const childCeiling = readSessionDelegatedParticipation(currentEntry);
+      if (childCeiling && !opts.operatorAuthority?.participationCeiling) {
+        throw new Error("Participant child has no admitted original-source authority.");
+      }
+      intersectParticipationCeilings(childCeiling, opts.operatorAuthority?.participationCeiling);
       operatorSession?.assertAuthorized(currentEntry);
       sessionEntry = currentEntry;
       params.onValidated(currentEntry);

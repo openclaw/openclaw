@@ -1,12 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../packages/gateway-protocol/src/client-info.js";
-import { validateSecretsResolveResult } from "../../packages/gateway-protocol/src/index.js";
 import type { SecretsResolveResult } from "../../packages/gateway-protocol/src/schema/secrets.js";
-import { bindAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import {
   cloneConfigWithResolutionFacts,
   copyConfigResolutionFactsExcept,
@@ -30,7 +24,6 @@ import { getPath, setPathExistingStrict } from "../secrets/path-utils.js";
 import { resolveSecretRefValue } from "../secrets/resolve.js";
 import { collectConfigAssignments } from "../secrets/runtime-config-collectors.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
-import { resolveRuntimeWebTools } from "../secrets/runtime-web-tools.js";
 import { assertExpectedResolvedSecretValue } from "../secrets/secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
@@ -121,14 +114,6 @@ function inactiveSurfaceDiagnosticPath(diagnostic: string): string | undefined {
   return markerIndex > 0 ? diagnostic.slice(0, markerIndex).trim() : undefined;
 }
 
-function isAllowedPathsSecretsResolveCompatError(err: unknown): boolean {
-  const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(err));
-  if (!message.includes("secrets.resolve")) {
-    return false;
-  }
-  return message.includes("invalid request") || message.includes("invalid secrets.resolve params");
-}
-
 function collectActiveGatewayExecSecretRefCredentialPaths(
   config: OpenClawConfig,
 ): SupportedGatewaySecretInputPath[] {
@@ -147,47 +132,6 @@ function collectActiveGatewayExecSecretRefCredentialPaths(
       })
     );
   });
-}
-
-async function callGatewaySecretsResolve(
-  params: CommandSecretScope & { gatewaySecretResolveTimeoutMs?: number },
-): Promise<SecretsResolveResult> {
-  const callGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
-  const request = {
-    config: params.config,
-    method: "secrets.resolve",
-    requiredMethods: ["secrets.resolve"],
-    params: {
-      commandName: params.commandName,
-      targetIds: [...params.targetIds],
-      ...(params.allowedPaths ? { allowedPaths: [...params.allowedPaths] } : {}),
-      ...(params.forcedActivePaths ? { forcedActivePaths: [...params.forcedActivePaths] } : {}),
-      ...(params.optionalActivePaths
-        ? { optionalActivePaths: [...params.optionalActivePaths] }
-        : {}),
-    },
-    timeoutMs: params.gatewaySecretResolveTimeoutMs ?? 30_000,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
-  };
-  try {
-    return await callGateway(request);
-  } catch (err) {
-    if (
-      (!params.allowedPaths && !params.forcedActivePaths && !params.optionalActivePaths) ||
-      Boolean(params.forcedActivePaths?.size) ||
-      !isAllowedPathsSecretsResolveCompatError(err)
-    ) {
-      throw err;
-    }
-    return callGateway({
-      ...request,
-      params: {
-        commandName: params.commandName,
-        targetIds: [...params.targetIds],
-      },
-    });
-  }
 }
 
 async function resolveCommandSecretRefsLocally(
@@ -217,6 +161,8 @@ async function resolveCommandSecretRefsLocally(
       /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(target.path),
     )
   ) {
+    // Model-only commands do not need web-provider discovery or its runtime helpers.
+    const { resolveRuntimeWebTools } = await import("../secrets/runtime-web-tools.js");
     try {
       await resolveRuntimeWebTools({
         sourceConfig,
@@ -431,6 +377,8 @@ export async function resolveCommandSecretRefsViaGateway(
     allowLocalExecSecretRefs?: boolean;
     scrubUnresolvedSecretRefs?: boolean;
     gatewaySecretResolveTimeoutMs?: number;
+    /** Supplied only while the caller retains newly acquired offline state custody. */
+    localGatewayAbsent?: true;
   },
 ): Promise<ResolveCommandSecretsResult> {
   const enforceResolved =
@@ -521,6 +469,21 @@ export async function resolveCommandSecretRefsViaGateway(
       preflightDiagnostics,
       allowedPaths,
     });
+  // Offline custody excludes this state root's Gateway, not an explicitly delegated target.
+  if (
+    params.localGatewayAbsent &&
+    params.config.gateway?.mode !== "remote" &&
+    !process.env.OPENCLAW_GATEWAY_URL?.trim() &&
+    !process.env.OPENCLAW_GATEWAY_PORT?.trim()
+  ) {
+    try {
+      return await resolveLocally();
+    } catch {
+      throw new Error(
+        `${params.commandName}: failed to resolve command secrets locally. Check the configured secret sources, then retry.`,
+      );
+    }
+  }
   const gatewayExecSecretRefCredentialPaths = resolutionPolicy.allowExecSecretRefs
     ? []
     : collectActiveGatewayExecSecretRefCredentialPaths(params.config);
@@ -535,6 +498,8 @@ export async function resolveCommandSecretRefsViaGateway(
     };
   }
 
+  const { callGatewaySecretsResolve, isAllowedPathsSecretsResolveCompatError } =
+    await import("./command-secret-gateway-request.js");
   let payload: SecretsResolveResult;
   try {
     payload = await callGatewaySecretsResolve(params);
@@ -588,6 +553,8 @@ export async function resolveCommandSecretRefsViaGateway(
     );
   }
 
+  const { validateSecretsResolveResult } =
+    await import("../../packages/gateway-protocol/src/index.js");
   if (!validateSecretsResolveResult(payload)) {
     throw new Error("gateway returned invalid secrets.resolve payload.");
   }

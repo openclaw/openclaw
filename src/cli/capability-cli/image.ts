@@ -3,14 +3,16 @@ import { detectMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
+import { resolveFilesystemPath } from "../../infra/home-dir.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
-import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
+import type { CapabilityEnvelope } from "./result-types.js";
 
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
@@ -76,7 +78,9 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const { parseAspectRatioValue } =
             await import("../../../packages/media-generation-core/src/normalization.js");
           if (aspectRatio && !parseAspectRatioValue(aspectRatio)) {
-            throw new Error("--aspect-ratio must be a W:H ratio of positive numbers, like 16:9");
+            throwExpectedCliError(
+              "--aspect-ratio must be a W:H ratio of positive numbers, like 16:9",
+            );
           }
           const resolution = normalizeImageGenerationResolution(opts.resolution);
           const outputFormat = parseImageOption(
@@ -98,7 +102,7 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const quality = parseImageOption(opts.quality, IMAGE_QUALITIES, "--quality");
           const timeoutMs = parseOptionalTimeoutMs(opts.timeoutMs as string | number | undefined);
           const output = opts.output as string | undefined;
-          const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+          const { getModelsCommandSecretTargetIds } = await import("../model-secret-targets.js");
           const { generateImage } = await import("../../image-generation/runtime.js");
           const { getImageMetadata } = await import("../../media/media-services.js");
           const { writeOutputAsset } = await import("../media-output.js");
@@ -113,7 +117,7 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
             file && file.length > 0
               ? await Promise.all(
                   file.map(async (filePath) => {
-                    const resolvedPath = path.resolve(filePath);
+                    const resolvedPath = resolveFilesystemPath(filePath);
                     const { readRegularFile } = await import("../../infra/fs-safe.js");
                     const { buffer } = await readRegularFile({
                       filePath: await realpath(resolvedPath),
@@ -227,7 +231,7 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const promptInput = opts.prompt as string | undefined;
           const timeoutMs = parseOptionalTimeoutMs(opts.timeoutMs);
           const agent = resolveCapabilityAgentOption(command, opts.agent);
-          const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+          const { getModelsCommandSecretTargetIds } = await import("../model-secret-targets.js");
           const { runWithImageModelFallback } =
             await import("../../agents/model-fallback-image.js");
           const {
@@ -245,7 +249,9 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const outputs = await Promise.all(
             files.map(async (filePath) => {
               const trimmed = filePath.trim();
-              const resolvedPath = /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
+              const resolvedPath = /^https?:\/\//i.test(trimmed)
+                ? trimmed
+                : resolveFilesystemPath(filePath);
               const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
               const preparedImage = activeModel
                 ? await prepareImageDescriptionInput(

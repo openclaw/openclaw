@@ -1,3 +1,4 @@
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
@@ -7,6 +8,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -16,6 +18,7 @@ import type {
   MediaUnderstandingScopeConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { toAgentRequestSessionKey } from "../routing/session-key.js";
 import { runtimeMediaModelSecretOwnerId } from "../secrets/runtime-media-secret-owner.js";
 import { DEFAULT_MEDIA_CONCURRENCY, MEDIA_CAPABILITY_DEFAULTS } from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
@@ -164,6 +167,7 @@ export function resolveScopeDecision(params: {
     const matchChannel = normalizeOptionalLowercaseString(match.channel);
     const matchChatType = normalizeChatType(match.chatType);
     const matchPrefix = normalizeOptionalLowercaseString(match.keyPrefix);
+    const matchRawPrefix = normalizeOptionalLowercaseString(match.rawKeyPrefix);
 
     if (matchChannel && matchChannel !== channel) {
       continue;
@@ -171,7 +175,14 @@ export function resolveScopeDecision(params: {
     if (matchChatType && matchChatType !== chatType) {
       continue;
     }
-    if (matchPrefix && !sessionKey.startsWith(matchPrefix)) {
+    if (matchRawPrefix && !sessionKey.startsWith(matchRawPrefix)) {
+      continue;
+    }
+    if (
+      matchPrefix &&
+      !sessionKey.startsWith(matchPrefix) &&
+      !toAgentRequestSessionKey(sessionKey)?.startsWith(matchPrefix)
+    ) {
       continue;
     }
     return rule.action;
@@ -185,6 +196,7 @@ export function resolveModelEntries(params: {
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
   providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
+  modelOverride?: ProviderModelRef;
 }): ResolvedMediaModelEntry[] {
   const { cfg, capability, config } = params;
   const sharedModels = cfg.tools?.media?.models ?? [];
@@ -213,6 +225,19 @@ export function resolveModelEntries(params: {
         preferredMediaModelRank(right.entry, preferred) -
         preferredMediaModelRank(left.entry, preferred),
     );
+  }
+  if (params.modelOverride) {
+    // An explicit model is a pin (docs/cli/infer.md): it is the only attempt, and it reuses a
+    // configured descriptor (credential owner, transport) only for the same provider/model.
+    const provider = normalizeMediaExecutionProviderId(params.modelOverride.provider);
+    const model = params.modelOverride.model.trim();
+    const exact = entries.find(
+      ({ entry }) =>
+        (entry.type ?? (entry.command ? "cli" : "provider")) === "provider" &&
+        normalizeMediaExecutionProviderId(entry.provider ?? "") === provider &&
+        entry.model?.trim() === model,
+    );
+    return [exact ?? { entry: { provider, model } }];
   }
   return entries;
 }

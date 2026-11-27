@@ -91,6 +91,14 @@ export function readSqlitePageHeader(database: DatabaseSync) {
   };
 }
 
+/** Read logical image bytes, including WAL growth but excluding historical frames. */
+export function readSqliteImageSizeBytes(database: DatabaseSync): number {
+  return (
+    Number(database.prepare("PRAGMA page_count;").get()?.page_count) *
+    Number(database.prepare("PRAGMA page_size;").get()?.page_size)
+  );
+}
+
 /** Reuse actual catalog facts only within one unchanged read transaction on this connection. */
 export function createSqliteTableContractReader(
   database: DatabaseSync,

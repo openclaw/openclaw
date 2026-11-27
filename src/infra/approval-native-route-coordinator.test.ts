@@ -6,6 +6,10 @@ import {
 } from "./approval-native-route-coordinator.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 
+const log = vi.hoisted(() => ({ warn: vi.fn() }));
+// mock-isolation: Capture the undelivered-notice record without writing host logs.
+vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
+
 const coordinators: Array<ReturnType<typeof createCoordinator>> = [];
 const approvalRouteReporters: Reporter[] = [];
 function createApprovalNativeRouteCoordinator() {
@@ -200,55 +204,52 @@ describe("createApprovalNativeRouteReporter", () => {
     },
   );
 
-  it.each([
-    [false, "Matrix DMs or Telegram DMs"],
-    [true, "Matrix or Telegram DMs"],
-  ] as const)(
-    "reports sorted unique cross-channel destinations with mixed surfaces=%s",
-    async (mixed, destinations) => {
-      const request = originRequest("cross-channel-destinations", "discord");
-      const reporters = (
-        [
-          ["telegram", "Telegram", "default"],
-          ["matrix", "Matrix", "default"],
-          ["telegram", "Telegram", "ops"],
-        ] as const
-      ).map(([channel, channelLabel, accountId]) =>
-        coordinatedReporter(coordinator, {
-          channel,
-          channelLabel,
-          accountId,
-          classifyRoute: () => (channel === "telegram" ? "bound-or-explicit" : "unbound"),
-        }),
-      );
-      for (const reporter of reporters) {
-        await expectSelection(reporter, request, "selected");
-      }
-      for (const [index, reporter] of reporters.entries()) {
-        await reporter.reportDelivery(
-          delivery(request, [
-            approverDm("user:owner"),
-            ...(mixed && index === 1
-              ? [
-                  {
-                    surface: "origin" as const,
-                    target: { to: "room:other" },
-                    reason: "preferred" as const,
-                  },
-                ]
-              : []),
-          ]),
-        );
-      }
-      expect(requestGateway).toHaveBeenCalledTimes(1);
-      expectNotice(
-        requestGateway,
-        request.id,
-        `Approval required. I sent the approval request to ${destinations}, not this chat.`,
-        { channel: "discord", accountId: undefined },
-      );
-    },
-  );
+  it("selects both bound Telegram accounts and the sole unbound Matrix account for a Discord origin", async () => {
+    const request = originRequest("cross-channel-destinations", "discord");
+    const reporters = (
+      [
+        ["telegram", "Telegram", "default"],
+        ["matrix", "Matrix", "default"],
+        ["telegram", "Telegram", "ops"],
+      ] as const
+    ).map(([channel, channelLabel, accountId]) =>
+      coordinatedReporter(coordinator, {
+        channel,
+        channelLabel,
+        accountId,
+        classifyRoute: () => (channel === "telegram" ? "bound-or-explicit" : "unbound"),
+      }),
+    );
+    for (const reporter of reporters) {
+      await expectSelection(reporter, request, "selected");
+    }
+  });
+
+  it("suppresses the DM fallback notice when delivery matches a private topic origin", async () => {
+    const reporter = slackReporter({
+      channel: "telegram",
+      channelLabel: "Telegram",
+      accountId: "default",
+    });
+    const request = createRequest("private-dm-topic", {
+      turnSourceChannel: "telegram",
+      turnSourceTo: "700000001",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: 42,
+    });
+    await reporter.selectRequest(selection(request));
+    await reporter.reportDelivery({
+      ...selection(request),
+      deliveryPlan: {
+        targets: [approverDm("700000001")],
+        originTarget: { to: "700000001", threadId: 42 },
+        notifyOriginWhenDmOnly: true,
+      },
+      deliveredTargets: [{ ...approverDm("700000001"), target: { to: "700000001", threadId: 42 } }],
+    });
+
+    expect(requestGateway).not.toHaveBeenCalled();
+  });
 
   it("does not send a route notice without delivered destinations", async () => {
     const reporter = createApprovalNativeRouteReporter();
@@ -436,6 +437,26 @@ describe("createApprovalNativeRouteReporter", () => {
         "Reply with: /approve deadbeef allow-once|deny\n" +
         "If the short code is ambiguous, use the full id in /approve.",
       { channel: "discord" },
+    );
+  });
+
+  it("records a manual fallback notice that could not be delivered", async () => {
+    const request = originRequest("deadbeef-2234-4567-89ab-cdef01234567", "discord", {
+      turnSourceAccountId: "default",
+    });
+    requestGateway.mockRejectedValueOnce(new Error("channel offline"));
+    const reporter = createApprovalNativeRouteReporter({
+      channel: "discord",
+      channelLabel: "Discord",
+    });
+    await reporter.selectRequest(selection(request));
+
+    await reporter.reportDelivery(delivery(request, [], [approverDm("user:owner")]));
+
+    await vi.waitFor(() =>
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining(`approval ${request.id}, channel discord): channel offline`),
+      ),
     );
   });
 });

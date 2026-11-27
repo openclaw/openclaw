@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.i18n.nativeText
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -9,6 +10,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
@@ -21,6 +23,13 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class CronRuntimeGuardTest {
+  private val runtimes = mutableListOf<NodeRuntime>()
+
+  @After
+  fun closeRuntimes() {
+    runtimes.forEach(::closeNodeRuntimeTestFixture)
+  }
+
   @Before
   fun clearPlainPrefs() {
     RuntimeEnvironment
@@ -41,7 +50,7 @@ class CronRuntimeGuardTest {
     assertEquals(
       GatewayCronActionState.Notice(
         id = "job-1",
-        message = "Cron changes require operator.admin access.",
+        message = nativeText("Cron changes require operator.admin access."),
         kind = GatewayCronNoticeKind.Error,
       ),
       runtime.cronActionState.value,
@@ -68,7 +77,7 @@ class CronRuntimeGuardTest {
         assertEquals(
           GatewayCronActionState.Notice(
             id = "job-1",
-            message = "Another cron action is still finishing.",
+            message = nativeText("Another cron action is still finishing."),
             kind = GatewayCronNoticeKind.Warning,
           ),
           runtime.cronActionState.value,
@@ -106,7 +115,7 @@ class CronRuntimeGuardTest {
     val notice =
       GatewayCronActionState.Notice(
         id = "job-a",
-        message = "Automation updated.",
+        message = nativeText("Automation updated."),
         kind = GatewayCronNoticeKind.Success,
       )
     actionState.value = notice
@@ -316,7 +325,7 @@ class CronRuntimeGuardTest {
         "openclaw.node.cron.guard.test.${UUID.randomUUID()}",
         android.content.Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also(runtimes::add)
   }
 
   private fun seedConnectedRuntime(runtime: NodeRuntime) {

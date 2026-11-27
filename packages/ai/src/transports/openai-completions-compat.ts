@@ -20,12 +20,16 @@ import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 
 type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
 
+/** Mistral's Chat Completions API names the sampling seed `random_seed`. */
+type OpenAICompletionsSeedField = "seed" | "random_seed";
+
 type OpenAICompletionsCompatDefaults = {
   supportsStore: boolean;
   supportsDeveloperRole: boolean;
   supportsReasoningEffort: boolean;
   supportsUsageInStreaming: boolean;
   maxTokensField: "max_completion_tokens" | "max_tokens";
+  seedField: OpenAICompletionsSeedField;
   thinkingFormat: "openai" | "openrouter" | "deepseek" | "together" | "zai";
   emitsDsmlToolCalls: boolean;
   visibleReasoningDetailTypes: string[];
@@ -36,6 +40,7 @@ type OpenAICompletionsCompatDefaults = {
   requiresNonEmptyUserOrAssistantMessage: boolean;
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
   cacheControlSystemOnly: boolean;
+  cacheControlSharedSystem: boolean;
   sessionAffinityFormat: Exclude<OpenAICompletionsSessionAffinity, "none">;
   supportsLongCacheRetention: boolean;
 };
@@ -47,18 +52,17 @@ export type ResolvedOpenAICompletionsCompat = Omit<
   | "sendSessionAffinityHeaders"
   | "reasoningEffortMap"
   | "supportedReasoningEfforts"
+  | "seedField"
 > &
   Pick<OpenAICompletionsCompat, "reasoningEffortMap" | "supportedReasoningEfforts"> & {
     cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
-    cacheControlSystemOnly: boolean;
     openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
     sessionAffinity: OpenAICompletionsSessionAffinity;
     visibleReasoningDetailTypes: string[];
-    emitsDsmlToolCalls: boolean;
-    requiresNonEmptyUserOrAssistantMessage: boolean;
-    requiresTypedUnionBranches: boolean;
     configuredSupportsLongCacheRetention?: boolean;
     thinkingOffControlUndeclared: boolean;
+    /** Absent means `seed`. */
+    seedField?: OpenAICompletionsSeedField;
   };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
@@ -219,9 +223,12 @@ export function detectOpenAICompletionsCompat(
       isDefaultRouteProvider(provider, "cerebras", "chutes", "deepseek", "opencode", "xai"));
   const isOpenRouterLike = provider === "openrouter" || endpointClass === "openrouter";
   const openRouterModelId = normalizeOpenRouterModelFamilyId(modelId);
+  const isVerifiedOpenRouterRoute =
+    endpointClass === "openrouter" || (isDefaultRoute && provider === "openrouter");
   const isOpenRouterGemini =
-    (endpointClass === "openrouter" || (isDefaultRoute && provider === "openrouter")) &&
-    openRouterModelId?.startsWith("google/gemini") === true;
+    isVerifiedOpenRouterRoute && openRouterModelId?.startsWith("google/gemini") === true;
+  const isOpenRouterAnthropic =
+    isVerifiedOpenRouterRoute && openRouterModelId?.startsWith("anthropic/") === true;
   const isLocalEndpoint = endpointClass === "local";
   const isMistral = knownProviderFamily === "mistral" || endpointClass === "mistral-public";
   const modelStudioEndpoint = isModelStudioLike ? URL.parse(baseUrl ?? "") : null;
@@ -253,6 +260,7 @@ export function detectOpenAICompletionsCompat(
           !usesConfiguredNonOpenAIEndpoint ||
           supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
+    seedField: isMistral ? "random_seed" : "seed",
     emitsDsmlToolCalls: isDeepSeek || isXiaomi || /(?:^|\/)deepseek(?:[-/]|$)/i.test(modelId ?? ""),
     thinkingFormat:
       isDeepSeek || isXiaomi
@@ -265,8 +273,13 @@ export function detectOpenAICompletionsCompat(
               ? "openrouter"
               : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
+    // Declared strict support: the OpenAI and Azure OpenAI endpoints, OpenRouter, and the
+    // default route of the openai provider; any other route declares it in catalog or config.
     supportsStrictMode:
-      !isZai && (!usesConfiguredNonOpenAIEndpoint || endpointClass === "openrouter"),
+      endpointClass === "openai-public" ||
+      endpointClass === "azure-openai" ||
+      endpointClass === "openrouter" ||
+      (isDefaultRoute && isDefaultRouteProvider(provider, "openai")),
     requiresTypedUnionBranches: isMoonshot,
     supportsJsonSchemaResponseFormat:
       (endpointClass === "openai-public" ||
@@ -277,13 +290,12 @@ export function detectOpenAICompletionsCompat(
     cacheControlFormat:
       isOpenRouterGemini ||
       (isModelStudioLike && endpointClass !== "custom") ||
-      (openRouterModelId?.startsWith("anthropic/") === true &&
-        (endpointClass === "openrouter" ||
-          (isDefaultRoute && provider === "openrouter") ||
-          provider === "deepinfra"))
+      isOpenRouterAnthropic ||
+      (openRouterModelId?.startsWith("anthropic/") === true && provider === "deepinfra")
         ? "anthropic"
         : undefined,
     cacheControlSystemOnly: isOpenRouterGemini,
+    cacheControlSharedSystem: isOpenRouterAnthropic,
     sessionAffinityFormat: isOpenRouterLike ? "openrouter" : "openai",
     supportsLongCacheRetention:
       !isOpenRouterGemini &&
@@ -346,6 +358,7 @@ export function resolveOpenAICompletionsCompat(
     supportsUsageInStreaming:
       configured?.supportsUsageInStreaming ?? defaults.supportsUsageInStreaming,
     maxTokensField: configured?.maxTokensField ?? defaults.maxTokensField,
+    seedField: configured?.seedField ?? defaults.seedField,
     requiresToolResultName: configured?.requiresToolResultName ?? false,
     requiresAssistantAfterToolResult: configured?.requiresAssistantAfterToolResult ?? false,
     requiresThinkingAsText: configured?.requiresThinkingAsText ?? false,
@@ -354,16 +367,21 @@ export function resolveOpenAICompletionsCompat(
       defaults.requiresReasoningContentOnAssistantMessages,
     thinkingFormat,
     // Explicit DeepSeek-format aliases retain their existing response contract.
-    emitsDsmlToolCalls: configured?.thinkingFormat === "deepseek" || defaults.emitsDsmlToolCalls,
+    emitsDsmlToolCalls:
+      configured?.emitsDsmlToolCalls ??
+      (configured?.thinkingFormat === "deepseek" || defaults.emitsDsmlToolCalls),
     openRouterRouting: configured?.openRouterRouting,
     vercelGatewayRouting: configured?.vercelGatewayRouting ?? {},
     zaiToolStream: configured?.zaiToolStream ?? false,
     supportsStrictMode: configured?.supportsStrictMode ?? defaults.supportsStrictMode,
-    requiresTypedUnionBranches: defaults.requiresTypedUnionBranches,
+    requiresTypedUnionBranches:
+      configured?.requiresTypedUnionBranches ?? defaults.requiresTypedUnionBranches,
     supportsJsonSchemaResponseFormat:
       configured?.supportsJsonSchemaResponseFormat ?? defaults.supportsJsonSchemaResponseFormat,
     cacheControlFormat: configured?.cacheControlFormat ?? defaults.cacheControlFormat,
-    cacheControlSystemOnly: defaults.cacheControlSystemOnly,
+    cacheControlSystemOnly: configured?.cacheControlSystemOnly ?? defaults.cacheControlSystemOnly,
+    cacheControlSharedSystem:
+      configured?.cacheControlSharedSystem ?? defaults.cacheControlSharedSystem,
     sessionAffinity: resolveSessionAffinity(model, defaults.sessionAffinityFormat),
     supportsPromptCacheKey: resolveOpenAIPromptCacheKeySupport(model),
     supportsLongCacheRetention:
@@ -375,6 +393,8 @@ export function resolveOpenAICompletionsCompat(
         ? ((configured as { visibleReasoningDetailTypes?: string[] }).visibleReasoningDetailTypes ??
           defaults.visibleReasoningDetailTypes)
         : defaults.visibleReasoningDetailTypes,
-    requiresNonEmptyUserOrAssistantMessage: defaults.requiresNonEmptyUserOrAssistantMessage,
+    requiresNonEmptyUserOrAssistantMessage:
+      configured?.requiresNonEmptyUserOrAssistantMessage ??
+      defaults.requiresNonEmptyUserOrAssistantMessage,
   };
 }

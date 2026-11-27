@@ -15,8 +15,8 @@ import {
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import {

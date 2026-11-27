@@ -59,7 +59,10 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/settings/updates", routeId: "updates" });
         await gateway.waitForRequest("update.status", { after, match: { refreshCheckout: true } });
         const staleStatus = page.locator(".settings-status", { hasText: "12 commits behind" });
-        await page.locator(".settings-status", { hasText: "Checking for updates…" }).waitFor();
+        const checking = page.locator(".settings-status", { hasText: "Checking for updates…" });
+        await checking.waitFor();
+        const checkingBounds = await checking.boundingBox();
+        expect(checkingBounds).not.toBeNull();
         expect(
           await gateway.getRequests("update.status", { refreshCheckout: true }),
         ).not.toHaveLength(0);
@@ -68,7 +71,11 @@ suite.define(() => {
         await gateway.resolveDeferred("update.status", refreshedStatus, {
           match: { refreshCheckout: true },
         });
-        await page.getByText("Up to date", { exact: true }).waitFor();
+        const current = page.getByText("Up to date", { exact: true });
+        await current.waitFor();
+        const currentBounds = await current.boundingBox();
+        expect(currentBounds).not.toBeNull();
+        expect(currentBounds!.x).toBeCloseTo(checkingBounds!.x, 1);
         await page
           .locator(".settings-status", { hasText: "Checking for updates…" })
           .waitFor({ state: "hidden" });

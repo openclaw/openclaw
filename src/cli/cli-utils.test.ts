@@ -4,15 +4,17 @@ import { ExitError } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
 import {
+  formatCliFailureLines,
+  formatCliJsonFailure,
+  recordCliGatewayRunFailure,
+} from "./failure-output.js";
+import {
   applyResolvedCommandOutputMode,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
-import {
-  shouldSkipRespawnForArgv,
-  shouldSkipStartupEnvironmentRespawnForArgv,
-} from "./respawn-policy.js";
+import { shouldSkipStartupEnvironmentRespawnForArgv } from "./respawn-policy.js";
 import { waitForever } from "./wait.js";
 
 afterEach(() => {
@@ -62,38 +64,45 @@ describe("runCommandWithRuntime", () => {
     expect(runtime.exit.mock.calls).toEqual([[1], [1]]);
   });
 
-  it("bubbles JSON-mode failures to the process-level owner", async () => {
+  it("reports JSON failures once while retaining the original envelope", async () => {
     const runtime = { error: vi.fn(), exit: vi.fn() };
+    const error = new Error("archive missing");
+    recordCliGatewayRunFailure(error, "run-1");
     await withConsoleLogsRoutedToStderrForJson(["--json"], async () => {
       applyResolvedCommandOutputMode(true);
-      await expect(
-        runCommandWithRuntime(runtime, rejectWith(new Error("archive missing"))),
-      ).rejects.toThrow("archive missing");
+      const caught = await runCommandWithRuntime(runtime, rejectWith(error)).catch(
+        (err: unknown) => err,
+      );
+      expect(formatCliJsonFailure(caught)).toEqual({
+        ok: false,
+        runId: "run-1",
+        origin: "gateway",
+        error: { type: "cli_error", message: "archive missing" },
+      });
+      expect(formatCliFailureLines({ title: "failed", error: caught })).toEqual([]);
     });
-
-    expect([runtime.error.mock.calls, runtime.exit.mock.calls]).toEqual([[], []]);
+    expect(runtime.error.mock.calls).toEqual([["archive missing"]]);
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });
 
 it.each([
-  [["--help"], undefined, true, true],
-  [["tui"], undefined, true, false],
-  [["hooks", "relay", "--relay-id", "relay-1"], undefined, true, true],
-  [["hooks", "relay", "--relay-id", "relay-1"], "win32", false, false],
-  [["gateway"], undefined, true, true],
-  [["gateway", "run", "--port=14720", "--bind", "loopback"], undefined, true, true],
-  [["gateway", "status"], undefined, true, false],
-  [["--", "gateway", "run"], undefined, true, true],
-  [["--profile", "server", "gateway", "run", "--allow-unconfigured"], undefined, true, true],
-  [["status"], undefined, false, false],
-  [["gateway", "call", "health"], undefined, false, false],
-  [["--", "gateway", "run", "--force"], undefined, false, false],
-] as const)("resolves both respawn policies for %j on %s", (args, platform, skip, startup) => {
-  const argv = ["node", "openclaw", ...args];
-  expect([
-    shouldSkipRespawnForArgv(argv, platform),
-    shouldSkipStartupEnvironmentRespawnForArgv(argv, platform),
-  ]).toEqual([skip, startup]);
+  [["--help"], undefined, true],
+  [["tui"], undefined, false],
+  [["hooks", "relay", "--relay-id", "relay-1"], undefined, true],
+  [["hooks", "relay", "--relay-id", "relay-1"], "win32", false],
+  [["gateway"], undefined, true],
+  [["gateway", "run", "--port=14720", "--bind", "loopback"], undefined, true],
+  [["gateway", "status"], undefined, false],
+  [["--", "gateway", "run"], undefined, true],
+  [["--profile", "server", "gateway", "run", "--allow-unconfigured"], undefined, true],
+  [["status"], undefined, false],
+  [["gateway", "call", "health"], undefined, false],
+  [["--", "gateway", "run", "--force"], undefined, false],
+] as const)("resolves the startup respawn policy for %j on %s", (args, platform, startup) => {
+  expect(shouldSkipStartupEnvironmentRespawnForArgv(["node", "openclaw", ...args], platform)).toBe(
+    startup,
+  );
 });
 
 it.each(["../../x", "evil\nrecords"])(
@@ -113,6 +122,10 @@ it.each([
   [parseByteSize, "10kb", 10 * 1024],
   [parseByteSize, `${Number.MAX_SAFE_INTEGER}.1`, Number.MAX_SAFE_INTEGER],
   [parseDurationMs, "0.5s", 500],
+  [parseDurationMs, "2.0235s", 2024],
+  [parseDurationMs, "2023.5ms", 2024],
+  [parseDurationMs, "2s23.49999999999999999ms", 2023],
+  [parseDurationMs, "9007199254740990ms0.25ms0.25ms", Number.MAX_SAFE_INTEGER],
   [parseDurationMs, "  1H30M  ", 5_400_000],
   [parseDurationMs, "0.4ms0.4ms", 1],
   [parseDurationMs, "9007199254740990ms1ms", Number.MAX_SAFE_INTEGER],

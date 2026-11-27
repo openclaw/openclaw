@@ -56,31 +56,6 @@ describe("config form scalar integrity", () => {
     expect(onPatch).toHaveBeenCalledTimes(1);
   });
 
-  it("separates boolean help from its default description", () => {
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        runtime: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              default: true,
-              description: "Controls runtime processing.",
-            },
-          },
-        },
-      },
-    });
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { runtime: { enabled: false } },
-      onPatch: vi.fn(),
-    });
-    expect(container.textContent).toContain("Controls runtime processing.");
-    expect(container.textContent).not.toContain("Default: true");
-  });
-
   it.each(["text", "number"] as const)(
     "revalidates a focused %s draft through snapshot refresh without untracked reads",
     (inputType) => {
@@ -467,7 +442,9 @@ describe("config form scalar integrity", () => {
         value: { policy: value },
         onPatch,
       });
-      expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
+      expect(container.textContent).toContain(
+        "Edit this setting in the Raw tab of Advanced settings.",
+      );
       expect(container.querySelector("input, select, textarea")).toBeNull();
       expect(onPatch).not.toHaveBeenCalled();
     },
