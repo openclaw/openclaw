@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createLocalFileReferenceLease } from "../../../../src/gateway/server-methods/session-file-references.ts";
 import { root as openRoot } from "../../../../src/infra/fs-safe.ts";
 import type { SessionsFilesReferencesParams } from "../../../../src/shared/file-references.ts";
@@ -18,9 +18,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function flow(directory: string) {
+async function flow(directory: string, transcript = utterance, withLiteralComma = false) {
   await fs.mkdir(path.join(directory, "src"));
-  await fs.writeFile(path.join(directory, "src/auth.ts"), "synthetic private contents");
+  for (const name of withLiteralComma ? ["src/auth.ts", "src/auth.ts,"] : ["src/auth.ts"]) {
+    await fs.writeFile(path.join(directory, name), "synthetic private contents");
+  }
   const fsRoot = await openRoot(directory, { symlinks: "reject", hardlinks: "reject" });
   const handle = await fs.open(path.join(directory, "src/auth.ts"));
   const handleRead = vi.spyOn(Object.getPrototypeOf(handle), "read");
@@ -77,10 +79,8 @@ async function flow(directory: string) {
   });
   owner.enable(true);
   const complete = owner.capture();
-  if (!complete) {
-    throw new Error("Enabled reference capture must be admitted");
-  }
-  fixture.externalEdit(utterance);
+  assert.isDefined(complete, "Enabled reference capture must be admitted");
+  fixture.externalEdit(transcript);
   // Await the real search owner's settlement instead of a one-second polling
   // allowance, which races filesystem work on a loaded host.
   const settled = new Promise<void>((resolve) => {
@@ -95,18 +95,21 @@ async function flow(directory: string) {
   complete(
     {
       target: fixture.input,
-      text: utterance,
+      text: transcript,
       from: 0,
-      to: utterance.length,
+      to: transcript.length,
       previousValue: "",
-      value: utterance,
+      value: transcript,
       complete: true,
     },
     true,
   );
   await settled;
   expect(owner.phase).toBe("choosing");
+  const first = owner.candidates[0];
+  assert.isDefined(first, "Expected a selectable file in the chooser");
   return {
+    first,
     fixture,
     owner,
     requests,
@@ -115,7 +118,7 @@ async function flow(directory: string) {
       expect(handleRead).not.toHaveBeenCalled();
       expect(handleReadFile).not.toHaveBeenCalled();
     },
-    async dispose() {
+    async [Symbol.asyncDispose]() {
       owner.dispose();
       await lease?.dispose();
     },
@@ -123,40 +126,41 @@ async function flow(directory: string) {
 }
 
 describe("actual metadata provider to identity-capable composer", () => {
-  it("binds the exact object once and retains it through serialization, remount and disablement", async () => {
+  it.each(["src/auth.ts", "src/auth.ts,"])("replays dictation and binds %s", async (bestPath) => {
     await withTempDir("m09-provider-editor-", async (directory) => {
-      const current = await flow(directory);
-      try {
-        const selected = current.owner.candidates[0].reference;
-        expect(selected.relativePath).toBe("src/auth.ts");
-        expect(selected.namespace).toBe("openclaw.session-file.v1");
-        expect(selected.objectId).not.toBe(selected.relativePath);
-        current.owner.select(selected.objectId);
-        expect(current.fixture.text).toBe(utterance);
-        await Promise.all([current.owner.confirm(), current.owner.confirm()]);
-        expect(current.owner.phase).toBe("committed");
-        expect(current.fixture.text).toBe("Look at @src/auth.ts please.");
-        const snapshot = current.fixture.destination.snapshot();
-        expect(snapshot.references).toEqual([{ start: 8, end: 20, reference: selected }]);
-        expect(current.requests.filter((action) => action === "revalidate")).toHaveLength(1);
-        await current.owner.confirm();
-        expect(current.fixture.destination.snapshot()).toEqual(snapshot);
-        const serialized = JSON.stringify({
-          text: current.fixture.text,
-          references: snapshot.references,
-        });
-        const restored: { text: string; references: unknown } = JSON.parse(serialized);
-        const references = readComposerFileReferences(restored.text, restored.references);
-        expect(references).toEqual(snapshot.references);
-        current.fixture.externalEdit(restored.text, references);
-        current.fixture.remount();
-        current.owner.enable(false);
-        expect(current.fixture.destination.snapshot().references[0].reference).toEqual(selected);
-        expect(current.fixture.text).toBe("Look at @src/auth.ts please.");
-        current.assertNoContentReads();
-      } finally {
-        await current.dispose();
-      }
+      const transcript =
+        "Let's inspect Reference File src/auth.ts, end reference, because it's failing.";
+      const literalComma = bestPath.endsWith(",");
+      await using current = await flow(directory, transcript, literalComma);
+      const { owner, fixture } = current;
+      const { match, reference: selected } = current.first;
+      expect(match).toBe(literalComma ? "path" : "spoken");
+      expect(owner.candidates.map((c) => c.reference.relativePath)).toEqual(
+        literalComma ? ["src/auth.ts,", "src/auth.ts"] : ["src/auth.ts"],
+      );
+      expect(selected.namespace).toBe("openclaw.session-file.v1");
+      expect(selected.objectId).not.toBe(selected.relativePath);
+      owner.select(selected.objectId);
+      expect(fixture.destination.snapshot()).toMatchObject({ text: transcript, references: [] });
+      await Promise.all([owner.confirm(), owner.confirm()]);
+      expect(owner.phase).toBe("committed");
+      const confirmed = "Let's inspect @" + bestPath + ", because it's failing.";
+      const snapshot = fixture.destination.snapshot();
+      const binding = { start: 14, end: 15 + bestPath.length, reference: selected };
+      expect(snapshot).toMatchObject({ text: confirmed, references: [binding] });
+      expect(current.requests.filter((action) => action === "revalidate")).toHaveLength(1);
+      await owner.confirm();
+      expect(fixture.destination.snapshot()).toEqual(snapshot);
+      const serialized = JSON.stringify({ text: fixture.text, references: snapshot.references });
+      const restored: { text: string; references: unknown } = JSON.parse(serialized);
+      const references = readComposerFileReferences(restored.text, restored.references);
+      expect(references).toEqual(snapshot.references);
+      fixture.externalEdit(restored.text, references);
+      fixture.remount();
+      owner.enable(false);
+      expect(fixture.destination.snapshot().references).toEqual([binding]);
+      expect(fixture.text).toBe(confirmed);
+      current.assertNoContentReads();
     });
   });
 
@@ -164,26 +168,22 @@ describe("actual metadata provider to identity-capable composer", () => {
     "rejects an actual %s before commit without changing the draft",
     async (change) => {
       await withTempDir("m09-provider-stale-", async (directory) => {
-        const current = await flow(directory);
-        try {
-          current.owner.select(current.owner.candidates[0].reference.objectId);
-          const filename = path.join(directory, "src/auth.ts");
-          if (change === "rename") {
-            await fs.rename(filename, path.join(directory, "src/renamed.ts"));
-          } else {
-            await fs.unlink(filename);
-            if (change === "replace") {
-              await fs.writeFile(filename, "replacement object");
-            }
+        await using current = await flow(directory);
+        current.owner.select(current.first.reference.objectId);
+        const filename = path.join(directory, "src/auth.ts");
+        if (change === "rename") {
+          await fs.rename(filename, path.join(directory, "src/renamed.ts"));
+        } else {
+          await fs.unlink(filename);
+          if (change === "replace") {
+            await fs.writeFile(filename, "replacement object");
           }
-          await current.owner.confirm();
-          expect(current.owner.phase).toBe("stale");
-          expect(current.fixture.text).toBe(utterance);
-          expect(current.fixture.destination.snapshot().references).toEqual([]);
-          current.assertNoContentReads();
-        } finally {
-          await current.dispose();
         }
+        await current.owner.confirm();
+        expect(current.owner.phase).toBe("stale");
+        expect(current.fixture.text).toBe(utterance);
+        expect(current.fixture.destination.snapshot().references).toEqual([]);
+        current.assertNoContentReads();
       });
     },
   );

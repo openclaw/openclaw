@@ -242,6 +242,10 @@ export async function createLocalFileReferenceLease(options: {
             await loadIndex(assertCurrent, operation);
           }
           const tokens = spokenTokens(query);
+          // STT can append a comma to the final word. Exact paths, filenames, and
+          // literal spoken tokens still use the original query.
+          const last = tokens.length - 1;
+          const withoutComma = query.endsWith(",") ? tokens[last]?.slice(0, -1) : undefined;
           const matches =
             cursor && page?.remaining.length
               ? page.remaining
@@ -252,7 +256,14 @@ export async function createLocalFileReferenceLease(options: {
                         ? "path"
                         : path.posix.basename(file.relativePath) === query
                           ? "name"
-                          : tokens.length && tokens.every((token) => file.tokens.includes(token))
+                          : tokens.length &&
+                              tokens.every(
+                                (token, i) =>
+                                  file.tokens.includes(token) ||
+                                  (i === last &&
+                                    withoutComma &&
+                                    file.tokens.includes(withoutComma)),
+                              )
                             ? "spoken"
                             : undefined;
                     return match ? [{ file, match }] : [];

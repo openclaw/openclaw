@@ -36,7 +36,10 @@ utterance beginning with reference file** option enables the shorter form only
 when the entire utterance is that command.
 
 Search prefers an exact relative path, then an exact filename, then normalized
-spoken words. Exact paths preserve case. Every match requires selection; an
+spoken words. Exact paths preserve case. If transcription adds a comma after a
+filename, spoken matching can ignore that final comma. A file whose name
+actually ends in a comma still ranks first when its path matches exactly.
+Every match requires selection; an
 incomplete page never establishes uniqueness. **Next candidates** continues a
 bounded search. Use **Inspect full path and workspace** for long or bidirectional
 names. **Cancel** or Escape dismisses the chooser without inserting a reference.
