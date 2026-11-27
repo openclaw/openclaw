@@ -2,54 +2,76 @@
 
 Related: https://github.com/openclaw/openclaw/issues/206424
 
-## The problem
+## What Problem This Solves
 
-Our work focuses on optimizing OpenClaw for long-running, multi-user Discord conversations, particularly agents running local models with a 32k context window. Discord is our test environment, not a limit on the wider applicability of the architectural improvements. The measurements and performance targets below are specific to our conversational workload.
+Our work focuses on long-running, multi-user Discord conversations in OpenClaw, particularly on consumer hardware with a 32k local-model context window. Discord is our test environment; the underlying context-management principles have wider applicability.
 
-OpenClaw spends model context on its own bookkeeping. Historical runtime-context snapshots accumulate even when a fresh snapshot already supplies the relevant information, and each snapshot contains redundant operational metadata. The two costs compound. Separate durable conversation and stable instructions from volatile per-turn information instead of making the model repeatedly process both.
+OpenClaw can spend a substantial portion of its context window on its own bookkeeping rather than the conversation. On the tested route, historical runtime-context snapshots accumulate even when the latest snapshot already supplies the relevant information. Each snapshot also contains unnecessary operational metadata.
 
-## Two complementary solutions, demonstrated in live traffic
+This creates a compounding problem: **redundant context → faster context growth → earlier context exhaustion → more frequent compaction, history rebuilding or session resets → potential cache loss and increased inference usage.** A warm cache does not eliminate the context-window capacity consumed by redundant tokens. Depending on the harness and provider, rewriting or resetting the cached prefix can make those tokens expensive to process again.
 
-| Metric | Before | After | Reduction |
+We have working solutions for both the accumulation of redundant snapshots and the size of the context that remains.
+
+## User Impact — the win
+
+| Live observation | Before | After | Reduction |
 | --- | ---: | ---: | ---: |
-| Sampled input tokens | 14,805 | 6,381 | 56.9% |
-| Mean input growth per short exchange | 1,080 | 211 | 80.5% |
-| Runtime metadata block (characters, subsequent experiment) | 405 | 57 | 85.9% |
+| Sampled input tokens | 14,805 | 6,381 | **56.9%** |
+| Mean input growth per short exchange | 1,080 | 211 | **80.5%** |
+| Runtime metadata block, characters (subsequent experiment) | 405 | 57 | **85.9%** |
 
-- [Transient Turn Context v0.1 plugin](https://github.com/Animeleague/openclaw/tree/bank/transient-turn-context-v0.1-2026-11-27/live-bank/2026-11-27-transient-turn-context-v0.1): use the existing provider replay-policy hook to exclude historical typed runtime-context carriers while retaining the current carrier. Genuine conversation survives; recent-room recall passed.
-- [Prompt optimization V3.1](https://github.com/Animeleague/openclaw/blob/bank/prompt-optimisation-v3.1-2026-11-27/live-bank/2026-11-27-prompt-optimisation-v3.1/README.md): reduce redundant metadata at its source and separate stable policy from changing facts.
+The first experiment reclaimed 8,424 input tokens in an existing session without deleting genuine conversation history. Recent-room recall passed. At the measured average growth rates, an equivalent remaining context budget could accommodate approximately five times as many short exchanges before reaching its limit, assuming other inputs stay constant.
 
-The first limits accumulation; the second shrinks what remains. Preserve attribution, chronology, trust boundaries, tool permissions and checkpoint compatibility. No global removal of tool instructions or security policy is proposed.
+The second experiment reduces the overhead of the runtime context that remains. Together, they address both prompt size and its rate of growth.
 
-**The present work is more fundamental to context growth than our August owner/non-owner cache fix.** That earlier fix prevented avoidable cache invalidation when sender permissions changed. These two optimizations tackle unnecessary context accumulation on ordinary turns, even when the sender, permissions and tool catalog remain unchanged. A cache can be almost entirely warm and still contain thousands of redundant tokens occupying the context window. Unnecessary growth brings the agent to its context limit sooner, increasing pressure to compact, truncate or rebuild history and, depending on the harness, rotate or reset the session. These operations can disrupt cached prefixes and degrade conversational continuity. By preventing repeated snapshots from accumulating and shrinking the remaining metadata, we address both the size of the prompt and its rate of growth. This should also reduce avoidable context-limit interventions and associated cache rebuilds; their frequency has not yet been measured in a controlled long-running test. The August fix is evidence of our track record; the broader context-management improvements are the main contribution here. Their potential scope is greater, although comparative total usage savings across workloads have not been measured.
+The potential benefit is more meaningful conversation and task context, fewer context-limit interventions, better continuity, and fewer associated cache rebuilds. This is particularly important for smaller local models, but relevant to hosted models too. Actual reset frequency, latency and usage savings across workloads require longer controlled tests.
 
-## We had working solutions months ago
+## Why This Change Was Made
 
-This is not hindsight. On August 10, 2026, we submitted [upstream PR #121683](https://github.com/openclaw/openclaw/pull/121683), addressing the fact that owner/non-owner tool permissions changed the durable registered-tool schema and destabilized Codex thread reuse. Our solution separated durable advertised tools from actual per-turn execution authority.
+Two complementary working proofs of concept:
 
-An equivalent live patch preserved the same native thread and registered-tool fingerprint over six turns, with 98.30–99.83% cache reuse; non-owner turns retained 99.24% and 98.94% without gaining privileged execution rights. The PR was closed without merging on September 3. On August 14 we also created the public [Transient Tools plugin](https://github.com/Animeleague/openclaw-plugin-transient-tools), addressing persistent tool-history accumulation.
+1. [Transient Turn Context v0.1 plugin](https://github.com/Animeleague/openclaw/tree/bank/transient-turn-context-v0.1-2026-11-27/live-bank/2026-11-27-transient-turn-context-v0.1): uses the existing provider replay-policy hook to retain the current typed runtime-context carrier rather than replay historical carriers. No transcript deletion is required.
+2. [Prompt optimization V3.1](https://github.com/Animeleague/openclaw/blob/bank/prompt-optimisation-v3.1-2026-11-27/live-bank/2026-11-27-prompt-optimisation-v3.1/README.md): reduces redundant metadata at its source and separates stable policy from changing facts. This is a scoped, version-pinned runtime overlay.
 
-### Upstream subsequently adopted the same principle
+The objective is not to make agents remember less. It is to stop making them repeatedly read information they already have or cannot use. Preserve attribution, chronology, reply semantics, trust boundaries, actual execution permissions and checkpoint compatibility. Do not indiscriminately remove tool instructions or security policy.
 
-On October 17, 2026, **68 days after our submission**, upstream merged [PR #175309](https://github.com/openclaw/openclaw/pull/175309), explicitly addressing prompt-cache misses on non-owner turns. Its production telemetry identified owner/non-owner tool-list changes as the most frequent raw cause of cache drops. It kept tool definitions stable and enforced actual authority at execution time, the same architectural separation we demonstrated in August.
+## Evidence and limitations
 
-On November 26, 108 days after our submission, [upstream PR #206126](https://github.com/openclaw/openclaw/pull/206126) was opened to address remaining Codex native-thread rotation from tool catalog drift, again separating the durable catalog from per-turn execution authority. It was not merged as of November 27.
+November testing used OpenClaw 2026.11.10, Windows, local Gemma via openai-completions and tool-free Discord. Historical carriers fell from 6–9 to one. Derived warm-cache reuse decreased from 92.0% to 82.2%, and mean fresh tokens increased slightly from 1,092 to 1,216 in the first experiment. Subsequent metadata-experiment first-token times were approximately 97, 5 and 40 seconds; history changes and cache behavior confound these observations. The table reports distinct measurements, not a combined speedup.
 
-These public records establish the chronology and technical convergence, not code copying or identical implementations.
+Related cache investigation: https://github.com/openclaw/openclaw/issues/202001. The renamed transient-context package is locally tested but not independently live-installed; the overlay is tied to exact compiled bundles. Current upstream source integration, regression tests, tool-enabled and cross-provider validation, rollback and controlled combined benchmarks remain outstanding.
 
-The point is not merely that we identified a problem in August. We had implemented solutions and published measured evidence more than three months before this proposal. Today's work applies the same architectural principle to another context surface: durable state should not be inflated or destabilized by transient information.
+This is a draft design proposal, not a merge-ready runtime change. The branch is based on upstream main and contains only the proposal document, excluding unrelated fork commits and private recovery fixtures.
 
-## Evidence boundaries
+## Our track record: working solutions months before upstream
 
-November tests used OpenClaw 2026.11.10, Windows, local Gemma, openai-completions and tool-free Discord. Warm-cache reuse decreased from 92.0% to 82.2% in the first experiment, and mean fresh tokens rose slightly from 1,092 to 1,216. Subsequent metadata-experiment first-token times were approximately 97, 5 and 40 seconds; history and cache changes confound those measurements. The reductions in the table are distinct measurements, not a combined speedup. No universal latency or cost guarantee is made.
+On August 10, 2026, we submitted [upstream PR #121683](https://github.com/openclaw/openclaw/pull/121683), addressing a related defect: switching between an owner and a non-owner changed the registered dynamic-tool schema, destabilizing Codex native-thread reuse and prompt caching. We separated the stable advertised tool catalog from actual per-turn execution permissions.
 
-The generic renamed transient-context package is locally tested but not independently live-installed. The V3.1 overlay is version-pinned. This draft changes no runtime behavior. Source integration, regression tests, tool-enabled and cross-provider validation, rollback and controlled combined benchmarks are still needed. Related cache investigation: https://github.com/openclaw/openclaw/issues/202001. This branch is based on upstream main and excludes unrelated fork changes and private recovery fixtures.
+Our published live evidence demonstrated the same native thread and registered-tool fingerprint across six turns, including ownership changes. Non-owner turns retained 99.24% and 98.94% cache reuse without gaining privileged execution rights; across all six turns, cache reuse ranged from 98.30% to 99.83%, including an image turn.
+
+On August 14, we also created our public [Transient Tools plugin](https://github.com/Animeleague/openclaw-plugin-transient-tools) to address persistent tool-history accumulation. Our August PR was closed without merging on September 3. Its live evidence came from an equivalent deployed patch, not the exact PR checkout.
+
+### Upstream subsequently adopted the same architectural principle
+
+On October 17, 2026 — **68 days after our submission** — upstream merged [PR #175309: fix prompt cache misses on completion, heartbeat and non-owner turns](https://github.com/openclaw/openclaw/pull/175309). Its production telemetry identified owner/non-owner tool-list changes as the most frequent raw cause of cache drops. Across all measured causes over 14 days, it reported 925 drops involving 101 million cached tokens on one deployment and 247 drops involving 25.8 million on another.
+
+Its solution? Keep advertised tool definitions stable and enforce actual authority at execution time — the same architectural separation we demonstrated in August.
+
+On November 26 — 108 days after our submission — [upstream PR #206126](https://github.com/openclaw/openclaw/pull/206126) was opened to address remaining Codex native-thread rotation from internal-turn tool-catalog drift, again separating the durable catalog from per-turn execution authority. It was not merged as of November 27.
+
+**We had implemented, live-tested and published a solution in August. Upstream merged a fix based on the same principle in October.** The public records establish this chronology and technical convergence, not code copying or identical implementations.
+
+### Why today's work goes further
+
+Our August fix addressed cache invalidation caused by changing tool authority. Today's work addresses unnecessary context growth even when the sender, permissions and tool catalog remain unchanged.
+
+That is a more fundamental context-management problem: not merely whether existing context can be cached, but how much unnecessary context exists in the first place, how quickly it exhausts the window, and how often that forces operations that can drop the cache. The earlier fix establishes our track record. The broader context-growth optimizations are the main contribution here. Comparative total usage savings have not yet been measured.
 
 ## In summary: we have solutions, not just suggestions
 
-In August, we demonstrated a working solution to owner/non-owner cache instability. Sixty-eight days later, upstream merged a fix built on the same architectural principle. Today, we are presenting two complementary optimizations that go further: they address the growth and size of the context itself, rather than only cache invalidation triggered by changes in tool authority.
+We were right about separating durable model state from transient per-turn information in August. Today's independent results reinforce that principle and extend it to context growth itself.
 
-We've been using the general transient-turn approach in our Discord deployments for months, with an observed approximately threefold improvement in usage efficiency across our own operational experience, rather than a controlled benchmark of these two latest changes.
+We've been using the general transient-turn approach in our Discord deployments for months, with approximately threefold improvement in usage efficiency reported from our operational experience. This is not a controlled benchmark of the two November changes.
 
 **We were ahead of upstream on this architectural principle in August. We have working solutions to share again today.**
 
@@ -57,13 +79,13 @@ If upstream chooses not to adopt them, that's fine. We will continue benefiting 
 
 ## Our manifesto: human-level conversational intelligence and memory within 32k
 
-Our goal is a capable OpenClaw agent participating in ordinary, multi-user Discord conversation on consumer hardware. These engineering targets are for short conversational exchanges, not coding, research or tool-heavy workflows. The broader context-optimization principles can benefit other OpenClaw deployments, but their token budgets will differ.
+Our goal is a capable OpenClaw agent participating in ordinary multi-user Discord conversation on consumer hardware. These engineering targets are for short conversational exchanges, not coding, research or tool-heavy workflows:
 
-- **32,768-token context window:** remain useful within this budget, rather than relying on ever-larger windows.
-- **Under 100 tokens of average net prompt growth per ordinary short chat exchange:** preserve genuine conversation, not repeated bookkeeping.
+- **32,768-token context window:** remain useful within this budget.
+- **Under 100 tokens of average net prompt growth per short chat exchange:** preserve genuine conversation, not repeated bookkeeping.
 - **Under 500 fresh input tokens per typical warm short-chat request:** reuse stable context and minimize unnecessary prefill.
-- **Remove the fluff from bootstraps:** omit redundant or irrelevant instructions and metadata when they are not needed, while preserving useful capabilities and security boundaries.
+- **Remove the fluff from bootstraps:** omit redundant or irrelevant instructions and metadata when unneeded, while preserving useful capabilities and security boundaries.
 - **Long-term memory:** retrieve relevant facts and past interactions on demand rather than replaying the entire conversation.
 - **Human-level conversational judgment:** remember relevant details, distinguish speakers, and know when to speak or stay silent.
 
-These are proposed targets, not achieved benchmarks. Bigger context windows are not a substitute for better context engineering.
+These are targets, not achieved benchmarks. Bigger context windows are not a substitute for better context engineering.
