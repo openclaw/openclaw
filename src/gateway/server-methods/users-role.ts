@@ -3,13 +3,20 @@ import {
   type UsersListParams,
   type UsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import {
   readUserProfileSnapshot,
   prepareUserProfileCatalog,
 } from "../../state/user-profile-list.js";
-import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
+import {
+  setCanonicalUserProfileRole,
+  type UserProfileRoleChange,
+} from "../../state/user-profile-writes.js";
 import { listProfiles } from "../../state/user-profiles.js";
+import { stopWorkStartedBy } from "../chat-abort-stop-work.js";
 import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import {
   invalidateOperatorRolePolicy,
@@ -24,6 +31,38 @@ import {
   prepareUserProfileAdministration,
   resolveUserRoleAssignmentError,
 } from "./users-profile-access.js";
+
+const SESSION_ACCESS = ["none", "invited", "view", "suggest", "write"];
+
+/**
+ * A role write loses access when the new role drops an operator scope, an agent or session
+ * access the old role had. A role that cannot be resolved is not comparable, so it counts as
+ * a loss. Other role limits (tools, sandbox, projects) apply to the next request only.
+ */
+function roleChangeLosesAccess(cfg: OpenClawConfig, change: UserProfileRoleChange): boolean {
+  const roles = cfg.gateway?.roles;
+  const definition = (role: string | null): GatewayOperatorRoleDefinition | undefined => {
+    const name = role ?? roles?.default;
+    return name && roles && Object.hasOwn(roles.definitions, name)
+      ? roles.definitions[name]
+      : undefined;
+  };
+  const before = definition(change.previousRole);
+  const after = definition(change.role);
+  if (!before || !after) {
+    return before !== after;
+  }
+  return (
+    !roleScopesAllow({
+      role: "operator",
+      requestedScopes: before.scopes,
+      allowedScopes: after.scopes,
+    }) ||
+    (after.agents !== "*" &&
+      (before.agents === "*" || before.agents.some((agent) => !after.agents.includes(agent)))) ||
+    SESSION_ACCESS.indexOf(after.sessions.others) < SESSION_ACCESS.indexOf(before.sessions.others)
+  );
+}
 
 export async function handleUsersSetRole(
   options: Omit<GatewayRequestHandlerOptions, "params"> & { params: UsersSetRoleParams },
@@ -47,6 +86,7 @@ export async function handleUsersSetRole(
   }
   holdGatewayPolicyResponse(respond);
   let recorded: Promise<void> | undefined;
+  let lostAccess: string | undefined;
   const write = setCanonicalUserProfileRole(profileId, role, {
     assertCurrent: () => {
       assertCurrent();
@@ -64,6 +104,9 @@ export async function handleUsersSetRole(
     },
     onRoleChanged: (change) => {
       recorded = recordRoleAssignmentChange(change, options.client, context.logGateway);
+      if (roleChangeLosesAccess(context.getRuntimeConfig(), change)) {
+        lostAccess = change.profileId;
+      }
     },
   });
   // Committed history lands before the reply or a result-delivery error.
@@ -71,6 +114,10 @@ export async function handleUsersSetRole(
     () => recorded,
     () => recorded,
   );
+  // The new role is committed, so the person's next message is admitted against it.
+  if (lostAccess) {
+    await stopWorkStartedBy(context, { profileId: lostAccess, stopReason: "access-reduced" });
+  }
   respond(true, { profile: await write });
 }
 

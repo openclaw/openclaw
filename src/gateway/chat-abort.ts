@@ -69,6 +69,7 @@ import {
 } from "./chat-abort-lifecycle-internal.js";
 import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
 import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
+import { accessLossStopText } from "./operator-refusal.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import { createChatAbortMarker, type ChatRunState } from "./server-chat-state.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
@@ -518,7 +519,9 @@ export function abortChatRunById(
   }
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   if (!params.preserveTerminal && active.adapter.controlUiVisible !== false) {
-    const errorMessage = readToolValidationErrorSummary(active.adapter.toolErrorSummary);
+    const errorMessage =
+      readToolValidationErrorSummary(active.adapter.toolErrorSummary) ??
+      accessLossStopText(stopReason);
     const explicitAgentId = normalizeOptionalLowercaseString(identity.agentId);
     const defaultGlobalAgentId =
       sessionKey === "global" && !explicitAgentId
