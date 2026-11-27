@@ -7,9 +7,6 @@ extension OpenClawChatComposer {
            self.viewModel.composerCapabilityControlsAvailable
         {
             Divider()
-            Text("Tool changes apply to the next run.")
-                .font(OpenClawChatTypography.caption)
-            self.composerWebSearchButton
             self.composerSkillsMenu
             self.composerConnectorsMenu
             if self.viewModel.composerToolOverrides.overrideCount > 0 {
@@ -37,13 +34,6 @@ extension OpenClawChatComposer {
                 Text(reason)
                     .font(OpenClawChatTypography.caption)
             }
-            if !self.viewModel.composerCapabilitiesLoading,
-               !self.viewModel.composerCapabilityCatalog.webSearchAvailable,
-               self.viewModel.composerCapabilityErrorMessage == nil
-            {
-                Text("Web Search is unavailable on this Gateway.")
-                    .font(OpenClawChatTypography.caption)
-            }
             if let errorMessage = self.viewModel.composerCapabilityErrorMessage {
                 Text(errorMessage)
                     .font(OpenClawChatTypography.caption)
@@ -56,94 +46,35 @@ extension OpenClawChatComposer {
         }
     }
 
+    #if os(iOS)
+    /// One glyph for the session's permission mode. It opens the sheet that also holds the built-in
+    /// tools, so the composer never spells out a mode or a tool state.
     @ViewBuilder
-    var cleanInlinePermissionMenu: some View {
+    var cleanInlinePermissionButton: some View {
         if self.viewModel.composerCapabilityControlsAvailable {
-            Menu {
-                self.permissionButton(nil, title: String(localized: "Default (inherited)"))
-                ForEach(OpenClawChatPermissionMode.allCases, id: \.rawValue) { mode in
-                    self.permissionButton(mode, title: mode.displayName)
-                        .disabled(mode == .full && !self.viewModel.composerCapabilityCatalog.canSelectFullPermission)
-                }
-                if !self.viewModel.composerCapabilityCatalog.canSelectFullPermission {
-                    Text("You don’t have permission to turn on Full access.")
-                        .font(OpenClawChatTypography.caption)
-                }
+            let mode = self.viewModel.composerPermissionMode
+            Button {
+                self.showsPermissionsSheet = true
             } label: {
-                self.cleanInlinePermissionGlyph
+                // Full access carries the accent, as in the Control UI. The trailing padding sits the
+                // glyph 20 pt from the `+` instead of a full control width away.
+                ChatPermissionModeGlyph(mode: mode, size: 15)
+                    .foregroundStyle(mode == .full ? OpenClawChatTheme.accent : CleanChatComposerMetrics.footerInk)
+                    .padding(.trailing, 12)
                     .frame(
-                        width: CleanChatComposerMetrics.controlTouchSize,
+                        width: CleanChatComposerMetrics.glyphControlWidth,
                         height: CleanChatComposerMetrics.controlTouchSize)
                     // A full touch target that takes the gap after it, so no neighbor's target overlaps it.
                     .frame(width: CleanChatComposerMetrics.controlTouchSize, alignment: .leading)
                     .contentShape(Rectangle())
             }
-            .menuIndicator(.hidden)
-            .tint(OpenClawChatTheme.muted)
-            .disabled(
-                !self.viewModel.composerCapabilityCatalog.permissionMutationAvailable ||
-                    self.viewModel.composerCapabilityMutationDisabled)
+            .buttonStyle(.plain)
             .accessibilityLabel("Session permissions")
-            .accessibilityValue(
-                self.viewModel.composerPermissionMode?.displayName ?? String(localized: "Default (inherited)"))
-            .accessibilityHint(self.viewModel.composerPermissionMutationDisabledReason ?? "")
+            .accessibilityValue(mode?.displayName ?? String(localized: "Agent default"))
             .accessibilityIdentifier("chat-composer-inline-permissions")
         }
     }
-
-    private var cleanInlinePermissionGlyph: some View {
-        ZStack {
-            Image(systemName: "shield")
-                .font(.system(size: OpenClawChatTypography.scaled(18), weight: .semibold))
-            Image(systemName: self.cleanInlinePermissionOverlaySymbol)
-                .font(.system(size: OpenClawChatTypography.scaled(7), weight: .bold))
-                .offset(y: -1)
-        }
-        .foregroundStyle(.secondary)
-    }
-
-    private var cleanInlinePermissionOverlaySymbol: String {
-        switch self.viewModel.composerPermissionMode {
-        case .readOnly: "ellipsis"
-        case .guarded: "lock.fill"
-        case .workspace: "gearshape.fill"
-        case .full: "exclamationmark"
-        case nil: "checkmark"
-        }
-    }
-
-    private func permissionButton(
-        _ mode: OpenClawChatPermissionMode?,
-        title: String) -> some View
-    {
-        let isSelected = self.viewModel.composerPermissionMode == mode
-        return Button {
-            self.viewModel.selectComposerPermissionMode(mode)
-        } label: {
-            chatActionLabel(Text(title), systemImage: isSelected ? "checkmark.circle.fill" : "circle")
-        }
-        .accessibilityValue(isSelected ? String(localized: "Selected") : String(localized: "Not selected"))
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityHint(self.viewModel.composerPermissionDisabledReason(mode) ?? "")
-    }
-
-    private var composerWebSearchButton: some View {
-        let isEnabled = self.viewModel.composerWebSearchEnabled
-        return Button {
-            self.viewModel.toggleComposerWebSearch()
-        } label: {
-            chatActionLabel(Text("Web Search"), systemImage: isEnabled ? "checkmark.circle.fill" : "circle")
-        }
-        .disabled(
-            !self.viewModel.composerCapabilityCatalog.webSearchAvailable ||
-                !self.viewModel.composerCapabilityCatalog.webSearchBaseEnabled ||
-                !self.viewModel.composerCapabilityCatalog.toolOverrideMutationAvailable ||
-                self.viewModel.composerCapabilityMutationDisabled)
-        .accessibilityValue(isEnabled ? String(localized: "On") : String(localized: "Off"))
-        .accessibilityAddTraits(isEnabled ? .isSelected : [])
-        .accessibilityHint(self.viewModel.composerWebSearchMutationDisabledReason ?? "")
-        .accessibilityIdentifier("chat-composer-web-search")
-    }
+    #endif
 
     private var composerSkillsMenu: some View {
         Menu {
@@ -259,8 +190,10 @@ extension OpenClawChatComposer {
         .accessibilityAddTraits(isEnabled ? .isSelected : [])
     }
 
+    /// iOS shows these notices in the permissions sheet, not in the composer.
     @ViewBuilder
     var composerCapabilityNoticeRow: some View {
+        #if !os(iOS)
         if let notice = self.viewModel.composerCapabilityNotice {
             HStack(alignment: .center, spacing: 8) {
                 Image(systemName: "info.circle.fill")
@@ -291,5 +224,6 @@ extension OpenClawChatComposer {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("chat-composer-capability-notice")
         }
+        #endif
     }
 }

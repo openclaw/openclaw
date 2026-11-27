@@ -100,6 +100,22 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "accessibility-model-and-send-controls")
     }
 
+    func testChatComposerPermissionsOpensWithKeyboardVisible() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Phone composer")
+        self.launchApp(for: Self.chatScreenshotTarget)
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let permissions = app.buttons["chat-composer-inline-permissions"]
+        XCTAssertTrue(permissions.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        permissions.tap()
+
+        let defaultMode = app.buttons["chat-composer-permission-default"]
+        XCTAssertTrue(defaultMode.wait(for: \.isHittable, toEqual: true, timeout: 5))
+    }
+
     func testChatComposerReturnInsertsNewlineWithoutSending() throws {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat",
