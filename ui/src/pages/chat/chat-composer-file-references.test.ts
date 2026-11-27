@@ -16,22 +16,24 @@ import {
   renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { readComposerFileReferenceSource } from "./components/chat-composer-file-reference-options.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { acquireMissingGeometry } from "./composer-file-reference-destination.test-support.ts";
+import { readComposerFileReferenceSource } from "./composer-file-references.ts";
 
 afterEach(() => resetComposerFixture());
 
-it("revokes review consent and refreshes the retained owner's source on composer remount", () => {
+it("creates the review owner only on opt-in and revokes consent on composer remount", async () => {
   const originalClient = createTestGatewayClient(async () => ({}));
   const replacementClient = createTestGatewayClient(async () => ({}));
   const { container, props } = renderComposerFixture({ gatewayClient: originalClient });
   document.body.appendChild(container);
-  const owner = getChatComposerState(props.paneId).fileReferences!;
+  const pane = getChatComposerState(props.paneId);
+  expect(pane.fileReferences).toBeNull();
   const optIn = container.querySelector<HTMLInputElement>(".composer-file-references input")!;
   expect(optIn.checked).toBe(false);
   optIn.click();
-  expect(owner.enabled).toBe(true);
+  await waitForSolid(() => expect(pane.fileReferences?.enabled).toBe(true));
+  const owner = pane.fileReferences!;
   disposeComposer(container);
   const replacement = createComposerProps({
     ...props,
@@ -54,13 +56,12 @@ it("binds a captured source's outgoing requests to its exact gateway client", as
   const oldRequest = vi.fn(async () => ({ status: "released" }));
   const newRequest = vi.fn(async () => ({ status: "released" }));
   const original = createTestGatewayClient(oldRequest);
-  const replacement = createTestGatewayClient(newRequest);
   const props = createComposerProps({ gatewayClient: original, sessionKey: "old-session" });
   const source = readComposerFileReferenceSource(props, {
     editRevision: 7,
     composerTextarea: null,
   });
-  props.gatewayClient = replacement;
+  props.gatewayClient = createTestGatewayClient(newRequest);
   props.sessionKey = "new-session";
   const release = {
     schemaVersion: 1,
@@ -86,8 +87,6 @@ it("requires explicit conversion before goal editing can borrow and restore the 
   const reference = composerFileReferenceFixture;
   const draft = fileReferenceText(reference.reference);
   const goal = createSessionGoalFixture("goal-with-reference", "Revise this objective");
-  const onGoalDraftModeChange = vi.fn();
-  const onGoalSubmit = vi.fn(async () => true);
   const { container, props } = renderComposerFixture({
     draft: "reference file src/example.ts end reference",
     fileReferences: [],
@@ -100,8 +99,8 @@ it("requires explicit conversion before goal editing can borrow and restore the 
       goal,
     },
     onGoalAction: vi.fn(),
-    onGoalDraftModeChange,
-    onGoalSubmit,
+    onGoalDraftModeChange: vi.fn(),
+    onGoalSubmit: vi.fn(async () => true),
   });
   document.body.appendChild(container);
   await waitForSolid(() => expect(findComposerButton(container, "Edit goal")).toBeTruthy());
@@ -121,34 +120,38 @@ it("requires explicit conversion before goal editing can borrow and restore the 
   // Goal admission reads the current draft owner before the projected props flush.
   findComposerButton(container, "Edit goal").click();
   flush();
-  expect(onGoalDraftModeChange).not.toHaveBeenCalled();
-  expect(props.draft).toBe(draft);
-  expect(props.fileReferences).toEqual([reference]);
+  expect(props.onGoalDraftModeChange).not.toHaveBeenCalled();
+  expect(props).toMatchObject({ draft, fileReferences: [reference] });
   expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
   expect(container.querySelector('[role="alert"]')?.textContent).toContain(
     "Convert file references to plain text before sending",
   );
 
-  const convert = container.querySelector<HTMLButtonElement>(".composer-file-references button")!;
-  convert.click();
+  // A bound draft exposes Convert without a recognition owner or Gateway client.
+  expect(getChatComposerState(props.paneId).fileReferences).toBeNull();
+  const convert = () =>
+    container.querySelector<HTMLButtonElement>(".composer-file-references button");
+  await waitForSolid(() =>
+    expect(convert()?.textContent).toContain("Convert file references to plain text"),
+  );
+  convert()!.click();
   await waitForSolid(() => expect(props.fileReferences).toEqual([]));
   expect(props.draft).toBe(draft);
   const editor = EditorView.findFromDOM(container.querySelector<HTMLElement>(".cm-content")!)!;
-  expect(undo(editor)).toBe(true);
-  flush();
-  expect(props.draft).toBe(draft);
-  expect(props.fileReferences).toEqual([reference]);
-  expect(redo(editor)).toBe(true);
-  flush();
-  expect(props.draft).toBe(draft);
-  expect(props.fileReferences).toEqual([]);
+  for (const [change, fileReferences] of [
+    [undo, [reference]],
+    [redo, []],
+  ] as const) {
+    expect(change(editor)).toBe(true);
+    flush();
+    expect(props).toMatchObject({ draft, fileReferences });
+  }
   findComposerButton(container, "Edit goal").click();
   await waitForSolid(() => expect(findComposerButton(container, "Cancel goal entry")).toBeTruthy());
   expect(props.draft).toBe(goal.objective);
   findComposerButton(container, "Cancel goal entry").click();
   await waitForSolid(() => expect(container.querySelector(".agent-chat__goal-mode")).toBeNull());
-  expect(props.draft).toBe(draft);
-  expect(props.fileReferences).toEqual([]);
-  expect(onGoalSubmit).not.toHaveBeenCalled();
+  expect(props).toMatchObject({ draft, fileReferences: [] });
+  expect(props.onGoalSubmit).not.toHaveBeenCalled();
   expect(props.onSend).not.toHaveBeenCalled();
 });

@@ -14,7 +14,7 @@ import {
 } from "./chat-composer.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
-import { placeComposerDictation } from "./composer-dictation-session.ts";
+import { applyChatTranscript, placeComposerDictation } from "./composer-dictation-session.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -208,6 +208,7 @@ describe("renderChatComposer controls", () => {
     const finishActive = vi.spyOn(dictation, "finishActive").mockResolvedValue(true);
     // Commits arrive only after the capture module, which places transcripts, has loaded.
     vi.spyOn(dictation, "placeTranscript").mockImplementation(placeComposerDictation);
+    vi.spyOn(dictation, "applyChatTranscript", "get").mockReturnValue(applyChatTranscript);
     const update = vi.spyOn(dictation, "update");
     renderComposerInto(container, props);
     const commit = update.mock.lastCall?.[0].onCommit;
@@ -226,7 +227,7 @@ describe("renderChatComposer controls", () => {
       const transcript = await finalTranscript.promise;
       active.mockReturnValue(false);
       locked.mockReturnValue(false);
-      commit(transcript);
+      expect(commit(transcript)).toMatchObject({ target: input, text: transcript, complete: true });
       return true;
     });
     const input = textarea(container);

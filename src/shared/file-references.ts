@@ -7,7 +7,7 @@ export type {
   SessionsFilesReferencesParams,
 } from "../../packages/gateway-protocol/src/schema/sessions-file-references.js";
 export {
-  isFileReference,
   isFileReferenceCapability,
   isFileReferenceResult,
-} from "../../packages/gateway-protocol/src/compiled/file-reference.js";
+} from "../../packages/gateway-protocol/src/compiled/file-reference-provider.js";
+export { isFileReference } from "../../packages/gateway-protocol/src/compiled/file-reference.js";

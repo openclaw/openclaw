@@ -4,9 +4,9 @@ import { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as durableStore from "../../lib/chat/composer-draft-store.runtime.ts";
 import {
   captureChatOutboxRecoveryDestination as destinationFor,
-  readChatOutboxRecovery as recovery,
   restoreChatOutboxRecovery as restore,
-} from "../../lib/chat/outbox-recovery.ts";
+} from "../../lib/chat/outbox-recovery-actions.ts";
+import { readChatOutboxRecovery as recovery } from "../../lib/chat/outbox-recovery.ts";
 import { listStoredChatOutboxes as outboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission as capture,

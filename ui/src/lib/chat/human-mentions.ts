@@ -1,6 +1,6 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_HUMAN_MENTIONS } from "../../../../packages/gateway-protocol/src/human-mention-limits.js";
 import type { HumanMention } from "./chat-types.ts";
+import { isComposerSpan, mapComposerSpans } from "./composer-spans.ts";
 
 export { MAX_HUMAN_MENTIONS } from "../../../../packages/gateway-protocol/src/human-mention-limits.js";
 
@@ -38,7 +38,7 @@ export type HumanMentionInput = {
 // shared without allocating an array and copied recipient for every edited span.
 function isHumanMention(text: string, entry: unknown, previousEnd: number): entry is HumanMention {
   if (
-    !isRecord(entry) ||
+    !isComposerSpan(entry, previousEnd, text.length) ||
     (entry.access !== undefined &&
       entry.access !== "read" &&
       entry.access !== "suggest" &&
@@ -46,13 +46,6 @@ function isHumanMention(text: string, entry: unknown, previousEnd: number): entr
     typeof entry.profileId !== "string" ||
     !entry.profileId.trim() ||
     entry.profileId.length > 256 ||
-    typeof entry.start !== "number" ||
-    !Number.isSafeInteger(entry.start) ||
-    typeof entry.end !== "number" ||
-    !Number.isSafeInteger(entry.end) ||
-    entry.start < previousEnd ||
-    entry.end <= entry.start + 1 ||
-    entry.end > text.length ||
     text[entry.start] !== "@" ||
     /[\p{L}\p{N}\p{M}_@.%+-]/u.test(text[entry.start - 1] ?? "") ||
     !text.slice(entry.start + 1, entry.end).trim()
@@ -133,8 +126,7 @@ export function updateHumanMentions(
   if ((!input && previous === next) || mentions.length === 0) {
     return restoreHumanMentions(next, mentions);
   }
-  let start: number | undefined;
-  let previousEnd = 0;
+  let exact: { start: number; end: number } | undefined;
   // Use the supplied edit before scanning the draft. Native undo exposes only a
   // caret, whereas the rich editor supplies its exact inverse range.
   if (input?.value === previous && (editorInput || !input.inputType.startsWith("history"))) {
@@ -155,44 +147,11 @@ export function updateHumanMentions(
       previous.slice(0, inputStart) === next.slice(0, inputStart) &&
       previous.slice(inputEnd) === next.slice(inputStart + inserted)
     ) {
-      start = inputStart;
-      previousEnd = inputEnd;
+      exact = { start: inputStart, end: inputEnd };
     }
   }
-  if (start === undefined) {
-    start = 0;
-    while (start < previous.length && start < next.length && previous[start] === next[start]) {
-      start += 1;
-    }
-    let suffix = 0;
-    const sharedLength = Math.min(previous.length, next.length);
-    while (
-      suffix < sharedLength &&
-      previous[previous.length - suffix - 1] === next[next.length - suffix - 1]
-    ) {
-      suffix += 1;
-    }
-    previousEnd = previous.length - suffix;
-    // Repeated labels are ambiguous without an exact range. Invalidate the union
-    // of possible edits rather than guessing which person was changed.
-    if (start + suffix > sharedLength) {
-      previousEnd = start + Math.max(0, previous.length - next.length);
-      start = sharedLength - suffix;
-    }
-  }
-  const delta = next.length - previous.length;
-  const shifted = mentions.flatMap((mention) => {
-    if (mention.end <= start) {
-      // Typing into the end of a selected label edits that label, not its identity.
-      return mention.end === start && /[\p{L}\p{N}\p{M}_-]/u.test(next[start] ?? "")
-        ? []
-        : [mention];
-    }
-    if (mention.start >= previousEnd) {
-      return [{ ...mention, start: mention.start + delta, end: mention.end + delta }];
-    }
-    return [];
-  });
+  // A word character appended to a selected person edits the label, not its identity.
+  const shifted = mapComposerSpans(previous, next, mentions, exact, /[\p{L}\p{N}\p{M}_-]/u);
   // Invalidate only the tokens this edit broke; unrelated recipients survive.
   return restoreHumanMentions(
     next,

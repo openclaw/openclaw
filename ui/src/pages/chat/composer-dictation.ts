@@ -5,6 +5,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import type {
   ComposerDictationCommits,
+  ComposerDictationReview,
   ComposerDictationSession,
   placeComposerDictation,
 } from "./composer-dictation-session.ts";
@@ -21,7 +22,7 @@ type ComposerDictationFailure = {
   preservesText: boolean;
 };
 
-type ComposerDictationOwnerOptions = {
+export type ComposerDictationOwnerOptions = {
   client: GatewayBrowserClient | null;
   sessionKey?: string;
   prepareSession?: () => Promise<string | undefined>;
@@ -31,9 +32,7 @@ type ComposerDictationOwnerOptions = {
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
   onCommit: (text: string, late?: true, preservePreview?: true) => DictationReferenceReceipt | void;
-  onCapture?: () =>
-    | ((receipt: DictationReferenceReceipt | undefined, final: boolean) => void)
-    | undefined;
+  onCapture?: () => ComposerDictationReview | undefined;
   onCancelCapture?: () => void;
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
@@ -57,10 +56,6 @@ export class ComposerDictationOwner extends EventTarget {
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   // Created with the lazy capture module, before the first transcript exists.
   private commits: ComposerDictationCommits | undefined;
-  private readonly capturedReviews = new WeakMap<
-    ComposerDictationSession,
-    ReturnType<NonNullable<ComposerDictationOwnerOptions["onCapture"]>>
-  >();
   private disposed = false;
 
   constructor(private options: ComposerDictationOwnerOptions) {
@@ -101,6 +96,10 @@ export class ComposerDictationOwner extends EventTarget {
     ...args: Parameters<typeof placeComposerDictation>
   ): ReturnType<typeof placeComposerDictation> | undefined {
     return this.commits?.place(...args);
+  }
+
+  get applyChatTranscript() {
+    return this.commits?.applyChatTranscript;
   }
 
   get inputLevel(): RealtimeTalkLevelSignal | undefined {
@@ -387,9 +386,9 @@ export class ComposerDictationOwner extends EventTarget {
           },
         },
         { sessionKey },
+        review,
       );
       this.session = session;
-      this.capturedReviews.set(session, review);
       await session.start();
     } catch (error) {
       if (this.captureStart !== captureStart || this.disposed || this.finalizing) {
@@ -424,30 +423,25 @@ export class ComposerDictationOwner extends EventTarget {
     }
     // Capture and typing unlock immediately. Stopped recordings retain ownership
     // and commit in capture order, even when a later provider finishes first.
-    const review = this.capturedReviews.get(session);
-    const committed = this.commits!.add(
-      session,
-      (lateTranscript, final) => {
-        this.releasePlayback();
-        this.pendingCommitsChanged();
-        if (
-          !lateTranscript ||
-          !wasActive ||
-          this.disposed ||
-          !this.options.enabled ||
-          this.options.realtimeTalkActive
-        ) {
-          return false;
-        }
-        const receipt = this.active
-          ? this.options.onCommit(lateTranscript, true, true)
-          : this.options.onCommit(lateTranscript, true);
-        review?.(receipt ?? undefined, final);
-        this.dispatchEvent(new Event("change"));
-        return true;
-      },
-      Boolean(review),
-    );
+    const committed = this.commits!.add(session, (lateTranscript, final) => {
+      this.releasePlayback();
+      this.pendingCommitsChanged();
+      if (
+        !lateTranscript ||
+        !wasActive ||
+        this.disposed ||
+        !this.options.enabled ||
+        this.options.realtimeTalkActive
+      ) {
+        return false;
+      }
+      const receipt = this.active
+        ? this.options.onCommit(lateTranscript, true, true)
+        : this.options.onCommit(lateTranscript, true);
+      session.review?.(receipt ?? undefined, final);
+      this.dispatchEvent(new Event("change"));
+      return true;
+    });
     this.pendingCommitsChanged();
     return committed;
   }

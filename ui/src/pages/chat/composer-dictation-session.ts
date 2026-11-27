@@ -5,8 +5,12 @@ import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictation.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
+import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
+import type { ChatComposerProps, ChatComposerState } from "./components/chat-composer-types.ts";
+import type { DictationReferenceReceipt } from "./composer-file-references.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -30,6 +34,11 @@ type DictationSessionResult = {
     inputSampleRateHz?: unknown;
   };
 };
+
+export type ComposerDictationReview = (
+  receipt: DictationReferenceReceipt | undefined,
+  final: boolean,
+) => void;
 
 type ComposerDictationSessionCallbacks = {
   onError: (message: string, preservesText: boolean) => void;
@@ -65,6 +74,7 @@ export class ComposerDictationCommits {
   private tail: Promise<unknown> = Promise.resolve();
   // Consumers place delivered and preview transcripts in their drafts.
   readonly place = placeComposerDictation;
+  readonly applyChatTranscript = applyChatTranscript;
 
   get size(): number {
     return this.sessions.size;
@@ -78,11 +88,10 @@ export class ComposerDictationCommits {
   add(
     session: ComposerDictationSession,
     deliver: (transcript: string, final: boolean) => boolean,
-    requireFinality = false,
   ): Promise<boolean> {
     const previous = this.tail;
     this.sessions.add(session);
-    if (requireFinality) {
+    if (session.review) {
       session.trackFinality();
     }
     const settled = session
@@ -91,7 +100,7 @@ export class ComposerDictationCommits {
       .then(async (transcript) => {
         // Keep the session owned until its close receipt settles, so cancellation
         // and disconnect still reach it while a final transcript is already here.
-        const final = requireFinality ? await session.finalized() : false;
+        const final = session.review ? await session.finalized() : false;
         await previous;
         return this.sessions.delete(session) && deliver(transcript, final);
       })
@@ -178,6 +187,62 @@ export function placeComposerDictation(
   };
 }
 
+// Chat supplies its draft writer; other capture surfaces need not load Chat state.
+export function applyChatTranscript(
+  props: ChatComposerProps,
+  state: ChatComposerState,
+  commitDraft: (props: ChatComposerProps, value: string) => void,
+  transcript: string,
+  late?: true,
+  preservePreview?: true,
+): DictationReferenceReceipt | undefined {
+  const target = state.composerTextarea;
+  const captured = state.dictationSelection;
+  // A newer recording may be painting a partial over its captured draft.
+  const liveValue = preservePreview
+    ? (captured?.value ?? props.getDraft?.() ?? props.draft)
+    : (target?.value ?? props.getDraft?.() ?? props.draft);
+  const insertion = placeComposerDictation(
+    transcript,
+    captured,
+    {
+      start: target?.selectionStart ?? liveValue.length,
+      end: target?.selectionEnd ?? liveValue.length,
+      value: liveValue,
+      maxLength: target?.maxLength,
+    },
+    late,
+    preservePreview,
+  );
+  if (target) {
+    target.value = insertion.value;
+    adjustTextareaHeight(target);
+  }
+  commitDraft(props, insertion.value);
+  state.dictationSelection = insertion.captured;
+  queueMicrotask(() => {
+    const textarea = state.composerTextarea;
+    if (!textarea || textarea !== target) {
+      return;
+    }
+    focusComposerInput(textarea, { preventScroll: true });
+    selectComposerInput(textarea, insertion.caret, insertion.caret);
+  });
+  if (!target) {
+    return undefined;
+  }
+  const text = insertion.value.slice(insertion.from, insertion.to);
+  return {
+    target,
+    text,
+    complete: text === transcript.trim(),
+    from: insertion.from,
+    to: insertion.to,
+    previousValue: insertion.previousValue,
+    value: insertion.value,
+  };
+}
+
 export function describeDictationStartError(error: unknown): [string, "busy" | "start"] {
   // Stopped recordings hold their Gateway sessions until transcribed; a full
   // connection refuses the next one before its microphone opens.
@@ -232,6 +297,7 @@ export class ComposerDictationSession {
       inputDeviceId?: string;
       silenceTimeoutMs?: number;
     },
+    readonly review?: ComposerDictationReview,
   ) {}
 
   start(): Promise<void> {

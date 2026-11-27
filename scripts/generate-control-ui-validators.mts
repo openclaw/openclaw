@@ -63,7 +63,8 @@ type Group =
   | "board"
   | "history-state"
   | "sender-identity"
-  | "file-reference";
+  | "file-reference"
+  | "file-reference-provider";
 const additionalLintRules: Partial<Record<Group, string[]>> = {
   activity: ["eslint/curly"],
   approvals: ["unicorn/no-useless-length-check"],
@@ -79,13 +80,13 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     "FileReferenceCapability",
     FileReferenceCapabilitySchema,
     'import("../schema/sessions-file-references.js").FileReferenceCapability',
-    "file-reference",
+    "file-reference-provider",
   ],
   [
     "FileReferenceResult",
     FileReferenceResultSchema,
     'import("../schema/sessions-file-references.js").FileReferenceResult',
-    "file-reference",
+    "file-reference-provider",
   ],
   [
     "BoardSnapshot",
@@ -261,6 +262,7 @@ async function main() {
     "history-state",
     "sender-identity",
     "file-reference",
+    "file-reference-provider",
     "board",
   ] as const) {
     const selected = validators.filter((entry) => entry[3] === group);
@@ -270,6 +272,7 @@ async function main() {
       "approvals",
       "session-input",
       "file-reference",
+      "file-reference-provider",
     ].includes(group);
     const compiled = await compileStandaloneValidators(
       selected.map(([name, schema]) => ({
@@ -314,7 +317,9 @@ async function main() {
       ["d.ts", declaration],
     ]) {
       const outputPath =
-        group === "sender-identity" || group === "file-reference"
+        group === "sender-identity" ||
+        group === "file-reference" ||
+        group === "file-reference-provider"
           ? `packages/gateway-protocol/src/compiled/${group}.${extension}`
           : `${outputBase}/${group}.${extension}`;
       const generatedHeader = standaloneValidatorHeader("pnpm ui:validators:gen", {

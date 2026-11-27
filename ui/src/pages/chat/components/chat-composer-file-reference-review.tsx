@@ -3,10 +3,34 @@ import { registerChatFileReferenceReviewEnglish } from "../../../i18n/locales/en
 import { fileReferenceText } from "../../../lib/chat/file-references.ts";
 import { focusComposerInput } from "../../../lib/composer-input.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import type { ComposerFileReferenceOwner } from "../composer-file-references.ts";
+import {
+  ComposerFileReferenceOwner,
+  readComposerFileReferenceSource,
+} from "../composer-file-references.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
-export { ComposerFileReferenceOwner } from "../composer-file-references.ts";
+/** The click is consent for this presenter, not one that arrived while its code was loading. */
+export function activateComposerFileReferences(
+  composer: ChatComposerProps,
+  state: ChatComposerState,
+  expected: Pick<ChatComposerProps, "gatewayClient" | "sessionKey" | "currentAgentId">,
+) {
+  if (
+    composer.gatewayClient !== expected.gatewayClient ||
+    composer.sessionKey !== expected.sessionKey ||
+    composer.currentAgentId !== expected.currentAgentId
+  ) {
+    return null;
+  }
+  const read = () => readComposerFileReferenceSource(composer, state);
+  const source = read();
+  if (!source.connected || !source.eligible) {
+    return null;
+  }
+  const owner = (state.fileReferences ??= new ComposerFileReferenceOwner(read));
+  owner.enable(true);
+  return owner;
+}
 
 registerEnglishCatalog(registerChatFileReferenceReviewEnglish);
 

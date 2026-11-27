@@ -2,9 +2,3 @@
 export function isFileReference(
   value: unknown,
 ): value is import("../schema/sessions-file-references.js").FileReference;
-export function isFileReferenceCapability(
-  value: unknown,
-): value is import("../schema/sessions-file-references.js").FileReferenceCapability;
-export function isFileReferenceResult(
-  value: unknown,
-): value is import("../schema/sessions-file-references.js").FileReferenceResult;

@@ -54,6 +54,12 @@ import type { SlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
 import type { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 
+export type ComposerFileReferenceControlsProps = {
+  composer: ChatComposerProps;
+  state: ChatComposerState;
+  mountedOwner: Signal<ComposerFileReferenceOwner | null>;
+};
+
 type ChatQueuedEditProps = {
   editingId: string | null;
   editingText?: string;
@@ -223,7 +229,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
     component: typeof ChatPaneModelControl;
   };
   footerContent?: JSX.Element;
-  fileReferenceControls?: Component<{ composer: ChatComposerProps; state: ChatComposerState }>;
+  fileReferenceControls?: Component<ComposerFileReferenceControlsProps>;
   /** False while the pane is retained but hidden; plugin composer actions retire then. */
   pluginActionsPresented?: boolean;
   composerRecovery?:

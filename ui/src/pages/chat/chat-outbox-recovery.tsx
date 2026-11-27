@@ -5,12 +5,9 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import type { DurableComposerRecoveryEntry } from "../../lib/chat/composer-draft-store.runtime.ts";
 import "../../styles/chat/outbox-recovery.css";
+import type * as RecoveryActions from "../../lib/chat/outbox-recovery-actions.ts";
 import {
-  captureChatOutboxRecoveryDestination,
-  discardChatOutboxRecovery,
   readChatOutboxRecovery,
-  restoreChatOutboxRecovery,
-  retireDeliveredChatOutboxRecovery,
   type ChatOutboxRecoveryEntry,
 } from "../../lib/chat/outbox-recovery.ts";
 import {
@@ -28,10 +25,10 @@ import { chatRunPresentation } from "./chat-run-presentation.ts";
 registerEnglishCatalog(registerChatComposerEnglish);
 
 type RecoveryEntry = ChatOutboxRecoveryEntry | DurableComposerRecoveryEntry;
-type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &
+type RecoveryHost = Parameters<typeof RecoveryActions.captureChatOutboxRecoveryDestination>[0] &
   Required<
     Pick<
-      Parameters<typeof captureChatOutboxRecoveryDestination>[0],
+      Parameters<typeof RecoveryActions.captureChatOutboxRecoveryDestination>[0],
       "sessionKey" | "chatAttachments" | "chatQueue" | "chatMessages"
     >
   > & {
@@ -59,6 +56,8 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
   // Ordinary error writes settle with the action; hide prior feedback during its retry.
   const error = () => (busy() ? "" : failure());
   const rows = createMemo(() => [...entries(), ...drafts()]);
+  // Discovery stays synchronous. Only a real recovery row needs the identity-preserving transfer code.
+  let actions: typeof RecoveryActions | undefined;
   let generation = 0;
   let refreshQueued = false;
   let active = true;
@@ -126,7 +125,13 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
       let recovery = host ? readChatOutboxRecovery(host) : null;
       let retirementError = "";
       if (host && recovery?.entries.length) {
-        const result = retireDeliveredChatOutboxRecovery(host, recovery.entries);
+        if (!actions) {
+          actions = await import("../../lib/chat/outbox-recovery-actions.ts");
+          if (request !== generation || !isConnected()) {
+            return;
+          }
+        }
+        const result = actions.retireDeliveredChatOutboxRecovery(host, recovery.entries);
         if (result !== "unchanged") {
           recovery = readChatOutboxRecovery(host);
         }
@@ -144,6 +149,12 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
       if (result.status === "storage-failed") {
         throw new Error("storage-failed");
       }
+      if (result.entries.length && !actions) {
+        actions = await import("../../lib/chat/outbox-recovery-actions.ts");
+        if (request !== generation || !isConnected()) {
+          return;
+        }
+      }
       setDrafts(result.entries);
       setError(retirementError || (recovery?.blocked ? t("chat.outboxRecoveryFull") : ""));
     } catch {
@@ -156,9 +167,10 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
   const commitRecovery = action(function* (entry: RecoveryEntry, operation: "restore" | "discard") {
     const host = props.host;
     const owner = readOwner();
-    if (!host || !owner || changeInFlight || !isConnected()) {
+    if (!host || !owner || !actions || changeInFlight || !isConnected()) {
       return undefined;
     }
+    const transfer = actions;
     const identity = props.identity;
     const client = host.client;
     const sessionId = host.currentSessionId;
@@ -198,9 +210,9 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
         if (!confirmed || !isCurrent()) {
           return undefined;
         }
-        let result: ReturnType<typeof discardChatOutboxRecovery>;
+        let result: ReturnType<typeof transfer.discardChatOutboxRecovery>;
         if ("id" in entry) {
-          result = discardChatOutboxRecovery(host, entry, isCurrent);
+          result = transfer.discardChatOutboxRecovery(host, entry, isCurrent);
         } else {
           const store: Awaited<typeof draftStore> = yield loadDraftStore();
           const discarded: Awaited<ReturnType<typeof store.discardDurableComposerRecovery>> =
@@ -227,7 +239,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
         return undefined;
       }
       const scope = resolveUiConversationIdentity(host, host.sessionKey);
-      const destination = captureChatOutboxRecoveryDestination(host, scope);
+      const destination = transfer.captureChatOutboxRecoveryDestination(host, scope);
       const durableScope = { ...owner, scopeKey: `chat:v3:${storedChatOutboxScopeKey(scope)}` };
       const store: Awaited<typeof draftStore> = yield loadDraftStore();
       const before: Awaited<ReturnType<typeof store.readDurableComposerDraft>> =
@@ -260,10 +272,10 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
         return undefined;
       }
       let result:
-        | ReturnType<typeof restoreChatOutboxRecovery>
+        | ReturnType<typeof transfer.restoreChatOutboxRecovery>
         | Awaited<ReturnType<typeof store.restoreDurableComposerRecovery>>["status"];
       if ("id" in entry) {
-        result = restoreChatOutboxRecovery(host, entry, destination, before.revision ?? 0);
+        result = transfer.restoreChatOutboxRecovery(host, entry, destination, before.revision ?? 0);
       } else {
         const restored: Awaited<ReturnType<typeof store.restoreDurableComposerRecovery>> =
           yield store.restoreDurableComposerRecovery(
@@ -273,7 +285,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
             before.writeId,
             () =>
               isCurrent() &&
-              JSON.stringify(captureChatOutboxRecoveryDestination(host, scope)) ===
+              JSON.stringify(transfer.captureChatOutboxRecoveryDestination(host, scope)) ===
                 JSON.stringify(destination),
             destination.revision,
           );

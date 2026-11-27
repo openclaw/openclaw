@@ -1,5 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isFileReference, type FileReference } from "../../../../src/shared/file-references.js";
+import { isFileReference } from "../../../../packages/gateway-protocol/src/compiled/file-reference.js";
+import type { FileReference } from "../../../../src/shared/file-references.js";
+import { isComposerSpan, mapComposerSpans } from "./composer-spans.ts";
 
 export type ComposerFileReference = {
   start: number;
@@ -28,14 +30,7 @@ export function readComposerFileReferences(
   let end = 0;
   for (const entry of value) {
     if (
-      !isRecord(entry) ||
-      typeof entry.start !== "number" ||
-      !Number.isSafeInteger(entry.start) ||
-      typeof entry.end !== "number" ||
-      !Number.isSafeInteger(entry.end) ||
-      entry.start < end ||
-      entry.end <= entry.start ||
-      entry.end > text.length ||
+      !isComposerSpan(entry, end, text.length) ||
       !isFileReference(entry.reference) ||
       text.slice(entry.start, entry.end) !== fileReferenceText(entry.reference)
     ) {
@@ -77,36 +72,9 @@ export function updateComposerFileReferences(
   if (selected) {
     return selected;
   }
-  if (previous === next) {
-    return references;
-  }
-  let start = 0;
-  while (start < previous.length && start < next.length && previous[start] === next[start]) {
-    start += 1;
-  }
-  let suffix = 0;
-  const shared = Math.min(previous.length, next.length);
-  while (
-    suffix < shared &&
-    previous[previous.length - suffix - 1] === next[next.length - suffix - 1]
-  ) {
-    suffix += 1;
-  }
-  let previousEnd = previous.length - suffix;
-  if (start + suffix > shared) {
-    previousEnd = start + Math.max(0, previous.length - next.length);
-    start = shared - suffix;
-  }
-  const delta = next.length - previous.length;
-  return references.flatMap((reference) => {
-    if (reference.end <= start) {
-      return [reference];
-    }
-    if (reference.start >= previousEnd) {
-      return [{ ...reference, start: reference.start + delta, end: reference.end + delta }];
-    }
-    return [];
-  });
+  return !references.length || previous === next
+    ? references
+    : mapComposerSpans(previous, next, references);
 }
 
 /** A future identity schema must not be erased by a reader that cannot decode it. */

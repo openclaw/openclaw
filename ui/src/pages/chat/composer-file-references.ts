@@ -15,6 +15,8 @@ import {
   recognizeDictatedFileReferences,
   type DictatedFileCommand,
 } from "../../lib/dictation-file-references.ts";
+import { isComposerFileReferenceEligible } from "./components/chat-composer-file-reference-options.ts";
+import type { ChatComposerProps, ChatComposerState } from "./components/chat-composer-types.ts";
 
 export type FileReferenceSource = {
   client: object | null;
@@ -28,6 +30,29 @@ export type FileReferenceSource = {
   eligible: boolean;
   request(params: SessionsFilesReferencesParams): Promise<unknown>;
 };
+
+export function readComposerFileReferenceSource(
+  props: ChatComposerProps,
+  state: Pick<ChatComposerState, "editRevision" | "composerTextarea">,
+): FileReferenceSource {
+  const client = props.gatewayClient ?? null;
+  return {
+    client,
+    connected: props.connected,
+    sessionKey: props.sessionKey,
+    agentId: props.currentAgentId,
+    draft: props.getDraft?.() ?? props.draft,
+    revision: state.editRevision,
+    target: state.composerTextarea,
+    // The opt-in control explicitly selects the English command grammar.
+    locale: "en-US",
+    eligible: isComposerFileReferenceEligible(props),
+    request: (params) =>
+      client
+        ? client.request("sessions.files.references", params)
+        : Promise.reject(new Error("File reference provider unavailable")),
+  };
+}
 
 export type DictationReferenceReceipt = {
   target: HTMLTextAreaElement;
@@ -124,6 +149,14 @@ export class ComposerFileReferenceOwner {
     private readSource: () => FileReferenceSource,
     private readonly prepare = prepareFileReferenceDestination,
   ) {}
+
+  get source() {
+    return this.readSource();
+  }
+
+  bindComposer(props: ChatComposerProps, state: ChatComposerState) {
+    this.rebind(() => readComposerFileReferenceSource(props, state));
+  }
 
   /** A remounted presenter supplies fresh props and must obtain fresh consent. */
   rebind(readSource: () => FileReferenceSource) {

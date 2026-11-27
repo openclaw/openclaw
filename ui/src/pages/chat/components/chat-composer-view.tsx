@@ -40,7 +40,11 @@ import { presentComposerTasks } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { ComposerTaskSlot } from "./chat-composer-task-slot.tsx";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
-import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import type {
+  ChatComposerProps,
+  ChatComposerState,
+  ComposerFileReferenceControlsProps,
+} from "./chat-composer-types.ts";
 import { ComposerWidthEdge, prepareComposerWidthEdge } from "./chat-composer-width-ref.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
@@ -80,6 +84,7 @@ export function renderChatComposerView(
   context: () => ChatComposerViewContext,
   props: ChatComposerProps,
   state: ChatComposerState,
+  mountedReferenceOwner: ComposerFileReferenceControlsProps["mountedOwner"],
 ) {
   const footerControl = createFooterControlRef();
   let restoreFocusFor: string | undefined;
@@ -279,7 +284,9 @@ export function renderChatComposerView(
         <div class="chat-footer__context" ref={(element) => (state.composerContext = element)}>
           {props.footerContent}
           <Show when={props.fileReferenceControls} keyed>
-            {(Controls) => <Controls composer={props} state={state} />}
+            {(Controls) => (
+              <Controls composer={props} state={state} mountedOwner={mountedReferenceOwner} />
+            )}
           </Show>
           <ComposerTaskSlot
             state={state}

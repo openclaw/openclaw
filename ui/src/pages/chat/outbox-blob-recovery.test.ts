@@ -7,9 +7,9 @@ import type { ChatQueueItem, ChatSelectionAnnotation } from "../../lib/chat/chat
 import * as payloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {
   captureChatOutboxRecoveryDestination as captureDestination,
-  readChatOutboxRecovery as readRecovery,
   restoreChatOutboxRecovery as restoreRecovery,
-} from "../../lib/chat/outbox-recovery.ts";
+} from "../../lib/chat/outbox-recovery-actions.ts";
+import { readChatOutboxRecovery as readRecovery } from "../../lib/chat/outbox-recovery.ts";
 import { listStoredChatOutboxes as listOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   readStoredOutboxStore as readStore,
