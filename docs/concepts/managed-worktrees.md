@@ -956,7 +956,7 @@ Administrators can inspect the preservation reason with `openclaw worktrees list
 
 One missing-object failure pauses further idle snapshots for the shared repository, including sibling checkouts in the same sweep. Pack consolidation independently verifies only the bounded batch it may retire; missing snapshot objects do not force a full repository integrity scan or block healthy packs. Capacity eviction honors recorded backoff and terminal preservation, and refuses removal when snapshot capture fails. No database migration is required.
 
-If a worktree's source repository path no longer exists (for example, the repository was deleted), cleanup skips its orphan-branch discovery and Git maintenance instead of reporting a failure on every pass. Registry rows, snapshots, and recovery refs keep their ownership, and both resume when the repository path returns.
+If a worktree's source repository path no longer exists (for example, the repository was deleted), cleanup skips its orphan-branch discovery and Git maintenance instead of reporting a failure on every pass. Skipping them changes no registry rows, snapshots, or recovery refs, and normal snapshot expiry still applies. Both steps resume when the repository path returns while a registry row still refers to it. If a running Gateway had already suspended that repository's Git maintenance before the path went missing, run `openclaw worktrees gc --retry-deferred` or restart the Gateway after restoring it.
 
 Listing and cleanup mark a missing checkout as removed only if its recorded path, activity, and repository identity still match the earlier check. A restore or repository repair that completes during that check preserves the newer live record.
 
