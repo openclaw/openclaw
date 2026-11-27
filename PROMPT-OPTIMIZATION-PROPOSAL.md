@@ -78,16 +78,3 @@ We've been using the general transient-turn approach in our Discord deployments 
 **We were ahead of upstream on this architectural principle in August. We have working solutions to share again today.**
 
 If upstream chooses not to adopt them, that's fine. We will continue benefiting from and developing them ourselves. We're sharing this work because the wider OpenClaw community could benefit too.
-
-## Our manifesto: human-level conversational intelligence and memory within 32k
-
-Our goal is a capable OpenClaw agent participating in ordinary multi-user Discord conversation on consumer hardware. These engineering targets are for short conversational exchanges, not coding, research or tool-heavy workflows:
-
-- **32,768-token context window:** remain useful within this budget.
-- **Under 100 tokens of average net prompt growth per short chat exchange:** preserve genuine conversation, not repeated bookkeeping.
-- **Under 500 fresh input tokens per typical warm short-chat request:** reuse stable context and minimize unnecessary prefill.
-- **Remove the fluff from bootstraps:** omit redundant or irrelevant instructions and metadata when unneeded, while preserving useful capabilities and security boundaries.
-- **Long-term memory:** retrieve relevant facts and past interactions on demand rather than replaying the entire conversation.
-- **Human-level conversational judgment:** remember relevant details, distinguish speakers, and know when to speak or stay silent.
-
-These are targets, not achieved benchmarks. Bigger context windows are not a substitute for better context engineering.
