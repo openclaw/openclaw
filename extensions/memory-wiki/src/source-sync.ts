@@ -1,3 +1,4 @@
+import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import {
@@ -135,7 +136,8 @@ export function refreshMemoryWikiImportedSources(
   params: { config: ResolvedMemoryWikiConfig; appConfig?: OpenClawConfig; signal: AbortSignal },
   onError: (error: unknown) => void,
 ): void {
-  void syncMemoryWikiImportedSources(params).catch((error: unknown) => {
+  // Detach from the request's async scope, which closes once the response is sent.
+  void runInDetachedAsyncContext(() => syncMemoryWikiImportedSources(params)).catch((error) => {
     if (params.signal.aborted) {
       return;
     }
