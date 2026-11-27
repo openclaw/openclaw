@@ -12,7 +12,7 @@ const publishedToolDefinitions = new WeakMap<
 >();
 
 export function describeSessionToolDefinition(
-  tool: AnyAgentTool,
+  tool: Pick<AnyAgentTool, "name" | "description" | "parameters">,
 ): Pick<AnyAgentTool, "name" | "description" | "parameters"> {
   const { name, description, parameters } = tool;
   const published = getPublishedRuntimeToolInputSchema(parameters);

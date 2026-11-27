@@ -74,8 +74,13 @@ or apply to Codex-native Code Mode.
 ## What it does
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
-  such as `computer` or the native-vision `view_image` loader whose image result
-  cannot survive the guest bridge.
+  such as the native-vision `view_image` loader whose image result cannot survive
+  the guest bridge.
+- On-demand tools such as `computer` stay out of that list until the model looks
+  one up with `describe()` or calls it; it then loads as a top-level tool and
+  stays direct for the prompt series. Guest code that calls one gets an error
+  saying to call it directly as a top-level tool. See
+  [On-demand tools](/tools/tool-search#on-demand-tools).
 - `exec` evaluates model-generated JavaScript in the selected executor's worker
   thread.
 - Every catalog-eligible enabled non-MCP tool (OpenClaw core, plugin, client) is
@@ -87,8 +92,11 @@ or apply to Codex-native Code Mode.
   MCP entries, and overflow entries. Callable `catalog.search(...)` results are
   the fallback. Input hints retain integer and numeric bounds as comments, such
   as `offset?: number /* integer, >= 1 */`. A hint that overflows its budget
-  shows only required arguments, at every level, and ends each object that
-  dropped optional ones with `...`; required types shorten further if needed. Other validation details remain in
+  preserves required arguments first, shortening their types only when needed.
+  Nested optional fields are elided. If every top-level optional field fits in
+  the remaining space with shallow types, those names are included too. `...`
+  marks omitted fields or type details; the input hint stays within 300 characters.
+  Other validation details remain in
   the full schema available through `describe()`. These hints do not change
   tool validation or output contracts. Core file and shell tool signatures stay
   first in the bounded index, followed by tools with declared output hints, so

@@ -3,6 +3,7 @@ import {
   getCanonicalGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { hasSameRequesterOrigin } from "../../requester-origin.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -45,6 +46,18 @@ function sameCompletionAuthority(
   );
 }
 
+/** Display and conversation metadata do not identify the authenticated human. */
+function hasSharedRequester(
+  sources: readonly (SubagentCompletionCustody["authority"] | undefined)[],
+): boolean {
+  const first = sources[0]?.requesterOrigin;
+  return sources.every((source) =>
+    first && source?.requesterOrigin
+      ? hasSameRequesterOrigin(first, source.requesterOrigin)
+      : first === source?.requesterOrigin,
+  );
+}
+
 /** Separate requester turns before admission; a sibling never supplies another invocation's authority. */
 export function selectCompletionAuthorityBatch(
   observed: readonly SubagentRunRecord[],
@@ -73,9 +86,12 @@ export function runWithSubagentCompletionBatchAuthority<T>(
     batch: readonly SubagentRunRecord[];
     custodies: ReadonlyMap<object, SubagentCompletionCustody>;
     assertCurrent: (entry: SubagentRunRecord) => void;
-    runWithAuthority: (entry: SubagentRunRecord, run: () => T) => T;
+    runWithAuthority: (
+      entry: SubagentRunRecord,
+      run: (authority?: SubagentCompletionCustody["authority"]) => T,
+    ) => T;
   },
-  run: () => T,
+  run: (authority?: SubagentCompletionCustody["authority"]) => T,
 ): T {
   const { batch, custodies } = params;
   batch.forEach((entry) => {
@@ -103,9 +119,14 @@ export function runWithSubagentCompletionBatchAuthority<T>(
     }
     return run();
   }
+  // Mixed humans keep operator-owned delivery. Never select one member's
+  // personal identity for the whole wave.
+  const requester = hasSharedRequester(sources);
   if (resultEntry) {
-    return params.runWithAuthority(resultEntry, run);
+    return params.runWithAuthority(resultEntry, (authority) =>
+      run(requester ? authority : undefined),
+    );
   }
   sources.forEach((source) => source?.assertCurrent());
-  return first.run(run);
+  return first.run(() => run(requester ? first : undefined));
 }

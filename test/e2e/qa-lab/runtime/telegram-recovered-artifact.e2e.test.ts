@@ -327,12 +327,19 @@ test("delivers a recovered artifact once while preserving its inter-session tran
     expect(documents).toHaveLength(0);
     // Exclude seed-run context reads, but count every recovery tool call.
     const recoveryToolStart = toolCalls.length;
-    const receipt = (await gateway.call("chat.send", {
+    // Use the agent RPC that admits inter-session turns. Route its final result
+    // to the test recipient explicitly so this test exercises artifact delivery.
+    const receipt = (await gateway.call("agent", {
       sessionKey,
+      channel: "webchat",
+      sourceReplyDeliveryMode: "message_tool_only",
       message: `Empty response after write recovery QA check: write ${FILE_NAME}, then reply with exact marker: \`${marker}\nMEDIA:./${FILE_NAME}\`.`,
-      deliver: false,
+      deliver: true,
+      replyChannel: "telegram",
+      replyTo: `telegram:${CHAT_ID}`,
+      replyAccountId: "proof",
       idempotencyKey: randomUUID(),
-      systemInputProvenance: {
+      inputProvenance: {
         kind: "inter_session",
         sourceTool: "sessions_send",
         sourceSessionKey: "agent:qa:artifact-requester",

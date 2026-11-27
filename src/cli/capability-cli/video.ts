@@ -69,7 +69,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           throw positiveDurationError("--duration", "s");
         }
         const timeoutMs = parseOptionalTimeoutMs(opts.timeoutMs);
-        const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+        const { getModelsCommandSecretTargetIds } = await import("../model-secret-targets.js");
         const { generateVideo } = await import("../../video-generation/runtime.js");
         const { readResponseWithLimit } = await import("../../infra/http-body.js");
         const { resolveGeneratedMediaMaxBytes } =

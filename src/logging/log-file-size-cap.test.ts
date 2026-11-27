@@ -2,8 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
-import { testApi } from "./logger.test-support.js";
+import { flushLogger, getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-cap-");
 
@@ -38,7 +37,7 @@ it("rotates file writes after cap is reached and keeps logging", async () => {
 
   logger.error(`network-failure-${"x".repeat(400)}`);
   logger.error("post-rotation-diagnostic");
-  await testApi.flushFileLogQueueForTests();
+  await flushLogger();
 
   const currentContent = fs.readFileSync(logPath, "utf8");
   const archiveContent = fs.readFileSync(logPath.replace(/\.log$/, ".1.log"), "utf8");
@@ -57,7 +56,7 @@ it("structures rotation failure diagnostics for JSON console output", async () =
   configure({ maxFileBytes: 1, consoleLevel: "info", consoleStyle: "json" });
 
   getLogger().error("rotation diagnostic");
-  await testApi.flushFileLogQueueForTests();
+  await flushLogger();
 
   const [warning] = rotationWarnings(stderrSpy);
   expect(JSON.parse(warning ?? "")).toMatchObject({
@@ -81,7 +80,7 @@ it.each([
   logger.info({ message: "first day" });
   vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
   logger.info({ message: "second day" });
-  await testApi.flushFileLogQueueForTests();
+  await flushLogger();
 
   const firstContent = fs.readFileSync(firstDay, "utf8");
   expect(firstContent).toContain("first day");

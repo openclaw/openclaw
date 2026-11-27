@@ -23,6 +23,8 @@ import {
   captureRequesterSessionEntryCurrent,
   withSubagentRequesterSource,
 } from "../agents/subagents/announce/subagent-announce-delivery.runtime.js";
+import { createSubagentAnnounceObligation } from "../agents/subagents/announce/subagent-announce-obligation-lifecycle.js";
+import { isDurableAnnounceDelivery } from "../agents/subagents/announce/subagent-announce-obligation.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
@@ -50,6 +52,38 @@ export type AgentHarnessCompletionStatus = "succeeded" | "failed" | "cancelled";
 export type AgentHarnessCompletionDelivery = Awaited<
   ReturnType<typeof deliverSubagentAnnouncement>
 > & { recoveryPending?: true; recoveryBlocked?: true };
+
+const detachedCompletionScope = {};
+
+/** Registers one native assignment with the host's completion lifecycle owner. */
+export function registerAgentHarnessCompletion<Completion>(params: {
+  scope: AgentHarnessCompletionScope;
+  assignmentId: string;
+  isCurrent(): boolean;
+  readiness(): "ready" | "waiting" | "blocked" | "unavailable";
+  observeConsumption(assertCurrent: () => void): Promise<boolean>;
+  deliver(
+    completion: Completion,
+    assertCurrent: () => void,
+  ): Promise<AgentHarnessCompletionDelivery>;
+  retire(
+    outcome: "consumed" | "undelivered" | "unavailable",
+    assertCurrent: () => void,
+  ): Promise<void>;
+  settleExecution(): void;
+  onError(error: unknown): void;
+}) {
+  const { scope: scopeInput, assignmentId, ...lifecycle } = params;
+  const scope = assertAgentHarnessCompletionScope(scopeInput);
+  // Identity groups receipts; it never grants execution or delivery authority.
+  // Replacement client contexts still observe the same requester and assignment.
+  // The supplied delivery operation still uses the host-issued scope and custody.
+  return createSubagentAnnounceObligation(undefined, {
+    ...lifecycle,
+    scope: detachedCompletionScope,
+    key: `${scope.requesterAgentId}\0${scope.requesterSessionKey}\0${assignmentId}`,
+  });
+}
 
 /** Delivers a completed harness task result back to the requester or parent session. */
 export async function deliverAgentHarnessCompletion(params: {
@@ -259,20 +293,5 @@ async function deliverAgentHarnessCompletionBound(
 export function isDurableAgentHarnessCompletionDelivery(
   delivery: AgentHarnessCompletionDelivery,
 ): boolean {
-  if (!delivery.delivered) {
-    return false;
-  }
-  if (delivery.path === "steered") {
-    return true;
-  }
-  if (delivery.path !== "direct") {
-    return false;
-  }
-  const phases = Array.isArray(delivery.phases) ? delivery.phases : undefined;
-  if (!phases) {
-    return true;
-  }
-  return phases.some(
-    (phase) => phase.phase === "direct-primary" && phase.delivered && phase.path === "direct",
-  );
+  return isDurableAnnounceDelivery(delivery);
 }

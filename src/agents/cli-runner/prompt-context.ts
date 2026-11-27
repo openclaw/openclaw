@@ -28,7 +28,10 @@ import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareAgentPromptRepoRoot } from "../prompt-projects.js";
 import { sessionProjectGuidanceSource } from "../session-project-guidance.js";
-import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
+import {
+  appendModelIdentitySystemPrompt,
+  buildModelIdentityPromptLine,
+} from "../system-prompt-model-identity.js";
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
 import { cliBackendLog } from "./log.js";
 import { resolveCliSkillsPrompt } from "./skills-prompt.js";
@@ -257,6 +260,7 @@ export async function prepareCliSystemPrompt({
     ...params,
     requesterProfileId,
     prepareSessionProjectGuidance: sessionProjectGuidanceSource({
+      workspaceDir: runtimeCwd,
       config: params.config,
       agentId: params.agentId,
       sessionKey: params.sessionKey,

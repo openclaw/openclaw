@@ -56,7 +56,7 @@ Behavior:
 - Isolated cron exec completions stay on the originating run's session, including jobs with `delivery.mode: "announce"`. They never wake the agent main session. A completion accepted while that run is active waits for it to finish before starting a follow-up turn. Completions not yet accepted when the originating run ends cannot start another turn; retained output remains available through `process poll` or `process log`. Jobs with `delivery.mode: "none"` keep automatic completion wakes disabled. The cron job's normal announcement delivery is unchanged.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
 - Ordinary Gateway-hosted background processes still end with the Gateway, and their in-memory handles and requester continuations are not restored after restart. A command whose exit would wake its conversation is reported after the restart instead; see [lost background commands](#lost-background-commands). Use `durable: true` on a supported Linux or macOS Gateway when the physical process must survive. A surviving durable process is not reported as lost. Check saved output and side effects before repeating work whose outcome is unknown.
-- A completion that wakes its conversation is saved in that conversation when the command exits, before its turn starts, together with the requester who started the command. The turn appends it to the transcript once. If the Gateway restarts first, the completion turn runs after the restart as that requester, admitted again against current access: a requester who lost session write access gets the saved completion shown as not run, with its cause. A completion saved by an older version, or started by a configured channel owner, runs with the session principal's current authority. If the completion turn cannot start, OpenClaw tries one more time from the saved completion; if that also fails, the saved completion shows as not run with its cause. An active Goal waits for a saved completion: the completion turn runs first, then the Goal continues.
+- A completion that wakes its conversation is saved in that conversation when the command exits, before its turn starts, together with the requester who started the command. The turn appends it to the transcript once. If the Gateway restarts first, the completion turn runs after the restart as that requester, admitted again against current access: a requester who lost session write access gets the saved completion shown as not run, with its cause. A configured channel owner is admitted again against the current `commands.ownerAllowFrom`; a sender no longer listed gets the saved completion shown as not run. A completion saved by an older version runs with the session principal's current authority. If the completion turn cannot start, OpenClaw tries one more time from the saved completion; if that also fails, the saved completion shows as not run with its cause. An active Goal waits for a saved completion: the completion turn runs first, then the Goal continues.
 - Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
@@ -91,8 +91,8 @@ When the Gateway restarts while an ordinary background command is still running 
 exit would wake the conversation, the next Gateway start sends that conversation a
 notice for each such command, which starts a turn. The notice names the command's process handle and start time, so
 the agent can find the command in its transcript and decide whether to run it again.
-This covers crashes too, not only graceful restarts. The notice is new system input under
-the session's current authority. Reset, archived, hidden subagent and ended cron sessions
+This covers crashes too, not only graceful restarts. The notice runs as the requester who
+started the command, admitted again against current access, like a durable completion. Reset, archived, hidden subagent and ended cron sessions
 get no notice, incognito sessions are never recorded, and disabling
 `tools.exec.notifyOnExit` suppresses the notice.
 A command whose exit would not wake the conversation, such as a service started with
@@ -218,7 +218,8 @@ Stdout and stderr append to a per-process log under
 `$OPENCLAW_STATE_DIR/processes/`. A small ownership row in the
 [shared state database](/reference/database-schemas/layout#durable-background-processes)
 records the process, owning agent and session generation, unit identity, cwd, log
-path, start time, notification policy, and terminal outcome. It contains no
+path, start time, notification policy, terminal outcome, and the requester's saved
+source (the same record a queued message keeps; never a grant). It contains no
 environment values, credentials, command arguments, or output. After restart, the
 displayed command is a generic summary rather than the original command text.
 Logs are named local artifacts and can contain whatever the command prints. The
@@ -234,9 +235,11 @@ the registry records it and cleans up the unit. A missing unit is recorded as a
 lost process with an unknown outcome; check saved output and side effects before
 repeating work. Adoption never re-executes the command.
 
-An adopted completion or lost-process outcome is new system input to the owning
-session under that session principal's current authority. OpenClaw does not
-restore the original requester or operator continuation. Reset or archived
+An adopted completion or lost-process outcome wakes the owning session as the
+requester who started the command, admitted again against current access. If that
+requester lost access, the saved outcome stays in the conversation, shown as not run
+with its cause. A record written by an older version has no saved requester and
+wakes under the session principal's current authority. Reset or archived
 sessions, incognito sessions, subagents, ended cron runs, and disabled completion
 notifications receive no restart wake. Empty successful outcomes follow the
 captured `notifyOnExitEmptySuccess` policy. The registry checks these conditions

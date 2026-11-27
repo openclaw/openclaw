@@ -211,8 +211,18 @@ run and their descendants, including ordinary sub-agents and [Swarm](/tools/swar
 collectors. Successful cancellation keeps selected queued collectors from
 starting while running children stop. Exact-run cancellation does not cancel
 unrelated turns or clear unrelated session-wide queues.
+
+The caller's authority to stop is checked once, while the Stop selects its runs.
+A caller who loses control before then is refused and nothing stops. After that
+the Stop finishes, even if the caller loses control or the Stop itself ends the
+parent turn that started it. The revocation applies to the caller's next request.
 Cancelling a queued follow-up by its `runId` removes only that follow-up; the
 active run and other queued follow-ups in the same session continue.
+
+Once Stop records its kill claim, a session reset, rotation, or removal does not cancel that
+Stop or require a retry. Stop finishes the claimed original run and joins its
+captured execution. It does not stop a successor run or update the replacement
+session's status or abort marker. A new Stop selects its own current target.
 
 Every new registration records its selected owning agent as `childAgentId`,
 including agent-qualified child keys, and the original child session identity.

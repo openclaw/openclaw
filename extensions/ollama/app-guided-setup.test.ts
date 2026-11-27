@@ -156,8 +156,8 @@ describe("Ollama app-guided setup HTTP discovery", () => {
   });
 
   it.each([
-    { name: "remote host", tag: { remote_host: "https://ollama.com" }, expected: 262_144 },
-    { name: "remote model", tag: { remote_model: "upstream-model" }, expected: 262_144 },
+    { name: "remote host", tag: { remote_host: "https://ollama.com" }, expected: 32_768 },
+    { name: "remote model", tag: { remote_model: "upstream-model" }, expected: 32_768 },
     { name: "local", tag: {}, expected: 16_384 },
     {
       name: "authored remote cap",

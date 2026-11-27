@@ -81,10 +81,14 @@ export function createMergeOutcomeFixtureHarness() {
   const supportsNoLazyFetch =
     spawnSync("git", ["--no-lazy-fetch", "--version"], { env: gitEnv }).status === 0;
 
-  function reuseCompletedSetup<Args extends unknown[], Setup extends { f: { root: string } }>(
-    create: (...args: Args) => Setup,
-  ): (...args: Args) => Setup {
-    const completed = new Map<string, { setup: Setup; snapshot: string }>();
+  function reuseCompletedSetup<
+    Args extends unknown[],
+    Setup extends { f: { root: string; checkpointExecutionEnvironment: () => () => void } },
+  >(create: (...args: Args) => Setup): (...args: Args) => Setup {
+    const completed = new Map<
+      string,
+      { setup: Setup; snapshot: string; restoreEnvironment: () => void }
+    >();
     return (...args) => {
       const key = JSON.stringify(args);
       const cached = completed.get(key);
@@ -92,6 +96,7 @@ export function createMergeOutcomeFixtureHarness() {
         // Keep absolute Git worktree links and retained evidence paths intact.
         rmSync(cached.setup.f.root, { recursive: true, force: true });
         copyTreeCloseOnExec(cached.snapshot, cached.setup.f.root);
+        cached.restoreEnvironment();
         restoredRoots.add(cached.setup.f.root);
         return cached.setup;
       }
@@ -99,7 +104,11 @@ export function createMergeOutcomeFixtureHarness() {
       const snapshot = templateDirs.make("pr-recovery-setup-");
       // Builders settle every command and recover failed dispatch locks before returning.
       copyTreeCloseOnExec(setup.f.root, snapshot);
-      completed.set(key, { setup, snapshot });
+      completed.set(key, {
+        setup,
+        snapshot,
+        restoreEnvironment: setup.f.checkpointExecutionEnvironment(),
+      });
       return setup;
     };
   }
@@ -1083,7 +1092,7 @@ fi
     );
     template.program("bin/gh", '#!/bin/sh\nexec node "$FIXTURE_GH" direct "$@"\n', true);
     const tracePath = join(root, "git.trace.jsonl");
-    const env = {
+    let env = {
       ...gitEnv,
       PATH: `${bin}:${gitEnv.PATH}`,
       TMPDIR: root,
@@ -1258,6 +1267,14 @@ fi
       state,
       save,
       run,
+      checkpointExecutionEnvironment: () => {
+        // Cached files and their execution controls form one completed setup.
+        // Restoring only files leaves hooks pointing into a removed test root.
+        const checkpoint = { ...env };
+        return () => {
+          env = { ...checkpoint };
+        };
+      },
       retain: (...args: Parameters<typeof run>) => {
         env.FIXTURE_RETAIN_RESOURCES = "true";
         try {

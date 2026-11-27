@@ -148,31 +148,38 @@ afterEach(async () => {
 describe("prepareEmbeddedAttemptPromptContext", () => {
   registerParityHostLifecycle();
 
-  it("reports unavailable MCP servers in this turn without rewriting history or the system prompt", async () => {
-    const fixture = createInput();
-    const history = JSON.stringify(fixture.input.messages);
-    const prepared = await prepareContext({
-      ...fixture.input,
-      sessionVersion: 4,
-      appendOnlyRuntimeContext: true,
-      mcpDiagnostics: [
-        {
-          serverName: "fixture",
-          safeServerName: "fixture",
-          launchSummary: "synthetic server",
-          message: "MCP tool listing timed out after 10000ms",
-        },
-      ],
-    });
-    expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "MCP server fixture unavailable: MCP tool listing timed out after 10000ms",
-    );
-    expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "Check server reachability",
-    );
-    expect(JSON.stringify(fixture.input.messages)).toBe(history);
-    expect(prepared.systemPromptForHook).toBe("Base system prompt");
-  });
+  it.each([3, 4])(
+    "reports unavailable MCP servers only in the current version %i turn without rewriting history",
+    async (sessionVersion) => {
+      const fixture = createInput();
+      const history = JSON.stringify(fixture.input.messages);
+      const prepared = await prepareContext({
+        ...fixture.input,
+        sessionVersion,
+        appendOnlyRuntimeContext: true,
+        mcpDiagnostics: [
+          {
+            serverName: "fixture",
+            safeServerName: "fixture",
+            launchSummary: "synthetic server",
+            message: "MCP tool listing timed out after 10000ms",
+          },
+        ],
+      });
+      expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
+        "MCP server fixture unavailable: MCP tool listing timed out after 10000ms",
+      );
+      expect(prepared.runtimeContextMessageForCurrentTurn?.content).toContain(
+        "openclaw mcp status --verbose",
+      );
+      expect(JSON.stringify(fixture.input.messages)).toBe(history);
+      expect(prepared.systemPromptForHook).toBe("Base system prompt");
+      const recovered = await prepareContext({ ...fixture.input, sessionVersion });
+      expect(recovered.runtimeContextMessageForCurrentTurn?.content).not.toContain(
+        "MCP server fixture unavailable",
+      );
+    },
+  );
 
   it("preserves fallback context envelopes and canonical input across route switches and replay", async () => {
     const original = "Describe the attached landscape.";

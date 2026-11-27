@@ -1,4 +1,12 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
+import {
+  buildContextBudgetCategories,
+  buildDeferredContextGroups,
+  type ContextCategory,
+  type ContextEntry,
+  type ContextGroup,
+} from "../../../../../src/shared/context-budget-categories.js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
@@ -9,13 +17,6 @@ import { createParkedProjection } from "../../../lib/reactive/parked-projection.
 import { createTimeout } from "../../../lib/reactive/timers.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { getContextNoticeViewModel } from "./chat-composer-context-model.ts";
-import {
-  buildChatContextCategories,
-  buildDeferredContextGroups,
-  type ContextCategory,
-  type ContextEntry,
-  type ContextGroup,
-} from "./chat-context-breakdown-model.ts";
 import { ContextCompactButton, type ContextCompactProps } from "./chat-context-compact.tsx";
 import {
   ChatContextReport,
@@ -89,7 +90,8 @@ function ContextList(props: {
   let search: HTMLInputElement | undefined;
   const long = () => props.entries.length > 20;
   const groups = createMemo(() => {
-    const needle = long() && all() ? query().trim().toLocaleLowerCase().normalize("NFC") : "";
+    const needle =
+      long() && all() ? foldSearchCase(query().trim().toLocaleLowerCase()).normalize("NFC") : "";
     let remaining = long() && !all() ? 8 : Infinity;
     return (props.groups ?? [{ key: "", entries: props.entries }])
       .map((group) => {
@@ -97,8 +99,7 @@ function ContextList(props: {
           .filter(
             (entry) =>
               !needle ||
-              (entry.name + " " + (entry.path ?? ""))
-                .toLocaleLowerCase()
+              foldSearchCase((entry.name + " " + (entry.path ?? "")).toLocaleLowerCase())
                 .normalize("NFC")
                 .includes(needle),
           )
@@ -468,7 +469,7 @@ function ChatContextPage(props: {
         {(result, refresh) => {
           const categories = createMemo<ContextCategory[]>(() =>
             result().report
-              ? buildChatContextCategories(result().report!, usage()!.used)
+              ? buildContextBudgetCategories(result().report!, usage()!.used)
               : (["messages", "files", "tools", "skills", "system"] as const).map((id) => ({
                   id,
                   tokens: null,

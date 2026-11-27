@@ -14,6 +14,7 @@ import {
   type NativeInferenceStartup,
 } from "./native-inference-startup.js";
 import { nativeWorkerTestEntrypoint } from "./native-worker-entrypoints.test-support.js";
+import { NODE_WORKER_EXECUTION_ENV, type NodeExecutionContext } from "./node-execution-context.js";
 import { serializeWorkerProcessInput, type WorkerProcessInput } from "./worker-process-protocol.js";
 import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exec-entrypoints.test-support.js";
 
@@ -62,6 +63,7 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
   const launch = async (options: {
     descriptor: WorkerLaunchDescriptor;
     startup?: NativeInferenceStartup;
+    nodeExecution?: NodeExecutionContext;
     signal: AbortSignal;
     diagnostics?: () => Record<string, unknown>;
   }) => {
@@ -97,6 +99,9 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
         cwd: repoRoot,
         // Deliberately do not inherit provider keys, proxy settings, NODE_OPTIONS, or live state.
         env: {
+          ...(options.nodeExecution && {
+            [NODE_WORKER_EXECUTION_ENV]: JSON.stringify(options.nodeExecution),
+          }),
           PATH: process.env.PATH,
           SystemRoot: process.env.SystemRoot,
           WINDIR: process.env.WINDIR,

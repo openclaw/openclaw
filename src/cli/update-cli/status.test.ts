@@ -248,7 +248,7 @@ it.each([
       expectOutput("Last update run failed (preflight-no-good-commit)");
       expect(outputText()).not.toContain("Run openclaw update.");
     } else {
-      expectOutput("OpenClaw update failed", "Run openclaw update.");
+      expectOutput("OpenClaw couldn't finish updating", "Run openclaw update.");
     }
   },
 );
@@ -450,6 +450,28 @@ it.each([true, false])("shows the Gateway's recorded trust refusal (JSON: %s)", 
   }
 });
 
+it("sends an integer channels.status timeoutMs when the overall budget bounds it", async () => {
+  const issue = {
+    channel: "feishu",
+    accountId: "default",
+    kind: "runtime",
+    message: "channel offline",
+    fix: "restart the channel",
+  };
+  callGateway.mockResolvedValue({ statusIssues: [issue] });
+
+  // A --timeout at or above the 30 s floor leaves less than the per-check budget,
+  // so remainingMs() bounds the RPC timeout. Its fractional value must not reach
+  // channels.status, whose timeoutMs is an integer in the protocol schema.
+  await updateStatus({ json: true, timeout: "40" });
+
+  const firstCall = callGateway.mock.calls[0]?.[0] as { params: { timeoutMs: number } };
+  const params = firstCall.params;
+  expect(Number.isInteger(params.timeoutMs)).toBe(true);
+  expect(jsonResult().inspectionErrors ?? []).toEqual([]);
+  expect(jsonResult().channelIssues).toEqual([issue]);
+});
+
 it.each([true, false])(
   "preserves diagnostics when SQLite history is unsafe (JSON: %s)",
   async (json) => {
@@ -614,7 +636,7 @@ it.each([false, true])(
     expect(output.includes("Let the current update or repair finish")).toBe(!finished);
     if (!finished) {
       expect(output).toContain("in progress · validating");
-      expect(output.trim()).toMatch(/Check progress with openclaw update status\.$/);
+      expect(output.trim()).toMatch(/run `openclaw update status` in your terminal\.$/);
     }
     expect(await jsonStatus()).toMatchObject({
       availability: { available: true },

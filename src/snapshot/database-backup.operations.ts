@@ -11,10 +11,7 @@ import {
   withDatabasePortPostgres,
   withDatabasePortConnection,
 } from "../infra/database-engine/port-provider.js";
-import {
-  admitDatabasePortDescriptor,
-  inspectDatabasePort,
-} from "../infra/database-engine/port.worker.js";
+import { admitDatabasePortDescriptor } from "../infra/database-engine/port.worker.js";
 import {
   assertPostgresCatalog,
   postgresCatalogQuery,
@@ -350,7 +347,7 @@ export async function inspectPostgresUpgradeInWorker(params: {
 }) {
   const anchor = requirePostgresUpgradeAnchor(params.sourcePath);
   return withDatabasePortConnection(params.config, async (client) => {
-    const { store: family, version } = await readPostgresStoreMetadata(client, anchor);
+    const { store: family, version, minReader } = await readPostgresStoreMetadata(client, anchor);
     // Total relation size already includes indexes and TOAST. Partition parents
     // have no storage; their ordinary-table partitions are counted individually.
     const size = await client.query<{ physical_bytes: string }>(
@@ -387,6 +384,7 @@ export async function inspectPostgresUpgradeInWorker(params: {
       ...anchor,
       family,
       version,
+      minReader,
       physicalBytes,
       retainedAgentIds,
       registeredAgentDatabases,
@@ -483,28 +481,6 @@ export async function clonePostgresUpgradeInWorker(params: {
   });
 }
 
-/** Verify the migrated namespace, not its local SQLite anchor. */
-export async function validatePostgresUpgradeInWorker(params: {
-  anchorPath: string;
-  config: OpenClawConfig;
-  expectedVersion: number;
-}) {
-  const anchor = requirePostgresUpgradeAnchor(params.anchorPath);
-  await withDatabasePortPostgres(params.config, anchor, async (client, descriptor, version) => {
-    if (version !== params.expectedVersion) {
-      throw new Error(
-        `Protected PostgreSQL copy has schema ${version}; expected ${params.expectedVersion}.`,
-      );
-    }
-    await inspectDatabasePort(
-      { engine: "postgres", db: client, namespace: anchor.namespace },
-      descriptor,
-      anchor.storeId,
-      true,
-    );
-  });
-}
-
 /** Adoption requires both exact role ownership and the preserved anchor's physical store ID. */
 export async function retirePostgresUpgradeInWorker(params: {
   anchorPath: string;
@@ -539,12 +515,12 @@ export type PostgresUpgradeInspection = {
   namespace: string;
   family: string;
   version: number;
+  minReader: number;
   physicalBytes: number;
   retainedAgentIds: string[];
   registeredAgentDatabases: { agentId: string; path: string }[];
 };
 type PostgresUpgradeClone = Parameters<typeof clonePostgresUpgradeInWorker>[0];
-type PostgresUpgradeValidation = Parameters<typeof validatePostgresUpgradeInWorker>[0];
 type PostgresUpgradeRetirement = Parameters<typeof retirePostgresUpgradeInWorker>[0];
 
 export type Capture = Parameters<typeof capturePostgresBackupInWorker>[0];
@@ -553,7 +529,6 @@ export type BackupTask =
   | { operation: "inspect-upgrade"; params: { sourcePath: string; config: OpenClawConfig } }
   | { operation: "preflight-upgrade"; params: { sourcePaths: string[]; config: OpenClawConfig } }
   | { operation: "clone-upgrade"; params: Omit<PostgresUpgradeClone, "assertCurrent"> }
-  | { operation: "validate-upgrade"; params: PostgresUpgradeValidation }
   | { operation: "retire-upgrade"; params: PostgresUpgradeRetirement }
   | { operation: "discard"; params: { config: OpenClawConfig; namespaces: string[] } }
   | { operation: "capture"; params: Omit<Capture, "assertCurrent"> }

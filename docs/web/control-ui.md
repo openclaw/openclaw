@@ -112,18 +112,14 @@ Agent questions appear above the message box. You can keep writing or queue a
 follow-up while the question is expanded; sending a chat message does not answer
 the question. Use its choices and **Submit**, or **Skip**, to resolve it.
 
-## Edit a failed message
+<a id="edit-a-failed-message" />
 
-If a model rejects a message (for example, because it contains too many images),
-choose **Edit message** on the latest failed reply. Confirm the rewind to return
-that message and its attachments to the composer, remove or change attachments,
-and send again. The rejected turn remains in a saved conversation branch, but is
-excluded from the active model context.
+## Rewind and fork
 
-Send or clear any existing composer draft first; recovery never replaces it.
-Editing requires permission to rewind the conversation and is unavailable while
-a run is active. **Try again** still continues the existing conversation without
-replaying the original message, because earlier actions may already have run.
+To edit a failed message, hover over your original message and choose **Rewind**,
+or right-click it and choose **Rewind to here**. Confirm to load the message and
+its attachments into the composer. Rewind replaces any draft already there.
+
 Rewinding does not undo external actions. Rewinding and switching branches keep
 the existing conversation and move only its active branch, so neither copies the
 transcript. Both still read its history navigation, and a selection far from the
@@ -372,6 +368,8 @@ If the selected session changes while its message subscription is being admitted
 
 Opening a nested session from a **Waiting on** link, a direct URL, or browser history expands its owning sidebar group and session ancestors so you can see where the session belongs. Other branches keep their disclosure state, and ordinary refreshes do not undo a branch you collapse while staying in the same session.
 
+On a page reload, the sidebar remembers branches you opened manually. Branches opened automatically for another chat start collapsed; the sidebar still reveals the path to the nested chat you're opening.
+
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
 Snoozing also hides pinned sessions from the Active sidebar until they wake. Their pins and relative order are preserved, and snoozed sessions remain discoverable with the **Snoozed** or **All** filter.
@@ -522,7 +520,9 @@ with a reported zero exit code still shows **failed** in its summary and expande
 result. Nonzero exit codes remain visible as diagnostics; captured output and
 reported exit facts are unchanged.
 
-Failed replies show **Try again** at the right of the heading. A compact
+Failed replies show one action at the right of the heading: **Open Models** when
+the provider rejects the saved key or reports a billing problem, **Start a new
+session** when the harness needs an update, and **Try again** otherwise. A compact
 **Copy error** icon beside the title appears on hover or keyboard focus, and
 stays visible on touch devices. **Details** appears only when the diagnostic
 contains more than the visible summary. To change models, use the model picker
@@ -686,9 +686,10 @@ Folders are not downloadable. Downloads require the Control UI and its Gateway
 connection to share an origin (including a same-origin Gateway proxy).
 
 Detected PDFs opened from chat file links or the Files panel use the same
-browser-native preview as PDF attachments, up to 16 MiB. Preview failures and
-larger PDFs retain **Download file**. Rendering depends on your browser's PDF
-support; the generic text and image inline-preview limit is unchanged.
+browser-native preview as PDF attachments, up to 16 MiB. In browsers that support
+these settings, the PDF fits the preview pane's width and opens with page
+thumbnails collapsed. Preview failures and larger PDFs retain **Download file**.
+The generic text and image inline-preview limit is unchanged.
 Refreshing unchanged file metadata keeps the PDF reader's page and scroll
 position. The preview still reads fresh bytes and checks file access; changed
 contents reload the document, and selecting a different source replaces it.

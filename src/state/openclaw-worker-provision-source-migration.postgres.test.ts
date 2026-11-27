@@ -84,7 +84,7 @@ describe.skipIf(!connection)("PostgreSQL worker provisioning source migration", 
       ).toEqual(expected);
       fixture.invalidate();
       expect(() => fixture.open(source)).toThrow(
-        `PostgreSQL state schema ${OPENCLAW_STATE_SCHEMA_VERSION} is newer`,
+        new RegExp(`minimum reader ${OPENCLAW_STATE_SCHEMA_VERSION}.*supports 39`, "iu"),
       );
       const reopened = fixture.open(stateEngineSchema);
       expect(

@@ -35,6 +35,12 @@
   min-height: 240px;
   gap: 12px;
 }
+.mcp-app-panel > :not(mcp-app-view, .mcp-app-panel__toolbar) {
+  margin-inline: 16px;
+}
+.mcp-app-panel__toolbar {
+  padding: 12px 16px 0;
+}
 .mcp-app-panel__toolbar strong {
   flex: 1;
 }

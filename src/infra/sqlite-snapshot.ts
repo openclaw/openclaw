@@ -634,9 +634,15 @@ async function verifyAndPublishSqliteSnapshot(
             // Compaction and transforms must always verify the raw acquired pages.
             if (autoVacuum !== 0 && autoVacuum !== 2) {
               options.onStage?.("source-integrity", "start", sourceBytes);
-              assertSqliteIntegrity(source, options.sourcePath, options.integrity);
+              const { staleFts } = assertSqliteIntegrity(
+                source,
+                options.sourcePath,
+                options.integrity,
+              );
               options.onStage?.("source-integrity", "done", sourceBytes);
-              recordSourceIntegrity?.();
+              if (!staleFts) {
+                recordSourceIntegrity?.();
+              }
             }
             options.validate?.(source, options.sourcePath);
           } finally {

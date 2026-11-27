@@ -1,5 +1,10 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
+import { captureChatSessionScrollPosition } from "../scroll.ts";
 import { extractTranscriptRange } from "./chat-transcript-range.ts";
+import type {
+  TranscriptProjectionSource,
+  TranscriptSearchProjection,
+} from "./chat-transcript-session.ts";
 
 type ChatTranscriptPrependAnchor = { messageKey: string; rowKey: string | null; top: number };
 type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
@@ -8,7 +13,12 @@ type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
 export class TranscriptPrependAnchor {
   messageKeys: TranscriptMessageKeys = new Set();
   committedMessageRows: ReadonlyMap<string, string> = new Map();
+  private searchProjection: TranscriptSearchProjection = null;
+  private searchReturn: ChatTranscriptPrependAnchor | "end" | null = null;
+  private searchPlacement: "reader" | "end" | null = null;
   private firstMessageKey: string | undefined;
+  private source?: TranscriptProjectionSource;
+  private firstSourceMessage: unknown;
   private pending:
     | (ChatTranscriptPrependAnchor & { measured: boolean; prepended: boolean })
     | null = null;
@@ -38,12 +48,69 @@ export class TranscriptPrependAnchor {
     return extractTranscriptRange(range, indexes, [focusedRowKey, rowKey]);
   }
 
+  get returningReader(): boolean {
+    return this.searchPlacement === "reader";
+  }
+
+  commitSearchReturn(restoreEnd: () => void): void {
+    const end = this.searchPlacement === "end";
+    this.searchPlacement = null;
+    if (end) {
+      restoreEnd();
+    }
+  }
+
+  /** Track the source history boundary and the reader to restore across an empty search. */
+  project(
+    messageKeys: TranscriptMessageKeys,
+    source: TranscriptProjectionSource | undefined,
+    element: HTMLDivElement | null,
+    following: boolean,
+  ): void {
+    this.messageKeys = messageKeys;
+    this.source = source;
+    const projection = source?.search ?? null;
+    const previous = this.searchProjection;
+    if (previous?.query === projection?.query && previous?.empty === projection?.empty) {
+      return;
+    }
+    this.searchProjection = projection;
+    this.searchPlacement = null;
+    if (projection && !previous?.empty && !this.searchReturn) {
+      this.searchReturn =
+        following &&
+        !previous?.query &&
+        element &&
+        captureChatSessionScrollPosition(element).anchorToEnd
+          ? "end"
+          : captureTranscriptPrependAnchor(
+              element,
+              this.committedMessageRows,
+              this.messageElements.values(),
+            );
+    }
+    const position = this.searchReturn;
+    if (!projection) {
+      this.searchReturn = null;
+    }
+    if (previous?.empty && !projection?.query) {
+      if (position === "end") {
+        this.searchPlacement = "end";
+      } else if (position && this.messageKeys.has(position.messageKey)) {
+        this.pending = { ...position, measured: false, prepended: false };
+        this.searchPlacement = "reader";
+      }
+    }
+  }
+
   /** Whether the next projection inserts history before the committed first message. */
   get hasPrepend(): boolean {
     return Boolean(
       this.firstMessageKey &&
       this.firstMessageKey !== this.messageKeys.keys().next().value &&
-      this.messageKeys.has(this.firstMessageKey),
+      (this.messageKeys.has(this.firstMessageKey) ||
+        (this.firstSourceMessage !== undefined &&
+          (this.source?.messages.indexOf(this.firstSourceMessage) ?? -1) > 0)),
     );
   }
 
@@ -60,6 +127,7 @@ export class TranscriptPrependAnchor {
       this.retainReader(element);
     }
     this.firstMessageKey = this.messageKeys.keys().next().value;
+    this.firstSourceMessage = this.source?.messages[0];
   }
 
   /** Retain current geometry without admitting a candidate message projection. */
@@ -115,6 +183,12 @@ export class TranscriptPrependAnchor {
     return true;
   }
 
+  readerMoved(nativeInput: boolean): void {
+    if (nativeInput && this.searchProjection && !this.searchProjection.empty) {
+      this.searchReturn = null;
+    }
+  }
+
   /** Carry the viewport target with native reader movement, not layout growth. */
   moveWithReader(delta: number): void {
     if (this.pending) {
@@ -124,13 +198,18 @@ export class TranscriptPrependAnchor {
 
   /** Retire pending restoration when the reader or another command takes over. */
   clear(): void {
+    this.searchPlacement = null;
     this.pending = null;
   }
 
   /** Drop projection identity when the owning session is disposed. */
   reset(): void {
     this.clear();
+    this.searchReturn = null;
+    this.searchProjection = null;
     this.firstMessageKey = undefined;
+    this.firstSourceMessage = undefined;
+    this.source = undefined;
     this.messageKeys = new Set();
     this.committedMessageRows = new Map();
   }

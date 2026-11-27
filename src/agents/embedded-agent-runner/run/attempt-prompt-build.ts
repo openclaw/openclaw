@@ -26,12 +26,11 @@ import {
 } from "../../internal-runtime-context.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { wrapUntrustedPromptDataBlock } from "../../sanitize-for-prompt.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
-} from "../../system-prompt.js";
+} from "../../system-prompt-model-identity.js";
 import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
@@ -60,6 +59,7 @@ import {
 } from "./attempt-prompt-helpers.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
+import { buildMcpDiagnosticPromptFragments } from "./mcp-diagnostic-prompt.js";
 import {
   buildRuntimeContextCustomMessage,
   buildSystemUpdateMessage,
@@ -467,14 +467,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),
     ...(input.systemPromptRuntimeContextFragments ?? []),
-    ...(input.mcpDiagnostics ?? []).map((diagnostic): RuntimeContextFragment => ({
-      kind: "conversation-data",
-      text: wrapUntrustedPromptDataBlock({
-        label: "MCP server availability",
-        text: `MCP server ${diagnostic.serverName} unavailable: ${diagnostic.message}. Check server reachability or retry on a later turn.`,
-        maxChars: 2_000,
-      }),
-    })),
+    ...buildMcpDiagnosticPromptFragments(input.mcpDiagnostics ?? []),
     ...(input.prompt.originContext
       ? escapedProjection
         ? input.prompt.originContext.fragments
@@ -562,10 +555,12 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       ? { currentUserTimestamp: preparedUserTurnTimestamp }
       : {}),
   };
-  const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
-    ...boundaryInput,
-    messages: messagesForCurrentPrompt,
-  });
+  const projectHistoryForCurrentPrompt = (messages: AgentMessage[]) =>
+    normalizeMessagesForCurrentPromptBoundary({
+      ...boundaryInput,
+      messages,
+    });
+  const hookMessagesForCurrentPrompt = projectHistoryForCurrentPrompt(messagesForCurrentPrompt);
   if (input.systemPromptReport) {
     input.systemPromptReport.currentTurn = {
       ...(attempt.currentInboundEventKind ? { kind: attempt.currentInboundEventKind } : {}),
@@ -596,6 +591,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     prePromptMessageCount,
     promptForModel,
     promptForSession,
+    projectHistoryForCurrentPrompt,
     promptSubmission,
     promptToolResultAggregateMaxChars,
     promptToolResultMaxChars,

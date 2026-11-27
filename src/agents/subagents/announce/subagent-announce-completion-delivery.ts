@@ -1,5 +1,4 @@
-import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
 import { runOutsideAdmittedTurnScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -10,26 +9,14 @@ import { getGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-ru
 import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { sendMessage as sendSubagentAnnounceMessage } from "../../../infra/outbound/message.js";
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
-import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
 import {
   getCanonicalGatewayContextResolver,
   getGatewayContextLifetime,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
-import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
-import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
 import type { SubagentCompletion } from "../../../shared/subagent-completion.js";
-import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
-import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
-import {
-  getGatewayAgentResult,
-  hasCommittedSourceReplyDeliveryEvidence,
-  hasMessagingToolDeliveryEvidence,
-  hasUnaccountedMessagingToolAggregateEvidence,
-  resolveExplicitFinalSourceReplyDeliveryEvidence,
-} from "../../embedded-agent-runner/delivery-evidence.js";
 import { hasVisibleAgentPayload } from "../../embedded-agent-runner/message-visibility.js";
 import { hasVisibleCompletionResult } from "../../internal-event-contract.js";
 import { collectAgentInternalEventMedia, type AgentInternalEvent } from "../../internal-events.js";
@@ -42,7 +29,7 @@ import {
 import { tryResolveSubagentRequesterAgentId } from "./subagent-announce-delivery.runtime.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { SubagentCompletionToolHandoffRegistration } from "./subagent-announce-handoff.js";
-import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
+import { isDirectMessageDeliveryTarget } from "./subagent-announce-obligation.js";
 import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 export async function runAnnounceAgentCall(params: {
@@ -198,77 +185,10 @@ export async function runAnnounceAgentCall(params: {
   }
 }
 
-export function isGatewayAgentRunPending(response: unknown): boolean {
-  return isNonTerminalAgentRunStatus(asOptionalObjectRecord(response)?.status);
-}
-
-export function resolvePrivateCompletionDeliveryResult(
-  response: Record<string, unknown> | undefined,
-  origin?: DeliveryContext,
-): SubagentAnnounceDeliveryResult {
-  const outcome = buildAgentRunTerminalOutcomeFromWaitResult(response);
-  if (outcome?.reason === "cancelled" && outcome.stopReason !== "restart") {
-    return {
-      delivered: false,
-      path: "direct",
-      reason: "delivery_suppressed",
-      error: "private requester continuation was cancelled",
-    };
-  }
-  // Successful internal consumption may be silent or start the next child.
-  // Queue acceptance alone is not consumption, and no external receipt is owed.
-  const delivery: SubagentAnnounceDeliveryResult =
-    response?.status === "ok" && response.inputProcessingCompleted === true
-      ? { delivered: true, path: "direct" }
-      : {
-          delivered: false,
-          path: "direct",
-          reason: "completion_handoff_pending",
-          error: "private requester turn has not completed successfully",
-        };
-  const result = getGatewayAgentResult(response);
-  if (
-    delivery.delivered &&
-    origin?.channel &&
-    origin.to &&
-    result &&
-    result.meta?.yielded !== true &&
-    result.meta?.continuationPending !== true &&
-    hasMessagingToolDeliveryToSource(result, origin, { requireFinalReply: true })
-  ) {
-    delivery.requesterVisibleFinalDelivered = true;
-  }
-  return delivery;
-}
-
-export function buildRequesterCompletionDeliveryResult(
-  finalCommitted: boolean,
-  text: unknown,
-): SubagentAnnounceDeliveryResult {
-  const finalAssistantVisibleText =
-    finalCommitted && typeof text === "string" ? truncateUtf16Safe(text.trim(), 12_000) : "";
-  return {
-    delivered: true,
-    path: "direct",
-    // A canceled partial payload or accepted handoff is not a visible final receipt.
-    ...(finalCommitted ? { requesterVisibleFinalDelivered: true } : {}),
-    ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
-  };
-}
-
-export function isDirectMessageDeliveryTarget(
-  target: { channel?: string; to?: string; threadId?: string },
-  requesterSessionKey: string,
-): boolean {
-  if (target.threadId) {
-    return false;
-  }
-  const targetChatType = inferDeliveryTargetChatType(target);
-  if (targetChatType) {
-    return targetChatType === "direct";
-  }
-  return deriveSessionChatTypeFromKey(requesterSessionKey) === "direct";
-}
+export {
+  isGatewayAgentRunPending,
+  resolvePrivateCompletionDeliveryResult,
+} from "./subagent-announce-obligation.js";
 
 type DirectCompletionContent = { content: string; mediaUrls: string[]; audioAsVoice?: boolean };
 
@@ -360,7 +280,6 @@ export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
   requesterSessionId?: string;
-  requesterLifecycleRevision?: string;
   requesterAgentId?: string;
   directIdempotencyKey: string;
   deliveryTarget: {
@@ -492,63 +411,4 @@ export async function deliverCompletionDirect(params: {
   } finally {
     await deliveryResultReported;
   }
-}
-
-export function hasMessagingToolDeliveryToSource(
-  result: {
-    didDeliverSourceReplyViaMessageTool?: unknown;
-    didSendViaMessagingTool?: unknown;
-    messagingToolSentTargets?: unknown;
-    messagingToolSourceReplyPayloads?: unknown;
-  },
-  deliveryTarget: Parameters<typeof sourceDeliveryTargetsMatch>[1],
-  options?: { requireFinalReply?: boolean },
-): boolean {
-  const targets = Array.isArray(result.messagingToolSentTargets)
-    ? result.messagingToolSentTargets
-    : [];
-  const sourceTargets = targets.filter((target) => {
-    if (
-      !target ||
-      typeof target !== "object" ||
-      Array.isArray(target) ||
-      !deliveryTarget.channel ||
-      !deliveryTarget.to
-    ) {
-      return false;
-    }
-    const record = target as Parameters<typeof sourceDeliveryTargetsMatch>[0];
-    // Older source receipts omit `to`; explicit off-target sends must never satisfy it.
-    const sourceTarget =
-      typeof record.to === "string" && record.to.trim()
-        ? record
-        : { ...record, to: deliveryTarget.to };
-    return sourceDeliveryTargetsMatch(sourceTarget, deliveryTarget);
-  });
-  if (options?.requireFinalReply) {
-    const hasCommittedSourceDelivery =
-      hasCommittedSourceReplyDeliveryEvidence(result) ||
-      (hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0);
-    // Only current-source final markers count; another target's final cannot
-    // turn a source progress update into the owed requester reply.
-    return (
-      hasCommittedSourceDelivery &&
-      resolveExplicitFinalSourceReplyDeliveryEvidence({
-        messagingToolSentTargets: sourceTargets,
-        messagingToolSourceReplyPayloads: result.messagingToolSourceReplyPayloads,
-      }) !== false
-    );
-  }
-  if (
-    hasCommittedSourceReplyDeliveryEvidence(result) ||
-    hasUnaccountedMessagingToolAggregateEvidence({ ...result, didSendViaMessagingTool: false })
-  ) {
-    return true;
-  }
-
-  if (targets.length === 0 || !deliveryTarget.channel || !deliveryTarget.to) {
-    return hasMessagingToolDeliveryEvidence(result);
-  }
-
-  return hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0;
 }

@@ -22,10 +22,8 @@ import { createSessionsTool } from "./sessions-tool.js";
 const currentKey = "agent:main:main";
 const targetKeys = ["agent:main:dashboard:first", "agent:main:dashboard:second"];
 const session = (sessionKey: string) => loadSessionEntry({ agentId: "main", sessionKey });
-const values = (
-  field: "category" | "archivedAt" | "pinnedAt",
-  keys = [...targetKeys, currentKey],
-) => keys.map((key) => session(key)?.[field]);
+const values = (field: "category" | "archivedAt", keys = [...targetKeys, currentKey]) =>
+  keys.map((key) => session(key)?.[field]);
 function createTool(
   callGateway: AgentToolGatewayRequestCaller,
   config: OpenClawConfig = {},
@@ -146,13 +144,10 @@ describe("sessions tool batch patch", () => {
       async (tool) => {
         const result = await tool.patch({
           targets: [{ sessionKey: targetKeys[0] }, { sessionKey: "current" }],
-          pinned: true,
+          group: "Visible",
         });
         expect(result.details).toMatchObject({ status: "partial", succeeded: [1], failed: [0] });
-        expect(values("pinnedAt", [currentKey, targetKeys[0]!])).toEqual([
-          expect.any(Number),
-          undefined,
-        ]);
+        expect(values("category", [currentKey, targetKeys[0]!])).toEqual(["Visible", undefined]);
       },
       { tools: { sessions: { visibility: "self" } } },
     ));

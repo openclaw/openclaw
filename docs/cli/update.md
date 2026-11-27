@@ -191,7 +191,7 @@ Invalid configuration reports `invalid-config` before database schema inspection
 An unreadable configuration file or failed configuration loading step instead
 reports `config-read-failed`, with a recognized filesystem error code when available.
 An ownership refusal during loading includes the `gateway-ownership-unverified`
-failure fact and points to `openclaw gateway recover-lock` for inspection. Active
+failure fact and advises stopping the recorded Gateway before retrying. Active
 maintenance instead reports `gateway-maintenance-busy` with wait or stop guidance.
 Neither diagnostic includes the recorded holder's private details.
 For supported package targets, the candidate makes that
@@ -262,7 +262,10 @@ default. Declining or cancelling preserves the failed update's nonzero exit
 status. JSON, non-interactive, `--yes`, and managed-service handoff invocations do
 not prompt after rollback.
 
-Update completion prints the terminal outcome and a local Markdown report path before exiting, including unexpected failures. Failed runs keep rollback-facing diagnostic JSON within the released 8 KiB limit. That file links a separate artifact containing every individually bounded Doctor finding; the Markdown report also retains the complete inventory. JSON output includes `reportPath`; a report-write failure prints a warning and preserves the update outcome.
+The release-update run settles once after required plugin maintenance. Its CLI,
+status and final notice use the same summary: the version serving, any failed
+plugin step, and its exact recovery command. Plugin failures do not change a
+successful core update into a failure or trigger rollback.
 
 When another process holds the state database writer, the update driver gives
 its worker-backed phase and progress writes up to two minutes to acquire the
@@ -846,7 +849,8 @@ work, and retained generations. See
 for retention, cleanup warnings, and legacy recovery distinctions.
 
 Candidate SQLite migrations use whole-database `quick_check`, full integrity
-checks of rewritten or re-indexed tables, and foreign-key checks by default.
+checks of rewritten or re-indexed tables, and foreign-key checks by default. Agent
+database version steps check only the schema catalog and the tables they declare.
 Prepared-release updates (Git and npm, pnpm or Bun installs) refuse
 `--full-integrity-check` before creating a run; they do not support this selection.
 Run `openclaw doctor --fix --full-integrity-check` separately for full checks

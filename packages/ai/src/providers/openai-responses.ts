@@ -4,7 +4,7 @@ import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import { resolveProviderSimpleCompletionHeaders } from "../transports/provider-transport-turn-state.js";
-import type { Model, SimpleStreamOptions, StreamFunction } from "../types.js";
+import type { SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { requireApiKey } from "../utils/required-api-key.js";
 import { resolveCacheRetention } from "./cache-retention.js";
@@ -27,13 +27,6 @@ import {
 import { buildBaseOptions } from "./simple-options.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
-
-function getCompat(model: Model<"openai-responses">) {
-  return {
-    ...resolveOpenAICompletionsCompat(model),
-    sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
-  };
-}
 
 export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
   reasoningEffort?: OpenAIRequestReasoningEffort;
@@ -72,14 +65,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
         throw new Error(`No API key for provider: ${model.provider}`);
       }
 
-      const compat = getCompat(model);
       const headers = { ...model.headers };
       if (model.provider === "github-copilot") {
         Object.assign(headers, buildCopilotDynamicHeaders(context.messages));
       }
 
       if (cacheSessionId) {
-        if (compat.sendSessionIdHeader) {
+        if (model.compat?.sendSessionIdHeader ?? true) {
           headers.session_id = cacheSessionId;
         }
         headers["x-client-request-id"] = cacheSessionId;
@@ -103,7 +95,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
       });
 
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-      const compat = getCompat(model);
+      const compat = resolveOpenAICompletionsCompat(model);
       // The API supports 12h before the pinned SDK exposes that TTL. Keep other SDK fields strict.
       const params: Omit<ResponseCreateParamsStreaming, "prompt_cache_options"> &
         OpenAIResponsesRequestParams = {

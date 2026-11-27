@@ -1,11 +1,7 @@
 // Prompt series identity across runs whose bounded transcript window omits an old compaction.
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
-import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "../../../config/sessions/session-actor-storage-acquisition.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
-import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { SessionEntry } from "../../sessions/session-manager-types.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
@@ -13,6 +9,7 @@ import {
   persistSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
+import { openSyntheticSqliteSession } from "./attempt-session-runtime-prepare.test-support.js";
 
 const mocks = vi.hoisted(() => ({ prepareSessionManager: vi.fn() }));
 
@@ -51,44 +48,9 @@ const hasCompaction = (manager: SessionManager) =>
 /** One SQLite-backed session. Each run hydrates its own bounded view and prompt state, as the Gateway does. */
 async function openSession(sessionId: string) {
   sessionIds.add(sessionId);
-  const env = { OPENCLAW_STATE_DIR: `/synthetic/prompt-history-boundary/${sessionId}` };
-  const scope = {
-    agentId: "main",
-    env,
+  const { scope, admittedRunContext } = await openSyntheticSqliteSession(
     sessionId,
-    sessionKey: `agent:main:dashboard:incognito-${sessionId}`,
-    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
-  };
-  const admission = prepareSystemAgentRunAdmission(
-    {},
-    `run-${sessionId}`,
-    "main",
-    "history-boundary",
-  );
-  onTestFinished(() => admission.close());
-  const admittedRunContext = await admission.admit("embedded");
-  const authority = { assertCurrent() {}, authorize() {} };
-  const binding = await acquireSessionActorStorage(scope, {
-    authority,
-    lifetime: { assertCurrent() {}, assertReadable() {} },
-    create: true,
-  });
-  if (!binding) {
-    throw new Error("Missing incognito fixture actor");
-  }
-  onTestFinished(async () => {
-    await binding.actor.release();
-    memorySessionActorOwners.closeDatabase(binding);
-  });
-  await binding.actor.storage.mutate(
-    {
-      type: "session.entry.create",
-      input: {
-        entry: { sessionId, lifecycleRevision: "initial", updatedAt: 1 },
-        cwd: "/synthetic",
-      },
-    },
-    authority,
+    "prompt-history-boundary",
   );
   const run = async (prompt = "## Skills\nPinned skills", maxBytes = 8_192) => {
     const manager = await SessionManager.openBoundedAsync(scope, { maxBytes, maxEvents: 100 });

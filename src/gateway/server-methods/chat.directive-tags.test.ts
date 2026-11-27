@@ -103,6 +103,7 @@ import {
   createChatDirectiveSuiteResources,
   deniedChatCronAuthorityCases,
   lazyChatCronAuthorityCases,
+  admittedInternal,
   handedOffDashboardSession,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
@@ -4835,9 +4836,7 @@ describe("chat.send local operator client sender context", () => {
         },
       );
       const probe = vi.fn();
-      mockState.cronAuthorityProbe = async (_runId, capability) => {
-        probe(capability);
-      };
+      mockState.cronAuthorityProbe = async (_runId, capability) => probe(capability);
       await createChatRequestFixture().send({
         idempotencyKey: "child-chat-scheduling",
         sessionKey,
@@ -4851,7 +4850,7 @@ describe("chat.send local operator client sender context", () => {
             },
             scopes: [scope],
           },
-          internal: { authenticatedControlUi: true, controlUiAdmin: scope === "operator.admin" },
+          internal: admittedInternal(scope, { authenticatedControlUi: true }),
         },
         expectBroadcast: false,
       });
@@ -4873,7 +4872,7 @@ describe("chat.send local operator client sender context", () => {
         const localOwner = local === true && scope === "operator.admin";
         expect(capability?.callerOrigin).toEqual({ kind: localOwner ? "local" : "unknown" });
         expect(capability?.callerScopedCreation).toBe(localOwner ? undefined : true);
-        expect(capability?.managementEntitlement).toBeUndefined();
+        expect(capability?.managementEntitlement?.source).toBe(localOwner ? "operator" : undefined);
         await new Promise<void>((resolveTick) => {
           setTimeout(resolveTick, 0);
         });
@@ -4913,7 +4912,7 @@ describe("chat.send local operator client sender context", () => {
             client: { id: clientId, mode, version: "dev", platform },
             scopes: [scope],
           },
-          internal: local === true ? { isLocalClient: true } : {},
+          internal: admittedInternal(scope, local === true ? { isLocalClient: true } : {}),
         },
         requestParams:
           local === "resumed"

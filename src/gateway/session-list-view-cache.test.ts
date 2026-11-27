@@ -65,6 +65,36 @@ it("does not reread required row facts when only a sibling identity changes", ()
   expect(reads).toBe(0);
 });
 
+it("keeps leading recipient runs compact alongside sparse recipient groups", () => {
+  const rows = Array.from({ length: 5 }, (_, index) =>
+    Object.freeze({
+      ...row,
+      key: `row-${index}`,
+      pinned: false,
+      ...(index < 3 ? { label: "Leading", visibility: "shared" as const } : {}),
+      ...(index % 2 === 0 ? { origin: { provider: "sparse" } } : {}),
+    }),
+  );
+  using join = vi.spyOn(Array.prototype, "join");
+  const packed = shareSessionRowFacts(rows);
+  const recipientKeys = join.mock.results.map(({ value }) => value);
+  join.mockRestore();
+
+  expect(recipientKeys).toEqual(["0,2,4"]);
+  expect(packed.sharedFacts).toEqual([
+    { pinned: false },
+    { label: "Leading", visibility: "shared" },
+    { origin: { provider: "sparse" } },
+  ]);
+  expect(packed.sessions.map((value) => value.sharedFacts)).toEqual([
+    [0, 1, 2],
+    [0, 1],
+    [0, 1, 2],
+    [0],
+    [0, 2],
+  ]);
+});
+
 let cache: SessionListViewCache;
 let reports: { views: number; refs: number; estimatedBytes: number }[];
 let retirements: string[];

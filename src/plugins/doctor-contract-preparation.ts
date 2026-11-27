@@ -1,3 +1,4 @@
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import {
@@ -54,9 +55,11 @@ export async function preparePluginDoctorContractModules(
     for (const surface of surfaces) {
       const records =
         params.inventory?.records ??
-        (surface === "stateMigrations"
-          ? resolvePluginDoctorStateMigrationRecords(params)
-          : resolvePluginDoctorManifestRecords(params, surface === "configRepair"));
+        withEngineStoreAdmission(() =>
+          surface === "stateMigrations"
+            ? resolvePluginDoctorStateMigrationRecords(params)
+            : resolvePluginDoctorManifestRecords(params, surface === "configRepair"),
+        );
       await prepareDoctorContractRecords(
         surface === "sessionRouteStateOwners"
           ? records.filter((record) => record.sessionRouteStateOwners === undefined)

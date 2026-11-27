@@ -484,15 +484,15 @@ function projectRunFailureNotices(
 ): Array<Record<string, unknown>> {
   return messages.flatMap((message) => {
     if (message.role === "custom" && message.customType === "run-failed-before-reply") {
+      const notice = readRunFailureNotice(message);
+      const details = asOptionalRecord(message.details);
       const runId =
         readSessionTranscriptFailureRunId(message) ?? readSessionTranscriptRunId(message);
       const summary =
-        readRunFailureNotice(message)?.summary ??
+        notice?.summary ??
         (typeof message.content === "string" ? message.content.trim() : undefined);
-      const cause =
-        readRunFailureNotice(message)?.cause ??
-        readRunFailureCause(asOptionalRecord(message.details)?.cause);
-      const desktopNotice = asOptionalRecord(message.details)?.desktopNotice;
+      const cause = notice?.cause ?? readRunFailureCause(details?.cause);
+      const desktopNotice = details?.desktopNotice;
       const desktopSummary =
         typeof desktopNotice === "string" && desktopNotice.trim() ? desktopNotice : undefined;
       return runId && summary
@@ -502,6 +502,9 @@ function projectRunFailureNotices(
               openclawRunError: {
                 runId,
                 summary,
+                ...(notice?.summaryAsTitle || details?.summaryAsTitle === true
+                  ? { summaryAsTitle: true }
+                  : {}),
                 ...(desktopSummary ? { desktopSummary } : {}),
                 ...(cause ? { cause } : {}),
               },
