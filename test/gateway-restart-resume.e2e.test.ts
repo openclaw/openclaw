@@ -1251,11 +1251,12 @@ it.skipIf(process.platform === "win32").for([
             { timeout: 15_000 },
           );
         }
-        await client.request(
+        const followup = queued(3, 1);
+        const { runId: followupRunId } = await client.request<{ runId: string }>(
           "chat.send",
           {
             sessionKey,
-            message: queued(3, 1),
+            message: followup,
             idempotencyKey: followupKey,
             ...(predecessorEnded ? {} : { queueMode: "followup" }),
           },
@@ -1285,7 +1286,6 @@ it.skipIf(process.platform === "win32").for([
             )
             .all(`${followupKey}%`);
         };
-        const callsBeforeRestart = provider.calls.length;
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
         // An interrupted turn resumes; its held resume request is released when it arrives.
@@ -1295,13 +1295,32 @@ it.skipIf(process.platform === "win32").for([
           .catch(() => {});
         await vi.waitFor(
           async () => {
-            expect(
-              provider.calls
-                .slice(callsBeforeRestart)
-                .some((call) => call.input.includes(queued(3, 1))),
-              JSON.stringify(cancelled()),
-            ).toBe(true);
-            expect((await history()).sessionInfo.hasActiveRun).toBe(false);
+            const { messages, sessionInfo } = await history();
+            const resumedFollowup = provider.calls.some(
+              (call) => call.resumeInput && call.current.includes(followupRunId),
+            );
+            // The follow-up can finish before shutdown, drain from the queue, or resume as
+            // its own interrupted run. Seeing it in provider history is not a visible answer.
+            let inputs = 0;
+            let replies = 0;
+            for (const message of messages.filter(isRecord)) {
+              const content = JSON.stringify(message.content ?? "");
+              if (message.role === "user" && content.includes(followup)) {
+                inputs++;
+              } else if (
+                inputs > 0 &&
+                message.role === "assistant" &&
+                (content.includes(`HANDLED_${followup}`) ||
+                  (resumedFollowup && content.includes("RESUMED_3_stream")))
+              ) {
+                replies++;
+              }
+            }
+            expect({ inputs, replies, active: sessionInfo.hasActiveRun }).toEqual({
+              inputs: 1,
+              replies: 1,
+              active: false,
+            });
           },
           { timeout: 30_000 },
         );
@@ -1428,10 +1447,16 @@ it.skipIf(process.platform === "win32")(
                       JSON.stringify(message).includes(marker(cycle, "tool")),
                   ),
                 ).toHaveLength(1);
+                if (cycle === queuedCycle) {
+                  const replies = messages.filter(
+                    (message) =>
+                      isRecord(message) &&
+                      message.role === "assistant" &&
+                      JSON.stringify(message.content).includes(`HANDLED_${independent}`),
+                  );
+                  expect(replies.length).toBe(1);
+                }
               }
-              expect(JSON.stringify((await history(queuedCycle)).messages)).toContain(
-                `HANDLED_${independent}`,
-              );
             },
             { timeout: 30_000 },
           ),
@@ -1446,9 +1471,11 @@ it.skipIf(process.platform === "win32")(
         const queuedCalls = provider.calls.filter(
           (call) => call.cycle === queuedCycle && call.name === "tool",
         );
-        expect(
-          queuedCalls.find((call) => call.current.includes(independent))?.ordinal,
-        ).toBeGreaterThan(queuedCalls.find((call) => call.resumeInput)!.ordinal);
+        const followups = queuedCalls.filter((call) => call.current.includes(independent));
+        expect(followups.length).toBe(1);
+        expect(followups[0]?.ordinal).toBeGreaterThan(
+          queuedCalls.find((call) => call.resumeInput)!.ordinal,
+        );
         expect(await readFile(committed, "utf8")).toBe("COMMITTED_SHELL_EFFECT\n");
         await expect(stat(absent)).rejects.toMatchObject({ code: "ENOENT" });
       },
