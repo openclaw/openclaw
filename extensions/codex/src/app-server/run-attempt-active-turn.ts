@@ -326,7 +326,10 @@ export function activateCodexAttemptTurn(
     }
   };
   const isSteeringAvailable = () =>
-    !state.completed && !state.terminalTurnNotificationQueued && !runAbortController.signal.aborted;
+    !state.completed &&
+    !state.terminalTurnNotificationQueued &&
+    !resourceState.turnRoute?.signal.aborted &&
+    !runAbortController.signal.aborted;
   const assertSteeringActive = () => {
     connection.assertCurrent();
     runAbortController.signal.throwIfAborted();
@@ -593,10 +596,7 @@ export function activateCodexAttemptTurn(
     isAborted: () => runAbortController.signal.aborted,
     isStopped: () => state.completed || runAbortController.signal.aborted,
     ownsLiveness: () =>
-      deadlines.ownsExecutionWait() &&
-      resourceState.turnRoute?.signal.aborted === false &&
-      !state.completed &&
-      !state.terminalTurnNotificationQueued,
+      deadlines.ownsExecutionWait() && Boolean(resourceState.turnRoute) && isSteeringAvailable(),
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
@@ -690,6 +690,7 @@ export function activateCodexAttemptTurn(
           upstreamUserText,
         }),
       );
+      state.projectionBound = true;
     } catch (error) {
       activationFailed = true;
       runAbortController.abort(error);

@@ -78,6 +78,9 @@ export class CodexNativeSubagentSubmissionOwner {
   }
 
   isCurrent(state: ParentState): boolean {
+    if (this.disposed) {
+      return false;
+    }
     if (this.dependencies.isCurrent(state)) {
       return true;
     }
@@ -259,25 +262,62 @@ export class CodexNativeSubagentSubmissionOwner {
     }
   }
 
-  retire(state: ParentState): void {
+  retire(state: ParentState, held?: ReadonlySet<CodexNativeSubagentSubmission>): void {
     for (const call of this.calls.get(state)?.values() ?? []) {
       this.modelInputs.settleSubmissionModelInput(call, false);
       call.completionCustody?.release();
     }
     this.calls.delete(state);
-    for (const custody of this.pending.get(state)?.values() ?? []) {
-      custody.phase = "settled";
+    const entries = this.pending.get(state);
+    for (const [key, custody] of entries ?? []) {
       clearTimeout(custody.timer);
       custody.release();
       custody.completionCustody?.release();
+      if (held?.has(custody.receipt)) {
+        // The promoted child owns delivery. Keep only the receipt for settleChild.
+        custody.owner = undefined;
+        custody.completionCustody = undefined;
+        continue;
+      }
+      custody.phase = "settled";
+      entries!.delete(key);
     }
-    this.pending.delete(state);
+    if (!entries?.size) {
+      this.pending.delete(state);
+    }
   }
 
-  dispose(): void {
+  stopForDisconnect() {
+    // Freeze observation before draining writes. A queued sibling must not retire
+    // the whole parent's inventory while a promoted receipt still needs settlement.
+    this.disposed = true;
+    const held = new Map<ChildState, CodexNativeSubagentSubmission>();
+    for (const [state, entries] of this.pending) {
+      if (state.owners.size || state.pendingRegistrations?.size || !state.assignmentStore) {
+        continue;
+      }
+      for (const { phase, receipt } of entries.values()) {
+        const child = this.dependencies.currentChild(receipt.childThreadId);
+        if (
+          phase === "promoting" &&
+          child?.parentThreadId === state.parentThreadId &&
+          child.nativeParentThreadId === state.parentThreadId &&
+          child.nativeTurnId === receipt.submissionId &&
+          child.runId === codexNativeSubagentRunId(receipt.childThreadId, receipt.submissionId) &&
+          !child.terminal &&
+          child.completionCustody
+        ) {
+          held.set(child, receipt);
+        }
+      }
+    }
+    return held;
+  }
+
+  dispose(held?: ReadonlySet<CodexNativeSubagentSubmission>): void {
     this.disposed = true;
     for (const state of new Set([...this.pending.keys(), ...this.calls.keys()])) {
-      this.retire(state);
+      this.retire(state, held);
     }
   }
 

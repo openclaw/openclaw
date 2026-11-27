@@ -1,5 +1,6 @@
 import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { emitAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { codexNativeSubagentRunId } from "./native-subagent-assignment.js";
 import {
   MAX_PENDING_CHILD_ADMISSION_EVIDENCE,
   admitNativeChildModelExecution,
@@ -151,6 +152,31 @@ export class CodexNativeSubagentAdmissionCustody {
     for (const [turnId, pending] of this.pending) {
       this.replace(turnId, pending.filter(keep));
     }
+  }
+
+  completeSubmission(state: ParentState, child: ChildState): void {
+    const { childThreadId, nativeTurnId } = child;
+    const known = this.dependencies.knownChildren.get(childThreadId);
+    if (
+      !nativeTurnId ||
+      child.pendingCompletion?.status !== "succeeded" ||
+      child.runId !== codexNativeSubagentRunId(childThreadId, nativeTurnId) ||
+      known?.parent !== state ||
+      (known.observedTurns.get(nativeTurnId)?.state !== "completed" &&
+        child.nativeTurnState !== "completed")
+    ) {
+      return;
+    }
+    // History can admit a submitted turn before turn/started pairs its interaction.
+    // Only that turn's own result discharges the unpaired receipt. Delivery keeps its hold.
+    this.retainOnly(
+      (entry) =>
+        entry.kind !== "interaction" ||
+        entry.parentThreadId !== state.parentThreadId ||
+        entry.childThreadId !== childThreadId ||
+        entry.nativeTurnId !== undefined ||
+        entry.modelSourceTurnId !== nativeTurnId,
+    );
   }
 
   prune(isRetired: (state: ParentState) => boolean): void {

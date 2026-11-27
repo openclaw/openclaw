@@ -53,6 +53,7 @@ class CodexAttemptState {
   nativeHookRelayLastRenewedAt = 0;
   activeAppServerTurnRequests = 0;
   activeLocalProjections = 0;
+  projectionBound = false;
   projectionClosed = false;
   pendingTerminalDynamicToolRelease?: {
     call: CodexDynamicToolCallParams;

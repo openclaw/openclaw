@@ -1,11 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createNativeSubagentCompletionCustodyFixture } from "./native-subagent-custody.test-support.js";
 import {
+  agentMessage,
+  collabItem,
   CodexNativeSubagentMonitor,
   createClient,
+  createMonitorFixture,
+  createNativeModelSourceFixture,
   createRuntime,
   notifyChildStarted,
+  parentRegistration,
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
+
+const target = "00000000-0000-4000-8000-000000000042";
 
 describe("Codex native input target scope", () => {
   it.each([
@@ -26,7 +34,6 @@ describe("Codex native input target scope", () => {
       modelSource: undefined,
     });
     sender.bindTurn("sender-turn");
-    const target = "00000000-0000-4000-8000-000000000042";
     const foreign = await monitor.registerParent({
       parentThreadId: kind === "unrelated root" ? target : "unrelated-root",
       modelSource: undefined,
@@ -78,4 +85,256 @@ describe("Codex native input target scope", () => {
       await foreign.unregister();
     }
   });
+});
+
+async function coldChild(modelSource?: ReturnType<typeof createNativeModelSourceFixture>) {
+  const { client, monitor, runtime } = createMonitorFixture();
+  const custody = createNativeSubagentCompletionCustodyFixture();
+  runtime.captureAgentHarnessCompletionCustody.mockResolvedValueOnce(custody.root);
+  const parent = await monitor.registerParent(parentRegistration({ modelSource }));
+  parent.bindTurn("parent-turn");
+  onTestFinished(async () => {
+    await parent.unregister();
+    await monitor.dispose();
+  });
+  const metadata = threadRead({ childThreadId: target, agentPath: "/root/worker" });
+  metadata.thread.modelProvider = "test-provider";
+  metadata.thread.turns = [];
+  client.setThreadRead(target, metadata);
+  const first = {
+    id: "first",
+    status: "completed",
+    completedAt: 100,
+    itemsView: "summary",
+    items: [agentMessage("answer-1", "First result", "final_answer")],
+  };
+  client.setThreadTurns(target, { data: [first], nextCursor: null });
+  const prepare = (returnsSubmissionId = true, turnId = "parent-turn", itemId = "input") =>
+    monitor.prepareModelInput({
+      threadId: "parent-thread",
+      turnId,
+      itemId,
+      target,
+      returnsSubmissionId,
+      readQualification: () => undefined,
+      assertCurrent: () => {},
+    });
+  return { parent, client, monitor, runtime, metadata, first, prepare, custody };
+}
+
+it.each(["First result", "Second result"])(
+  "attributes a receipt for %s after resuming a settled child on a fresh client",
+  async (result) => {
+    const { client, parent, runtime, prepare } = await coldChild();
+    await client.item(
+      collabItem("resumeAgent", [target], { status: "inProgress" }),
+      "parent-turn",
+      "parent-thread",
+      "started",
+    );
+    await client.item(collabItem("resumeAgent", [target]));
+    await prepare();
+    await client.item(collabItem("sendInput", [target], { id: "input" }));
+    await client.sendInputOutput({ callId: "input", submissionId: "second" });
+    await client.startTurn("second", { threadId: target });
+    await client.completeNative({ agentPath: "/root/worker", turnId: "parent-turn", result });
+    await client.completeTurn({
+      threadId: target,
+      turnId: "second",
+      status: "completed",
+      items: [agentMessage("answer", "Second result", "final_answer")],
+    });
+    await parent.unregister();
+    if (result === "Second result") {
+      expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+      return;
+    }
+    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        announceId: `codex-native:parent-thread:codex-thread:${target}:turn:second:succeeded`,
+        completionCustody: expect.anything(),
+        result: "Second result",
+      }),
+    );
+  },
+);
+
+it.each(["matching", "different", "history-only completion", "rejected send"] as const)(
+  "recovers a reused worker from a paged summary with %s",
+  async (scenario) => {
+    const { client, monitor, parent, runtime, metadata, first, prepare } = await coldChild();
+    const registerParentTurn = async (turnId: string) => {
+      const { root } = createNativeSubagentCompletionCustodyFixture();
+      runtime.captureAgentHarnessCompletionCustody.mockResolvedValueOnce(root);
+      const registration = await monitor.registerParent(
+        parentRegistration({ modelSource: undefined }),
+      );
+      onTestFinished(() => registration.unregister());
+      registration.bindTurn(turnId);
+      return registration;
+    };
+    const second = {
+      ...first,
+      id: "second",
+      completedAt: 200,
+      items: [agentMessage("answer-2", "Second result", "final_answer")],
+    };
+
+    await prepare();
+    if (scenario === "history-only completion") {
+      metadata.thread.turns = [first, second];
+    }
+    await client.sendInputOutput({ callId: "input", submissionId: "second" });
+    if (scenario !== "history-only completion") {
+      await client.startTurn("second", { threadId: target });
+      await client.completeTurn({
+        threadId: target,
+        turnId: "second",
+        status: "completed",
+        items: second.items,
+      });
+    }
+    await parent.unregister();
+    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        announceId: `codex-native:parent-thread:codex-thread:${target}:turn:second:succeeded`,
+        result: "Second result",
+      }),
+    );
+    runtime.deliverAgentHarnessCompletion.mockClear();
+
+    client.setThreadTurns(target, {
+      data: [scenario === "different" ? { ...second, id: "unobserved" } : second],
+      nextCursor: "older",
+    });
+    if (scenario === "rejected send") {
+      const rejected = await registerParentTurn("rejected-parent-turn");
+      await prepare(true, "rejected-parent-turn", "rejected-input");
+      await client.notify({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "rejected-parent-turn",
+          item: {
+            type: "function_call_output",
+            call_id: "rejected-input",
+            output: "Native input rejected",
+          },
+        },
+      });
+      await rejected.unregister();
+    }
+
+    client.request.mockClear();
+    const resumed = await registerParentTurn("resumed-parent-turn");
+    await prepare(true, "resumed-parent-turn", "resumed-input");
+    expect(client.request).toHaveBeenCalledWith(
+      "thread/turns/list",
+      { threadId: target, limit: 1, sortDirection: "desc", itemsView: "summary" },
+      expect.anything(),
+    );
+    await client.sendInputOutput({
+      callId: "resumed-input",
+      submissionId: "third",
+      turnId: "resumed-parent-turn",
+    });
+    await client.startTurn("third", { threadId: target });
+    const numberedRun = `codex-thread:${target}:turn:third`;
+    expect(resumed.listPendingChildren().some((child) => child.runId === numberedRun)).toBe(
+      scenario !== "different",
+    );
+    if (scenario !== "different") {
+      await client.completeTurn({
+        threadId: target,
+        turnId: "third",
+        status: "completed",
+        items: [agentMessage("answer-3", "Third result", "final_answer")],
+      });
+      await resumed.unregister();
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          announceId: `codex-native:parent-thread:${numberedRun}:succeeded`,
+          completionCustody: expect.anything(),
+          result: "Third result",
+        }),
+      );
+    }
+  },
+);
+
+it("releases a cold worker after history admits its next turn before the start notification", async () => {
+  const source = createNativeModelSourceFixture(["worker"]);
+  const { client, parent, runtime, prepare, metadata, custody } = await coldChild({
+    ...source,
+    bindModelExecution: () =>
+      source.bindModelExecution?.({ provider: "test-provider", model: "worker" }),
+  });
+  await prepare();
+  metadata.thread.turns = [
+    { id: "first", status: "completed", items: [] },
+    { id: "second", status: "inProgress", items: [] },
+  ];
+  await client.item(collabItem("sendInput", [target], { id: "input" }));
+  await client.sendInputOutput({ callId: "input", submissionId: "second" });
+  await client.startTurn("second", { threadId: target });
+  await parent.unregister();
+  expect(source.release).not.toHaveBeenCalled();
+  expect(custody.live().length).toBeGreaterThan(0);
+  await client.completeTurn({
+    threadId: target,
+    turnId: "second",
+    status: "completed",
+    items: [agentMessage("answer", "Second result", "final_answer")],
+  });
+  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ result: "Second result", completionCustody: expect.anything() }),
+  );
+  expect(source.release).toHaveBeenCalledOnce();
+  expect(custody.live()).toHaveLength(0);
+});
+
+it.each(["fork", "multiple turns", "more pages", "commentary only", "failed turn"] as const)(
+  "does not assign an inferred follow-up to %s",
+  async (kind) => {
+    const { metadata, client, first, prepare, parent } = await coldChild();
+    if (kind === "fork") {
+      metadata.thread.forkedFromId = "parent-thread";
+    } else if (kind === "multiple turns") {
+      client.setThreadTurns(target, { data: [{ ...first, id: "another" }, first] });
+    } else if (kind === "more pages") {
+      client.setThreadTurns(target, { data: [first], nextCursor: "earlier" });
+    } else if (kind === "commentary only") {
+      first.items = [agentMessage("update", "Working", "commentary")];
+    } else {
+      first.status = "failed";
+    }
+    await prepare();
+    await client.sendInputOutput({ callId: "input", submissionId: "second" });
+    await client.startTurn("second", { threadId: target });
+    expect(parent.listPendingChildren().map((child) => child.runId)).not.toContain(
+      `codex-thread:${target}:turn:second`,
+    );
+  },
+);
+
+it("does not read history for inputs without a native submission ID", async () => {
+  const { client, prepare } = await coldChild();
+  await prepare(false);
+  expect(client.request.mock.calls.map(([method]) => method)).not.toContain("thread/turns/list");
+});
+
+it("refuses active children without an admitted execution before reading turn metadata", async () => {
+  const { metadata, client, prepare } = await coldChild();
+  metadata.thread.status = { type: "active" };
+  await expect(prepare()).rejects.toThrow("receiver's exact admitted execution");
+  expect(client.request.mock.calls.map(([method]) => method)).not.toContain("thread/turns/list");
+});
+
+it("refuses stale metadata after a receiver appears during turn lookup", async () => {
+  const { client, first, metadata, prepare } = await coldChild();
+  client.request.mockResolvedValueOnce(metadata).mockImplementationOnce(async () => {
+    await notifyChildStarted(client, "parent-thread", target);
+    return { data: [first], nextCursor: null };
+  });
+  await expect(prepare()).rejects.toThrow("receiver changed during input preparation");
 });
