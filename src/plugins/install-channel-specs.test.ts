@@ -85,6 +85,7 @@ it.each([
   [npmName + "@2026.6.33", "beta", npmName, "2026.8.1-beta.3"],
   [npmName + "@next", "beta", npmName, "2026.8.1-beta.3"],
   [npmName + "@^2026.6.0", "beta", npmName, "2026.8.1-beta.3"],
+  [npmName + "@^2026.6.0", "stable", npmName, "2026.8.1"],
   ["@acme/discord", "extended-stable", clawHubName, "2026.7.33"],
 ] as const)(
   "preserves explicit or third-party %s on %s",
@@ -105,6 +106,7 @@ it.each([
   ["2026.9.1-beta.1", "2026.9.2", "2026.9.2", "latest", "tag-behind-latest"],
   ["2026.9.3-beta.1", "2026.9.2", "2026.9.3-beta.1", "beta", undefined],
   ["2026.9.2", "2026.9.2", "2026.9.2", "beta", undefined],
+  ["2026.9.2", "2026.9.2-1", "2026.9.2-1", "latest", "tag-behind-latest"],
   [null, "2026.9.2", "2026.9.2", "latest", undefined],
   ["2026.9.3-beta.1", null, "2026.9.3-beta.1", "beta", undefined],
 ] as const)(

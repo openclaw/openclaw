@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { execNodeEvalSync } from "../test-utils/node-process.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   createCatalogAttemptReporter,
@@ -6,6 +7,29 @@ import {
 } from "./prepared-model-runtime.publication-events.js";
 
 describe("catalog attempt status publication", () => {
+  it("publishes diagnostic recovery while another acquisition remains failed", () => {
+    const reporter = createCatalogAttemptReporter(
+      {},
+      { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+      () => true,
+    );
+    const catalog = reporter.withRefreshStatus({ entries: [], routeVariants: [] });
+    reporter.failed(new Error("provider failed"), ["fixture"]);
+    reporter.failed(new Error("native failed"), ["fixture"], "native");
+    const listener = vi.fn();
+    const unregister = registerPreparedModelRuntimePublicationListener(listener);
+    try {
+      reporter.published(["fixture"], "provider");
+      expect(catalog.refreshFailed).toBe(true);
+      expect(catalog.refreshFailures).toEqual([{ acquisition: "native", provider: "fixture" }]);
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({ phase: "catalog-published", refreshStatusChanged: true }),
+      );
+    } finally {
+      unregister();
+    }
+  });
+
   it.each(["provider", "native"] as const)(
     "separates %s auth rejection from refresh failure",
     (kind) => {
@@ -13,7 +37,6 @@ describe("catalog attempt status publication", () => {
         {},
         { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
         () => true,
-        () => {},
       );
       const rejected = { provider: "signed-out", status: "auth-rejected" } as const;
       const unavailable = { provider: "unreachable", status: "unavailable" } as const;
@@ -46,7 +69,6 @@ describe("catalog attempt status publication", () => {
       {},
       { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
       () => true,
-      () => {},
     );
     const catalog: ModelCatalogSnapshot = reporter.withRefreshStatus({
       entries: [],
@@ -85,4 +107,31 @@ describe("catalog attempt status publication", () => {
       unregister();
     }
   });
+});
+
+it("keeps retained catalog status readable without retaining acquisition callbacks", () => {
+  const output = execNodeEvalSync(
+    `import assert from "node:assert/strict";
+     import { expectCollected } from ${JSON.stringify(new URL("../test-utils/retention.ts", import.meta.url).href)};
+     import { createCatalogAttemptReporter } from ${JSON.stringify(new URL("./prepared-model-runtime.publication-events.ts", import.meta.url).href)};
+     class Acquisition { active = true; }
+     function publish() {
+       const acquisition = new Acquisition();
+       const reporter = createCatalogAttemptReporter({},
+         { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+         () => acquisition.active);
+       reporter.setPending(["synthetic"]);
+       reporter.failed(new Error("synthetic native failure"), ["native-provider"], "native");
+       const catalog = reporter.withRefreshStatus({ entries: [], routeVariants: [] });
+       return { catalog, acquisition: new WeakRef(acquisition) };
+     }
+     const retained = publish();
+     await expectCollected(retained.acquisition);
+     assert.deepEqual(retained.catalog.pendingProviders, ["synthetic"]);
+     assert.equal(retained.catalog.refreshFailed, true);
+     assert.deepEqual(retained.catalog.refreshFailures, [{ acquisition: "native", provider: "native-provider" }]);
+     console.log("Acquisition released; status retained");`,
+    { imports: ["./scripts/tsx.mjs"], execArgv: ["--expose-gc"], timeout: 10_000 },
+  );
+  expect(output.trim()).toBe("Acquisition released; status retained");
 });

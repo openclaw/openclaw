@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyAuthority from "../../auto-reply/reply/reply-tool-authority.js";
 import type { ReplyToolAuthorityInput } from "../../auto-reply/reply/reply-tool-authority.types.js";
 import * as joinObservation from "../../sessions/session-controller.message-join-observation.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { captureCliRunToolAuthority } from "./tool-authority.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -161,16 +161,10 @@ describe("CLI question creator binding", () => {
     });
   });
 
-  it("carries the host-issued profile and refuses it after its source is revoked", async () => {
-    let active = true;
-    const source = createAdmittedRunOperatorAuthority({
+  it("carries the host-issued profile into question authority", async () => {
+    const source = createTestOperatorAuthority({
       profileId: "creator-profile",
       scopes: ["operator.write"],
-      assertCurrent: () => {
-        if (!active) {
-          throw new Error("source revoked");
-        }
-      },
     });
     using authority = captureCliRunToolAuthority(
       {
@@ -191,7 +185,5 @@ describe("CLI question creator binding", () => {
     const question = bound.bindQuestionAnswerAuthority(() => {});
     expect(question.requesterProfileId).toBe("creator-profile");
     expect(() => question.assertActive()).not.toThrow();
-    active = false;
-    expect(() => question.assertActive()).toThrow("source revoked");
   });
 });

@@ -13,9 +13,16 @@ export function nameControlUiChunks(files: Asset[]): Asset[] {
       continue;
     }
     const found: Reference[] = [];
-    const visit = (node: unknown): void => {
+    const pending: unknown[] = [
+      parse(Buffer.from(file.contents).toString("utf8"), {
+        ecmaVersion: "latest",
+        sourceType: "module",
+      }),
+    ];
+    while (pending.length > 0) {
+      const node = pending.pop();
       if (!isRecord(node)) {
-        return;
+        continue;
       }
       if (
         node.type === "ImportDeclaration" ||
@@ -39,19 +46,13 @@ export function nameControlUiChunks(files: Asset[]): Asset[] {
       for (const value of Object.values(node)) {
         if (Array.isArray(value)) {
           for (const child of value) {
-            visit(child);
+            pending.push(child);
           }
         } else {
-          visit(value);
+          pending.push(value);
         }
       }
-    };
-    visit(
-      parse(Buffer.from(file.contents).toString("utf8"), {
-        ecmaVersion: "latest",
-        sourceType: "module",
-      }),
-    );
+    }
     references.set(
       file.name,
       found.toSorted((a, b) => a.start - b.start),

@@ -4,6 +4,7 @@ import "./detached-async-context.js";
 import { runWithAsyncStore } from "./async-store.js";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
+import { settlesWithin } from "./settle-within.js";
 
 type AsyncWorkScopeFrame = { scope: AsyncWorkScope; parent?: AsyncWorkScopeFrame };
 
@@ -33,12 +34,19 @@ export const AsyncWorkScopeClosedError = resolveGlobalSingleton(
 /** Joins cooperating descendants even when their caller returns a cached value first. */
 export class AsyncWorkScope {
   private readonly pending = new Set<Promise<unknown>>();
-  private readonly controller = new AbortController();
+  private controller?: AbortController;
   private phase: "open" | "closing" | "closed" = "open";
 
   constructor(private readonly failures?: Set<unknown>) {}
 
   get signal(): AbortSignal {
+    if (!this.controller) {
+      this.controller = new AbortController();
+      if (this.isClosing) {
+        this.controller.abort();
+        materializeErrorStack(this.controller.signal.reason);
+      }
+    }
     return this.controller.signal;
   }
 
@@ -114,8 +122,13 @@ export class AsyncWorkScope {
       return;
     }
     this.phase = "closing";
-    this.controller.abort(reason);
-    materializeErrorStack(this.controller.signal.reason);
+    // A default abort reason is only needed once the cancellation signal escapes.
+    const controller =
+      reason === undefined ? this.controller : (this.controller ??= new AbortController());
+    if (controller) {
+      controller.abort(reason);
+      materializeErrorStack(controller.signal.reason);
+    }
   }
 
   /** Starts the next phase in the same continuation that observes settled pending work. */
@@ -149,6 +162,16 @@ export class AsyncWorkScope {
   }
 }
 
+export const GatewayRetainedWorkTimeoutError = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayRetainedWorkTimeoutError"),
+  () =>
+    class RetainedWorkTimeoutError extends Error {
+      constructor() {
+        super("Retained Gateway work did not settle after abort; resources remain retained");
+      }
+    },
+);
+
 /** Retains accepted work across Gateway close handles and successor scope generations. */
 export class GatewayRetainedWorkScope {
   private work = new AsyncWorkScope();
@@ -156,7 +179,10 @@ export class GatewayRetainedWorkScope {
   private gateways = 0;
   private closing = false;
 
-  constructor(private readonly assertSettled?: () => void) {}
+  constructor(
+    private readonly assertSettled?: () => void,
+    private readonly escalation?: { abortPendingAfterMs: () => number; reason: string },
+  ) {}
 
   get scope(): AsyncWorkScope {
     return this.work;
@@ -176,8 +202,8 @@ export class GatewayRetainedWorkScope {
     this.closing = false;
   }
 
-  private drain(scope: AsyncWorkScope): Promise<void> {
-    return AsyncWorkScope.runWhenAllIdle(
+  private async drain(scope: AsyncWorkScope): Promise<void> {
+    const settlement = AsyncWorkScope.runWhenAllIdle(
       () => [scope],
       async () => {
         await scope.drain();
@@ -185,6 +211,22 @@ export class GatewayRetainedWorkScope {
         this.scopes.delete(scope);
       },
     );
+    if (!this.escalation) {
+      return settlement;
+    }
+    const graceMs = this.escalation.abortPendingAfterMs();
+    if (await settlesWithin(settlement, graceMs)) {
+      return;
+    }
+    if (!scope.isClosing) {
+      console.warn(this.escalation.reason);
+      scope.beginClose(new Error(this.escalation.reason));
+    }
+    // Cancellation never releases custody: late receipts and cleanup still join
+    // settlement, and an uncooperative operation keeps its registered scope.
+    if (!(await settlesWithin(settlement, graceMs))) {
+      throw new GatewayRetainedWorkTimeoutError();
+    }
   }
 
   beginDrainAll(): Promise<void[]> {

@@ -174,7 +174,7 @@ describe("chat session sharing menu", () => {
           identities: Array.from({ length: count }, (_, index) => ({
             type: "human" as const,
             id: `person-${index}`,
-            label: `Person ${index} (${count})`,
+            label: `É ${index} (${count})`,
             get avatarUrl() {
               return readAvatar();
             },
@@ -200,7 +200,7 @@ describe("chat session sharing menu", () => {
     expect(root.querySelector('[data-value="member:person-100"]')).toBe(member);
     expect(member?.querySelector("openclaw-session-owner-chip")).toBe(avatar);
     expect(item(root, "permission:person-100")).toMatchObject({ title: "Requires write" });
-    expect(member && part(member, "sharing-member-label")?.textContent).toBe("Person 100 (102)");
+    expect(member && part(member, "sharing-member-label")?.textContent).toBe("É 100 (102)");
     expect(item(root, "permission:person-100")?.getAttribute("aria-label")).toContain("Can send");
     panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     flush();
@@ -211,7 +211,7 @@ describe("chat session sharing menu", () => {
     flush();
     const search = root.querySelector<HTMLInputElement>("input[data-search]")!;
     expect(document.activeElement).toBe(search);
-    search.value = "Person 101";
+    search.value = "e\u0301 101";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     expect(root.querySelector("input[data-search]")).toBe(search);
@@ -281,6 +281,7 @@ describe("chat session sharing menu", () => {
     expect(part(inherited, "sharing-permission")?.textContent).toBe("Can send");
     const editable = item(root, "permission:channel:chn_design")!;
     expect(editable.textContent).toBe("Can read");
+    expect(editable.querySelector(".picker-select__chevron svg")).not.toBeNull();
     expect(
       root.querySelector('[data-value="member:channel:chn_design"] openclaw-session-owner-chip'),
     ).not.toBeNull();
@@ -315,6 +316,71 @@ describe("chat session sharing menu", () => {
     render({ ...props, session: sharingSession({ visibility: "shared" }) }, root);
     readOption.click();
     expect(onMemberChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("edits invited access across visibility and legacy membership states", async () => {
+    const onMemberAccessChange = vi.fn();
+    const props = renderSharing({
+      session: sharingSession({ visibility: "shared" }),
+      onMemberAccessChange,
+      state: sharingState({
+        identities: [human("alice", "Alice"), human("other", "Other")],
+        members: [{ identityId: "alice", addedBy: "owner", addedAt: 1, access: "send" }],
+        permissions: [
+          {
+            identityId: "alice",
+            level: "send",
+            options: ["read", "suggest", "send"],
+            invitation: "member",
+          },
+          { identityId: "other", level: "read", options: ["read", "send"] },
+        ],
+      }),
+    });
+    const root = await mount(props);
+    expect(item(root, "permission:other")).toBeNull();
+    item(root, "permission:alice")!.click();
+    await waitForSolid(() => expect(item(root, "permission:suggest:alice")).not.toBeNull());
+    expect(root.textContent).not.toContain("queued messages");
+    item(root, "permission:suggest:alice")!.click();
+    expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("alice", "suggest");
+    expect(props.onMemberChange).not.toHaveBeenCalled();
+    render({ ...props, session: sharingSession({ visibility: "draft" }) }, root);
+    expect(item(root, "permission:alice")).not.toBeNull();
+    render({ ...props, onMemberAccessChange: undefined }, root);
+    await waitForSolid(() => expect(item(root, "permission:alice")).toBeNull());
+    expect(root.textContent).toContain("Can send");
+    const legacy = renderSharing({
+      session: sharingSession({ visibility: "read-only" }),
+      onMemberAccessChange,
+      onMemberChange: props.onMemberChange,
+      state: sharingState({
+        identities: [human("legacy", "Legacy"), human("uninvited", "Uninvited")],
+        members: [{ identityId: "legacy", addedBy: "owner", addedAt: 1 }],
+        permissions: [
+          {
+            identityId: "legacy",
+            level: "read",
+            options: ["read", "suggest", "send"],
+            invitation: "member",
+          },
+          {
+            identityId: "uninvited",
+            level: "read",
+            options: ["read", "suggest", "send"],
+            invitation: "available",
+          },
+        ],
+      }),
+    });
+    render(legacy, root);
+    onMemberAccessChange.mockClear();
+    expect(item(root, "permission:uninvited")).toBeNull();
+    item(root, "permission:legacy")!.click();
+    await waitForSolid(() => expect(item(root, "permission:suggest:legacy")).not.toBeNull());
+    item(root, "permission:suggest:legacy")!.click();
+    expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("legacy", "suggest");
+    expect(props.onMemberChange).not.toHaveBeenCalled();
   });
 
   it("keeps a world-readable draft session visibly public after its menu closes", async () => {
@@ -364,7 +430,7 @@ describe("chat session sharing menu", () => {
       onCopyPublicLink,
     });
     expect(root.textContent).toContain("Link sharing");
-    expect(root.textContent).toContain("The public link stays readable in Draft.");
+    expect(root.textContent).toContain("Anyone can read without signing in.");
     await select(root, "public:disable");
     expect(onPublicShareChange).toHaveBeenCalledWith(false);
     expect(onVisibilityChange).not.toHaveBeenCalled();
@@ -424,10 +490,40 @@ describe("chat session sharing menu", () => {
       expect(copy.disabled).toBe(true);
     });
     retry.resolve({ status: "success" });
-    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied"));
     expect(item(root, "public:copy")).toBe(copy);
     expect(copy.disabled).toBe(false);
     expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
+  });
+
+  it("shows the scan caption only with a QR code it could encode", async () => {
+    const root = await mount({
+      state: { ...sharingState({ publicShare }), publicUrl: "https://team.example/chat/main/demo" },
+      onPublicShareChange: vi.fn(),
+      onCopyPublicLink: vi.fn(),
+    });
+    await waitForSolid(() =>
+      expect(root.querySelector(".chat-session-public-qr .qr-code")).not.toBeNull(),
+    );
+    expect(root.querySelector(".chat-session-public-qr")?.textContent).toContain(
+      "Scan to open the public link",
+    );
+
+    // Past QR capacity the encoder throws; copy stays, and no caption points at a missing code.
+    render(
+      renderSharing({
+        state: {
+          ...sharingState({ publicShare }),
+          publicUrl: `https://team.example/${"a".repeat(3000)}`,
+        },
+        onPublicShareChange: vi.fn(),
+        onCopyPublicLink: vi.fn(),
+      }),
+      root,
+    );
+    await waitForSolid(() => expect(root.querySelector(".chat-session-public-qr")).toBeNull());
+    expect(root.textContent).not.toContain("Scan to open the public link");
+    expect(item(root, "public:copy")?.disabled).toBe(false);
   });
 
   it.each(["loading", "read-only", "member"] as const)(

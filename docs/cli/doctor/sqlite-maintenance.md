@@ -306,7 +306,8 @@ are named in the warning; retained historical conflicts do not block update's
 post-session plugin repair. Preserve the originals and migration manifests while
 resolving those conflicts, then rerun `openclaw doctor --fix`.
 
-If you deleted a retained historical archive, Doctor keeps a warning and completes
+If a retained historical archive is missing, Doctor redirects its receipts to a
+verified identical surviving archive when available. Otherwise it keeps a warning and completes
 verified plugin session repair. History available only in that missing file cannot
 be recovered; Doctor does not recreate it or resurrect deleted sessions. Remaining
 originals and their recovery references stay protected.

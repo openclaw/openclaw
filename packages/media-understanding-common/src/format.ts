@@ -1,4 +1,84 @@
-import type { MediaUnderstandingOutput } from "./types.js";
+import type {
+  MediaAttachmentDisposition,
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingModelDecision,
+  MediaUnderstandingOutput,
+} from "./types.js";
+
+/** Formats a compact operator-facing summary of a media-understanding decision. */
+export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
+  const { attachments } = decision;
+  const total = attachments.length;
+  const success = attachments.filter((entry) => entry.chosen?.outcome === "success").length;
+  const chosen = attachments.find((entry) => entry.chosen)?.chosen;
+  const provider = chosen?.provider?.trim();
+  const model = chosen?.model?.trim();
+  const modelLabel = provider
+    ? model && model !== provider
+      ? `${provider}/${model}`
+      : provider
+    : undefined;
+  const backendLabel = chosen?.observedBackend
+    ? ` observed=${chosen.observedBackend}`
+    : chosen?.requestedBackend
+      ? ` requested=${chosen.requestedBackend}`
+      : "";
+  const reason = findDecisionReason(decision, decision.outcome === "failed" ? "failed" : undefined);
+  const shortReason = summarizeDecisionReason(reason);
+  const code = decision.outcome === "failed" ? findFailedProviderCode(decision) : undefined;
+  const countLabel = total > 0 ? ` (${success}/${total})` : "";
+  const viaLabel = modelLabel ? ` via ${modelLabel}${backendLabel}` : "";
+  const reasonLabel = shortReason ? ` reason=${shortReason}${code ? ` code=${code}` : ""}` : "";
+  return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
+}
+
+/** Provider error code of the attachment whose failure `findDecisionReason` reports. */
+function findFailedProviderCode(decision: MediaUnderstandingDecision): string | undefined {
+  const attachment = decision.attachments.find((entry) =>
+    entry.attempts.some((attempt) => attempt.outcome === "failed" && attempt.reason?.trim()),
+  );
+  const disposition = attachment && decision.attachmentDispositions?.[attachment.attachmentIndex];
+  return disposition?.kind === "failed" ? disposition.code : undefined;
+}
+
+/** Returns the first non-empty attempt reason, optionally filtered by outcome. */
+export function findDecisionReason(
+  decision: MediaUnderstandingDecision,
+  outcome?: MediaUnderstandingModelDecision["outcome"],
+): string | undefined {
+  for (const attachment of decision.attachments) {
+    for (const attempt of attachment.attempts) {
+      if (outcome && attempt.outcome !== outcome) {
+        continue;
+      }
+      if (!attempt.reason?.trim()) {
+        continue;
+      }
+      return attempt.reason;
+    }
+  }
+  return undefined;
+}
+
+/** Trims provider/runtime error prefixes into a stable human-readable reason. */
+export function normalizeDecisionReason(reason?: string): string | undefined {
+  const trimmed = reason?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed.replace(/^(?:Error|ProviderHttpError):\s*/i, "").trim();
+  return normalized || undefined;
+}
+
+/** Produces the short reason token used in status and decision summary output. */
+export function summarizeDecisionReason(reason?: string): string | undefined {
+  const normalized = normalizeDecisionReason(reason);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.split(/:|\s+\[request_id=/)[0]?.trim() || undefined;
+}
 
 const sectionByKind = {
   "audio.transcription": { title: "Audio", label: "Transcript" },
@@ -51,4 +131,54 @@ export function formatAudioTranscripts(outputs: MediaUnderstandingOutput[]): str
       outputs.length === 1 ? output.text : `Audio ${index + 1}:\n${output.text}`,
     )
     .join("\n\n");
+}
+
+const MAX_SKIPPED_FILE_MARKERS = 5;
+
+// Reason-neutral because the shared overflow can mix file and media outcomes.
+function renderSkippedFileOverflowSummary(count: number): string {
+  return `[${count} more attachment${count === 1 ? "" : "s"} skipped]`;
+}
+
+export function renderMediaAttachmentDisposition(
+  capability: MediaUnderstandingCapability,
+  disposition: MediaAttachmentDisposition,
+): string | null {
+  const label = `${capability[0]?.toUpperCase()}${capability.slice(1)}`;
+  switch (disposition.kind) {
+    case "handled":
+    case "handed-to-native-vision":
+      return null;
+    case "not-selected":
+      return `[${label} attachment not processed: attachment limit reached]`;
+    case "capability-disabled":
+      return `[${label} attachment not analyzed: ${capability} understanding is disabled]`;
+    case "no-model":
+      return `[${label} attachment not analyzed: no ${capability}-understanding model is configured]`;
+    case "scope-denied":
+      return `[${label} attachment not analyzed in this chat]`;
+    case "failed":
+      return disposition.status === undefined
+        ? `[${label} attachment could not be analyzed]`
+        : `[${label} attachment could not be analyzed (HTTP ${disposition.status}${disposition.code ? ` code=${disposition.code}` : ""})]`;
+    default:
+      return disposition satisfies never;
+  }
+}
+
+export type AttachmentContextBlock = { text: string; consumesMarkerBudget: boolean };
+
+export function applyAttachmentMarkerBudget(blocks: AttachmentContextBlock[]): string[] {
+  const rendered: string[] = [];
+  let markers = 0;
+  let overflow = 0;
+  for (const block of blocks) {
+    if (block.consumesMarkerBudget && markers >= MAX_SKIPPED_FILE_MARKERS) {
+      overflow += 1;
+      continue;
+    }
+    markers += Number(block.consumesMarkerBudget);
+    rendered.push(block.text);
+  }
+  return overflow > 0 ? [...rendered, renderSkippedFileOverflowSummary(overflow)] : rendered;
 }

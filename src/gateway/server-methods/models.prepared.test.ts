@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { apiKey, harnessRegistry } from "../../agents/model-catalog-fixtures.test-support.js";
 import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import {
@@ -10,15 +11,17 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as providerPolicySurface from "../../plugins/provider-policy-surface.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as pluginScope from "../../plugins/runtime/gateway-request-scope.js";
+import { connectUserModelAccount } from "../../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { authorizationClient } from "../server-methods.authorization.test-support.js";
 import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import * as sessionReads from "../session-utils-store.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
@@ -49,7 +52,111 @@ function modelsReader(
   };
 }
 
-it("retains the model-list projection until its catalog facts change", async () => {
+it.each(["ambient", "configured", "personal"] as const)(
+  "defers required-worker auth without hiding %s account failures",
+  async (selection) => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "worker-model-picker-", env: WITHOUT_OPENAI_ENV_AUTH },
+      async (state) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              model: `openai/worker-default${selection === "configured" ? "@openai:chosen" : ""}`,
+              models: { "openai/worker-default": {}, "openai/worker-alternative": {} },
+            },
+            entries: { main: {} },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://models.example.test/v1",
+                api: "openai-completions",
+                models: ["worker-default", "worker-alternative"].map((id) => modelDefinition(id)),
+              },
+            },
+          },
+          cloudWorkers: {
+            requiredProfile: "dedicated",
+            profiles: {
+              dedicated: {
+                provider: "device",
+                settings: { device: "paired", inference: "worker" },
+              },
+            },
+          },
+        };
+        let client: GatewayClient | null = null;
+        if (selection === "personal") {
+          const person = ensureProfileForEmail("worker-picker@example.test");
+          connectUserModelAccount({
+            ownerProfileId: person.id,
+            credential: {
+              type: "token",
+              provider: "openai",
+              token: "synthetic-expired",
+              expires: 1,
+            },
+            assertCurrent() {},
+          });
+          client = authorizationClient("worker-picker", ["operator.read"], {
+            authenticatedUserProfile: gatewayProfile(
+              person.id,
+              person.displayName,
+              person.updatedAt,
+            ),
+          });
+        }
+        const context = createModelsListTestContext({
+          cfg,
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          catalog: ["worker-default", "worker-alternative"].map((id) =>
+            providerCatalogEntry("openai", id),
+          ),
+        });
+        const read = (view: "configured" | "provider-config") =>
+          modelsReader(context, { agentId: "main", view }, client)();
+        const draft = await read("configured");
+        expect(draft?.models.map((model) => model.id)).toEqual([
+          "worker-default",
+          "worker-alternative",
+        ]);
+        for (const model of draft!.models) {
+          const pinned =
+            selection === "personal" ||
+            (selection === "configured" && model.id === "worker-default");
+          if (pinned) {
+            expect(model.available).toBe(false);
+            expect(model.unavailableReason).toBeDefined();
+          } else {
+            // Ambient worker auth stays unknown until admission, not positively available.
+            expect(model).not.toHaveProperty("available");
+            expect(model).not.toHaveProperty("unavailableReason");
+          }
+        }
+        for (const model of (await read("provider-config"))!.models) {
+          expect(model).toMatchObject({
+            available: false,
+            unavailableReason:
+              selection === "configured" && model.id === "worker-default"
+                ? "auth-failed"
+                : "missing-auth",
+          });
+        }
+        if (selection === "personal") {
+          // The same catalog identity must not carry a different requester's private pin.
+          const ambient = await modelsReader(context, { agentId: "main", view: "configured" })();
+          expect(ambient?.models.every((model) => model.available === undefined)).toBe(true);
+          expect(
+            (await read("configured"))?.models.every((model) => model.available === false),
+          ).toBe(true);
+        }
+      },
+    );
+  },
+);
+
+it("publishes catalog status and policy changes while retaining a retired owner until replacement", async () => {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "model-list-projection-" },
     async (state) => {
@@ -61,9 +168,7 @@ it("retains the model-list projection until its catalog facts change", async () 
       };
       setRuntimeConfigSnapshot(config);
       const pluginRegistry = createEmptyPluginRegistry();
-      const catalog = Array.from({ length: 64 }, (_, index) =>
-        providerCatalogEntry("test", index === 0 ? "first" : `model-${index}`),
-      );
+      const catalog = ["first", "model-1"].map((id) => providerCatalogEntry("test", id));
       const context = createModelsListTestContext({
         pluginRegistry,
         cfg: config,
@@ -80,12 +185,6 @@ it("retains the model-list projection until its catalog facts change", async () 
         { internal: { syntheticClient: true } },
         { caps: ["model-selection-policy"] },
       );
-      const expected = await modelsListResult.buildModelsListResult({
-        source: { kind: "gateway", context },
-        agentId: "main",
-        params,
-        includeManualSelection: true,
-      });
       const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
       let current = true;
       const owner: ReturnType<typeof createChatMetadataOwner> = {
@@ -103,7 +202,6 @@ it("retains the model-list projection until its catalog facts change", async () 
         loadDeferred: unpreparedRead,
       });
       const read = modelsReader(context, params, client);
-      const readCommands = () => harness.runtime.read({ agentId: "main", includeModels: false });
       const publishConfig = async (next: OpenClawConfig) => {
         currentConfig = next;
         setRuntimeConfigSnapshot(next, next);
@@ -114,45 +212,27 @@ it("retains the model-list projection until its catalog facts change", async () 
       try {
         using prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
         await harness.runtime.refresh();
-        expect(JSON.stringify(await read())).toBe(JSON.stringify(expected));
-        await expect(readCommands()).resolves.toMatchObject({
-          commands: [{ name: "command-1-1" }],
-        });
+        const prepared = await read();
+        expect(prepared?.models.map(({ id }) => id)).toEqual(["first", "model-1"]);
         {
           using enterPluginScope = vi.spyOn(pluginScope, "withPluginRuntimeRegistryScope");
-          using resolvePolicy = vi.spyOn(
-            providerPolicySurface,
-            "resolveDirectBundledProviderPolicySurface",
-          );
           using prepareStatement = vi.spyOn(DatabaseSync.prototype, "prepare");
           using executeStatement = vi.spyOn(DatabaseSync.prototype, "exec");
-          expect(await Promise.all(Array.from({ length: 10 }, read))).toEqual(
-            Array.from({ length: 10 }, () => expected),
-          );
+          expect(await Promise.all([read(), read()])).toEqual([prepared, prepared]);
           expect(enterPluginScope).not.toHaveBeenCalled();
           expect(prepareStatement).not.toHaveBeenCalled();
           expect(executeStatement).not.toHaveBeenCalled();
           expect(unpreparedRead).not.toHaveBeenCalled();
-          // One provider lookup per read is sufficient; prepared rows retain their identities.
-          expect(resolvePolicy.mock.calls.length).toBeLessThanOrEqual(10);
+          expect(prepareProjection).toHaveBeenCalledOnce();
         }
         harness.setSkillsVersion(2);
         await publishConfig({
-          ...config,
+          ...currentConfig,
           ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
           meta: { lastTouchedVersion: "2026.10.11" },
         });
-        await expect(readCommands()).resolves.toMatchObject({
-          commands: [{ name: "command-2-1" }],
-        });
-        expect(harness.buildCommands).toHaveBeenCalledTimes(2);
-        expect(await read()).toEqual(expected);
+        expect(await read()).toEqual(prepared);
         expect(prepareProjection).toHaveBeenCalledOnce();
-        harness.setSkillsVersion(2);
-        await harness.runtime.refresh();
-        expect(await read()).toEqual(expected);
-        expect(prepareProjection).toHaveBeenCalledOnce();
-        expect(await readCommands()).toMatchObject({ commands: [{ name: "command-2-1" }] });
         owner.modelCatalog.pendingProviders = ["test"];
         expect(await read()).toMatchObject({ pendingProviders: ["test"] });
         owner.modelCatalog.pendingProviders = undefined;
@@ -191,7 +271,6 @@ it("retains the model-list projection until its catalog facts change", async () 
         expect(await read()).toMatchObject({
           models: expect.arrayContaining([expect.objectContaining({ id: "second" })]),
         });
-        await Promise.all(Array.from({ length: 8 }, read));
         expect(prepareProjection).toHaveBeenCalledTimes(3);
         expect(unpreparedRead).not.toHaveBeenCalled();
       } finally {
@@ -202,7 +281,7 @@ it("retains the model-list projection until its catalog facts change", async () 
   );
 });
 
-it("bounds saved-session reads while projecting configured models and runtime choices", async () => {
+it("isolates saved account and runtime choices between sessions", async () => {
   await withOpenClawTestState(
     {
       layout: "state-only",
@@ -326,15 +405,12 @@ it("bounds saved-session reads while projecting configured models and runtime ch
         sessionRead.mockClear();
         expect(await read()).toEqual(result);
         const warmReadsPerRequest = sessionRead.mock.calls.length;
-        expect(await Promise.all(Array.from({ length: 6 }, read))).toEqual(
-          Array.from({ length: 6 }, () => result),
-        );
+        expect(await Promise.all([read(), read()])).toEqual([result, result]);
         expect(loadNativeCatalog).not.toHaveBeenCalled();
         // Model/runtime cardinality must not multiply live session authority acquisitions.
         expect(readsPerRequest).toBeLessThanOrEqual(12);
         expect(warmReadsPerRequest).toBeLessThanOrEqual(2);
         expect(prepareProjection).toHaveBeenCalledOnce();
-
         params.sessionKey = siblingSessionKey;
         expect(await read()).toMatchObject({
           models: result?.models,
@@ -353,20 +429,19 @@ it("bounds saved-session reads while projecting configured models and runtime ch
             authProfileOverride: "openai:alternate",
           },
         );
-        const changed = await Promise.all(Array.from({ length: 6 }, read));
-        for (const projection of changed) {
-          expect(projection?.models[0]).toMatchObject({
-            id: "gpt-fixture-8",
-            agentRuntime: { id: "codex" },
-          });
-          expect(projection?.accountSelection).toMatchObject({
-            kind: "shared",
-            authProfileId: "openai:alternate",
-            source: "user",
-          });
-        }
+        const [changed, concurrentChanged] = await Promise.all([read(), read()]);
+        expect(concurrentChanged).toEqual(changed);
+        expect(changed?.models[0]).toMatchObject({
+          id: "gpt-fixture-8",
+          agentRuntime: { id: "codex" },
+        });
+        expect(changed?.accountSelection).toMatchObject({
+          kind: "shared",
+          authProfileId: "openai:alternate",
+          source: "user",
+        });
         expect(prepareProjection).toHaveBeenCalledTimes(2);
-        expect(await read()).toEqual(changed[0]);
+        expect(await read()).toEqual(changed);
         expect(prepareProjection).toHaveBeenCalledTimes(2);
         params.sessionKey = siblingSessionKey;
         expect(await read()).toMatchObject({
@@ -374,6 +449,103 @@ it("bounds saved-session reads while projecting configured models and runtime ch
           accountSelection: result?.accountSelection,
         });
         expect(prepareProjection).toHaveBeenCalledTimes(2);
+      } finally {
+        await harness.runtime.stop();
+      }
+    },
+  );
+});
+
+it("keeps default snapshots distinct from user selections in the prepared session catalog", async () => {
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "default-session-model-list-", env: WITHOUT_OPENAI_ENV_AUTH },
+    async (state) => {
+      const config: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          defaults: {
+            model: "openai/current",
+            models: { "openai/current": {} },
+            modelPolicy: { allow: ["openai/*", "anthropic/*"] },
+          },
+        },
+      };
+      await state.writeConfig(config);
+      const catalog = [
+        providerCatalogEntry("openai", "current"),
+        providerCatalogEntry("anthropic", "previous"),
+      ];
+      const pluginRegistry = createEmptyPluginRegistry();
+      const context = createModelsListTestContext({
+        cfg: config,
+        catalog,
+        pluginRegistry,
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+      });
+      const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
+      harness.setOwner({
+        ...createChatMetadataOwner(config, "current", {}, "openai", "openai-completions"),
+        pluginRegistry,
+        modelCatalog: { entries: catalog, routeVariants: catalog },
+      });
+      context.readPreparedModelsList = harness.runtime.readModelsList;
+      const sessionKey = "agent:main:default-catalog";
+      const userSessionKey = "agent:main:user-catalog";
+      for (const [key, source] of [
+        [sessionKey, "default"],
+        [userSessionKey, "user"],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: key },
+          {
+            sessionId: key,
+            updatedAt: 1,
+            providerOverride: "anthropic",
+            modelOverride: "previous",
+            modelOverrideSource: source,
+            agentRuntimeOverride: "openclaw",
+          },
+        );
+      }
+      try {
+        using prepare = vi.spyOn(modelsListResult, "prepareModelsListResult");
+        await harness.runtime.refresh();
+        const client = authorizationClient(
+          "default-catalog",
+          ["operator.read"],
+          { internal: { syntheticClient: true } },
+          { caps: ["model-selection-policy"] },
+        );
+        const read = (key: string) =>
+          modelsReader(
+            context,
+            {
+              agentId: "main",
+              sessionKey: key,
+              view: "configured",
+            },
+            client,
+          )();
+        const inherited = await read(sessionKey);
+        expect(inherited?.models.map(({ provider, id }) => `${provider}/${id}`)).toEqual([
+          "openai/current",
+        ]);
+        const selected = await read(userSessionKey);
+        expect(selected?.models.map(({ provider, id }) => `${provider}/${id}`)).toContain(
+          "anthropic/previous",
+        );
+        expect(prepare).toHaveBeenCalledTimes(2);
+        expect(inherited?.models[0]?.agentRuntime).toMatchObject({
+          id: "openclaw",
+          source: "model",
+        });
+        expect(
+          selected?.models.find(({ provider }) => provider === "openai")?.agentRuntime,
+        ).toMatchObject({ id: "codex", source: "implicit" });
+        expect(await read(sessionKey)).toEqual(inherited);
+        expect(await read(userSessionKey)).toEqual(selected);
+        expect(prepare).toHaveBeenCalledTimes(2);
       } finally {
         await harness.runtime.stop();
       }

@@ -8,11 +8,20 @@ import { appendReplyMediaFailures, type ReplyMediaFailure } from "../auto-reply/
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
-import { normalizeInputProvenance } from "../sessions/input-provenance.js";
+import {
+  isCompletionReportInputProvenance,
+  normalizeInputProvenance,
+  stripInterSessionPromptPrefixForDisplay,
+} from "../sessions/input-provenance.js";
+import { isLegacySessionsSendFailureNoticeText } from "../sessions/sessions-send-failure-notice.js";
 import {
   extractAssistantPhaseText,
   isAssistantTextContentBlockType as isAssistantTextContentType,
 } from "../shared/chat-message-content.js";
+import {
+  readSubagentCompletions,
+  subagentCompletionMessage,
+} from "../shared/subagent-completion.js";
 
 export { isAssistantTextContentType };
 
@@ -153,7 +162,7 @@ export function truncateChatHistoryText(
   }
   const prefix = truncateUtf16Safe(text, limit);
   return {
-    text: preserveExactPrefix ? prefix : `${prefix}\n...(truncated)...`,
+    text: preserveExactPrefix || !prefix.trim() ? prefix : `${prefix}\n...(truncated)...`,
     truncated: true,
   };
 }
@@ -312,10 +321,64 @@ export function isProjectedForwardedMessage(message: Record<string, unknown>): b
   return message.role === "assistant" && hasForwardedMessageProvenance(message);
 }
 
+/** Legacy peer delivery failure notices were persisted without `display: false`. */
+export function isLegacySessionsSendFailureNoticeMessage(
+  message: Record<string, unknown>,
+): boolean {
+  if (message.role !== "user" && message.role !== "assistant") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  return (
+    provenance?.kind === "inter_session" &&
+    provenance.sourceTool === "sessions_send" &&
+    isLegacySessionsSendFailureNoticeText(
+      stripInterSessionPromptPrefixForDisplay(
+        extractProjectedText(message.content ?? message.text),
+      ),
+    )
+  );
+}
+
 function hasForwardedMessageProvenance(message: Record<string, unknown>): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
   return (
     (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
     isCronRunMessage(message)
   );
+}
+
+/**
+ * Called after original user-input classification; only display facts leave private inputs.
+ * The receipt replaces its wake, so it carries the wake's turn boundary.
+ */
+export function projectCompletionReportInput(
+  message: Record<string, unknown>,
+  boundary: boolean | string,
+) {
+  const completions = isCompletionReportInputProvenance(message.provenance)
+    ? readSubagentCompletions(readRecord(message["__openclaw"])?.subagentCompletions)
+    : [];
+  if (!completions.length) {
+    return message;
+  }
+  const receipt = subagentCompletionMessage(message, completions);
+  return boundary ? attachProjectedTurnBoundary(receipt, boundary) : receipt;
+}
+
+export function attachProjectedTurnBoundary(
+  message: Record<string, unknown>,
+  boundary: true | string,
+): Record<string, unknown> {
+  const metadata = readRecord(message["__openclaw"]);
+  return {
+    ...message,
+    __openclaw: {
+      ...metadata,
+      // Exec and restart rows kept `turnBoundary` for clients that read only it;
+      // the continuation fact tells the Control UI the turn goes on.
+      ...(boundary === "subagent" ? {} : { turnBoundary: true }),
+      ...(boundary === true ? {} : { continuation: { source: boundary } }),
+    },
+  };
 }

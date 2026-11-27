@@ -35,6 +35,7 @@ import {
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -229,11 +230,7 @@ export function resolveSessionStoreIdentity(
   if (!generation) {
     return deriveSessionStoreIdentity(params);
   }
-  let identities = sessionStoreIdentities.get(generation);
-  if (!identities) {
-    identities = new Map();
-    sessionStoreIdentities.set(generation, identities);
-  }
+  const identities = getOrCreateWeakOwnerMap(sessionStoreIdentities, generation);
   const key = JSON.stringify([
     params.sessionKey,
     params.agentId,

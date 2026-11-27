@@ -114,14 +114,21 @@ async function drain(...runs: Promise<unknown>[]) {
 }
 
 it.each([false, true])(
-  "bounds session adoption even without runner start (lane wait: %s)",
+  "bounds session adoption without charging lane wait to the payload (lane wait: %s)",
   async (waiting) => {
     const runner = pendingRunner();
+    let admitLane: (() => void) | undefined;
+    let waitAgain: (() => void) | undefined;
     const job = agentJob(`unstarted-session-${waiting}`, 1);
     job.sessionTarget = "main";
     const { state, advance, jobState } = await fixture(job, {
-      runSessionEvent: async ({ onLaneWait, abortSignal }) => {
+      runSessionEvent: async ({ onLaneWait, onExecutionStarted, abortSignal }) => {
         onLaneWait?.({ waiting });
+        admitLane = () => onLaneWait?.({ waiting: false });
+        waitAgain = () => {
+          onExecutionStarted?.();
+          onLaneWait?.({ waiting: true });
+        };
         runner.started.resolve(abortSignal);
         return await runner.result.promise;
       },
@@ -129,7 +136,20 @@ it.each([false, true])(
     const timer = onTimer(state);
     try {
       const signal = await runner.started.promise;
-      await advance(1_000);
+      if (waiting) {
+        await advance(20 * 60_000);
+        expect(signal?.aborted).toBe(false);
+        expect(jobState().runningAtMs).toBeDefined();
+        admitLane?.();
+        await advance(250);
+        waitAgain?.();
+        await advance(20 * 60_000);
+        expect(signal?.aborted).toBe(false);
+        admitLane?.();
+        await advance(749);
+        expect(signal?.aborted).toBe(false);
+      }
+      await advance(waiting ? 1 : 1_000);
       expect(signal?.reason).toMatchObject({ name: "TimeoutError" });
       await timer;
       expect(jobState().runningAtMs).toBeUndefined();
@@ -199,6 +219,79 @@ it("keeps timed-out cron runs from being overwritten by late cancellation", asyn
     resetActiveCronTaskRunsForTests();
   }
 });
+
+it.each(["one-shot", "recurring"])(
+  "fences %s timeout retries until the original execution settles",
+  async (mode) => {
+    const job = agentJob(`timeout-retry-settlement-${mode}`, 1);
+    job.delivery = { mode: "none" };
+    if (mode === "recurring") {
+      job.schedule = { kind: "every", everyMs: 60_000, anchorMs: SCHEDULED_AT };
+    }
+    const cleanup = createDeferred();
+    const runner = pendingRunner();
+    runner.run
+      .mockImplementationOnce(async (args) => {
+        args.onExecutionStarted?.(attribution(job.id));
+        runner.started.resolve(args.abortSignal);
+        return await runner.result.promise;
+      })
+      .mockResolvedValue(done);
+    const { state, advance, jobState } = await fixture(job, {
+      nowMs: Date.now,
+      runIsolatedAgentJob: runner.run,
+      cleanupTimedOutAgentRun: async () => {
+        if (mode === "one-shot") {
+          throw new Error("cleanup unavailable");
+        }
+        await cleanup.promise;
+      },
+    });
+    const first = onTimer(state);
+    try {
+      await runner.started.promise;
+      await advance(mode === "recurring" ? 21_010 : 1_010);
+      await first;
+      expect(jobState().lastStatus).toBe("error");
+      expect(requireJob(state, job.id).enabled).toBe(true);
+      const retryAt = jobState().nextRunAtMs;
+      expect(retryAt).toBeGreaterThan(SCHEDULED_AT);
+      if (retryAt === undefined) {
+        throw new Error("Expected a retained timeout retry");
+      }
+      expect(
+        inspectActiveCronRunReceipt({ storePath: state.deps.storePath, jobId: job.id }),
+      ).toBeDefined();
+      vi.setSystemTime(retryAt + 1);
+      await onTimer(state);
+      expect(runner.run).toHaveBeenCalledTimes(1);
+      expect(jobState().nextRunAtMs).toBe(retryAt);
+      runner.result.resolve(done);
+      await vi.waitFor(() =>
+        expect(
+          inspectActiveCronRunReceipt({ storePath: state.deps.storePath, jobId: job.id }),
+        ).toBeUndefined(),
+      );
+      expect(readCronRunRecordsForTests(job.id)).toHaveLength(1);
+      expect(jobState().consecutiveErrors).toBe(1);
+      await onTimer(state);
+      expect(runner.run).toHaveBeenCalledTimes(2);
+      expect(jobState().lastStatus).toBe("ok");
+      expect(readCronRunRecordsForTests(job.id)).toHaveLength(2);
+      expect(readCronRunRecordsForTests(job.id)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ status: "timed_out" }),
+          expect.objectContaining({ status: "succeeded" }),
+        ]),
+      );
+    } finally {
+      stop(state);
+      runner.result.resolve(done);
+      cleanup.resolve();
+      await drain(first);
+    }
+  },
+);
 
 it("returns cancellation attribution before the core finishes its owned cleanup (#95873)", async () => {
   resetActiveCronTaskRunsForTests();

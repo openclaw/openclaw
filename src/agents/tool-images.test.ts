@@ -7,16 +7,15 @@ import {
   createSolidPngBuffer,
   createTinyJpegBuffer,
 } from "../../test/helpers/image-fixtures.js";
-import { getImageMetadata } from "../media/image-ops.js";
-import { resizeToJpeg } from "../media/media-services.js";
+import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
 import {
   sanitizeContentBlocksImages,
   sanitizeImageBlocks,
   sanitizeToolResultImages,
 } from "./tool-images.js";
 
-vi.mock("../media/media-services.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../media/media-services.js")>();
+vi.mock("../media/image-ops.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/image-ops.js")>();
   return { ...actual, resizeToJpeg: vi.fn(actual.resizeToJpeg) };
 });
 
@@ -176,6 +175,16 @@ describe("tool image sanitizing", () => {
     const meta = await getImageMetadata(Buffer.from(getImageBlock(out).data, "base64"));
     expect(meta?.width).toBeLessThanOrEqual(120);
     expect(meta?.height).toBeLessThanOrEqual(120);
+  }, 20_000);
+
+  it("downscales a tall screenshot above the generic decode cap", async () => {
+    // 25.2 MP: over MAX_IMAGE_INPUT_PIXELS, which used to drop the image before any resize.
+    const tall = createSolidPngBuffer(2000, 12_600, { r: 17, g: 31, b: 47 });
+    const image = getImageBlock(await sanitize(tall, { maxDimensionPx: 1200 }));
+    expect(image.mimeType).toBe("image/jpeg");
+    expect(await getImageMetadata(Buffer.from(image.data, "base64"))).toMatchObject({
+      height: 1200,
+    });
   }, 20_000);
 
   it("uses default image limits for non-finite options", async () => {

@@ -1,5 +1,6 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStatePathCacheInvalidation } from "./openclaw-state-db-cache.js";
 import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
@@ -83,7 +84,7 @@ function rowFor(store: Store, workspaceId: string): Row {
 }
 
 function copy(workspace: SessionRepositoryWorkspaceRecord | undefined) {
-  return workspace ? Object.freeze({ ...workspace }) : undefined;
+  return workspace ? freezeJsonSnapshot(structuredClone(workspace)) : undefined;
 }
 
 /** Fence current-fact consumers before COMMIT and reopen them only after native settlement. */

@@ -55,6 +55,7 @@ it("preserves the native authorization result contract", async () => {
     senderIsOwner: boolean;
     isAuthorizedSender: boolean;
     assertOwnerCurrent?: () => void;
+    assertAuthorizedCurrent?: () => void;
     from?: string;
     to?: string;
   };
@@ -69,6 +70,7 @@ it("preserves the native authorization result contract", async () => {
     senderId: "guest",
     senderIsOwner: false,
     isAuthorizedSender: false,
+    assertAuthorizedCurrent: expect.any(Function),
     from: undefined,
     to: undefined,
   };
@@ -82,9 +84,32 @@ it("preserves the native authorization result contract", async () => {
     resolveCommandAuthorization(params);
     return resolveCommandAuthorization(params);
   });
-  expect(await resolveCommandAuthorizationAsync(params)).toStrictEqual(expected);
+  const asyncActual = await resolveCommandAuthorizationAsync(params);
+  expect(asyncActual).toStrictEqual(expected);
   expect(actual).toStrictEqual(expected);
   expect(new Set(Reflect.ownKeys(actual))).toEqual(new Set(Reflect.ownKeys(expected)));
+  for (const authorization of [actual, asyncActual]) {
+    expect(authorization.assertAuthorizedCurrent).toThrow("Your command authorization changed");
+  }
+  const allowedParams = {
+    ...params,
+    cfg: { commands: { allowFrom: { "*": ["guest"] } } },
+  };
+  const allowed = [
+    withPluginRuntimePluginScope({ pluginId: "command-auth-compat-proof" }, () =>
+      resolveCommandAuthorization(allowedParams),
+    ),
+    await resolveCommandAuthorizationAsync(allowedParams),
+  ];
+  for (const authorization of allowed) {
+    expect(authorization.senderIsOwner).toBe(false);
+    expect(authorization.assertAuthorizedCurrent).not.toThrow();
+  }
+  allowedParams.cfg.commands.allowFrom["*"] = ["other"];
+  for (const authorization of allowed) {
+    expect(authorization.isAuthorizedSender).toBe(true);
+    expect(authorization.assertAuthorizedCurrent).toThrow("Your command authorization changed");
+  }
   expect(warning).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining(
       "resolveCommandAuthorization is deprecated; use resolveCommandAuthorizationAsync",

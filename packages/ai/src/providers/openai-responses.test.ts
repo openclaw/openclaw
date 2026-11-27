@@ -1,7 +1,7 @@
 import type { ClientOptions } from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import { configureAiTransportHost } from "../host.js";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 
 const openAiMockState = vi.hoisted(() => ({
@@ -26,9 +26,9 @@ vi.mock("openai", () => ({
   },
 }));
 
-import { createOpenAIResponsesClient } from "../transports/openai-responses-client.js";
 import type { OpenAIResponsesOptions as Options } from "../transports/openai-responses-contracts.js";
 import { buildOpenAIResponsesParams } from "../transports/openai-responses-params-internal.js";
+import { createOpenAIResponsesClient } from "./openai-provider-client.js";
 import { makeOpenAIProviderModel } from "./openai-provider.test-support.js";
 import { streamOpenAIResponses, streamSimpleOpenAIResponses } from "./openai-responses.js";
 
@@ -105,6 +105,36 @@ describe("OpenAI Responses provider", () => {
       defaultHeaders: { "x-opencode-session": "conversation-123" },
     });
   });
+
+  it.each<[string, Options, boolean | undefined, Record<string, string>]>([
+    ["no session", {}, undefined, {}],
+    [
+      "default",
+      { sessionId: "turn" },
+      undefined,
+      { session_id: "turn", "x-client-request-id": "turn" },
+    ],
+    ["disabled header", { sessionId: "turn" }, false, { "x-client-request-id": "turn" }],
+    ["disabled cache", { sessionId: "turn", cacheRetention: "none" }, undefined, {}],
+    [
+      "explicit header",
+      { sessionId: "turn", headers: { session_id: "explicit" } },
+      true,
+      { session_id: "explicit", "x-client-request-id": "turn" },
+    ],
+  ])(
+    "resolves payload compatibility once and preserves %s headers",
+    async (_, options, sendSessionIdHeader, expectedHeaders) => {
+      const resolveCapabilities = vi.fn(getAiTransportHost().resolveProviderRequestCapabilities);
+      configureAiTransportHost({ resolveProviderRequestCapabilities: resolveCapabilities });
+      await runRequest({ apiKey: "test", ...options }, model({ compat: { sendSessionIdHeader } }));
+      expect(openAiMockState.params).toHaveLength(1);
+      expect(openAiMockState.configs[0]?.defaultHeaders).toEqual(expectedHeaders);
+      expect(
+        resolveCapabilities.mock.calls.filter(([input]) => input.api === "openai-completions"),
+      ).toHaveLength(1);
+    },
+  );
 
   it("sends priority service tier from simple completions", async () => {
     const options = { apiKey: "test", serviceTier: "priority" } as const;

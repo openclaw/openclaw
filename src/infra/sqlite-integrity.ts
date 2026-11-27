@@ -1,11 +1,7 @@
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
-import { quickIntegrityVerificationKey } from "./sqlite-database-admission-seal.js";
-import {
-  publishSqliteDatabaseAdmission,
-  recordSqliteDatabaseIntegrity,
-} from "./sqlite-database-admission.js";
+import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
   consumeSqliteMaintenanceIntegrity,
@@ -20,6 +16,7 @@ export type { SqliteIntegrityCheckOptions } from "./sqlite-maintenance-integrity
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
+  staleFts?: true;
 };
 
 export type SqliteIntegrityCheckTiming = {
@@ -37,14 +34,7 @@ export type SqliteIntegrityCheck = SqliteIntegrityCheckOptions & {
 export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
 
 export type SqliteIntegrityDiagnostics = {
-  because?: string;
-  integrityGateReason?:
-    | "revoked"
-    | "stale-lease-full"
-    | "process-death"
-    | "dirty-receipt"
-    | SqliteCleanCloseSealRefusal
-    | "lease-class";
+  integrityGateReason?: "revoked" | "dirty-receipt" | SqliteCleanCloseSealRefusal | "lease-class";
   integrityGateMode?: "quick" | "full" | "deferred";
   integrityGateMs?: number;
   integrityGateOutcome?: "healthy" | "failed" | "cached" | "pending";
@@ -72,14 +62,11 @@ export function* sqliteIntegrityCheckSteps(
     return;
   }
   const startedAt = performance.now();
-  // WAL owner death alone is not corruption evidence. Explicit maintenance keeps its policy.
-  const processDeathQuick =
-    diagnostics?.integrityGateReason === "process-death" && options.check === undefined;
   const check: SqliteIntegrityCheck = {
     database,
     databaseLabel,
     ...options,
-    check: options.check ?? (processDeathQuick ? "quick" : "full"),
+    check: options.check ?? "full",
   };
   if (diagnostics) {
     check.timing = {};
@@ -92,19 +79,7 @@ export function* sqliteIntegrityCheckSteps(
     delete diagnostics.integrityOutsideWorkerMs;
   }
   try {
-    try {
-      yield check;
-    } catch (error) {
-      if (!processDeathQuick) {
-        throw error;
-      }
-      check.check = "full";
-      diagnostics.integrityGateMode = "full";
-      yield check;
-    }
-    if (processDeathQuick && check.check === "quick") {
-      publishSqliteDatabaseAdmission(database, quickIntegrityVerificationKey, Date.now());
-    }
+    yield check;
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "healthy";
     }
@@ -151,13 +126,14 @@ export function runSqliteIntegrityOperationSync<T>(
   operation: SqliteIntegrityOperation<T>,
   beforeResume?: () => void,
   repairIntegrityError?: (check: SqliteIntegrityCheck, error: unknown) => boolean,
+  runCheck = runSqliteIntegrityCheckSync,
 ): T {
   beforeResume?.();
   let step = operation.next();
   while (!step.done) {
     let failure: { error: unknown } | undefined;
     try {
-      runSqliteIntegrityCheckSync(step.value);
+      runCheck(step.value);
     } catch (error) {
       failure = { error };
     }
@@ -257,8 +233,19 @@ export function assertSqliteIntegrity(
   } = {},
 ): SqliteIntegrityChecks {
   if (options.check === "quick" && options.schemaOnly) {
-    // The owner only widens a stored CHECK; unchanged payloads and FKs need no scan.
-    runSqliteCheck(database, databaseLabel, "quick_check", "schema_meta");
+    // A schema-only step checks the catalog and its declared tables, never other pages.
+    runSqliteCheck(database, databaseLabel, "integrity_check", "sqlite_schema");
+    const existing = new Set(
+      readSqliteSchemaObjects(database)
+        .filter((row) => row.type === "table")
+        .map((row) => row.name),
+    );
+    for (const table of options.tables ?? []) {
+      if (existing.has(table)) {
+        assertSqliteTableIntegrity(database, databaseLabel, table);
+        runSqliteForeignKeyCheck(database, databaseLabel, table);
+      }
+    }
     return { integrityCheck: "ok" };
   }
   const check = options.check === "quick" ? "quick_check" : "integrity_check";
@@ -281,6 +268,13 @@ export function assertSqliteIntegrity(
     ) {
       throw error;
     }
+    if (check === "quick_check") {
+      // QUICK skips ordinary index consistency. Only excuse stale FTS after ruling out mixed damage.
+      return assertSqliteIntegrity(database, databaseLabel, {
+        check: "full",
+        ftsSchemas: options.ftsSchemas,
+      });
+    }
     staleFts = true;
   }
   if (check === "quick_check" && options.tables?.length) {
@@ -299,7 +293,7 @@ export function assertSqliteIntegrity(
   if (check === "integrity_check" && !staleFts) {
     recordSqliteDatabaseIntegrity(database);
   }
-  return { integrityCheck: "ok" };
+  return staleFts ? { integrityCheck: "ok", staleFts: true } : { integrityCheck: "ok" };
 }
 
 /** Only exact, owned FTS definitions may treat their inverted index as derived data. */
@@ -409,7 +403,11 @@ function runSqliteCheck(
   );
 }
 
-function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
+function runSqliteForeignKeyCheck(
+  database: DatabaseSync,
+  databaseLabel: string,
+  tableName?: string,
+): void {
   let violationCount = 0;
   let repairable = true;
   let taskDeliveryForeignKeyId: bigint | undefined;
@@ -417,7 +415,9 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
   try {
     // Use direct PRAGMA syntax because a real schema object can shadow the
     // table-valued pragma name and make a corrupt database appear clean.
-    const statement = database.prepare("PRAGMA foreign_key_check;");
+    const statement = database.prepare(
+      `PRAGMA foreign_key_check${tableName ? `('${tableName.replaceAll("'", "''")}')` : ""};`,
+    );
     statement.setReadBigInts(true);
     // OpenClaw's Node >=24.16.0 floor includes iterate(), added in Node 22.13.
     for (const violation of statement.iterate() as Iterable<SqliteForeignKeyViolation>) {

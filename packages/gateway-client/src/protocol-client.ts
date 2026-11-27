@@ -3,9 +3,9 @@ import {
   isGatewayEventFrame,
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
-import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { toStringifiedError } from "@openclaw/normalization-core/stringified-error";
 import { resolveSleepDelayMs, RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
@@ -281,7 +281,7 @@ export class GatewayProtocolClient<TPlan> {
           this.invoke("close", () => this.opts.onClose?.(context, decision));
           // A close callback can reconnect synchronously and already own the next socket or retry.
           if (decision.retry && !this.stopped && !this.socket && !this.reconnectSignal) {
-            const error = context.connectFailure?.error;
+            const error = decision.pendingError ?? context.connectFailure?.error;
             // Apply server timing only after adapter policy admits retry; a hint
             // must never turn terminal authentication failures into reconnects.
             const retryAfterMs =

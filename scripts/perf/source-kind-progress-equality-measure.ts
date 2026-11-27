@@ -13,6 +13,7 @@ import { loadavg } from "node:os";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { CronJob } from "../../src/cron/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -120,12 +121,7 @@ try {
     globalThis.gc?.();
     const inspector = new Session();
     if (values.allocations) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 1024,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 1024);
     }
     const hostLoad = loadavg();
     const cpu = process.threadCpuUsage();

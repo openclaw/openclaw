@@ -21,6 +21,7 @@ import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { traceDoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { createDoctorMaintenanceState } from "./doctor-maintenance-state.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { assertDoctorServiceSelection } from "./doctor-service-repair-policy.js";
@@ -178,6 +179,10 @@ export async function restoreDoctorGatewayService(params: {
       assertCustody?.();
       assertCurrent();
     };
+    // Update admission reads the update ledger (a full state-database observation).
+    // Native writers call their live `assertCurrent` at every command boundary, so
+    // they get custody plus the held service lock; the ledger is rechecked at each
+    // checkpoint below and in `beforeMutation`, before every native side effect.
     const assertMaintenanceCurrent = () => {
       assertInspectionCurrent();
       assertRestoreAdmission?.();
@@ -336,6 +341,7 @@ export async function restoreDoctorGatewayService(params: {
       (installation.requiresInstallRootRefresh || writeConfig)
     ) {
       const originalInstallation = installation;
+      await traceDoctorMaintenancePending("service-definition");
       if (!inspectionFailure) {
         // Reversing our stop cannot authorize an installation rewrite during another update.
         const assertInstallationCurrent = () => {
@@ -382,9 +388,12 @@ export async function restoreDoctorGatewayService(params: {
                     },
                     serviceMaintenance: {
                       managerUid: before.serviceManagerUid,
-                      assertCurrent: assertInstallationCurrent,
+                      assertCurrent: assertInspectionCurrent,
                       assertReadCurrent: assertInspectionCurrent,
-                      beforeMutation: assertAutoStartCurrent,
+                      beforeMutation: async () => {
+                        await assertAutoStartCurrent();
+                        params.assertInstallationAdmission?.();
+                      },
                     },
                   },
                 ),
@@ -453,6 +462,19 @@ export async function restoreDoctorGatewayService(params: {
       params.runtime.log(warning);
     }
     assertMaintenanceCurrent();
+    // A disabled Scheduled Task cannot run. Older releases disabled it on `gateway stop`;
+    // `gateway start` re-enables it, so leave that choice to the operator.
+    if (process.platform === "win32" && service.isEnabled) {
+      const readEnabled = service.isEnabled;
+      const enabled = await settle(() => readEnabled({ env: current?.env ?? serviceEnv }));
+      assertMaintenanceCurrent();
+      if (!enabled) {
+        const warning = `Gateway Scheduled Task is disabled, so Doctor left the Gateway stopped. Start it with \`${formatCliCommand("openclaw gateway start", serviceEnv)}\` (this re-enables the task), then check \`${formatCliCommand("openclaw gateway status --deep", serviceEnv)}\`.`;
+        warnings.push(warning);
+        params.runtime.log(warning);
+        return undefined;
+      }
+    }
     const restore = current && !inspectionFailure ? service.restart : service.start;
     await settle(async () => {
       await restore({
@@ -461,7 +483,9 @@ export async function restoreDoctorGatewayService(params: {
         preserveDefinition: true,
         preserveAutoStart: true,
         beforeMutation: assertAutoStartCurrent,
-        assertCurrent: assertMaintenanceCurrent,
+        // systemd also rechecks admission right before each native start/restart dispatch.
+        beforeEffect: assertMaintenanceCurrent,
+        assertCurrent: assertInspectionCurrent,
         ...(before.serviceSystemdIdentity
           ? { systemdIdentity: before.serviceSystemdIdentity }
           : {}),

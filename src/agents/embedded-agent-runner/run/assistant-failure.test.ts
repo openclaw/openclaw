@@ -2,12 +2,14 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context } from "../../../../packages/ai/src/types.js";
+import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { AssistantMessage } from "../../../llm/types.js";
 import {
+  type AssistantMessage,
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
 } from "../../../llm/types.js";
+import { buildRealtimeVoiceAgentErrorProviderResult } from "../../../talk/agent-run-control.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { createApiKeyCredential } from "../../auth-profiles/credential-fixtures.test-support.js";
@@ -22,6 +24,7 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createModelFallbackConfig } from "../../test-helpers/model-fallback-config-fixture.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { log } from "../logger.js";
 import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
 import {
   makeAssistantFailureInput,
@@ -210,6 +213,76 @@ async function streamIncompleteMistralResponseOverLoopback() {
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it.each([
+    "404 model not found",
+    "404 model_not_found",
+    "model-not-found",
+    "unknown model: mock-1",
+    "models/gemini-missing is not found for API version v1beta",
+    "mock-1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)",
+    "No endpoints found for synthetic/missing",
+    "The model mock-1 has been deprecated.",
+  ])("advances to the fallback model without rotating credentials for %s", async (errorMessage) => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    setAttempt(fixture.input, buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage }));
+    const requests: string[] = [];
+    let profile = 0;
+    fixture.input.failover.advanceAuthProfile = vi.fn(async () => ++profile < 3);
+    const result = await runWithModelFallback({
+      cfg: createModelFallbackConfig("anthropic/mock-1", ["google/mock-2"]),
+      provider: "anthropic",
+      model: "mock-1",
+      sessionId: `session:missing-${errorMessage}`,
+      skipAuthProfileRuntime: true,
+      run: async (provider, model) => {
+        if (provider === "anthropic") {
+          for (;;) {
+            requests.push(`${provider}/${model}/profile-${profile}`);
+            await handleEmbeddedAssistantFailure(fixture.input);
+          }
+        }
+        requests.push(`${provider}/${model}`);
+        return "fallback complete";
+      },
+    });
+    expect(result.result).toBe("fallback complete");
+    expect(requests).toEqual(["anthropic/mock-1/profile-0", "google/mock-2"]);
+    expect(fixture.input.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "401 unauthorized",
+    "429 quota exceeded",
+    "The model does not exist or you do not have access",
+    "model not found for this plan",
+    "404 page not found",
+    "not_found_error",
+    "HTTP 400 not_found_error: model: mock-1 (request_id: synthetic)",
+    "unknown model: permission denied",
+  ])("retains profile recovery for %s", async (errorMessage) => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    setAttempt(fixture.input, buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage }));
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({
+      action: "retry",
+    });
+    expect(fixture.advanceAuthProfile).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces a missing model without rotating when no fallback is configured", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    fixture.input.runInput.fallbackConfigured = false;
+    setAttempt(
+      fixture.input,
+      buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage: "unknown model: mock-1" }),
+    );
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      reason: "model_not_found",
+    });
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
   it("surfaces storage failure without replaying the run or rotating credentials", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
     fixture.input.normalizedAttempt.attemptAssistant = buildEmbeddedRunnerAssistant({
@@ -615,5 +688,93 @@ describe("handleEmbeddedAssistantFailure", () => {
         "groq/mock-2",
       ]);
     });
+  });
+});
+
+describe("assistant failure fallback guards", () => {
+  async function failureFor(input: AssistantFailureInput): Promise<FailoverError> {
+    const failure: unknown = await handleEmbeddedAssistantFailure(input).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(FailoverError);
+    if (!(failure instanceof FailoverError)) {
+      throw new Error("Expected an assistant failover error");
+    }
+    return failure;
+  }
+  it.each([
+    { errorMessage: "Model prompt projection lost its canonical user turn" },
+    { errorMessage: "Request rejected by content policy", errorType: "invalid_request_error" },
+  ])("stops unchanged retries and model fallback for $errorMessage", async (fields) => {
+    let attempts = 0;
+    const run = vi.fn(async () => {
+      const input = makeAssistantFailureInput({ ...fields, content: [] });
+      for (;;) {
+        attempts++;
+        const outcome = await handleEmbeddedAssistantFailure(input);
+        if (outcome.action !== "retry") {
+          throw new Error("failure was not surfaced");
+        }
+        input.emptyErrorRetries = outcome.emptyErrorRetries;
+      }
+    });
+    await expect(
+      runWithModelFallback({
+        cfg: undefined,
+        provider: "anthropic",
+        model: "test-model",
+        manifestPlugins: [],
+        fallbacksOverride: ["openai/fixture-next", "groq/fixture-last"],
+        skipAuthProfileRuntime: true,
+        run,
+      }),
+    ).rejects.toThrow();
+    expect(run).toHaveBeenCalledOnce();
+    expect(attempts).toBe(1);
+  });
+  it("preserves redacted plugin copy or generic advice at the overload cap", async () => {
+    for (const copy of [
+      "Contact support. api_key=sk-fixture1234567890abcdefghijklmnop",
+      undefined,
+    ]) {
+      const input = makeAssistantFailureInput({ errorMessage: "HTTP 503 overloaded" });
+      input.overloadProfileRotations = 1;
+      input.failover.overloadProfileRotationLimit = 1;
+      input.providerOwner = { id: "fixture", formatUserFacingError: () => copy };
+      const failure = await failureFor(input);
+      expect(failure).toMatchObject({ reason: "overloaded", status: 503 });
+      expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(failure.message).toBe(
+        "The AI service is temporarily overloaded. Please try again in a moment.",
+      );
+      if (copy) {
+        expect(failure.userMessage).toEqual(expect.stringContaining("Contact support."));
+        expect(failure.userMessage).not.toContain("sk-fixture1234567890abcdefghijklmnop");
+      } else {
+        expect(failure.userMessage).toBeUndefined();
+      }
+    }
+  });
+  it("preserves billing failures when bookkeeping rejects=true", async () => {
+    using warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const input = makeAssistantFailureInput({ errorMessage: "credit balance is too low" });
+    input.failover.resolveAuthProfileFailureReason = () => "billing";
+    input.failover.maybeMarkAuthProfileFailure = vi.fn(async () => {
+      throw new Error("storage unavailable");
+    });
+    expect(await failureFor(input)).toMatchObject({ reason: "billing", status: 402 });
+    expect(warn).toHaveBeenCalledWith("profile failure mark failed: Error: storage unavailable");
+  });
+  it("keeps provider Error failures visible to realtime voice", async () => {
+    const error = new Error("provider connection failed"),
+      signal = new AbortController().signal;
+    const input = makeAssistantFailureInput({ errorMessage: error.message });
+    Object.assign(input.normalizedAttempt.attemptAssistant, projectProviderError(error, signal));
+    input.normalizedAttempt.attemptAssistant.content = [];
+    input.emptyErrorRetries = 3;
+    const failure = await failureFor(input);
+    expect(failure.rawError).toBe(error.message);
+    expect(buildRealtimeVoiceAgentErrorProviderResult(failure)).toEqual({ error: failure.message });
+    expect(signal.aborted).toBe(false);
   });
 });

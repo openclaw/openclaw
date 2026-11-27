@@ -231,6 +231,22 @@ it("ignores an already-contained snapshot", async () => {
   await h.flush(["Hello world"], true, 1);
 });
 
+it.each([false, true])(
+  "reconciles divergent text_end with terminal partial=%s",
+  async (partial) => {
+    const h = setup({}, false);
+    emitAssistantTextDelta({ emit: h.emit, delta: "Hello word" });
+    if (partial) {
+      h.end(["Hello world"], 0);
+    } else {
+      emitAssistantTextEnd({ emit: h.emit, content: "Hello world" });
+    }
+    const expected = partial ? "Hello world" : "Hello word";
+    await h.flush([expected], true, 1);
+    h.expectEvent(expected);
+  },
+);
+
 it("sends only the new suffix when replies grow across tool calls", async () => {
   const h = setup({}, false);
   const expected = [

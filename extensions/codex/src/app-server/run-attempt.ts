@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
@@ -42,8 +43,32 @@ export async function runCodexAppServerAttempt(
     }),
   );
   try {
+    // The connection owns execution placement, so its preparer decides whether
+    // the full request can become a file this runtime can read.
+    const fittedPrompt =
+      (await connection.params.hostCapabilities.fitCurrentInput?.({
+        prompt: connection.params.prompt,
+        maxChars: CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
+        stageAttachment: (maxChars, media) =>
+          connection.prepareInputAttachments({
+            maxChars,
+            turn: { media },
+            assertCurrent: () => {},
+          }),
+      })) ?? connection.params.prompt;
+    const fittedConnection =
+      fittedPrompt === connection.params.prompt
+        ? connection
+        : {
+            ...connection,
+            params: {
+              ...connection.params,
+              prompt: fittedPrompt,
+              transcriptPrompt: connection.params.transcriptPrompt ?? connection.params.prompt,
+            },
+          };
     const runtime = await preparation.measure("runtime", () =>
-      prepareCodexAttemptRuntime(connection),
+      prepareCodexAttemptRuntime(fittedConnection),
     );
     try {
       const attemptTools = await preparation.measure("tools", () =>

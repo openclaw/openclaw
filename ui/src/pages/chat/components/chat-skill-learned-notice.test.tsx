@@ -10,7 +10,6 @@ import { createContext } from "../../skill-workshop/skill-workshop-page.test-sup
 import { ChatSkillLearnedNotice } from "./chat-skill-learned-notice.tsx";
 
 const notice: SkillWorkshopChangeNotice = {
-  kind: "skill-workshop-change",
   agentId: "main",
   runId: "skill-workshop-review:r1",
   skills: [
@@ -33,14 +32,19 @@ const undoButton = (element: HTMLElement) =>
   );
 
 describe("skill review notice", () => {
-  it("undoes the whole review once and reports it as undone", async () => {
-    const request = vi.fn(async () => ({ status: "undone", changes: [] }));
+  it.each([
+    ["undone", "Undone"],
+    ["already-undone", "Already undone"],
+  ])("requests Undo once and reports %s in the status", async (status, label) => {
+    const request = vi.fn(async () => ({ status, changes: [] }));
     const element = mount(createContext(request, { methods: ["skills.workshop.undo"] }));
 
     undoButton(element)?.click();
     undoButton(element)?.click();
 
-    await waitForSolid(() => expect(element.textContent).toContain("Undone"));
+    await waitForSolid(() =>
+      expect(element.querySelector("[role='status']")?.textContent).toBe(label),
+    );
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith("skills.workshop.undo", {
       agentId: "main",

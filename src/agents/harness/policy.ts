@@ -26,6 +26,7 @@ export function resolveAgentHarnessPolicy(
     requestTransportOverrides?: ProviderRouteOverridePresence;
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
+    resolveOpenAIProviderRoutes?: Parameters<typeof resolveOpenAIImplicitAgentRuntime>[1];
   } & AgentRuntimePolicyScope,
   // Configured selectors can reuse a normalized lookup without losing their route input.
   configured = resolveModelRuntimePolicy(params),
@@ -49,12 +50,15 @@ export function resolveAgentHarnessPolicy(
       ...(configured.forcedByEnvironment ? { forcedByEnvironment: true } : {}),
     };
   }
-  const openAIImplicitRuntime = resolveOpenAIImplicitAgentRuntime({
-    ...params,
-    runtimePolicy: configured,
-    api: params.modelApi,
-    baseUrl: params.modelBaseUrl,
-  });
+  const openAIImplicitRuntime = resolveOpenAIImplicitAgentRuntime(
+    {
+      ...params,
+      runtimePolicy: configured,
+      api: params.modelApi,
+      baseUrl: params.modelBaseUrl,
+    },
+    params.resolveOpenAIProviderRoutes,
+  );
   return {
     runtime: openAIImplicitRuntime || runtime,
     runtimeSource,

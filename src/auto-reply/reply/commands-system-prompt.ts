@@ -1,6 +1,6 @@
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
-import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.async.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import { resolveRuntimeSkillsPrompt } from "../../agents/embedded-agent-runner/skills-prompt.js";
@@ -9,6 +9,7 @@ import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surf
 import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
+import { sessionProjectGuidanceSource } from "../../agents/session-project-guidance.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -68,7 +69,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
   };
   const { classificationAgentId: sandboxAgentId, sandboxed } = sandboxRuntime;
   const executionWorkspace = resolveSessionSkillExecutionWorkspace(
-    targetSessionEntry?.worktree?.canonicalWorkspaceDir,
+    targetSessionEntry,
     workspaceDir,
   );
   const existingSkillsSnapshot: SkillSnapshot | undefined = targetSessionEntry?.skillsSnapshot;
@@ -185,11 +186,20 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     agentId: sessionAgentId,
     workspaceDir,
   });
-  const systemPrompt = buildConfiguredAgentSystemPrompt({
+  const systemPrompt = await buildConfiguredAgentSystemPrompt({
     preparedTtsPreferences: params.opts?.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     config: params.cfg,
     preparedModelRuntime,
     agentId: sessionAgentId,
+    prepareSessionProjectGuidance: sessionProjectGuidanceSource({
+      workspaceDir,
+      config: params.cfg,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      entry: targetSessionEntry,
+      senderIsOwner: params.command.senderIsOwner,
+      operatorAuthority: params.opts?.operatorAuthority,
+    }),
     workspaceDir,
     reasoningLevel: params.resolvedReasoningLevel,
     extraSystemPrompt: undefined,

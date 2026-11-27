@@ -54,18 +54,22 @@ struct OnboardingWizardView: View {
     @FocusState private var focusedField: OnboardingFocusedField?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
+    @State private var showNewUserGuide: Bool = false
     let allowSkip: Bool
+    let offersNewUserGuide: Bool
     let onRequestLocalNetworkAccess: (String) -> Void
     let onClose: () -> Void
     let onComplete: () -> Void
 
     init(
         allowSkip: Bool,
+        offersNewUserGuide: Bool,
         onRequestLocalNetworkAccess: @escaping (String) -> Void,
         onClose: @escaping () -> Void,
         onComplete: @escaping () -> Void)
     {
         self.allowSkip = allowSkip
+        self.offersNewUserGuide = offersNewUserGuide
         self.onRequestLocalNetworkAccess = onRequestLocalNetworkAccess
         self.onClose = onClose
         self.onComplete = onComplete
@@ -220,6 +224,9 @@ struct OnboardingWizardView: View {
             content: {
                 self.qrScannerSheet
             })
+        .sheet(isPresented: self.$showNewUserGuide) {
+            OnboardingNewUserGuideSheet()
+        }
         .sheet(isPresented: self.$showGatewayProblemDetails) {
             if let currentProblem = self.currentProblem {
                 GatewayProblemDetailsSheet(
@@ -270,9 +277,9 @@ struct OnboardingWizardView: View {
             self.clearStagedGatewaySetupLink()
         }
         .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
-            self.updateConnectionIssue(problem: newValue, statusText: self.appModel.gatewayStatusText)
+            self.updateConnectionIssue(problem: newValue, statusText: self.appModel.gatewayDisplayStatusText)
         }
-        .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
+        .onChange(of: self.appModel.gatewayDisplayStatusText) { _, newValue in
             self.updateConnectionIssue(problem: self.appModel.lastGatewayProblem, statusText: newValue)
         }
         .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
@@ -428,7 +435,8 @@ struct OnboardingWizardView: View {
                 self.invalidateSetupAttempt()
                 self.statusLine = ""
                 self.navigate(to: .mode)
-            })
+            },
+            onShowNewUserGuide: self.offersNewUserGuide ? { self.showNewUserGuide = true } : nil)
     }
 
     @ViewBuilder
@@ -806,8 +814,7 @@ extension OnboardingWizardView {
             "",
             text: text,
             prompt: Text(placeholder)
-                .font(OpenClawType.subhead)
-                .foregroundStyle(.tertiary))
+                .font(OpenClawType.subhead))
             .font(OpenClawType.subhead)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
@@ -906,6 +913,8 @@ extension OnboardingWizardView {
                 self.handleScannedLink(link)
             case let .setupCode(code):
                 self.handleScannedSetupCode(code)
+            case .espDevice:
+                return
             }
         }
         if delivery == nil {
@@ -1051,7 +1060,8 @@ extension OnboardingWizardView {
         self.pendingTargetSuppression.releaseAutoConnect(.qrScanner, controller: self.gatewayController)
     }
 
-    private func openQRScannerFromOnboarding(status: String = "Opening QR scanner…") {
+    private func openQRScannerFromOnboarding(status: String = "") {
+        // The scanner sheet provides opening feedback; keep the parent neutral when it is canceled.
         // Stop active reconnect loops before scanning new credentials.
         self.qrCodeCompletion.cancel()
         self.invalidateSetupAttempt()
@@ -1070,9 +1080,8 @@ extension OnboardingWizardView {
 
     private func resumeAfterPairingApproval(silent: Bool = false) {
         // We intentionally stop reconnect churn while unpaired to avoid generating multiple pending requests.
-        self.appModel.gatewayAutoReconnectEnabled = true
-        self.appModel.gatewayPairingPaused = false
-        self.appModel.gatewayPairingRequestId = nil
+        // The forced reconnect below leaves the pause and allows reconnects when it commits; resuming
+        // here too would let the waiting loops attempt first and send a second pairing request.
         // Pairing state is sticky to prevent UI flip-flop during reconnect churn.
         // Once the user explicitly resumes after approving, clear the sticky issue
         // so new status/auth errors can surface instead of being masked as pairing.
@@ -1089,6 +1098,9 @@ extension OnboardingWizardView {
         guard self.step == .auth else { return }
         guard self.issue.needsPairing else { return }
         guard self.connectingGateway == nil else { return }
+        // The view's pairing issue is sticky; retry automatically only while every live pause is a
+        // pairing approval, never alongside a rate limit or rejected credential.
+        guard self.appModel.connection.isPausedOnlyForPairing else { return }
 
         let now = Date()
         if let last = lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {
@@ -1101,23 +1113,22 @@ extension OnboardingWizardView {
     private func updateConnectionIssue(problem: GatewayConnectionProblem?, statusText: String) {
         let wasOnAuthStep = self.step == .auth
         let next = GatewayConnectionIssue.detect(problem: problem)
-        let fallback = next == .none ? GatewayConnectionIssue.detect(from: statusText) : next
 
         // Avoid "flip-flopping" the UI by clearing actionable issues when the underlying connection
         // transitions through intermediate statuses (e.g. Offline/Connecting while reconnect churns).
-        if self.issue.needsPairing, fallback.needsPairing {
-            let mergedRequestId = fallback.requestId ?? self.issue.requestId ?? self.pairingRequestId
+        if self.issue.needsPairing, next.needsPairing {
+            let mergedRequestId = next.requestId ?? self.issue.requestId ?? self.pairingRequestId
             self.issue = .pairingRequired(requestId: mergedRequestId)
-        } else if self.issue.needsPairing, !fallback.needsPairing {
+        } else if self.issue.needsPairing, !next.needsPairing {
             // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
-        } else if self.issue.needsAuthCredentials, !fallback.needsAuthCredentials, !fallback.needsPairing {
+        } else if self.issue.needsAuthCredentials, !next.needsAuthCredentials, !next.needsPairing {
             // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
             // the user retries/scans again or we successfully connect.
         } else {
-            self.issue = fallback
+            self.issue = next
         }
 
-        if let requestId = problem?.requestId ?? fallback.requestId, !requestId.isEmpty {
+        if let requestId = problem?.requestId ?? next.requestId, !requestId.isEmpty {
             self.pairingRequestId = requestId
         }
 

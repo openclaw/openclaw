@@ -1,5 +1,6 @@
 // Shared snapshot, lock, and normalization owner for device pairing domain modules.
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { mergeDevicePairingRoles } from "./device-pairing-roles.js";
 import {
   loadDevicePairingStoreState,
   type DevicePairingStoreState,
@@ -21,19 +22,6 @@ export function loadDevicePairingStateForMutation(
 
 export function resolvePairingRequestExpiry(timestampMs: number): number {
   return timestampMs + DEVICE_PAIRING_PENDING_TTL_MS;
-}
-
-export function normalizeDevicePairingRole(role: string | undefined): string | null {
-  const trimmed = role?.trim();
-  return trimmed ? trimmed : null;
-}
-
-/** Merge pairing roles while preserving first-seen order. */
-export function mergeDevicePairingRoles(
-  ...items: Array<string | string[] | undefined>
-): string[] | undefined {
-  const roles = [...new Set(items.flatMap(normalizeUniqueSingleOrTrimmedStringList))];
-  return roles.length > 0 ? roles : undefined;
 }
 
 /** Merge pairing scopes while preserving first-seen order and explicit emptiness. */

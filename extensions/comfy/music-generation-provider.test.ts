@@ -34,6 +34,7 @@ describe("comfy music-generation provider", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it("registers the workflow model", () => {
@@ -122,12 +123,15 @@ describe("comfy music-generation provider", () => {
 
   it("honors req.timeoutMs for the music workflow poll deadline", async () => {
     // Regression: music ignored timeoutMs and waited the five-minute default.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     fetchWithSsrFGuardMock.mockImplementation(async (params: { url?: string }) =>
       fetchGuardJson(params.url?.includes("/prompt") ? { prompt_id: "music-job-slow" } : {}),
     );
 
-    await expect(
+    const result = expect(
       comfyProviders.music.generateMusic({ ...request, timeoutMs: 1000 }),
     ).rejects.toThrow("Comfy workflow did not finish within 1s");
+    await vi.advanceTimersByTimeAsync(1000);
+    await result;
   });
 });

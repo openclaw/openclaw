@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, expect, it } from "vitest";
 import { parse, stringify } from "yaml";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
@@ -13,7 +13,7 @@ import { resolveTestCorepackHome } from "../test-home-context.mts";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const installArgs = ["install", "--offline", "--ignore-scripts", "--no-frozen-lockfile"];
 
-it("keeps installed compiler inputs unchanged when another checkout imports the same package", async () => {
+it("keeps installed compiler inputs private to each checkout under a host global virtual store", async () => {
   const root = tempDirs.make("pnpm-install-isolation-");
   const home = path.join(root, "home");
   const packageRoot = path.join(root, "package");
@@ -30,11 +30,21 @@ it("keeps installed compiler inputs unchanged when another checkout imports the 
   const archive = path.join(root, "fixture.tgz");
   await tar.c({ file: archive, gzip: true, cwd: root }, ["package"]);
   const { packageManager } = JSON.parse(repoFile("package.json"));
-  const { nodeLinker, packageImportMethod } = parse(repoFile("pnpm-workspace.yaml"));
+  const { nodeLinker, packageImportMethod, virtualStoreType } = parse(
+    repoFile("pnpm-workspace.yaml"),
+  );
   const { environment } = pnpmLockfileDocuments(repoFile("pnpm-lock.yaml"));
   expect(environment).not.toBeNull();
   const dependencies = { "isolation-fixture": `file:${archive.replaceAll("\\", "/")}` };
-  const workspace = stringify({ packages: ["."], nodeLinker, packageImportMethod });
+  const workspace = stringify({
+    packages: ["."],
+    nodeLinker,
+    packageImportMethod,
+    virtualStoreType,
+  });
+  // A host's user config may select pnpm 12's shared virtual store.
+  fs.mkdirSync(path.join(home, "config/pnpm"), { recursive: true });
+  write(path.join(home, "config/pnpm"), "config.yaml", "virtualStoreType: global\n");
   // pnpm 12 resolves its own integrity pin even when the selected binary matches.
   const lockfile = `---\n${environment}\n---\nlockfileVersion: '9.0'\nimporters: {}\n`;
   const env = {
@@ -75,7 +85,10 @@ it("keeps installed compiler inputs unchanged when another checkout imports the 
     });
     expect(result.error, result.stdout + result.stderr).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    return path.join(cwd, "node_modules/isolation-fixture/index.js");
+    const installed = path.join(cwd, "node_modules/isolation-fixture/index.js");
+    // The build's declaration guard rejects dependency files outside the checkout.
+    expect(path.relative(fs.realpathSync(cwd), fs.realpathSync(installed))).not.toMatch(/^\.\./u);
+    return installed;
   };
   const first = install("first");
   const before = fs.statSync(first);

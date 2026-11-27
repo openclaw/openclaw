@@ -4,7 +4,7 @@
 // Measures 2,000 warm acquisitions after 100 warmups with 45 enabled native
 // plugins declaring one MCP server each. Real manager/runtime admission runs;
 // catalog discovery and tool execution do not (no child processes or network).
-// Acceptance: fewer declaration loads, lower CPU/allocation, unchanged admission
+// Acceptance: fewer configuration preparations, lower main-thread CPU/allocation, unchanged admission
 // and reload behavior. This owner probe does not measure end-to-end chat latency.
 import assert from "node:assert/strict";
 import { Session, type HeapProfiler } from "node:inspector/promises";
@@ -14,6 +14,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { PluginManifestRegistry } from "../../src/plugins/manifest-registry.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: { allocation: { type: "boolean" }, "base-dir": { type: "string" } },
@@ -86,15 +87,10 @@ try {
     await acquire();
   }
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   const samples: number[] = [];
-  const cpuStart = process.cpuUsage();
+  const cpuStart = process.threadCpuUsage();
   const start = performance.now();
   for (let index = 0; index < 2_000; index++) {
     const operationStart = performance.now();
@@ -102,7 +98,7 @@ try {
     samples.push(performance.now() - operationStart);
   }
   const wallMs = performance.now() - start;
-  const cpu = process.cpuUsage(cpuStart);
+  const cpu = process.threadCpuUsage(cpuStart);
   let sampledBytes: number | undefined;
   if (values.allocation) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");

@@ -6,6 +6,7 @@ import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.t
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createOverlay, type Overlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -79,6 +80,29 @@ function dropOn(row: Element | null, types: string[], data: Record<string, strin
 }
 
 describe("sessions view", () => {
+  it("retains accepted empty controls during refresh but retires them with the query", async () => {
+    document.body.append(container);
+    const result = buildMultiResult([]);
+    const initial = { searchQuery: "missing", roster: Promise.resolve(null) };
+    renderView(result, initial);
+    await vi.waitFor(() => expect(query(".data-table-empty-state button")).not.toBeNull());
+    const button = getButton(".data-table-empty-state button")!;
+    button.focus();
+    const pending = createDeferred<null>();
+    onTestFinished(() => pending.resolve(null));
+    renderView(result, { ...initial, roster: pending.promise, loading: true });
+    flush();
+    expect(query(".data-table-empty-state button")).toBe(button);
+    expect(document.activeElement).toBe(button);
+    renderView(result, { ...initial, roster: pending.promise, error: "Access denied" });
+    flush();
+    expect(query(".data-table-empty-state")).toBeNull();
+    renderView(result, { ...initial, result: null, roster: pending.promise, loading: true });
+    flush();
+    expect(query(".data-table-empty-state")).toBeNull();
+    expect(queryAll(".session-skeleton-row")).toHaveLength(4);
+  });
+
   it.each(["bulk", "empty"] as const)(
     "uses current callbacks on retained %s buttons",
     async (kind) => {
@@ -346,13 +370,63 @@ describe("sessions view", () => {
     expect(keyboardContextMenu.defaultPrevented).toBe(true);
   });
 
-  it("keeps pinned sessions above newer unpinned sessions", async () => {
+  it("does not import a historical shared pin into an empty personal layout", async () => {
     await renderSettled([
       createRow("newer", { updatedAt: 200 }),
       createRow("pinned", { updatedAt: 100, pinned: true, pinnedAt: 300 }),
     ]);
 
-    expectTexts("tbody .session-data-row .session-key-cell__primary", ["pinned", "newer"]);
+    expectTexts("tbody .session-data-row .session-key-cell__primary", ["newer", "pinned"]);
+  });
+
+  it("keeps eligible personal pins in sidebar order before column sorting, including after a reorder", async () => {
+    const rows = [
+      createRow("rail", { updatedAt: 100 }),
+      createRow("a", { updatedAt: 50 }),
+      createRow("z", { updatedAt: 1 }),
+      createRow("archived", { updatedAt: 30, archived: true }),
+    ];
+    const selector = "tbody .session-data-row .session-key-cell__primary";
+    await renderSettled(rows, {
+      personalSidebarEntries: [
+        "session-rail:rail",
+        "session:missing",
+        "session:archived",
+        "session:z",
+        "session:a",
+      ],
+    });
+    expectTexts(selector, ["z", "a", "rail", "archived"]);
+    await renderSettled(rows, {
+      personalSidebarEntries: ["session:a", "session:z"],
+      sortColumn: "key",
+      sortDir: "asc",
+    });
+    expectTexts(selector, ["a", "z", "archived", "rail"]);
+  });
+
+  it("returns two snoozed pins to their saved positions on successive deadlines without new inputs", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.setSystemTime(1_000);
+    const selector = "tbody .session-data-row .session-key-cell__primary";
+    await renderSettled(
+      [
+        createRow("ordinary", { updatedAt: 100 }),
+        createRow("second", { updatedAt: 50, snoozedUntil: 2_000 }),
+        createRow("first", { updatedAt: 1, snoozedUntil: 3_000 }),
+      ],
+      { personalSidebarEntries: ["session:first", "session:second"] },
+    );
+    expectTexts(selector, ["ordinary", "second", "first"]);
+    vi.advanceTimersByTime(1_001);
+    flush();
+    expectTexts(selector, ["second", "ordinary", "first"]);
+    vi.advanceTimersByTime(1_000);
+    flush();
+    expectTexts(selector, ["first", "second", "ordinary"]);
   });
 
   it("keeps session filters in the header popover without a count badge", async () => {
@@ -482,7 +556,7 @@ describe("sessions view", () => {
 
     const details = expectDefined(query(".session-details-panel"), "session details");
     expect(text(".session-details-panel__eyebrow", details)).toBe("Session details");
-    expect(text(".session-details-panel__title", details)).toBe("agent:main:main");
+    expect(text(".session-details-panel__title", details)).toBe("Main session");
     expect(
       texts(".session-details-panel__badges > *", details).map((s) => s?.replace(/\s+/g, " ")),
     ).toEqual(["Live", "Goal blocked (24k used)", "direct"]);
@@ -662,12 +736,17 @@ it("preserves the saved ultrafast override until explicitly changed", async () =
 });
 
 const render = (props: Partial<ReturnType<typeof buildProps>>) => renderView([], props);
-const unavailable = "Connect to the Gateway to search transcripts.";
+const unavailable = "Reconnect to search messages.";
 const connectionStatus = () => container.querySelector('.settings-section__desc [role="status"]');
 const transcriptTrigger = () =>
   container.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger");
-const filterInput = () =>
-  container.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+const filterInput = () => {
+  if (!container.querySelector(".sessions-filter-popover__search input")) {
+    container.querySelector<HTMLButtonElement>(".sessions-filter-popover__search button")?.click();
+    flush();
+  }
+  return container.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+};
 const escapeKey = (options: KeyboardEventInit = {}) =>
   new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...options });
 
@@ -706,14 +785,12 @@ describe("sessions transcript search view", () => {
       await Promise.resolve();
 
       const rosterFilter = container.querySelector<HTMLInputElement>(
-        '.sessions-filter-popover__search input[type="text"]',
+        ".sessions-filter-popover__search input",
       );
       const trigger = transcriptTrigger();
       expect(rosterFilter?.value).toBe("agent label");
-      expect(rosterFilter?.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
-      expect(trigger?.getAttribute("aria-label")).toBe(
-        available ? "Search transcripts" : unavailable,
-      );
+      expect(rosterFilter?.getAttribute("aria-label")).toBe("Search sessions…");
+      expect(trigger?.getAttribute("aria-label")).toBe(available ? "Search chats" : unavailable);
       expect(trigger?.disabled).toBe(!available);
       expect(container.querySelector(".sessions-transcript-search__input input")).toBeNull();
       expect(connectionStatus()?.textContent).toBe(available ? undefined : unavailable);
@@ -732,7 +809,7 @@ describe("sessions transcript search view", () => {
           .querySelector(".sessions-transcript-search__form")
           ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       } else {
-        expect(trigger?.closest("openclaw-tooltip")).toBeNull();
+        expect(trigger?.closest("openclaw-tooltip")?.content).toBe(unavailable);
         render({ transcriptSearchAvailable: true });
         await Promise.resolve();
         expect(connectionStatus()).toBeNull();
@@ -821,5 +898,75 @@ describe("Sessions query clearing", () => {
       overlay?.removeAttribute("open");
       overlay?.remove();
     }
+  });
+});
+
+describe("sessions view at phone width", () => {
+  beforeEach(() => {
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (media) =>
+        ({
+          matches: media === "(max-width: 640px)",
+          media,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }) as unknown as MediaQueryList,
+    );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders phone row titles and full keys and searches from the toolbar", async () => {
+    const onSearchChange = vi.fn();
+    await renderSettled(
+      [
+        createRow("agent:main:alpha", { label: "Alpha", updatedAt: 1 }),
+        createRow("agent:main:beta", { label: "Beta", updatedAt: 1 }),
+      ],
+      { onSearchChange },
+    );
+    flush();
+
+    expectTexts(".session-list-cell__title", ["Alpha", "Beta"]);
+    expectTexts(".session-list-cell__key", ["agent:main:alpha", "agent:main:beta"]);
+    const search = getInput(".sessions-search input");
+    expect(search?.placeholder).toBe("Search sessions…");
+    search!.value = "alp";
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onSearchChange).toHaveBeenCalledWith("alp");
+  });
+
+  it("sorts from the filter and shows a changed sort on the trigger", async () => {
+    const onSortChange = vi.fn();
+    document.body.append(container);
+    const defaults = { onSortChange, searchQuery: "alp", includeGlobal: true, limit: "50" };
+    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], defaults);
+    flush();
+    const trigger = getButton(".sessions-filter-popover__trigger");
+    // The toolbar shows the search itself, so only a changed sort lights the trigger.
+    expect(trigger?.classList.contains("active")).toBe(false);
+
+    trigger?.click();
+    flush();
+    const choose = (select: HTMLSelectElement, value: string) => {
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const [, sort, direction] = queryAll<HTMLSelectElement>("#sessions-filter-popover select");
+    choose(sort!, "key");
+    expect(onSortChange).toHaveBeenLastCalledWith("key", "desc");
+    choose(direction!, "asc");
+    expect(onSortChange).toHaveBeenLastCalledWith("updated", "asc");
+    expect(text("#sessions-filter-popover .oc-sheet__title")).toBe("Filters");
+    expect(attr("#sessions-filter-popover .oc-sheet__close", "aria-label")).toBe("Close");
+
+    disposeSessionViews();
+    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], {
+      ...defaults,
+      sortDir: "asc",
+    });
+    flush();
+    expect(getButton(".sessions-filter-popover__trigger")?.classList.contains("active")).toBe(true);
   });
 });

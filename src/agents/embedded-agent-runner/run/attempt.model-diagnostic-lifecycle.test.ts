@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { notifyProviderStreamOpened } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -36,6 +35,7 @@ import {
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { forceFullGc } from "../../../test-utils/retention.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { log } from "../logger.js";
@@ -198,7 +198,7 @@ describe("model diagnostic lifecycle", () => {
       const completed = await Promise.all(Array.from({ length: 20 }, settleRequest));
       const control = new WeakRef({});
       await nextTurn();
-      queryObjects(WeakRef);
+      forceFullGc();
       expect(control.deref()).toBeUndefined();
       expect(completed.filter(({ owner }) => owner.deref())).toHaveLength(0);
       expect(completed[0]!.frame(getModelTransportContext)).toMatchObject({
@@ -581,7 +581,7 @@ describe("model diagnostic lifecycle", () => {
         stream: true,
         input: [{ role: "user", content: "private preparation fixture" }],
       });
-      expect(await request.body.text()).toContain("private preparation fixture");
+      expect(await new Response(request.body).text()).toContain("private preparation fixture");
       return completedStream();
     });
     const events = await timeline(async () => {

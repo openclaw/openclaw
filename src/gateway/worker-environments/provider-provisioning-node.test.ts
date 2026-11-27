@@ -322,6 +322,147 @@ describe("node worker provider provisioning", () => {
     );
   });
 
+  it.each(["ready", "destroy-requested"] as const)(
+    "keeps provisioning authority through authenticated node binding until %s",
+    async (outcome) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", state.root);
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      const deviceId = "guarded-enrollment-node";
+      const receipt = {
+        version: 1 as const,
+        leaseId: "guarded-lease",
+        identity: { resource: "original" },
+      };
+      const enrollmentManager = createWorkerNodeEnrollmentManager({
+        store: state.store,
+        getConfig: () => ({
+          gateway: {
+            publicOrigin: "https://gateway.example.test",
+            auth: { mode: "token", token: "gateway-token" },
+          },
+        }),
+        resolveAvailability: async () => ({ available: true }),
+        prepareArtifact: async () => ({
+          tarballPath: path.join(state.root, "node-runtime.tgz"),
+          tarballSha256: support.NODE_BOOTSTRAP.sha256,
+          tarballBytes: 1,
+          openclawVersion: "2026.8.1",
+          buildId: "gateway-source-build",
+          enabledPluginIds: [],
+        }),
+        transfer: createWorkerBootstrapArtifactTransferService(),
+      });
+      onTestFinished(() => enrollmentManager.stop());
+      let guard: (() => void) | undefined;
+      let callerCurrent = true;
+      const service = nodeService(
+        {
+          supportsResourceReceipts: true,
+          resolveAllocation: async () => ({ leaseId: receipt.leaseId, sharedHost: false }),
+          provision: async (_profile, _operationId, options) => {
+            guard = options!.assertCurrent!;
+            guard();
+            await options!.recordResourceReceipt!(receipt);
+            const enrollment = await options!.beginNodeEnrollment!();
+            if (enrollment.mode !== "connect") {
+              throw new Error("Expected fresh enrollment");
+            }
+            const { bootstrapToken: token } = decodePairingSetupCode(enrollment.setupCode);
+            await expect(
+              verifyDeviceBootstrapToken({
+                token,
+                deviceId,
+                publicKey: "guarded-enrollment-public-key",
+                role: "node",
+                scopes: [],
+              }),
+            ).resolves.toEqual({ ok: true });
+            await expect(
+              consumeDeviceBootstrapTokenWithSetupCompletion({
+                token,
+                deviceId,
+                completedAtMs: state.nowMs,
+                admitsCloudWorkerSetup: enrollmentManager.admitsNodeSetupCompletion,
+              }),
+            ).resolves.toMatchObject({ completion: { setupId: enrollment.setupId, deviceId } });
+            // The real pairing writer publishes a new immutable row before wait returns.
+            guard();
+            expect(await enrollment.waitForDeviceId()).toBe(deviceId);
+            guard();
+            const current = state.store.list()[0]!;
+            expect(current).toMatchObject({ nodeDeviceId: deviceId, resourceReceipt: receipt });
+            if (outcome === "ready") {
+              // Inject changed owner observations after genuine enrollment; none may be adopted.
+              for (const changed of [
+                { ...current, ownerEpoch: current.ownerEpoch + 1 },
+                { ...current, provisionOperationId: "replacement-operation" },
+                { ...current, nodeSetupId: "replacement-setup" },
+                { ...current, nodeDeviceId: "replacement-node" },
+                {
+                  ...current,
+                  resourceReceipt: { ...receipt, identity: { resource: "replacement" } },
+                },
+              ]) {
+                const read = vi.spyOn(state.store, "get").mockReturnValueOnce(changed);
+                try {
+                  expect(guard).toThrow();
+                } finally {
+                  read.mockRestore();
+                }
+                guard();
+              }
+              callerCurrent = false;
+              expect(guard).toThrow("Caller authority closed");
+              callerCurrent = true;
+              guard();
+            }
+            if (outcome === "destroy-requested") {
+              await state.store.requestDestroy({
+                environmentId: current.environmentId,
+                state: current.state,
+              });
+              expect(guard).toThrow(closedMessage);
+              throw new Error("Observed current destroy intent");
+            }
+            return {
+              leaseId: receipt.leaseId,
+              node: { deviceId },
+              sharedHost: false,
+              resourceReceipt: receipt,
+            };
+          },
+        },
+        {
+          prepareNodeEnrollment: enrollmentManager.begin,
+          closeNodeEnrollment: enrollmentManager.close,
+          ensureNodeWorkerBundle: cloneReceipt,
+        },
+      );
+      const creation = create(service, "guarded-node-" + outcome, {
+        beforeProvision: () => {
+          if (!callerCurrent) {
+            throw new Error("Caller authority closed");
+          }
+        },
+      });
+      if (outcome === "ready") {
+        await expect(creation).resolves.toMatchObject({
+          state: "ready",
+          nodeDeviceId: deviceId,
+          resourceReceipt: receipt,
+        });
+      } else {
+        await expect(creation).rejects.toThrow("Observed current destroy intent");
+      }
+      expect(guard).toThrow(closedMessage);
+      await expect(service.destroy(state.store.list()[0]!.environmentId)).resolves.toMatchObject({
+        state: "destroyed",
+      });
+    },
+  );
+
   it("prepares the node runtime before allocation when preparation ends in teardown", async () => {
     const entered = createDeferredCore();
     const prepared = createDeferredCore();
@@ -607,6 +748,7 @@ describe("node worker provider provisioning", () => {
     expect(destroy).toHaveBeenCalledExactlyOnceWith({
       leaseId,
       profile: { region: "test" },
+      assertCurrent: expect.any(Function),
       signal: expect.any(AbortSignal),
     });
     expect(retireNodeEnrollment).toHaveBeenCalledExactlyOnceWith(

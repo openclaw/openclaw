@@ -33,9 +33,12 @@ function selectReadiness(options: InstalledPluginIndexStoreOptions) {
     artifactPreservingReadOnly,
     includeDeferred: true,
   };
+  // Until a migration write publishes a receipt here, the current read admission keys settled
+  // readiness. Synchronous Gateway loads cannot reread the PostgreSQL ledger on the main thread;
+  // closing or replacing the database retires this admission.
   const receipt =
     !artifactPreservingReadOnly && !context.maintenanceScope && !context.existingSchemaPath
-      ? readDeferredPluginMigrationReceipt(path)
+      ? (readDeferredPluginMigrationReceipt(path) ?? context.admission)
       : undefined;
   return {
     database,

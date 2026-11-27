@@ -145,7 +145,9 @@ stays bounded; accumulated source claims grow only after explicit pagination.
 Knowledge's separately registered session-activity panel opens through the chat
 header's native Panels control. It covers 40 initial rows, 40 older rows, ordering,
 read filtering and a 5000-character preview. Chat navigation happens outside that
-panel's measured interval and has no navigation-performance claim. These fixtures do not claim real Gateway,
+panel's measured interval and has no navigation-performance claim. Record views
+receive an empty entity timeline because the fixture has no dated source records.
+These fixtures do not claim real Gateway,
 relay, social-network, provider or account latency.
 WhatsApp uses a 1 × 1 synthetic PNG to measure QR state rendering, so its results
 do not represent the image-decoding cost of a realistic QR code.

@@ -1,12 +1,13 @@
 import { createMemo, createSignal, onSettled, useContext } from "solid-js";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { createResizeObserver } from "../lib/reactive/observers.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { visibleSessionChildren, type SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SidebarScrollContext } from "./sidebar-context-controller.ts";
 
 type WindowItem = { row: SidebarRecentSession; index: number; top: number; height: number };
-type GeometrySignature = [boolean] | [boolean, GeometrySignature[], boolean, string[]];
+type GeometrySignature = [boolean] | [boolean, GeometrySignature[], string[]];
 
 /** Bounded sidebar pages need only a prefix-height pass. The transcript's
  * general virtualizer stays out of the eager sidebar/New Session graph. */
@@ -17,12 +18,9 @@ export function createSidebarSessionWindow(
 ) {
   const scroll = useContext(SidebarScrollContext);
   let list: HTMLDivElement;
-  const [rowFloor, setRowFloor] = createSignal(32);
+  const [rowFloor, setRowFloor] = createSignal(scroll?.rowFloor() ?? 32);
   const [focusedKey, setFocusedKey] = createSignal<string>();
-  const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>({
-    items: [],
-    height: 0,
-  });
+  const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>();
   const retained = (row: SidebarRecentSession, focused: string | undefined): boolean =>
     row.visuallyActive ||
     row.key === focused ||
@@ -51,9 +49,8 @@ export function createSidebarSessionWindow(
       height:
         ownHeight +
         children.reduce((height, child) => height + child.height, 0) +
-        (children.length < row.children.length ? 28 : 0) +
-        (row.loadingChildren && children.length === 0 ? 32 : 0),
-      signature: [preview, children.map((child) => child.signature), row.loadingChildren, errors],
+        (children.length < row.children.length ? 28 : 0),
+      signature: [preview, children.map((child) => child.signature), errors],
     };
   };
   const inputs = createMemo(() => {
@@ -74,12 +71,30 @@ export function createSidebarSessionWindow(
     return {
       bind: (element: HTMLDivElement) => (list = element),
       rows,
-      height: () => undefined,
-      item: (_key: string) => undefined,
+      trailingSpace: () => undefined,
+      spaceBefore: (_key: string) => undefined,
       focus: (_key: string) => {},
       rowRef: (_key: () => string) => (_element: HTMLDivElement) => {},
     };
   }
+  // A keyed move keeps the control but the browser can blur it during insertion.
+  createPendingFocus(
+    () => {
+      rows();
+      const active = list?.ownerDocument.activeElement;
+      return active instanceof HTMLElement && list.contains(active) ? { active } : null;
+    },
+    {
+      requested: (request) =>
+        Boolean(
+          request &&
+          request.active.isConnected &&
+          list.contains(request.active) &&
+          request.active.ownerDocument.activeElement === request.active.ownerDocument.body,
+        ),
+      focus: (request) => request?.active.focus({ preventScroll: true }),
+    },
+  );
   const measured = new Map<string, { signature: string; height: number }>();
   const mounted = new Map<string, HTMLDivElement>();
   const [mountRevision, setMountRevision] = createSignal(0);
@@ -94,21 +109,30 @@ export function createSidebarSessionWindow(
   const restoreAnchor = scroll.readAnchor();
   const anchorAt = (top: number) =>
     top < 0 || top >= totalHeight ? undefined : positions.findLast((item) => item.top <= top);
+  const windowAt = (offset: number) => {
+    const top = offset - margin;
+    const first = positions.findIndex((item) => item.top + item.height > top);
+    const beyond = positions.findIndex((item) => item.top >= top + viewportHeight);
+    const start = first < 0 ? positions.length : Math.max(0, first - 2);
+    // A section below the viewport has no visible rows to overscan.
+    const end =
+      beyond < 0 ? positions.length : beyond === 0 ? 0 : Math.min(positions.length, beyond + 2);
+    // Scroll can precede geometry's retention update after selection or focus.
+    return positions.filter(
+      (item, index) =>
+        (index >= start && index < end) ||
+        current[index]!.retained ||
+        retained(item.row, focusedKey()),
+    );
+  };
   const publish = () => {
     const scroller = scroll.element();
     if (!scroller) {
       return;
     }
-    const top = scroller.scrollTop - margin;
-    const first = positions.findIndex((item) => item.top + item.height > top);
-    const beyond = positions.findIndex((item) => item.top >= top + viewportHeight);
-    const start = first < 0 ? positions.length : Math.max(0, first - 2);
-    const end = beyond < 0 ? positions.length : Math.min(positions.length, beyond + 2);
-    const items = positions.filter(
-      (_, index) => (index >= start && index < end) || current[index]!.retained,
-    );
+    const items = windowAt(scroller.scrollTop);
     setView((previous) =>
-      previous.height === totalHeight &&
+      previous?.height === totalHeight &&
       previous.items.length === items.length &&
       previous.items.every(
         (item, index) =>
@@ -124,7 +148,7 @@ export function createSidebarSessionWindow(
   const rebuild = () => {
     const scroller = scroll.element();
     const anchor = scroller && anchorAt(scroller.scrollTop - margin);
-    const offset = anchor && scroller ? scroller.scrollTop - margin - anchor.top : 0;
+    const offset = anchor ? scroller.scrollTop - margin - anchor.top : 0;
     let top = 0;
     positions = current.map((input, index) => {
       const known = measured.get(input.row.key);
@@ -141,7 +165,7 @@ export function createSidebarSessionWindow(
     publish();
   };
   const scheduleMeasurement = createLayoutMeasurement(
-    () => ({ items: inputs() }),
+    () => ({ items: inputs(), rowFloor: rowFloor() }),
     (request) => {
       const scroller = scroll.element();
       if (!request || !scroller) {
@@ -164,13 +188,20 @@ export function createSidebarSessionWindow(
         scroller.scrollTop;
       // All layout reads precede the publication/scroll writes.
       return () => {
+        scroll.captureRowFloor(nextRowFloor);
         // This request still contains estimates for the previous CSS minimum.
-        if (rowFloor() !== nextRowFloor) {
+        if (request.rowFloor !== nextRowFloor) {
           setRowFloor(nextRowFloor);
           return;
         }
         if (layout !== nextLayout) {
-          measured.clear();
+          // Mounted rows remain observed. Dropping their measurements can lose
+          // a resize already delivered, or wait forever for an unchanged size.
+          for (const key of measured.keys()) {
+            if (!mounted.has(key)) {
+              measured.delete(key);
+            }
+          }
         }
         layout = nextLayout;
         viewportHeight = nextHeight;
@@ -243,22 +274,56 @@ export function createSidebarSessionWindow(
       }
     }),
   );
-  const items = createMemo(() => new Map(view().items.map((item) => [item.row.key, item])));
-  const fullHeight = createMemo(() => {
-    view();
-    return Math.max(
-      0,
-      inputs().reduce((height, input) => {
-        const known = measured.get(input.row.key);
-        return height + (known?.signature === input.signature ? known.height : input.height);
-      }, 0),
+  onSettled(() =>
+    // Snapshot capture samples the measured zero-offset range without layout reads.
+    scroll.registerWindow(() => {
+      const source = inputs();
+      if (source.length === 0) {
+        return [];
+      }
+      return view() && current === source ? windowAt(0).map((item) => item.row.key) : undefined;
+    }),
+  );
+  const items = createMemo(() => {
+    const ready = view();
+    // A zero-height measurement still belongs to the previous empty row set.
+    if (ready && (ready.height > 0 || inputs().length === 0)) {
+      return new Map(ready.items.map((item) => [item.row.key, item]));
+    }
+    const keys = new Set(host().sidebarSnapshot?.windowKeys);
+    let top = 0;
+    return new Map(
+      inputs().flatMap((input, index) => {
+        const item = { row: input.row, index, top, height: input.height };
+        top += input.height;
+        return keys.has(input.row.key) ? [[input.row.key, item] as const] : [];
+      }),
     );
+  });
+  // Let mounted siblings use their real block sizes. Estimates reserve only the
+  // rows omitted by windowing, including gaps around a retained focused row.
+  const spacing = createMemo(() => {
+    const visible = items();
+    const before = new Map<string, number>();
+    let gap = 0;
+    for (const input of inputs()) {
+      if (visible.has(input.row.key)) {
+        if (gap) {
+          before.set(input.row.key, gap);
+        }
+        gap = 0;
+      } else {
+        const known = measured.get(input.row.key);
+        gap += known?.signature === input.signature ? known.height : input.height;
+      }
+    }
+    return { before, trailing: gap };
   });
   return {
     bind: (element: HTMLDivElement) => (list = element),
     rows: () => rows().filter((row) => items().has(row.key)),
-    height: () => `${fullHeight()}px`,
-    item: (key: string) => items().get(key),
+    trailingSpace: () => `${spacing().trailing}px`,
+    spaceBefore: (key: string) => `${spacing().before.get(key) ?? 0}px`,
     focus: setFocusedKey,
     rowRef(key: () => string) {
       let element: HTMLDivElement;

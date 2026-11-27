@@ -11,7 +11,7 @@ import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
-import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.async.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../auth-profiles/store-runtime.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
@@ -28,11 +28,7 @@ import {
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
-import {
-  applyAuthHeaderOverride,
-  applyLocalNoAuthHeaderOverride,
-  resolveModelAuthModeAsync,
-} from "../model-auth.js";
+import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { getPreparedModelRuntimeAuthStore } from "../prepared-model-runtime-auth.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
@@ -45,6 +41,8 @@ import {
   resolveSessionPermissionExecMode,
   SESSION_PERMISSION_BY_EXEC_MODE,
 } from "../session-permission-exec-mode.js";
+import { prepareRunSessionPermissionPolicy } from "../session-permission-policy.js";
+import { isSessionProjectMoveEligible } from "../session-project-guidance.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { resolveRuntimeAgentName } from "../system-prompt-params.js";
@@ -98,13 +96,24 @@ export async function buildPreparedCompactionRuntime(
     effectiveCwd,
     sessionAgentId,
   } = prepared;
+  const participationCeiling = params.pluginExecutionAuthority?.participationCeiling;
   const mode = params.execOverrides?.mode
     ? SESSION_PERMISSION_BY_EXEC_MODE[params.execOverrides.mode]
     : (params.permissionMode ?? params.sessionEntry?.permissionMode);
-  const root = params.sessionRoot ?? params.sessionEntry?.sessionRoot;
-  const sessionPermissionPolicy = mode
-    ? { mode, root: root ?? (await fs.realpath(resolvedWorkspace)) }
-    : undefined;
+  const root =
+    participationCeiling?.source?.root ?? params.sessionRoot ?? params.sessionEntry?.sessionRoot;
+  const sessionPermissionPolicy =
+    mode || participationCeiling
+      ? await prepareRunSessionPermissionPolicy({
+          mode,
+          root: root ?? (await fs.realpath(resolvedWorkspace)),
+          pluginExecutionAuthority: params.pluginExecutionAuthority,
+          config: params.config,
+          agentId: sessionAgentId,
+          sandboxAvailable: sandbox?.enabled === true,
+          execOverrides: params.execOverrides,
+        })
+      : undefined;
   const execOverrides = sessionPermissionPolicy
     ? { ...params.execOverrides, mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
     : params.execOverrides;
@@ -255,6 +264,7 @@ export async function buildPreparedCompactionRuntime(
       chatType: params.chatType,
       requesterOrigin: params.requesterOrigin,
       operatorProfileId: params.operatorProfileId,
+      pluginExecutionAuthority: params.pluginExecutionAuthority,
       conversationId: params.conversationId,
       messageThreadId: params.messageThreadId,
       memberRoleIds: params.memberRoleIds,
@@ -310,6 +320,12 @@ export async function buildPreparedCompactionRuntime(
             pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
             oneShotCliRun: params.oneShotCliRun,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+            sessionProjectMoveEligible: isSessionProjectMoveEligible(
+              params.config,
+              sessionAgentId,
+              params.sessionEntry,
+              params.cwd?.trim() || resolvedWorkspace,
+            ),
             webSearchEnabled: params.toolOverrides?.webSearch !== false,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             modelHasVision: effectiveModel.input?.includes("image") ?? false,
@@ -318,14 +334,6 @@ export async function buildPreparedCompactionRuntime(
             skillInstructionDeliveryCache,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             preparedModelRuntime: params.preparedModelRuntime,
-            modelAuthMode: await resolveModelAuthModeAsync(
-              effectiveModel.provider,
-              params.config,
-              authProfileStore,
-              {
-                workspaceDir: effectiveWorkspace,
-              },
-            ),
           },
           skillReadResources,
         )
@@ -520,8 +528,8 @@ export async function buildPreparedCompactionRuntime(
     const { prepareTtsPreferences } = await import("../../tts/tts-preferences.js");
     const preparedTtsPreferences =
       promptMode === "full" ? await prepareTtsPreferences() : undefined;
-    const buildSystemPromptText = () => {
-      const builtSystemPrompt = buildConfiguredAgentSystemPrompt({
+    const buildSystemPromptText = async () => {
+      const builtSystemPrompt = await buildConfiguredAgentSystemPrompt({
         preparedTtsPreferences,
         config: params.config,
         preparedModelRuntime: params.preparedModelRuntime,

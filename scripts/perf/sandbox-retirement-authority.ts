@@ -35,6 +35,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -126,8 +127,13 @@ try {
   assert(container && browser, "Registry fixtures were not published");
   const authorityCycle = async () => {
     for (let check = 0; check < 4; check++) {
-      await registry.assertSandboxRegistryRetirementCurrent("container", container, database);
-      await registry.assertSandboxRegistryRetirementCurrent("browser", browser, database);
+      // Historical --registry-module inputs still return promises.
+      await Promise.resolve(
+        registry.assertSandboxRegistryRetirementCurrent("container", container, database),
+      );
+      await Promise.resolve(
+        registry.assertSandboxRegistryRetirementCurrent("browser", browser, database),
+      );
     }
   };
   const workspaceDir = entry(0).workspaceDir;
@@ -160,12 +166,7 @@ try {
   await nextTurn();
   await nextTurn();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   observer.observe({ entryTypes: ["gc"] });
   const loadBefore = loadavg();

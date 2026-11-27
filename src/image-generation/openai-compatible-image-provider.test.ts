@@ -4,7 +4,7 @@ import {
   createOpenAiCompatibleImageGenerationProvider,
   type OpenAiCompatibleImageProviderOptions,
 } from "./openai-compatible-image-provider.js";
-import type { ImageGenerationProvider, ImageGenerationRequest } from "./types.js";
+import type { ImageGenerationProvider, ImageGenerationRequest } from "./provider-types.js";
 
 const { http, auth, availability } = vi.hoisted(() => ({
   http: {

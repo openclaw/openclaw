@@ -1,5 +1,6 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { REDACTED_FIELD_VALUE, VALUE_FIELD_ROLES } from "./sensitive-field-values.js";
 import { INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 type RoleRef = {
@@ -283,6 +284,59 @@ function parseAiSnapshotRef(ref: string | undefined): string | null {
 }
 
 /**
+ * Mask form field values in a Playwright AI snapshot. Playwright prints every input value and
+ * renders password inputs as plain textboxes, either inline (`- textbox [ref=e1]: value`) or as
+ * a `- text:` child when the field also has props such as a placeholder. A valued field line
+ * without a ref is masked because nothing can prove the field safe.
+ */
+export async function redactAiSnapshotFieldValues(
+  aiSnapshot: string,
+  isSensitiveRef: (ref: string) => Promise<boolean>,
+): Promise<string> {
+  const lines = aiSnapshot.split("\n");
+  const fields: Array<{ ref: string | null; values: Array<{ index: number; head: string }> }> = [];
+  for (const [index, line] of lines.entries()) {
+    const parsed = parseSnapshotLine(line);
+    if (!parsed || !VALUE_FIELD_ROLES.has(parsed.role)) {
+      continue;
+    }
+    // Formatter attributes sit between the key and the value; the rest is page text.
+    const attributes = parsed.suffix.match(/^(?:\s+\[[^\][]*\])*/)?.[0] ?? "";
+    const tail = parsed.suffix.slice(attributes.length);
+    const values: Array<{ index: number; head: string }> = [];
+    if (/^: \S/.test(tail) && line.endsWith(tail)) {
+      values.push({ index, head: line.slice(0, line.length - tail.length + 2) });
+    } else if (tail === ":") {
+      const childIndent = getIndentLevel(line) + 1;
+      for (let child = index + 1; child < lines.length; child += 1) {
+        const childIndentLevel = getIndentLevel(lines[child]!);
+        if (childIndentLevel < childIndent) {
+          break;
+        }
+        const text = lines[child]!.match(/^\s*- text: /);
+        if (text && childIndentLevel === childIndent) {
+          values.push({ index: child, head: text[0] });
+        }
+      }
+    }
+    if (values.length) {
+      fields.push({ ref: parseAiSnapshotRef(parsed.ref), values });
+    }
+  }
+  await Promise.all(
+    fields.map(async ({ ref, values }) => {
+      if (ref && !(await isSensitiveRef(ref))) {
+        return;
+      }
+      for (const { index, head } of values) {
+        lines[index] = `${head}${REDACTED_FIELD_VALUE}`;
+      }
+    }),
+  );
+  return lines.join("\n");
+}
+
+/**
  * Build a role snapshot from Playwright's AI snapshot output while preserving Playwright's own
  * aria-ref ids (e.g. ref=e13). This makes the refs self-resolving across calls.
  */
@@ -295,13 +349,25 @@ export function buildRoleSnapshotFromAiSnapshot(
   const refs: RoleRefMap = {};
 
   const out: string[] | undefined = suppliedOptions === undefined ? undefined : [];
+  // Unnamed generic wrappers don't count toward maxDepth, matching CDP role snapshots.
+  const ancestors: Array<{ indent: number; childDepth: number }> = [];
   for (const line of lines) {
-    const depth = getIndentLevel(line);
+    const indent = getIndentLevel(line);
+    let parent = ancestors.at(-1);
+    while (parent && parent.indent >= indent) {
+      ancestors.pop();
+      parent = ancestors.at(-1);
+    }
+    const depth = parent?.childDepth ?? 0;
+    const parsed = parseSnapshotLine(line);
+    if (parsed) {
+      const wrapper = parsed.role === "generic" && !parsed.nameToken;
+      ancestors.push({ indent, childDepth: depth + (wrapper ? 0 : 1) });
+    }
     if (options.maxDepth !== undefined && depth > options.maxDepth) {
       continue;
     }
 
-    const parsed = parseSnapshotLine(line);
     if (!parsed) {
       if (!options.interactive) {
         out?.push(line);

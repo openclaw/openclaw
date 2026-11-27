@@ -194,7 +194,7 @@ describe("resolveExistingUploadPaths", () => {
       "Invalid media reference",
     ],
     ["rejects nested absolute inbound media paths", "nested-absolute", directChild],
-    ["rejects files outside both managed upload roots", "outside", "inbound media directory"],
+    ["rejects files outside both managed upload roots", "outside", "uploads directory"],
   ]);
 });
 

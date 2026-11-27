@@ -29,6 +29,7 @@ import {
   getRemoteControlUiIngressContext,
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
+  readGatewayIngressTransport,
   readPreparedGatewayIngressAttribution,
   PROXY_ATTRIBUTION_GUIDANCE,
   PROXY_ATTRIBUTION_REQUIRED_REASON,
@@ -204,7 +205,8 @@ export function attachGatewayUpgradeHandler(opts: {
     // Node releases socket errors before routing can await a plugin or authenticate.
     socket.once("error", () => socket.destroy());
     const remoteIngress = getRemoteControlUiIngressContext(req);
-    if (!remoteIngress) {
+    // Listener-owned pre-handlers (remote Control UI, OpenClaw ID tunnel) assign first.
+    if (!readGatewayIngressTransport(req)) {
       markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
     }
     const handleUpgrade = async () => {
@@ -229,6 +231,7 @@ export function attachGatewayUpgradeHandler(opts: {
       const ingressAttribution = prepareGatewayIngressAttribution({
         req,
         trustedProxies,
+        trustedProxy: getResolvedAuth().trustedProxy,
         allowRealIpFallback,
       });
       const requestClientIp =
@@ -297,7 +300,7 @@ export function attachGatewayUpgradeHandler(opts: {
       }
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
-        rejectUpgradeAuth(socket, { ok: false, reason: "unauthorized" });
+        rejectWebSocketUpgrade(socket, { status: scopedNodeCapability.scopedPath ? 400 : 401 });
         return;
       }
       if (scopedNodeCapability.rewrittenUrl) {
@@ -373,10 +376,6 @@ export function attachGatewayUpgradeHandler(opts: {
             req,
             authCheck.requestAuth,
           );
-        }
-        if (pluginGatewayRequestAuth?.hasCurrentClientAuthority?.() === false) {
-          rejectUpgradeAuth(socket, { ok: false, reason: "unauthorized" });
-          return;
         }
         assertRemoteControlUiIngressCurrent(remoteIngress);
         if (
@@ -463,7 +462,10 @@ export function attachGatewayUpgradeHandler(opts: {
       const remoteAddress = (socket as { remoteAddress?: string }).remoteAddress ?? "unknown";
       const errorMessage = err instanceof Error ? err.message : String(err);
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);
-      rejectWebSocketUpgrade(socket, { status: 503 });
+      rejectWebSocketUpgrade(socket, {
+        status: 503,
+        headers: { "Cache-Control": "no-store", "Retry-After": "1" },
+      });
     });
   };
   opts.httpServer.on("upgrade", (req, socket, head) => {

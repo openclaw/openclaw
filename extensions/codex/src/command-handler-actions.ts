@@ -36,8 +36,13 @@ import {
   CODEX_FULL_PERMISSIONS_AUTH_ERROR,
   hasCodexAdminScope,
 } from "./command-authorization.js";
-import { formatCodexDisplayText, formatComputerUseStatus } from "./command-formatters.js";
 import {
+  formatCodexDisplayText,
+  formatComputerUseStatus,
+  formatStartedCodexReview,
+} from "./command-formatters.js";
+import {
+  type CodexReviewTarget,
   formatComputerUsePersistentIdentityMigration,
   parseBindArgs,
   parseComputerUseArgs,
@@ -83,16 +88,14 @@ export async function resolveCodexNativeCommandSandboxBlock(
   ctx: PluginCommandContext,
   subcommand: string,
   args: readonly string[],
+  skipsNativeExecution: boolean,
 ): Promise<{
   block: string | undefined;
   assertCurrent: () => Promise<void>;
   source?: PreparedSessionSourceAssertion;
   release: () => void;
 }> {
-  if (
-    isReadOnlyCodexGoalCommand(subcommand, args) ||
-    returnsBeforeNativeCodexExecution(subcommand, args)
-  ) {
+  if (skipsNativeExecution) {
     return { block: undefined, async assertCurrent() {}, release() {} };
   }
   const sessionKey = ctx.sessionTarget?.sessionKey ?? ctx.sessionKey;
@@ -167,6 +170,7 @@ export function isReadOnlyCodexGoalCommand(subcommand: string, args: readonly st
 export function returnsBeforeNativeCodexExecution(
   subcommand: string,
   args: readonly string[],
+  reviewTarget: CodexReviewTarget | undefined,
 ): boolean {
   switch (subcommand) {
     case "bind":
@@ -183,8 +187,9 @@ export function returnsBeforeNativeCodexExecution(
       return (
         args.length === 0 || args.length > 1 || parseCodexPermissionsModeArg(args[0]) === undefined
       );
-    case "compact":
     case "review":
+      return reviewTarget === undefined;
+    case "compact":
     case "detach":
     case "unbind":
     case "stop":
@@ -521,22 +526,18 @@ export async function startThreadAction(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: CodexPluginConfig | undefined,
-  kind: "compact" | "review",
-  args: string[],
+  action: { kind: "compact" } | { kind: "review"; target: CodexReviewTarget },
 ): Promise<string> {
-  if (args.length > 0) {
-    return `Usage: /codex ${kind}`;
-  }
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
   using _ = { [Symbol.dispose]: authority.release };
   const { target, binding } = authority;
   if (!target) {
-    return `Cannot start Codex ${kind === "compact" ? "compaction" : "review"} because this command did not include a stable binding identity.`;
+    return `Cannot start Codex ${action.kind === "compact" ? "compaction" : "review"} because this command did not include a stable binding identity.`;
   }
   if (!binding?.threadId) {
     return `No Codex thread is attached to this OpenClaw session yet.`;
   }
-  if (kind === "compact") {
+  if (action.kind === "compact") {
     const sessionTarget = ctx.sessionTarget;
     if (
       !ctx.sessionId ||
@@ -588,7 +589,7 @@ export async function startThreadAction(
     codexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.review,
-      { threadId: binding.threadId, target: { type: "uncommittedChanges" } },
+      { threadId: binding.threadId, target: action.target },
       {
         agentDir: target.agentDir,
         authProfileId: connection.clientAuthProfileId,
@@ -608,7 +609,7 @@ export async function startThreadAction(
       },
     ),
   );
-  return `Started Codex review for thread ${formatCodexDisplayText(binding.threadId)}.`;
+  return formatStartedCodexReview(binding.threadId, action.target);
 }
 
 function supervisedCommandGuard(

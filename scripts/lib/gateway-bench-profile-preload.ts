@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync, writeFileSync, writeSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import { availableParallelism } from "node:os";
@@ -11,7 +11,7 @@ import { getSessionRowSelectionMetrics } from "../../src/infra/gateway-work-metr
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 import {
   GATEWAY_PROFILE_CHANNEL,
-  GATEWAY_GC_TRACE_MARKER,
+  writeGatewayGcTraceMarker,
   GATEWAY_CPU_SAMPLE_INTERVAL_MICROS,
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   type GatewayBenchCommand,
@@ -122,9 +122,10 @@ if (isMainThread) {
     }
     const owner = new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href;
     const workerOwners = new Map(
-      ["worker-message-metrics.ts", "sqlite-worker-operation-admission.ts", "worker-cpu.ts"].map(
-        (file) => [new URL(`../../src/infra/${file}`, import.meta.url).href, file],
-      ),
+      ["worker-message-metrics.ts", "worker-cpu.ts"].map((file) => [
+        new URL(`../../src/infra/${file}`, import.meta.url).href,
+        file,
+      ]),
     );
     workerOwners.set(
       new URL("../../packages/worker-runtime/src/worker-task-pool-core.ts", import.meta.url).href,
@@ -217,7 +218,9 @@ ${source.replace(
           const returnAnchor = sharedDelivery
             ? "      return projected;"
             : "      return {\n        payload: wirePayload,";
-          const payload = sharedDelivery ? "projected.payload" : "wirePayload";
+          const payload = sharedDelivery
+            ? "projected.payload ?? projected.serializePayload"
+            : "wirePayload";
           const replacements = [
             [
               "    const audiences = new Map<",
@@ -347,11 +350,7 @@ ${source}`;
   }
   const markGc = (phase: string, profilePath?: string) => {
     if (traceGc) {
-      // Share V8's stdout descriptor without asynchronous stream buffering.
-      writeSync(
-        1,
-        `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-      );
+      writeGatewayGcTraceMarker(phase, profilePath);
     }
   };
   if (traceGc) {

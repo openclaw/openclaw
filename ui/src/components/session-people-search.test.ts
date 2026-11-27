@@ -22,6 +22,7 @@ it("preserves a loading query until the connection changes", async () => {
   const menu = await mountMenu({ context });
   await openSubmenu(menu, "Assign to…");
   await waitForFast(() => expect(request).toHaveBeenCalledWith("users.list", {}));
+  await waitForSolid(() => expect(menu.querySelector('input[type="search"]')).not.toBeNull());
   const search = menu.querySelector<HTMLInputElement>('input[type="search"]')!;
   searchFor(search, "Carol");
 
@@ -32,7 +33,10 @@ it("preserves a loading query until the connection changes", async () => {
 
   publish({ phase: "reconnecting" });
   publish({ phase: "connected" });
-  await waitForSolid(() => expect(search.value).toBe(""));
+  await waitForSolid(() => {
+    expect(menu.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("");
+    expect(owners(menu)).toHaveLength(4);
+  });
 });
 
 it("refreshes agent labels from identity publications without clearing the search", async () => {
@@ -44,6 +48,7 @@ it("refreshes agent labels from identity publications without clearing the searc
   const agentIdentity = createAgentIdentityCapability(context.gateway);
   const menu = await mountMenu({ context: { ...context, agentIdentity } });
   await openSubmenu(menu, "Assign to…");
+  await waitForSolid(() => expect(menu.querySelector('input[type="search"]')).not.toBeNull());
   const search = menu.querySelector<HTMLInputElement>('input[type="search"]')!;
   searchFor(search, "Assistant");
   await waitForSolid(() => expect(owners(menu)).toHaveLength(0));

@@ -16,7 +16,8 @@
       "showQr": "显示二维码",
       "waitForScan": "等待扫描",
       "logout": "退出登录",
-      "refresh": "刷新"
+      "refresh": "刷新",
+      "details": "详情"
     },
     "channels": {
       "lastError": "上次错误",
@@ -49,7 +50,8 @@
       "showQr": "顯示 QR 碼",
       "waitForScan": "等待掃描",
       "logout": "登出",
-      "refresh": "重新整理"
+      "refresh": "重新整理",
+      "details": "詳細資訊"
     },
     "channels": {
       "lastError": "最近一次錯誤",
@@ -82,7 +84,8 @@
       "showQr": "Mostrar QR",
       "waitForScan": "Aguardar leitura",
       "logout": "Sair",
-      "refresh": "Atualizar"
+      "refresh": "Atualizar",
+      "details": "Detalhes"
     },
     "channels": {
       "lastError": "Último erro",
@@ -115,7 +118,8 @@
       "showQr": "QR-Code anzeigen",
       "waitForScan": "Auf Scan warten",
       "logout": "Abmelden",
-      "refresh": "Aktualisieren"
+      "refresh": "Aktualisieren",
+      "details": "Details"
     },
     "channels": {
       "lastError": "Letzter Fehler",
@@ -148,7 +152,8 @@
       "showQr": "Mostrar QR",
       "waitForScan": "Esperar al escaneo",
       "logout": "Cerrar sesión",
-      "refresh": "Actualizar"
+      "refresh": "Actualizar",
+      "details": "Detalles"
     },
     "channels": {
       "lastError": "Último error",
@@ -181,7 +186,8 @@
       "showQr": "QRを表示",
       "waitForScan": "スキャンを待機",
       "logout": "ログアウト",
-      "refresh": "更新"
+      "refresh": "更新",
+      "details": "詳細"
     },
     "channels": {
       "lastError": "直近のエラー",
@@ -214,7 +220,8 @@
       "showQr": "QR 표시",
       "waitForScan": "스캔 대기",
       "logout": "로그아웃",
-      "refresh": "새로고침"
+      "refresh": "새로고침",
+      "details": "세부 정보"
     },
     "channels": {
       "lastError": "최근 오류",
@@ -247,7 +254,8 @@
       "showQr": "Afficher le QR",
       "waitForScan": "Attendre le scan",
       "logout": "Se déconnecter",
-      "refresh": "Actualiser"
+      "refresh": "Actualiser",
+      "details": "Détails"
     },
     "channels": {
       "lastError": "Dernière erreur",
@@ -280,7 +288,8 @@
       "showQr": "QR दिखाएँ",
       "waitForScan": "स्कैन होने की प्रतीक्षा करें",
       "logout": "लॉग आउट करें",
-      "refresh": "रिफ़्रेश करें"
+      "refresh": "रिफ़्रेश करें",
+      "details": "विवरण"
     },
     "channels": {
       "lastError": "पिछली त्रुटि",
@@ -313,7 +322,8 @@
       "showQr": "إظهار رمز QR",
       "waitForScan": "انتظار المسح",
       "logout": "تسجيل الخروج",
-      "refresh": "تحديث"
+      "refresh": "تحديث",
+      "details": "التفاصيل"
     },
     "channels": {
       "lastError": "آخر خطأ",
@@ -346,7 +356,8 @@
       "showQr": "Mostra QR",
       "waitForScan": "Attendi la scansione",
       "logout": "Esci",
-      "refresh": "Aggiorna"
+      "refresh": "Aggiorna",
+      "details": "Dettagli"
     },
     "channels": {
       "lastError": "Ultimo errore",
@@ -379,7 +390,8 @@
       "showQr": "QR Göster",
       "waitForScan": "Taranmasını bekle",
       "logout": "Oturumu Kapat",
-      "refresh": "Yenile"
+      "refresh": "Yenile",
+      "details": "Ayrıntılar"
     },
     "channels": {
       "lastError": "Son hata",
@@ -412,7 +424,8 @@
       "showQr": "Показати QR",
       "waitForScan": "Дочекайтеся сканування",
       "logout": "Вийти",
-      "refresh": "Оновити"
+      "refresh": "Оновити",
+      "details": "Докладніше"
     },
     "channels": {
       "lastError": "Остання помилка",
@@ -445,7 +458,8 @@
       "showQr": "Tampilkan QR",
       "waitForScan": "Tunggu pemindaian",
       "logout": "Keluar",
-      "refresh": "Segarkan"
+      "refresh": "Segarkan",
+      "details": "Detail"
     },
     "channels": {
       "lastError": "Kesalahan terakhir",
@@ -478,7 +492,8 @@
       "showQr": "Pokaż QR",
       "waitForScan": "Poczekaj na zeskanowanie",
       "logout": "Wyloguj się",
-      "refresh": "Odśwież"
+      "refresh": "Odśwież",
+      "details": "Szczegóły"
     },
     "channels": {
       "lastError": "Ostatni błąd",
@@ -511,7 +526,8 @@
       "showQr": "แสดง QR",
       "waitForScan": "รอการสแกน",
       "logout": "ออกจากระบบ",
-      "refresh": "รีเฟรช"
+      "refresh": "รีเฟรช",
+      "details": "รายละเอียด"
     },
     "channels": {
       "lastError": "ข้อผิดพลาดล่าสุด",
@@ -544,7 +560,8 @@
       "showQr": "Hiện mã QR",
       "waitForScan": "Chờ quét",
       "logout": "Đăng xuất",
-      "refresh": "Làm mới"
+      "refresh": "Làm mới",
+      "details": "Chi tiết"
     },
     "channels": {
       "lastError": "Lỗi gần nhất",
@@ -577,7 +594,8 @@
       "showQr": "QR tonen",
       "waitForScan": "Wachten op scan",
       "logout": "Uitloggen",
-      "refresh": "Vernieuwen"
+      "refresh": "Vernieuwen",
+      "details": "Details"
     },
     "channels": {
       "lastError": "Laatste fout",
@@ -610,7 +628,8 @@
       "showQr": "نمایش QR",
       "waitForScan": "منتظر اسکن بمانید",
       "logout": "خروج",
-      "refresh": "تازه‌سازی"
+      "refresh": "تازه‌سازی",
+      "details": "جزئیات"
     },
     "channels": {
       "lastError": "آخرین خطا",
@@ -643,7 +662,8 @@
       "showQr": "Показать QR",
       "waitForScan": "Дождаться сканирования",
       "logout": "Выйти",
-      "refresh": "Обновить"
+      "refresh": "Обновить",
+      "details": "Подробности"
     },
     "channels": {
       "lastError": "Последняя ошибка",
@@ -676,7 +696,8 @@
       "showQr": "Visa QR-kod",
       "waitForScan": "Vänta på skanning",
       "logout": "Logga ut",
-      "refresh": "Uppdatera"
+      "refresh": "Uppdatera",
+      "details": "Detaljer"
     },
     "channels": {
       "lastError": "Senaste fel",
@@ -689,6 +710,40 @@
         "phoneNumber": "Telefonnummer",
         "logoutConfirmTitle": "Logga ut från WhatsApp-kontot {accountId}?",
         "logoutConfirmMessage": "Om du loggar ut från kontot {accountId} stoppas dess lyssnare och dess sparade inloggningsuppgifter raderas."
+      }
+    }
+  },
+  "ca": {
+    "common": {
+      "configured": "Configurat",
+      "linked": "Vinculat",
+      "running": "En execució",
+      "connected": "Connectat",
+      "lastConnect": "Última connexió",
+      "lastMessage": "Últim missatge",
+      "authAge": "Antiguitat de l'autenticació",
+      "na": "n/d",
+      "yes": "Sí",
+      "no": "No",
+      "relink": "Torna a vincular",
+      "working": "En procés…",
+      "showQr": "Mostra el QR",
+      "waitForScan": "Espera l'escaneig",
+      "logout": "Tanca la sessió",
+      "refresh": "Actualitza",
+      "details": "Detalls"
+    },
+    "channels": {
+      "lastError": "Últim error",
+      "setup": {
+        "whatsappQrAlt": "QR de WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Vincula WhatsApp Web i supervisa l'estat de la connexió.",
+        "phoneNumber": "Número de telèfon",
+        "logoutConfirmTitle": "Voleu tancar la sessió del compte de WhatsApp {accountId}?",
+        "logoutConfirmMessage": "Tancar la sessió del compte {accountId} atura el seu procés d'escolta i elimina les seves credencials desades."
       }
     }
   }

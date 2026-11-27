@@ -112,16 +112,15 @@ it("detects helper-owned global listeners but accepts remove, abort and once com
 
 it("tracks pointer capture until it is released", () => {
   const target = document.body.appendChild(document.createElement("div"));
-  const pointer = (type: string) =>
-    Object.assign(new Event(type, { bubbles: true }), { pointerId: 7 });
   const check = beginUiLeakCheck();
-  target.dispatchEvent(pointer("gotpointercapture"));
+  target.setPointerCapture(7);
   const leaks = check();
   expect(leaks).toEqual(["pointer capture 7 on <div>"]);
   expect(() => reportUiLeaks("offending pointer", leaks, "fail")).toThrow("offending pointer");
+  target.releasePointerCapture(7);
   const released = beginUiLeakCheck();
-  target.dispatchEvent(pointer("gotpointercapture"));
-  target.dispatchEvent(pointer("lostpointercapture"));
+  target.setPointerCapture(7);
+  target.releasePointerCapture(7);
   expect(released()).toEqual([]);
 });
 

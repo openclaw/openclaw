@@ -21,7 +21,6 @@ function createFixture(): string {
   mkdirSync(path.join(fixtureRoot, "recovery"));
   for (const [file, contents] of Object.entries({
     "package.json": '{"version":"2026.9.2-beta.1"}\n',
-    "apps/android/version.json": '{"version":"2026.8.2","versionCode":2026080201}\n',
     ".gitignore":
       "scripts\nFastfile\norigin.git/\nrecovery/\napps/android/build/\napps/android/fastlane/\n",
   })) {
@@ -52,6 +51,7 @@ const rubyFastlaneHarness = String.raw`
 require "json"
 require "open3"
 require "fileutils"
+require "rbconfig"
 if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
   require "fastlane"
   require "supply"
@@ -175,6 +175,18 @@ module Open3
     end
   end
 end
+module Process
+  class << self
+    alias_method :fixture_spawn, :spawn
+    def spawn(*args, **options)
+      if args.any? { |arg| arg.to_s.end_with?("mobile-release-notes.ts") }
+        $events << "generate-notes"
+        return fixture_spawn(RbConfig.ruby, "-e", "exit 0")
+      end
+      fixture_spawn(*args, **options)
+    end
+  end
+end
 ENV["GOOGLE_PLAY_JSON_KEY_DATA"] = "synthetic"
 %w(MATCH_PASSWORD GOOGLE_PLAY_TRACK GOOGLE_PLAY_RELEASE_STATUS GOOGLE_PLAY_VALIDATE_ONLY OPENCLAW_ANDROID_RELEASE_PLAN SUPPLY_UPLOAD_METADATA SUPPLY_UPLOAD_SCREENSHOTS SUPPLY_UPLOAD_IMAGES SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW).each { |key| ENV.delete(key) }
 if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
@@ -227,7 +239,7 @@ type LaneResult = {
   error?: string;
   events: string[];
   tracks: unknown;
-  pinned_notes?: string;
+  manual_notes?: string;
   wear_code?: string;
   committed_config?: Record<string, boolean | null>;
   committed_query?: Record<string, boolean>;
@@ -272,13 +284,14 @@ end
 FileUtils.mkdir_p(File.join(android_root, "build", "release-artifacts"))
 play_release_artifact_paths("2026.9.20").each { |file| File.write(file, "synthetic signed bundle") }
 notes_path = File.join(play_metadata_path, "en-US", "release_notes.txt")
-File.write(notes_path, "Pinned archive notes stay unchanged.\n")
+File.write(notes_path, "Manual archive notes stay unchanged.\n")
 File.write(File.join(play_metadata_path, "en-US", "title.txt"), "Store listing title")
 File.write(File.join(play_metadata_path, "en-US", "images", "icon.png"), "synthetic icon")
 plan_path = File.join($root, "recovery", "android-plan.json")
 $scenario, $events, $edits, $client = "plan", [], 0, Supply::Client.new
 $run_lane.call(:release_plan, output_path: plan_path)
 ENV["OPENCLAW_ANDROID_RELEASE_PLAN"] = plan_path
+ENV["OPENCLAW_MOBILE_RELEASE_NOTES"] = File.join($root, "recovery", "release-notes.json")
 results = %w(invalid-destination invalid-notes changed-baseline changed-code initialize-failure validate-only upload closed-testing internal).map do |scenario|
   scenario_result(scenario) do
   ENV["SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW"] = "true"
@@ -295,7 +308,7 @@ results = %w(invalid-destination invalid-notes changed-baseline changed-code ini
     destination = { "internal" => "internal", "invalid-destination" => "production" }[scenario]
     options = destination ? { destination: destination } : {}
     $run_lane.call(:release_upload, options)
-    { events: $events, tracks: $tracks, pinned_notes: File.read(notes_path), wear_code: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"], committed_config: $committed_config, committed_query: $committed_query }
+    { events: $events, tracks: $tracks, manual_notes: File.read(notes_path), wear_code: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"], committed_config: $committed_config, committed_query: $committed_query }
   end
 end
 STDOUT.puts JSON.generate(results)
@@ -311,12 +324,12 @@ STDOUT.puts JSON.generate(results)
       closedTesting,
       internal,
     ] = results;
-    for (const [result, error] of [
-      [invalidDestination, "destination must be play-store or internal"],
-      [rejected, "Saved release notes do not match source/build"],
-    ] as const) {
-      expect(result).toMatchObject({ error: expect.stringContaining(error), events: [] });
-    }
+    expect(invalidDestination).toMatchObject({
+      error: expect.stringContaining("destination must be play-store or internal"),
+      events: [],
+    });
+    expect(rejected?.error).toContain("Saved release notes do not match source/build");
+    expectAbsent(rejected, "upload", "commit", "ref:initialize-android", "ref:record");
     for (const rejectedPlan of [changedBaseline, changedCode]) {
       expectAborted(rejectedPlan, "changed after preparation", "upload", "ref:initialize-android");
     }
@@ -333,7 +346,7 @@ STDOUT.puts JSON.generate(results)
       expect(result?.error).toBeUndefined();
       expect(result?.tracks).toEqual(tracks);
       expect(result).toMatchObject({
-        pinned_notes: "Pinned archive notes stay unchanged.\n",
+        manual_notes: "Manual archive notes stay unchanged.\n",
         committed_config: reviewConfig(null),
       });
       expect([eventCount(result, "commit"), eventCount(result, "upload")]).toEqual([1, 2]);

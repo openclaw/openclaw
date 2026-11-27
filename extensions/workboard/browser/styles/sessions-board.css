@@ -99,6 +99,17 @@ a.workboard-session-pr:hover {
   overflow-wrap: anywhere;
 }
 
+.workboard-sessions__pagination {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 4px 0 8px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 .workboard-board-kind {
   display: flex;
   gap: 20px;
@@ -134,6 +145,17 @@ a.workboard-session-pr:hover {
   display: grid;
   gap: 6px;
   font-size: 0.8rem;
+}
+
+.workboard-sessions-editor label:has(> input[type="radio"]) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+
+  > input {
+    margin: 0;
+  }
 }
 
 .workboard-sessions-editor .settings-input {

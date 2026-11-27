@@ -24,8 +24,9 @@ export function readMemorySessionTargets(
   if (!params.sessionIds?.length && !params.hookSources?.length && !params.participants?.length) {
     return [];
   }
+  const scope = { ...params, projection: "list" } as const;
   return selectMemorySessionTargets(params, {
-    instances: listSessionTranscriptInstances(params, { includeAllWindows: true }, continuation),
+    instances: listSessionTranscriptInstances(scope, { includeAllWindows: true }, continuation),
     participants: new Map(
       [...listSessionParticipantsReadOnly(params)].map(([key, rows]) => [
         key,

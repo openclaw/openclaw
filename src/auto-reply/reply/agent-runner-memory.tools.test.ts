@@ -11,7 +11,10 @@ import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import {
   loadSessionEntry,
@@ -149,7 +152,7 @@ describe("provider-owned memory flush", () => {
       updatedAt: Date.now(),
       totalTokens: 80_000,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       compactionCount: 1,
       sessionId: "10000000-0000-4000-8000-000000000001",
       lifecycleRevision: "incarnation-1",

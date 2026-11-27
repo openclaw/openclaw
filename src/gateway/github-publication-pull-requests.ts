@@ -214,6 +214,7 @@ export async function findGitHubPublicationPullRequest(
   params: GitHubPublicationPullRequestLookup & {
     headCommit: string;
     recordObserved?: (url: string) => void | Promise<void>;
+    assertReuse?: (url: string) => Promise<void>;
   },
 ): Promise<string | undefined> {
   const { identity, candidates } = await loadGitHubPublicationPullRequests(params);
@@ -222,6 +223,22 @@ export async function findGitHubPublicationPullRequest(
       code: "github_rejected",
       nextAction: "Inspect the original pull request before requesting another publication.",
     });
+  }
+  const occupied = candidates.find(
+    (candidate) =>
+      candidate.state === "open" &&
+      candidate.headRef === params.branch &&
+      candidate.baseRef === params.baseBranch,
+  );
+  if (!params.pullRequest && occupied && occupied.userId !== identity.account.accountId) {
+    throw new GitHubPublicationKnownFailure("GitHub pull request is owned by another account.", {
+      code: "github_rejected",
+      nextAction: "Check pull-request permission for the effective account, then retry.",
+    });
+  }
+  if (occupied && !occupied.body.includes(params.marker)) {
+    await params.assertReuse?.(occupied.url);
+    params.assertCurrent();
   }
   const exact = matchingGitHubPublicationHeads(params, { identity, candidates });
   const found =
@@ -243,18 +260,6 @@ export async function findGitHubPublicationPullRequest(
       );
     }
   }
-  const occupied = candidates.find(
-    (candidate) =>
-      candidate.state === "open" &&
-      candidate.headRef === params.branch &&
-      candidate.baseRef === params.baseBranch,
-  );
-  if (!params.pullRequest && occupied && occupied.userId !== identity.account.accountId) {
-    throw new GitHubPublicationKnownFailure("GitHub pull request is owned by another account.", {
-      code: "github_rejected",
-      nextAction: "Check pull-request permission for the effective account, then retry.",
-    });
-  }
   // A matching accepted result settles its receipt; later actions still check authority.
   if (found) {
     return found.url;
@@ -270,6 +275,8 @@ export async function reconcileGitHubPublicationPullRequest(
     pushRepository: string;
     workspaceTree: string;
     parentCommit: string;
+    repositoryIntegration?: true;
+    readAcceptedRequestId?: (head: string) => Promise<string | undefined>;
     pushOnly?: "observed" | "dispatched";
     beforeRetry?: boolean;
     knownPullRequestUrls: readonly string[];
@@ -315,10 +322,46 @@ export async function reconcileGitHubPublicationPullRequest(
     }
     return parent.sha;
   });
+  let accepted = commit;
+  if (params.repositoryIntegration && parents.length === 2) {
+    const { raw: inputRaw } = await readGitHubPublicationApi(
+      params,
+      `repos/${params.pushRepository}/git/commits/${parents[0]}`,
+    );
+    params.assertCurrent();
+    const value: unknown = JSON.parse(inputRaw);
+    if (!isRecord(value) || value.sha !== parents[0]) {
+      return undefined;
+    }
+    accepted = value;
+  }
+  let acceptedRequestId = params.requestId;
   if (
-    commit.tree.sha !== params.workspaceTree ||
-    parents.length !== 1 ||
-    parents[0] !== params.parentCommit ||
+    typeof accepted.message === "string" &&
+    !accepted.message.split(/\r?\n/u).includes(`OpenClaw-Publication: ${acceptedRequestId}`)
+  ) {
+    const acceptedRequest =
+      typeof accepted.sha === "string"
+        ? await params.readAcceptedRequestId?.(accepted.sha)
+        : undefined;
+    params.assertCurrent();
+    if (!acceptedRequest) {
+      return undefined;
+    }
+    acceptedRequestId = acceptedRequest;
+  }
+  if (
+    !isRecord(accepted.tree) ||
+    typeof accepted.tree.sha !== "string" ||
+    !objectId.test(accepted.tree.sha) ||
+    !Array.isArray(accepted.parents) ||
+    (acceptedRequestId === params.requestId &&
+      (accepted.tree.sha !== params.workspaceTree ||
+        accepted.parents.length !== 1 ||
+        !isRecord(accepted.parents[0]) ||
+        accepted.parents[0].sha !== params.parentCommit)) ||
+    typeof accepted.message !== "string" ||
+    !accepted.message.split(/\r?\n/u).includes(`OpenClaw-Publication: ${acceptedRequestId}`) ||
     !commit.message.split(/\r?\n/u).includes(`OpenClaw-Publication: ${params.requestId}`)
   ) {
     return undefined;

@@ -1,10 +1,8 @@
 // Transient user-turn transcript context carried through runtime queues.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import { createMessageInjectionAuthority } from "../auto-reply/reply/message-injection-authority.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnTranscriptRecorder,
-} from "./user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
+import { prepareUserTurnMessageCommit } from "./user-turn-transcript-admission.js";
+import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
 const RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT = Symbol.for(
   "openclaw.runtimeUserTurnTranscriptContext",
@@ -109,16 +107,10 @@ export function withRuntimeUserTurnTranscriptRecorder<T>(
   append: (beforeFreshMessageCommit?: () => void) => T,
 ): T {
   const recorder = readRuntimeUserTurnTranscriptRecorder(runtimeMessage);
-  const assertCommit = recorder?.assertOriginalInputCommit;
   // Capture before SessionManager canonicalizes the message and drops its symbols.
-  // Only the fresh SQL append invokes this assertion; replay keeps its recorded result.
-  const beforeFreshMessageCommit = assertCommit
-    ? createMessageInjectionAuthority(() => {
-        assertCommit();
-        return true;
-      })
-    : undefined;
-  const persist = () => append(beforeFreshMessageCommit);
+  // Only fresh input invokes this assertion; replay keeps its original receipt.
+  const assertCurrent = prepareUserTurnMessageCommit(recorder, runtimeMessage);
+  const persist = () => append(assertCurrent);
   return recorder?.withPendingInput ? recorder.withPendingInput(persist) : persist();
 }
 

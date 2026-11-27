@@ -17,6 +17,14 @@ import { createAgentsPageState } from "./agents-page-state.ts";
 import type { AgentsRouteData } from "./route.ts";
 
 const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
+  "agents.list",
+  "agent.identity.get",
+  "agents.files.list",
+  "agents.files.get",
+  "skills.status",
+  "channels.status",
+  "config.get",
+  "models.list",
   "config.patch",
   "config.set",
   "agents.update",
@@ -142,7 +150,6 @@ export function createAgentsPage(context: ApplicationContext, routeData?: Agents
   };
   pages.add(dispose);
   return {
-    identitySavePending: state.identitySavePending,
     read: () => state.read(),
     data: () => state.read().readData(),
     setRouteData(next?: AgentsRouteData) {
@@ -219,6 +226,11 @@ export function gateway(current: ApplicationGatewaySnapshot): ApplicationContext
       return () => snapshots.delete(notify);
     }),
   } as unknown as ApplicationContext["gateway"];
+  // Real Gateway connection publication binds the hello before any consumer reads.
+  createGatewayMetadataObserver((next) => next === result.snapshot).synchronize(
+    createApplicationGatewaySnapshot(),
+    current,
+  );
   eventListeners.set(result, listeners);
   gatewayListeners.set(result, snapshots);
   return result;

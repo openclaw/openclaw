@@ -3,8 +3,11 @@ package ai.openclaw.app
 import ai.openclaw.app.i18n.resolveNativeText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -12,6 +15,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CronJobDetailTest {
+  @Test
+  fun summaryParserPreservesEnabledCoercionAndPromptPreviews() {
+    val jobs =
+      Json
+        .parseToJsonElement(
+          """
+          [
+            {"id":"agent","name":"Agent","enabled":" true ","payload":{"kind":"agentTurn","message":"  first\n  second  "}},
+            {"id":"empty","name":"Empty","enabled":false,"payload":{"kind":"systemEvent","text":"  "}},
+            {"id":"command","name":"Command","payload":{"kind":"command","argv":["printf","done"]}}
+          ]
+          """.trimIndent(),
+        ).jsonArray
+
+    val summaries = parseCronJobs(jobs)
+
+    assertEquals(listOf(true, false, false), summaries.map { it.enabled })
+    assertEquals(
+      listOf("first second", "No prompt", "No prompt"),
+      summaries.map { it.promptPreview.resolveNativeText() },
+    )
+  }
+
   @Test
   fun parsesFullGatewayCronJob() {
     val detail = parseGatewayCronJobDetail(parseJob())
@@ -34,6 +60,51 @@ class CronJobDetailTest {
     assertEquals("After 3 · Announce · telegram · ops · Cooldown Every 1h", detail.failureAlertLabel.resolveNativeText())
     assertEquals(2L, detail.consecutiveErrors)
     assertEquals("error", detail.lastRunStatus)
+  }
+
+  @Test
+  fun preservesWholeMinutesWhenProjectingIntervalSchedules() {
+    val cases =
+      listOf(
+        88_200_000L to "Every 1470m",
+        172_860_000L to "Every 2881m",
+        86_400_000L to "Every 1d",
+        172_800_000L to "Every 2d",
+        90_000_000L to "Every 25h",
+        5_400_000L to "Every 90m",
+        86_400_001L to "Every 1d",
+      )
+
+    for ((everyMs, expected) in cases) {
+      val schedule =
+        buildJsonObject {
+          put("kind", "every")
+          put("everyMs", everyMs)
+        }
+      val job = JsonObject(parseJob() + ("schedule" to schedule))
+      val detail = requireNotNull(parseGatewayCronJobDetail(job))
+
+      assertEquals("schedule label for $everyMs", expected, detail.scheduleLabel.resolveNativeText())
+      assertEquals("schedule detail for $everyMs", expected, detail.scheduleDetail.resolveNativeText())
+      assertEquals(everyMs, detail.scheduleEveryMs)
+    }
+  }
+
+  @Test
+  fun preservesWholeMinutesWhenProjectingFailureCooldowns() {
+    val cases = listOf(88_200_000L to "Every 1470m", 86_400_000L to "Every 1d")
+
+    for ((cooldownMs, expected) in cases) {
+      val alert =
+        buildJsonObject {
+          put("after", 3)
+          put("cooldownMs", cooldownMs)
+        }
+      val job = JsonObject(parseJob() + ("failureAlert" to alert))
+      val detail = requireNotNull(parseGatewayCronJobDetail(job))
+
+      assertEquals("After 3 · Cooldown $expected", detail.failureAlertLabel.resolveNativeText())
+    }
   }
 
   @Test

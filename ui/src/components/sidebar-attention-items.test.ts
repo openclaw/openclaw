@@ -1,33 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { CronJob } from "../api/types.ts";
 import {
   buildScopeUpgradeInboxEntry,
   buildSidebarInboxEntries,
   sidebarInboxTabCounts,
 } from "./sidebar-attention-entries.ts";
-import { buildSidebarAttentionEntries, type CronAttentionJob } from "./sidebar-attention-items.ts";
+import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import { inboxMention } from "./sidebar-inbox.test-support.ts";
 
-function cronJob(
-  id: string,
-  state: CronJob["state"] = { lastRunStatus: "error" },
-  name = id,
-): CronAttentionJob {
-  return { id, name, enabled: true, updatedAtMs: 0, state };
-}
-
-function cronItems(
-  cronJobs: readonly CronAttentionJob[],
-  now = 0,
-  cronOwnerByJobId?: ReadonlyMap<string, string>,
-  cronSchedulerEnabled = true,
-) {
+function accountWarning(arrivedAtMs: number) {
   return buildSidebarAttentionEntries({
-    cronJobs,
-    cronSchedulerEnabled,
-    cronOwnerByJobId,
-    modelAuthStatus: null,
-    now,
+    modelAuthStatus: {
+      ts: arrivedAtMs,
+      providers: [{ provider: "openai", displayName: "OpenAI", status: "missing", profiles: [] }],
+    },
+    now: arrivedAtMs,
   });
 }
 
@@ -52,40 +38,22 @@ function inbox(
 }
 
 describe("sidebar attention projection", () => {
-  it("does not flag an actively running job as overdue", () => {
-    const running = cronJob("running-id", { lastRunStatus: "ok", nextRunAtMs: 1, runningAtMs: 2 });
-    const stalled = cronJob("stalled-id", { lastRunStatus: "ok", nextRunAtMs: 2 });
-
-    const overdue = cronItems([running, stalled], 300_003).find(
-      (item) => item.kind === "cronOverdue",
-    );
-
-    expect(overdue?.label).toBe("stalled-id");
+  it("orders rows by arrival, newest first, with timeless live states on top", () => {
+    const entries = buildSidebarInboxEntries({
+      approvals: [
+        { id: "old", createdAtMs: 1_000 },
+        { id: "new", createdAtMs: 4_000 },
+      ] as never,
+      attention: accountWarning(2_000),
+      mentions: [{ ...inboxMention("mention"), createdAt: 3_000 }],
+      scopeUpgrade: { type: "scopeUpgrade" } as never,
+      update: null,
+    });
+    expect(
+      entries.map((entry) => (entry.type === "approval" ? entry.approval.id : entry.type)),
+    ).toEqual(["scopeUpgrade", "new", "mention", "attention", "old"]);
   });
 
-  it("labels and links automation alerts, ordered by failure then recency", () => {
-    const items = cronItems(
-      [
-        cronJob("older-overdue", { lastRunStatus: "ok", nextRunAtMs: 1 }),
-        cronJob("older-failed", { lastRunStatus: "error", lastRunAtMs: 100 }, ""),
-        cronJob("overdue", { lastRunStatus: "ok", nextRunAtMs: 2 }),
-        cronJob("failed", { lastRunStatus: "error", lastRunAtMs: 200 }, "Nightly backup"),
-      ],
-      300_003,
-      new Map([["failed", "Writer"]]),
-    );
-
-    expect(items.map((item) => item.label)).toEqual([
-      "Nightly backup",
-      "older-failed",
-      "overdue",
-      "older-overdue",
-    ]);
-    expect(items.map((item) => item.action)).toEqual(
-      Array.from({ length: 4 }, () => ({ kind: "navigate", routeId: "cron" })),
-    );
-    expect(items[0]?.meta?.context).toBe("Writer");
-  });
   it("derives every tab count and dismiss control from one entry list", () => {
     const entries = inbox(true, {
       approvals: [
@@ -97,7 +65,7 @@ describe("sidebar attention projection", () => {
           expiresAtMs: 60_000,
         },
       ],
-      attention: cronItems([cronJob("failed-job")]),
+      attention: accountWarning(1),
       mentions: [
         { ...inboxMention("older"), createdAt: 1_000 },
         { ...inboxMention("newer"), createdAt: 2_000 },
@@ -112,17 +80,15 @@ describe("sidebar attention projection", () => {
       all: 6,
       approvals: 1,
       mentions: 2,
-      automations: 1,
-      system: 2,
+      system: 3,
     });
     expect(entries.filter((entry) => entry.dismissal).map((entry) => entry.type)).toEqual([
       "scopeUpgrade",
       "attention",
     ]);
-    expect(entries.slice(-2).map((entry) => entry.type === "mention" && entry.mention.id)).toEqual([
-      "newer",
-      "older",
-    ]);
+    expect(
+      entries.flatMap((entry) => (entry.type === "mention" ? [entry.mention.id] : [])),
+    ).toEqual(["newer", "older"]);
   });
 
   it("keeps informational updates visible without adding them to attention counts", () => {
@@ -133,7 +99,6 @@ describe("sidebar attention projection", () => {
       all: 0,
       approvals: 0,
       mentions: 0,
-      automations: 0,
       system: 0,
     });
   });

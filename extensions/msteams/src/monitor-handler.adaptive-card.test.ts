@@ -94,53 +94,45 @@ function lastDispatchedCtxPayload(): Record<string, unknown> {
 
 describe("msteams members added handler", () => {
   it.each([
-    { promptStarters: ["Do X", "Do Y"], labels: ["Do X", "Do Y"] },
-    {
-      promptStarters: [],
-      labels: ["What can you do?", "Summarize my last meeting", "Help me draft an email"],
-    },
-  ])("sends welcome card starters $promptStarters", async ({ promptStarters, labels }) => {
+    ["personal", 1],
+    ["groupChat", 0],
+  ] as const)("stores the %s install conversation reference", async (conversationType, saves) => {
     const deps = createDeps();
-    deps.cfg = { channels: { msteams: { promptStarters } } };
-    const sendActivity = await welcome(deps);
-    expect(sendActivity).toHaveBeenCalledWith({
-      type: "message",
-      attachments: [
-        {
-          contentType: "application/vnd.microsoft.card.adaptive",
-          content: {
-            type: "AdaptiveCard",
-            version: "1.5",
-            body: [
-              { type: "TextBlock", text: "Hi! I'm OpenClaw.", weight: "Bolder", size: "Medium" },
-              {
-                type: "TextBlock",
-                text: "I can help you with questions, tasks, and more. Here are some things to try:",
-                wrap: true,
-              },
-            ],
-            actions: labels.map((label) => ({
-              type: "Action.Submit",
-              title: label,
-              data: { msteams: { type: "imBack", value: label } },
-            })),
-          },
-        },
-      ],
+    const upsert = vi.fn(async () => {});
+    deps.conversationStore.upsert = upsert;
+    await createMSTeamsActivityHandler(deps)({
+      activity: {
+        type: "conversationUpdate",
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        membersAdded: [{ id: "28:bot-app" }],
+        from: { id: "29:user-bf", aadObjectId: "user-aad" },
+        recipient: { id: "28:bot-app", name: "Bot" },
+        conversation: { id: "a:installed-chat", conversationType, tenantId: "tenant-1" },
+        channelData: { tenant: { id: "tenant-1" } },
+      },
+      sendActivity: vi.fn(async () => ({ id: "activity-id" })),
+      updateActivity: vi.fn(async () => undefined),
     });
-  });
-
-  it.each([
-    { botName: undefined, name: "OpenClaw" },
-    { botName: "", name: "OpenClaw" },
-    { botName: "Support", name: "Support" },
-  ])("sends the group welcome for $botName", async ({ botName, name }) => {
-    const deps = createDeps();
-    deps.cfg = { channels: { msteams: { groupWelcomeCard: true } } };
-    const sendActivity = await welcome(deps, "groupChat", botName);
-    expect(sendActivity).toHaveBeenCalledWith(
-      `Hi! I'm ${name}. Mention me with @${name} to get started.`,
-    );
+    expect(upsert).toHaveBeenCalledTimes(saves);
+    if (saves) {
+      expect(upsert).toHaveBeenCalledWith("a:installed-chat", {
+        activityId: undefined,
+        user: { id: "29:user-bf", name: undefined, aadObjectId: "user-aad" },
+        agent: { id: "28:bot-app", name: "Bot" },
+        conversation: {
+          id: "a:installed-chat",
+          conversationType: "personal",
+          tenantId: "tenant-1",
+        },
+        tenantId: "tenant-1",
+        aadObjectId: "user-aad",
+        teamId: undefined,
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer",
+        locale: undefined,
+      });
+    }
   });
 
   it("uses account-specific welcome card config", async () => {
@@ -199,6 +191,11 @@ describe("msteams adaptive card action invoke", () => {
       label: "legacy structured data",
       action: { type: "Action.Submit", data: { value: "/codex permissions yolo", label: "Run" } },
       text: JSON.stringify({ value: "/codex permissions yolo", label: "Run" }),
+    },
+    {
+      label: "agent button",
+      action: { type: "Action.Submit", data: { value: "::/pick a", label: "Pick" } },
+      text: "callback_data: /pick a",
     },
     {
       label: "execute metadata",

@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
-import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
+import {
+  consumeRootOptionToken as consumeLauncherRootOptionToken,
+  isUpdateCommandArgv,
+} from "./cli-root-options.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
   RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
@@ -13,6 +16,7 @@ import {
 } from "./gateway-shutdown-budget.mjs";
 import { nodeRuntimePathEntries, withNodeRuntimePath } from "./node-runtime-env.mjs";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "./node-sqlite.mjs";
+import { formatNodeSecurityWarning } from "./node-version.mjs";
 import { createRuntimeProcessScriptFile } from "./runtime-process-scripts.generated.mjs";
 
 export { consumeLauncherRootOptionToken };
@@ -71,6 +75,7 @@ export const runRespawnedChild = ({ command, args, env }) => {
   const launcherStopTimeoutMs = resolveLauncherStopTimeoutMs({
     platform: process.platform,
     foreground: isForegroundGatewayRunArgv(process.argv),
+    update: isUpdateCommandArgv(process.argv),
   });
   const signalExitGraceMs = launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
   const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
@@ -81,9 +86,9 @@ export const runRespawnedChild = ({ command, args, env }) => {
   });
   const listeners = new Map();
   // Keep signal forwarding and bounded shutdown in sync with src/entry.compile-cache.ts,
-  // which drives src/process/respawn-child-runner.ts. That runner still holds its own
-  // copies of the escalation graces and reaps on a fixed short one, so only this
-  // launcher's deadline is the one the serving Gateway derives.
+  // which drives src/process/respawn-child-runner.ts. That runner shares this escalation
+  // policy but never wraps a foreground Unix Gateway, so only this launcher's deadline
+  // is the one the serving Gateway derives.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
   let firstForwardedSignal = null;
@@ -764,19 +769,32 @@ export async function recoverNodeRuntime({
     env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" ||
     !process.argv[1] ||
     isForegroundGmailRunInvocation(process.argv) ||
-    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) ||
-    !nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities())
+    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv))
   ) {
     return false;
   }
-  const selected = await findUsableNodeRuntime({ homeDir, allowInstall, env });
+  const failure = nodeRuntimeFailure(
+    process.versions.node,
+    await detectCurrentSqliteCapabilities(),
+  );
+  const securityWarning = formatNodeSecurityWarning(process.versions.node);
+  if (!failure && !securityWarning) {
+    return false;
+  }
+  // Certificate-only recovery may reuse a patched runtime, never download one.
+  const selected = await findUsableNodeRuntime({
+    homeDir,
+    allowInstall: Boolean(failure) && allowInstall,
+    env,
+    acceptVersion: failure ? undefined : (version) => !formatNodeSecurityWarning(version),
+  });
   const nodePath = selected?.nodePath;
   const reason = selected?.reason;
   if (!nodePath) {
     return false;
   }
   process.stderr.write(
-    `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission).\n`,
+    `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; ${failure ? "current Node failed runtime admission" : "recommended security patch"}).\n`,
   );
   return await runRespawnedChild(
     resolveOpenClawCliRespawn({

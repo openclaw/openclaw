@@ -2,6 +2,7 @@ import type { Chat, Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import { resolveTelegramForumFlag } from "./bot/helpers.js";
 import { getTelegramSequentialConstraints, getTelegramSequentialKey } from "./sequential-key.js";
+import { recordPreparedTelegramWidgetQuery } from "./widgets/widget-query-context.js";
 
 const mockMessage = (message: Partial<Message> = {}): Message =>
   ({
@@ -48,6 +49,35 @@ describe("getTelegramSequentialKey", () => {
     [callback(321, "tgq1:ask_0123456789abcdef0123456789abcdef:2"), "telegram:321:question"],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toEqual(expected);
+  });
+
+  it("puts a widget tap on its widget's private-topic lane", () => {
+    const tap = (messageId: number) => ({
+      update_id: messageId,
+      widget_query: {
+        id: `q${messageId}`,
+        chat: { id: 7, type: "private" },
+        message_id: messageId,
+      },
+    });
+    const topicTap = tap(1);
+    const plainTap = tap(2);
+    recordPreparedTelegramWidgetQuery(topicTap, { messageThreadId: 42 });
+    recordPreparedTelegramWidgetQuery(plainTap, {});
+    const me = { has_topics_enabled: true } as never;
+    expect(getTelegramSequentialKey({ me, update: topicTap })).toBe("telegram:7:topic:42");
+    // Same lane as an ordinary message in that topic, so /new and later messages queue behind it.
+    expect(
+      getTelegramSequentialKey({
+        me,
+        ...messageContext({
+          chat: { id: 7, type: "private", first_name: "A" },
+          message_thread_id: 42,
+        }),
+      }),
+    ).toBe("telegram:7:topic:42");
+    expect(getTelegramSequentialKey({ me, update: plainTap })).toBe("telegram:7");
+    expect(getTelegramSequentialKey({ me, update: tap(3) })).toBe("telegram:7");
   });
 
   it("keeps malformed message updates on the unknown lane", () => {

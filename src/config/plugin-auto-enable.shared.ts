@@ -55,36 +55,25 @@ function resolveAutoEnableProviderPluginIds(
   return Object.fromEntries(entries);
 }
 
-function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean {
-  const normalized = normalizeProviderId(providerId);
-  const profiles = cfg.auth?.profiles;
-  if (
-    profiles &&
-    typeof profiles === "object" &&
-    Object.values(profiles).some(
-      (profile) => isRecord(profile) && normalizeProviderId(profile.provider ?? "") === normalized,
-    )
-  ) {
-    return true;
-  }
-
-  const providerConfig = cfg.models?.providers;
-  if (
-    providerConfig &&
-    typeof providerConfig === "object" &&
-    Object.keys(providerConfig).some((key) => normalizeProviderId(key) === normalized)
-  ) {
-    return true;
-  }
-
-  return collectConfiguredModelRefs(cfg, { includeChannelModelOverrides: false }).some(
-    ({ value: ref }) => {
-      const trimmed = ref.trim();
-      const slash = trimmed.indexOf("/");
-      const provider = slash > 0 ? normalizeProviderId(trimmed.slice(0, slash)) : null;
-      return Boolean(provider) && provider === normalized;
-    },
+function collectConfiguredProviderIds(cfg: OpenClawConfig, modelRefs: ReadonlySet<string>) {
+  const ids = new Set(
+    Object.keys(asOptionalObjectRecord(cfg.models?.providers) ?? {}).map(normalizeProviderId),
   );
+  const profiles = cfg.auth?.profiles;
+  if (profiles && typeof profiles === "object") {
+    for (const profile of Object.values(profiles)) {
+      if (isRecord(profile)) {
+        ids.add(normalizeProviderId(profile.provider ?? ""));
+      }
+    }
+  }
+  for (const ref of modelRefs) {
+    const slash = ref.indexOf("/");
+    if (slash > 0) {
+      ids.add(normalizeProviderId(ref.slice(0, slash)));
+    }
+  }
+  return ids;
 }
 
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRecord): boolean {
@@ -166,18 +155,10 @@ function hasAcpxSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   return configured && (!backend || backend === "acpx");
 }
 
-function hasXaiSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
-  if (cfg.plugins?.entries?.xai?.enabled === false) {
-    return false;
-  }
-  const pluginConfig = cfg.plugins?.entries?.xai?.config;
-  return (
-    isRecord(pluginConfig) &&
-    (isRecord(pluginConfig.xSearch) || isRecord(pluginConfig.codeExecution))
-  );
-}
-
-function resolveRelevantSetupAutoEnablePluginIds(cfg: OpenClawConfig): string[] {
+function resolveRelevantSetupAutoEnablePluginIds(
+  cfg: OpenClawConfig,
+  registry: PluginManifestRegistry,
+): string[] {
   const pluginIds = new Set(
     Object.keys(asOptionalObjectRecord(cfg.plugins?.entries) ?? {})
       .map((pluginId) => pluginId.trim())
@@ -189,22 +170,33 @@ function resolveRelevantSetupAutoEnablePluginIds(cfg: OpenClawConfig): string[] 
   if (hasAcpxSetupAutoEnableRelevantConfig(cfg)) {
     pluginIds.add("acpx");
   }
-  if (hasXaiSetupAutoEnableRelevantConfig(cfg)) {
-    pluginIds.add("xai");
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  const policy = normalizePluginsConfig(cfg.plugins);
+  return [...pluginIds]
+    .filter((pluginId) => {
+      const plugin = registry.plugins.find((record) => record.id === pluginId);
+      // Enabled non-channel candidates are discarded unless they repair an allowlist
+      // or participate in prefer-over ordering. Avoid capturing their setup dependencies.
+      return (
+        policy.entries[pluginId]?.enabled !== true ||
+        (policy.allow.length > 0 && !policy.allow.includes(pluginId)) ||
+        !plugin ||
+        plugin.channels.length > 0 ||
+        (plugin.channelConfigs?.[pluginId]?.preferOver?.length ?? 0) > 0 ||
+        (plugin.channelCatalogMeta?.preferOver?.length ?? 0) > 0
+      );
+    })
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   return (
+    hasConfiguredPluginConfigEntry(cfg) ||
     hasBrowserSetupAutoEnableRelevantConfig(cfg) ||
-    hasAcpxSetupAutoEnableRelevantConfig(cfg) ||
-    hasXaiSetupAutoEnableRelevantConfig(cfg) ||
-    hasConfiguredPluginConfigEntry(cfg)
+    hasAcpxSetupAutoEnableRelevantConfig(cfg)
   );
 }
 
-/** Prepare the same setup owners consulted by readiness and auto-enable probes. */
+/** Prepare only the setup owners whose probes can affect auto-enable selection. */
 export async function preparePluginAutoEnableSetup(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -217,9 +209,14 @@ export async function preparePluginAutoEnableSetup(params: {
   ) {
     return;
   }
+  const registry = resolvePluginAutoEnableManifestRegistry({
+    ...params,
+    env: params.env ?? process.env,
+  });
   await resolvePluginSetupRegistryAsync({
     ...params,
-    pluginIds: resolveRelevantSetupAutoEnablePluginIds(params.config),
+    manifestRegistry: registry,
+    pluginIds: resolveRelevantSetupAutoEnablePluginIds(params.config, registry),
   });
 }
 
@@ -255,7 +252,7 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
   }
   if (
     hasPluginAllowlistWithMaterialEntries(cfg) ||
-    hasConfiguredPluginConfigEntry(cfg) ||
+    hasSetupAutoEnableRelevantConfig(cfg) ||
     hasConfiguredPluginProviders(cfg)
   ) {
     return true;
@@ -287,15 +284,9 @@ export function resolvePluginAutoEnableReadiness(
   return {
     mayNeedAutoEnable:
       hasPluginAllowlistWithMaterialEntries(cfg) ||
-      hasConfiguredPluginConfigEntry(cfg) ||
+      hasSetupAutoEnableRelevantConfig(cfg) ||
       configuredChannelIds.length > 0 ||
-      hasConfiguredPluginProviders(cfg) ||
-      (hasSetupAutoEnableRelevantConfig(cfg) &&
-        resolvePluginSetupAutoEnableReasons({
-          config: cfg,
-          env,
-          pluginIds: resolveRelevantSetupAutoEnablePluginIds(cfg),
-        }).length > 0),
+      hasConfiguredPluginProviders(cfg),
     configuredChannelIds,
   };
 }
@@ -321,20 +312,23 @@ export function resolveConfiguredPluginAutoEnableCandidates(
       : [];
   };
 
-  for (const [providerId, pluginId] of Object.entries(
-    resolveAutoEnableProviderPluginIds(params.registry),
-  )) {
-    if (isProviderConfigured(params.config, providerId)) {
-      changes.push({ pluginId, kind: "provider-auth-configured", providerId });
+  const modelRefs = new Set(
+    collectConfiguredModelRefs(params.config, { includeChannelModelOverrides: false }).map(
+      ({ value }) => value,
+    ),
+  );
+  const providerClaims = Object.entries(resolveAutoEnableProviderPluginIds(params.registry));
+  if (providerClaims.length > 0) {
+    const configuredProviders = collectConfiguredProviderIds(params.config, modelRefs);
+    for (const [providerId, pluginId] of providerClaims) {
+      if (configuredProviders.has(normalizeProviderId(providerId))) {
+        changes.push({ pluginId, kind: "provider-auth-configured", providerId });
+      }
     }
   }
 
   const configuredModelPluginIds = new Set<string>();
-  for (const modelRef of new Set(
-    collectConfiguredModelRefs(params.config, { includeChannelModelOverrides: false }).map(
-      ({ value }) => value,
-    ),
-  )) {
+  for (const modelRef of modelRefs) {
     const owningPluginIds = resolveOwningPluginIdsForModelRef({
       model: modelRef,
       config: params.config,
@@ -447,9 +441,10 @@ export function resolveConfiguredPluginAutoEnableCandidates(
 
   if (hasSetupAutoEnableRelevantConfig(params.config)) {
     const manifestMatchedPluginIds = new Set(changes.map((entry) => entry.pluginId));
-    const setupPluginIds = resolveRelevantSetupAutoEnablePluginIds(params.config).filter(
-      (pluginId) => !manifestMatchedPluginIds.has(pluginId),
-    );
+    const setupPluginIds = resolveRelevantSetupAutoEnablePluginIds(
+      params.config,
+      params.registry,
+    ).filter((pluginId) => !manifestMatchedPluginIds.has(pluginId));
     for (const entry of resolvePluginSetupAutoEnableReasons({
       config: params.config,
       env: params.env,

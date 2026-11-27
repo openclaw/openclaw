@@ -17,7 +17,7 @@ import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
-import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
 import { repairAuditEventsSchema } from "../state/openclaw-state-db-audit-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -70,6 +70,17 @@ function schemaMetadata(databasePath: string) {
     return {
       userVersion: db.prepare("PRAGMA user_version").get()?.user_version,
       schemaMeta: db.prepare("SELECT * FROM schema_meta ORDER BY rowid").all(),
+      rows: Object.fromEntries(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+          )
+          .all()
+          .map(({ name }) => {
+            assert(typeof name === "string");
+            return [name, db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all()];
+          }),
+      ),
     };
   } finally {
     db.close();
@@ -118,7 +129,7 @@ it.each<[string, AdmissionCase]>([
   ["Missing config", { config: "absent", consolidated: true }],
   ["Configured plugin load path is unavailable", { consolidated: true, unavailablePlugin: true }],
   ["OpenClaw config is invalid", { consolidated: true, unavailablePlugin: true, repairable: true }],
-  ["Legacy client credentials require migration", { identityFile: "device.json" }],
+  ["Legacy device identity is invalid or unsupported", { identityFile: "device.json" }],
   ["__CANONICAL_IDENTITY_READY__", { identityFile: "device.json", canonicalIdentity: true }],
 ])(
   "startup admission preserves shipped state: %s (%j)",
@@ -193,7 +204,9 @@ it.each<[string, AdmissionCase]>([
       }
       if (config !== "absent") {
         writeJson(configPath, {
-          gateway: { mode: "local" },
+          // A missing plugin path is advisory; an invalid port must still refuse
+          // before state writes, even when the session keys can be migrated.
+          gateway: { mode: "local", ...(repairable ? { port: "invalid" } : {}) },
           plugins: unavailablePlugin
             ? { load: { paths: [path.join(root, "missing-plugin")] } }
             : { enabled: false },
@@ -359,8 +372,111 @@ it.each<[string, AdmissionCase]>([
             expect(after[file], file).toBe(hash);
           }
         }
+      } else if (identityFile && !canonicalIdentity) {
+        // Outside a launcher trial, a later identity refusal retains completed
+        // schema steps. The recovery image preserves every original table row.
+        expect(fs.readFileSync(configPath, "utf8")).toBe(configBefore);
+        const after = manifest(stateDir);
+        for (const [file, hash] of Object.entries(before)) {
+          if (!file.startsWith(path.join("state", "openclaw.sqlite"))) {
+            expect(after[file], file).toBe(hash);
+          }
+        }
+        const backups = fs
+          .readdirSync(path.dirname(databasePath))
+          .filter(
+            (name) =>
+              name.startsWith("openclaw.sqlite.pre-startup-migration-") &&
+              name.endsWith(".bak") &&
+              !name.endsWith(".scoped.bak"),
+          );
+        expect(backups).toHaveLength(1);
+        expect(schemaMetadata(path.join(path.dirname(databasePath), backups[0]!))).toEqual(
+          schemaBefore,
+        );
+        const live = schemaMetadata(databasePath);
+        expect(live.userVersion).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        expect(live.schemaMeta).toContainEqual(
+          expect.objectContaining({
+            meta_key: "primary",
+            schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          }),
+        );
       } else if (!canonicalIdentity) {
-        expect(manifest(stateDir)).toEqual(before);
+        const after = manifest(stateDir);
+        const wal = path.relative(stateDir, `${databasePath}-wal`);
+        if (!(wal in before) && wal in after) {
+          expect(fs.statSync(`${databasePath}-wal`).size).toBe(0);
+          delete after[wal];
+        }
+        if (unavailablePlugin && repairable && process.platform !== "win32") {
+          // Read-only repair projection reports unavailable compatibility inputs without writes.
+          const added = Object.keys(after).filter((file) => !(file in before));
+          expect(added).toHaveLength(1);
+          const logFile = added[0]!;
+          expect(path.dirname(logFile)).toBe("logs");
+          expect(path.basename(logFile)).toMatch(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/u);
+          const warning =
+            `Configured plugin load path is unavailable: ${path.join(root, "missing-plugin")}. ` +
+            "Uninspected plugin configuration is preserved. Restore access to the path, " +
+            "then run `openclaw doctor --fix`.";
+          expect(output).toContain(warning);
+          const records = fs
+            .readFileSync(path.join(stateDir, logFile), "utf8")
+            .trimEnd()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          expect(records.length).toBeGreaterThan(0);
+          for (const record of records) {
+            expect(record).toEqual(
+              expect.objectContaining({
+                "0": '{"subsystem":"plugins/doctor-contracts"}',
+                message: warning,
+                _meta: expect.objectContaining({ logLevelName: "WARN" }),
+              }),
+            );
+          }
+          delete after[logFile];
+        }
+        if ((workspace || selectedSession || identityFile) && process.platform !== "win32") {
+          // Default diagnostics are state-local; only the verified new refusal log is exempt.
+          const added = Object.keys(after).filter((file) => !(file in before));
+          expect(added).toHaveLength(1);
+          const logFile = added[0]!;
+          expect(path.dirname(logFile)).toBe("logs");
+          expect(path.basename(logFile)).toMatch(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/u);
+          const records = fs
+            .readFileSync(path.join(stateDir, logFile), "utf8")
+            .trimEnd()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          const migration = workspace
+            ? "workspace setup state migration"
+            : selectedSession
+              ? "session store migration"
+              : "state migration";
+          const refusal =
+            `gateway requires ${migration}. Stop the service with openclaw gateway stop ` +
+            "(or its service owner), then run openclaw doctor --fix, then start it again with openclaw gateway start.";
+          const unavailableLaunchd =
+            "failed to park the managed LaunchAgent: Native Gateway service membership could not be verified. " +
+            "From an interactive external shell not started by the service, run openclaw gateway stop && openclaw update --yes && openclaw gateway start. " +
+            "If the update fails, follow its recovery guidance before starting the Gateway. No service teardown was attempted. " +
+            "With native helper support (systemd-run on Linux), use openclaw gateway call update.run --params '{}' for a managed handoff.";
+          const messages =
+            records[0]?.message === unavailableLaunchd ? [unavailableLaunchd, refusal] : [refusal];
+          expect(records).toEqual(
+            messages.map((message) =>
+              expect.objectContaining({
+                "0": '{"subsystem":"gateway"}',
+                message,
+                _meta: expect.objectContaining({ logLevelName: "ERROR" }),
+              }),
+            ),
+          );
+          delete after[logFile];
+        }
+        expect(after).toEqual(before);
         expect(schemaMetadata(databasePath)).toEqual(schemaBefore);
       }
     } finally {
@@ -532,7 +648,7 @@ it.each<[string, string, boolean, string?]>([
     }
     expect(fs.readFileSync(legacyPath)).toEqual(before);
     expect(fs.readFileSync(configPath)).toEqual(configBefore);
-    expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+    expect(hasActiveStartupMigrationLeaseForTest({ env })).toBe(false);
   },
   75_000,
 );

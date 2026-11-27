@@ -16,7 +16,8 @@ import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import { shareSessionSystemPrompt } from "../../src/agents/sessions/system-prompt-pool.js";
-import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -115,12 +116,7 @@ global.gc();
 const inspector = new Session();
 try {
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const hostLoadBefore = loadavg();
   const before = process.memoryUsage();

@@ -1,9 +1,19 @@
+import { execFile } from "node:child_process";
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import {
+  buildSkillSnapshot,
+  resolveSkillsPrompt,
+} from "../skills/loading/workspace-skill-prompt.js";
 import {
   createCanonicalFixtureSkill,
   createFixtureSkillEntry,
@@ -19,13 +29,83 @@ import { createCatalogCodeModeHarness, resetCodeModeTestState } from "./code-mod
 import { bindHostSkillCatalog } from "./harness/host-skills.js";
 import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
+import { createCronTool } from "./tools/cron-tool.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 import { registerAgentWorkspaceAccess } from "./workspace-access.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(resetCodeModeTestState);
+
+it("preserves native filesystem policy across companion reads in a reused worker", async () => {
+  const home = tempDirs.make("skill-companion-native-policy-");
+  await promisify(execFile)(
+    process.execPath,
+    [
+      "--no-addons",
+      "--conditions=openclaw-custom",
+      ...resolveRuntimeWorkerArgv(
+        new URL("./code-mode.skill-read.native-policy.test-support.ts", import.meta.url),
+      ),
+      home,
+    ],
+    {
+      timeout: 60_000,
+      env: {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        HOME: home,
+        USERPROFILE: home,
+        TMPDIR: home,
+        OPENCLAW_STATE_DIR: home,
+        FS_SAFE_NATIVE_MODE: "auto",
+        NODE_OPTIONS: "--no-addons",
+      },
+    },
+  );
+});
+
+it("carries prepared skill directory identities without filesystem lookups or worker tasks", async () => {
+  const dir = tempDirs.make("skill-resource-admission-");
+  const linked = `${dir}-linked`;
+  await fs.symlink(dir, linked, "dir");
+  onTestFinished(() => fs.unlink(linked));
+  const skill = createCanonicalFixtureSkill({
+    name: "guide",
+    description: "Guide",
+    filePath: path.join(linked, "SKILL.md"),
+    baseDir: linked,
+    source: "bundled",
+  });
+  const snapshot = await buildSkillSnapshot(dir, {
+    entries: [
+      skill,
+      { ...skill, name: "missing", filePath: path.join(dir, "missing", "SKILL.md") },
+    ].map((candidate) => ({ skill: candidate, frontmatter: {} })),
+  });
+  const workerTasks = vi.spyOn(WorkerTaskPool.prototype, "run");
+  const stat = vi.spyOn(syncFs, "statSync");
+  const realpath = vi.spyOn(syncFs.realpathSync, "native");
+  syncBuiltinESMExports();
+  try {
+    const catalog = prepareInstalledSkillCatalog({
+      snapshot,
+      workspaceDir: dir,
+    });
+    await catalog[0]!.resourceRoot;
+    await expect(catalog[1]!.resourceRoot).rejects.toThrow();
+    expect(stat).not.toHaveBeenCalled();
+    expect(realpath).not.toHaveBeenCalled();
+    expect(workerTasks).not.toHaveBeenCalled();
+  } finally {
+    stat.mockRestore();
+    realpath.mockRestore();
+    workerTasks.mockRestore();
+    syncBuiltinESMExports();
+  }
+});
 
 it("reads local skill companions through the worker without exposing escaped, binary or oversized files", async () => {
   const dir = tempDirs.make("code-mode-skill-resources-");
@@ -41,19 +121,14 @@ it("reads local skill companions through the worker without exposing escaped, bi
   await fs.writeFile(path.join(root, "large.md"), "x".repeat(256 * 1024 + 1));
   await fs.writeFile(path.join(root, "binary"), Buffer.from([0, 1, 2]));
   await fs.writeFile(path.join(root, "invalid-utf8"), Buffer.from([0xff]));
-  const snapshot = {
-    prompt: "",
-    skills: [{ name: "guide" }],
-    discoverySkills: [
-      createCanonicalFixtureSkill({
-        name: "guide",
-        description: "Guide",
-        filePath,
-        baseDir: root,
-        source: "bundled",
-      }),
-    ],
-  };
+  const skill = createCanonicalFixtureSkill({
+    name: "guide",
+    description: "Guide",
+    filePath,
+    baseDir: root,
+    source: "bundled",
+  });
+  const snapshot = await buildSkillSnapshot(dir, { entries: [{ skill, frontmatter: {} }] });
   let active = true;
   const catalog = prepareInstalledSkillCatalog({
     snapshot,
@@ -66,7 +141,16 @@ it("reads local skill companions through the worker without exposing escaped, bi
   });
   const tools = createInstalledSkillTools(catalog);
   const h = createCatalogCodeModeHarness(tools, { codeModeSkills: catalog });
+  const prompt = buildAgentSystemPrompt({
+    workspaceDir: dir,
+    codeModeActive: true,
+    toolNames: ["exec", "wait"],
+    capabilityToolNames: tools.map((tool) => tool.name),
+    skillsPrompt: snapshot.prompt,
+  });
+  expect(prompt).not.toContain("<available_skills>");
   const result = await h.complete(`
+    const found = await skills.search("guide");
     const whole = await skills.read("guide");
     const companion = await skills.read("guide", "references/workflow.md");
     const denied = [];
@@ -91,21 +175,38 @@ it("reads local skill companions through the worker without exposing escaped, bi
       try { await skills.read("guide", relativePath); denied.push(false); }
       catch { denied.push(true); }
     }
-    return { whole, companion, denied };
+    return { found, whole, companion, denied };
   `);
   expect(result).toMatchObject({
     status: "completed",
     value: {
+      found: { skills: [{ name: "guide" }] },
       whole: expect.stringContaining("Read references/workflow.md."),
       companion: "Companion text 😀",
       denied: Array(16).fill(true),
     },
   });
   const read = tools.find((tool) => tool.name === "skills_read")!;
-  expect(
-    (await read.execute("native", { name: "guide", relativePath: "references/workflow.md" }))
-      .content,
-  ).toEqual([{ type: "text", text: "Companion text 😀" }]);
+  const syncLookups = [
+    vi.spyOn(syncFs, "statSync"),
+    vi.spyOn(syncFs, "lstatSync"),
+    vi.spyOn(syncFs, "fstatSync"),
+    vi.spyOn(syncFs, "openSync"),
+    vi.spyOn(syncFs.realpathSync, "native"),
+  ];
+  syncBuiltinESMExports();
+  try {
+    expect(
+      (await read.execute("native", { name: "guide", relativePath: "references/workflow.md" }))
+        .content,
+    ).toEqual([{ type: "text", text: "Companion text 😀" }]);
+    for (const lookup of syncLookups) {
+      expect(lookup).not.toHaveBeenCalled();
+    }
+  } finally {
+    syncLookups.forEach((lookup) => lookup.mockRestore());
+    syncBuiltinESMExports();
+  }
   const resourceRoot = (await catalog[0]!.resourceRoot)!;
   const readFile = resourceRoot.read.bind(resourceRoot);
   for (const cancel of [false, true]) {
@@ -130,12 +231,19 @@ it("reads local skill companions through the worker without exposing escaped, bi
     spy.mockRestore();
     active = true;
   }
+  const unreadCatalog = prepareInstalledSkillCatalog({ snapshot, workspaceDir: dir });
+  await unreadCatalog[0]!.resourceRoot;
   await fs.rename(root, `${root}-old`);
   await fs.mkdir(root);
   await fs.writeFile(path.join(root, "SKILL.md"), "Replacement marker");
   expect(await h.complete('return await skills.read("guide", "SKILL.md");')).toMatchObject({
     status: "failed",
   });
+  await expect(
+    createInstalledSkillTools(unreadCatalog)
+      .find((tool) => tool.name === "skills_read")!
+      .execute("replaced-before-read", { name: "guide", relativePath: "SKILL.md" }),
+  ).rejects.toThrow();
 });
 
 it("keeps restricted placements instruction-only for companion requests", async () => {
@@ -306,6 +414,10 @@ it("keeps core signatures visible when the catalog overflows", () => {
   const render = () => buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []);
   onTestFinished(() => clearToolSearchCatalog(ctx));
   const description = render();
+  expect(description).toContain(
+    "for file changes instead of shell/Python rewriting with nested escaping",
+  );
+  expect(description).toContain('exec({command:["pwd","git diff --check"].join("\\n")})');
   const index = description.slice(description.indexOf("Enabled async tool globals"));
   expect(index).toContain("additional tools omitted");
   expect(index.length).toBeLessThanOrEqual(8_000);
@@ -322,4 +434,49 @@ it("keeps core signatures visible when the catalog overflows", () => {
   expect(lines.some((line) => line.startsWith("- read "))).toBe(true);
   applyCodeModeCatalog({ ...ctx, tools: [...controls, ...targets.toReversed()] });
   expect(render()).toBe(description);
+  applyCodeModeCatalog({
+    ...ctx,
+    tools: [
+      ...controls,
+      ...targets.filter((tool) => !["exec", "edit", "apply_patch"].includes(tool.name)),
+    ],
+  });
+  expect(render()).not.toContain("for file changes instead of shell/Python rewriting");
+  expect(render()).not.toContain("For multiline commands");
+});
+
+it("keeps the admitted native scheduler visible in a crowded catalog", () => {
+  const fillers = Array.from({ length: 150 }, (_, i) => {
+    const tool = createStubTool(`a_${i}_${"x".repeat(44)}`);
+    return { ...tool, outputSchema: tool.parameters };
+  });
+  const scheduler = createCronTool();
+  const pluginTool = { ...scheduler };
+  setPluginToolMeta(pluginTool, { pluginId: "fixture", optional: false });
+  for (const candidate of [scheduler, pluginTool, undefined]) {
+    const targets = candidate ? [...fillers, candidate] : fillers;
+    const { ctx, catalogRef } = createCatalogCodeModeHarness(targets);
+    onTestFinished(() => clearToolSearchCatalog(ctx));
+    const entries = catalogRef.current?.entries ?? [];
+    const ranking = {
+      version: 1 as const,
+      at: 1,
+      orderedToolIds: entries
+        .filter((entry) => entry.name.startsWith("a_"))
+        .map((entry) => entry.id),
+    };
+    for (const usage of [undefined, ranking]) {
+      const prompt = buildCodeModeCatalogPrompt(ctx, entries, usage);
+      expect(prompt).toContain("additional tools omitted");
+      const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
+      const firstFiller = index.indexOf("\n- a_");
+      const schedulerRow = index.indexOf(`\n- ${scheduler.name} `);
+      expect(firstFiller).toBeGreaterThan(0);
+      // A short plugin row can still fit at the end. Only the admitted core tool is pinned.
+      expect(schedulerRow >= 0 && schedulerRow < firstFiller).toBe(candidate === scheduler);
+      if (!candidate) {
+        expect(schedulerRow).toBe(-1);
+      }
+    }
+  }
 });

@@ -3,6 +3,7 @@ import type { StartupConfigPreflightOptions } from "../../commands/startup-confi
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
 import { CLI_NAME } from "../cli-name.js";
@@ -12,6 +13,8 @@ import {
 } from "../command-execution-startup.js";
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { resolveCliStartupPolicy } from "../command-startup-policy.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
+import { shouldPreserveGatewayProcessArgv } from "../gateway-run-argv.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import { isModelsPlainMachineOutput } from "../models-output-mode.js";
 import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
@@ -41,6 +44,8 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
     const { checkCliGatewayStateDir } = await import("../state-dir-gateway-check.js");
     outcome = await checkCliGatewayStateDir({ command: `openclaw ${commandPath.join(" ")}` });
   } catch (error) {
+    // A cancelled guard read is the CLI stopping, not a guard failure to diagnose.
+    getAsyncWorkSignal()?.throwIfAborted();
     const { formatErrorMessage } = await import("../../infra/errors.js");
     const { logDebug } = await import("../../logger.js");
     logDebug(`state-store guard unavailable: ${formatErrorMessage(error)}`);
@@ -49,17 +54,16 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
   if (outcome.kind === "warn") {
     defaultRuntime.log(outcome.message);
   } else if (outcome.kind === "refuse") {
-    throw new Error(outcome.message);
+    throwExpectedCliError(outcome.message);
   }
 }
 
 /** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
-    // Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
-    // long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
-    // operators can tell it apart from ordinary commands.
-    if (process.title !== CLI_NAME) {
+    // Present ordinary commands as `openclaw`. Foreground Gateways can retain
+    // their original Linux command line for installation ownership checks.
+    if (process.title !== CLI_NAME && !shouldPreserveGatewayProcessArgv(process.argv)) {
       process.title = CLI_NAME;
     }
     const argv = process.argv;
@@ -141,16 +145,13 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     let beforeStatePreparation: StartupConfigPreflightOptions["beforeStatePreparation"];
-    const [{ resolvePluginInstallInvalidConfigPolicy }, { resolvePluginInstallPreactionRequest }] =
-      await Promise.all([
-        import("../../plugins/install-config.js"),
-        import("../plugin-install-config-policy.js"),
-      ]);
-    let allowInvalid =
-      commandPath[0] === "update" ||
-      resolvePluginInstallInvalidConfigPolicy(
-        resolvePluginInstallPreactionRequest({ actionCommand, commandPath }),
-      ) === "allow-plugin-recovery";
+    let allowInvalid = primary === "update";
+    if (primary === "plugins" && secondary === "install") {
+      // Only installation can recover an invalid config from the requested plugin's metadata.
+      const { allowsPluginInstallConfigRecovery } =
+        await import("../plugin-install-config-policy.js");
+      allowInvalid = allowsPluginInstallConfigRecovery(actionCommand);
+    }
     const isGatewayRun =
       commandPath[0] === "gateway" &&
       (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));

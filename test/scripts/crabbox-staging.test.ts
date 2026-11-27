@@ -19,7 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { hasUnjoinedWork, runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
   resolveRuntimeWorkerArgv,
@@ -106,7 +106,7 @@ async function withFixture(scenario: (context: ReturnType<typeof createFixture>)
 
 function createFixture(diagnostics?: FixtureDiagnostics) {
   const nodeExecutable = resolveTestNodeExecPath();
-  const nodeArgs = resolveVitestNodeArgs();
+  const nodeArgs = resolveNodeCompilerArgs();
   // openclaw-temp-dir: allow retain input ownership when a child cannot be joined
   const root = mkdtempSync(join(tmpdir(), "openclaw-crabbox-recovery-"));
   const source = join(root, "source"),
@@ -939,7 +939,7 @@ console.log(JSON.stringify({bytes}));`);
       expect(JSON.parse(result.stdout).bytes).toBeGreaterThan(64 * 1024 * 1024);
     }));
 
-  it("holds an exclusive command view and only adopts an explicit idle handoff", async () =>
+  it.each(["prepared", "settled"])("hands off %s mirrors after preservation", async (state) =>
     withFixture(async (f) => {
       const result = await f.program(`${seedMirror}
 const first=createMirrorStaging(ctx.staging,ctx.repository);const source=seed(first);
@@ -948,7 +948,7 @@ const busy=createMirrorStaging(ctx.staging,ctx.repository)===undefined;
 fs.mkdirSync(join(source,'.crabbox','runs'),{recursive:true});
 fs.mkdirSync(join(source,'.crabbox','captures'));
 fs.writeFileSync(join(source,'.crabbox','runs','output.log'),'native output');
-first.staging.admitted(captureClaimNamespace(source));first.staging.settled();
+if(${state === "settled"}){first.staging.admitted(captureClaimNamespace(source));first.staging.settled();}
 const artifacts=preserveCrabboxArtifacts(source,ctx.repository);first.staging.preserved(artifacts);
 first.finish();
 const pruned=!fs.existsSync(join(source,'.crabbox'));
@@ -956,7 +956,7 @@ const preserved=fs.readFileSync(join(artifacts.destination.path,'runs','output.l
 const next=createMirrorStaging(ctx.staging,ctx.repository);
 const reused=next?.reused===true&&next.staging.root===first.staging.root;
 const unchanged=fs.statSync(join(source,'source.txt')).ino===inode;
-next.discard();
+next?.discard();
 console.log(JSON.stringify({busy,reused,unchanged,pruned,preserved,removed:!fs.existsSync(first.staging.root)}));`);
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({
@@ -967,6 +967,29 @@ console.log(JSON.stringify({busy,reused,unchanged,pruned,preserved,removed:!fs.e
         preserved: true,
         removed: true,
       });
+    }),
+  );
+
+  it("records artifacts without advancing incomplete preparation or admitted users", async () =>
+    withFixture(async (f) => {
+      const result = await f.program(`
+const states=[];
+for(const state of ['preparing','admitted']){
+  const owner=createStaging(ctx.staging,ctx.repository);
+  const source=join(owner.payload,'source');fs.mkdirSync(source);
+  if(state==='admitted'){owner.prepared({files:[],deleted:[]});owner.admitted();}
+  const artifacts=preserveCrabboxArtifacts(source,ctx.repository);owner.preserved(artifacts);
+  const receipt=JSON.parse(fs.readFileSync(join(owner.root,'staging.json'),'utf8'));
+  const saved=fs.readFileSync(join(owner.root,'artifacts-'+receipt.artifactManifest+'.json'));
+  states.push({state:receipt.state,users:receipt.users,durable:receipt.durable,
+    recorded:crypto.createHash('sha256').update(saved).digest('hex')===receipt.artifactManifest&&JSON.stringify(JSON.parse(saved))===JSON.stringify(artifacts)});
+}
+console.log(JSON.stringify(states));`);
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual([
+        { state: "preparing", users: "none", durable: true, recorded: true },
+        { state: "admitted", users: "admitted", durable: true, recorded: true },
+      ]);
     }));
 
   it("preserves admitted, merely settled, and unverified writers instead of inferring idle authority", async () =>
@@ -1172,7 +1195,7 @@ describe.skipIf(process.platform === "win32")(
             new Set(["source-selection", "claims-cli"]),
           );
           for (const policy of policies) {
-            expect(policy.nodeArgs, policy.entry).toEqual(resolveVitestNodeArgs());
+            expect(policy.nodeArgs, policy.entry).toEqual(resolveNodeCompilerArgs());
           }
           expect(readdirSync(f.staging)).toEqual([]);
           expect(readFileSync(join(f.source, "source.txt"), "utf8")).toBe("retained source\n");

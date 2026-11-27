@@ -11,6 +11,7 @@ import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.gateway.gatewayTlsTestFixture
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.GatewayConnectConfig
 import ai.openclaw.app.ui.GatewayConnectPlan
@@ -73,17 +74,6 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
-import org.bouncycastle.asn1.ASN1Integer
-import org.bouncycastle.asn1.DERBitString
-import org.bouncycastle.asn1.DERNull
-import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers
-import org.bouncycastle.asn1.x500.X500Name
-import org.bouncycastle.asn1.x509.AlgorithmIdentifier
-import org.bouncycastle.asn1.x509.Certificate
-import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
-import org.bouncycastle.asn1.x509.Time
-import org.bouncycastle.asn1.x509.V3TBSCertificateGenerator
-import org.bouncycastle.asn1.x509.Validity
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -106,14 +96,10 @@ import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowApplication
 import org.robolectric.shadows.ShadowBroadcastPendingResult
 import org.robolectric.shadows.ShadowBroadcastReceiver
+import org.robolectric.shadows.ShadowSpeechRecognizer
 import org.robolectric.shadows.ShadowToast
 import org.robolectric.util.ReflectionHelpers
 import java.net.InetAddress
-import java.security.KeyPairGenerator
-import java.security.KeyStore
-import java.security.Signature
-import java.security.cert.CertificateFactory
-import java.util.Date
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
@@ -121,8 +107,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import javax.net.ssl.KeyManagerFactory
-import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocketFactory
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.CoroutineContext
@@ -130,6 +114,47 @@ import kotlin.coroutines.CoroutineContext
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class NodeForegroundServiceTest {
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun enabledWakeWordsKeepMicrophoneServiceAccessAfterBackgrounding() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    Shadows.shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
+    val runtime = app.ensureRuntime()
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", 18789)
+    ReflectionHelpers.setField(runtime, "connectedEndpoint", endpoint)
+    runtime.applyNodeVoiceWakeWords(endpoint.stableId, """{"triggers":["openclaw"]}""") { true }
+    runtime.setVoiceWakeEnabled(true)
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    try {
+      controller.get().onStartCommand(null, 0, 1)
+      drainWithMainLooper {
+        withTimeout(5_000) {
+          while (controller.get().foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0) yield()
+        }
+      }
+      val recognizer = Shadows.shadowOf(checkNotNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer()))
+      val source =
+        checkNotNull(
+          recognizer.lastRecognizerIntent.getParcelableExtra(
+            android.speech.RecognizerIntent.EXTRA_AUDIO_SOURCE,
+            android.os.ParcelFileDescriptor::class.java,
+          ),
+        )
+      recognizer.triggerOnReadyForSpeech(Bundle())
+      assertTrue(runtime.voiceWakeIsListening.value)
+      runtime.setForeground(false)
+      Shadows.shadowOf(Looper.getMainLooper()).idle()
+      assertTrue(runtime.voiceWakeIsListening.value)
+      controller.destroy()
+      assertEquals("Paused", runtime.voiceWakeStatusText.value)
+      assertFalse(source.fileDescriptor.valid())
+      assertTrue(recognizer.isDestroyed)
+    } finally {
+      closeNodeServiceTestFixture(controller, app)
+    }
+  }
+
   @After
   fun resetNodeServiceStartSuppression() {
     NodeForegroundService.resume(RuntimeEnvironment.getApplication(), startNow = false)
@@ -170,6 +195,9 @@ class NodeForegroundServiceTest {
   @Config(shadows = [ServiceRuntimePrefsShadow::class])
   fun coldStickyStartRestoresSavedGatewayWithoutForegroundCapabilities() {
     val app = RuntimeEnvironment.getApplication() as NodeApp
+    Shadows.shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
+    app.prefs.setVoiceWakeEnabled(true)
     val gateway = lifetimeGateway(hello = ::bootstrapHello)
     val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
@@ -188,6 +216,12 @@ class NodeForegroundServiceTest {
         }
       }
       assertFalse(requireNotNull(app.peekRuntime()).isForeground.value)
+      val recognizerBeforeWords = ShadowSpeechRecognizer.getLatestSpeechRecognizer()
+      requireNotNull(app.peekRuntime()).applyNodeVoiceWakeWords(endpoint.stableId, """{"triggers":["openclaw"]}""") { true }
+      Shadows.shadowOf(Looper.getMainLooper()).idle()
+      assertEquals(0, controller.get().foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+      assertEquals(listOf("openclaw"), requireNotNull(app.peekRuntime()).voiceWakeWords.value)
+      assertEquals(recognizerBeforeWords, ShadowSpeechRecognizer.getLatestSpeechRecognizer())
     } finally {
       closeNodeServiceTestFixture(controller, app)
       gateway.shutdown()
@@ -629,7 +663,7 @@ class NodeForegroundServiceTest {
   fun notificationReplyDoesNotBorrowOldConnectionWhileSameTargetTrustIsPending() = assertNotificationReplyTlsReadiness(warmReplacement = true)
 
   private fun assertNotificationReplyTlsReadiness(warmReplacement: Boolean) {
-    val tlsSocketFactory = lifetimeGatewayTlsSocketFactory()
+    val tlsSocketFactory = gatewayTlsTestFixture().socketFactory
     val app = RuntimeEnvironment.getApplication() as NodeApp
     val appShadow = Shadows.shadowOf(app)
     appShadow.grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
@@ -796,8 +830,8 @@ class NodeForegroundServiceTest {
   fun pendingSameTargetTrustBlocksRetainedConnectionSurfaceRefresh() = assertRetainedConnectionSurfaceRefresh(declineReplacement = false)
 
   private fun assertRetainedConnectionSurfaceRefresh(declineReplacement: Boolean) {
-    val originalTls = lifetimeGatewayTlsSocketFactory()
-    val replacementTls = lifetimeGatewayTlsSocketFactory()
+    val originalTls = gatewayTlsTestFixture().socketFactory
+    val replacementTls = gatewayTlsTestFixture().socketFactory
     val app = RuntimeEnvironment.getApplication() as NodeApp
     app.prefs.setManualTls(true)
     app.prefs.setCameraEnabled(false)
@@ -2704,41 +2738,6 @@ class NodeForegroundServiceTest {
     } else {
       """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
     }
-
-  private fun lifetimeGatewayTlsSocketFactory(): SSLSocketFactory {
-    val keyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
-    val algorithm = AlgorithmIdentifier(PKCSObjectIdentifiers.sha256WithRSAEncryption, DERNull.INSTANCE)
-    val subject = X500Name("CN=notification-tls-test")
-    val now = System.currentTimeMillis()
-    val tbs =
-      V3TBSCertificateGenerator()
-        .apply {
-          setSerialNumber(ASN1Integer.ONE)
-          setSignature(algorithm)
-          setIssuer(subject)
-          setSubject(subject)
-          setValidity(Validity(Time(Date(now - 60_000)), Time(Date(now + 86_400_000))))
-          setSubjectPublicKeyInfo(SubjectPublicKeyInfo.getInstance(keyPair.public.encoded))
-        }.generateTBSCertificate()
-    val signature =
-      Signature.getInstance("SHA256withRSA").apply {
-        initSign(keyPair.private)
-        update(tbs.encoded)
-      }
-    val encoded = Certificate(tbs, algorithm, DERBitString(signature.sign())).encoded
-    val certificate = CertificateFactory.getInstance("X.509").generateCertificate(encoded.inputStream())
-    val password = charArrayOf()
-    val keyStore =
-      KeyStore.getInstance("PKCS12").apply {
-        load(null, null)
-        setKeyEntry("server", keyPair.private, password, arrayOf(certificate))
-      }
-    val keyManagers =
-      KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply {
-        init(keyStore, password)
-      }
-    return SSLContext.getInstance("TLS").apply { init(keyManagers.keyManagers, null, null) }.socketFactory
-  }
 
   private fun lifetimeGateway(
     onRequest: (JsonObject) -> String = { "{}" },

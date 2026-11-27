@@ -14,7 +14,7 @@ import {
 
 const subscribers: (() => void)[] = [];
 function expectAvailable(actual: ReturnType<typeof resolveAttachmentSource>, src: string) {
-  expect(actual).toMatchObject({ status: "available", source: { src } });
+  expect(actual).toMatchObject({ status: "available", source: { src, playback: "transcode" } });
 }
 afterEach(() => {
   subscribers.splice(0).forEach(releaseChatMediaResourceOwner);

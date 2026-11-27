@@ -1,9 +1,10 @@
 import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { chunks, iterable, throwing } from "./plugin-instance.test-support.js";
-import { PluginInvocationScope, runPluginCleanupScope } from "./plugin-invocation-scope.js";
+import { PluginInvocationScope } from "./plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 const instances: PluginInstance[] = [];
@@ -315,75 +316,7 @@ it.each(["inner", "outer"] as const)(
   },
 );
 
-it.each(
-  (["idle", "pending"] as const).flatMap((phase) => [
-    { phase, operation: "next", sourceKind: "cursor" },
-    { phase, operation: "iterator", sourceKind: "cursor" },
-    { phase, operation: "iterator", sourceKind: "self" },
-  ]),
-)(
-  "settles $phase $sourceKind streams when closed cleanup rejects $operation",
-  async ({ phase, operation, sourceKind }) => {
-    const instance = owner();
-    const finish = createDeferredCore<IteratorResult<string>>();
-    const returned = vi.fn(async () => ({ done: true, value: "unexpected return" }));
-    let calls = 0;
-    let acquisitions = 0;
-    const cursor = {
-      [Symbol.asyncIterator]() {
-        acquisitions += 1;
-        return this;
-      },
-      async next() {
-        calls += 1;
-        return calls === 1 ? { done: false, value: "first" } : finish.promise;
-      },
-      return: returned,
-    };
-    const source = instance.wrap(
-      sourceKind === "self" ? cursor : { [Symbol.asyncIterator]: () => cursor },
-    );
-    let iterator!: typeof cursor;
-    let acquireIterator!: () => typeof cursor;
-    let pending: ReturnType<typeof iterator.next> | undefined;
-    try {
-      await instance.run(() =>
-        runPluginCleanupScope([source], async () => {
-          const open = source[Symbol.asyncIterator];
-          iterator = open();
-          acquireIterator = sourceKind === "self" ? open : iterator[Symbol.asyncIterator];
-          await expect(iterator.next()).resolves.toEqual({ done: false, value: "first" });
-          if (phase === "pending") {
-            pending = iterator.next();
-            void pending.catch(() => {});
-          }
-        }),
-      );
-      expect(instance.ordinaryCallCount).toBe(1);
-      if (operation === "iterator") {
-        expect(acquireIterator).toThrow("Plugin cleanup scope is closed");
-      } else {
-        await expect(iterator.next()).rejects.toThrow("Plugin cleanup scope is closed");
-      }
-      expect(instance.ordinaryCallCount).toBe(phase === "pending" ? 1 : 0);
-      await expect(iterator.return()).resolves.toEqual({ done: true, value: undefined });
-      expect(instance.ordinaryCallCount).toBe(phase === "pending" ? 1 : 0);
-      expect(returned).not.toHaveBeenCalled();
-      expect([calls, acquisitions]).toEqual([
-        phase === "pending" ? 2 : 1,
-        sourceKind === "self" ? 1 : 0,
-      ]);
-      finish.resolve({ done: true, value: "finished" });
-      await pending?.catch(() => {});
-      expect(instance.ordinaryCallCount).toBe(0);
-    } finally {
-      finish.resolve({ done: true, value: "finished" });
-      await pending?.catch(() => {});
-    }
-  },
-);
-
-it("settles a stream lease after its non-retained invocation scope closes", async () => {
+it("keeps an in-flight stream's own lease after its invocation scope is released", async () => {
   const instance = owner();
   const scope = new PluginInvocationScope(createEmptyPluginRegistry(), [instance]);
   const next = vi.fn(async () => ({ done: false, value: "first" }));
@@ -394,18 +327,18 @@ it("settles a stream lease after its non-retained invocation scope closes", asyn
     await expect(iterator.next()).resolves.toEqual({ done: false, value: "first" });
     expect(instance).toMatchObject({ hasRetainedConsumers: false, ordinaryCallCount: 1 });
     scope.release();
-    await expect(iterator.next()).rejects.toThrow("Plugin invocation scope is closed");
-    expect(instance.ordinaryCallCount).toBe(0);
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: "first" });
     await expect(iterator.return()).resolves.toEqual({ done: true, value: undefined });
-    expect(next).toHaveBeenCalledOnce();
-    expect(returned).not.toHaveBeenCalled();
+    expect(instance.ordinaryCallCount).toBe(0);
+    expect(next).toHaveBeenCalledTimes(2);
+    expect(returned).toHaveBeenCalledOnce();
   } finally {
     scope.release();
   }
 });
 
 it.each(["next", "return", "metadata"] as const)(
-  "fences an inactive iterator's %s getter when its original scope closes",
+  "fences an inactive iterator's %s getter while its instance retires after its scope is released",
   async (member) => {
     const instance = owner();
     const scope = new PluginInvocationScope(createEmptyPluginRegistry(), [instance]);
@@ -431,7 +364,8 @@ it.each(["next", "return", "metadata"] as const)(
       expect(instance.ordinaryCallCount).toBe(0);
       const admittedReads = reads;
       scope.release();
-      expect(() => Reflect.get(iterator, member)).toThrow("Plugin invocation scope is closed");
+      instance.quiesce();
+      expect(() => Reflect.get(iterator, member)).toThrow(PluginInstanceUnavailableError);
       expect(reads).toBe(admittedReads);
       expect(instance.ordinaryCallCount).toBe(0);
     } finally {
@@ -554,16 +488,22 @@ it.each(
       await expect(next()).resolves.toEqual({ done: false, value: 3 });
       expect(instance.ordinaryCallCount).toBe(custody === "finite scope" ? 1 : 0);
       origin.release();
-      const closed =
-        custody === "finite scope"
-          ? /invocation scope is closed/
-          : /consumer is closed|stream is closed/;
-      if (operation === "iterator") {
-        expect(open).toThrow(closed);
+      if (custody === "finite scope") {
+        // The stream's own in-flight lease outlives its released admitting scope.
+        if (operation === "iterator") {
+          expect(open()).toBe(iterator);
+        }
+        await expect(next()).resolves.toEqual({ done: true, value: undefined });
+        expect(finished).toHaveBeenCalledOnce();
       } else {
-        await expect(next()).rejects.toThrow(closed);
+        const closed = /consumer is closed|stream is closed/;
+        if (operation === "iterator") {
+          expect(open).toThrow(closed);
+        } else {
+          await expect(next()).rejects.toThrow(closed);
+        }
+        expect(finished).not.toHaveBeenCalled();
       }
-      expect(finished).not.toHaveBeenCalled();
       expect(instance.ordinaryCallCount).toBe(0);
     } finally {
       origin.release();

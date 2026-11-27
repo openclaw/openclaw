@@ -29,7 +29,7 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
 } from "../worker-environments/placement-store.js";
-import { isCurrentWorkerWorkspacePendingResultOwner } from "../worker-environments/placement-workspace-result.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "../worker-environments/placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "../worker-environments/placement-workspace-result.types.js";
 import {
   prepareSessionWorkerPlacementArchiveCheckAsync,

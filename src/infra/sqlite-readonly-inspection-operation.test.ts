@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 
 async function inspectFailure(
-  operation: "backup-source" | "snapshot-open" | "snapshot-copy" | "snapshot-backup",
+  operation: "backup-source" | "snapshot-copy" | "snapshot-backup",
   failure: Error,
 ) {
   const root = tempDirs.make("sqlite-inspection-operation-");
@@ -50,12 +50,7 @@ async function inspectFailure(
   const sqlite = await import("./node-sqlite.js");
   const opened: DatabaseSync[] = [];
   vi.mocked(sqlite.openNodeSqliteDatabase).mockImplementation((location, options) => {
-    if (
-      (operation === "backup-source" && location === sourcePath) ||
-      (operation === "snapshot-open" &&
-        path.dirname(location).startsWith(stagingRoot) &&
-        path.basename(location) === "database.sqlite.partial")
-    ) {
+    if (operation === "backup-source" && location === sourcePath) {
       throw failure;
     }
     const database = actual.openNodeSqliteDatabase(location, options);
@@ -77,8 +72,14 @@ async function inspectFailure(
   const diagnostics = await import("./sqlite-error-diagnostics.js");
   const format = vi.spyOn(diagnostics, "formatSqliteReadOnlyInspectionFailure");
   const completed = createDeferred();
-  const write = vi.spyOn(process.stdout, "write").mockImplementation(() => {
-    completed.resolve();
+  const write = vi.spyOn(process.stdout, "write").mockImplementation((_chunk, ...rest) => {
+    const callback = rest.find((argument) => typeof argument === "function");
+    queueMicrotask(() => {
+      if (typeof callback === "function") {
+        callback();
+      }
+      completed.resolve();
+    });
     return true;
   });
   process.argv = [
@@ -105,7 +106,6 @@ async function inspectFailure(
 
 it.each([
   ["backup-source", "opening the source database"],
-  ["snapshot-open", "creating its private snapshot"],
   ["snapshot-copy", "creating its private snapshot"],
   ["snapshot-backup", "creating its private snapshot"],
 ] as const)(
@@ -135,6 +135,7 @@ it.each([
         ok: false,
         message: `failed while ${context}: ${message} (code=ERR_SQLITE_ERROR, errcode=14)`,
       }),
+      expect.any(Function),
     );
   },
 );
@@ -150,6 +151,7 @@ it("keeps aggregate identity through staging and admits only bounded cause codes
     expect.stringContaining(
       "failed while opening the source database: read failed (SQLite errcode=778)",
     ),
+    expect.any(Function),
   );
   const [message] = expectDefined(write.mock.calls[0], "worker output");
   expect(message).toContain("code=EIO, errcode=778");

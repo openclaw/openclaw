@@ -74,6 +74,7 @@ function prepareDocsPublisher() {
     "check-docs-mdx.mjs",
     "check-docs-mdx.mts",
     "lib/arg-utils.runtime.mjs",
+    "lib/numeric-options.mjs",
     "lib/tsx-cli-shim.mjs",
     "lib/managed-cleanup-handoff.mts",
     "lib/local-check-runtime.mts",
@@ -932,15 +933,6 @@ async function command() {
         fs.writeFileSync(lock, "owned fixture lock\n", { flag: "wx" });
         process.on("SIGTERM", () => {});
         process.once("exit", () => fs.unlinkSync(lock));
-      }
-      if (options.performance?.remoteDuplicateAttempt === resultAttempt && operation === "push") {
-        const pushed = spawnSync(
-          options.performance.git,
-          ["-C", cwd, "push", options.performance.remote, "HEAD:main"],
-          { stdio: "inherit", env: hostEnv },
-        );
-        if (pushed.status !== 0)
-          throw new Error("Fixture ambiguous push did not reach local remote");
       }
       if (injectedResult === "cleanup-failure") {
         fs.writeFileSync(path.join(root, "bin/ps"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });

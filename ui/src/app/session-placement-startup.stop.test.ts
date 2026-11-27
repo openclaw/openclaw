@@ -412,7 +412,7 @@ describe("placement startup Retry", () => {
         phase: "failed",
         action: "retry",
         error:
-          "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
+          "Device setup is still in progress. Retry to check the existing device. Your message hasn’t been sent.",
         initialTurn: { text: input.recovery.message, sendRunId: messageId },
       });
       expect(readSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey)).toMatchObject({

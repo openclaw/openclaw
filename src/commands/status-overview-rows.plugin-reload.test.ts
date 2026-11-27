@@ -23,3 +23,17 @@ it("shows pending plugin reloads in the status-all overview", () => {
     "reloading composio, lobster · Plugin replacement queued behind 2 retained work item(s) for plugin composio, lobster; new agent runs wait up to the 600s drain budget. Press Ctrl+C to cancel the waiting reload.",
   );
 });
+
+it("shows plugins that failed to load in the status overview", () => {
+  const params = createStatusCommandOverviewRowsParams();
+  const rows = buildStatusAllOverviewRows({
+    ...params,
+    summary: { ...params.summary, failedPlugins: ["acme-heartbeat"] },
+    configPath: "/fixture/openclaw.json",
+    secretDiagnosticsCount: 0,
+  });
+
+  expect(rows.find(({ Item }) => Item === "Plugins not loaded")?.Value).toBe(
+    "acme-heartbeat · data kept; retried on next start · run openclaw doctor",
+  );
+});

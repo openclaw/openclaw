@@ -143,7 +143,9 @@ export async function mountSearch<R>(options: {
     const control = [...element.querySelectorAll("button")].find(
       (candidate) =>
         (
-          candidate.querySelector(".settings-row__title")?.textContent ?? candidate.textContent
+          candidate.getAttribute("aria-label") ??
+          candidate.querySelector(".settings-row__title")?.textContent ??
+          candidate.textContent
         )?.trim() === text,
     );
     expect(control, text).toBeDefined();

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, assert, expect, it } from "vitest";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   readSessionSubmittedInput,
@@ -28,11 +28,12 @@ const message = (runId: string, content = "Synthetic source"): PersistedUserTurn
   timestamp: 100,
   idempotencyKey: `${runId}:user`,
 });
-const stage = async (runId: string, committed = false) => {
+const stage = async (runId: string, committed = false, trackCompletion = false) => {
   await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
   const receipt = await stageSessionPendingInput(scope(), {
     runId,
     message: message(runId),
+    trackCompletion,
     assertCurrent: () => {},
   });
   assert(receipt, "Expected staged source");
@@ -53,7 +54,7 @@ async function readOnly<T>(run: () => Promise<T>) {
 }
 afterEach(async () => {
   for (const receipt of receipts) {
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
   }
   await Promise.allSettled(receipts.splice(0).map(async (receipt) => receipt.settled?.()));
 });
@@ -74,7 +75,7 @@ it.each(["pending", "committed"] as const)(
     ).toEqual({
       message: receipt.message,
       source: source === "committed" ? "transcript" : "pending",
-      ...(source === "committed" ? { messageSeq: 1 } : {}),
+      ...(source === "committed" ? { messageSeq: 1 } : { state: "queued", endCause: undefined }),
     });
     const db = database().db;
     const invalidMessages = [
@@ -131,3 +132,43 @@ it.each([
   });
   expect(readIndex()).toEqual(before);
 });
+
+it.each(["accepted", "rejected", "indeterminate"] as const)(
+  "keeps durable %s active-only source after completion without a transcript",
+  async (status) => {
+    const receipt = await stage("active-only", false, true);
+    const outcome = {
+      status: "error",
+      reason: "failed",
+      activeSteer: { runId: "native-run", status },
+    } as const;
+    assert(receipt.completeAsync, "Expected completion owner");
+    expect(await receipt.completeAsync(outcome)).toEqual(outcome);
+    receipt.finish("cancelled", "failed");
+    await receipt.settled?.();
+    const db = database().db;
+    expect(
+      db
+        .prepare("SELECT message_json FROM session_pending_inputs WHERE idempotency_key = ?")
+        .get("active-only:user"),
+    ).toBeDefined();
+    expect(
+      db
+        .prepare("SELECT outcome_json FROM session_input_completions WHERE idempotency_key = ?")
+        .get("active-only:user"),
+    ).toBeDefined();
+    await readOnly(async () => {
+      expect(
+        await readSessionSubmittedInput(scope(), "active-only:user", {
+          includeSource: true,
+          includeCompletion: true,
+        }),
+      ).toMatchObject({
+        message: receipt.message,
+        source: "pending",
+        state: "cancelled",
+        completion: outcome,
+      });
+    });
+  },
+);

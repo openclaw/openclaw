@@ -238,7 +238,7 @@ function listRecentSuccessfulCiRuns(limit) {
       "--limit",
       String(Math.max(limit * 4, limit)),
       "--json",
-      "databaseId,headSha,event,status,conclusion",
+      "databaseId,headSha,event,status,conclusion,createdAt,updatedAt,attempt",
     ],
     { encoding: "utf8" },
   );
@@ -985,7 +985,11 @@ async function main() {
   }
   if (recentLimit !== null) {
     for (const run of listRecentSuccessfulCiRuns(recentLimit)) {
-      const summary = summarizeJobs(loadRun(run.databaseId));
+      // Keep metadata and jobs on the listed attempt if another rerun starts.
+      const summary = summarizeJobs({
+        ...run,
+        jobs: loadRunJobs(run.databaseId, run.attempt).jobs,
+      });
       console.log(
         [
           `CI run ${run.databaseId}`,

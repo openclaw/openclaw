@@ -6,10 +6,12 @@ import {
   type SessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
 import {
+  getRpcSourceForGateway,
   getRpcSourceIdentity,
   isRpcSourceQueued,
   listRpcSourceEntries,
 } from "../../sessions/session-controller.rpc-sources.js";
+import { readSessionControllerSteerNow } from "../../sessions/session-controller.steer.js";
 import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
 import {
   createCurrentUserProfileMessageProjector,
@@ -21,6 +23,7 @@ import {
   captureRpcSourceScopeMatcher,
   type SessionRuntimeScope,
 } from "../session-runtime-scope.js";
+import type { GatewayContextResolver } from "./types.js";
 
 const PENDING_INPUT_DISPLAY_MAX_BYTES = 128 * 1024;
 // Correlation is useful for browser UUIDs, but arbitrary external run IDs must
@@ -38,7 +41,7 @@ export function captureQueuedChatInputRunIds(
         runId.length > PENDING_INPUT_CORRELATION_MAX_CHARS ||
         !matchesScope(source) ||
         !isRpcSourceQueued(source) ||
-        source.input.custody.enqueued !== true ||
+        source.input.phase !== "waiting" ||
         source.input.injection !== undefined
       ) {
         return [];
@@ -93,17 +96,29 @@ export async function readChatPendingInputs(
     maxChars: number;
     queuedRunIds?: ReadonlySet<string>;
     cronStorePath?: string;
+    resolveGatewayContext?: GatewayContextResolver;
+    physicalPaths?: SessionRuntimeScope["physicalPaths"];
+    audience?: import("../../config/sessions/session-pending-input-audience.js").PendingInputAudience;
   },
 ): Promise<ChatPendingInputsPage> {
   const page = await listSessionPendingInputs(scope, {
     before: options.before,
     limit: Math.min(options.limit, 20),
+    audience: options.audience,
   });
   const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
     page.items.map((input) => input.message),
     options.cronStorePath,
   );
   const projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
+  const matchesScope =
+    scope.storePath &&
+    captureRpcSourceScopeMatcher({
+      storePath: scope.storePath,
+      physicalPaths: options.physicalPaths,
+      resolveGatewayContext: options.resolveGatewayContext,
+    });
+  const hiddenQueuedRunIds = new Set<string>();
   const visible = page.items.flatMap((input) => {
     const message = projectPendingInputMessage(
       input,
@@ -111,7 +126,13 @@ export async function readChatPendingInputs(
       projectProfile,
       resolveCronJobName,
     );
-    return message ? [{ input, message }] : [];
+    if (!message) {
+      if (input.state === "queued" && options.queuedRunIds?.has(input.runId)) {
+        hiddenQueuedRunIds.add(input.runId);
+      }
+      return [];
+    }
+    return [{ input, message }];
   });
   const messages = replaceOversizedChatHistoryMessages({
     messages: visible.map(({ message }) => message),
@@ -121,7 +142,9 @@ export async function readChatPendingInputs(
   }).messages;
   return {
     ...page,
-    ...(options.queuedRunIds ? { queuedCount: options.queuedRunIds.size } : {}),
+    ...(options.queuedRunIds
+      ? { queuedCount: Math.max(0, options.queuedRunIds.size - hiddenQueuedRunIds.size) }
+      : {}),
     items: visible.map(({ input: item }, index) => {
       const display: ChatPendingInputsPage["items"][number] = {
         id: item.id,
@@ -129,10 +152,28 @@ export async function readChatPendingInputs(
         state: item.state,
         message: messages[index],
       };
+      if (item.endCause) {
+        display.endCause = item.endCause;
+      }
       if (item.runId.length <= PENDING_INPUT_CORRELATION_MAX_CHARS) {
         display.runId = item.runId;
         if (item.state === "queued" && options.queuedRunIds?.has(item.runId)) {
           display.queued = true;
+        }
+        if (item.state === "queued") {
+          const source = getRpcSourceForGateway(item.runId, options.resolveGatewayContext);
+          if (source) {
+            const identity = getRpcSourceIdentity(source);
+            if (
+              matchesScope &&
+              matchesScope(source) &&
+              identity.agentId === scope.agentId &&
+              identity.sessionKey === scope.sessionKey &&
+              identity.sessionId === scope.sessionId
+            ) {
+              display.steerNow = readSessionControllerSteerNow(source.input);
+            }
+          }
         }
       }
       return display;

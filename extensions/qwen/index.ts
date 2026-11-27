@@ -11,6 +11,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { classifyQwenFailoverReason } from "./failover.js";
 import {
   isQwen38ModelId,
+  isQwen4MaxModelId,
   isQwenCodingPlanBaseUrl,
   isQwenStandardOnlyModelId,
   isQwenTokenPlanDeepSeekV4ModelId,
@@ -238,6 +239,14 @@ function resolveQwenTokenPlanThinkingProfile(modelId: string) {
 }
 
 function resolveQwenThinkingProfile(modelId: string) {
+  if (isQwen4MaxModelId(modelId)) {
+    return {
+      levels: (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const).map((id) => ({
+        id,
+      })),
+      defaultLevel: "high" as const,
+    };
+  }
   return isQwen38ModelId(modelId)
     ? {
         levels: (["off", "low", "medium", "xhigh"] as const).map((id) => ({ id })),

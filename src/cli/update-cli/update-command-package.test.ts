@@ -11,7 +11,6 @@ import {
   writePackageRoot,
 } from "../../infra/package-update-steps.test-support.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
-import { runPackagePostInstallVerification } from "../../infra/package-update-verification-step.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
@@ -21,11 +20,9 @@ import {
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
-import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
-import * as gitRunner from "../../infra/update-runner-git.js";
+  updateRunStepsFromResultStep,
+  updateRunWarningMessages,
+} from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
@@ -45,10 +42,7 @@ import * as shared from "./shared.js";
 import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
 import * as doctorChild from "./update-command-doctor-child.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { resultFixture } from "./update-command-fixtures.test-support.js";
-import { updateGitInstall } from "./update-command-git.js";
 import { createPackageUpdateActivationOptions } from "./update-command-package-activation.js";
-import * as packageUpdate from "./update-command-package.js";
 import { runPackageInstallUpdate, stagePackageInstallUpdate } from "./update-command-package.js";
 import { UpdateCommandFailure, UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
@@ -193,6 +187,33 @@ async function packageFixture(
   };
   return { params, root, launcher, installedPrefixes, expectOriginal };
 }
+
+it.each([
+  [undefined, "global-install-failed"],
+  ["EACCES", "global-install-permission-denied"],
+] as const)("classifies a package-update catch (%s) as %s", async (code, reason) => {
+  const { params, expectOriginal } = await packageFixture(base, "2.0.0");
+  const result = await runPackageInstallUpdate({
+    ...params,
+    validateCandidate: async () => {
+      throw Object.assign(new Error("Candidate validation failed"), { code });
+    },
+  });
+  expect(result).toMatchObject({
+    status: "error",
+    reason,
+    failedStep: {
+      name: "package-update",
+      exitCode: 1,
+      failureFacts: expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("Candidate validation failed"),
+        }),
+      ]),
+    },
+  });
+  await expectOriginal();
+});
 
 it.each(["guidance", "staging"])(
   "carries the owner's permission retry outcome through %s",
@@ -735,24 +756,24 @@ it.each(["settlement", "database writes", "reporting failure"] as const)(
       });
       expect(stepsNamed(result, "doctor process settlement")).toEqual([settlement]);
     }
-    expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
-      warning,
-    );
+    const warnings = updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep));
+    expect(warnings).toContainEqual(expect.stringContaining(warning));
+    if (migration) {
+      expect(warnings).toContainEqual(
+        expect.stringContaining(`Snapshots retained at ${path.join(base, "backup")}.`),
+      );
+    }
     await restoreTransactions();
     await expectOriginal();
   },
 );
 
-it.each([
-  { method: "package", reason: "requester-revoked" },
-  { method: "package-to-git", reason: "include-ownership" },
-] as const)(
-  "retains the $reason Doctor receipt when $method verification throws after settlement",
-  async ({ method, reason }) => {
-    const expectedDoctorTimeoutMs = method === "package-to-git" ? undefined : 1000;
-    const { params: defaults, root, expectOriginal } = await packageFixture(base, "2.0.0");
+it.each([{ reason: "requester-revoked" }] as const)(
+  "retains the $reason Doctor receipt when package verification throws after settlement",
+  async ({ reason }) => {
+    const expectedDoctorTimeoutMs = 1000;
+    const { params: defaults, expectOriginal } = await packageFixture(base, "2.0.0");
     const doctorEnv = await doctorEnvironment();
-    const env = doctorEnv.installEnv;
     const receiptDetails = {
       configChanges: [{ kind: "migration", message: "Moved model allowlist." }],
       configWriteRefusal: { reason, message: "Config writer refused.", keys: ["agents"] },
@@ -763,81 +784,21 @@ it.each([
     let resultPath: string | undefined;
     mockDoctor(async (_argv, options) => {
       assert(typeof options === "object");
-      if (expectedDoctorTimeoutMs === undefined) {
-        expect(options.timeoutMs).toBeUndefined();
-      } else {
-        expect(options.timeoutMs).toBeGreaterThan(0);
-        expect(options.timeoutMs).toBeLessThanOrEqual(expectedDoctorTimeoutMs);
-      }
+      expect(options.timeoutMs).toBeGreaterThan(0);
+      expect(options.timeoutMs).toBeLessThanOrEqual(expectedDoctorTimeoutMs);
       resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
       assert(resultPath);
       await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
       throw new Error("Doctor transport failed after the child settled.");
     });
 
-    let result: UpdateRunResult;
-    if (method === "package") {
-      result = await runPackageInstallUpdate({
-        ...defaults,
-        ...doctorEnv,
-      });
-    } else {
-      const gitRoot = path.join(base, "checkout");
-      await writePackageRoot(gitRoot, "2.0.0");
-      vi.spyOn(shared, "resolveGitInstallDir").mockReturnValue(gitRoot);
-      vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue("npm");
-      vi.spyOn(shared, "ensureGitCheckout").mockResolvedValue({
-        checkoutDir: gitRoot,
-        step: null,
-      });
-      vi.spyOn(gitRunner, "updateGitCheckout").mockImplementation(async ({ opts }) => {
-        assert(opts.prepareGitExposure);
-        await opts.prepareGitExposure(gitRoot, "a".repeat(40), env);
-        return resultFixture(gitRoot, { mode: "git" });
-      });
-      vi.spyOn(packageUpdate, "prepareGitPackageExposure").mockImplementation(async (params) => {
-        assert(params.postVerifyStep);
-        expect(params).toMatchObject({
-          timeoutMs: expectedDoctorTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-          workTimeoutMs: expectedDoctorTimeoutMs ?? null,
-        });
-        const verify = params.postVerifyStep;
-        return {
-          activate: async () => {
-            const failedStep = await runPackagePostInstallVerification(gitRoot, verify);
-            return {
-              steps: [failedStep],
-              failedStep,
-              activePackageRoot: root,
-              afterVersion: "2.0.0",
-              recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
-            };
-          },
-          cancel: async () => ({
-            steps: [],
-            recovery: { serviceRestartSafe: true, version: "1.0.0" },
-          }),
-        };
-      });
-      result = await updateGitInstall({
-        root,
-        switchToGit: true,
-        installKind: "package",
-        timeoutMs: expectedDoctorTimeoutMs,
-        startedAt: Date.now(),
-        progress: {},
-        channel: "dev",
-        inspectGitTarget: async () => {},
-        beforeGitMutation: async () => {},
-        validateCandidate: async () => {},
-        getManagedServiceEnv: () => env,
-        getSnapshotSource: async () => ({ config: {}, env }),
-        jsonMode: true,
-      });
-    }
+    const result = await runPackageInstallUpdate({
+      ...defaults,
+      ...doctorEnv,
+    });
     expect(result).toMatchObject({
       status: "error",
-      reason: reason === "requester-revoked" ? reason : "repair-requires-config-change",
+      reason,
       failedStep: {
         name: "openclaw doctor",
         exitCode: 1,

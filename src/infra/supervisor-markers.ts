@@ -11,6 +11,7 @@ const SUPERVISOR_HINTS = {
 /** Environment keys that imply the gateway process is supervised by an external respawner. */
 export const SUPERVISOR_HINT_ENV_VARS = [
   "OPENCLAW_SUPERVISOR_MODE",
+  "OPENCLAW_LAUNCHER_IPC",
   "LAUNCH_JOB_LABEL",
   "LAUNCH_JOB_NAME",
   "XPC_SERVICE_NAME",

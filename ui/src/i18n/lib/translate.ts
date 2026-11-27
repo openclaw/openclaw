@@ -51,6 +51,7 @@ class I18nManager {
   private pendingLocaleShouldPersist = true;
   // Only the latest selection may update retry state or become active after an async chunk load.
   private localeRequestGeneration = 0;
+  private localeChange: Promise<void> | undefined;
   // One chunk import per locale may be active. Settlement removes it so a
   // disconnected/failed load remains retryable on the next connected transition.
   private inFlightLocaleLoads = new Map<Locale, Promise<TranslationMap | null>>();
@@ -97,7 +98,7 @@ class I18nManager {
       }
       return;
     }
-    void this.applyLocale(locale, false, shouldPersist);
+    void (this.localeChange = this.applyLocale(locale, false, shouldPersist));
   }
 
   public getLocale(): Locale {
@@ -109,11 +110,14 @@ class I18nManager {
   }
 
   public async prepareLocale(): Promise<void> {
-    let locale;
+    // A pending selection prepares its target before publishing. Prepare only
+    // the active catalog here; later registrations retain their lazy boundary.
+    const preparation = this.prepareCatalog(this.locale);
+    let change;
     do {
-      locale = this.locale;
-      await this.prepareCatalog(locale);
-    } while (locale !== this.locale);
+      change = this.localeChange;
+      await Promise.all([preparation, change]);
+    } while (change !== this.localeChange);
   }
 
   private prepareCatalog(locale: Locale): Promise<void> | undefined {
@@ -128,12 +132,12 @@ class I18nManager {
     return resolveNavigatorLocale(language ?? "");
   }
 
-  public async setLocale(locale: Locale) {
-    return this.applyLocale(locale, false, true);
+  public setLocale(locale: Locale) {
+    return (this.localeChange = this.applyLocale(locale, false, true));
   }
 
-  public async useSystemLocale() {
-    return this.applyLocale(this.getSystemLocale(), false, false);
+  public useSystemLocale() {
+    return (this.localeChange = this.applyLocale(this.getSystemLocale(), false, false));
   }
 
   private async applyLocale(locale: Locale, retrying: boolean, shouldPersist: boolean) {
@@ -201,7 +205,7 @@ class I18nManager {
     const target = this.pendingLocale;
     const shouldPersist = this.pendingLocaleShouldPersist;
     this.pendingLocale = null;
-    void this.applyLocale(target, true, shouldPersist);
+    void (this.localeChange = this.applyLocale(target, true, shouldPersist));
   }
 
   public setLocaleLoadRecovery(recovery: LocaleLoadRecovery | undefined): void {
@@ -275,7 +279,7 @@ export const i18n = new I18nManager();
 export const t = (key: string, params?: Record<string, string>) => i18n.t(key, params);
 export const translateActive = (key: string) => i18n.translateActive(key);
 
-if (typeof process !== "undefined" && (process.env?.VITEST || process.env?.NODE_ENV === "test")) {
+if (import.meta.env?.MODE === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.i18nManagerTestApi")] = {
     createI18nManager() {
       return new I18nManager();

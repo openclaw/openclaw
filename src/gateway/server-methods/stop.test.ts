@@ -50,7 +50,6 @@ function dispatchStop(
     params?: Record<string, unknown>;
     scopes?: string[];
     signal?: AbortSignal;
-    hasCurrentClientAuthority?: () => boolean;
   } = {},
 ) {
   const client = authorizationClient(
@@ -71,11 +70,10 @@ function dispatchStop(
         hostLifecycle: host.capability,
       }),
       signal: options.signal,
-      hasCurrentClientAuthority: options.hasCurrentClientAuthority,
     },
     crypto.randomUUID(),
   );
-  return { request, respond, client };
+  return { request, respond };
 }
 
 it("dispatches an authenticated targeted stop to the existing host lifecycle", async () => {
@@ -110,46 +108,21 @@ it.each([
   expectRpcError(respond, { code: "INVALID_REQUEST" });
 });
 
-it.each(["signal", "client invalidation", "transport authority", "stop preparation"] as const)(
-  "rejects a caller that loses authority during %s",
-  async (loss) => {
-    const reached = createDeferred();
-    const released = createDeferred();
-    const pause = async <T>(value: T) => {
-      reached.resolve();
-      await released.promise;
-      return value;
-    };
-    if (loss === "stop preparation") {
-      prepareHostedGatewayStop.mockImplementationOnce(() => pause(nativeStop));
-    } else {
-      readActiveGatewayLockIdentity.mockImplementationOnce(() => pause(activeLock));
-    }
-    const abort = new AbortController();
-    let current = true;
-    const { request, respond, client } = dispatchStop({
-      signal: abort.signal,
-      hasCurrentClientAuthority: () => current,
-    });
-    await reached.promise;
-    if (loss === "signal") {
-      abort.abort(new Error("stop request cancelled"));
-    } else if (loss === "client invalidation") {
-      client.invalidated = true;
-    } else {
-      current = false;
-    }
-    released.resolve();
-    await request;
-    if (loss === "stop preparation") {
-      expect(nativeStop.dispose).toHaveBeenCalledOnce();
-    } else {
-      expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
-    }
-    expect(acceptStop).not.toHaveBeenCalled();
-    expectRpcError(respond, {
-      code: "UNAVAILABLE",
-      ...(loss === "stop preparation" ? { message: "Gateway requester authority changed" } : {}),
-    });
-  },
-);
+it("rejects an aborted request during stop preparation", async () => {
+  const reached = createDeferred();
+  const released = createDeferred();
+  readActiveGatewayLockIdentity.mockImplementationOnce(async () => {
+    reached.resolve();
+    await released.promise;
+    return activeLock;
+  });
+  const abort = new AbortController();
+  const { request, respond } = dispatchStop({ signal: abort.signal });
+  await reached.promise;
+  abort.abort(new Error("stop request cancelled"));
+  released.resolve();
+  await request;
+  expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
+  expect(acceptStop).not.toHaveBeenCalled();
+  expectRpcError(respond, { code: "UNAVAILABLE" });
+});

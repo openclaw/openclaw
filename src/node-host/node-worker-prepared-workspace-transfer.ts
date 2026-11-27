@@ -3,7 +3,7 @@ import {
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "../gateway/worker-environments/workspace-hash-memo.js";
-import { changedPaths } from "../gateway/worker-environments/workspace-manifest-comparison.js";
+import { prepareWorkspaceReconciliation } from "../gateway/worker-environments/workspace-manifest-comparison.js";
 import { overlayWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import type {
   WorkerWorkspaceManifest,
@@ -12,6 +12,10 @@ import type {
 import { applyStagedWorkerWorkspace } from "../gateway/worker-environments/workspace-reconcile-apply.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { runCommandBuffered } from "../process/exec.js";
+import {
+  withNodeWorkerFilesystemCommands,
+  type NodeWorkerCommandIsolation,
+} from "./node-worker-command-filesystem.js";
 import type {
   NodeWorkerPreparedWorkspaceRow,
   NodeWorkerPreparedWorkspaceStore,
@@ -35,6 +39,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
   sourceOverlay: boolean;
   hashMemo?: WorkspaceHashMemo;
   signal?: AbortSignal;
+  isolation?: NodeWorkerCommandIsolation;
 }) {
   const { row, store } = params.prepared;
   const { manifest: source } = await readWorkspaceManifest(
@@ -47,6 +52,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
   }
   const capture = async (referenceManifestRef: string, baseManifestRef?: string) =>
     await captureManifest({
+      mode: "eligible",
       workspaceDir: row.workspace_dir,
       manifestHome: row.home_dir,
       baseCommit: source.baseCommit,
@@ -54,6 +60,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
       baseManifestRef,
       hashMemo: params.hashMemo,
       signal: params.signal,
+      isolation: params.isolation,
     });
   const baseManifestRef = await capture(row.source_manifest_ref);
   const { manifest: base } = await readWorkspaceManifest(
@@ -69,8 +76,10 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
     target = overlay.manifest;
   }
   const sourceEntries = new Map(source.entries.map((entry) => [entry.path, entry]));
+  params.signal?.throwIfAborted();
+  const reconciliation = prepareWorkspaceReconciliation(base, target);
   return {
-    changed: changedPaths(base, target, params.signal),
+    changed: new Set(reconciliation.preflight.changedPaths),
     readSourceFile: async (
       entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
     ): Promise<Buffer> => {
@@ -85,32 +94,42 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
       }
       // Checkpoints carry C-vs-B blobs only. If setup changed B into P and the
       // session restored B, recover those bytes locally without expanding its download token.
-      const result = await runCommandBuffered(
-        [
-          "git",
-          "--no-replace-objects",
-          "-c",
-          "protocol.allow=never",
-          "cat-file",
-          "blob",
-          `${source.baseCommit}:${entry.path}`,
-        ],
+      const result = await withNodeWorkerFilesystemCommands(
         {
-          cwd: row.workspace_dir,
-          baseEnv: {
-            PATH: process.env.PATH,
-            HOME: row.home_dir,
-            GIT_CONFIG_NOSYSTEM: "1",
-            GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-            GIT_NO_LAZY_FETCH: "1",
-            GIT_TERMINAL_PROMPT: "0",
-          },
+          isolation: params.isolation,
+          workspaceDir: row.workspace_dir,
+          homeDir: row.home_dir,
+          env: { PATH: process.env.PATH, HOME: row.home_dir },
           signal: params.signal,
-          timeoutMs: TRANSFER_TIMEOUT_MS,
-          killProcessTree: true,
-          maxOutputBytes: { stdout: entry.size + 1, stderr: 16 * 1024 },
-          maxCombinedOutputBytes: entry.size + 1 + 16 * 1024,
         },
+        () =>
+          runCommandBuffered(
+            [
+              "git",
+              "--no-replace-objects",
+              "-c",
+              "protocol.allow=never",
+              "cat-file",
+              "blob",
+              `${source.baseCommit}:${entry.path}`,
+            ],
+            {
+              cwd: row.workspace_dir,
+              baseEnv: {
+                PATH: process.env.PATH,
+                HOME: row.home_dir,
+                GIT_CONFIG_NOSYSTEM: "1",
+                GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+                GIT_NO_LAZY_FETCH: "1",
+                GIT_TERMINAL_PROMPT: "0",
+              },
+              signal: params.signal,
+              timeoutMs: TRANSFER_TIMEOUT_MS,
+              killProcessTree: true,
+              maxOutputBytes: { stdout: entry.size + 1, stderr: 16 * 1024 },
+              maxCombinedOutputBytes: entry.size + 1 + 16 * 1024,
+            },
+          ),
       );
       if (
         result.termination !== "exit" ||
@@ -141,7 +160,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
               stagingRoot,
               baseManifestRef,
               currentManifestRef: targetRef,
-              base,
+              reconciliation,
               current: target,
               journal: {
                 load: async () => undefined,

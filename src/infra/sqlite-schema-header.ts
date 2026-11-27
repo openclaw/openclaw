@@ -1,12 +1,16 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   readExistingAgentSchemaMeta,
   type ExistingAgentSchemaMeta,
 } from "../state/openclaw-agent-db-metadata.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
+import { readStateSchemaMinReader } from "../state/openclaw-state-db-schema-version.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
+import { emitSnapshotCleanupFailure } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion, readSqliteWriterAppVersion } from "./sqlite-user-version.js";
@@ -14,6 +18,7 @@ import { configureSqliteReadOnlyPragmas } from "./sqlite-wal.js";
 
 export type SqliteSchemaHeader = {
   userVersion: number;
+  minReader?: number;
   writerAppVersion?: string;
   agentSchemaMeta?: ExistingAgentSchemaMeta | null;
 };
@@ -29,14 +34,20 @@ export function readSqliteSchemaHeader(
     () => {
       const userVersion = readSqliteUserVersion(database);
       const writerAppVersion = readSqliteWriterAppVersion(database);
+      const agentSchemaMeta =
+        agentSchemaVersionForOwnership !== undefined
+          ? readExistingAgentSchemaMeta(database)
+          : undefined;
+      const minReader =
+        agentSchemaVersionForOwnership !== undefined
+          ? (agentSchemaMeta?.minReader ??
+            Math.max(agentSchemaMeta?.schemaVersion ?? 0, userVersion))
+          : readStateSchemaMinReader(database);
       return {
         userVersion,
+        ...(minReader !== userVersion ? { minReader } : {}),
         ...(writerAppVersion ? { writerAppVersion } : {}),
-        // A newer schema may have a different metadata contract; its version alone refuses admission.
-        ...(agentSchemaVersionForOwnership !== undefined &&
-        userVersion <= agentSchemaVersionForOwnership
-          ? { agentSchemaMeta: readExistingAgentSchemaMeta(database) }
-          : {}),
+        ...(agentSchemaMeta !== undefined ? { agentSchemaMeta } : {}),
       };
     },
     { operationLabel: "database.schema-header" },
@@ -48,12 +59,27 @@ export function readSqliteSchemaHeaderFromSnapshot(
   prepared: PreparedSqliteReadOnlyLocation,
   signal?: AbortSignal,
   agentSchemaVersionForOwnership?: number,
+  options: { cleanupFailure?: "warn" } = {},
 ): SqliteSchemaHeader {
   return runWithSqliteCleanup(
     {
       release: () => {
-        if (!prepared.cleanup()) {
-          throw new Error(`SQLite read-only worker snapshot cleanup failed: ${prepared.location}`);
+        try {
+          if (!prepared.cleanup() && options.cleanupFailure !== "warn") {
+            throw new Error(
+              `SQLite read-only worker snapshot cleanup failed: ${prepared.location}`,
+            );
+          }
+        } catch (error) {
+          if (options.cleanupFailure !== "warn") {
+            throw error;
+          }
+          // Boolean failures are logged by the prepared owner, which retains retry custody.
+          emitSnapshotCleanupFailure({
+            cleanupRoot: prepared.cleanupRoot ?? path.dirname(prepared.location),
+            operation: "rm",
+            code: extractErrorCode(error),
+          });
         }
       },
     },

@@ -1,3 +1,23 @@
+/* A customizable select sizes to its selected option. Reserve the widest translated
+   choice without moving the other controls when the operator changes modes. */
+:is(.systems-desktop .desktop-toolbar, openclaw-desktop-panel .desktop-touch-toolbar)
+  select.desktop-sizing {
+  display: inline-block;
+  width: max-content;
+  min-width: 88px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+:is(.systems-desktop .desktop-toolbar, openclaw-desktop-panel .desktop-touch-toolbar)
+  .desktop-sizing::after {
+  display: block;
+  height: 0;
+  visibility: hidden;
+  content: attr(data-sizing-labels);
+  white-space: pre;
+  letter-spacing: normal;
+}
+
 openclaw-desktop-panel {
   .desktop-apps {
     display: flex;
@@ -104,10 +124,6 @@ openclaw-desktop-panel {
   .desktop-touch-toolbar .desktop-audio-label {
     display: none;
   }
-  .desktop-fullscreen-icon > svg {
-    width: 15px;
-    height: 15px;
-  }
   .bp:fullscreen {
     inset: 0;
     width: 100%;
@@ -136,19 +152,13 @@ openclaw-desktop-panel {
     flex: 1;
   }
   .desktop-sizing {
+    --settings-control-height: 32px;
+
     width: 88px;
-    height: 32px;
     flex: 0 0 auto;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0 6px;
-    background: var(--bg);
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
   }
   .desktop-touch-toolbar .desktop-sizing {
-    height: 44px;
+    --settings-control-height: 44px;
   }
   .desktop-sizing-menu__trigger {
     height: 28px;
@@ -328,13 +338,13 @@ openclaw-desktop-panel {
   .desktop-rail__menu--desktop {
     width: 330px;
     padding: 8px;
-    border-radius: 22px;
+    border-radius: var(--menu-radius-large);
   }
   .desktop-rail__menu--desktop .oc-menu-item,
   .desktop-rail__menu--desktop .desktop-toolbar-action {
     min-height: 36px;
     padding: 8px 10px;
-    border-radius: 10px;
+    border-radius: var(--menu-item-radius);
     font-size: 13px;
     line-height: 18px;
     gap: 10px;
@@ -413,7 +423,7 @@ openclaw-desktop-panel {
   }
   .desktop-button {
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 5px 10px;
     background: transparent;
     color: var(--text);
@@ -582,7 +592,7 @@ openclaw-desktop-panel {
   .desktop-viewer-hint[data-fullscreen="true"] {
     padding: 7px 10px;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--bg);
     color: var(--text);
     font-size: 13px;
@@ -600,7 +610,7 @@ openclaw-desktop-panel {
     position: absolute;
     right: 12px;
     max-width: calc(50% - 225px);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
   }
   @container (max-width: 900px) {
     .desktop-takeover--fullscreen {
@@ -680,7 +690,7 @@ openclaw-desktop-panel {
     padding: 0;
     box-shadow: none;
     background: transparent;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
   }
   .desktop-connection-rail--mobile .desktop-rail__pill > :not(:first-child) {
     border-left-color: var(--border);
@@ -768,7 +778,7 @@ openclaw-desktop-panel {
   }
   .desktop-credentials__input {
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 7px 9px;
     background: var(--bg);
     color: var(--text);
@@ -780,7 +790,7 @@ openclaw-desktop-panel {
     gap: 10px;
     padding: 10px;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
   }
   .desktop-environment__details {
     display: flex;
@@ -790,12 +800,26 @@ openclaw-desktop-panel {
     gap: 5px;
   }
   .desktop-environment__id {
-    overflow: hidden;
     color: var(--text);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px;
+  }
+  .desktop-environment__label,
+  .desktop-environment__qualifier {
+    display: block;
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* Machine IDs share long prefixes. Clip the start, not the identifying end. */
+  .desktop-environment__label[data-identifier="true"],
+  .desktop-environment__qualifier {
+    direction: rtl;
+    text-align: match-parent;
+  }
+  .desktop-environment__qualifier {
+    color: var(--muted);
+    font-size: 11px;
   }
   .desktop-environment__meta,
   .desktop-environment__sessions {
@@ -864,7 +888,7 @@ openclaw-desktop-panel {
     margin: 0 auto;
     padding: 5px;
     border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--bg) 84%, transparent);
     box-shadow: var(--overlay-shadow);
     backdrop-filter: blur(16px);
@@ -877,7 +901,7 @@ openclaw-desktop-panel {
     justify-content: center;
     gap: 5px;
     border: 0;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     padding: 0 9px;
     background: transparent;
     color: var(--text);
@@ -931,11 +955,12 @@ openclaw-desktop-panel {
     .desktop-touch-toolbar {
       display: grid;
       width: calc(100% - 24px);
-      grid-template-columns: repeat(3, minmax(44px, 1fr));
+      grid-template-columns: minmax(44px, 1fr) minmax(max-content, 1fr) minmax(44px, 1fr);
     }
-    .desktop-touch-toolbar .desktop-sizing {
+    .desktop-document .desktop-touch-toolbar select.desktop-sizing {
       box-sizing: border-box;
-      width: 100%;
+      width: auto;
+      justify-self: stretch;
     }
   }
 }

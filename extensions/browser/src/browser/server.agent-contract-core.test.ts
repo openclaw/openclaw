@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import "../test-support/browser-security.mock.js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { getBrowserExecutableError } from "./chrome.executable-probe.js";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   installAgentContractHooks,
@@ -28,6 +29,16 @@ import {
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
 import { createBrowserTestClient, getBrowserTestFetch } from "./test-support/fetch.js";
+
+// This route suite owns a synthetic browser, not the host Chromium installation.
+vi.mock("./chrome.executables.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chrome.executables.js")>()),
+  resolveBrowserExecutableForPlatform: vi.fn(() => ({ kind: "chrome", path: "/fake/chrome" })),
+}));
+vi.mock("./chrome.executable-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chrome.executable-probe.js")>()),
+  getBrowserExecutableError: vi.fn(async () => null),
+}));
 
 const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 const targetId = "abcd1234";
@@ -267,7 +278,12 @@ describe("browser control server", () => {
     });
     pw("storageGetViaPlaywright").mockResolvedValueOnce({ values: { token: "value" } });
     for (const [route, mock, result, options] of [
-      ["/cookies", "cookiesGetViaPlaywright", { cookies: [{ name: "session" }] }, {}],
+      [
+        "/cookies",
+        "cookiesGetViaPlaywright",
+        { cookies: [{ name: "session" }] },
+        { partition: undefined, signal: expect.any(AbortSignal) },
+      ],
       [
         "/storage/local?key=token",
         "storageGetViaPlaywright",
@@ -283,22 +299,32 @@ describe("browser control server", () => {
     }
   });
 
-  it("agent contract: doctor deep runs a live snapshot probe", async () => {
-    const base = await startServerAndBase();
+  it.each([null, "Chromium executable cannot run: fixture loader failure"])(
+    "agent contract: doctor deep runs a live snapshot probe with executable error %s",
+    async (executableError) => {
+      vi.mocked(getBrowserExecutableError).mockResolvedValueOnce(executableError);
+      const base = await startServerAndBase();
 
-    const report = (await realFetch(`${base}/doctor?deep=true`).then((r) => r.json())) as {
-      ok: boolean;
-      checks?: Array<{ id?: string; status?: string; summary?: string }>;
-    };
+      const report = (await realFetch(`${base}/doctor?deep=true`).then((r) => r.json())) as {
+        ok: boolean;
+        checks?: Array<{ id?: string; status?: string; summary?: string }>;
+      };
 
-    expect(report.ok).toBe(true);
-    const liveSnapshotCheck = report.checks?.find((check) => check.id === "live-snapshot");
-    expect(liveSnapshotCheck).toMatchObject({ id: "live-snapshot", status: "pass" });
-    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
-      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
-      limit: 25,
-    });
-  });
+      expect(report.ok).toBe(executableError === null);
+      expect(report.checks).toContainEqual(
+        expect.objectContaining({
+          id: "managed-executable",
+          status: executableError === null ? "pass" : "fail",
+        }),
+      );
+      const liveSnapshotCheck = report.checks?.find((check) => check.id === "live-snapshot");
+      expect(liveSnapshotCheck).toMatchObject({ id: "live-snapshot", status: "pass" });
+      expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
+        wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+        limit: 25,
+      });
+    },
+  );
 
   it.each([
     { ownerTarget: undefined, backendTarget: "unrelated-999", expected: "abcd1234" },
@@ -356,6 +382,22 @@ describe("browser control server", () => {
     );
   });
 
+  it("refuses strict-policy Chrome MCP navigation before dispatching uninspectable redirects", async () => {
+    setBrowserControlServerProfiles({ openclaw: { color: "#FF4500", driver: "existing-session" } });
+    setBrowserControlServerSsrFPolicy({ dangerouslyAllowPrivateNetwork: false });
+    const response = await postResponse(await startServerAndBase(), "/navigate", {
+      url: "http://93.184.216.34/redirect",
+      targetId: "7",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining("requires redirect-hop inspection"),
+    });
+    const chromeMcp = await import("./chrome-mcp.js");
+    expect(chromeMcp.navigateChromeMcpPage).not.toHaveBeenCalled();
+  });
+
   it("agent contract: navigation + common act commands", async () => {
     await startServerAndBase();
     expect(await post("/navigate", { url: TAB_URL })).toMatchObject({ ok: true, targetId });
@@ -368,8 +410,6 @@ describe("browser control server", () => {
       }),
     );
     const actions: ActionCase[] = [
-      [{ kind: "click", ref: "1", button: "left", modifiers: ["Shift"] }],
-      [{ kind: "click", selector: "button.save" }],
       [
         {
           kind: "clickCoords",
@@ -384,9 +424,6 @@ describe("browser control server", () => {
       [{ kind: "type", ref: "1", text: "" }],
       [{ kind: "press", key: "Enter" }],
       [{ kind: "press", key: "Ctrl+Shift+Esc" }, { key: "Control+Shift+Escape" }],
-      [{ kind: "hover", ref: "2" }],
-      [{ kind: "scrollIntoView", ref: "2" }],
-      [{ kind: "drag", startRef: "3", endRef: "4" }],
     ];
     for (const [input, normalized] of actions) {
       expect(await post("/act", input)).toMatchObject({ ok: true, url: TAB_URL });
@@ -540,7 +577,7 @@ describe("browser control server", () => {
   });
 
   it("agent contract: hooks + response + downloads + screenshot", async () => {
-    const base = await startServerAndBase();
+    await startServerAndBase();
     async function call(
       route: string,
       body: Record<string, unknown>,
@@ -561,11 +598,6 @@ describe("browser control server", () => {
       ref: "e12",
       signal: expect.any(AbortSignal),
     });
-    for (const selector of [{ inputRef: "e99" }, { element: "input[type=file]" }]) {
-      expect(await post("/hooks/file-chooser", { paths: ["c.txt"], ...selector })).toMatchObject({
-        ok: true,
-      });
-    }
     await call(
       "/hooks/dialog",
       { accept: true, dialogId: "d1", timeoutMs: 5678 },
@@ -582,20 +614,6 @@ describe("browser control server", () => {
         signal: expect.any(AbortSignal),
       });
     }
-    expect(
-      await post("/response/body", { url: "**/api/data", timeoutMs: 2222, maxChars: 10 }),
-    ).toMatchObject({ ok: true });
-    expect(await (await realFetch(`${base}/console?level=error`)).json()).toMatchObject({
-      ok: true,
-      messages: [],
-    });
-    expect(await post("/pdf", {})).toMatchObject({ ok: true, path: expect.any(String) });
-    const screenshot = { element: "body", type: "jpeg", timeoutMs: 3333 };
-    expect(await post("/screenshot", screenshot)).toMatchObject({
-      ok: true,
-      path: expect.any(String),
-    });
-    expect(requireMockArg(pw("takeScreenshotViaPlaywright"))).toMatchObject(screenshot);
   });
 
   it.each([

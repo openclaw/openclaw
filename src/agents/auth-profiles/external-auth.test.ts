@@ -10,12 +10,7 @@ import {
 } from "./external-auth.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  getRuntimeAuthProfileStoreSnapshotCore,
-  registerRuntimeAuthProfileStoreMutationListener,
-  replaceRuntimeAuthProfileStoreSnapshots,
-} from "./runtime-snapshots.js";
+import * as snapshots from "./runtime-snapshots.js";
 import { runAuthProfileWriteTransaction } from "./sqlite.js";
 import { withAgentDirEnv } from "./sqlite.test-support.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
@@ -37,11 +32,11 @@ beforeEach(() => {
   prepareSharedAuthStoreOwnershipForNative();
   readMiniMax.mockReset().mockReturnValue(null);
   testing.setResolveExternalAuthProfilesForTest(() => []);
-  clearRuntimeAuthProfileStoreSnapshots();
+  snapshots.clearRuntimeAuthProfileStoreSnapshots();
 });
 afterEach(() => {
   testing.resetResolveExternalAuthProfilesForTest();
-  clearRuntimeAuthProfileStoreSnapshots();
+  snapshots.clearRuntimeAuthProfileStoreSnapshots();
 });
 
 it.each(["expired", "matching-refresh", "matching-access"])(
@@ -143,16 +138,18 @@ it.each([false, true])("retains external account health during a scoped=%s refre
     runtimeExternalProfileIds: [profileId],
   };
   testing.setResolveExternalAuthProfilesForTest(() => [{ profileId, credential: external }]);
-  replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
+  snapshots.replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
   const loaded = ensureAuthProfileStore(agentDir, {
     ...(scoped ? { externalCliProviderIds: ["openai"] } : {}),
     ...readOptions,
   });
   // Scoped lookups publish retained health; ordinary lookups return it to the caller.
-  const retained = scoped ? getRuntimeAuthProfileStoreSnapshotCore(agentDir) : loaded;
+  const retained = scoped ? snapshots.getRuntimeAuthProfileStoreSnapshotCore(agentDir) : loaded;
   const { profiles, order, lastGood, usageStats } = store;
   expect(retained).toMatchObject({ profiles, order, lastGood, usageStats });
-  expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats).toEqual(store.usageStats);
+  expect(snapshots.getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats).toEqual(
+    store.usageStats,
+  );
 });
 
 it.each([undefined, "resolved-key"])(
@@ -171,19 +168,49 @@ it.each([undefined, "resolved-key"])(
         },
       },
     };
-    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
+    snapshots.replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
+    using publish = vi.spyOn(snapshots, "updateRuntimeAuthProfileStoreSnapshot");
     const listener = vi.fn();
-    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    const unregister = snapshots.registerRuntimeAuthProfileStoreMutationListener(listener);
     try {
       const loaded = ensureAuthProfileStore(agentDir, {
         externalCliProviderIds: ["openai"],
         ...readOptions,
       });
       expect(loaded.profiles).toEqual(store.profiles);
-      expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles).toEqual(store.profiles);
+      expect(snapshots.getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles).toEqual(
+        store.profiles,
+      );
+      expect(publish).not.toHaveBeenCalled();
       expect(listener).not.toHaveBeenCalled();
     } finally {
       unregister();
     }
   },
 );
+
+it("publishes a scoped credential rotation only on the first read", () => {
+  const agentDir = "/tmp/openclaw-external-owner-rotation";
+  const profileId = "openai:external";
+  const previous = credential();
+  const rotated = { ...previous, access: "rotated-access" };
+  snapshots.replaceRuntimeAuthProfileStoreSnapshots([
+    {
+      agentDir,
+      store: {
+        version: 1,
+        profiles: { [profileId]: previous },
+        runtimeExternalProfileIds: [profileId],
+      },
+    },
+  ]);
+  testing.setResolveExternalAuthProfilesForTest(() => [{ profileId, credential: rotated }]);
+  using publish = vi.spyOn(snapshots, "updateRuntimeAuthProfileStoreSnapshot");
+  const options = { externalCliProviderIds: ["openai"], ...readOptions };
+  expect(ensureAuthProfileStore(agentDir, options).profiles[profileId]).toEqual(rotated);
+  expect(snapshots.getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles[profileId]).toEqual(
+    rotated,
+  );
+  ensureAuthProfileStore(agentDir, options);
+  expect(publish).toHaveBeenCalledTimes(1);
+});

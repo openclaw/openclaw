@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { EngineConnection, PostgresSqlConnection } from "../sql-connection.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   getOrLoadSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
 } from "../sqlite-database-admission.js";
+import { postgresReadSnapshots } from "../sqlite-schema-scope.js";
+import { StartupMaintenanceRequiredError } from "../startup-maintenance-required.js";
 import type { StoreSchema } from "./contract.js";
 import {
   postgresPhysicalFactsKey as admissionKey,
@@ -13,6 +16,8 @@ import {
 import type { PostgresCatalogFact } from "./postgres-catalog.js";
 import {
   admitPostgresCapabilities,
+  getAdmittedPostgresSchema,
+  postgresSchemaHash,
   readPostgresSchema,
   recordPostgresSchema,
   verifyPostgresSchema,
@@ -25,6 +30,13 @@ const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
 
 export function getPostgresPhysicalFacts(db: EngineConnection, options?: { refresh?: boolean }) {
+  if (isPostgresSqlConnection(db) && db.isTransaction && !options?.refresh) {
+    const snapshot = postgresReadSnapshots.get(db);
+    // Shared-state readers retain their live admission, deadline, and cancellation checks.
+    if (snapshot?.schema.store === "agent") {
+      return db.isOpen && db.anchor.isOpen ? snapshot.schema : undefined;
+    }
+  }
   return getSqliteDatabaseAdmission(db, admissionKey, options);
 }
 
@@ -43,9 +55,49 @@ export function admitPostgresPhysicalFacts(params: {
   schema?: StoreSchema;
   recordSchema?: boolean;
   preserveSchemaSeal?: boolean;
+  requireSealedSchema?: boolean;
 }): PostgresPhysicalFacts {
+  const readerVersion = params.schema?.version ?? params.version;
   const retained = getPostgresPhysicalFacts(params.db);
   if (retained) {
+    if (
+      retained.version < params.version ||
+      retained.storeId !== params.storeId ||
+      retained.namespace !== params.namespace ||
+      retained.store !== params.store
+    ) {
+      throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
+    }
+    if (retained.minReader > readerVersion) {
+      throw new StartupMaintenanceRequiredError(
+        "newer-schema",
+        `PostgreSQL ${params.store} schema ${retained.version} requires minimum reader ${retained.minReader}; this build supports ${readerVersion}. Use a compatible binary or reverse-port before downgrading.`,
+      );
+    }
+    if (params.schema && retained.version > readerVersion && !retained.schemaHash) {
+      throw new Error(
+        `Compatible newer PostgreSQL schema requires a matching installed schema seal. ${recovery}`,
+      );
+    }
+    if (params.requireSealedSchema) {
+      const schema = params.schema;
+      const admitted = getAdmittedPostgresSchema(params.db);
+      // Dynamic extensions belong to the installed schema, not the caller's base definition.
+      if (
+        !schema ||
+        !retained.schemaHash ||
+        (retained.version === readerVersion &&
+          retained.schemaHash !==
+            postgresSchemaHash(
+              { ...schema, searchExtensions: admitted?.searchExtensions },
+              retained.catalog,
+            ))
+      ) {
+        throw new Error(
+          `Read-only PostgreSQL admission requires a matching schema seal. ${recovery}`,
+        );
+      }
+    }
     return retained;
   }
   const capabilities = admitPostgresCapabilities(params.db);
@@ -56,20 +108,28 @@ export function admitPostgresPhysicalFacts(params: {
     throw new Error(`Cannot read PostgreSQL catalog or metadata. ${recovery}`, { cause: error });
   }
   const { metadata: row, catalog } = snapshot;
-  if (row.version !== params.version || row.store_id !== params.storeId) {
+  if (row.version < params.version || row.store_id !== params.storeId) {
     throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
   }
+  if (snapshot.minReader > readerVersion) {
+    throw new StartupMaintenanceRequiredError(
+      "newer-schema",
+      `PostgreSQL ${params.store} schema ${row.version} requires minimum reader ${snapshot.minReader}; this build supports ${readerVersion}. Use a compatible binary or reverse-port before downgrading.`,
+    );
+  }
+  let schemaHash: string | undefined;
   if (params.schema) {
     const schema = withPostgresSearchExtensions(params.schema, snapshot);
     if (params.recordSchema) {
-      recordPostgresSchema(params.db, params.namespace, schema, snapshot);
+      schemaHash = recordPostgresSchema(params.db, params.namespace, schema, snapshot);
     } else {
-      verifyPostgresSchema(
+      schemaHash = verifyPostgresSchema(
         params.db,
         params.namespace,
         schema,
         snapshot,
         params.preserveSchemaSeal,
+        params.requireSealedSchema,
       );
     }
     retainPostgresSchema(params.db, schema);
@@ -81,6 +141,8 @@ export function admitPostgresPhysicalFacts(params: {
     namespace: params.namespace,
     storeId: row.store_id,
     version: row.version,
+    minReader: snapshot.minReader,
+    schemaHash,
     capabilities,
     catalog,
   };
@@ -92,11 +154,13 @@ export function publishPostgresSearchExtensionFacts(
   db: PostgresSqlConnection,
   facts: PostgresPhysicalFacts,
   catalog: readonly PostgresCatalogFact[],
+  schema: StoreSchema,
 ): void {
   publishSqliteDatabaseAdmission(db, admissionKey, {
     ...facts,
     admissionId: randomUUID(),
     catalog,
+    schemaHash: postgresSchemaHash(schema, catalog),
   });
 }
 

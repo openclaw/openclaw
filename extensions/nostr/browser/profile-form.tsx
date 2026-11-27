@@ -176,7 +176,7 @@ export function createNostrProfileForm(t: Translator) {
           </>
         ) : undefined}
 
-        <div class="settings-row">
+        <div class="settings-row settings-row--stacked">
           <div class="settings-row__text">
             {isDirty() ? (
               <span class="settings-row__desc">{t("common.unsavedChanges")}</span>

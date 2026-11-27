@@ -17,6 +17,7 @@ Write the acceptance rule in the PR **before** the first run: flow, workload, me
 | Gateway startup / restart       | `scripts/bench-gateway-startup.ts`, `scripts/bench-gateway-restart.ts`, `scripts/perf/post-restart-burst-measure.ts` |
 | Chat turn, frames per turn      | `scripts/bench-channel-turn.mts`, `scripts/perf/transcript-broadcast-measure.ts`                                     |
 | Control UI cold load            | `scripts/bench-control-ui-cold-load.ts`, `pnpm ui:check-performance` (`:base` compares)                              |
+| Control UI older-history paging | `scripts/bench-control-ui-history-depth.ts`                                                                          |
 | Session list, multi-agent shape | `scripts/perf/team-shape-fixture.ts`, `src/gateway/session-list-viewers.perf.test.ts`                                |
 | Concurrency, SQLite state       | `scripts/bench-gateway-concurrency.ts`, `pnpm test:sqlite:perf`                                                      |
 

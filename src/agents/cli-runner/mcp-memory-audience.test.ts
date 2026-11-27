@@ -1,10 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  activateMcpLoopbackClientGrantCapture,
+  mintMcpLoopbackClientGrant,
+  resolveMcpLoopbackClientGrant,
+  revokeMcpLoopbackClientGrantsForRuntime,
+  transferMcpLoopbackClientGrant,
+} from "../../gateway/mcp-grant-store.js";
+import {
   assertMemoryAudienceCurrent,
   assertMemoryAudienceSession,
 } from "../../plugins/memory-audience.js";
 import { fakeSessionOwner } from "../../plugins/memory-audience.test-support.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 
 // mock-isolation: the fake session owner replaces SQLite generation facts.
 vi.mock("../../config/sessions/session-delivery-generation.js", async () => {
@@ -23,6 +31,7 @@ vi.mock("../../plugins/memory-state.js", () => ({
   resolveLoadedMemoryProviderKind: () => "native",
 }));
 
+import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { resolveCliMcpMemoryAudience } from "./mcp-memory-audience.js";
 
 const STORE_PATH = "/tmp/openclaw-cli-mcp-memory-audience/main.sqlite";
@@ -85,5 +94,44 @@ describe("resolveCliMcpMemoryAudience", () => {
 
     expect(resolved.memoryAudience).toBeUndefined();
     expect(fakeSessionOwner.activeLeases).toBe(0);
+  });
+  it("revokes a transferred CLI turn and releases its memory audience exactly once", async () => {
+    const turn = admittedTurn();
+    const runtimeOwnerToken = `audience-runtime-${randomUUID()}`;
+    const admission = prepareSystemAgentRunAdmission({}, "cli-audience-turn", "main", "test");
+    const params = {
+      context: { sessionKey: turn.sessionKey, senderIsOwner: true },
+      runtimeOwnerToken,
+      toolPolicyConfig: {},
+      admittedRunContext: await admission.admit("plugin-harness"),
+    };
+    const stable = mintMcpLoopbackClientGrant(params);
+    const minted = await mintCliMcpClientGrant(turn.run, "main", params);
+    try {
+      expect(fakeSessionOwner.activeLeases).toBe(1);
+      expect(
+        transferMcpLoopbackClientGrant({
+          sourceToken: minted.grant.token,
+          targetToken: stable.token,
+          runtimeOwnerToken,
+        }),
+      ).toBe(true);
+      const capture = { token: stable.token, runtimeOwnerToken, captureKey: "audience-capture" };
+      expect(activateMcpLoopbackClientGrantCapture(capture)).toBeTruthy();
+      const resolved = resolveMcpLoopbackClientGrant(capture);
+      expect(resolved?.memoryAudience).toEqual({ kind: "owner-private", agentId: "main" });
+      const audience = resolved!.memoryAudience!;
+      await minted.cleanup();
+      expect(activateMcpLoopbackClientGrantCapture(capture)).toBe(false);
+      expect(resolved?.isCurrent()).toBe(false);
+      expect(fakeSessionOwner.activeLeases).toBe(0);
+      expect(() => assertMemoryAudienceCurrent(audience)).toThrow("released");
+      await minted.cleanup();
+      expect(fakeSessionOwner.activeLeases).toBe(0);
+    } finally {
+      await minted.cleanup();
+      revokeMcpLoopbackClientGrantsForRuntime(runtimeOwnerToken);
+      admission.close();
+    }
   });
 });

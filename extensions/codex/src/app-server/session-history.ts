@@ -92,7 +92,6 @@ export async function readCodexMirroredSessionHistoryMessages(
   target: CodexMirroredSessionHistoryTarget,
   admission?: TranscriptTurnAdmission,
   signal?: AbortSignal,
-  contextTokenBudget?: number,
 ): Promise<AgentMessage[] | undefined> {
   signal?.throwIfAborted();
   let result: AgentMessage[] | undefined;
@@ -102,7 +101,7 @@ export async function readCodexMirroredSessionHistoryMessages(
     const loaded = await SessionManager.openModelContextAsync(resolved.target, {
       admission,
       signal,
-      limits: resolveAgentHarnessHistoryLimits(contextTokenBudget),
+      limits: resolveAgentHarnessHistoryLimits(),
     });
     result = consumeCodexHistory(
       loaded.buildSessionContext().messages,

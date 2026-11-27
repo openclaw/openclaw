@@ -1,9 +1,11 @@
 /** Builds Doctor service plans while preserving installed runtime and environment intent. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { DurableServiceCliError } from "../daemon/durable-service-entrypoint.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
+import { resolveServiceEntrypoint } from "../daemon/service-layout.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
@@ -34,16 +36,29 @@ export async function buildExpectedGatewayServicePlan(params: {
   ) {
     runtimePath = recordedNode;
   }
-  return buildGatewayInstallPlan({
-    env: params.serviceInstallEnv,
-    port: params.port,
-    runtime: params.runtime,
-    runtimePath,
-    pinnedRuntimePath: params.pinnedRuntimePath,
-    existingCommand: params.command,
-    existingEnvironment: managed?.environment,
-    existingEnvironmentValueSources: managed?.environmentValueSources,
-    warn: (message, title) => note(message, title),
-    config: params.cfg,
-  });
+  const plan = (serviceCli?: { executable: string; entrypoint: string }) =>
+    buildGatewayInstallPlan({
+      ...(serviceCli ? { serviceCli } : {}),
+      env: params.serviceInstallEnv,
+      port: params.port,
+      runtime: params.runtime,
+      runtimePath,
+      pinnedRuntimePath: params.pinnedRuntimePath,
+      existingCommand: params.command,
+      existingEnvironment: managed?.environment,
+      existingEnvironmentValueSources: managed?.environmentValueSources,
+      warn: (message, title) => note(message, title),
+      config: params.cfg,
+    });
+  const retained = managed && resolveServiceEntrypoint(managed);
+  try {
+    return await plan();
+  } catch (error) {
+    // Doctor never installs: report the explicit reinstall and keep the service's CLI.
+    if (!(error instanceof DurableServiceCliError) || !retained) {
+      throw error;
+    }
+    note(error.message, "Gateway service");
+    return await plan({ executable: process.execPath, entrypoint: retained });
+  }
 }

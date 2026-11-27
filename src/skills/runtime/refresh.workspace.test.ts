@@ -13,6 +13,10 @@ import {
   registerAgentWorkspaceAccess,
   type AgentWorkspaceAccess,
 } from "../../agents/workspace-access.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createGatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import {
   getActiveGatewayRootWorkHolders,
@@ -28,7 +32,7 @@ import {
 } from "../loading/workspace-skill-sources.js";
 import { resolveSkillFileHost } from "../skill-file-host.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import * as remoteRefresh from "./refresh-remote.js";
 import { getSkillsSnapshotVersion as versionOf } from "./refresh-state.js";
 import * as refresh from "./refresh.js";
@@ -166,7 +170,7 @@ async function remoteFixture(options: { finishOnAbort?: boolean } = {}) {
     ),
   };
   const release = registerAgentWorkspaceAccess(gateway, access);
-  const config = { plugins: { enabled: false } };
+  const config = { plugins: { allow: ["skill-workshop"] } };
   releases.push(release);
   const params = { workspaceDir: gateway, config };
   const remoteParams = {
@@ -177,6 +181,28 @@ async function remoteFixture(options: { finishOnAbort?: boolean } = {}) {
   };
   return { gateway, writes, subscriptions, access, release, params, remoteParams };
 }
+
+it("does not start a remote watcher disabled while its predecessor is retiring", async () => {
+  const { remoteParams, access, subscriptions } = await remoteFixture({ finishOnAbort: false });
+  setRuntimeConfigSnapshot({ skills: { load: { watch: true } } });
+  await remoteRefresh.ensureRemoteSkillsWatcher(remoteParams);
+  const replacement = remoteRefresh.ensureRemoteSkillsWatcher({
+    ...remoteParams,
+    executionWorkspaceDir: "/remote/replacement",
+  });
+  try {
+    await expect.poll(() => subscriptions[0]!.signal.aborted).toBe(true);
+    setRuntimeConfigSnapshot({ skills: { load: { watch: false } } });
+    subscriptions[0]!.end();
+    await replacement;
+    expect(access.watchSkills).toHaveBeenCalledOnce();
+  } finally {
+    subscriptions.forEach((subscription) => subscription.end());
+    await replacement;
+    subscriptions.forEach((subscription) => subscription.end());
+    clearRuntimeConfigSnapshot();
+  }
+});
 
 it("bounds remote subscriptions by recent access and invalidates evicted source readmission", async () => {
   const { gateway, access, subscriptions, remoteParams } = await remoteFixture();
@@ -224,7 +250,10 @@ it.each(["replacement", "watch disablement", "shutdown"] as const)(
           ? refresh.ensureSkillsWatcher({
               ...params,
               sourcePlan: remoteParams.sourcePlan,
-              config: { plugins: { enabled: false }, skills: { load: { watch: false } } },
+              config: {
+                plugins: { allow: ["skill-workshop"] },
+                skills: { load: { watch: false } },
+              },
             })
           : remoteRefresh.closeRemoteSkillsWatchers();
     try {

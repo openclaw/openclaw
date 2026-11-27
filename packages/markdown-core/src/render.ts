@@ -1,5 +1,6 @@
 import { applyConstructFallbacks } from "./construct-fallbacks.js";
 import type { FormatCapabilityProfile } from "./format-capabilities.js";
+import type { MarkdownIRWithMetadata } from "./ir-metadata.js";
 import {
   copyMarkdownLinkSpan,
   isAutoLinkedMarkdownLink,
@@ -38,6 +39,8 @@ type MarkdownLinkOrigin = "authored" | "linkify";
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
   annotationMarkers?: RenderAnnotationMap;
+  /** Line-oriented targets repeat this before each nonempty blockquote line. */
+  blockquotePrefix?: string;
   escapeText: (text: string) => string;
   buildLink?: (
     link: MarkdownLinkSpan,
@@ -168,6 +171,37 @@ function splitAtBoundaries<T extends { start: number; end: number }>(
   return pieces;
 }
 
+/** Maps each nonempty quoted line outside fenced code to its parser-owned quote depth. */
+export function collectBlockquoteLineStarts(ir: MarkdownIR): Map<number, number> {
+  const metadataIR: MarkdownIRWithMetadata = ir;
+  // Parser blocks outlive a capability profile that drops the blockquote style.
+  const quotes: { start: number; end: number; blockquoteDepth?: number }[] =
+    metadataIR.blocks?.filter((block) => block.kind === "blockquote") ??
+    ir.styles.filter((span) => span.style === "blockquote");
+  const lineStarts = new Map<number, number>();
+  if (quotes.length === 0) {
+    return lineStarts;
+  }
+  const { text } = ir;
+  const codeBlocks = ir.styles.filter((span) => span.style === "code_block");
+  for (const quote of quotes) {
+    for (let start = quote.start; start < quote.end;) {
+      if (
+        text[start] !== "\n" &&
+        !codeBlocks.some((code) => code.start < start && start < code.end)
+      ) {
+        lineStarts.set(start, Math.max(lineStarts.get(start) ?? 0, quote.blockquoteDepth ?? 1));
+      }
+      const newline = text.indexOf("\n", start);
+      if (newline === -1) {
+        break;
+      }
+      start = newline + 1;
+    }
+  }
+  return lineStarts;
+}
+
 /** Renders Markdown IR by nesting configured style markers and optional link markers. */
 export function renderMarkdownWithMarkers(
   ir: MarkdownIR,
@@ -193,6 +227,11 @@ export function renderMarkdownWithMarkers(
     ...new Set(annotated.flatMap((span) => [span.start, span.end])),
   ].toSorted((a, b) => a - b);
   const boundaries = new Set([0, text.length]);
+  const blockquotePrefix = options.blockquotePrefix ?? "";
+  const quoteLineStarts = blockquotePrefix ? collectBlockquoteLineStarts(projected) : undefined;
+  for (const start of quoteLineStarts?.keys() ?? []) {
+    boundaries.add(start);
+  }
 
   const startsAt = new Map<number, MarkdownStyleSpan[]>();
   for (const span of projected.styles) {
@@ -286,6 +325,10 @@ export function renderMarkdownWithMarkers(
           stack.push(item);
         }
       }
+    }
+    const quoteDepth = quoteLineStarts?.get(pos);
+    if (quoteDepth) {
+      out += blockquotePrefix.repeat(quoteDepth);
     }
 
     const openingItems: OpeningItem[] = [];

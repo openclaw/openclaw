@@ -62,13 +62,19 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     let mobileReturn: { scrollTop: number; focus: HTMLElement | null } | undefined;
     const data = useSessionPanel(
       host,
-      () => ({ sessionKey: host.sessionKey, agentId: host.agentId, presented: host.presented }),
+      () => ({
+        sessionKey: host.sessionKey,
+        agentId: host.agentId,
+        presented: host.presented,
+        includeDescendants: host.mobile !== true,
+      }),
       SubagentsPanelData,
       syncSelection,
     );
     const readiness = createSubagentsPresentation(data);
     const emptyLoading = createMemo(
       () =>
+        !data().hasResult &&
         !data().rows.length &&
         !data().nativeSnapshot &&
         !data().nativeError &&
@@ -135,7 +141,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     const Empty = () => (
       <Show when={!data().nativeSnapshot && !data().nativeError}>
         <Show
-          when={isPending(readiness.read)}
+          when={!data().hasResult && isPending(readiness.read)}
           fallback={
             data().hasResult &&
             !data().stopError && (
@@ -270,6 +276,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       return {
         key: row.session.key,
         title,
+        modelLabel: row.modelLabel,
         status,
         statusLabel,
         elapsed: renderElapsed(row),
@@ -554,6 +561,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         key === "sessionKey" ||
         key === "agentId" ||
         key === "presented" ||
+        key === "mobile" ||
         key === "showRequest"
       ) {
         syncSessionPanelInputs(host);

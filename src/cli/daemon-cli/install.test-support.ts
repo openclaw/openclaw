@@ -87,8 +87,8 @@ vi.mock("../../commands/random-token.js", () => ({
 vi.mock("../../commands/daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: buildGatewayInstallPlanMock,
 }));
-vi.mock("../../daemon/program-args.js", () => ({
-  OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
+vi.mock("../../daemon/program-args.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/program-args.js")>()),
   resolveOpenClawWrapperPath: async (value: string | undefined) => value?.trim() || undefined,
 }));
 vi.mock("./shared.js", async (importOriginal) => ({
@@ -129,7 +129,7 @@ vi.mock("./response.js", () => ({
   buildDaemonServiceSnapshot: vi.fn(),
   installDaemonServiceAndEmit: installDaemonServiceAndEmitMock,
 }));
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { defaultRuntime, resetRuntimeCapture, runtimeLogs } = createCliRuntimeCapture();
 vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
@@ -193,6 +193,7 @@ export function setupInstallTests() {
   });
 }
 export {
+  runtimeLogs,
   actionState,
   buildGatewayInstallPlanMock,
   ensureConfigReadyMock,

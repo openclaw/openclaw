@@ -6,9 +6,16 @@ import {
   recordCronNextCheckProposal,
 } from "../../infra/agent-run-registry.automation.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
-import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+import {
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readToolStringParam,
+  ToolInputError,
+} from "./common.js";
 import type { CronToolOptions } from "./cron-tool.types.js";
 import type { callGatewayTool, GatewayCallOptions } from "./gateway.js";
+
+const NEXT_CHECK_DURATION_ERROR = 'Set `in` to a duration greater than zero, for example `"5m"`.';
 
 export function createCronAutomationActions(opts?: CronToolOptions) {
   const selfJobId = opts?.selfRemoveOnlyJobId?.trim();
@@ -84,15 +91,20 @@ export function createCronAutomationActions(opts?: CronToolOptions) {
           if (!jobId || !runId || !activeRun || !assertCurrentRun) {
             throw new Error("cron next_check is only available to the currently running job");
           }
-          const rawDuration = readToolStringParam(params, "in", { required: true });
+          const rawDuration = readToolStringParam(params, "in");
+          if (rawDuration === undefined) {
+            throw new ToolInputError(
+              'Set `in` to a non-empty duration string, for example `"5m"`.',
+            );
+          }
           let delayMs: number;
           try {
             delayMs = parseDurationMs(rawDuration);
           } catch {
-            throw new Error("cron next_check in must be a positive duration");
+            throw new Error(NEXT_CHECK_DURATION_ERROR);
           }
           if (delayMs <= 0) {
-            throw new Error("cron next_check in must be a positive duration");
+            throw new Error(NEXT_CHECK_DURATION_ERROR);
           }
           recordCronNextCheckProposal(runId, jobId, delayMs);
           return jsonResult({ ok: true, delayMs });

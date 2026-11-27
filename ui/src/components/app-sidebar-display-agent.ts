@@ -1,10 +1,12 @@
+import type { GatewayAgentRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { listSelectableAgents } from "../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
-import { resolveActiveSidebarAgent } from "./app-sidebar-session-navigation-logic.ts";
 
 /** Show a provisional chat's owner without changing the selected-agent scope. */
 export function resolveSidebarDisplayAgent(input: {
@@ -16,18 +18,45 @@ export function resolveSidebarDisplayAgent(input: {
   sessionKey: string;
   chipMode: boolean;
 }) {
-  const active = resolveActiveSidebarAgent(input);
-  const sessionAgentId = parseAgentSessionKey(input.sessionKey)?.agentId;
-  if (
+  const { creation, pending, sessionKey, roster } = input;
+  const findAgent = (id: string) => roster.find((row) => normalizeAgentId(row.id) === id);
+  const creationAgentId =
     input.chipMode &&
-    input.pending &&
-    input.creation &&
-    !input.creation.creation.admitted &&
-    areUiSessionKeysEquivalent(input.sessionKey, input.creation.creation.sessionKey) &&
-    sessionAgentId &&
-    normalizeAgentId(sessionAgentId) === normalizeAgentId(input.pending.id)
-  ) {
-    return { ...active, activeId: input.pending.id, agent: input.pending, identity: null };
-  }
-  return active;
+    creation &&
+    areUiSessionKeysEquivalent(sessionKey, creation.creation.sessionKey) &&
+    parseAgentSessionKey(sessionKey)?.agentId;
+  // Until admission, the displayed recipient belongs to the visible creation, not the selected scope.
+  const sessionAgentId = creation && !creation.creation.admitted && creationAgentId;
+  const id = sessionAgentId && normalizeAgentId(sessionAgentId);
+  const provisional: GatewayAgentRow | undefined =
+    creation && sessionAgentId && id
+      ? pending && normalizeAgentId(pending.id) === id
+        ? pending
+        : (findAgent(id) ??
+          (creation.displayName ? { id: sessionAgentId, name: creation.displayName } : undefined))
+      : undefined;
+  const activeId = provisional ? provisional.id : input.activeId;
+  const identities = new Map(
+    input.identities.map((identity) => [identity.agentId, identity] as const),
+  );
+  const agent = provisional || findAgent(activeId);
+  const identity = identities.get(provisional && id ? id : activeId) ?? null;
+  // A Template's catalog image stands in while its agent is created and set up, until the
+  // agent has an avatar of its own. The agent is first admitted without one, and a cached
+  // identity can still say so for a moment after the Template's identity is written.
+  const avatarUrl =
+    creation &&
+    creationAgentId &&
+    agent &&
+    normalizeAgentId(agent.id) === normalizeAgentId(creationAgentId) &&
+    !resolveAgentAvatarUrl(agent, identity)
+      ? creation.avatarUrl
+      : undefined;
+  return {
+    activeId,
+    agent: agent && avatarUrl ? { ...agent, identity: { ...agent.identity, avatarUrl } } : agent,
+    agents: listSelectableAgents(roster),
+    identity: avatarUrl && identity ? { ...identity, avatar: avatarUrl } : identity,
+    identities,
+  };
 }

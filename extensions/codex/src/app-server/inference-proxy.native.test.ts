@@ -239,6 +239,84 @@ const nativeInput = (text: string): CodexUserInput[] => [{ type: "text", text, t
 // It never reaches a provider or the operator's HOME.
 describe.skipIf(process.platform === "win32")("native inference admission", () => {
   it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE === "1")(
+    "loads a remote model catalog through the relay with native client version and auth",
+    async (context) => {
+      const native = await prepareNative(context, "codex-catalog-relay-");
+      // Synthetic external ChatGPT auth: no real credentials or provider calls.
+      const accessToken =
+        [
+          { alg: "none", typ: "JWT" },
+          { "https://api.openai.com/auth": { chatgpt_account_id: "catalog-account" } },
+        ]
+          .map((part) => Buffer.from(JSON.stringify(part)).toString("base64url"))
+          .join(".") + ".signature";
+      const seen: string[] = [];
+      transport.fetch.mockReset().mockImplementation(async (args) => {
+        seen.push(args.url);
+        expect(args.init).toMatchObject({
+          method: "GET",
+          headers: {
+            authorization: `Bearer ${accessToken}`,
+            "chatgpt-account-id": "catalog-account",
+          },
+        });
+        return {
+          response: Response.json({
+            models: [
+              {
+                slug: "relay-catalog-only",
+                display_name: "Relay catalog fixture",
+                description: "Only available from the test upstream",
+                model_messages: { instructions_template: "Synthetic catalog fixture." },
+                default_reasoning_level: "medium",
+                supported_reasoning_levels: [{ effort: "medium", description: "Medium" }],
+                shell_type: "shell_command",
+                visibility: "list",
+                supported_in_api: true,
+                priority: 1,
+                upgrade: null,
+                support_verbosity: false,
+                default_verbosity: null,
+                apply_patch_tool_type: null,
+                truncation_policy: { mode: "bytes", limit: 10000 },
+                context_window: 1050000,
+                experimental_supported_tools: [],
+              },
+            ],
+          }),
+          release: async () => {},
+        };
+      });
+      const proxy = await createCodexInferenceProxy({
+        upstream: new URL("https://chatgpt.com/backend-api/codex"),
+        assertCurrent: () => {},
+      });
+      context.onTestFinished(() => proxy.close());
+      await fs.writeFile(
+        path.join(native.codexHome, "config.toml"),
+        [
+          "openai_base_url=" + JSON.stringify(proxy.baseUrl),
+          ...nativeConfig("relay-catalog-only", "openai"),
+        ].join("\n"),
+      );
+      const client = await startNative(context, native);
+      await client.request("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken,
+        chatgptAccountId: "catalog-account",
+        chatgptPlanType: "plus",
+      });
+      const result = await client.request("model/list", {});
+      expect(seen, client.getStderrDiagnostic()).toContain(
+        "https://chatgpt.com/backend-api/codex/models?client_version=" + CODEX_APP_SERVER_VERSION,
+      );
+      expect(
+        result.data.map((model) => model.id),
+        client.getStderrDiagnostic(),
+      ).toContain("relay-catalog-only");
+    },
+  );
+  it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE === "1")(
     "starts native roots and delegated work beyond 16 active responses",
     { timeout: 90_000 },
     async (context) => {
@@ -469,6 +547,106 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
       await waitFor(() => (transport.httpClosed === 2 ? true : undefined));
       expect(httpAttempts).toBe(2);
       expect(transport.httpSockets.size).toBe(2);
+    },
+  );
+  it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE === "1")(
+    "keeps oversized native history terminal while a bounded replacement can answer",
+    { timeout: 60_000 },
+    async (context) => {
+      const native = await prepareNative(context, "codex-relay-size-");
+      const upstreamCalls: number[] = [];
+      transport.fetch.mockReset().mockImplementation(async (args) => {
+        upstreamCalls.push(1);
+        expect(String(args.url).endsWith("/responses")).toBe(true);
+        return {
+          response: new Response(
+            responseEvents("bounded", assistantMessage("answer", "BOUNDED_OK"))
+              .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+              .join(""),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+          release: async () => {},
+        };
+      });
+      const proxy = await createCodexInferenceProxy({
+        upstream: new URL("https://api.openai.com/v1"),
+        assertCurrent: () => {},
+      });
+      context.onTestFinished(() => proxy.close());
+      await fs.writeFile(
+        path.join(native.codexHome, "config.toml"),
+        [
+          "model_context_window=100000000",
+          "model_auto_compact_token_limit=99000000",
+          ...nativeConfig("gpt-5.5", "http-fixture"),
+          ...fixtureProvider("Synthetic size provider", proxy.baseUrl, false),
+        ].join("\n"),
+      );
+      const client = await startNative(context, native);
+      const begin = async () => {
+        const { thread } = await client.request("thread/start", { cwd: native.cwd });
+        const registration = await proxy.context.register({
+          threadId: thread.id,
+          text: "Synthetic size recovery proof.",
+          signal: new AbortController().signal,
+          assertCurrent: () => {},
+        });
+        context.onTestFinished(() => registration.release());
+        return { thread, registration };
+      };
+      const old = await begin();
+      // The native history, not the small current request, crosses the real 32 MiB relay cap.
+      for (let index = 0; index < 34; index++) {
+        await client.request("thread/inject_items", {
+          threadId: old.thread.id,
+          items: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "x".repeat(1_000_000) }],
+            },
+          ],
+        });
+      }
+      const turns = observeTurns(client);
+      const start = async (entry: typeof old) => {
+        await client.request("turn/start", {
+          threadId: entry.thread.id,
+          input: nativeInput("Reply exactly BOUNDED_OK. Do not use tools."),
+          responsesapiClientMetadata: {
+            [CODEX_INFERENCE_GENERATION_KEY]: entry.registration.generation,
+          },
+        });
+      };
+      await start(old);
+      await turns.settled(old.thread.id, "failed");
+      const failed = await client.request("thread/read", {
+        threadId: old.thread.id,
+        includeTurns: true,
+      });
+      expect(failed.thread.turns?.at(-1)?.error?.message).toContain(
+        "Request exceeds the maximum size accepted by the Codex inference relay",
+      );
+      expect(upstreamCalls).toHaveLength(0);
+      const fresh = await begin();
+      await start(fresh);
+      await turns.settled(fresh.thread.id);
+      const answered = await client.request("thread/read", {
+        threadId: fresh.thread.id,
+        includeTurns: true,
+      });
+      expect(
+        answered.thread.turns
+          ?.flatMap((turn) => turn.items)
+          .filter((item) => item.type === "agentMessage")
+          .map((item) => item.text),
+      ).toContain("BOUNDED_OK");
+      expect(upstreamCalls).toHaveLength(1);
+      const retained = await client.request("thread/read", {
+        threadId: old.thread.id,
+        includeTurns: false,
+      });
+      expect(retained.thread.id).toBe(old.thread.id);
     },
   );
   it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE !== "1")(

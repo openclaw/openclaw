@@ -70,7 +70,8 @@ export type SecretsRuntimeRefreshContext = {
   includeConfigRefs?: boolean;
   includeAuthStoreRefs: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore | Promise<AuthProfileStore>;
-  loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
+  /** An omitted inventory lets a later config refresh discover its first plugin secret surface. */
+  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 };
 
@@ -117,7 +118,7 @@ function cloneSecretsRuntimeRefreshContext(
     explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
     includeConfigRefs: context.includeConfigRefs ?? true,
     includeAuthStoreRefs: context.includeAuthStoreRefs,
-    loadablePluginOrigins: new Map(context.loadablePluginOrigins),
+    loadablePluginOrigins: context.loadablePluginOrigins && new Map(context.loadablePluginOrigins),
     ...(context.manifestRegistry ? { manifestRegistry: context.manifestRegistry } : {}),
     ...(context.loadAuthStore ? { loadAuthStore: context.loadAuthStore } : {}),
   };
@@ -783,8 +784,9 @@ export function activateSecretsRuntimeSnapshotState(params: {
     );
   }
   const next = cloneSecretsRuntimeSnapshot(params.snapshot, authStores);
-  // This owner replaces source revisions; immutable copies reuse snapshot-comparison facts.
+  // This owner replaces config revisions; immutable copies reuse snapshot-comparison facts.
   freezeJsonSnapshot(next.sourceConfig);
+  freezeJsonSnapshot(next.config);
   if (params.mergeLiveAuthBookkeeping !== false) {
     next.authStores = mergeLiveAuthStoreBookkeeping(
       next.authStores,
@@ -813,11 +815,10 @@ export function activateSecretsRuntimeSnapshotState(params: {
   replaceOwnedRuntimeAuthProfileStoreSnapshots(next.authStores);
   next.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   next.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
-  const previousLineageStartRevision = activeSnapshotLineageStartRevision;
   activeSnapshot = next;
   activeSnapshotRevision += 1;
   activeSnapshotLineageStartRevision = params.preserveActivationLineage
-    ? previousLineageStartRevision
+    ? activeSnapshotLineageStartRevision
     : activeSnapshotRevision;
   activeSnapshotLineageAuthStores = params.preserveActivationLineage
     ? previousLineageAuthStores

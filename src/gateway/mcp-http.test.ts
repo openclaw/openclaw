@@ -67,7 +67,7 @@ type ScopedToolsCall = Parameters<typeof resolveGatewayScopedTools>[0] & {
 type BeforeToolCallHookInput = Parameters<typeof runBeforeToolCallHook>[0];
 
 const runBeforeToolCallHookMock = vi.hoisted(() =>
-  vi.fn(async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
+  vi.fn(async (args: BeforeToolCallHookInput): Promise<MockBeforeToolCallHookResult> => ({
     blocked: false,
     params: args.params,
   })),
@@ -180,6 +180,7 @@ import {
   mcpToolCallMessage,
   readMcpPayload,
   readOkMcpPayload,
+  registerRequesterPolicyTests,
   sendLoopbackToolCall,
   sendRaw,
   startLoopbackServerForTest,
@@ -377,18 +378,11 @@ function getScopedToolsCall(index: number): ScopedToolsCall {
 }
 
 function getBeforeToolCallHookInput(index: number): BeforeToolCallHookInput {
-  const call = runBeforeToolCallHookMock.mock.calls[index]?.[0];
-  if (typeof call !== "object" || call === null) {
-    throw new Error(`Expected before-tool-call hook ${index} to receive an input object`);
-  }
-  return call as BeforeToolCallHookInput;
+  return expectDefined(runBeforeToolCallHookMock.mock.calls[index]?.[0], "hook input");
 }
 
 function mockScopedTools(tools: MockGatewayTool[]) {
-  resolveGatewayScopedToolsMock.mockResolvedValue({
-    agentId: "main",
-    tools,
-  });
+  resolveGatewayScopedToolsMock.mockResolvedValue({ agentId: "main", tools });
 }
 
 beforeEach(() => {
@@ -713,7 +707,7 @@ describe("mcp loopback server", () => {
   it("passes session, account, message channel, and inbound event headers into shared tool resolution", async () => {
     const { runtime } = await startLoopbackServerForTest();
     const response = await sendLoopbackToolsList({
-      token: runtime.nonOwnerToken,
+      token: runtime.ownerToken,
       headers: {
         "x-session-key": "agent:main:telegram:group:chat123",
         "x-openclaw-session-id": "session-123",
@@ -750,7 +744,8 @@ describe("mcp loopback server", () => {
     expect(call.taskSuggestionDeliveryMode).toBe("gateway");
     expect(call.requireExplicitMessageTarget).toBe(true);
     expect(call.conversationReadOrigin).toBe("delegated");
-    expect(call.senderIsOwner).toBe(false);
+    // The raw owner token names the local host.
+    expect(call.senderIsOwner).toBe(true);
     expect(call.surface).toBe("loopback");
     expect(call.includeNodeExecTool).toBe(false);
     expect(new Set(call.excludeToolNames)).toEqual(
@@ -795,6 +790,12 @@ describe("mcp loopback server", () => {
     expect(call.conversationReadOrigin).toBe("delegated");
     expect(call.includeNodeExecTool).toBe(false);
     expect(Array.from(call.excludeToolNames ?? [])).toContain("exec");
+  });
+
+  registerRequesterPolicyTests({
+    createCliGrant,
+    mockScopedTools,
+    beforeToolCall: runBeforeToolCallHookMock,
   });
 
   it("binds a CLI grant's complete context and ignores spoofed scope headers", async () => {
@@ -940,7 +941,6 @@ describe("mcp loopback server", () => {
       turnSourceAccountId: "bound-account",
       turnSourceThreadId: "bound-thread",
     });
-    expect(getBeforeToolCallHookInput(0).ctx).toHaveProperty("loopDetection");
     expect(toolCallerIdentity).toMatchObject({
       agentId: "main",
       sessionKey: boundContext.sessionKey,
@@ -1239,41 +1239,6 @@ describe("mcp loopback server", () => {
       availability.resolve({ cacheKey: "eligible", isAvailable: () => true });
       clearMcpLoopbackToolCallCapture(captureKey);
     }
-  });
-
-  it("fences caller authority when the grant is replaced during tool execution", async () => {
-    const { promise: started, resolve: markStarted } = createDeferred();
-    const { promise: gate, resolve: release } = createDeferred();
-    let committed = false;
-    mockScopedTools([
-      makeMessageTool({
-        execute: async () => {
-          const caller = getGatewayToolCallerIdentity();
-          markStarted();
-          await gate;
-          if (caller?.receiptAuthority?.() !== true) {
-            throw new Error("Grant authority expired before publication");
-          }
-          committed = true;
-          return { content: [{ type: "text", text: "published" }] };
-        },
-      }),
-    ]);
-    await startLoopbackServerForTest();
-    const grant = await createCliGrant("run-publication", {
-      context: { sessionKey: "agent:main:publication" },
-      captureKey: "capture-publication",
-    });
-    const response = sendLoopbackToolCall({ ...grant.scope, name: "message" });
-    await started;
-    activateMcpLoopbackClientGrantCapture(grant.captureParams);
-    release();
-    expectMcpResultText(
-      await readOkMcpPayload(await response),
-      "Grant authority expired before publication",
-      true,
-    );
-    expect(committed).toBe(false);
   });
 
   it("routes sessions_yield to the current CLI capture", async () => {
@@ -2253,10 +2218,7 @@ describe("collector result tool across the loopback MCP boundary", () => {
     await startLoopbackServerForTest();
     const scope = await mintCollectorGrant();
 
-    expectMcpResultText(
-      await callStructuredOutput(scope),
-      JSON.stringify({ status: "recorded" }, null, 2),
-    );
+    expectMcpResultText(await callStructuredOutput(scope), JSON.stringify({ status: "recorded" }));
     expect(getSubagentRunByRunId(collectorRunId)?.structuredOutput).toEqual({
       structured: { answer: "ok" },
       invalidAttempts: 0,

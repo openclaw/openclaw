@@ -5,7 +5,7 @@ type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unkn
 export type GatewayLoopParams = {
   start: GatewayLoopStart;
   beginBoot?: (startedAtMs: number) => Promise<void> | void;
-  completeBoot?: (completion: unknown) => void;
+  completeBoot?: Parameters<typeof import("./run-loop.js").runGatewayLoop>[0]["completeBoot"];
   onProcessResourcesSettled?: (outcome: "drained" | "retained") => void;
   onRestartStartupFailure?: (error: unknown, signal: AbortSignal) => Promise<void>;
   ownsProcessLifecycle?: boolean;

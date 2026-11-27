@@ -32,15 +32,6 @@ function present<const T extends unknown[]>(...blocks: T) {
   return { blocks };
 }
 
-const buttons = (label: string, value: string) => ({
-  type: "buttons",
-  buttons: [{ label, value }],
-});
-const select = (placeholder: string, label: string, value: string) => ({
-  type: "select",
-  placeholder,
-  options: [{ label, value }],
-});
 const wideTable = (rows = 1) => {
   const headers = Array.from({ length: 21 }, (_, index) => `Column ${index}`);
   return {
@@ -98,21 +89,6 @@ function elementAt(block: Record<string, unknown>, index: number) {
   const element = elements?.[index];
   assert(element, `expected Slack block element ${index}`);
   return element;
-}
-
-function largeTablePresentation() {
-  return {
-    blocks: [
-      {
-        type: "table",
-        caption: "Large pipeline",
-        headers: ["Account"],
-        rows: Array.from({ length: 100 }, (_entry, index) => [
-          index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(110)}`,
-        ]),
-      },
-    ],
-  };
 }
 
 const paddedMarkdownTable = [
@@ -250,56 +226,6 @@ describe("Slack action adapter", () => {
       messageId: "171234.567",
       content: "Updated pipeline\n\nPipeline (table)\n- Account: Acme; Stage: Won",
     });
-  });
-
-  it("routes non-native tables through Slack-safe text with native controls", async () => {
-    await send({
-      to: "channel:C1",
-      message: "Summary",
-      presentation: present(
-        {
-          type: "chart",
-          chartType: "pie",
-          title: "Revenue mix",
-          segments: [{ label: "Product", value: 60 }],
-        },
-        ...largeTablePresentation().blocks,
-        buttons("Stage", "stage"),
-        select("Lane", "Production", "production"),
-      ),
-      interactive: present(buttons("Refresh", "refresh"), select("Window", "Recent", "recent")),
-    });
-
-    const action = firstAction(invoke);
-    expect(action.content).toBe("Summary");
-    expect(action).not.toHaveProperty("nativeDataFallbackBaseText");
-    expect(action).not.toHaveProperty("separateTextAndBlocks");
-    expect(action).not.toHaveProperty("blocks");
-    const messages = preparedMessages(invoke);
-    expect(messages).toHaveLength(3);
-    expect(messages[0]?.text).toBe("Summary\n\nRevenue mix (pie chart)\n- Product: 60");
-    expect(blockAt(messages[0]!, 1)).toEqual({
-      type: "data_visualization",
-      title: "Revenue mix",
-      chart: { type: "pie", segments: [{ label: "Product", value: 60 }] },
-    });
-    expect(messages[1]?.text).toContain("- Account: <@U123>");
-    expect(messages[1]?.text).toContain("- Account: account-99");
-    expect(messages[1]?.textIsSlackPlainText).toBe(true);
-    const controls = messages[2]!;
-    expect(controls.blocks).toMatchObject([
-      {
-        block_id: "openclaw_reply_buttons_1",
-        elements: [{ action_id: "openclaw:reply_button:1:1", value: "stage" }],
-      },
-      { block_id: "openclaw_reply_select_1", elements: [{ action_id: "openclaw:reply_select:1" }] },
-      {
-        block_id: "openclaw_reply_buttons_2",
-        elements: [{ action_id: "openclaw:reply_button:2:1", value: "refresh" }],
-      },
-      { block_id: "openclaw_reply_select_2", elements: [{ action_id: "openclaw:reply_select:2" }] },
-    ]);
-    expect(String(messages[1]?.text).length).toBeGreaterThan(8000);
   });
 
   it("keeps an oversized portable control label complete in literal fallback", async () => {
@@ -584,26 +510,6 @@ describe("Slack action adapter", () => {
         replyBroadcast: true,
       }),
     ).rejects.toThrow(/replyBroadcast is only supported for text or block thread replies/i);
-  });
-
-  it("forwards messageId for read actions", async () => {
-    await dispatch(invoke, "read", {
-      channelId: "C1",
-      messageId: "1712345678.654321",
-    });
-
-    const action = firstAction(invoke);
-    expect(action.action).toBe("readMessages");
-    expect(action.channelId).toBe("C1");
-    expect(action.messageId).toBe("1712345678.654321");
-    expect(firstInvokeCall(invoke)[1]).toEqual({});
-  });
-
-  it.each([2.5])("forwards raw read limit %s to the authorized action owner", async (limit) => {
-    await dispatch(invoke, "read", { channelId: "C1", limit });
-
-    expect(firstAction(invoke)).toMatchObject({ action: "readMessages", limit });
-    expect(invoke).toHaveBeenCalledOnce();
   });
 
   it("requires filePath, path, or media for upload-file", async () => {

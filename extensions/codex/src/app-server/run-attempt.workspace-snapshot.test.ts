@@ -31,7 +31,7 @@ import {
 
 setupRunAttemptTestHooks();
 const initial = "Captured workspace instructions.";
-const updated = "Updated instructions must wait for a new session.";
+const updated = "Updated workspace instructions.";
 
 async function workspace(guidance?: string) {
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
@@ -70,7 +70,7 @@ async function attempt(params: ReturnType<typeof createParams>, resume = false) 
 }
 
 describe("Codex workspace instruction snapshots", () => {
-  it("keeps loaded instructions when optional memory preparation fails and freezes them on resume", async () => {
+  it("keeps instructions through optional memory failure and refreshes edits on resume", async () => {
     const { params, agentsPath } = await workspace(initial);
     setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("memory_get")]);
     params.disableTools = false;
@@ -97,30 +97,29 @@ describe("Codex workspace instruction snapshots", () => {
         });
         await fs.writeFile(agentsPath, updated);
         const { instructions } = await attempt(params, true);
-        expect(instructions).toContain(initial);
-        expect(instructions).not.toContain(updated);
+        expect(instructions).toContain(updated);
+        expect(instructions).not.toContain(initial);
       });
     } finally {
       await disposePluginRegistryInstances(registration.registry);
     }
   });
 
-  it("retains the first successful capture after resume bootstrap loading fails", async () => {
+  it("retains the latest delivered instructions after resume bootstrap loading fails", async () => {
     const { params, agentsPath } = await workspace(initial);
     await attempt(params);
-    const captured = await readCodexAppServerBinding(params.sessionFile);
-    expect(captured?.agentWorkspaceDeveloperInstructions).toEqual(expect.stringContaining(initial));
     await fs.writeFile(agentsPath, updated);
+    expect((await attempt(params, true)).instructions).toContain(updated);
     vi.spyOn(agentHarnessRuntime, "prepareAgentWorkspaceContext").mockRejectedValueOnce(
       new Error("workspace bootstrap unavailable"),
     );
     const resumed = await attempt(params, true);
     expect(resumed.result.systemPromptReport?.injectedWorkspaceFiles).toEqual([]);
-    expect(resumed.instructions).toContain(initial);
-    expect(resumed.instructions).not.toContain(updated);
+    expect(resumed.instructions).toContain(updated);
+    expect(resumed.instructions).not.toContain(initial);
   });
 
-  it("captures an empty legacy snapshot once and preserves it when AGENTS.md appears", async () => {
+  it("refreshes an empty legacy snapshot when AGENTS.md appears", async () => {
     const { params, agentsPath } = await workspace();
     const started = await attempt(params);
     expect(started.instructions).not.toContain("OpenClaw Agent Workspace Instructions");
@@ -135,6 +134,6 @@ describe("Codex workspace instruction snapshots", () => {
       (await readCodexAppServerBinding(params.sessionFile))?.agentWorkspaceDeveloperInstructions,
     ).toBe("");
     await fs.writeFile(agentsPath, updated);
-    expect((await attempt(params, true)).instructions).not.toContain(updated);
+    expect((await attempt(params, true)).instructions).toContain(updated);
   });
 });

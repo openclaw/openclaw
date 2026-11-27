@@ -14,6 +14,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
+import { registerOpenClawAgentDatabaseSyncResource } from "./openclaw-agent-db-resources.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import * as native from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
@@ -35,24 +36,51 @@ let env: NodeJS.ProcessEnv;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.spyOn(databaseProcessRole, "getDatabaseProcessRole").mockReturnValue("gateway");
   env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-idle-")) };
   opened.length = 0;
   // Exercise the real borrow/release owner without booting native workers for timer tests.
-  vi.spyOn(native, "createAgentDatabaseNativeGeneration").mockImplementation((agentId) => {
-    const close = vi.fn(async () => {});
-    opened.push({ agentId, close });
-    return {
-      close,
-      run: async () => undefined,
-      failure: () => undefined,
-      isPrepared: () => false,
-      getPendingNativeOpen: () => undefined,
-      getPendingPreparation: () => undefined,
-      captureClaim: () => {
-        throw new Error("Unused native claim");
-      },
-    };
-  });
+  vi.spyOn(native, "createAgentDatabaseNativeGeneration").mockImplementation(
+    (
+      agentId,
+      pathname,
+      _context,
+      _processOwner,
+      _logicalLifetime,
+      _assertLogicalCurrent,
+      _assertCleanupOwned,
+      _expectedIdentity,
+      acceptFileIdentity,
+    ) => {
+      const close = vi.fn(async () => {});
+      let prepared = false;
+      opened.push({ agentId, close });
+      return {
+        close,
+        run: async () => {
+          fs.mkdirSync(path.dirname(pathname), { recursive: true });
+          fs.writeFileSync(pathname, "", { flag: "a" });
+          const identity = readDatabasePathIdentitySync(pathname);
+          assert(identity.birthtime);
+          acceptFileIdentity({
+            kind: "file",
+            physicalIdentity: identity.key.slice("file:".length),
+            nativeLocation: identity.canonicalPath,
+            birthtime: identity.birthtime,
+          });
+          prepared = true;
+          return undefined;
+        },
+        failure: () => undefined,
+        isPrepared: () => prepared,
+        getPendingNativeOpen: () => undefined,
+        getPendingPreparation: () => undefined,
+        captureClaim: () => {
+          throw new Error("Unused native claim");
+        },
+      };
+    },
+  );
 });
 
 const source: AgentDatabaseRequestExecutionSource = {
@@ -82,7 +110,7 @@ function closedAgents() {
 
 const fillIdlePool = () => use("first", "second", "third", "fourth");
 
-it("keeps a shared creating owner out of idle eviction until its last borrower releases", async () => {
+it("keeps a shared owner out of idle eviction until its last borrower releases", async () => {
   const options = {
     agentId: "creating",
     env,
@@ -100,7 +128,8 @@ it("keeps a shared creating owner out of idle eviction until its last borrower r
     expect(opened.filter(({ agentId }) => agentId === "creating")).toHaveLength(1);
     const ordinary = captureOpenClawAgentDatabaseExecution(options);
     try {
-      await expect(ordinary.prepare(source)).rejects.toThrow(/captured creating reference/);
+      await expect(ordinary.prepare(source)).resolves.toBeUndefined();
+      expect(opened.filter(({ agentId }) => agentId === "creating")).toHaveLength(1);
     } finally {
       await ordinary.release();
     }
@@ -133,13 +162,31 @@ it("retires a CLI one-shot's warm executor after the CLI window", async () => {
   expect(closedAgents()).toEqual(["one-shot"]);
 });
 
-it("keeps warm executors through restart drain until marker persistence releases cleanup", async () => {
-  await fillIdlePool();
+it("drains dependent readers before retiring warm executors during shutdown", async () => {
+  const first = await fillIdlePool();
+  const readerClosed = vi.fn();
+  registerOpenClawAgentDatabaseSyncResource({
+    agentId: first.agentId,
+    path: first.path,
+    revoke() {},
+    close: readerClosed,
+  });
+  const firstNative = opened[0];
+  assert(firstNative);
+  firstNative.close.mockImplementation(async () => {
+    expect(readerClosed).toHaveBeenCalledOnce();
+  });
+  const borrowing = capture("second");
+  await borrowing.prepare(source);
   markGatewayRestartDraining();
   await vi.advanceTimersByTimeAsync(0);
   expect(closedAgents()).toEqual([]);
   beginGatewayShutdownCleanup();
-  await vi.advanceTimersByTimeAsync(0);
+  expect(closedAgents()).toEqual([]);
+  await borrowing.release();
+  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
+  expect(closedAgents()).toEqual(["second"]);
+  await closeOpenClawAgentDatabasesAsync();
   expect(closedAgents()).toEqual(["first", "second", "third", "fourth"]);
   expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
 });

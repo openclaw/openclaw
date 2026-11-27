@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { MemorySearchManager } from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { getScopedDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 import type { getActiveMemorySearchManagerCore } from "../plugins/memory-runtime.js";
 import {
   createOpenClawTestState,

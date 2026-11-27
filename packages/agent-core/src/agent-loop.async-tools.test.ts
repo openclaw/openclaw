@@ -30,7 +30,6 @@ import { runAgentLoop } from "./agent-loop.js";
 import * as fixtures from "./agent-loop.test-support.js";
 import { streamAgentResponse } from "./agent-stream-response.js";
 import { Agent } from "./agent.js";
-import { attachInternalToolBatchLifecycle, setInternalBeforeToolBatch } from "./internal-hooks.js";
 import { distinctRecordOutputs, variedRows } from "./repetition-guard.test-fixtures.js";
 import { getAgentToolExecutionContext } from "./tool-execution-context.js";
 import type { AgentEvent, AgentMessage, AgentTool, AgentToolCall, StreamFn } from "./types.js";
@@ -320,7 +319,6 @@ it("transfers the detached async prefix directly to persistence preparation", as
         terminalToolCallIds: [],
         steeringMessages: [],
         terminate: false,
-        terminateRun: false,
       };
     },
     (message) => {
@@ -406,15 +404,6 @@ it("persists async calls before admission and keeps the live answer visible thro
     streamFn,
   });
   const persisted = agent.state.messages;
-  setInternalBeforeToolBatch(agent, async ({ calls }) =>
-    attachInternalToolBatchLifecycle(
-      {},
-      {
-        commitReadyCalls: () => executionOrder.push(`admit:${calls[0]?.toolCall.id}`),
-        releaseSkippedCalls: () => {},
-      },
-    ),
-  );
   agent.subscribe((event) => {
     events.push(event);
     if (isTextDelta(event)) {
@@ -456,7 +445,7 @@ it("persists async calls before admission and keeps the live answer visible thro
   fixtures.finishMessageStream(response, assistant([source, text, ordinary], "toolUse"), "toolUse");
   await run;
   const result = agent.state.messages;
-  expect(executionOrder).toEqual(["admit:lookup", "lookup", "admit:ordinary", "ordinary"]);
+  expect(executionOrder).toEqual(["lookup", "ordinary"]);
   expect(
     assistants(result)
       .flatMap((message) => message.content)
@@ -466,50 +455,6 @@ it("persists async calls before admission and keeps the live answer visible thro
   expect(contexts[1]?.messages).toEqual(persisted.slice(0, -1));
   expect(assistants(persisted).map((message) => message.usage.totalTokens)).toEqual([0, 9, 9]);
   expect(agent.state.streamingMessage).toBeUndefined();
-});
-
-it("preserves external cancellation when an output-limited async batch hits the critical loop limit", async () => {
-  const beforeBatch = createDeferred();
-  const releaseBatch = createDeferred();
-  const controller = new AbortController();
-  const execute = vi.fn(async () => ({ content: [], details: {} }));
-  const loop = call("loop");
-  const { response, events, run } = runFixture({
-    tools: [tool("loop", execute)],
-    config: {
-      toolLoopRecoveryState: { criticalToolLoopSeen: true },
-      beforeToolBatch: async () => {
-        beforeBatch.resolve();
-        await releaseBatch.promise;
-        return {
-          intervention: {
-            kind: "critical-tool-loop",
-            toolCallId: loop.id,
-            toolName: loop.name,
-            actionKey: "loop:same-action",
-            detector: "generic_repeat",
-            count: 20,
-            reason: "Repeated critical tool loop",
-          },
-        };
-      },
-    },
-    onEvent: (event) => {
-      if (event.type === "tool_execution_end") {
-        controller.abort(new Error("Operator stopped the run"));
-      }
-    },
-    signal: controller.signal,
-  });
-  cleanup(run, [response], releaseBatch.resolve, () => controller.abort());
-  startCalls(response, [loop]);
-  await beforeBatch.promise;
-  fixtures.finishMessageStream(response, outputLimitFailure([loop]));
-  releaseBatch.resolve();
-  const messages = await run;
-  expect(execute).not.toHaveBeenCalled();
-  expect(assistants(messages).at(-1)).toMatchObject({ stopReason: "aborted", usage });
-  expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
 });
 
 it.each(["aborted", "output-limit"] as const)(

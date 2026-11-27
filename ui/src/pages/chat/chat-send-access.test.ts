@@ -68,8 +68,8 @@ it.each(["access", "recovery", "session"])("retains the composer behind %s", asy
   expect(host.chatReplyTarget).toEqual(replyTarget);
   expect(host.request).not.toHaveBeenCalled();
   const error =
-    hold === "session" ? "The active session is unavailable; refresh and try again." : earlierError;
-  expect(host).toMatchObject({ chatError: error, lastError: error ?? null });
+    hold === "session" ? "Couldn’t open the active session. Refresh and try again." : earlierError;
+  expect([host.chatError, host.lastError]).toEqual([error, error ?? null]);
   if (hold === "recovery") {
     readiness!.mockReturnValue(true);
     await handleSendChat(host);
@@ -78,6 +78,28 @@ it.each(["access", "recovery", "session"])("retains the composer behind %s", asy
       attachments: [{ fileName: "brief.pdf" }],
     });
   }
+});
+
+it("keeps the draft until a cold Gateway connection establishes outbox ownership", async () => {
+  const message = "Send after the first connection";
+  const host = makeChatHost({
+    connected: false,
+    chatMessage: message,
+    requestHandlers: sendStarted,
+  });
+  const readiness = vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
+  const scope = vi.spyOn(host.client!, "recoveryScope", "get").mockReturnValue("");
+
+  await handleSendChat(host);
+  expect(host).toMatchObject({ chatMessage: message, chatQueue: [], lastError: null });
+  expect(host.request).not.toHaveBeenCalled();
+
+  host.connected = true;
+  readiness.mockReturnValue(true);
+  scope.mockReturnValue("test-recovery-scope");
+  await handleSendChat(host);
+  expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+  expect(findChatSendPayload(host)).toMatchObject({ message });
 });
 
 it.each([true, false])(
@@ -167,7 +189,7 @@ it.each(["initial-turn", "recovery-scope", "send-access"])(
     }
     if (hold === "recovery-scope") {
       expect(retained[0]?.sendError).toBe(
-        "Chat settings update was interrupted. Review and retry when ready.",
+        "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.",
       );
       expect(host.chatQueue).toEqual([]);
       readiness.mockReturnValue(true);
@@ -286,7 +308,7 @@ it.each(["scope missing", "scope revoked", "equivalent alias", "run started"])(
         sendState: outcome === "run started" ? "waiting-idle" : "failed",
       });
       if (outcome !== "run started") {
-        expect(host.lastError).toContain("operator.admin");
+        expect(host.lastError).toBe("You don’t have permission to do this.");
       }
     }
   },

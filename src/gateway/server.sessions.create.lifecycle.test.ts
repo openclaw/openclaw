@@ -9,21 +9,28 @@ import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/se
 import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+  withSqliteSessionDatabase,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createGatewayActiveWorkSnapshot,
   waitForGatewayActiveWork,
 } from "../infra/gateway-active-work.js";
-import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   setupPersistentSessionCreateTestHarness,
+  removeSessionWorktree,
   chatSendOwner,
-  sessionCreateRuntimeClient,
 } from "./server.sessions.create.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -31,8 +38,11 @@ import {
   directSessionReq,
   sessionHookMocks,
   sessionLifecycleHookMocks,
+  beforeResetHookMocks,
+  beforeResetHookState,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+
 const { createSessionStoreDir, openClient } = setupPersistentSessionCreateTestHarness();
 let storePath: string;
 beforeEach(async () => {
@@ -43,8 +53,8 @@ type CreatedSession = { key: string; sessionId: string; entry: SessionEntry; run
 type CreateParams = Parameters<
   (typeof import("./session-create-service.js"))["createGatewaySession"]
 >[0];
-const adminClient = () => ({ client: { connect: { scopes: ["operator.admin"] } } as never });
-const writeClient = () => ({ client: { connect: { scopes: ["operator.write"] } } as never });
+const adminClient = () => ({ client: { connect: gatewayConnect(["operator.admin"]) } as never });
+const writeClient = () => ({ client: { connect: gatewayConnect(["operator.write"]) } as never });
 const mainReset = { parentSessionKey: "main", emitCommandHooks: true };
 const expectOk = (result: { ok: boolean }) => expect(result.ok).toBe(true);
 const missingAdmin = {
@@ -146,7 +156,7 @@ test.for([
       expect(createGatewayActiveWorkSnapshot().counts.sessionMutations).toBe(1);
       successor = directSessionReq(
         "sessions.patch",
-        { key: blockedKey, pinned: true },
+        { key: blockedKey, color: "purple" },
         { context },
       );
       void successor.then(() => {
@@ -157,8 +167,8 @@ test.for([
       expect(successorFinished).toBe(false);
       const created = readEntry(createdKey);
       expect(created?.sessionId).toBeTruthy();
-      expectOk(await rpcReq(ws, "sessions.patch", { key: createdKey, pinned: true }));
-      expect(readEntry(createdKey)?.pinnedAt).toEqual(expect.any(Number));
+      expectOk(await rpcReq(ws, "sessions.patch", { key: createdKey, color: "purple" }));
+      expect(readEntry(createdKey)?.color).toBe("purple");
     } finally {
       release.resolve();
       await Promise.allSettled([changing, creating, successor]);
@@ -181,17 +191,22 @@ test.for([
 
 test("sessions.create registers a category only after the session commit succeeds", async () => {
   const category = "Deferred category";
-  let validations = 0;
-  const failed = await createSession(
-    { category, key: "agent:main:dashboard:failed-category-create" },
-    {
-      context: {
-        validateAgentRuntimeApprovalAuthority: () => ++validations < 3,
+  const bindCreation = vi.fn(() => {
+    throw new Error("session commit rejected");
+  });
+  await expect(
+    createSession(
+      { category, key: "agent:main:dashboard:failed-category-create" },
+      {
+        sessionMutationAuthorization: {
+          assertCurrent: vi.fn(),
+          assertTargetCurrent: vi.fn(),
+          bindCreation,
+        },
       },
-      client: sessionCreateRuntimeClient(["operator.write"]) as never,
-    },
-  );
-  expect(failed.ok).toBe(false);
+    ),
+  ).rejects.toThrow("session commit rejected");
+  expect(bindCreation).toHaveBeenCalledOnce();
   expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
   const broadcastToConnIds = vi.fn();
   const created = await createSession(
@@ -518,11 +533,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
   const context = { dedupe: new Map() };
   const ownerId = ensureProfileForEmail("replay@owner.test").id;
   const clientFor = (scopes = ["operator.write", "operator.admin"], profileId = ownerId) => ({
-    connect: {
-      role: "operator",
-      scopes,
-      device: { id: "control-ui-device" },
-    },
+    connect: { ...gatewayConnect(scopes), device: { id: "control-ui-device" } },
     authenticatedUserProfile: { profileId },
   });
   const params = {
@@ -554,6 +565,13 @@ test("sessions.create replays an identical creation once and rejects conflicting
       idempotencyKey: expect.any(String),
       message: "start this task exactly once",
     });
+    const restarted = await directSessionReq<{ key: string }>("sessions.create", params, {
+      client: clientFor() as never,
+      context: { dedupe: new Map() },
+    });
+    expectOk(restarted);
+    expect(restarted.payload?.key).toBe(first.payload?.key);
+    expect(chatSend).toHaveBeenCalledOnce();
     const conflict = await request({ ...params, message: "start a different task" });
     expect(conflict).toMatchObject({
       ok: false,
@@ -583,3 +601,227 @@ test("sessions.create replays an identical creation once and rejects conflicting
     chatSend.mockRestore();
   }
 });
+
+test("durable creation replays before label claims and refuses a reset incarnation", async () => {
+  const client = {
+    connect: {
+      ...gatewayConnect(["operator.write", "operator.admin"]),
+      device: { id: "receipt-device" },
+    },
+    authenticatedUserProfile: { profileId: ensureProfileForEmail("receipt-owner@example.test").id },
+  };
+  const params = {
+    agentId: "main",
+    label: "Receipt original",
+    idempotencyKey: "receipt-label-once",
+  };
+  const request = (scopes = client.connect.scopes) =>
+    directSessionReq<CreatedSession>("sessions.create", params, {
+      client: { ...client, connect: { ...client.connect, scopes } } as never,
+      context: { dedupe: new Map() },
+    });
+  const first = await request();
+  expectOk(first);
+  const created = first.payload!;
+  expectOk(
+    await directSessionReq(
+      "sessions.patch",
+      { key: created.key, label: "Renamed original" },
+      { client: client as never },
+    ),
+  );
+  expectOk(
+    await directSessionReq(
+      "sessions.create",
+      { agentId: "main", label: params.label },
+      { client: client as never },
+    ),
+  );
+  const replay = await request();
+  expect(replay).toMatchObject({
+    ok: true,
+    payload: {
+      key: created.key,
+      sessionId: created.sessionId,
+      entry: { label: "Renamed original" },
+      runStarted: false,
+      creationReplayed: true,
+    },
+  });
+  expect(await request(["operator.write"])).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN" },
+  });
+  expectOk(
+    await directSessionReq("sessions.reset", { key: created.key }, { client: client as never }),
+  );
+  expect(readEntry(created.key)?.sessionId).toBe(created.sessionId);
+  expect(await request()).toMatchObject({
+    ok: false,
+    error: { message: "The original creation incarnation is no longer available." },
+  });
+});
+
+test.each(["new-session", "reset"] as const)(
+  "warm replay uses the replacement receipt for %s",
+  async (replacement) => {
+    const client = {
+      connect: gatewayConnect(["operator.write", "operator.admin"]),
+      authenticatedUserProfile: {
+        profileId: ensureProfileForEmail("receipt-replacement@example.test").id,
+      },
+    };
+    const params = {
+      agentId: "main",
+      idempotencyKey: `replace-expired-receipt-${replacement}`,
+      ...(replacement === "reset" ? { key: "agent:main:dashboard:receipt-reset" } : {}),
+    };
+    const warmContext = { dedupe: new Map() };
+    const request = (context = { dedupe: new Map() }) =>
+      directSessionReq<CreatedSession>("sessions.create", params, {
+        client: client as never,
+        context,
+      });
+    const original = await request();
+    expect(original.ok, `original create: ${JSON.stringify(original.error)}`).toBe(true);
+    const first = original.payload!;
+    expect(await request(warmContext)).toMatchObject({
+      ok: true,
+      payload: { key: first.key, sessionId: first.sessionId },
+    });
+    // Advance only the persisted retention deadline. Both incarnations and receipts
+    // still come from the public handlers; the independent warm cache stays live.
+    const scope = resolveSqliteStoreScope(storePath, { agentId: "main" });
+    await runExclusiveSqliteSessionWrite(
+      scope,
+      async () => {
+        await withSqliteSessionDatabase(toDatabaseOptions(scope), ({ db }) =>
+          db
+            .prepare("UPDATE session_creation_operations SET expires_at = ? WHERE session_key = ?")
+            .run(Date.now() - 1, first.key),
+        );
+      },
+      "session.entry.create-with-transcript",
+    );
+    if (replacement === "reset") {
+      const reset = await directSessionReq(
+        "sessions.reset",
+        { key: first.key },
+        { client: client as never },
+      );
+      expect(reset.ok, `reset: ${JSON.stringify(reset.error)}`).toBe(true);
+    }
+    const next = await request();
+    expect(next.ok, `replacement create: ${JSON.stringify(next.error)}`).toBe(true);
+    if (replacement === "reset") {
+      expect(next.payload?.sessionId).toBe(first.sessionId);
+      expect(next.payload?.entry.lifecycleRevision).not.toBe(first.entry.lifecycleRevision);
+    } else {
+      expect(next.payload?.key).not.toBe(first.key);
+      expect(next.payload?.sessionId).not.toBe(first.sessionId);
+    }
+    const replay = await request(warmContext);
+    expect(replay.ok, `warm replay: ${JSON.stringify(replay.error)}`).toBe(true);
+    expect(replay.payload).toMatchObject({
+      key: next.payload!.key,
+      sessionId: next.payload!.sessionId,
+      creationReplayed: true,
+      runStarted: false,
+    });
+    expect(replay.payload?.entry.lifecycleRevision).toBe(next.payload?.entry.lifecycleRevision);
+    expect(readEntry(next.payload!.key)?.sessionId).toBe(next.payload?.sessionId);
+  },
+);
+
+test.each([
+  { parentKey: "agent:main:dashboard:busy", worktree: false },
+  { parentKey: "agent:main:main", worktree: false },
+  { parentKey: "agent:main:dashboard:busy", worktree: true },
+])(
+  "sessions.create preserves active $parentKey with worktree=$worktree",
+  async ({ parentKey, worktree }) => {
+    const parentSessionId = "sess-active-parallel-parent";
+    const previousSessionConfig = testState.sessionConfig;
+    testState.sessionConfig = { dmScope: "main" };
+    await writeSessionStore({
+      entries: {
+        [parentKey]: sessionStoreEntry(parentSessionId, {
+          providerOverride: "anthropic",
+          modelOverride: "parent-model",
+          modelOverrideSource: "user",
+          thinkingLevel: "high",
+          fastMode: true,
+        }),
+      },
+    });
+    beforeResetHookState.hasBeforeResetHook = true;
+    const parentOperation = createReplyOperation({
+      sessionKey: parentKey,
+      sessionId: parentSessionId,
+      agentId: "main",
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: parentKey,
+        incarnation: parentSessionId,
+        agentId: "main",
+      }),
+    });
+    parentOperation.setPhase("running");
+    // Model a producer that releases custody when reset requests cancellation.
+    parentOperation.abortSignal.addEventListener("abort", () => parentOperation.complete(), {
+      once: true,
+    });
+    let createdKey: string | undefined;
+    try {
+      const created = await directSessionReq<CreatedSession>(
+        "sessions.create",
+        {
+          agentId: "main",
+          parentSessionKey: parentKey,
+          emitCommandHooks: true,
+          succeedsParent: false,
+          ...(worktree ? { worktree: true, worktreeSource: "empty" } : {}),
+        },
+        adminClient(),
+      );
+      createdKey = created.payload?.key;
+      if (worktree) {
+        expect(created).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE", message: expect.stringContaining("active") },
+        });
+      } else {
+        expect(created.ok, JSON.stringify(created.error)).toBe(true);
+        expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+        expect(created.payload?.key).not.toBe(parentKey);
+        expect(created.payload?.entry).toMatchObject({
+          parentSessionKey: parentKey,
+          providerOverride: "anthropic",
+          modelOverride: "parent-model",
+          thinkingLevel: "high",
+          fastMode: true,
+        });
+      }
+      expect(readEntry(parentKey)?.sessionId).toBe(parentSessionId);
+      expect(parentOperation.phase).toBe("running");
+      expect(parentOperation.abortSignal.aborted).toBe(false);
+      expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+      expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
+      expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+      if (worktree) {
+        expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+      } else {
+        expect(sessionLifecycleHookMocks.runSessionStart.mock.calls[0]?.[0]).toMatchObject({
+          sessionKey: created.payload?.key,
+        });
+      }
+    } finally {
+      parentOperation.complete();
+      if (worktree && createdKey) {
+        await removeSessionWorktree(createdKey);
+      }
+      testState.sessionConfig = previousSessionConfig;
+    }
+  },
+);

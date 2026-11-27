@@ -128,7 +128,7 @@ const getSessionEntry = getSessionEntryHoisted;
 export const loadSessionStore = loadSessionStoreHoisted;
 export const readLatestAssistantTextByIdentity = readLatestAssistantTextByIdentityHoisted;
 const resolveStorePath = resolveStorePathHoisted;
-const generateTopicLabel = generateTopicLabelHoisted;
+export const generateTopicLabel = generateTopicLabelHoisted;
 const describeStickerImage = describeStickerImageHoisted;
 const resolveAgentDir = resolveAgentDirHoisted;
 const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
@@ -276,7 +276,8 @@ vi.mock("./bot/delivery.replies.js", () => ({
   deliverStructuredReplies: deliverRepliesHoisted,
 }));
 
-vi.mock("./send.js", async () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   buildInlineKeyboard: (await import("./inline-keyboard.js")).buildInlineKeyboard,
   editMessageReplyMarkupTelegram: editMessageReplyMarkupTelegramHoisted,
   editMessageTelegram: editMessageTelegramHoisted,
@@ -309,7 +310,7 @@ vi.mock("./sticker-cache.js", () => ({
   describeStickerImage: describeStickerImageHoisted,
 }));
 
-export let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
+let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
 
 function unexpectedInboundContextCall(): never {
   throw new Error("Dispatch fixtures do not construct inbound message context");
@@ -690,10 +691,7 @@ export async function dispatchWithContext(params: {
   replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
-  textLimit?: number;
   turnAdoptionLifecycle?: Parameters<typeof dispatchTelegramMessage>[0]["turnAdoptionLifecycle"];
-  runtime?: Parameters<typeof dispatchTelegramMessage>[0]["runtime"];
-  opts?: Parameters<typeof dispatchTelegramMessage>[0]["opts"];
 }) {
   const bot = params.bot ?? createBot();
   telegramDepsForTest = params.moduleMocks ?? defaultTelegramModuleMocks;
@@ -701,12 +699,12 @@ export async function dispatchWithContext(params: {
     context: params.context,
     bot,
     cfg: params.cfg ?? {},
-    runtime: params.runtime ?? createRuntime(),
+    runtime: createRuntime(),
     replyToMode: params.replyToMode ?? "first",
     streamMode: params.streamMode ?? "partial",
-    textLimit: params.textLimit ?? 4096,
+    textLimit: 4096,
     telegramCfg: params.telegramCfg ?? {},
-    opts: params.opts ?? { token: "token" },
+    opts: { token: "token" },
     retryDispatchErrors: params.retryDispatchErrors,
     suppressFailureFallback: params.suppressFailureFallback,
     turnAdoptionLifecycle: params.turnAdoptionLifecycle,
@@ -734,5 +732,3 @@ export function describeTelegramDispatch(name: string, registerTests: () => void
     registerTests();
   });
 }
-
-export type { TelegramBotFixtureMocks };

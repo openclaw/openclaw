@@ -43,6 +43,7 @@ import {
 import {
   prepareNativeModelToolInput,
   drainNativeChildModelAdmissions,
+  RetiredNativeChildPaths,
 } from "./native-subagent-model-input.js";
 import {
   currentNativeModelExecution,
@@ -126,6 +127,7 @@ class Monitor {
   // Native threads survive completed assignments; task runs and delivery remain per assignment.
   private readonly knownChildren = new Map<string, KnownChild>();
   private readonly childThreadIdsByAgentPath = new Map<string, string>();
+  private readonly retiredChildren = new RetiredNativeChildPaths(this.childThreadIdsByAgentPath);
   private readonly interruptModelExecution?: MonitorOptions["interruptModelExecution"];
   private readonly interruptChildAndWait?: MonitorOptions["interruptChildAndWait"];
   private readonly cancellationReservations = new Map<
@@ -191,6 +193,7 @@ class Monitor {
       children: this.childStates,
       parents: this.parentStates,
       retiredParents: this.retiredParentStates,
+      isParentThreadRetained: (parentThreadId) => this.parentThreadRetentions.has(parentThreadId),
       unregisterChild: (child) => this.unregisterChild(child),
       abandon: (state, child, assertCurrent) =>
         this.assignments.abandon(state, child, assertCurrent),
@@ -931,6 +934,7 @@ class Monitor {
         ),
       admissions: this.admissionCustody.entries,
       canPrepareReceiver: (state, threadId) => this.canPrepareReceiverChild(state, threadId),
+      retiredChildren: this.retiredChildren,
       prepareReceiver: (state, threadId, nativeParentThreadId) =>
         this.prepareReceiverChild(state, threadId, nativeParentThreadId),
       registerChildThread: (state, threadId, options) =>
@@ -1115,7 +1119,7 @@ class Monitor {
     if (parent && canNativeParentConsumeCompletion(parent, readString(params, "turnId"))) {
       observeCodexNativeSubagentDeliveryReceipts({
         state: parent,
-        receipts: nativeNotification.receipts,
+        notification: nativeNotification,
         knownChildren: this.knownChildren.values(),
         applyReceipts: (runIds) => this.completionDelivery.applyReceipts(parent, runIds),
       });
@@ -1315,29 +1319,28 @@ class Monitor {
         buildParentAgentPathKey(state.parentThreadId, nativeCompletion.agentPath),
       );
       const childState = childThreadId ? this.currentChild(childThreadId) : undefined;
-      if (
-        !childState ||
-        childState.parentThreadId !== state.parentThreadId ||
-        childState.terminal ||
-        this.knownChildren.get(childState.childThreadId)?.pendingTurns.length ||
-        readCodexNativeSubagentRunId(childState.runId)?.turnId
-      ) {
-        embeddedAgentLog.warn(
-          "Ignoring Codex native subagent completion for unknown child thread",
-          {
-            parentThreadId: state.parentThreadId,
-            agentPath: nativeCompletion.agentPath,
-          },
-        );
+      if (!childState || childState.parentThreadId !== state.parentThreadId) {
+        embeddedAgentLog.warn("Ignoring completion for unknown Codex child", {
+          parentThreadId: state.parentThreadId,
+          agentPath: nativeCompletion.agentPath,
+        });
         continue;
       }
-      const completion: CodexNativeSubagentCompletion = {
+      // A parent notification can describe an earlier task. Use the child's own turn evidence.
+      if (
+        childState.terminal ||
+        childState.nativeTurnId ||
+        readCodexNativeSubagentRunId(childState.runId)?.turnId ||
+        this.knownChildren.get(childState.childThreadId)?.pendingTurns.length
+      ) {
+        continue;
+      }
+      await this.processObservedCompletion(state, childState, {
         childThreadId: childState.childThreadId,
         status: nativeCompletion.status,
         statusLabel: nativeCompletion.statusLabel,
         result: nativeCompletion.result,
-      };
-      await this.processObservedCompletion(state, childState, completion);
+      });
     }
   }
 
@@ -1370,7 +1373,8 @@ class Monitor {
     });
     // History is a best-effort snapshot; subsequent notifications and polls
     // reconcile a status change that overlaps this read.
-    if (this.childStates.get(childState.runId) !== childState || !this.isCurrentParent(state)) {
+    const live = !childState.terminal && this.childStates.get(childState.runId) === childState;
+    if (!live || !this.isCurrentParent(state)) {
       return false;
     }
     if (childState.completionCustody && !childState.completionCustody.isCurrent()) {
@@ -1402,11 +1406,10 @@ class Monitor {
       return false;
     }
     const completion = this.processRecoveredCompletion(state, childState, recovery);
-    if (!completion) {
-      return false;
+    if (completion) {
+      await completion;
     }
-    await completion;
-    return true;
+    return completion !== undefined;
   }
 
   private processRecoveredCompletion(
@@ -1701,9 +1704,7 @@ class Monitor {
         historyOwner: options.historyOwner ?? state.historyOwner,
         recoveryAttempt: 0,
         terminal: false,
-        nativeCompletionDelivered: false,
         settledWithoutCompletion: false,
-        completionDeliveryAttempt: 0,
       };
       this.childStates.set(runId, childState);
       if (
@@ -1909,7 +1910,7 @@ class Monitor {
     const startedChild = this.currentChild(threadId);
     if (startedChild && !known.pendingTurns.some((candidate) => candidate.turnId === turnId)) {
       // Reserve the new turn before persistence yields to a later completion receipt.
-      startedChild.nativeCompletionDelivered = false;
+      this.completionDelivery.reset(startedChild);
       this.resumeChild(startedChild);
     }
     return true;
@@ -2349,8 +2350,17 @@ class Monitor {
     // Pending completion delivery keeps its own custody, but must not block
     // the parent from resuming to receive those results.
     const releaseParentThread = this.parentThreadRetentions.get(parentThreadId);
+    if (!releaseParentThread) {
+      return;
+    }
     this.parentThreadRetentions.delete(parentThreadId);
-    releaseParentThread?.();
+    releaseParentThread();
+    // Completion delivery holds detached results while this retention protects
+    // the parent; wake them now that their turn can take the parent subscription.
+    const state = this.parentStates.get(parentThreadId);
+    if (state) {
+      this.completionDelivery.deliverDetached(state);
+    }
   }
 
   private hasChildrenForParent(parentThreadId: string): boolean {
@@ -2383,11 +2393,7 @@ class Monitor {
           this.childCloses.retireReceiver(known, () =>
             this.updateChildThreadOwnership("release", threadId, this.releaseChildThread),
           );
-          for (const path of known.agentPaths) {
-            this.childThreadIdsByAgentPath.delete(
-              buildParentAgentPathKey(state.parentThreadId, path),
-            );
-          }
+          this.retiredChildren.retire(state.parentThreadId, known, threadId);
           this.knownChildren.delete(threadId);
           known.pendingTurns.forEach(releaseCompletionCustody);
         }

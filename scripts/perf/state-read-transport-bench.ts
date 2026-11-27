@@ -7,6 +7,8 @@
  *   scripts/perf/state-read-transport-bench.ts --iterations 10000
  * Add --allocations for sampled allocation, including objects collected by GC.
  * --owner <absolute source module path> selects another prepared revision.
+ * --command descendants --topology-size 2000 models cron cleanup's live identity
+ * topology. Add --immutable-command to include the producer's freeze admission.
  *
  * This measures the per-read machinery only, using the real source capture,
  * transport creation and cleanup. The backup command has no variable payload;
@@ -24,7 +26,11 @@ import { resolve } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
+import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
 import type { captureOpenClawStateReadSource } from "../../src/state/openclaw-state-read-worker.js";
+import type { OpenClawStateReadCommand } from "../../src/state/openclaw-state-read.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -33,6 +39,9 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "2000" },
     allocations: { type: "boolean", default: false },
     owner: { type: "string" },
+    command: { type: "string", default: "backup" },
+    "topology-size": { type: "string", default: "2000" },
+    "immutable-command": { type: "boolean", default: false },
   },
 });
 const iterations = parseStrictIntegerOption({
@@ -55,12 +64,84 @@ const ownerSourceSha256 = createHash("sha256").update(readFileSync(ownerUrl)).di
 const { captureOpenClawStateReadSource: captureSource } = (await import(ownerUrl.href)) as {
   captureOpenClawStateReadSource: typeof captureOpenClawStateReadSource;
 };
-const command = { type: "backup.runs" } as const;
+const topologySize = parseStrictIntegerOption({
+  raw: values["topology-size"],
+  label: "--topology-size",
+  min: 1,
+  fallback: 2000,
+});
+const liveTopology = freezeTrustedJsonSnapshot(
+  Array.from({ length: topologySize }, (_, index) => ({
+    childSessionKey: `agent:synthetic:subagent:00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    requesterSessionKey: `agent:synthetic:cron:00000000-0000-4000-8000-${String(Math.floor(index / 8)).padStart(12, "0")}:run:synthetic`,
+  })),
+);
+// Prepared selector payloads are read-only within their producer's operation.
+// Reuse them to isolate transport cost from projection/filesystem preparation.
+const entries = Array.from({ length: 5000 }, (_, index) => ({
+  acp: {
+    keys: [`agent:synthetic:session-${index}`],
+    entry: { sessionId: `session-${index}`, lifecycleRevision: "revision", sessionStartedAt: 1 },
+  },
+  repositoryWorkspace: {
+    agentId: "synthetic",
+    sessionKey: `session-${index}`,
+    workspaceId: `workspace-${index}`,
+  },
+}));
+const preparedEntries = Array.from({ length: 62000 }, (_, index) => ({
+  entry: {
+    path: `src/file-${index}.ts`,
+    type: "file" as const,
+    mode: 0o644,
+    size: 18000,
+    sha256: "a".repeat(64),
+  },
+  identity: `${index}:1`,
+  objectId: "b".repeat(64),
+}));
+function createCommand(): OpenClawStateReadCommand {
+  switch (values.command) {
+    case "backup":
+      return { type: "backup.runs" };
+    case "registry":
+      return { type: "agentDatabaseRegistry.read" };
+    case "shared-facts":
+      return { type: "sessionRows.sharedFacts", entries };
+    case "workspace":
+      return {
+        type: "localWorkspace.manifest",
+        input: {
+          id: "synthetic",
+          revision: 1,
+          action: {
+            kind: "scan",
+            target: "canonical",
+            canonicalRoot: "/synthetic/workspace",
+            preparedEntries,
+          },
+        },
+      };
+    case "descendants": {
+      const command = {
+        type: "subagents.runs",
+        scope: {
+          kind: "descendants",
+          sessionKeys: ["agent:synthetic:cron:00000000-0000-4000-8000-000000000000:run:synthetic"],
+          liveTopology,
+        },
+      } as const;
+      return values["immutable-command"] ? freezeTrustedJsonSnapshot(command) : command;
+    }
+    default:
+      throw new Error(`Unknown command: ${values.command}`);
+  }
+}
 
 async function setup(count: number): Promise<void> {
   for (let index = 0; index < count; index++) {
     const source = captureSource();
-    const transport = source.createTransport(command);
+    const transport = source.createTransport(createCommand());
     await transport.startClose();
   }
 }
@@ -72,7 +153,7 @@ async function countFunctions(count: number) {
   const startClose = new Set();
   for (let index = 0; index < count; index++) {
     const source = captureSource();
-    const transport = source.createTransport(command);
+    const transport = source.createTransport(createCommand());
     createTransport.add(source.createTransport);
     startRead.add(transport.startRead);
     startValidateFresh.add(transport.startValidateFresh);
@@ -92,7 +173,7 @@ function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
   return node.selfSize + node.children.reduce((total, child) => total + allocated(child), 0);
 }
 
-const functionIdentities = await countFunctions(100);
+const functionIdentities = await countFunctions(Math.min(100, iterations));
 await setup(warmup);
 global.gc();
 await nextTurn();
@@ -101,27 +182,32 @@ const memoryBefore = process.memoryUsage();
 const inspector = new Session();
 try {
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const cpuBefore = process.threadCpuUsage();
+  const allocatedBefore: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
   const started = performance.now();
   await setup(iterations);
   const elapsedMs = performance.now() - started;
   const cpu = process.threadCpuUsage(cpuBefore);
+  const allocatedAfter: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
   const memoryAfter = process.memoryUsage();
   const profile = values.allocations
     ? (await inspector.post("HeapProfiler.stopSampling")).profile
     : undefined;
-  const allocatedBytes = profile ? allocated(profile.head) : undefined;
+  const allocatedBytes = profile
+    ? allocated(profile.head)
+    : typeof allocatedBefore === "number" && typeof allocatedAfter === "number"
+      ? allocatedAfter - allocatedBefore
+      : undefined;
   console.log(
     JSON.stringify({
       workload: "state read source capture, transport setup and empty close; no read dispatch",
       ownerSourceSha256,
+      command: values.command,
+      topologySize: values.command === "descendants" ? topologySize : undefined,
+      immutableCommand: values["immutable-command"],
+      commandJsonBytes: Buffer.byteLength(JSON.stringify(createCommand())),
       host: hostname(),
       node: process.version,
       availableParallelism: availableParallelism(),
@@ -132,6 +218,7 @@ try {
       allocationSampling: values.allocations,
       functionIdentities,
       elapsedMs,
+      operationsPerSecond: (iterations * 1000) / elapsedMs,
       mainThreadCpuMs: (cpu.user + cpu.system) / 1000,
       mainThreadCpuUsPerOperation: (cpu.user + cpu.system) / iterations,
       allocatedBytes,

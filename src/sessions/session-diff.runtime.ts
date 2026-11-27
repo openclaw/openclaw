@@ -83,13 +83,11 @@ async function loadCheckoutRevision(
     if (!root) {
       return undefined;
     }
-    const branchOut = head
-      ? (await gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"]))?.trim()
-      : undefined;
+    const branchOut = head ? (await gitOut(root, ["branch", "--show-current"]))?.trim() : undefined;
     return {
       root,
       head,
-      branch: branchOut && branchOut !== "HEAD" ? branchOut : undefined,
+      branch: branchOut || undefined,
       objectFormat,
     };
   } catch {
