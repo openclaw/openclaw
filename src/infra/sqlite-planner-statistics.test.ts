@@ -6,12 +6,27 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { compareValidSemver } from "./semver.js";
 import {
   refreshSqlitePlannerStatistics,
   sqlitePlannerStatisticsNeedRefresh,
 } from "./sqlite-planner-statistics.js";
 
+function readRuntimeSqliteVersion(): string {
+  const database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(":memory:");
+  try {
+    return String(database.prepare("SELECT sqlite_version() AS version").get()?.version);
+  } finally {
+    database.close();
+  }
+}
+
 const tempDirs: string[] = [];
+const runtimeVersion = readRuntimeSqliteVersion();
+const runtimeAtLeast = (version: string) =>
+  (compareValidSemver(runtimeVersion, version) ?? -1) >= 0;
+// The read-only rule mirrors optimize's all-table mask, which SQLite 3.46 introduced.
+const optimizeAllTables = runtimeAtLeast("3.46.0");
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -103,41 +118,60 @@ describe("SQLite planner maintenance", () => {
     expect(readStatistics()).not.toBe("40 1");
   });
 
-  it("answers read-only exactly when optimize would refresh statistics", () => {
-    const pathname = path.join(makeTempDir(tempDirs, "openclaw-planner-"), "store.sqlite");
-    const writer = openNodeSqliteDatabase(pathname);
-    const observations: Array<{ step: string; readOnly: boolean; sqlite: boolean }> = [];
-    const observe = (step: string, change: string) => {
-      writer.exec(change);
-      observations.push({
-        step,
-        readOnly: readOnlyAnswer(pathname),
-        sqlite: sqliteWouldRefresh(pathname),
-      });
-    };
-    observe(
-      "never analyzed",
-      `CREATE TABLE samples (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+  it("always reports work where the writing pass runs explicit ANALYZE", () => {
+    const pathname = path.join(makeTempDir(tempDirs, "openclaw-planner-old-"), "store.sqlite");
+    {
+      using writer = openNodeSqliteDatabase(pathname);
+      writer.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT); CREATE INDEX t_v ON t(v);");
+      writer.exec(fill("t", 1, 50));
+      writer.exec("ANALYZE main;");
+    }
+    const admission = nodeSqlite.captureSqliteNativeRuntimeAdmission();
+    assert(admission);
+    vi.spyOn(nodeSqlite, "captureSqliteNativeRuntimeAdmission").mockReturnValue({
+      ...admission,
+      version: "3.44.6",
+    });
+    expect(readOnlyAnswer(pathname)).toBe(true);
+  });
+
+  it.runIf(optimizeAllTables)(
+    "answers read-only exactly when optimize would refresh statistics",
+    () => {
+      const pathname = path.join(makeTempDir(tempDirs, "openclaw-planner-"), "store.sqlite");
+      const writer = openNodeSqliteDatabase(pathname);
+      const observations: Array<{ step: string; readOnly: boolean; sqlite: boolean }> = [];
+      const observe = (step: string, change: string) => {
+        writer.exec(change);
+        observations.push({
+          step,
+          readOnly: readOnlyAnswer(pathname),
+          sqlite: sqliteWouldRefresh(pathname),
+        });
+      };
+      observe(
+        "never analyzed",
+        `CREATE TABLE samples (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
        CREATE INDEX samples_value ON samples(value);
        CREATE TABLE plain (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
        CREATE TABLE idle (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
        CREATE INDEX idle_value ON idle(value);
        ${fill("samples", 1, 3000)} ${fill("plain", 1, 400)}`,
-    );
-    observe("refreshed", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
-    observe("small growth", fill("samples", 3001, 4000));
-    observe("tenfold growth", fill("samples", 4001, 60_000));
-    observe("refreshed again", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
-    observe("unindexed growth", fill("plain", 401, 20_000));
-    observe("refreshed unindexed", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
-    observe("leftmost rows deleted", "DELETE FROM samples WHERE id < 57000;");
-    observe("refreshed after delete", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
-    observe("emptied table with statistics", "DELETE FROM plain;");
-    observe("refreshed empty", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
-    // Bounded analysis records a different count per index; SQLite keeps the last one.
-    observe(
-      "differing full-index estimates",
-      `CREATE TABLE pair (id INTEGER PRIMARY KEY, a TEXT NOT NULL, b TEXT NOT NULL);
+      );
+      observe("refreshed", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+      observe("small growth", fill("samples", 3001, 4000));
+      observe("tenfold growth", fill("samples", 4001, 60_000));
+      observe("refreshed again", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+      observe("unindexed growth", fill("plain", 401, 20_000));
+      observe("refreshed unindexed", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+      observe("leftmost rows deleted", "DELETE FROM samples WHERE id < 57000;");
+      observe("refreshed after delete", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+      observe("emptied table with statistics", "DELETE FROM plain;");
+      observe("refreshed empty", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+      // Bounded analysis records a different count per index; SQLite keeps the last one.
+      observe(
+        "differing full-index estimates",
+        `CREATE TABLE pair (id INTEGER PRIMARY KEY, a TEXT NOT NULL, b TEXT NOT NULL);
        CREATE INDEX pair_a ON pair(a);
        CREATE INDEX pair_b ON pair(b);
        WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v + 1 FROM n WHERE v < 6000)
@@ -146,55 +180,57 @@ describe("SQLite planner maintenance", () => {
        UPDATE sqlite_stat1 SET stat = '60000 1' WHERE idx = 'pair_a';
        UPDATE sqlite_stat1 SET stat = '600 1' WHERE idx = 'pair_b';
        ANALYZE sqlite_schema;`,
-    );
-    observe(
-      "analyzed single row deleted",
-      `CREATE TABLE single (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+      );
+      observe(
+        "analyzed single row deleted",
+        `CREATE TABLE single (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
        CREATE INDEX single_value ON single(value);
        INSERT INTO single VALUES (1, 'one');
        PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;
        DELETE FROM single;`,
-    );
-    observe(
-      "refreshed after single delete",
-      "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;",
-    );
-    // An empty table keeps its old statistics; optimize skips it even with an unanalyzed index.
-    observe(
-      "new index on an emptied analyzed table",
-      `CREATE TABLE lone (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+      );
+      observe(
+        "refreshed after single delete",
+        "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;",
+      );
+      // An empty table keeps its old statistics; optimize skips it even with an unanalyzed index.
+      observe(
+        "new index on an emptied analyzed table",
+        `CREATE TABLE lone (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
        ${fill("lone", 1, 400)}
        PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;
        DELETE FROM lone;
        CREATE INDEX lone_value ON lone(value);`,
-    );
-    // Two short-row leaves under a one-cell root: the estimate counts the root's two
-    // children, so a recorded count of 15 sits just outside optimize's 10x band.
-    observe(
-      "small fanout near the threshold",
-      `CREATE TABLE fan (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+      );
+      // Two short-row leaves under a one-cell root: the estimate counts the root's two
+      // children, so a recorded count of 15 sits just outside optimize's 10x band.
+      observe(
+        "small fanout near the threshold",
+        `CREATE TABLE fan (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
        CREATE INDEX fan_value ON fan(value);
        WITH RECURSIVE n(v) AS (VALUES(1) UNION ALL SELECT v + 1 FROM n WHERE v < 220)
        INSERT INTO fan SELECT v, printf('%020d', v) FROM n;
        PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;
        UPDATE sqlite_stat1 SET stat = '15 1' WHERE tbl = 'fan';
        ANALYZE sqlite_schema;`,
-    );
-    writer.close();
+      );
+      writer.close();
 
-    expect(observations.map(({ step, readOnly }) => ({ step, readOnly }))).toEqual(
-      observations.map(({ step, sqlite }) => ({ step, readOnly: sqlite })),
-    );
-    expect(
-      observations.find(({ step }) => step === "small fanout near the threshold"),
-    ).toMatchObject({
-      sqlite: true,
-    });
-    // The fixture reaches both answers, so agreement is not vacuous.
-    expect(new Set(observations.map(({ sqlite }) => sqlite))).toEqual(new Set([true, false]));
-  });
+      expect(observations.map(({ step, readOnly }) => ({ step, readOnly }))).toEqual(
+        observations.map(({ step, sqlite }) => ({ step, readOnly: sqlite })),
+      );
+      if (runtimeAtLeast("3.51.0")) {
+        // This estimator counts interior children, which puts the fixture past the band.
+        expect(
+          observations.find(({ step }) => step === "small fanout near the threshold"),
+        ).toMatchObject({ sqlite: true });
+      }
+      // The fixture reaches both answers, so agreement is not vacuous.
+      expect(new Set(observations.map(({ sqlite }) => sqlite))).toEqual(new Set([true, false]));
+    },
+  );
 
-  it("reads a refreshed agent schema as current without writing", () => {
+  it.runIf(optimizeAllTables)("reads a refreshed agent schema as current without writing", () => {
     const pathname = path.join(makeTempDir(tempDirs, "openclaw-planner-agent-"), "agent.sqlite");
     {
       using writer = openNodeSqliteDatabase(pathname);

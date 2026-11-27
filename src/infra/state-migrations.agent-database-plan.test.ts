@@ -11,6 +11,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { installDeletedAgentDatabaseFences } from "./agent-database-readers.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { compareValidSemver } from "./semver.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import { planAgentDatabaseMigration } from "./state-migrations.agent-database-plan.js";
 import { migrateLegacyMediaPersistence as migrate } from "./state-migrations.media-persistence.js";
@@ -25,6 +26,15 @@ import { MEDIA_ARCHIVE_VERIFICATION_KEY } from "./state-migrations.transcript-di
 type AgentDatabaseCondition = keyof Awaited<
   ReturnType<typeof planAgentDatabaseMigration>
 >["databases"][number]["conditions"];
+
+function readRuntimeSqliteVersion(): string {
+  const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  try {
+    return String(database.prepare("SELECT sqlite_version() AS version").get()?.version);
+  } finally {
+    database.close();
+  }
+}
 
 const tempDirs: string[] = [];
 
@@ -88,6 +98,13 @@ function allFileFacts(root: string): string[] {
 
 // Windows has no POSIX modes; the permission repair rewrites them on every pass.
 const windows = process.platform === "win32";
+// Before SQLite 3.46 the writing pass analyzes every table on every pass.
+const plannerAlwaysWork = (compareValidSemver(readRuntimeSqliteVersion(), "3.46.0") ?? -1) < 0;
+// Conditions with work on every pass of this runtime.
+const alwaysWork = [
+  ...(windows ? [["permissions", "work"]] : []),
+  ...(plannerAlwaysWork ? [["planner-statistics", "work"]] : []),
+];
 
 const conditionsOf = async (env: NodeJS.ProcessEnv) => {
   const plan = await planAgentDatabaseMigration({ env, configuredAgentDatabaseTargets: [] });
@@ -108,10 +125,10 @@ describe("agent database migration plan", () => {
 
     const { plan, conditions } = await conditionsOf(env);
 
-    expect(plan.pending).toBe(windows ? "work" : "none");
+    expect(plan.pending).toBe(alwaysWork.length > 0 ? "work" : "none");
     expect(plan.discovery).toEqual({ discovery: "none", "misplaced-copies": "none" });
     expect(Object.entries(conditions).filter(([, answer]) => answer !== "none")).toEqual(
-      windows ? [["permissions", "work"]] : [],
+      alwaysWork,
     );
     // Every condition the writing pass acts on was read, not skipped.
     expect(Object.keys(conditions).toSorted()).toEqual(
@@ -144,7 +161,7 @@ describe("agent database migration plan", () => {
 
   // On Windows the permission repair always has work, so no database is ever unchanged;
   // the case above covers that answer.
-  it.skipIf(windows)(
+  it.skipIf(alwaysWork.length > 0)(
     "leaves a healthy database unleased, unopened for writing and its files untouched on a Doctor rerun",
     async () => {
       const { env, databasePath } = await healthyInstall();
@@ -344,13 +361,14 @@ describe("agent database migration plan", () => {
 
   // On Windows permissions always have work, so the plan stops before its whole-store
   // reads (archives, archive files, integrity), and POSIX mode bits are no fixture.
-  const windowsUnread = new Set([
-    "permissions",
-    "transcript-archives",
-    "archive-files",
-    "integrity",
-  ]);
-  it.each(guards.filter((guard) => !windows || !windowsUnread.has(guard.condition)))(
+  // A condition with work on every pass stops the plan before its whole-store reads
+  // (archives, archive files, integrity); POSIX mode bits are no fixture on Windows.
+  const unread = new Set(
+    alwaysWork.length > 0
+      ? ["transcript-archives", "archive-files", "integrity", ...alwaysWork.map(([c]) => c)]
+      : [],
+  );
+  it.each(guards.filter((guard) => !unread.has(guard.condition)))(
     "reports $condition as work and the pass repairs it",
     async (guard) => {
       const fixture = await healthyInstall();
@@ -390,7 +408,7 @@ describe("agent database migration plan", () => {
     try {
       const { plan, conditions } = await conditionsOf(env);
       expect(conditions["schema-version"]).toBe("undecidable");
-      expect(plan.pending).toBe(windows ? "work" : "undecidable");
+      expect(plan.pending).toBe(alwaysWork.length > 0 ? "work" : "undecidable");
     } finally {
       installDeletedAgentDatabaseFences([]);
     }
