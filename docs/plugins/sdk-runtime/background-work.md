@@ -584,7 +584,7 @@ Use `registerAgentHarnessCompletion` once per native assignment to report its
 completion and consumed receipt. Keep native protocol parsing in the harness.
 The returned handle's `complete`, `consume`, and `release` operations
 delegate deduplication, retries, consumption, and retirement to the shared
-completion obligation owner. `join` waits for an accepted attempt; `isConsumed`
+completion obligation owner. `waitForDelivery` waits for an accepted attempt; `isConsumed`
 and `isRetiring` expose that owner's recorded facts. Readiness and persistence
 callbacks adapt native execution and storage; they do not choose retry policy.
 Registration grants no authority: its delivery callback must still use

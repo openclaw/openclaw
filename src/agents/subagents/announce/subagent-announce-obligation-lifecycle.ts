@@ -10,7 +10,7 @@ import {
 type AnnounceObligation = {
   readonly outcome: SubagentAnnounceFlowOutcome;
   readonly reported: boolean;
-  report(delivery: SubagentAnnounceDeliveryResult): Promise<void>;
+  report: (delivery: SubagentAnnounceDeliveryResult) => Promise<void>;
   consume(): void;
 };
 
@@ -35,7 +35,7 @@ type DetachedCompletionLifecycle<Completion> = {
 type DetachedCompletion<Completion> = {
   complete(completion: Completion): Promise<void>;
   consume(): void;
-  join(): Promise<void>;
+  waitForDelivery(): Promise<void>;
   isConsumed(): boolean;
   isRetiring(): boolean;
   release(): void;
@@ -319,7 +319,7 @@ function registerDetachedCompletion<Completion>(
         resumeObserver();
       }
     },
-    join: async () => {
+    waitForDelivery: async () => {
       await inFlight;
     },
     isConsumed,

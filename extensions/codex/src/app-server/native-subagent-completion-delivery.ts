@@ -46,7 +46,7 @@ export class CodexNativeSubagentCompletionDelivery {
   }
 
   async join(child: ChildState): Promise<void> {
-    await child.completionDelivery?.join();
+    await child.completionDelivery?.waitForDelivery();
   }
 
   applyReceipts(state: ParentState, runIds: readonly string[]): void {

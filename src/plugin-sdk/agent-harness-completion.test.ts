@@ -202,7 +202,7 @@ it("retires a duplicate observer after the shared delivery is abandoned", async 
     await duplicate.complete("native result");
     response.resolve({ delivered: false, path: "none", recoveryBlocked: true });
     await pending;
-    await duplicate.join();
+    await duplicate.waitForDelivery();
     expect(send).toHaveBeenCalledOnce();
     expect(retire).toHaveBeenCalledWith("unavailable", expect.any(Function));
   } finally {
@@ -248,7 +248,7 @@ it("accepts a duplicate receipt while undelivered retirement is still pending", 
     duplicate.consume();
     persistence.resolve();
     await pending;
-    await duplicate.join();
+    await duplicate.waitForDelivery();
     expect(send).toHaveBeenCalledOnce();
     expect(retire).toHaveBeenCalledWith("consumed", expect.any(Function));
     expect(owner.isConsumed()).toBe(true);
