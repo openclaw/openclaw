@@ -1038,6 +1038,14 @@ describe("truncateToolResultText head+tail strategy", () => {
     expect(result.length).toBeLessThanOrEqual(16_000);
   });
 
+  it("keeps the tail of a dense line under the context guard's weighted budget", () => {
+    const text = `${"a".repeat(30_000)} Error: failed`;
+    const result = truncateToolResultText(text, 8_192, { minKeepChars: 0, minimumRawWeight: 2 });
+
+    expect(result.endsWith("Error: failed")).toBe(true);
+    expect(result.length * 2).toBeLessThanOrEqual(8_192);
+  });
+
   it("cuts the head on a line boundary", () => {
     const text = Array.from({ length: 400 }, (_, i) => `line ${i}: ${"x".repeat(50)}`).join("\n");
     const result = truncateToolResultText(text, 10_000);

@@ -371,8 +371,8 @@ export function truncateToolResultText(
   // A small window keeps a whole prefix: splitting short records loses more than a tail.
   if (budget > MIN_KEEP_CHARS * 2) {
     const tailBudget = Math.floor(budget * 0.3);
-    // Four newlines frame the notice between head and tail.
-    const headBudget = budget - tailBudget - 4;
+    // Four newlines frame the notice between head and tail, at the caller's weight.
+    const headBudget = budget - tailBudget - estimateToolResultTextChars("\n\n\n\n", budgetOptions);
 
     if (headBudget > minKeepChars) {
       let headText = sliceToolResultTextToBudget(text, headBudget, budgetOptions);
