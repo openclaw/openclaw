@@ -10994,7 +10994,7 @@ describe("package artifact reuse", () => {
         [RELEASE_CHECKS_WORKFLOW, "package_acceptance_release_checks"],
         [PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance"],
         [PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance_registry"],
-      ]) {
+      ] as const) {
         expect(workflowJob(path, jobName).secrets, `${path}: ${jobName}`).toMatchObject({
           [name]: "${{ secrets." + name + " }}",
         });
