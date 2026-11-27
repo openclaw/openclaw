@@ -43,11 +43,11 @@ it("recovers bundled registration metadata when the installed channel catalog is
     const { register } = createChannelRegistry();
     const id = row.channelId;
     const eligible = row.configurable !== false && Boolean(row.label?.trim());
-    const label = eligible ? row.label?.trim() : id;
+    const expectedLabel = eligible ? row.label?.trim() : id;
     expect(register({ id, meta: { id } as never })?.meta).toMatchObject({
       id,
-      label,
-      selectionLabel: label,
+      label: expectedLabel,
+      selectionLabel: expectedLabel,
       docsPath: `/channels/${id}`,
       blurb: eligible ? (row.description?.trim() ?? "") : "",
     });
