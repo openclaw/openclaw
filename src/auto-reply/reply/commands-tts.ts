@@ -11,6 +11,7 @@ import {
 import { getSpeechProvider, listSpeechProviders } from "../../tts/provider-registry.js";
 import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
 import {
+  fitTtsTextToLimit,
   getLastTtsAttempt,
   getTtsMaxLength,
   getTtsPersona,
@@ -94,13 +95,17 @@ async function updateTtsPreference(
   }
 }
 
-async function buildTtsAudioReply(params: {
+async function buildTtsAudioReply({
+  summarized = false,
+  ...params
+}: {
   text: string;
   cfg: Parameters<typeof textToSpeech>[0]["cfg"];
   channel: string;
   accountId?: string;
   prefsPath: string;
   agentId?: string;
+  summarized?: boolean;
 }): Promise<{ reply: ReplyPayload } | { error: CommandHandlerResult }> {
   const start = Date.now();
   const result = await textToSpeech(params);
@@ -109,7 +114,7 @@ async function buildTtsAudioReply(params: {
     timestamp: Date.now(),
     success,
     textLength: params.text.length,
-    summarized: false,
+    summarized,
     persona: result.persona,
     attemptedProviders: result.attemptedProviders,
     attempts: result.attempts,
@@ -203,8 +208,21 @@ async function handleTtsLatestAction(
     return stopWithText("🔊 Latest assistant reply was already sent as audio.");
   }
 
-  const audio = await buildTtsAudioReply({
+  const fitted = await fitTtsTextToLimit({
     text: latestText,
+    maxLength: getTtsMaxLength(prefsPath),
+    summarize: isSummarizationEnabled(prefsPath),
+    cfg: params.cfg,
+    config: resolveTtsConfig(params.cfg, {
+      agentId: targetAgentId,
+      channelId: params.command.channel,
+      accountId,
+    }),
+    agentId: targetAgentId,
+  });
+  const audio = await buildTtsAudioReply({
+    text: fitted.text,
+    summarized: fitted.summarized,
     cfg: params.cfg,
     channel: params.command.channel,
     accountId,

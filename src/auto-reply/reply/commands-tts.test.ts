@@ -42,7 +42,15 @@ vi.mock("../../tts/provider-registry.js", () => ({
   listSpeechProviders: vi.fn(() => []),
 }));
 
-vi.mock("../../tts/tts.js", () => ttsMocks);
+vi.mock("../../tts/tts.js", async () => ({
+  ...ttsMocks,
+  // Real long-text handling, so tests see the text synthesis actually receives.
+  fitTtsTextToLimit: (
+    await vi.importActual<typeof import("../../tts/tts-text-limit.js")>(
+      "../../tts/tts-text-limit.js",
+    )
+  ).fitTtsTextToLimit,
+}));
 vi.mock("../../tts/tts-settings-write-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../tts/tts-settings-write-worker.js")>()),
   updateTtsPrefsAsync: ttsMocks.updateTtsPrefsAsync,
@@ -137,7 +145,7 @@ function transcriptText(text: string, phase: "commentary" | "final_answer") {
 describe("handleTtsCommands status fallback reporting", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    ttsMocks.resolveTtsConfig.mockReturnValue({});
+    ttsMocks.resolveTtsConfig.mockReturnValue({ maxTextLength: 4096 });
     ttsMocks.resolveTtsPrefsPathAsync.mockResolvedValue("/tmp/tts-prefs.json");
     ttsMocks.isTtsEnabled.mockReturnValue(true);
     ttsMocks.getTtsProviderAsync.mockReturnValue(PRIMARY_TTS_PROVIDER);
@@ -308,6 +316,28 @@ describe("handleTtsCommands status fallback reporting", () => {
       expect(sessionEntry.lastTtsReadLatestAt).toBeGreaterThanOrEqual(beforeTtsRead);
     },
   );
+
+  it("shortens a latest reply over the speech limit instead of failing", async () => {
+    const { scope, ...fixture } = await transcriptFixture("main", "agent:main:tts-long");
+    const longReply = `${"Quarterly growth held steady in every region. ".repeat(4)}Done.`;
+    appendTranscriptMessageSync(scope, {
+      message: { role: "assistant", content: [{ type: "text", text: longReply }] },
+    });
+    Object.assign(fixture.sessionEntry, loadSessionEntry(scope));
+    ttsMocks.resolveTtsConfig.mockReturnValue({ maxTextLength: 60 });
+    ttsMocks.isSummarizationEnabled.mockReturnValue(false);
+    mockAudio("/tmp/long.ogg");
+
+    const audio = await reply("/tts latest", {
+      ...fixture,
+      agentId: "main",
+      initialSessionEntry: structuredClone(fixture.sessionEntry),
+    });
+
+    const spoken = ttsMocks.textToSpeech.mock.lastCall?.[0]?.text;
+    expect(spoken).toBe(`${longReply.slice(0, 57)}...`);
+    expect(audio).toMatchObject({ mediaUrl: "/tmp/long.ogg", spokenText: spoken });
+  });
 
   it("reads the latest assistant reply from the incognito transcript store", async () => {
     const { scope, ...fixture } = await transcriptFixture(

@@ -9,13 +9,11 @@ import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { resolveSendableOutboundReplyParts } from "../infra/outbound/reply-payload-parts.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
-import { truncateUtf16Safe } from "../utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { parseTtsDirectives, resolveTtsDirectiveFacts } from "./directives.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { isCodeHeavySpeechText, normalizeSpeechText } from "./speech-text.js";
-import { summarizeText } from "./tts-core.js";
 import { prepareTtsPreferences, type PreparedTtsPreferences } from "./tts-preferences.js";
 import {
   getResolvedSpeechProviderConfig,
@@ -29,6 +27,7 @@ import {
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
 import { textToSpeechCore, type TtsAudioPersistence } from "./tts-synthesis.js";
+import { fitTtsTextToLimit } from "./tts-text-limit.js";
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
 
@@ -191,47 +190,20 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  // Synthesis rejects text over config.maxTextLength, so never prepare more than that.
-  const maxLength = Math.min(preferredMaxLength, config.maxTextLength);
-  let textForAudio = ttsText;
-  let wasSummarized = false;
-
-  if (!explicitTtsText && isCodeHeavySpeechText(textForAudio)) {
+  if (!explicitTtsText && isCodeHeavySpeechText(ttsText)) {
     // The visible reply already carries code-heavy detail. Skip noisy voice-note audio instead of
     // telling channel users to look at a screen they may not have.
     return nextPayload;
   }
 
-  if (textForAudio.length > maxLength) {
-    if (!summarize) {
-      logVerbose(
-        `TTS: truncating long text (${textForAudio.length} > ${maxLength}), summarization disabled.`,
-      );
-      textForAudio = `${truncateUtf16Safe(textForAudio, maxLength - 3)}...`;
-    } else {
-      try {
-        const summary = await summarizeText({
-          text: textForAudio,
-          targetLength: maxLength,
-          cfg,
-          config,
-          timeoutMs: config.timeoutMs,
-          agentId: params.agentId,
-        });
-        textForAudio = summary.summary;
-        wasSummarized = true;
-        if (textForAudio.length > config.maxTextLength) {
-          logVerbose(
-            `TTS: summary exceeded hard limit (${textForAudio.length} > ${config.maxTextLength}); truncating.`,
-          );
-          textForAudio = `${truncateUtf16Safe(textForAudio, config.maxTextLength - 3)}...`;
-        }
-      } catch {
-        logVerbose("TTS: summarization failed, truncating instead.");
-        textForAudio = `${truncateUtf16Safe(textForAudio, maxLength - 3)}...`;
-      }
-    }
-  }
+  const { text: textForAudio, summarized: wasSummarized } = await fitTtsTextToLimit({
+    text: ttsText,
+    maxLength: preferredMaxLength,
+    summarize,
+    cfg,
+    config,
+    agentId: params.agentId,
+  });
 
   const normalizedTextForAudio = normalizeSpeechText(textForAudio);
   if (!normalizedTextForAudio) {
