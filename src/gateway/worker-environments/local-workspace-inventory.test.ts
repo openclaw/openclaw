@@ -19,11 +19,12 @@ it.each([
   "dist\n.cache/openclaw-bun/\n",
   "dist/a/x\n",
   "*.js\n!dist/keep.js\n",
-  "",
 ])("answers build-output exclusions like a full ignored listing (%j)", async (ignore) => {
   vi.stubEnv("GIT_CONFIG_GLOBAL", gitNullConfigPath());
   vi.stubEnv("GIT_CONFIG_SYSTEM", gitNullConfigPath());
-  const root = tempDirs.make("local-workspace-ignored-");
+  // Production reads the host index against a separate projection work tree.
+  const host = tempDirs.make("local-workspace-host-");
+  const projection = tempDirs.make("local-workspace-projection-");
   const files = [
     "dist/a/x",
     "dist/keep.js",
@@ -35,32 +36,27 @@ it.each([
     "nested/dist/z",
   ];
   for (const file of files) {
-    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
-    await fs.writeFile(path.join(root, file), file);
+    await fs.mkdir(path.dirname(path.join(projection, file)), { recursive: true });
+    await fs.writeFile(path.join(projection, file), file);
   }
-  await fs.writeFile(path.join(root, ".gitignore"), ignore);
-  await requireGit(root, ["init", "--quiet"]);
-  await requireGit(root, ["add", ".gitignore"]);
-  const full = new Set(
-    (
-      await requireGitBuffer(root, [
-        "ls-files",
-        "--full-name",
-        "--others",
-        "--ignored",
-        "--exclude-standard",
-        "--directory",
-        "-z",
-      ])
-    )
-      .toString()
-      .split("\0")
-      .filter(Boolean),
-  );
-  const scoped = (await readLocalWorkspaceGitExclusions(root, root, new Set())).paths;
+  await fs.writeFile(path.join(projection, ".gitignore"), ignore);
+  await requireGit(host, ["init", "--quiet"]);
+  const listing = [
+    `--work-tree=${projection}`,
+    "ls-files",
+    "--full-name",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+    "-z",
+  ];
+  const full = new Set((await requireGitBuffer(host, listing)).toString().split("\0"));
+  const scoped = (await readLocalWorkspaceGitExclusions(host, projection, new Set())).paths;
   const candidates = new Set(files.flatMap((file) => [file, ...workspacePathAncestors(file)]));
   const answers = (ignored: ReadonlySet<string>) =>
     [...candidates].filter((candidate) => isIgnoredWorkspaceBuildOutput(candidate, ignored));
+  expect(answers(full)).not.toEqual([]);
   expect(answers(scoped)).toEqual(answers(full));
 });
 

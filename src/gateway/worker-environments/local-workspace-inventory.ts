@@ -131,7 +131,10 @@ export function parseLocalWorkspaceSourcePaths(value: string): string[] {
   return paths;
 }
 
-/** Read guest ignore files with the host's index/config, never guest Git metadata. */
+/**
+ * Read guest ignore files with the host's index/config, never guest Git metadata.
+ * Lists only build-output roots: `isIgnoredWorkspaceBuildOutput` is the sole consumer of `paths`.
+ */
 export async function readLocalWorkspaceGitExclusions(
   root: string,
   projection: string,
