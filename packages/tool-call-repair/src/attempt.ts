@@ -200,10 +200,16 @@ function findLegacyBracketedToolName(text: string): string | undefined {
   return undefined;
 }
 
+// `[tool call id=<id> name=<tool>] {args}`: how OpenAI-compatible replay renders a
+// historical call it cannot send natively. Models imitate it instead of calling the tool.
+const REPLAY_TOOL_CALL_OPEN = String.raw`\[tool call id=[^\s\]]{0,256} name=([A-Za-z_][A-Za-z0-9_.:-]{0,119})\][ \t]*(?=\{)`;
+const REPLAY_TOOL_CALL_OPEN_RE = new RegExp(REPLAY_TOOL_CALL_OPEN);
+const REPLAY_TOOL_CALL_NEXT_RE = new RegExp(String.raw`\s*${REPLAY_TOOL_CALL_OPEN}`, "y");
+
 function detectBracketedToolCall(text: string): ToolCallShapedTextDetection | null {
-  const legacyToolName = findLegacyBracketedToolName(text);
-  if (legacyToolName) {
-    return { kind: "bracketed_tool_call", toolName: legacyToolName };
+  const toolName = findLegacyBracketedToolName(text) ?? REPLAY_TOOL_CALL_OPEN_RE.exec(text)?.[1];
+  if (toolName) {
+    return { kind: "bracketed_tool_call", toolName };
   }
 
   const match =
@@ -257,11 +263,36 @@ function unwrapToolCallTag(text: string): string | undefined {
   return text.slice(open[0].length, text.length - close.length).trim();
 }
 
+// Only replay-notation calls, each with complete JSON object arguments; names the first
+// offered tool.
+function findReplayNotationCallName(
+  text: string,
+  hasToolName: PlainTextToolCallNameMatcher["hasExactName"],
+): string | undefined {
+  let offered: string | undefined;
+  for (let offset = 0; offset < text.length;) {
+    REPLAY_TOOL_CALL_NEXT_RE.lastIndex = offset;
+    const open = REPLAY_TOOL_CALL_NEXT_RE.exec(text);
+    const argsStart = REPLAY_TOOL_CALL_NEXT_RE.lastIndex;
+    const args = open && extractBalancedJsonPrefix(text.slice(argsStart));
+    if (!open || !args || !asOptionalRecord(safeParseJson(args.json))) {
+      return undefined;
+    }
+    offered ??= hasToolName(open[1]!) ? open[1] : undefined;
+    offset = argsStart + args.endIndex + 1;
+  }
+  return offered;
+}
+
 function findStructuredCallName(
   text: string,
   hasToolName: PlainTextToolCallNameMatcher["hasExactName"],
 ): string | undefined {
   const body = unwrapToolCallTag(text) ?? text;
+  const replayed = findReplayNotationCallName(body, hasToolName);
+  if (replayed) {
+    return replayed;
+  }
   const detection = classifyJsonValue(safeParseJson(body), hasToolName);
   if (detection?.toolName) {
     return detection.toolName;

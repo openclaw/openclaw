@@ -219,6 +219,17 @@ describe("attempt result projection", () => {
     },
   );
 
+  it("flags a text-only call written in the notation replay shows for past calls", () => {
+    expect(
+      completeResult({
+        currentAttemptCompletedAssistant: textAssistant(
+          '[tool call id=call_read name=read] {"path":"notes.txt"}',
+        ),
+        allowedToolNames: ["read"],
+      }).textToolCallAttempt,
+    ).toBe(true);
+  });
+
   it.each([false, true])("corrects deferred text calls only when available: %s", (available) => {
     const assistant = textAssistant(
       "<tool_call>\n<function=skills_read>\n<parameter=name>\nbriefing\n</parameter>\n</function>\n</tool_call>",
