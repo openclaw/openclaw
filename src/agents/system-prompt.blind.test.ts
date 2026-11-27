@@ -80,9 +80,7 @@ describe("blind system prompt", () => {
     expect(blind).toContain("## <workspace>/AGENTS.md");
     expect(blind).toContain("Use the house style.");
     expect(blind).toContain("Notes live in <workspace>/notes.");
-    expect(blind).toContain(
-      "Runtime: host=host-a | os=macOS 27 (arm64) | node=v26.12.1 | shell=zsh",
-    );
+    expect(blind).toContain("Runtime: host=host-a | os=macOS (arm64) | shell=zsh");
   });
 
   it("replaces only the workspace path itself, not paths that share its text", () => {

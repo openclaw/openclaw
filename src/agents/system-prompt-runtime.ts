@@ -84,6 +84,8 @@ export function buildRuntimeLine(
   // carry per-run ids. Keep only stable session identity in the cached Runtime line.
   const { baseSessionKey: cronBaseKey } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
   const baseSessionKey = (cronBaseKey && internalSessionEffectsBaseKey(cronBaseKey)) ?? cronBaseKey;
+  // Keep host package versions out of the cached Runtime line.
+  const osName = runtimeInfo?.os?.trim().split(/\s+/u, 1)[0];
   const fields = {
     name: runtimeInfo?.agentName,
     agent: runtimeInfo?.agentId,
@@ -91,9 +93,8 @@ export function buildRuntimeLine(
     sessionUrl: runtimeInfo?.sessionUrl && sanitizeForPromptLiteral(runtimeInfo.sessionUrl),
     host: runtimeInfo?.host,
     repo: runtimeInfo?.repoRoot,
-    os: runtimeInfo?.os && `${runtimeInfo.os}${runtimeInfo.arch ? ` (${runtimeInfo.arch})` : ""}`,
-    arch: runtimeInfo?.os ? undefined : runtimeInfo?.arch,
-    node: runtimeInfo?.node,
+    os: osName && `${osName}${runtimeInfo.arch ? ` (${runtimeInfo.arch})` : ""}`,
+    arch: osName ? undefined : runtimeInfo?.arch,
     active_node: runtimeInfo?.activeNode && sanitizeForPromptLiteral(runtimeInfo.activeNode),
     active_node_identity: runtimeInfo?.activeNodeIdentity,
     model: runtimeInfo?.model,
