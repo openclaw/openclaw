@@ -107,11 +107,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
 
   const inputs = {
     runs,
-    inMemoryRuns: {
-      [Symbol.iterator]() {
-        return inMemoryDisplayByChildSessionKey.values();
-      },
-    },
+    inMemoryRuns: new Set<T>(),
   };
   const groups = [
     [snapshotRunsByChildSessionKey, "snapshotPosition"],
@@ -195,6 +191,15 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
       const rows = snapshotRunsByChildSessionKey.get(child) ?? [];
       const memory = latestSubagentRun(memoryRunsByChildSessionKey.get(child) ?? []);
       const latest = latestSubagentRun(rows);
+      const previousMemory = inMemoryDisplayByChildSessionKey.get(child);
+      if (previousMemory !== memory) {
+        if (previousMemory) {
+          inputs.inMemoryRuns.delete(previousMemory);
+        }
+        if (memory) {
+          inputs.inMemoryRuns.add(memory);
+        }
+      }
       for (const [index, entry] of [
         [inMemoryDisplayByChildSessionKey, memory],
         [latestRunsByChildSessionKey, latest],

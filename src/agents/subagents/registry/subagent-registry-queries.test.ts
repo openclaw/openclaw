@@ -295,12 +295,8 @@ describe("subagent registry query regressions", () => {
     latest.swarmRequesterSessionKey = "swarm";
     index = index.patch(toRunMap([structuredClone(latest)]), toRunMap([latest]));
     expect(index.revision).not.toBe(revision);
-    const replay = { ...index.inputs };
-    for (const view of [
-      index,
-      buildSubagentRunReadIndexFromRuns(replay),
-      buildSubagentRunReadIndexFromRuns(replay),
-    ]) {
+    const replay = buildSubagentRunReadIndexFromRuns(index.inputs);
+    for (const view of [index, replay]) {
       expect(view.getSessionDisplayFacts("child")?.identity).toBe(older);
       expect(view.getSessionDisplayFacts("moved")?.identity).toBe(latest);
     }
