@@ -636,6 +636,15 @@ const sessionMemoryOwners: string[] = [
 
 const deferredOwnerCases: Array<[string, string[], string[], boolean?]> = [
   [
+    "persisted operator recovery schemas",
+    ["src/gateway/operator-run-recovery-source.codec.ts", "src/cron/store/read-only.worker.ts"],
+    [
+      "src/config/zod-schema.gateway.ts",
+      "src/config/zod-schema.root-support.ts",
+      "src/config/zod-schema.memory-search.ts",
+    ],
+  ],
+  [
     "operator role policy",
     ["src/gateway/operator-role-policy.ts"],
     ["packages/gateway-protocol/src/protocol-validator.ts"],

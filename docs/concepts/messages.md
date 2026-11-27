@@ -150,6 +150,10 @@ Once a turn is durably accepted, an unexpected failure before its answer produce
 
 A final source reply completes only the input it answers. When another input steers the same running agent, its answer or failure remains visible even if an earlier input already received a final reply through the message tool.
 
+Successful local message-tool sends retain the delivered answer in the source session transcript, including sends prepared by channel plugins for core delivery. When the send belongs to an admitted source turn, `final=true` (or omitted `final` under the normal default) makes the answer available to accepted-turn context capture and prevents unchanged answered requests from being injected again as recent channel history. Progress replies (`final=false`, or omitted `final` when the run disables final-by-default), failed or partial sends, dry runs, and deliveries to other conversations do not mark that source turn answered.
+
+Images delivered to the current conversation through a local message-tool send or a plugin's `toolContext.delivery.send()` are retained as managed attachments for Control UI history and reload. Attachment preparation uses the send's authorized media reader and does not resend the image. Existing filename-only history is not backfilled.
+
 When delivery of the current input's reply is pending, OpenClaw waits for its outcome before sending a replacement answer or failure message.
 
 With the OpenClaw runtime, an assistant turn that errors or is aborted after producing partial text, without tool calls, appears as a short failure marker in the next model request. Its unfinished text is not replayed, and the stored failed turn stays unchanged. Empty and placeholder-only failures remain excluded; failed tool calls keep their existing pairing rules. The marker does not establish whether an earlier action completed.
@@ -220,7 +224,7 @@ still apply, and the current-prompt capability expires with its admitted turn.
 
 Silent maintenance turns suppress streamed text, attachments, locations, and interactive controls. Errors, actual voice messages, and system notices explicitly marked for delivery keep their normal delivery rules.
 
-The silent token `NO_REPLY` is reserved for sessions connected to external message channels. Only a completed final whose entire text is `NO_REPLY`, ignoring casing and surrounding whitespace, requests silence. It intentionally ends a turn without another reply, including after a cross-chat send, a reaction, group chatter, or a deliberate yield, even when the admitted turn normally requires a reply. Subagents, private completions, the Control UI, and other internal sessions still must return a result or continue unfinished work.
+The silent token `NO_REPLY` is reserved for sessions connected to external message channels. Only a completed final whose entire text is `NO_REPLY`, ignoring casing and surrounding whitespace, requests silence. It intentionally ends a turn without another reply, including after a cross-chat send, a reaction, group chatter, or a deliberate yield, even when the admitted turn normally requires a reply. Subagents, private completions, the Control UI, and other internal sessions still must return a result or continue unfinished work. A turn started by another session's `sessions_send` can also end with `NO_REPLY`, unless the target is a spawned child; a waiting sender then gets `status: "no_reply"`.
 
 Direct-message prompts omit silent-reply guidance. An exact `NO_REPLY` emitted by the model still follows this protocol; omitting the prompt guidance does not force an additional answer.
 

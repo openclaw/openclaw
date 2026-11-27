@@ -18,14 +18,13 @@ import { assertExecutionPolicy } from "../cron/service/jobs-validation.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
-import {
-  loadCronRuntimeAuthorities,
-  replaceCronRuntimeAuthorityRows,
-} from "../cron/store/runtime-authority-store.js";
+import { loadCronRuntimeAuthorities } from "../cron/store/runtime-authority-store.js";
+import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { prepareProviderModelPolicySurfaces } from "../plugins/provider-model-routes.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { decodeDoctorHeartbeatJobRows, type DoctorCronJob } from "./doctor-heartbeat-jobs.js";
@@ -44,6 +43,7 @@ import {
   resolveDoctorHeartbeatReceiptJob,
   selectDoctorHeartbeatMonitor,
 } from "./doctor-heartbeat-monitors.js";
+import { recoverDoctorHeartbeatRun } from "./doctor-heartbeat-run-recovery.js";
 import {
   resolveHeartbeatPhaseMs,
   resolveHeartbeatSchedulerSeed,
@@ -215,6 +215,15 @@ function convertMonitor(
         schedulingInputsRequested: true,
         scheduleChanged,
       });
+      if (previous.state.runningAtMs !== undefined) {
+        // Conversion may disable a monitor whose recovery needs Gateway startup.
+        // Keep its execution facts; cron still owns settlement of that result.
+        Object.assign(job.state, {
+          runningAtMs: previous.state.runningAtMs,
+          runningReceiptId: previous.state.runningReceiptId,
+          runningScheduleChangeId: previous.state.runningScheduleChangeId,
+        });
+      }
     }
   }
   job.updatedAtMs = nowMs;
@@ -230,6 +239,7 @@ export async function ensureHeartbeatMonitorJobs(
   legacyFileAgentIds: readonly string[] = [],
 ): Promise<Map<string, CronJob>> {
   validateLegacyHeartbeatConfig(cfg);
+  await prepareProviderModelPolicySurfaces();
   const inspected = await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
     ({ db }) => {
       const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
@@ -277,7 +287,8 @@ export async function ensureHeartbeatMonitorJobs(
     return conversions;
   });
   return runOpenClawStateWriteTransaction(
-    ({ db }) => {
+    (database) => {
+      const { db } = database;
       const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
       const rows = loadCronRows(db, storeKey);
       const currentJobs = decodeDoctorHeartbeatJobRows(rows);
@@ -325,7 +336,7 @@ export async function ensureHeartbeatMonitorJobs(
           }
           continue;
         }
-        const current = item.previous
+        let current = item.previous
           ? currentJobs.find((job) => job.id === item.previous!.id)
           : undefined;
         if (
@@ -340,8 +351,18 @@ export async function ensureHeartbeatMonitorJobs(
           );
         }
         if (current?.state.runningAtMs !== undefined) {
-          throw new Error(
-            `Automation ${current.id} is running; stop the Gateway and rerun Doctor to preserve its execution boundary.`,
+          current = recoverDoctorHeartbeatRun({ database, storeKey, job: current, cfg, nowMs });
+          if (!current) {
+            continue;
+          }
+          item.job = convertMonitor(
+            cfg,
+            item.agentId,
+            current,
+            nowMs,
+            schedulerSeed,
+            env,
+            enrolledAgentIds.has(item.agentId),
           );
         }
         const sortOrder = current

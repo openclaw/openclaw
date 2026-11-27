@@ -111,7 +111,7 @@ export async function openUrlPrivately(targetUrl: string): Promise<boolean> {
         "<title>OpenClaw</title>",
         "</head>",
         "<body>",
-        "<p>Opening the OpenClaw Control UI…</p>",
+        "<p>Opening OpenClaw…</p>",
         `<p>If nothing happens, <a href="${href}">continue to OpenClaw</a>.</p>`,
         `<script>location.replace(${JSON.stringify(normalizedTargetUrl).replaceAll("<", "\\u003c")});</script>`,
         "</body>",

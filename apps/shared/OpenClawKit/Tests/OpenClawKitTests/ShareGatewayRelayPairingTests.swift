@@ -28,7 +28,8 @@ struct ShareGatewayRelayPairingTests {
             operatorGateway: owner,
             url: url,
             gatewayStableID: gatewayID,
-            sessionBox: WebSocketSessionBox(session: shareSocket))
+            sessionBox: WebSocketSessionBox(session: shareSocket),
+            extraHeadersProvider: { ["X-Service": "share-service-credential"] })
         let ownerTask = try #require(ownerSocket.latestTask())
         await ownerTask.waitForSentRequests(method: "device.pair.setupCode", count: 1)
         let request = try #require(ownerTask.sentRequests(method: "device.pair.setupCode").first)
@@ -60,6 +61,7 @@ struct ShareGatewayRelayPairingTests {
             gatewayID: "share-gateway-b",
             profile: .shareExtension)?.token == "other-gateway-token")
         #expect(shareSocket.latestRequest()?.url == url)
+        #expect(shareSocket.latestRequest()?.value(forHTTPHeaderField: "X-Service") == "share-service-credential")
         let auth = try #require(shareSocket.latestTask()?.latestConnectAuth())
         #expect(auth["bootstrapToken"] as? String == "node-bootstrap")
         #expect(auth["token"] == nil)

@@ -17,6 +17,7 @@ type LoadWorkboardParams = WorkboardClientContext & {
   more?: boolean;
   refreshDiagnostics?: boolean;
   preserveError?: boolean;
+  publishRefreshStatus?: (refreshed: boolean) => void;
 };
 
 export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolean> {
@@ -121,6 +122,7 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
       // save payload after canonical state may have changed.
       state.mutationReadiness = state.editingCardId ? "stale_edit_draft" : "ready";
       state.loaded = true;
+      params.publishRefreshStatus?.(true);
       return true;
     } catch (error) {
       if (runtime.loadPromise === loadPromise) {
@@ -131,6 +133,7 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
           runtime.loadError = formattedError;
           state.error = formattedError;
         }
+        params.publishRefreshStatus?.(false);
       }
       return false;
     } finally {
@@ -165,20 +168,20 @@ export async function refreshWorkboard(
     notifyWorkboard(params.host);
     return false;
   }
-  const refreshed = await loadWorkboard({
+  return await loadWorkboard({
     host: params.host,
     client: params.client,
     force: true,
     refreshDiagnostics: params.refreshDiagnostics,
     preserveError: passive,
+    publishRefreshStatus(refreshed) {
+      if (!passive && state.error) {
+        state.lastRefreshError = state.error;
+      } else if (refreshed) {
+        state.lastRefreshAt = Date.now();
+      }
+    },
   });
-  if (!passive && state.error) {
-    state.lastRefreshError = state.error;
-  } else if (refreshed) {
-    state.lastRefreshAt = Date.now();
-  }
-  notifyWorkboard(params.host);
-  return refreshed;
 }
 
 export function shouldDeferWorkboardLiveRefresh(state: WorkboardUiState): boolean {

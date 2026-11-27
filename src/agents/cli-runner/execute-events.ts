@@ -15,6 +15,7 @@ import {
 } from "../agent-tools.before-tool-call.diagnostics.js";
 import type {
   CliCompactionDelta,
+  CliOutput,
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
@@ -45,9 +46,6 @@ function withBrowserTabDetails(result: unknown, browserTab: unknown): unknown {
   if (isRecord(result) && Array.isArray(result.content)) {
     return { ...result, details: { ...asOptionalRecord(result.details), browserTab } };
   }
-  if (Array.isArray(result)) {
-    return { content: result, details: { browserTab } };
-  }
   if (typeof result === "string" || typeof result === "number" || typeof result === "boolean") {
     return { content: [{ type: "text", text: String(result) }], details: { browserTab } };
   }
@@ -69,7 +67,8 @@ export function createCliEventHandlers(params: {
   };
   let observedCliActivity = false;
   let compactionActive = false;
-  let compactionClosed = false;
+  // One owner for native compaction facts: the published end event, the run's count, and its sizes.
+  let nativeCompaction: NonNullable<CliOutput["nativeCompaction"]> | undefined;
   let onCompactionActiveChange: (() => void) | undefined;
   const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
   const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
@@ -102,6 +101,7 @@ export function createCliEventHandlers(params: {
     data: Parameters<typeof projectAgentToolActivity>[0] & {
       result?: unknown;
       resultContentSource?: "network";
+      followsAssistantText?: true;
     },
     execution?: { args: unknown; requestedArgs?: unknown },
   ) => {
@@ -175,6 +175,7 @@ export function createCliEventHandlers(params: {
         name: event.name,
         toolCallId: event.toolCallId,
         args: event.args,
+        ...(event.followsAssistantText ? { followsAssistantText: true } : {}),
       });
     }
   };
@@ -184,7 +185,10 @@ export function createCliEventHandlers(params: {
       : undefined;
   const emitToolResult = (event: CliToolResultDelta, tracked: boolean) => {
     observedCliActivity = true;
-    const readResult = prepareToolResult(event.result);
+    // Claude reports content blocks bare; OpenClaw tool results carry them as `content`.
+    const readResult = prepareToolResult(
+      Array.isArray(event.result) ? { content: event.result } : event.result,
+    );
     const summary = recordToolSummary(event, event.isError);
     const firstTerminal = !summary.terminalObserved;
     summary.terminalObserved = true;
@@ -440,14 +444,13 @@ export function createCliEventHandlers(params: {
     if (event.phase === "start" && compactionActive) {
       return;
     }
-    // Claude Code closes one successful compaction with a status `compact_result`
-    // and an automatic `compact_boundary`. Drop that one repeat; ends without a
-    // start (boundary-only streams) still publish.
-    if (event.phase === "end" && compactionClosed) {
-      compactionClosed = false;
-      return;
+    if (event.phase === "end" && event.completed) {
+      nativeCompaction = {
+        compactionCount: (nativeCompaction?.compactionCount ?? 0) + 1,
+        ...(event.tokensBefore !== undefined ? { compactionTokensBefore: event.tokensBefore } : {}),
+        ...(event.tokensAfter !== undefined ? { compactionTokensAfter: event.tokensAfter } : {}),
+      };
     }
-    compactionClosed = event.phase === "end" && event.completed && compactionActive;
     // Native compaction is silent but busy: the no-output watchdog reads this
     // between phase boundaries, so an end event must always clear the flag,
     // even for a failed compaction (`completed: false`).
@@ -613,6 +616,7 @@ export function createCliEventHandlers(params: {
       return tool !== undefined && isClaudeForegroundAgentToolName(tool.toolName);
     },
     getToolSummary,
+    getNativeCompaction: () => nativeCompaction,
   };
 }
 

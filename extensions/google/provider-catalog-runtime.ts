@@ -77,13 +77,20 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
   };
 }
 
-export async function buildGoogleLiveCatalogProvider(params: {
+type GoogleLiveCatalogParams = {
   discoveryMode?: "strict";
   apiKey?: string;
   discoveryApiKey?: string;
-}): Promise<ModelProviderConfig> {
+};
+
+/** The provider config plus every model id the account listing returned, including hidden rows. */
+export async function loadGoogleLiveCatalog(params: GoogleLiveCatalogParams): Promise<{
+  provider: ModelProviderConfig;
+  listedModelIds?: string[];
+}> {
   const { models, ...providerConfig } = buildGoogleStaticCatalogProvider();
-  return await buildLiveModelProviderConfig({
+  let listedModelIds: string[] | undefined;
+  const provider = await buildLiveModelProviderConfig({
     providerId: "google",
     endpoint: GOOGLE_GEMINI_MODELS_ENDPOINT,
     providerConfig,
@@ -103,6 +110,10 @@ export async function buildGoogleLiveCatalogProvider(params: {
       ...((discoveryApiKey ?? apiKey) ? { "x-goog-api-key": discoveryApiKey ?? apiKey } : {}),
     }),
     projectRows(rows: readonly unknown[]): ModelDefinitionConfig[] {
+      listedModelIds = rows.flatMap((row) => {
+        const name = normalizeOptionalString(asOptionalRecord(row)?.name);
+        return name?.startsWith("models/") ? [name.slice("models/".length)] : [];
+      });
       const liveModels = rows
         .map(buildGoogleLiveModel)
         .filter((model): model is ModelDefinitionConfig => Boolean(model));
@@ -111,4 +122,5 @@ export async function buildGoogleLiveCatalogProvider(params: {
       );
     },
   });
+  return { provider, ...(listedModelIds ? { listedModelIds } : {}) };
 }

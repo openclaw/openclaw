@@ -131,11 +131,17 @@ setInterval(() => {}, 1000);`,
     await vi.advanceTimersByTimeAsync(1);
     // Let the deferred construction deadline decide before awaiting startup settlement.
     await vi.advanceTimersToNextTimerAsync();
-    await processRun;
+    const managedRun = await processRun;
     vi.useRealTimers();
     const completed = await result;
     await waitForDead(commandPid, signal);
     expect(completed).toMatchObject({ exitCode: 2, envelope: { ok: false, status: "timeout" } });
+    // Windows uses a direct child; only POSIX loses the relay's cleanup authority.
+    if (process.platform !== "win32") {
+      await expect(managedRun.waitForExtinction!()).rejects.toThrow(
+        "service child cleanup identity lost",
+      );
+    }
   } finally {
     vi.useRealTimers();
     if (input?.runId) {
@@ -145,12 +151,6 @@ setInterval(() => {}, 1000);`,
       process.kill(commandPid, "SIGKILL");
     }
     await result;
-    const cleanup = supervisor.shutdown();
-    // Windows uses a direct child; only POSIX loses the relay's cleanup authority.
-    if (process.platform === "win32") {
-      await expect(cleanup).resolves.toBeUndefined();
-    } else {
-      await expect(cleanup).rejects.toThrow("service child cleanup identity lost");
-    }
+    await expect(supervisor.shutdown()).resolves.toBeUndefined();
   }
 });

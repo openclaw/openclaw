@@ -117,7 +117,7 @@ describe("model-selection plugin runtime normalization", () => {
       await import("../auto-reply/reply/directive-handling.defaults.js");
     const { defaultProvider, defaultModel } = resolveDefaultModel({ cfg });
     expect(defaultModel).toBe("middle");
-    const selection = await selectModel(cfg, defaultProvider, defaultModel);
+    const selection = await selectModel(cfg, defaultProvider, defaultModel ?? "");
     expect(selection).toMatchObject({ provider: "openai", model: "middle" });
   });
 

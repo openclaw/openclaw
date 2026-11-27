@@ -730,7 +730,8 @@ describe("Gateway catalog worker pool", () => {
       await work.entered(first, signal);
       // The already-created pool owns native timers. Advance only the queued caller's outer
       // deadline while the sibling's worker and its admitted execution budget remain live.
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      // The deadline counts running time from `performance.now()`, so it advances with the timers.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       const expired = work.track(loadAuth(fixture.snapshots[1]!));
       const duplicate = work.track(
         loadPreparedModelRuntimeAuth(fixture.snapshots[1]!, {

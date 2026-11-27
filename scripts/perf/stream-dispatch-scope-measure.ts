@@ -36,7 +36,7 @@ import {
   getAsyncWorkSignal,
   runOutsideAsyncWorkScope,
 } from "../../src/shared/async-work-scope.js";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -226,12 +226,7 @@ try {
   observed.fill(0);
   delivered.fill(0);
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   gc.observe({ entryTypes: ["gc"] });
   loop.enable();

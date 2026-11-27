@@ -150,6 +150,22 @@ describe("renderUpdates", () => {
     expect(action.querySelector("button")?.classList.contains("primary")).toBe(false);
   });
 
+  it.each([
+    { canAdmin: false, refreshing: false, title: "Admin access required." },
+    { canAdmin: true, refreshing: true, title: "Checking for updates…" },
+  ])("explains a disabled retry as $title", ({ canAdmin, refreshing, title }) => {
+    renderUpdates({
+      canAdmin,
+      canUpdate: canAdmin,
+      update: { updateRun: failedRun(), updateStatusRefreshing: refreshing },
+    });
+    const retry = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Retry update",
+    )!;
+    expect(retry.disabled).toBe(true);
+    expect(retry.title).toBe(title);
+  });
+
   it.each(["Update Gateway…", "Retry update"])(
     "dispatches %s to the latest handler without replacing the button",
     (label) => {
@@ -355,7 +371,7 @@ describe("renderUpdates", () => {
     const onAutomaticUpdatesChange = vi.fn();
     renderUpdates({ onAutomaticUpdatesChange });
     expect(text("Gateway version")).toContain("2026.8.1");
-    expect(text("Control UI commit")).toContain("0123456789ab");
+    expect(text("Web app commit")).toContain("0123456789ab");
     expect(
       ["Built", "Last commit"].map((title) => row(title).querySelector("time")?.dateTime),
     ).toEqual(["1970-01-01T00:00:00.000Z", "1970-01-01T00:00:00.000Z"]);

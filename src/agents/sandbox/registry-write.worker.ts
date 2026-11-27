@@ -12,17 +12,28 @@ import {
   type SandboxRegistryInsert,
   type SandboxRegistryOperations,
 } from "./registry.kernel.js";
+import {
+  assertSandboxStateOwnerPathCurrent,
+  type SandboxStateOwnerPath,
+} from "./state-owner-path.js";
 
 function writeRegistry<T>(
   context: WorkerWriteOperationContext,
   operationLabel: string,
   operation: (db: EngineConnection) => T,
+  stateOwnerPath?: SandboxStateOwnerPath,
 ): T {
   return context.write(
     ({ db }) =>
       withSandboxRegistryWorkerReceipt(db, () => {
+        if (stateOwnerPath) {
+          assertSandboxStateOwnerPathCurrent(stateOwnerPath);
+        }
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const result = operation(db);
+        if (stateOwnerPath) {
+          assertSandboxStateOwnerPathCurrent(stateOwnerPath);
+        }
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         return result;
       }),
@@ -32,34 +43,48 @@ function writeRegistry<T>(
 
 export const sandboxRegistryOperations = {
   "sandboxRegistry.write": (
-    input: SandboxRegistryOperations["sandboxRegistry.write"]["input"],
+    { stateOwnerPath, ...input }: SandboxRegistryOperations["sandboxRegistry.write"]["input"],
     context: WorkerWriteOperationContext,
   ) =>
-    writeRegistry(context, "sandboxRegistry.write", (db) =>
-      writeSandboxRegistryInDatabase(db, input),
+    writeRegistry(
+      context,
+      "sandboxRegistry.write",
+      (db) => writeSandboxRegistryInDatabase(db, input),
+      stateOwnerPath,
     ),
   "sandboxRegistry.reserve": (
-    input: SandboxRegistryOperations["sandboxRegistry.reserve"]["input"],
+    { stateOwnerPath, ...input }: SandboxRegistryOperations["sandboxRegistry.reserve"]["input"],
     context: WorkerWriteOperationContext,
   ) =>
-    writeRegistry(context, "sandboxRegistry.reserve", (db) =>
-      reserveSandboxRegistryInDatabase(db, input),
+    writeRegistry(
+      context,
+      "sandboxRegistry.reserve",
+      (db) => reserveSandboxRegistryInDatabase(db, input),
+      stateOwnerPath,
     ),
   "sandboxRegistry.beginRemoval": (
-    input: SandboxRegistryOperations["sandboxRegistry.beginRemoval"]["input"],
+    {
+      stateOwnerPath,
+      ...input
+    }: SandboxRegistryOperations["sandboxRegistry.beginRemoval"]["input"],
     context: WorkerWriteOperationContext,
   ) =>
-    writeRegistry(context, "sandboxRegistry.beginRemoval", (db) => {
-      // Reservation and pruning share the same transaction and durable removal fence.
-      if (
-        input.preservePersistentExecs &&
-        readSandboxPersistentExecsInDatabase(db, { containerName: input.entry.containerName })
-          .length
-      ) {
-        return null;
-      }
-      return beginSandboxRegistryRemovalInDatabase(db, input);
-    }),
+    writeRegistry(
+      context,
+      "sandboxRegistry.beginRemoval",
+      (db) => {
+        // Reservation and pruning share the same transaction and durable removal fence.
+        if (
+          input.preservePersistentExecs &&
+          readSandboxPersistentExecsInDatabase(db, { containerName: input.entry.containerName })
+            .length
+        ) {
+          return null;
+        }
+        return beginSandboxRegistryRemovalInDatabase(db, input);
+      },
+      stateOwnerPath,
+    ),
   "sandboxRegistry.finishRemoval": (
     input: SandboxRegistryCleanupOperations["sandboxRegistry.finishRemoval"]["input"],
     context: WorkerWriteOperationContext,

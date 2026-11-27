@@ -246,6 +246,9 @@ export function createJob(
     ...(input.pacing !== undefined ? { pacing: structuredClone(input.pacing) } : {}),
     ...(input.activeHours !== undefined ? { activeHours: structuredClone(input.activeHours) } : {}),
     ...(input.idleOnly !== undefined ? { idleOnly: input.idleOnly } : {}),
+    ...(input.cyberAccessProgram !== undefined
+      ? { cyberAccessProgram: input.cyberAccessProgram }
+      : {}),
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
     payload:
@@ -369,6 +372,13 @@ export function applyJobPatch(
       delete job.activeHours;
     } else {
       job.activeHours = structuredClone(patch.activeHours);
+    }
+  }
+  if ("cyberAccessProgram" in patch) {
+    if (patch.cyberAccessProgram == null) {
+      delete job.cyberAccessProgram;
+    } else {
+      job.cyberAccessProgram = patch.cyberAccessProgram;
     }
   }
   if ("idleOnly" in patch) {
@@ -531,6 +541,11 @@ export function applyDeclarativeJobSpec(
     job.activeHours = structuredClone(input.activeHours);
   } else {
     delete job.activeHours;
+  }
+  if (input.cyberAccessProgram !== undefined) {
+    job.cyberAccessProgram = input.cyberAccessProgram;
+  } else {
+    delete job.cyberAccessProgram;
   }
   if (input.idleOnly !== undefined) {
     job.idleOnly = input.idleOnly;

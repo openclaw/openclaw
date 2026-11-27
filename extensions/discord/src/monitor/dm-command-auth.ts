@@ -35,6 +35,7 @@ type DiscordCommandAccessParams = {
   conversationParentId?: string;
   conversationThreadId?: string;
   contextBinding?: ChannelIngressContextBinding;
+  childSessionPublication?: ResolveChannelMessageIngressParams["childSessionPublication"];
   minIdentifierAuthentication?: IdentifierAuthentication;
 };
 
@@ -119,6 +120,7 @@ function createDiscordCommandContext(
       threadId: params.conversationThreadId,
     },
     ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
+    childSessionPublication: params.childSessionPublication,
     policy: {
       mutableIdentifierMatching: params.allowNameMatching
         ? ("enabled" as const)

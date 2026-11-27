@@ -291,7 +291,7 @@ suite.define(() => {
     await expectPastedPngImage(page.getByRole("img", { name: "pixel.png" }));
     await openChatModelPicker(page);
     const picker = page.locator("[data-chat-account-selection]");
-    await picker.locator("[data-chat-account-group-toggle]").click();
+    await picker.locator(".chat-controls__account-trigger").click();
     await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
     await pollAttribute(start, "aria-disabled").toBe("false");
     await page.keyboard.press("Escape");

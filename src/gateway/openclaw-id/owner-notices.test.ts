@@ -25,7 +25,7 @@ describe("OpenClaw ID owner notices", () => {
       events: [
         { type: "publish_snapshot" },
         { type: "notify_owners", event: "redemption_pending", ref: "ab".repeat(16) },
-        { type: "notify_owners", event: "kit_used", ref: "fp:xyz" },
+        { type: "notify_owners", event: "member_device_added", ref: "fp:xyz" },
       ],
       target: async () => ({ clawId: CLAW_ID, client }),
       log,
@@ -41,6 +41,10 @@ describe("OpenClaw ID owner notices", () => {
     expect(JSON.parse(new TextDecoder().decode(first!.init.body as Uint8Array))).toEqual({
       to: "owners",
       payload: { kind: "notice", event: "redemption_pending", ref: "ab".repeat(16) },
+    });
+    expect(JSON.parse(new TextDecoder().decode(requests[1]!.init.body as Uint8Array))).toEqual({
+      to: "owners",
+      payload: { kind: "notice", event: "member_device_added", ref: "fp:xyz" },
     });
     expect(log.warn).not.toHaveBeenCalled();
   });

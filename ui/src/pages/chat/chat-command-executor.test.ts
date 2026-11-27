@@ -500,7 +500,9 @@ describe("executeSlashCommand directives", () => {
 
 describe("executeSlashCommand /steer (soft inject)", () => {
   it.each([
-    [{ status: "started", runId: "run-1" }, "succeeded"],
+    [{ status: "started", runId: "run-1" }, "requested"],
+    [{ status: "in_flight", runId: "run-pending" }, "requested"],
+    [{ runId: "run-legacy" }, "requested"],
     [{ status: "ok", runId: "run-ok", messageSeq: 2 }, "succeeded"],
     [{ status: "timeout", runId: "run-timeout", summary: "aborted" }, "timeout"],
     [{ status: "error", runId: "run-error", summary: "aborted" }, "failed"],
@@ -508,7 +510,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     const request = mockRequests({ "chat.send": () => ack });
     const result = await runCommand(request, "steer", "try a different approach");
     expect(result.content).toBe(resultText(`steer.${key}`));
-    expect(result.failed ?? false).toBe(key !== "succeeded");
+    expect(result.failed ?? false).toBe(key === "timeout" || key === "failed");
     const { payload } = requireRequestCall(request, "chat.send");
     expect(payload).toMatchObject({
       sessionKey: "agent:main:main",
@@ -531,28 +533,31 @@ describe("executeSlashCommand /steer (soft inject)", () => {
 });
 
 describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
-  it("treats subagent-looking redirect prefixes as current-session message text", async () => {
-    const request = mockRequests({
-      "chat.send": () => ({ status: "started", runId: "run-3", messageSeq: 1 }),
-    });
-    const result = await runCommand(request, "redirect", "researcher start over completely");
-    expect(result.content).toBe(resultText("redirect.succeeded"));
-    expect(result.trackRunId).toBe("run-3");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      {
-        sessionKey: "agent:main:main",
-        message: "researcher start over completely",
-        queueMode: "interrupt",
-        idempotencyKey: expect.any(String),
-      },
-      {
-        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
-        signal: undefined,
-        retainSentResultOnAbort: true,
-      },
-    );
-  });
+  it.each(["started", "in_flight"])(
+    "keeps a %s redirect in progress and treats prefixes as current-session text",
+    async (status) => {
+      const request = mockRequests({
+        "chat.send": () => ({ status, runId: "run-3", messageSeq: 1 }),
+      });
+      const result = await runCommand(request, "redirect", "researcher start over completely");
+      expect(result.content).toBe(resultText("redirect.requested"));
+      expect(result.trackRunId).toBe("run-3");
+      expect(request).toHaveBeenCalledWith(
+        "chat.send",
+        {
+          sessionKey: "agent:main:main",
+          message: "researcher start over completely",
+          queueMode: "interrupt",
+          idempotencyKey: expect.any(String),
+        },
+        {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: undefined,
+          retainSentResultOnAbort: true,
+        },
+      );
+    },
+  );
 });
 
 it("reports the last-reply prompt budget through /usage", async () => {

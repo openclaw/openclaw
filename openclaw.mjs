@@ -29,6 +29,7 @@ import {
   formatUnsupportedNodeDiagnosticWarning,
   SUPPORTED_NODE_VERSION_RANGE,
 } from "./node-version.mjs";
+import { forwardToReleaseLauncher } from "./release-launcher-forward.mjs";
 
 watchCliRespawnParent();
 
@@ -638,7 +639,7 @@ if (isBrowserNativeHostInvocation) {
     // Fail closed without falling through to config loading or text on protocol stdout.
     process.exitCode = 1;
   }
-} else {
+} else if (!(await forwardToReleaseLauncher(new URL("./", import.meta.url)))) {
   await runLauncher();
 }
 

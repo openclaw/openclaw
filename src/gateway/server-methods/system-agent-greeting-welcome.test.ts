@@ -1,6 +1,7 @@
 import "./system-agent-transcript.mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -128,6 +129,37 @@ afterEach(() => {
 });
 
 describe("openclaw.chat caretaker welcome", () => {
+  it.each(["request", "tool"] as const)(
+    "honors a %s Stop during greeting inference without publishing the session",
+    async (source) => {
+      const controller = new AbortController();
+      const respond = vi.fn();
+      greetingMocks.resolveSystemAgentGreeting.mockImplementationOnce(async () => {
+        controller.abort(new Error("Stop requested"));
+        return "An inference result that must not be delivered";
+      });
+      const pending = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:stopped",
+          approvalSignals: source === "tool" ? [controller.signal] : [],
+        },
+        () =>
+          chatHandler({
+            params: { sessionId: "stopped" },
+            respond,
+            context,
+            client: defaultClient,
+            signal: source === "request" ? controller.signal : undefined,
+          } as never),
+      );
+      await expect(pending).rejects.toThrow("Stop requested");
+      expect(respond).not.toHaveBeenCalled();
+      expect(sessions.size).toBe(0);
+      expect(createdEngines[0]?.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([undefined, "new-agent"] as const)(
     "opens creation choices on the retained %s session without duplicating passive history",
     async (welcomeVariant) => {

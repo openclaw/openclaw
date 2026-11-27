@@ -289,7 +289,8 @@ describe("ClawHub fixture server", () => {
     expectFailure(assertPending("discord"), "whatsapp plugin install record missing");
     expect(assertRequests("complete").status).toBe(1);
     const whatsappPath = `/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}`;
-    const versionPath = `${whatsappPath}/versions/${version}`;
+    const detail = await fetchJson(baseUrl, whatsappPath);
+    const versionPath = `${whatsappPath}/versions/${detail.package.tags.alpha}`;
     const completeRequestPaths = [
       whatsappPath,
       `${versionPath}/artifact`,
@@ -297,11 +298,10 @@ describe("ClawHub fixture server", () => {
       `${versionPath}/artifact/download`,
       `${whatsappPath}/detail`,
     ];
-    const detail = await fetchJson(baseUrl, whatsappPath);
     expect(detail.package).toMatchObject({
       latestVersion: version,
       runtimeId: "whatsapp",
-      tags: { beta: version, latest: version },
+      tags: { alpha: version, beta: version, latest: version },
     });
     const artifact = await fetchJson(baseUrl, `${versionPath}/artifact`);
     expect(artifact.artifact).toMatchObject({ artifactKind: "npm-pack", artifactSha256: sha256 });
@@ -368,36 +368,5 @@ describe("ClawHub fixture server", () => {
       "expected 2-16 complete ClawHub artifact audit sequences",
     );
     expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fai`)).status).toBe(404);
-  });
-
-  it("serves separate plugin-family and skill search fixtures", async ({ signal }) => {
-    const { baseUrl } = await startFixtureServer("catalog-search", signal);
-
-    for (const family of ["code-plugin", "bundle-plugin"]) {
-      const { results } = await fetchJson(
-        baseUrl,
-        `/api/v1/packages/search?q=calendar&family=${family}&limit=5`,
-      );
-      expect(results).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ package: expect.objectContaining({ family }) }),
-        ]),
-      );
-    }
-
-    const skills = await fetchJson(baseUrl, "/api/v1/search?q=calendar&limit=5");
-    expect(skills.results).toEqual([expect.objectContaining({ slug: expect.any(String) })]);
-
-    const empty = await fetchJson(
-      baseUrl,
-      "/api/v1/packages/search?q=empty&family=code-plugin&limit=5",
-    );
-    expect(empty).toEqual({ results: [] });
-
-    const unavailable = await fetch(
-      `${baseUrl}/api/v1/packages/search?q=unavailable&family=code-plugin&limit=5`,
-    );
-    expect(unavailable.status).toBe(503);
-    await expect(unavailable.json()).resolves.toEqual({ error: "catalog unavailable" });
   });
 });

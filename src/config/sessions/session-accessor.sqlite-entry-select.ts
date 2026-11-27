@@ -137,12 +137,29 @@ export function readSelectedSessionEntryRows(
           "session_nodes.current_session_id",
         )
         .select([
-          "row_transcript_window.session_id as row_transcript_window_id",
           "row_transcript_window.row_transcript_json",
           "row_transcript_window.row_transcript_updated_at",
           "row_transcript_window.transcript_updated_at as row_transcript_source_updated_at",
           "row_transcript_index.indexed_seq as row_transcript_indexed_seq",
-        ]),
+        ])
+        .select((eb) =>
+          eb
+            .or([
+              eb.exists(
+                eb
+                  .selectFrom("transcript_events")
+                  .select("seq")
+                  .whereRef("session_id", "=", "session_nodes.current_session_id"),
+              ),
+              eb.exists(
+                eb
+                  .selectFrom("session_transcript_cold_archives")
+                  .select("session_id")
+                  .whereRef("session_id", "=", "session_nodes.current_session_id"),
+              ),
+            ])
+            .as("row_transcript_present"),
+        ),
   );
   const eb = expressionBuilder<OpenClawAgentKyselyDatabase, "session_nodes">();
   // Old stores have no board tables until first use; branch before compiling SQL.
@@ -160,7 +177,23 @@ export function readSelectedSessionEntryRows(
       )
     : transcriptQuery;
   const query = options?.includeMembership
-    ? boardQuery.select((outer) =>
+    ? boardQuery.select((outer) => [
+        tableExists(database.db, "session_members")
+          ? outer
+              .selectFrom("session_members")
+              .select((builder) =>
+                jsonOrderedArray(
+                  database.db,
+                  jsonArrayValue(database.db, [builder.ref("identity_id"), builder.ref("access")]),
+                  [builder.ref("identity_id")],
+                  "not-null",
+                ).as("levels"),
+              )
+              .whereRef("session_members.session_key", "=", "session_nodes.session_key")
+              .where("access", "is not", null)
+              .$asScalar()
+              .as("member_access_json")
+          : outer.val("[]").as("member_access_json"),
         tableExists(database.db, "session_members")
           ? outer
               .selectFrom("session_members")
@@ -176,7 +209,7 @@ export function readSelectedSessionEntryRows(
               .$asScalar()
               .as("member_ids_json")
           : outer.val("[]").as("member_ids_json"),
-      )
+      ])
     : boardQuery;
   const rows = executeSqliteQuerySync(
     database.db,
@@ -185,6 +218,16 @@ export function readSelectedSessionEntryRows(
       : query.where("session_nodes.session_key", "in", sqliteStringSet(selection))
     ).orderBy("session_nodes.session_key", "asc"),
   ).rows;
+  if (options?.includeMembership) {
+    const membershipRows: ReadableSessionEntryRow[] = rows;
+    for (const row of membershipRows) {
+      if (row.member_access_json) {
+        row.member_access_json = JSON.stringify(
+          Object.fromEntries(JSON.parse(row.member_access_json)),
+        );
+      }
+    }
+  }
   return options?.includeWindowFacts
     ? rows.map((row) => {
         const window = takeSessionEntryWindowFacts(row);

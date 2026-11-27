@@ -205,6 +205,7 @@ export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
   listMachineOptions: vi.fn(async () => undefined),
   listOperatingSystems: vi.fn(async () => undefined),
   create: vi.fn(async () => workerRecord()),
+  createWithRequest: vi.fn(async () => workerRecord()),
   prepare: vi.fn(async () => ({
     environmentId: "worker-1",
     preparationKey: "project-key",

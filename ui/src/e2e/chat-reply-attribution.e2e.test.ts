@@ -1,6 +1,12 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  chatThreadDistanceFromBottom,
+  openAiAuthor,
+  visibleChatBubbleTexts,
+  waitForChatScrollIdle,
+} from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Reply attribution" });
@@ -69,6 +75,50 @@ const replyButton = (root: Page | Locator, name: string) =>
   root.getByRole("button", { name, exact: true });
 
 suite.define(() => {
+  it.each(["reduce", "no-preference"] as const)(
+    "returns to the latest message after revealing a reply target with %s motion",
+    async (reducedMotion) => {
+      const messages = sequence(
+        Array.from({ length: 78 }, (_, index) =>
+          message(
+            `note-${index + 1}`,
+            index % 2 === 0 ? "user" : "assistant",
+            `Field note ${index + 1}`,
+            index === 76 ? { replyToId: "note-10" } : {},
+          ),
+        ),
+      );
+      await suite.withPage(
+        { viewport: { width: 1440, height: 900 }, reducedMotion },
+        async ({ page }) => {
+          await preparePage(page, `${sessionKey}-reveal`, messages, "dark");
+          const thread = page.locator(".chat-thread");
+          const latest = page.getByRole("button", { name: "Scroll to latest", exact: true });
+          const reply = thread.locator('[data-entry-id="note-77"] .chat-reply-attribution__target');
+          await reply.waitFor();
+          await thread.hover();
+          await page.mouse.wheel(0, -1200);
+          await latest.click();
+          await waitForChatScrollIdle(page);
+          expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
+
+          await reply.click();
+          const original = thread.locator('[data-entry-id="note-10"].chat-bubble--reply-target');
+          await original.waitFor();
+          await original.waitFor({ state: "hidden" });
+          expect((await visibleChatBubbleTexts(page)).join("\n")).toContain("Field note 10");
+          expect(await chatThreadDistanceFromBottom(page)).toBeGreaterThan(900);
+          await expect.poll(() => latest.count()).toBe(1);
+          await latest.click();
+          await waitForChatScrollIdle(page);
+          expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
+          expect((await visibleChatBubbleTexts(page)).join("\n")).toContain("Field note 78");
+          expect(await latest.count()).toBe(0);
+        },
+      );
+    },
+  );
+
   it.each(["explicit", "current", "automatic"])(
     "omits excerpts only for an adjacent %s reply",
     async (replyKind) => {
@@ -117,7 +167,7 @@ suite.define(() => {
               : "Control+f",
           );
           await page
-            .getByRole("textbox", { name: "Search messages", exact: true })
+            .getByRole("textbox", { name: "Search loaded messages", exact: true })
             .fill("looks good");
           expect(await page.locator('[data-entry-id="adjacent-prompt"]').count()).toBe(0);
           await expect
@@ -155,7 +205,7 @@ suite.define(() => {
         "assistant",
         "The checklist is ready to share.",
         { runId: "announce:review-complete" },
-        { phase: "final_answer", stopReason: "stop" },
+        { ...openAiAuthor, phase: "final_answer", stopReason: "stop" },
       ),
     ]);
     await suite.withPage(
@@ -170,7 +220,7 @@ suite.define(() => {
         const work = page.locator(".chat-work-group");
         await line.waitFor();
         await work.waitFor();
-        await answerGroup.locator(".chat-avatar:visible").waitFor();
+        await answerGroup.getByRole("img", { name: "OpenClaw", exact: true }).waitFor();
         await page
           .locator('.chat-group--peer:has([data-entry-id="review-prompt"]) .chat-avatar:visible')
           .waitFor();

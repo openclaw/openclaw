@@ -12,10 +12,15 @@ For that one-argument comparison, its Git wrapper reconstructs the baseline cens
 command inside the real worker; the direct-owner comparison loads baseline source.
 The target has 62,000 files / 1.14 GB; 600,000 historical blobs amplify the
 repository-wide promisor scan without copying production data. Creation is excluded.
+--files overrides the target file count (including its one absent target file).
 --extra-packs 1237 adds fragmented promisor history, for 1,239 packs before hydration.
 --extra-refs 20000 adds distinct session tips in 256 packs; --advancing --shallow
 requires a changed-tip refresh from a valid shallow boundary. --negotiation-tip
 compares restricted hydration tips against the prior all-ref scan during --creation.
+--refresh-negotiation compares restricted default-branch refresh instead; both
+arms retain the current hydration command. Pass the saved baseline base-ref.ts.
+--linked-worktrees 2437 adds valid no-checkout linked worktree metadata backed by
+the synthetic session branches; no product or operator checkout is registered.
 Acceptance: identical commit/bytes and one batch fetch, fewer pack reads and lower
 hydration CPU/wall time; no >20% owner regression. Use five AB/BA and five A/A pairs.
 """
@@ -30,6 +35,8 @@ import subprocess
 import sys
 
 root = Path(sys.argv[1]).resolve()
+file_count = int(sys.argv[sys.argv.index("--files") + 1]) if "--files" in sys.argv else 62000
+assert 2 <= file_count <= 100000
 if "--measure" in sys.argv:
     # macOS native timing: every Git launch has its own wait4 CPU receipt,
     # including native grandchildren. JS owner CPU/allocation is reported separately.
@@ -38,10 +45,15 @@ if "--measure" in sys.argv:
     assert baseline.is_file()
     creation = "--creation" in sys.argv
     negotiation = "--negotiation-tip" in sys.argv
+    refresh = "--refresh-negotiation" in sys.argv
     mode = "creation" if creation else "allocation" if "--allocation" in sys.argv else "timing"
     if creation:
         candidate = Path("src/agents/worktrees/object-hydration.ts").read_text()
-        if negotiation:
+        if refresh:
+            assert not negotiation
+            assert "--negotiation-tip=${cachedCommit}" in Path("src/agents/worktrees/base-ref.ts").read_text()
+            assert "--negotiation-tip=" not in baseline.read_text()
+        elif negotiation:
             assert candidate.replace(
                 "        // Even refetch's noop negotiator otherwise parses every local ref tip.\n"
                 "        `--negotiation-tip=${commit}`,\n", "") == baseline.read_text()
@@ -75,7 +87,12 @@ if "--measure" in sys.argv:
             metrics = arm_root / "git-metrics"
             metrics.mkdir()
             if creation:
-                rewrite = ('''for ((i=0; i<${#args[@]}; i++)); do
+                rewrite = ('''if [[ " $* " != *" --refetch "* ]]; then
+  for ((i=0; i<${#args[@]}; i++)); do
+    [[ "${args[i]}" != --negotiation-tip=* ]] || unset 'args[i]'
+  done
+fi
+''' if refresh else '''for ((i=0; i<${#args[@]}; i++)); do
   [[ "${args[i]}" != --negotiation-tip=* ]] || unset 'args[i]'
 done
 ''' if negotiation else '''if [[ " $* " == *" rev-list "* && " $* " == *" --missing=print "* ]]; then
@@ -98,7 +115,7 @@ fi
                 command = ["node", "--import", "./scripts/tsx.mjs",
                            "scripts/perf/worktree-creation-measure.ts", "--repo", str(clone),
                            "--output", str(arm_root / "creation"), "--samples", "1", "--default-base"]
-                if negotiation:
+                if negotiation or refresh:
                     target = subprocess.check_output(
                         [actual_git, "-C", str(root / "origin.git"), "rev-parse", "HEAD"],
                         text=True).strip()
@@ -189,17 +206,17 @@ def import_objects(final=False):
         commit("main", "missing target", git(origin, "rev-parse", "main"))
         stream.write(b"M 100644 :1 target/missing.txt\n\n")
     else:
-        for index in range(61_999):
+        for index in range(file_count - 1):
             blob(index + 1, f"synthetic target {index}\n".encode().ljust(18_432, b"x"))
         commit("main", "target base")
-        for index in range(61_999):
+        for index in range(file_count - 1):
             stream.write(f"M 100644 :{index + 1} target/d{index // 100}/f{index}.txt\n".encode())
         stream.write(b"\n")
         for index in range(600_000):
-            blob(62_000 + index, f"unrelated historical blob {index}\n".encode().ljust(128, b"h"))
+            blob(file_count + index, f"unrelated historical blob {index}\n".encode().ljust(128, b"h"))
         commit("history", "unrelated history")
         for index in range(600_000):
-            stream.write(f"M 100644 :{62_000 + index} history/d{index // 100}/f{index}.txt\n".encode())
+            stream.write(f"M 100644 :{file_count + index} history/d{index // 100}/f{index}.txt\n".encode())
         stream.write(b"\n")
     stream.close()
     assert process.wait() == 0
@@ -265,7 +282,26 @@ if "--advancing" in sys.argv:
         for suffix in (".pack", ".idx", ".rev", ".promisor"):
             pack.with_suffix(suffix).unlink(missing_ok=True)
     git(seed, "read-tree", "--reset", "-u", "HEAD")
-print(json.dumps({"root": str(root), "files": 62000, "targetBytes": 62000 * 18432,
+linked = int(sys.argv[sys.argv.index("--linked-worktrees") + 1]) if "--linked-worktrees" in sys.argv else 0
+assert 0 <= linked <= extra_refs
+if linked:
+    # Seed the native layout once, then construct the same no-checkout metadata.
+    # Running worktree-add N times also scans the growing list N times during setup.
+    directory = root / "linked"
+    directory.mkdir()
+    git(seed, "worktree", "add", "--no-checkout", str(directory / "session-0"), "synthetic-0")
+    for index in range(1, linked):
+        checkout = directory / f"session-{index}"
+        admin = seed / ".git/worktrees" / f"session-{index}"
+        checkout.mkdir()
+        admin.mkdir()
+        (checkout / ".git").write_text(f"gitdir: {admin}\n")
+        (admin / "gitdir").write_text(f"{checkout / '.git'}\n")
+        (admin / "commondir").write_text("../..\n")
+        (admin / "HEAD").write_text(f"ref: refs/heads/synthetic-{index}\n")
+    assert sum(line.startswith("worktree ") for line in git(seed, "worktree", "list", "--porcelain").splitlines()) == linked + 1
+print(json.dumps({"root": str(root), "files": file_count, "targetBytes": file_count * 18432,
                   "unrelatedHistoricalBlobs": 600000, "missingTargetObjects": 1,
-                  "extraRefs": extra_refs, "packs": len(list((seed / ".git/objects/pack").glob("*.pack"))),
+                  "extraRefs": extra_refs, "linkedWorktrees": linked,
+                  "packs": len(list((seed / ".git/objects/pack").glob("*.pack"))),
                   "commit": git(seed, "rev-parse", "HEAD")}))

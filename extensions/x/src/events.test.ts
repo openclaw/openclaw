@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { XPostEnvelope } from "./api.js";
+import { X_ACTIVITY_POST_EVENT_TYPES, type XPostEnvelope } from "./api.js";
 import { runXEvents, type XCursorState, type XEventStatus } from "./events.js";
 import { createXTestApi as createXApiClient } from "./test-support/api-client.js";
 import { budgetApi, post } from "./test-support/events.js";
@@ -83,6 +83,31 @@ afterEach(() => {
 });
 
 describe("X event transport", () => {
+  it.each([401, 403])("surfaces terminal polling authentication failure %s", async (status) => {
+    vi.useFakeTimers();
+    const api = budgetApi(createXTestSpend(), () => Response.json({}, { status }));
+    const failed = Promise.withResolvers<void>();
+    const test = streamFixture({
+      api,
+      mode: "poll",
+      onStatus: (value) => {
+        if (value.message?.includes("failed")) {
+          failed.resolve();
+        }
+      },
+    });
+    try {
+      await failed.promise;
+      expect(test.statuses.at(-1)).toMatchObject({
+        terminalDisconnect: true,
+        message: "mentions polling authentication failed; check X credentials",
+      });
+      await expect(test.run).rejects.toThrow(`HTTP ${status}`);
+    } finally {
+      await test.stop().catch(() => {});
+    }
+  });
+
   it("backs off consecutive failed opens but resets after each connected stream", async () => {
     vi.useFakeTimers();
     let attempt = 0;
@@ -262,6 +287,7 @@ describe("X event transport", () => {
       onStatus: (value) => {
         if (
           value.cursor ||
+          value.terminalDisconnect ||
           value.message === "mentions poll failed; retrying after the poll interval"
         ) {
           settled.resolve();
@@ -283,7 +309,11 @@ describe("X event transport", () => {
           : {}),
       });
     } finally {
-      await test.stop();
+      if (testCase.mode === "forbidden") {
+        await expect(test.stop()).rejects.toThrow("HTTP 403");
+      } else {
+        await test.stop();
+      }
     }
   });
 
@@ -486,7 +516,10 @@ describe("X event transport", () => {
               data:
                 endpoint === "create"
                   ? []
-                  : [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
+                  : X_ACTIVITY_POST_EVENT_TYPES.map((event_type) => ({
+                      event_type,
+                      filter: { user_id: "9" },
+                    })),
             });
           }
           if (input.endsWith("/oauth2/token")) {

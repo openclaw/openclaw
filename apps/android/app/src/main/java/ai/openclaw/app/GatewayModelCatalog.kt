@@ -4,7 +4,9 @@ import ai.openclaw.app.chat.ChatFastMode
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -52,14 +54,79 @@ internal data class GatewayModelCatalogResult(
   val models: List<GatewayModelSummary>,
   val refreshFailed: Boolean,
   val hasPendingProviders: Boolean,
+  val failedProviders: List<String> = emptyList(),
+  val nativeRefreshFailed: Boolean = false,
 )
 
-internal fun parseGatewayModelCatalog(root: JsonObject?): GatewayModelCatalogResult =
-  GatewayModelCatalogResult(
-    models = parseGatewayModels(root?.get("models") as? JsonArray),
+internal fun GatewayModelSummary.providerQualifiedRef(): String {
+  val trimmedProvider = provider.trim()
+  if (trimmedProvider.isEmpty()) return id
+  val providerPrefix = "$trimmedProvider/"
+  return if (id.startsWith(providerPrefix)) id else "$providerPrefix$id"
+}
+
+internal fun selectedChatModelUnavailableReason(
+  selectedModelRef: String?,
+  catalog: List<GatewayModelSummary>,
+): GatewayModelUnavailableReason? {
+  val selected = selectedModelRef?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+  val matches = catalog.filter { it.providerQualifiedRef().equals(selected, ignoreCase = true) }
+  if (matches.isEmpty() || matches.any { it.available != false || it.unavailableReason == null }) return null
+  if (matches.any { it.unavailableReason == GatewayModelUnavailableReason.Cooldown }) {
+    return GatewayModelUnavailableReason.Cooldown
+  }
+  return if (matches.any { it.unavailableReason == GatewayModelUnavailableReason.AuthFailed }) {
+    GatewayModelUnavailableReason.AuthFailed
+  } else {
+    GatewayModelUnavailableReason.MissingAuth
+  }
+}
+
+internal fun selectedChatModelSendBlockingReason(
+  gatewayReady: Boolean,
+  selectedModelRef: String?,
+  catalog: List<GatewayModelSummary>,
+): GatewayModelUnavailableReason? {
+  if (!gatewayReady) return null
+  return selectedChatModelUnavailableReason(selectedModelRef, catalog).takeIf {
+    it == GatewayModelUnavailableReason.MissingAuth || it == GatewayModelUnavailableReason.AuthFailed
+  }
+}
+
+private val catalogProviderIdentifier = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+internal fun parseGatewayModelCatalog(root: JsonObject?): GatewayModelCatalogResult {
+  val models = parseGatewayModels(root?.get("models") as? JsonArray)
+  val refreshFailures = (root?.get("refreshFailures") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+  val unavailableProviders =
+    (root?.get("providerOutcomes") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.filter {
+      (it["status"] as? JsonPrimitive)?.contentOrNull == "unavailable"
+    }
+  // New diagnostics already enforce the requested catalog scope. Do not refill a
+  // deliberately omitted provider from legacy, account-oriented outcomes.
+  val failedScopes =
+    if (root?.containsKey("refreshFailures") == true) {
+      refreshFailures
+    } else {
+      unavailableProviders.filter { outcome ->
+        models.any { it.provider == (outcome["provider"] as? JsonPrimitive)?.contentOrNull }
+      }
+    }
+  return GatewayModelCatalogResult(
+    models = models,
     refreshFailed = root?.get("refreshFailed")?.jsonPrimitive?.booleanOrNull == true,
     hasPendingProviders = (root?.get("pendingProviders") as? JsonArray)?.isNotEmpty() == true,
+    // Only display provider identifiers, never profile ids, errors, or endpoint-shaped values.
+    failedProviders =
+      failedScopes
+        .mapNotNull {
+          (it["provider"] as? JsonPrimitive)?.takeIf { value -> value.isString }?.contentOrNull?.takeIf { provider ->
+            catalogProviderIdentifier.matches(provider)
+          }
+        }.distinct(),
+    nativeRefreshFailed = refreshFailures.any { (it["acquisition"] as? JsonPrimitive)?.contentOrNull == "native" },
   )
+}
 
 internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
   models.orEmpty().map { item ->

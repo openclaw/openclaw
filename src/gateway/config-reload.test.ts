@@ -1404,7 +1404,7 @@ describe("startGatewayConfigReloader", () => {
     configAuditMocks.readLatestSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: hashConfigRaw(JSON.stringify(nextConfig)),
-      fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(nextConfig),
+      fingerprintedAuthoredConfig: await fingerprintConfigSnapshotAuthoredConfig(nextConfig),
     });
     configAuditMocks.append.mockClear();
 
@@ -1525,7 +1525,7 @@ describe("startGatewayConfigReloader", () => {
     configAuditMocks.readLatestSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: "previous-raw-hash",
-      fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(previousConfig),
+      fingerprintedAuthoredConfig: await fingerprintConfigSnapshotAuthoredConfig(previousConfig),
     });
 
     await createReadyWriteReloader({
@@ -1546,7 +1546,7 @@ describe("startGatewayConfigReloader", () => {
     const storedSnapshot = {
       configPath: "/tmp/config-a.json",
       rawHash: "path-a-raw-hash",
-      fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig({
+      fingerprintedAuthoredConfig: await fingerprintConfigSnapshotAuthoredConfig({
         gateway: { port: 18789 },
       }),
     };

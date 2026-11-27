@@ -72,6 +72,15 @@ export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
   );
 }
 
+/** A finished result a requester can receive; a yielded pause owns a continuation instead. */
+export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
+  return (
+    entry.execution.status !== "running" &&
+    entry.pauseReason !== "sessions_yield" &&
+    hasSubagentRunEnded(entry)
+  );
+}
+
 /** Last instant covered by registration grace, independent of live execution custody. */
 export function getSubagentRunStaleAt(entry: SubagentRunLivenessRecord): number {
   if (hasSubagentRunEnded(entry)) {

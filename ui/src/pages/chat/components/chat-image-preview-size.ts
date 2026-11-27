@@ -1,5 +1,15 @@
 export const MIN_CHAT_IMAGE_PREVIEW_WIDTH = 160;
 
+export type ChatImagePreviewSize = { width: number; height: number };
+
+export function fitChatImagePreview(
+  size: ChatImagePreviewSize,
+  bounds: ChatImagePreviewSize,
+): ChatImagePreviewSize {
+  const scale = Math.min(1, bounds.width / size.width, bounds.height / size.height);
+  return { width: size.width * scale, height: size.height * scale };
+}
+
 export function resolveChatImagePreviewSize(
   image: { width?: number; height?: number },
   decoded?: { width: number; height: number },

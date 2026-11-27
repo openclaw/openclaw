@@ -159,7 +159,7 @@ const historySchema = Type.Object(
 const history = {
   stateRevision: { pendingInputs: "inputs-1", sessionInfo: "session-1" },
   pendingInputs: { items: [], total: 0 },
-  sessionInfo: { key: "s", kind: "direct", sessionId: "session-1" },
+  sessionInfo: { key: "s", kind: "direct", sessionId: "session-1", hasMessages: false },
 };
 const fileReadMetadataSchema = Type.Pick(SessionsFilesGetResultSchema, ["root", "source"]);
 const invalidOwner = { key: "s", kind: "direct", owner: { actor: { type: "unknown" } } };

@@ -3,9 +3,14 @@ import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
-import llamaCppProviderDiscovery from "../../provider-discovery.js";
+import { llamaCppProviderDiscovery } from "../../provider-discovery.js";
+import { LLAMA_APP_SERVER } from "./defaults.js";
 import { discoverLlamaServer } from "./discovery.js";
-import { prepareLlamaServerSetup } from "./setup.js";
+import {
+  detectLlamaServerSetup,
+  prepareLlamaServerSetup,
+  validateLlamaServerNonInteractive,
+} from "./setup.js";
 
 function withDiscovery(
   reply: (request: IncomingMessage, response: ServerResponse) => unknown,
@@ -71,6 +76,67 @@ it.each([
   );
 });
 
+it("keeps an ordinary listener generic while allowing explicit Llama setup on the same server", async () => {
+  await withDiscovery(
+    ({ url }) => (url === "/models" ? { data: [{ id: "local-chat" }] } : {}),
+    async (baseUrl) => {
+      const app = { baseUrl, server: LLAMA_APP_SERVER };
+      await expect(
+        discoverLlamaServer({ ...app, requireAppListener: true }),
+      ).resolves.toMatchObject({ kind: "unreachable" });
+      await expect(discoverLlamaServer(app)).resolves.toMatchObject(result("local-chat"));
+      await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject(result("local-chat"));
+    },
+  );
+});
+
+it("selects a cold chat model instead of unfinished downloads and non-text router models", async () => {
+  const rows = [
+    ["interrupted", "incomplete", "text"],
+    ["pending", "downloading", "text"],
+    ["judge", "loaded", "decisions"],
+    ["voice", "loaded", "audio"],
+    ["ready", "unloaded", "text"],
+  ].map(([id, value, output]) => ({
+    id,
+    status: { value },
+    architecture: { output_modalities: [output] },
+  }));
+  await withDiscovery(
+    ({ url }) => (url === "/models" ? { data: rows } : {}),
+    async (baseUrl) => {
+      const config = { models: { providers: { "llama-cpp": { baseUrl, models: [] } } } };
+      await expect(detectLlamaServerSetup({ config, env: {} })).resolves.toMatchObject({
+        modelRef: "llama-cpp/ready",
+      });
+      const catalog = await refresh(config);
+      expect(catalog.map(({ id }) => id)).toEqual(["judge", "voice", "ready"]);
+      expect(catalog.slice(0, 2).map(({ inference }) => inference?.chat)).toEqual([false, false]);
+      for (const id of ["judge", "interrupted"]) {
+        await expect(
+          prepareLlamaServerSetup({ config, env: {}, modelRef: `llama-cpp/${id}` }),
+        ).resolves.toBeNull();
+        await expect(
+          validateLlamaServerNonInteractive({
+            authChoice: "llama-cpp-existing-server",
+            config,
+            baseConfig: config,
+            opts: { customModelId: id },
+            resolveApiKey: async () => null,
+            runtime: {
+              log() {},
+              error() {},
+              exit: () => {
+                throw new Error("unexpected exit");
+              },
+            },
+          }),
+        ).rejects.toThrow("Available models: ready");
+      }
+    },
+  );
+});
+
 it("attaches the normalized endpoint to shared discovery failures", async () => {
   await withDiscovery(
     () => ({}),
@@ -130,7 +196,7 @@ const facts = (contextWindow: number, supportsTools: boolean, contextTokens = co
 });
 const absentFacts = /"(?:contextWindow|contextTokens|supportsTools)"/u;
 
-it("persists verified router facts and refreshes unknown fields without replacing explicit values", async () => {
+it("seeds verified router facts only in explicit replace mode and refreshes without replacing authored values", async () => {
   let loadedModel = "model-a";
   const propsRequests: string[] = [];
   await withDiscovery(
@@ -164,7 +230,7 @@ it("persists verified router facts and refreshes unknown fields without replacin
         models: [],
       };
       const setup = await prepareLlamaServerSetup({
-        config: { models: { providers: { "llama-cpp": configured } } },
+        config: { models: { mode: "replace", providers: { "llama-cpp": configured } } },
         env: {},
         modelRef: "llama-cpp/model-a",
       });
@@ -182,7 +248,7 @@ it("persists verified router facts and refreshes unknown fields without replacin
 
       const refreshModel = async () =>
         (await refresh(saved)).find((model) => model.id === "model-b");
-      expect(await refreshModel()).toMatchObject(facts(128000, false));
+      expect(JSON.stringify(await refreshModel())).not.toMatch(absentFacts);
       loadedModel = "model-b";
       expect(await refreshModel()).toMatchObject(facts(32768, true));
 

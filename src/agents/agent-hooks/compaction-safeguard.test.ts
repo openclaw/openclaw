@@ -227,12 +227,14 @@ it("sends distinct history and split-turn summary formats", async () => {
   expect(providerPrompts[0]).toContain("[User]: summarize me");
   expect(providerPrompts[0]).toContain("receipt_90210");
   expect(providerPrompts[0]).toContain("Keep the deployment decision.");
-  expect(providerPrompts[0]).toContain("Preserve all opaque identifiers exactly");
+  expect(providerPrompts[0]).toContain("preserve literal values exactly as seen");
+  expect(providerPrompts[0]).not.toContain("Preserve all opaque identifiers exactly");
   expect(providerPrompts[0]).not.toContain("## Goal");
   expect(providerPrompts[0]).not.toContain("## Constraints & Preferences");
   expect(providerPrompts[0]).toContain("## Pending user asks");
   expect(providerPrompts[0]).not.toContain("## Original Request");
   expect(providerPrompts[1]).toContain("## Original Request");
+  expect(providerPrompts[1]).toContain("Preserve all opaque identifiers exactly");
   expect(providerPrompts[1]).not.toContain("## Pending user asks");
   expect(providerBudgets).toEqual([3_200, 2_000]);
 });
@@ -774,6 +776,19 @@ it("keeps only a head excerpt of preserved tool output", async () => {
   expect(summary).toContain("- Tool result (read): tool-head-");
   expect(summary).toContain(`[${output.length - 160} more chars omitted at compaction]`);
   expect(summary).not.toContain("tool-tail-");
+});
+
+it("redacts credentials in preserved turns and the latest request context", async () => {
+  const pem = "-----BEGIN PRIVATE KEY-----\nMIIEFAKEpem\n-----END PRIVATE KEY-----";
+  const secrets = `token=FAKEtok12345 sk-FAKEsk1234567890ab ghp_FAKEghp1234567890ab ${pem}`;
+  summarize.mockResolvedValue(structuredSummary());
+  const session = qualitySession({ recentTurnsPreserve: 1 });
+  const event = historyEvent(recentConversation(`deploy with ${secrets}`));
+  const { summary } = await runSummary(session, event);
+  const redacted = "deploy with [redacted] [redacted] [redacted] [redacted]";
+  expect(summary).toContain(`Latest user request context:\n"${redacted}"`);
+  expect(summary).toContain(`## Recent turns preserved verbatim\n- User: ${redacted}`);
+  expect(summary).not.toMatch(/FAKE|PRIVATE KEY/);
 });
 
 it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {

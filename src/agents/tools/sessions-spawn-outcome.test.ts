@@ -26,7 +26,10 @@ import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 const report = "Seven blue boxes remain. Thursday delivery is confirmed.";
 const backendId = "spawn-effects-fixture";
 const config: OpenClawConfig = {
-  agents: { defaults: { subagents: { allowAgents: ["main"] } }, entries: { main: {} } },
+  agents: {
+    defaults: { subagents: { allowAgents: ["main"] } },
+    entries: { main: { model: "openai/gpt-4.1" } },
+  },
 };
 const task = { task: "Prepare report", visible: true };
 const child = {

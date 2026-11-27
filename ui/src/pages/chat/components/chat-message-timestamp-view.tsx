@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show, useContext } from "solid-js";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { formatCompactTokenCount, formatTimeAgo } from "../../../lib/format.ts";
 import { formatCost } from "../../../lib/reactive/format.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -258,9 +259,14 @@ const TOKEN_FIELDS = [
   ["cacheWrite", "W", "msg-meta__cache"],
 ] as const;
 
-function MessageMetadata(props: { meta: GroupMeta | null }) {
+function MessageMetadata(props: { meta: GroupMeta | null; duration: string | undefined }) {
   return (
     <>
+      <Show when={props.duration}>
+        <span class="msg-meta__duration">
+          {t("chat.messages.turnDuration", { duration: props.duration ?? "" })}
+        </span>
+      </Show>
       <Show when={props.meta?.usageUnavailable}>
         <span class="msg-meta__tokens">{t("chat.messages.usageUnavailable")}</span>
       </Show>
@@ -299,21 +305,27 @@ function MessageMetadata(props: { meta: GroupMeta | null }) {
   );
 }
 
-export function MessageMeta(props: { timestamp: number; meta: GroupMeta | null }) {
+export function MessageMeta(props: {
+  timestamp: number;
+  meta: GroupMeta | null;
+  durationMs?: number;
+}) {
+  const duration = createMemo(() => formatDurationCompact(props.durationMs));
   const hasMetadata = () =>
-    props.meta &&
-    Boolean(
-      props.meta.usageUnavailable ||
-      props.meta.input ||
-      props.meta.output ||
-      props.meta.cacheRead ||
-      props.meta.cacheWrite ||
-      props.meta.cost > 0 ||
-      props.meta.contextPercent !== null ||
-      props.meta.model,
-    );
+    duration() ||
+    (props.meta &&
+      Boolean(
+        props.meta.usageUnavailable ||
+        props.meta.input ||
+        props.meta.output ||
+        props.meta.cacheRead ||
+        props.meta.cacheWrite ||
+        props.meta.cost > 0 ||
+        props.meta.contextPercent !== null ||
+        props.meta.model,
+      ));
   const metadata = createMemo(() =>
-    hasMetadata() ? [<MessageMetadata meta={props.meta} />] : undefined,
+    hasMetadata() ? [<MessageMetadata meta={props.meta} duration={duration()} />] : undefined,
   );
   return <ChatTimestamp timestamp={props.timestamp} metadata={metadata()} />;
 }

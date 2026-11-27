@@ -19,7 +19,7 @@ import { resolveAgentVerboseDefault, resolveDefaultAgentId } from "../agents/age
 import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { claimPendingEmbeddedAgentQuestionAnswer } from "../agents/embedded-agent-runner/runs.js";
-import { resolveThinkingDefault } from "../agents/model-selection.js";
+import { NO_MODEL_CONFIGURED_MESSAGE, resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import {
   readPreparedModelCatalog,
@@ -48,19 +48,11 @@ import {
   resolveAssistantTextInput,
 } from "../gateway/agent-event-assistant-text.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../gateway/chat-display-projection.js";
-import {
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  createChatHistoryActivityProjection,
-  createChatHistoryByteCounter,
-  getMaxChatHistoryMessagesBytes,
-  replaceOversizedChatHistoryMessages,
-} from "../gateway/chat-history-budget.js";
-import { enrichChatHistoryCompactionMarkers } from "../gateway/chat-history-response-page.js";
+import { getMaxChatHistoryMessagesBytes } from "../gateway/chat-history-budget.js";
 import {
   capLiveAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
-import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
@@ -68,7 +60,6 @@ import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../gateway/session-row-projection.js";
-import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
 import {
   loadGatewaySessionEntryReadOnlyInWorker,
@@ -112,6 +103,7 @@ import {
   resolveDeltaPayload,
   resolveTerminalChatState,
 } from "./embedded-chat-projection.js";
+import { readEmbeddedHistoryMessages } from "./embedded-history-messages.js";
 import { ensureEmbeddedHistoryRuntimePluginsLoaded } from "./embedded-history-runtime.js";
 import { enqueuePendingLocalMessage, findQueuedSessionRun } from "./embedded-local-queue.js";
 import {
@@ -145,6 +137,8 @@ import type {
   TuiImageData,
 } from "./tui-backend.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
+
+const BTW_NO_CONTEXT_MESSAGE = "/btw requires an active session with existing context.";
 
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
@@ -456,9 +450,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, opts.limit ?? 200);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars();
-    const historyPage = await readChatHistoryPage({
+    const { messages, activity } = await readEmbeddedHistoryMessages({
       entry,
-      provider: resolvedSessionModel.provider,
+      provider: resolvedSessionModel?.provider,
       sessionId,
       storePath,
       sessionAgentId,
@@ -469,20 +463,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
       offset: undefined,
       messageId: undefined,
     });
-    const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, entry);
-    const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
-    const byteCounter = createChatHistoryByteCounter(activity);
-    const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
-    const replaced = replaceOversizedChatHistoryMessages({
-      messages: normalized,
-      byteCounter,
-      maxSingleMessageBytes: perMessageHardCap,
-    });
-    const messages = capArrayByJsonBytes(
-      replaced.messages,
-      maxHistoryBytes - byteCounter.framingBytes(replaced.messages),
-      byteCounter.messageBytes,
-    ).items;
     const newestInFlightRun = [...this.runs.entries()].findLast(
       ([, run]) =>
         !run.question &&
@@ -498,7 +478,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       : undefined;
 
     let thinkingLevel = entry?.thinkingLevel;
-    if (!thinkingLevel) {
+    if (!thinkingLevel && resolvedSessionModel) {
       const catalog = await readPreparedModelCatalog({
         config: cfg,
         agentId: sessionAgentId,
@@ -540,7 +520,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionId,
       messages,
       defaults,
-      activity: messages.flatMap((message) => activity.get(message) ?? []),
+      activity,
       ...(sessionInfo ? { sessionInfo } : {}),
       thinkingLevel,
       fastMode: entry?.fastMode,
@@ -697,18 +677,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
       key: params.sessionKey,
       ...loadOptions,
     });
-    if (!entry?.sessionId) {
-      throw new Error("/btw requires an active session with existing context.");
-    }
     const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+    if (!entry?.sessionId || !resolvedModel) {
+      throw new Error(resolvedModel ? BTW_NO_CONTEXT_MESSAGE : NO_MODEL_CONFIGURED_MESSAGE);
+    }
     const timeoutSeconds = timeoutSecondsFromMs(params.timeoutMs);
     const { runBtwSideQuestion } = await import("../agents/btw.js");
     const reply = await runBtwSideQuestion({
       cfg,
       agentId: sessionAgentId,
       agentDir: resolveAgentDir(cfg, sessionAgentId),
-      provider: resolvedModel.provider,
-      model: resolvedModel.model,
+      ...resolvedModel,
       question: params.question,
       sessionEntry: entry,
       sessionStore: store,

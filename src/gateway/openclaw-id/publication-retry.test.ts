@@ -313,6 +313,51 @@ describe("publication retry (OCF-313)", () => {
     expect(publish).toHaveBeenCalledTimes(2);
     expect(setPending).toHaveBeenLastCalledWith(false);
   });
+
+  it("republishes a request that arrives while a successful attempt clears pending", async () => {
+    let seq = 1;
+    const published: number[] = [];
+    // Each durable pending write, with the newest seq published when it landed.
+    const writes: Array<[pending: boolean, publishedSeq: number | undefined]> = [];
+    const clearReached = Promise.withResolvers<void>();
+    const clearReleased = Promise.withResolvers<void>();
+    const retry = createPublicationRetry({
+      publish: async () => {
+        published.push(seq);
+        return {
+          state: "published",
+          ownerAccountId: "a",
+          snapshotSeq: seq,
+          snapshotIssuedAt: nowSeconds(),
+        };
+      },
+      current: () => undefined,
+      setPending: async (pending) => {
+        // Hold the clear after the first publication until the newer request is in.
+        if (!pending && published.length === 1) {
+          clearReached.resolve();
+          await clearReleased.promise;
+        }
+        writes.push([pending, published.at(-1)]);
+      },
+      log: log(),
+    });
+    const first = retry.request();
+    await clearReached.promise;
+    seq = 2;
+    await retry.request();
+    clearReleased.resolve();
+    await first;
+    expect(published).toEqual([1, 2]);
+    expect(writes).toEqual([
+      [true, undefined],
+      [true, 1],
+      // The held clear lands after the newer request's write, so pending is marked again.
+      [false, 1],
+      [true, 1],
+      [false, 2],
+    ]);
+  });
 });
 
 // An owner-signed Revocation of the claw's linked owner device D1, signed by R.

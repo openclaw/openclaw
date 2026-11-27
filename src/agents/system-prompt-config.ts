@@ -10,6 +10,7 @@ import { isRestartEnabled } from "../config/commands.flags.js";
 import { resolveNativeCommandsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
+import { describeSystemAgentConfigConflict } from "../system-agent/setup-config-snapshot.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { buildTtsSystemPromptHintAsync } from "../tts/tts-settings.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
@@ -20,6 +21,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 type ConfiguredAgentSystemPromptParams = Parameters<typeof buildAgentSystemPrompt>[0] & {
   config?: OpenClawConfig;
   agentId?: string;
+  prepareSessionProjectGuidance?: () => Promise<string | undefined>;
   preparedTtsPreferences?: PreparedTtsPreferences;
   tools?: { name: string; parameters: unknown }[];
   preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases">;
@@ -42,6 +44,7 @@ export async function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSy
     agentId: explicitAgentId,
     preparedModelRuntime,
     preparedTtsPreferences,
+    prepareSessionProjectGuidance,
     ...renderParams
   } = params;
   const agentId = explicitAgentId ?? (tools ? params.runtimeInfo?.agentId : undefined);
@@ -74,8 +77,15 @@ export async function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSy
   const channel = normalizeOptionalLowercaseString(renderParams.runtimeInfo?.channel) ?? "";
   const includeFullSections =
     renderParams.promptMode !== "minimal" && renderParams.promptMode !== "none";
+  if (
+    renderParams.toolNames?.includes("session_project") ||
+    renderParams.capabilityToolNames?.includes("session_project")
+  ) {
+    renderParams.sessionProjectGuidance = await prepareSessionProjectGuidance?.();
+  }
   return buildAgentSystemPrompt({
     ...renderParams,
+    openClawSetupIssue: describeSystemAgentConfigConflict(config),
     restartCommandsEnabled: isRestartEnabled(config),
     reasoningCommandsEnabled:
       shouldHandleTextCommands({ cfg: config, surface: channel }) ||

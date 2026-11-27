@@ -19,6 +19,8 @@ export type PairedDevice = Omit<PendingDevice, "requestId" | "silent" | "isRepai
   approvedVia?: PairedDeviceApprovalKind;
   /** Server-computed: the device currently holds a live gateway connection. */
   connected?: boolean;
+  /** Server-computed: an OpenClaw ID browser, managed on the Access page rather than as a device. */
+  managedBy?: "openclaw-id";
   createdAtMs?: number;
   approvedAtMs?: number;
   lastSeenAtMs?: number;

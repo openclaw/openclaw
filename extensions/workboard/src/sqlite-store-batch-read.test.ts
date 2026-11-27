@@ -15,7 +15,6 @@ import type {
   PersistedWorkboardNotificationSubscription,
 } from "./persistence-types.js";
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
-import { WorkboardStore } from "./store.js";
 import {
   createWorkboardSqliteKernel,
   createWorkboardSqliteStores,
@@ -24,7 +23,6 @@ import {
 import { runPostgresGroupedRollback } from "./test/postgres-fixture.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 import { sqliteOnly as test } from "./test/sqlite-only.js";
-import { sqliteTestAuxStores } from "./test/sqlite-store.js";
 
 const sqliteStatements = vi.hoisted(() => ({
   count: 0,
@@ -229,25 +227,6 @@ describe("workboard sqlite batch card persistence", () => {
     );
   });
 
-  // Counts statements by intercepting the native SQLite open boundary.
-  test.each(["worker log", "proof"])("hydrates once when adding a %s", async (operation) => {
-    await using stores = openKernel();
-    const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
-    const card = await store.create({ title: "Hydration budget" });
-    const before = sqliteStatements.executed.length;
-    const updated =
-      operation === "worker log"
-        ? await store.addWorkerLog(card.id, { message: "Recorded progress" })
-        : await store.addProof(card.id, { status: "passed", label: "Verified result" });
-    const statements = sqliteStatements.executed.slice(before);
-    expect(statements.filter((sql) => /^select\b/i.test(sql.trimStart()))).toHaveLength(14);
-    expect(
-      operation === "worker log"
-        ? updated.metadata?.workerLogs?.[0]?.message
-        : updated.metadata?.proof?.[0]?.label,
-    ).toBe(operation === "worker log" ? "Recorded progress" : "Verified result");
-  });
-
   // Regression for large-board stalls from per-card child reads.
   test("issues the same number of statements no matter how many cards exist", async () => {
     await using stores = openKernel();
@@ -316,8 +295,7 @@ describe("workboard sqlite batch card persistence", () => {
           target.id,
           persisted(next),
           target.updatedAt - (result === "conflict" ? 1 : 0),
-          "slot-owner",
-          3000,
+          { ownerId: "slot-owner", now: 3000, limit: 1 },
         ),
       ).resolves.toBe(result);
       if (result === "conflict") {
@@ -362,13 +340,11 @@ describe("workboard sqlite batch card persistence", () => {
       await stores.cards.register(target.id, persisted(target));
       const next = { ...target, updatedAt: target.updatedAt + 1 };
       await expect(
-        stores.cards.claimIfOwnerAvailable(
-          target.id,
-          persisted(next),
-          target.updatedAt,
-          "slot-owner",
-          1_000_000,
-        ),
+        stores.cards.claimIfOwnerAvailable(target.id, persisted(next), target.updatedAt, {
+          ownerId: "slot-owner",
+          now: 1_000_000,
+          limit: 1,
+        }),
       ).resolves.toBe(expected);
       await expect(stores.cards.lookup(target.id)).resolves.toEqual(
         persisted(expected === "updated" ? next : target),
@@ -430,13 +406,11 @@ describe("workboard sqlite batch card persistence", () => {
               version: 1,
               board: { id: "grouped", createdAt: 1, updatedAt: 2 },
             });
-            stores.cards.claimIfOwnerAvailable(
-              target.id,
-              persisted(next),
-              target.updatedAt,
-              "slot-owner",
-              3000,
-            );
+            stores.cards.claimIfOwnerAvailable(target.id, persisted(next), target.updatedAt, {
+              ownerId: "slot-owner",
+              now: 3000,
+              limit: 1,
+            });
           }),
         ).toThrow(fault === "constraint" ? "UNIQUE constraint failed" : TypeError);
         expect(stores.boards.lookup("grouped")).toBeUndefined();

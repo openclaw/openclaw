@@ -86,7 +86,10 @@ const OBSERVE = "desktop.observe";
 const requestCount = (gateway: Awaited<ReturnType<typeof installMockGateway>>, method: string) =>
   expect.poll(async () => (await gateway.getRequests(method)).length);
 
-function coldOpenScenario(populated = false): ControlUiMockGatewayScenario {
+function coldOpenScenario(
+  populated = false,
+  processName = "Build application",
+): ControlUiMockGatewayScenario {
   const rows = <T>(...values: T[]) => (populated ? values : []);
   const root = populated ? "/tmp/checkout" : "/tmp/plain-workspace";
   const files = rows({
@@ -142,7 +145,7 @@ function coldOpenScenario(populated = false): ControlUiMockGatewayScenario {
         processes: rows({
           processId: "process-1",
           instanceId: "incarnation-1",
-          name: "Build application",
+          name: processName,
           status: "running",
           startedAt: 1,
           tail: "Compiling",
@@ -383,6 +386,42 @@ async function readSlotColdOpenOutcome(
 }
 
 suite.define(() => {
+  it("shows the end of a long command name in a desktop Processes panel", async () => {
+    await suite.withPage(
+      { viewport: { width: 1180, height: 820 }, hasTouch: true },
+      async ({ page }) => {
+        const name =
+          "/workspace/coastal-survey/release-tools/field-equipment-calibration/portable-monitoring-station/bin/verify-sampling-manifest";
+        const choices = await openColdSidebar(page, coldOpenScenario(true, name));
+        await choices.filter({ hasText: "Processes" }).click();
+        const panel = page.locator("openclaw-chat-processes-panel");
+        const open = panel.getByRole("button", { name, exact: true });
+        await open.press("Enter");
+        const title = panel.locator(".chat-processes__detail-name");
+        expect(await title.textContent()).toBe(name);
+        expect(await title.getAttribute("title")).toBe(name);
+        const compact = await title.evaluate((el) => {
+          const text = el.querySelector("bdi")!.firstChild!;
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          const lines = new Set(Array.from(range.getClientRects(), (rect) => rect.top));
+          range.setStart(text, text.textContent!.lastIndexOf("/") + 1);
+          const executable = range.getBoundingClientRect();
+          const column = el.getBoundingClientRect();
+          return (
+            lines.size === 1 &&
+            executable.left >= column.left - 1 &&
+            executable.right <= column.right + 1
+          );
+        });
+        expect(compact).toBe(true);
+        await panel.getByText("Compiling", { exact: true }).waitFor();
+        await panel.getByRole("button", { name: "Back to processes" }).press("Enter");
+        expect(await open.evaluate((el) => el === document.activeElement)).toBe(true);
+      },
+    );
+  });
+
   it("closes a projected-empty side panel when a hidden board tab remains persisted", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await seedHiddenBoardSlot(page);

@@ -1,5 +1,5 @@
 import { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
-import { resolveMSTeamsMediaKind } from "./shared.js";
+import { resolveMSTeamsMediaKind } from "./html.js";
 import type { MSTeamsInboundMedia } from "./types.js";
 
 /**
