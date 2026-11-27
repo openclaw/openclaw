@@ -52,6 +52,25 @@ const isEntry = (entries: readonly string[], file: string) =>
 afterEach(() => vi.restoreAllMocks());
 
 describe("check-deadcode-exports", () => {
+  it("models generated PostgreSQL factories only while a getter consumes them", () => {
+    const compile = createDynamicConsumerCompiler();
+    const emitted = compile();
+    expect(
+      emitted.match(/from "\.\.\/src\/state\/postgres-schema\.generated\/postgres-/gu),
+    ).toHaveLength(12);
+    expect(emitted).not.toContain("postgres-runtime-unused.ts");
+    const file = "src/state/postgres-schema.generated/runtime.ts";
+    const source = fs.readFileSync(file, "utf8");
+    for (const removed of [
+      replaceFixture(source, '"./postgres-runtime-eagerSql.ts"', '"./not-a-payload.ts"'),
+      replaceFixture(source, ").default()", ").metadata"),
+    ]) {
+      expect(compile(new Map([[path.resolve(file), removed]]))).not.toContain(
+        'from "../src/state/postgres-schema.generated/postgres-runtime-eagerSql.ts"',
+      );
+    }
+  });
+
   it("models the renderer and path-selected native compiler as executable roots", () => {
     expect(knipConfig.workspaces).toHaveProperty(
       "packages/mermaid-renderer.entry",

@@ -14,7 +14,11 @@ export function generatePostgresRuntimeFiles(
       `${header}export default function createPostgresRuntimeValue() {\n  return ${JSON.stringify(value, null, 2)};\n}\n`;
     return `
   get ${key}() {
-    const value = (createRequire(import.meta.url)("./${factoryName}.ts") as typeof import("./${factoryName}.js")).default();
+    const factory = createRequire(import.meta.url)("./${factoryName}.ts");
+    const value = (
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      factory as typeof import("./${factoryName}.js")
+    ).default();
     Object.defineProperty(this, ${JSON.stringify(key)}, {
       value,
       enumerable: true,

@@ -5,6 +5,7 @@ import {
   managedHandoffPostgresBridgeEntrypoint,
   managedHandoffRuntimeEntrypoint,
 } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
+import { createDatabaseSchemaAssetsPlugin } from "./database-schema-assets.mts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 
@@ -41,6 +42,7 @@ function createSealedRecoveryBuildConfig(entry: typeof managedHandoffRuntimeEntr
     envPrefix: [],
     define: { SEALED_RUNTIME_BUILD: "true" },
     plugins: [
+      createDatabaseSchemaAssetsPlugin(undefined, undefined, { inlinePostgres: true }),
       createFsSafeWindowsHelperAssetPlugin(),
       createStateSchemaInlinePlugin(),
       {

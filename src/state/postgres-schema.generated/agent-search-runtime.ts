@@ -2,11 +2,10 @@
 import { createRequire } from "node:module";
 export const agentSearchPostgresRuntime = {
   get sql() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-agent-search-runtime-sql.ts",
-      ) as typeof import("./postgres-agent-search-runtime-sql.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-agent-search-runtime-sql.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-agent-search-runtime-sql.js")).default();
     Object.defineProperty(this, "sql", {
       value,
       enumerable: true,

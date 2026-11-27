@@ -18,21 +18,11 @@ export function resolveDatabaseSchemaAssetInputs(rootDir = process.cwd()): strin
     .map((name) => path.join(directory, name));
 }
 
-/** Include lazy catalogs in build fingerprints and reduced source checkouts. */
-export function resolveSqliteSchemaAssetInputs(rootDir = process.cwd()): string[] {
-  const directory = fs.realpathSync(path.resolve(rootDir, schemaAssetDirectory));
-  return fs
-    .readdirSync(directory)
-    .filter((name) => sqliteAssetPattern.test(name))
-    .toSorted()
-    .map((name) => path.join(directory, name));
-}
-
 /** Keep database payloads lazy in installed packages and sealed worker archives. */
 export function createDatabaseSchemaAssetsPlugin(
   rootDir = process.cwd(),
   recordInput?: (file: string) => void,
-  options: { workerChunks?: boolean } = {},
+  options: { workerChunks?: boolean; inlinePostgres?: boolean } = {},
 ): TsdownPlugin {
   const directory = fs.realpathSync(path.resolve(rootDir, schemaAssetDirectory));
   return {
@@ -51,12 +41,22 @@ export function createDatabaseSchemaAssetsPlugin(
         }
         const reference =
           /createRequire\(\s*import\.meta\.url\s*\)\(\s*["']\.\/(sqlite-[\w-]+-catalogs\.json|postgres-[\w-]+\.ts)["']\s*,?\s*\)/gu;
+        const imports: string[] = [];
         const transformed = code.replace(reference, (_reference, name: string) => {
+          const postgres = postgresAssetPattern.test(name);
+          if (options.inlinePostgres && !postgres) {
+            return _reference;
+          }
           const source = path.join(directory, name);
           recordInput?.(source);
           this.addWatchFile(source);
+          if (options.inlinePostgres) {
+            // Recovery bundles outlive the installation and cannot retain sidecars.
+            const binding = `schemaAsset${imports.length}`;
+            imports.push(`import * as ${binding} from ${JSON.stringify(source)};`);
+            return binding;
+          }
           const contents = fs.readFileSync(source, "utf8");
-          const postgres = postgresAssetPattern.test(name);
           const emittedName = postgres ? name.replace(/\.ts$/u, ".mjs") : name;
           const asset = this.emitFile({
             type: "asset",
@@ -74,7 +74,7 @@ export function createDatabaseSchemaAssetsPlugin(
         return {
           code:
             transformed !== code
-              ? `import { fileURLToPath as schemaAssetFileURLToPath } from "node:url";\n${transformed}`
+              ? `${options.inlinePostgres ? imports.join("\n") : 'import { fileURLToPath as schemaAssetFileURLToPath } from "node:url";'}\n${transformed}`
               : transformed,
           map: null,
         };

@@ -2,11 +2,10 @@
 import { createRequire } from "node:module";
 export const agentPostgresRuntime = {
   get sql() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-agent-runtime-sql.ts",
-      ) as typeof import("./postgres-agent-runtime-sql.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-agent-runtime-sql.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-agent-runtime-sql.js")).default();
     Object.defineProperty(this, "sql", {
       value,
       enumerable: true,
@@ -17,11 +16,10 @@ export const agentPostgresRuntime = {
   },
 
   get expectedCatalog() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-agent-runtime-expectedCatalog.ts",
-      ) as typeof import("./postgres-agent-runtime-expectedCatalog.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-agent-runtime-expectedCatalog.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-agent-runtime-expectedCatalog.js")).default();
     Object.defineProperty(this, "expectedCatalog", {
       value,
       enumerable: true,

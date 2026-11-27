@@ -2,9 +2,11 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { expect, it } from "vitest";
 import { createDatabaseSchemaAssetsPlugin } from "../../scripts/lib/database-schema-assets.mts";
+import { createManagedHandoffBuildConfigs } from "../../scripts/lib/managed-handoff-build-config.mts";
 import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import { createWorkerDeployBuildPlugin } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { agentPostgresRuntime } from "../../src/state/postgres-schema.generated/agent-runtime.js";
@@ -146,6 +148,58 @@ console.log(JSON.stringify({ postgres: createHash('sha256').update(JSON.stringif
       expect(store.tables).toEqual(store.expected);
       expect(store.tables.length).toBeGreaterThan(0);
     }
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
+
+it("materializes all PostgreSQL payloads from a relocated self-contained recovery runtime", async () => {
+  const root = fs.realpathSync(createTempDir("postgres-recovery-payloads-"));
+  const entry = path.join(root, "entry.ts");
+  fs.writeFileSync(
+    entry,
+    [
+      `import { statePostgresRuntime } from ${JSON.stringify(path.resolve("src/state/postgres-schema.generated/runtime.ts"))};`,
+      `import { agentPostgresRuntime } from ${JSON.stringify(path.resolve("src/state/postgres-schema.generated/agent-runtime.ts"))};`,
+      `import { agentSearchPostgresRuntime } from ${JSON.stringify(path.resolve("src/state/postgres-schema.generated/agent-search-runtime.ts"))};`,
+      "export const values = () => [statePostgresRuntime, agentPostgresRuntime, agentSearchPostgresRuntime];",
+    ].join("\n"),
+  );
+  const outDir = path.join(root, "build");
+  const { bundles } = await build({
+    ...createManagedHandoffBuildConfigs()[0],
+    config: false,
+    entry: { runtime: entry },
+    outDir,
+    logLevel: "silent",
+  });
+  try {
+    const installed = path.join(root, "relocated.mjs");
+    fs.renameSync(path.join(outDir, "runtime.mjs"), installed);
+    fs.rmSync(outDir, { recursive: true });
+    fs.rmSync(entry);
+    const result = execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import { isBuiltin, registerHooks } from 'node:module';
+      const entry = ${JSON.stringify(pathToFileURL(installed).href)};
+      registerHooks({ resolve(specifier, context, next) {
+        if (!isBuiltin(specifier) && specifier !== entry) throw new Error('External recovery dependency: ' + specifier);
+        return next(specifier, context);
+      } });
+      console.log(JSON.stringify((await import(entry)).values()));
+    `,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(JSON.parse(result)).toEqual(
+      structuredClone([statePostgresRuntime, agentPostgresRuntime, agentSearchPostgresRuntime]),
+    );
   } finally {
     for (const bundle of bundles) {
       await bundle[Symbol.asyncDispose]();

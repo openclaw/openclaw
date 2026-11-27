@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { resolveSqliteSchemaAssetInputs } from "../../scripts/lib/database-schema-assets.mts";
+import { resolveDatabaseSchemaAssetInputs } from "../../scripts/lib/database-schema-assets.mts";
 import { vitestWorkerRuntimeAssets } from "../../scripts/lib/package-root-modules.mts";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
@@ -62,7 +62,9 @@ it.each([false, true])(
     }
     // The schema build owner emits lazy catalogs as asset URLs rather than
     // module imports, so the module-closure copier cannot discover these edges.
-    for (const sourceAsset of resolveSqliteSchemaAssetInputs()) {
+    for (const sourceAsset of resolveDatabaseSchemaAssetInputs().filter((file) =>
+      file.endsWith(".json"),
+    )) {
       const relative = path.join("dist", "assets", "sqlite-schema", path.basename(sourceAsset));
       const target = path.join(runtimeRoot, relative);
       fs.mkdirSync(path.dirname(target), { recursive: true });

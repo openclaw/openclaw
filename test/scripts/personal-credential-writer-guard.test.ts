@@ -330,7 +330,11 @@ it.each(["DEL\\u0045TE", "D\\ELETE", "\\nDELETE", "\\tDELETE"])(
 
 it.each([
   ["scripts/generate-postgres-schema.mts", "function generatePostgresSchemas() {", "}"],
-  ["src/state/postgres-schema.generated/runtime.ts", "export const runtime = { sql:", "};"],
+  [
+    "src/state/postgres-schema.generated/postgres-runtime-operatorRecoveryV25Sql.ts",
+    "export default function createPostgresRuntimeValue() { return",
+    "; }",
+  ],
 ])("bounds the v25 metadata publication in %s to its exact statement", (file, before, after) => {
   const statement =
     "UPDATE config_machine_state SET value_json = '25' WHERE state_key = 'state.schema.contentVersion' AND value_json = '24';";
@@ -346,6 +350,11 @@ it.each([
   }
   expect(
     inspect({ "src/new-metadata-writer.ts": `const sql = ${JSON.stringify(statement)}` }),
+  ).toContainEqual(expect.stringContaining("raw authority-table write"));
+  expect(
+    inspect({
+      "src/state/postgres-schema.generated/runtime.ts": `const sql = ${JSON.stringify(statement)}`,
+    }),
   ).toContainEqual(expect.stringContaining("raw authority-table write"));
 });
 

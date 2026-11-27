@@ -423,6 +423,8 @@ async function compileVitestWorkerArtifacts(
         // Keep the invocation's loader boundaries while recording the binary
         // input and output alongside its sealed JavaScript consumers.
         plugins: [
+          // The copied recovery runtime owns its payloads, unlike ordinary worker assets.
+          createDatabaseSchemaAssetsPlugin(root, recordInput, { inlinePostgres: true }),
           createFsSafeWindowsHelperAssetPlugin(root, undefined, recordInput),
           config.plugins,
         ],

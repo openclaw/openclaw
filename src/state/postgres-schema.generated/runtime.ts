@@ -2,11 +2,10 @@
 import { createRequire } from "node:module";
 export const statePostgresRuntime = {
   get eagerSql() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-runtime-eagerSql.ts",
-      ) as typeof import("./postgres-runtime-eagerSql.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-runtime-eagerSql.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-runtime-eagerSql.js")).default();
     Object.defineProperty(this, "eagerSql", {
       value,
       enumerable: true,
@@ -17,11 +16,10 @@ export const statePostgresRuntime = {
   },
 
   get operatorRecoveryV25Sql() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-runtime-operatorRecoveryV25Sql.ts",
-      ) as typeof import("./postgres-runtime-operatorRecoveryV25Sql.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-runtime-operatorRecoveryV25Sql.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-runtime-operatorRecoveryV25Sql.js")).default();
     Object.defineProperty(this, "operatorRecoveryV25Sql", {
       value,
       enumerable: true,
@@ -32,11 +30,10 @@ export const statePostgresRuntime = {
   },
 
   get preWriteIndexesV27Sql() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-runtime-preWriteIndexesV27Sql.ts",
-      ) as typeof import("./postgres-runtime-preWriteIndexesV27Sql.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-runtime-preWriteIndexesV27Sql.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-runtime-preWriteIndexesV27Sql.js")).default();
     Object.defineProperty(this, "preWriteIndexesV27Sql", {
       value,
       enumerable: true,
@@ -47,11 +44,10 @@ export const statePostgresRuntime = {
   },
 
   get writeIndexesV27Sql() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-runtime-writeIndexesV27Sql.ts",
-      ) as typeof import("./postgres-runtime-writeIndexesV27Sql.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-runtime-writeIndexesV27Sql.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-runtime-writeIndexesV27Sql.js")).default();
     Object.defineProperty(this, "writeIndexesV27Sql", {
       value,
       enumerable: true,
@@ -62,11 +58,10 @@ export const statePostgresRuntime = {
   },
 
   get clientCredentialV29Sql() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-runtime-clientCredentialV29Sql.ts",
-      ) as typeof import("./postgres-runtime-clientCredentialV29Sql.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-runtime-clientCredentialV29Sql.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-runtime-clientCredentialV29Sql.js")).default();
     Object.defineProperty(this, "clientCredentialV29Sql", {
       value,
       enumerable: true,
@@ -77,11 +72,10 @@ export const statePostgresRuntime = {
   },
 
   get workspaceCasV35Sql() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-runtime-workspaceCasV35Sql.ts",
-      ) as typeof import("./postgres-runtime-workspaceCasV35Sql.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-runtime-workspaceCasV35Sql.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-runtime-workspaceCasV35Sql.js")).default();
     Object.defineProperty(this, "workspaceCasV35Sql", {
       value,
       enumerable: true,
@@ -92,11 +86,10 @@ export const statePostgresRuntime = {
   },
 
   get clientCredentialSource() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-runtime-clientCredentialSource.ts",
-      ) as typeof import("./postgres-runtime-clientCredentialSource.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-runtime-clientCredentialSource.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-runtime-clientCredentialSource.js")).default();
     Object.defineProperty(this, "clientCredentialSource", {
       value,
       enumerable: true,
@@ -107,11 +100,10 @@ export const statePostgresRuntime = {
   },
 
   get fragments() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-runtime-fragments.ts",
-      ) as typeof import("./postgres-runtime-fragments.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-runtime-fragments.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-runtime-fragments.js")).default();
     Object.defineProperty(this, "fragments", {
       value,
       enumerable: true,
@@ -122,11 +114,10 @@ export const statePostgresRuntime = {
   },
 
   get expectedCatalog() {
-    const value = (
-      createRequire(import.meta.url)(
-        "./postgres-runtime-expectedCatalog.ts",
-      ) as typeof import("./postgres-runtime-expectedCatalog.js")
-    ).default();
+    const factory = createRequire(import.meta.url)("./postgres-runtime-expectedCatalog.ts");
+    const value =
+      // SAFETY: The generator emits this sibling factory with exactly this default export.
+      (factory as typeof import("./postgres-runtime-expectedCatalog.js")).default();
     Object.defineProperty(this, "expectedCatalog", {
       value,
       enumerable: true,
