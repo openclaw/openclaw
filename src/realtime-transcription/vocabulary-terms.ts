@@ -31,6 +31,7 @@ function record(input: unknown, fields: readonly string[]): Record<string, unkno
       throw new VocabularyError("invalid-input");
     }
   }
+  // SAFETY: input is a plain object whose own keys are all checked string data fields.
   return input as Record<string, unknown>;
 }
 
@@ -58,7 +59,7 @@ function canonicalLocale(input: unknown): string {
 
 function stringList(input: unknown, maximum: number, normalize: (value: unknown) => string) {
   if (input === undefined) {
-    return Object.freeze([] as string[]);
+    return Object.freeze<string>([]);
   }
   if (!Array.isArray(input)) {
     throw new VocabularyError("invalid-input");
@@ -361,7 +362,7 @@ export function resolveEffectiveVocabulary(params: {
           ...first.term,
           aliases: mergeStrings(preferred.map((candidate) => candidate.term.aliases)),
           locales: preferred.some((candidate) => !candidate.term.locales.length)
-            ? Object.freeze([] as string[])
+            ? Object.freeze<string>([])
             : mergeStrings(preferred.map((candidate) => candidate.term.locales)),
         }),
         sources: Object.freeze([...sources.values()]),
@@ -375,7 +376,7 @@ export function selectVocabularyHints(
   effective: EffectiveVocabulary,
   capability: VocabularyHintCapability,
 ): VocabularyHints {
-  const empty = Object.freeze([] as string[]);
+  const empty = Object.freeze<string>([]);
   if (capability.kind === "unsupported") {
     return Object.freeze({
       status: "unsupported",
@@ -393,7 +394,7 @@ export function selectVocabularyHints(
     throw new VocabularyError("invalid-input");
   }
   const candidates = effective.entries.map((entry) => entry.term.canonical);
-  let selected = { terms: empty as readonly string[], bytes: 0, tokens: 0 };
+  let selected = { terms: empty, bytes: 0, tokens: 0 };
   let low = 0;
   let high = Math.min(candidates.length, capability.maxTerms);
   let length = high;
