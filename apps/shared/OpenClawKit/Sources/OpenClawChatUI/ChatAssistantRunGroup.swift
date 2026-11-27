@@ -13,11 +13,13 @@ struct ChatAssistantRunGroup: Identifiable {
     enum Part: Identifiable {
         case row(ChatTranscriptRow)
         case tool(OpenClawChatPendingToolCall)
+        case liveTools(runID: String, anchor: String, items: [ChatToolActivityItem])
 
         var id: String {
             switch self {
             case let .row(row): "row:\(row.id)"
             case let .tool(tool): "tool:\(tool.id)"
+            case let .liveTools(_, anchor, _): anchor
             }
         }
 
@@ -25,6 +27,7 @@ struct ChatAssistantRunGroup: Identifiable {
             switch self {
             case let .row(row): row.assistantRunID
             case let .tool(tool): tool.runID
+            case let .liveTools(runID, _, _): runID
             }
         }
 
@@ -32,6 +35,7 @@ struct ChatAssistantRunGroup: Identifiable {
             switch self {
             case let .row(row): row.timestamp
             case let .tool(tool): tool.startedAt
+            case .liveTools: nil
             }
         }
 
@@ -59,7 +63,8 @@ struct ChatAssistantRunGroup: Identifiable {
         tools: [OpenClawChatPendingToolCall] = [],
         liveRunID: String?,
         hasLiveContent: Bool,
-        searchActive: Bool) -> [Self]
+        searchActive: Bool,
+        compactLiveRunIDs: Set<String> = []) -> [Self]
     {
         var parts = rows.map(Part.row)
         // Use the producer's start time, not the active-first tool list order.
@@ -88,6 +93,9 @@ struct ChatAssistantRunGroup: Identifiable {
             } ?? parts.endIndex
             parts.insert(.tool(tool), at: index)
         }
+        if !compactLiveRunIDs.isEmpty, !searchActive {
+            parts = Self.compactLiveTools(parts, runIDs: compactLiveRunIDs, tools: tools)
+        }
         var groups: [Self] = []
         var boundaries: [String: UUID] = [:]
         var segments: [String: Int] = [:]
@@ -112,6 +120,7 @@ struct ChatAssistantRunGroup: Identifiable {
                 let id: ID = switch part {
                 case let .row(row): .row(row.id)
                 case let .tool(tool): .tool(tool.id)
+                case let .liveTools(_, anchor, _): .tool(anchor)
                 }
                 groups.append(Self(id: id, runID: nil, parts: [part]))
             }
@@ -138,6 +147,82 @@ struct ChatAssistantRunGroup: Identifiable {
             }
         }
         return groups
+    }
+
+    private static func isLiveToolEnvelope(_ message: OpenClawChatMessage) -> Bool {
+        message.content.allSatisfy {
+            $0.isToolCall || $0.isToolResult ||
+                ($0.type == "thinking" && ($0.thinking ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+
+    private static func compactLiveTools(
+        _ parts: [Part],
+        runIDs: Set<String>,
+        tools: [OpenClawChatPendingToolCall]) -> [Part]
+    {
+        let callsByRun = ChatRowPassInputs.liveToolCallsByRun(tools)
+        var compacted: [Part] = []
+        for part in parts {
+            guard let runID = part.runID, runIDs.contains(runID) else {
+                compacted.append(part)
+                continue
+            }
+            let items: [ChatToolActivityItem]
+            let sourceID: UUID?
+            switch part {
+            case let .tool(tool):
+                let item = ChatToolActivityItem(live: tool)
+                guard item.sessionLaunch == nil else {
+                    compacted.append(part)
+                    continue
+                }
+                items = [item]
+                sourceID = nil
+            case let .row(.message(message)) where !message.isNestedToolActivity &&
+                (message.isToolResult || Self.isLiveToolEnvelope(message)):
+                items = Self.activeToolItems([message], calls: callsByRun[runID] ?? [])
+                sourceID = message.presentationID
+            case let .row(.completedWork(work)) where work.isActivityRun:
+                // Keep full message rendering for reasoning the tool-only disclosure cannot show.
+                guard !work.messages.contains(where: Self.hasRecordedReasoning) else {
+                    compacted.append(part)
+                    continue
+                }
+                items = Self.activeToolItems(work.messages, calls: callsByRun[runID] ?? [])
+                sourceID = work.anchorID
+            default:
+                compacted.append(part)
+                continue
+            }
+            if items.contains(where: { $0.sessionLaunch != nil }) {
+                compacted.append(part)
+                continue
+            }
+            guard let first = items.first else { continue }
+            let anchor = sourceID.map { "recorded:\($0):\(first.id)" } ?? first.id
+            if case let .liveTools(previous, anchor, earlier) = compacted.last, previous == runID {
+                compacted[compacted.count - 1] = .liveTools(runID: runID, anchor: anchor, items: earlier + items)
+            } else {
+                compacted.append(.liveTools(runID: runID, anchor: anchor, items: items))
+            }
+        }
+        return compacted
+    }
+
+    private static func hasRecordedReasoning(_ message: OpenClawChatMessage) -> Bool {
+        let text = ChatMessageVisibleText.displayText(in: message, includeThinking: true)
+        return AssistantTextParser.segments(from: text).contains { $0.kind == .thinking }
+    }
+
+    private static func activeToolItems(
+        _ messages: [OpenClawChatMessage],
+        calls: [OpenClawChatPendingToolCall]) -> [ChatToolActivityItem]
+    {
+        messages.flatMap {
+            ChatToolActivity.items(message: $0, liveTools: calls, assumesPendingInActiveRun: true)
+        }
     }
 
     /// Index of the group that starts the latest turn, or the end when no group starts one.

@@ -22,6 +22,7 @@ struct ChatAssistantListCell: Identifiable {
                 let id: ID = switch part {
                 case let .row(row): .row(row.id)
                 case let .tool(tool): .tool(tool.runID, tool.id)
+                case let .liveTools(runID, anchor, _): .tool(runID, anchor)
                 }
                 return Self(
                     id: id,

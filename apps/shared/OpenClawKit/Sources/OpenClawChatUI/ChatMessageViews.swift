@@ -58,9 +58,10 @@ struct ChatInlineDisclosureStyle: DisclosureGroupStyle {
     }
 
     var chevron: Chevron = .tint
+    var accessibilityID: String?
 
     func makeBody(configuration: Configuration) -> some View {
-        ChatInlineDisclosure(configuration: configuration, chevron: self.chevron)
+        ChatInlineDisclosure(configuration: configuration, chevron: self.chevron, accessibilityID: self.accessibilityID)
     }
 }
 
@@ -69,6 +70,7 @@ private struct ChatInlineDisclosure: View {
     @Environment(\.openClawReadingPosition) private var readingPosition
     let configuration: DisclosureGroupStyleConfiguration
     let chevron: ChatInlineDisclosureStyle.Chevron
+    let accessibilityID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -99,6 +101,7 @@ private struct ChatInlineDisclosure: View {
             .buttonStyle(.plain)
             .accessibilityAddTraits(.isButton)
             .accessibilityValue(self.configuration.isExpanded ? Text("Expanded") : Text("Collapsed"))
+            .accessibilityIdentifier(self.accessibilityID ?? "", isEnabled: self.accessibilityID != nil)
             // Content enters below the header only; the clip keeps it from sliding over the header.
             VStack(alignment: .leading, spacing: 0) {
                 if self.configuration.isExpanded {

@@ -630,12 +630,18 @@ extension OpenClawChatView {
 
     private func runGroups(_ transcript: TranscriptPresentation) -> [ChatAssistantRunGroup] {
         let liveRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
+        #if os(iOS)
+        let compactLiveRunIDs = self.displayOptions.contains(.toolActivity) ? liveRunIDs : []
+        #else
+        let compactLiveRunIDs: Set<String> = []
+        #endif
         return ChatAssistantRunGroup.build(
             transcript.rows,
             tools: self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : [],
             liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
             hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
-            searchActive: self.isSearchPresented)
+            searchActive: self.isSearchPresented,
+            compactLiveRunIDs: compactLiveRunIDs)
     }
 
     @ViewBuilder
@@ -756,6 +762,8 @@ extension OpenClawChatView {
                 answerID: answerID)
                 .id(row.id)
                 .chatBehaviorProbe(.row(row))
+        case let .liveTools(_, anchor, items):
+            ChatLiveToolActivityDisclosure(anchor: anchor, items: items)
         case let .tool(tool):
             ChatToolActivityList(items: [ChatToolActivityItem(live: tool)])
                 .padding(.vertical, 4)
