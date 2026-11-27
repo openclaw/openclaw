@@ -645,7 +645,7 @@ describe("repetition stop at the stream owner", () => {
     });
   }
 
-  async function runResponse(content: AssistantMessage["content"], enabled = true, mode = "text") {
+  async function runResponse(content: AssistantMessage["content"], mode = "text") {
     const terminalOnly = mode === "terminal" || mode === "replaced terminal";
     const initialText = mode.startsWith("replaced")
       ? variedRows.slice(0, loop.length + 1)
@@ -692,7 +692,6 @@ describe("repetition stop at the stream owner", () => {
     const { run, events } = fixtures.captureToolLoop({
       prompt: fixtures.user(),
       tools: [],
-      config: { repetitionGuard: () => enabled },
       streamFn,
     });
     return { result: await run, events, requests };
@@ -718,7 +717,7 @@ describe("repetition stop at the stream owner", () => {
       ...prefix,
       kind === "thinking" ? { type: "thinking", thinking: loop } : { type: "text", text: loop },
     ];
-    const response = await runResponse(content, true, kind);
+    const response = await runResponse(content, kind);
     const expected: AssistantMessage["content"] = [...prefix, { type: "text", text: marker }];
     expectResponse(response, expected, true);
     if (kind.startsWith("replaced")) {
@@ -735,11 +734,6 @@ describe("repetition stop at the stream owner", () => {
     );
     expect(JSON.stringify(replay)).not.toContain("Please provide more input.");
     expect(JSON.stringify(replay)).toContain(marker);
-  });
-
-  it("leaves the same response untouched when the policy is off", async () => {
-    const content: AssistantMessage["content"] = [{ type: "text", text: loop }];
-    expectResponse(await runResponse(content, false), content);
   });
 
   it.each(["unadmitted snapshot", "delta", "error snapshot"])(
@@ -779,7 +773,6 @@ describe("repetition stop at the stream owner", () => {
           },
           fixtures.makeTool("discarded", executed),
         ],
-        config: { repetitionGuard: () => true },
         onEvent: (event) => {
           if (
             event.type === "message_end" &&
