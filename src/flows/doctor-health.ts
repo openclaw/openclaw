@@ -396,7 +396,14 @@ async function runDoctorHealthFlowWithResult(
         discovery.preparedTranscriptArchives = preparedArchiveDiscovery?.preparedTranscriptArchives;
       }
       const { loadAndMaybeMigrateDoctorConfig } = await import("../commands/doctor-config-flow.js");
-      await tracePending("config-flow");
+      if (maintenance) {
+        const { traceDoctorConfigFlowPending } =
+          await import("../commands/doctor-config-flow-pending.js");
+        await traceDoctorConfigFlowPending(tracePending, {
+          env: process.env,
+          integrityCheck: options.fullIntegrityCheck ? "full" : "quick",
+        });
+      }
       const configResult = await measure("doctor.config-flow", () =>
         loadAndMaybeMigrateDoctorConfig({
           options,

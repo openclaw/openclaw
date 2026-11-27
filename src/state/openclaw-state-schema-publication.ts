@@ -210,3 +210,48 @@ export function advanceStateSchemaContentVersion(
       ),
   );
 }
+
+/**
+ * Read-only: whether `markCurrentStateSchemaVersion` (without metadata creation) would
+ * change the header, the content-version row or the owner's `schema_meta` version. Any
+ * published version below the current one has work; a newer writer's store is left alone.
+ */
+export function hasCurrentStateSchemaVersionWork(db: DatabaseSync): boolean {
+  if (
+    readStateSchemaContentVersion(db) > OPENCLAW_STATE_SCHEMA_VERSION ||
+    !tableExists(db, "audit_events")
+  ) {
+    return false;
+  }
+  const published = readSqliteUserVersion(db);
+  if (published < OPENCLAW_STATE_SCHEMA_VERSION) {
+    return true;
+  }
+  if (published === OPENCLAW_STATE_SCHEMA_VERSION && tableExists(db, "config_machine_state")) {
+    const hasFloor = tableHasColumn(db, "config_machine_state", "min_reader");
+    const row = db
+      .prepare(
+        `SELECT value_json${hasFloor ? ", min_reader" : ""} FROM config_machine_state WHERE state_key = ?`,
+      )
+      .get(CONTENT_VERSION_KEY);
+    if (
+      row &&
+      (row.value_json !== String(OPENCLAW_STATE_SCHEMA_VERSION) ||
+        (hasFloor && row.min_reader !== null))
+    ) {
+      return true;
+    }
+  }
+  if (
+    !tableExists(db, "schema_meta") ||
+    !["meta_key", "schema_version", "updated_at"].every((column) =>
+      tableHasColumn(db, "schema_meta", column),
+    )
+  ) {
+    return false;
+  }
+  const metadata = db
+    .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+    .get();
+  return metadata !== undefined && metadata.schema_version !== published;
+}

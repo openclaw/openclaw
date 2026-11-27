@@ -112,6 +112,94 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
 }
 
 /**
+ * Canonical named indexes whose present definition differs from the committed schema, on
+ * tables that exist. Throws for an unexpected unique index (and, with `nonUniqueOnly`, for
+ * a unique index that differs), as repair refuses those.
+ */
+function collectCanonicalSqliteIndexRepairs(
+  databaseLabel: string,
+  schemaSql: SqliteSchemaSource,
+  readTable: SqliteTableContractReader,
+  options: Pick<RepairCanonicalSqliteIndexesOptions, "nonUniqueOnly">,
+): CanonicalSqliteNamedIndexContract[] {
+  if (hasCanonicalSqliteSchemaFingerprint(schemaSql, readTable)) {
+    return [];
+  }
+  const repairIndexes: CanonicalSqliteNamedIndexContract[] = [];
+  const indexes = getCanonicalSqliteNamedIndexContracts(schemaSql);
+  const indexesByTable = new Map<string, CanonicalSqliteNamedIndexContract[]>();
+  for (const index of indexes) {
+    assertSqliteIdentifier(index.name);
+    assertSqliteIdentifier(index.tableName);
+    const tableIndexes = indexesByTable.get(index.tableName) ?? [];
+    tableIndexes.push(index);
+    indexesByTable.set(index.tableName, tableIndexes);
+  }
+  for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
+    assertSqliteIdentifier(tableName);
+    const table = readTable(tableName);
+    if (!table) {
+      continue;
+    }
+    const tableIndexes = indexesByTable.get(tableName) ?? [];
+    const canonicalIndexNames = new Set(tableIndexes.map((index) => index.name));
+    const actualIndexes = table.indexes;
+    const unexpected = actualIndexes.find(
+      (index) =>
+        index.unique === 1 &&
+        index.origin === "c" &&
+        index.name !== null &&
+        !canonicalIndexNames.has(index.name),
+    );
+    if (unexpected) {
+      throw new SqliteSchemaMismatchError(
+        `SQLite schema is incomplete or noncanonical for ${databaseLabel}: unexpected unique index ${unexpected.name}`,
+      );
+    }
+    for (const index of tableIndexes) {
+      const actual = actualIndexes.find((candidate) => candidate.name === index.name);
+      if (JSON.stringify(actual) !== JSON.stringify(index.fingerprint)) {
+        if (options.nonUniqueOnly && (index.unique || actual?.unique === 1)) {
+          throw new SqliteSchemaMismatchError(
+            `Canonical unique index ${index.name} requires full admission`,
+          );
+        }
+        repairIndexes.push(index);
+      }
+    }
+  }
+  return repairIndexes;
+}
+
+/**
+ * Read-only: whether {@link repairCanonicalSqliteIndexes} would rebuild an index or refuse
+ * an unexpected unique one. It does not run the repair's optional integrity gate.
+ */
+export function hasCanonicalSqliteIndexRepairs(
+  db: DatabaseSync,
+  databaseLabel: string,
+  schemaSql: SqliteSchemaSource,
+): boolean {
+  return runSqliteSchemaReadSnapshotSync(db, () => {
+    try {
+      return (
+        collectCanonicalSqliteIndexRepairs(
+          databaseLabel,
+          schemaSql,
+          createSqliteTableContractReader(db),
+          {},
+        ).length > 0
+      );
+    } catch (error) {
+      if (isSqliteSchemaMismatchError(error)) {
+        return true;
+      }
+      throw error;
+    }
+  });
+}
+
+/**
  * Restore every named index when SQLite's IF NOT EXISTS semantics preserve a
  * same-name definition that no longer matches the committed schema.
  */
@@ -126,49 +214,13 @@ export function repairCanonicalSqliteIndexes(
   // One read snapshot also avoids a network lock round trip per metadata query.
   runSqliteSchemaReadSnapshotSync(db, () => {
     const readTable = createSqliteTableContractReader(db);
-    if (!hasCanonicalSqliteSchemaFingerprint(schemaSql, readTable)) {
-      const indexes = getCanonicalSqliteNamedIndexContracts(schemaSql);
-      const indexesByTable = new Map<string, CanonicalSqliteNamedIndexContract[]>();
-      for (const index of indexes) {
-        assertSqliteIdentifier(index.name);
-        assertSqliteIdentifier(index.tableName);
-        const tableIndexes = indexesByTable.get(index.tableName) ?? [];
-        tableIndexes.push(index);
-        indexesByTable.set(index.tableName, tableIndexes);
-      }
-      for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
-        assertSqliteIdentifier(tableName);
-        const table = readTable(tableName);
-        if (!table) {
-          continue;
-        }
-        const tableIndexes = indexesByTable.get(tableName) ?? [];
-        const canonicalIndexNames = new Set(tableIndexes.map((index) => index.name));
-        const actualIndexes = table.indexes;
-        const unexpected = actualIndexes.find(
-          (index) =>
-            index.unique === 1 &&
-            index.origin === "c" &&
-            index.name !== null &&
-            !canonicalIndexNames.has(index.name),
-        );
-        if (unexpected) {
-          throw new SqliteSchemaMismatchError(
-            `SQLite schema is incomplete or noncanonical for ${databaseLabel}: unexpected unique index ${unexpected.name}`,
-          );
-        }
-        for (const index of tableIndexes) {
-          const actual = actualIndexes.find((candidate) => candidate.name === index.name);
-          if (JSON.stringify(actual) !== JSON.stringify(index.fingerprint)) {
-            if (options.nonUniqueOnly && (index.unique || actual?.unique === 1)) {
-              throw new SqliteSchemaMismatchError(
-                `Canonical unique index ${index.name} requires full admission`,
-              );
-            }
-            repairIndexes.add(index);
-          }
-        }
-      }
+    for (const index of collectCanonicalSqliteIndexRepairs(
+      databaseLabel,
+      schemaSql,
+      readTable,
+      options,
+    )) {
+      repairIndexes.add(index);
     }
 
     if (options.verifyPhysicalIntegrity !== false) {
