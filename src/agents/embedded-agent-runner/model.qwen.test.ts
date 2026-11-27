@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { createApiRegistry, createNodeLlmRuntime } from "@openclaw/ai";
+import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { expectDefined } from "@openclaw/normalization-core";
 import { assert, describe, expect, it, vi } from "vitest";
@@ -119,7 +120,7 @@ describe("Qwen static fallback routing", () => {
   });
 });
 
-it("admits Qwen4-Max thinking aliases and sends their canonical efforts", async () => {
+it("admits Qwen4-Max thinking levels and preserves them through runtime clamping", async () => {
   const model = makeProviderModelFixture<"openai-completions">({
     provider: "qwen-token-plan",
     id: "qwen4-max",
@@ -131,13 +132,17 @@ it("admits Qwen4-Max thinking aliases and sends their canonical efforts", async 
     default: Parameters<typeof registerProviderPlugins>[0];
   }>({ pluginId: "qwen", artifactBasename: "index.js" });
   const provider = requireRegisteredProvider(await registerProviderPlugins(plugin), model.provider);
-  const aliases = [
+  const runtimeModel =
+    provider.normalizeResolvedModel?.({ provider: model.provider, modelId: model.id, model }) ??
+    model;
+  const efforts = [
     ["minimal", "low"],
     ["medium", "high"],
+    ["xhigh", "xhigh"],
     ["max", "xhigh"],
   ] as const;
 
-  for (const [level, effort] of aliases) {
+  for (const [level, effort] of efforts) {
     const selected = resolveThinkingSelectionForModel({
       provider: model.provider,
       model: model.id,
@@ -157,13 +162,17 @@ it("admits Qwen4-Max thinking aliases and sends their canonical efforts", async 
       provider.wrapStreamFn?.({
         provider: model.provider,
         modelId: model.id,
-        model,
+        model: runtimeModel,
         streamFn,
         thinkingLevel: selected.level,
       }),
       "Qwen Token Plan stream wrapper",
     );
-    await stream(model, { messages: [] });
+    await stream(
+      runtimeModel,
+      { messages: [] },
+      { reasoning: clampThinkingLevel(runtimeModel, selected.level) },
+    );
     expect(payload).toEqual({ messages: [], enable_thinking: true, reasoning_effort: effort });
   }
 });
