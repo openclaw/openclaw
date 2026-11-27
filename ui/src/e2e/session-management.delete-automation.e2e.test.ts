@@ -18,6 +18,7 @@ suite.define(() => {
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const main = sessionRow("agent:main:main", "Main", 1);
         const target = sessionRow("agent:main:backup", "Backup maintenance", 2, {
+          label: "",
           hasAutomation: true,
         });
         const gateway = await ui.installSessionRows(page, [main, target], {
@@ -55,7 +56,7 @@ suite.define(() => {
         );
         const row =
           surface === "list"
-            ? page.locator(".session-data-row").filter({ hasText: target.label })
+            ? page.locator(".session-data-row").filter({ hasText: target.displayName })
             : page.locator('.sidebar-recent-session[data-session-key="' + target.key + '"]');
         const openDelete = async () => {
           await ui.visible(row);
@@ -87,6 +88,7 @@ suite.define(() => {
           path.join(suite.artifactDir, "delete-automation-" + surface + ".png"),
           frame.elements[0]!.png,
         );
+        expect.soft(await dialog.textContent()).toContain("Delete “Backup maintenance”?");
         expect
           .soft(await dialog.textContent())
           .toContain(

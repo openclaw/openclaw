@@ -14,6 +14,7 @@ import {
 } from "../../components/session-workspace-recovery.runtime.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -159,7 +160,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       only && rows.length === 1
         ? {
             title: t("sessionsView.deleteSessionTitle", {
-              session: normalizeOptionalString(only.label) ?? only.key,
+              session: resolveSessionDisplayName(only.key, only),
             }),
             message: sessionDeleteConfirmationMessage(rows),
           }
@@ -200,7 +201,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
         sessions: rows.map((row) => ({
           key: row.key,
           agentId: sessionAgentId(row.key, scope.context),
-          label: normalizeOptionalString(row.label) ?? row.key,
+          label: resolveSessionDisplayName(row.key, row),
           hasAutomation: currentAutomationFlag(row),
         })),
         gateway: scope.gateway,
@@ -263,7 +264,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
               action: "delete",
               session: {
                 ...row,
-                label: row.label || row.displayName || row.key,
+                label: resolveSessionDisplayName(row.key, row),
                 agentId: requests[0]!.agentId,
               },
               scope,
@@ -344,7 +345,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
   }
 
   async function deleteSessionFromMenu(row: GatewaySessionRow) {
-    const label = normalizeOptionalString(row.label) ?? row.key;
+    const label = resolveSessionDisplayName(row.key, row);
     const scope = captureRequestScope({ allowDeferred: true });
     if (
       !scope ||
