@@ -501,6 +501,8 @@ it.each([undefined, true, false])(
       operationId: "plugin-maintenance-reload",
       generation: 2,
       pluginIds: ["updated", "restored"],
+      restartRequired: false,
+      warnings: ["Plugin replacement waited for retained work to finish."],
     }));
     vi.mocked(resolvePluginBatchReload).mockResolvedValueOnce(reload);
     if (acceptCapabilities === false) {
@@ -628,6 +630,11 @@ it.each([undefined, true, false])(
       expect(summary).toContain("openclaw plugins reload updated restored");
     } else {
       expect(summary).not.toContain("Failed step:");
+      expect(maintained?.steps.find(({ step }) => step === "plugins")?.detail).toContain(
+        "Plugin replacement waited for retained work to finish.",
+      );
+      expect(maintained?.origin.nextAction).toBeUndefined();
+      expect(summary).not.toContain("openclaw plugins reload");
     }
   },
 );

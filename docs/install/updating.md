@@ -178,7 +178,8 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    changed plugins through the existing runtime lifecycle. The run settles and
    sends one notice after this work finishes. Plugin failures appear in that
    summary with the failed step and exact next command; they never fail the core
-   update or trigger rollback.
+   update or trigger rollback. A successful reload's warnings stay in the plugin
+   step details without marking activation failed or requesting a retry.
 
 Packaged bundled plugins belong to the selected core release, not a second
 plugin installation. Channel synchronization retires obsolete compiled-bundle
