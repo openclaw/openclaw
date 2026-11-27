@@ -38,10 +38,9 @@ type AgentTurnService = ReturnType<
 >;
 const turns = vi.hoisted(() => ({
   start: vi.fn<AgentTurnService["startTurn"]>(),
-  wait: vi.fn<AgentTurnService["waitForTurn"]>(),
 }));
 vi.mock("../../../gateway/agent-turn/agent-turn-service.js", () => ({
-  createAgentTurnService: () => ({ startTurn: turns.start, waitForTurn: turns.wait }),
+  createAgentTurnService: () => ({ startTurn: turns.start }),
 }));
 
 const fixture = useSubagentControlFixture();
@@ -68,7 +67,6 @@ beforeEach(() => {
     assertAdmissionCurrent?.();
     acceptTurn(io, "synthetic-requester-turn");
   });
-  turns.wait.mockReset();
 });
 
 const registerCompletion = announcementFixture(fixture, true);

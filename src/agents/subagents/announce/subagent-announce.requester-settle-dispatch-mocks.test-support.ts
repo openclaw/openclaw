@@ -65,7 +65,7 @@ vi.mock("../../../gateway/agent-turn/agent-request-preflight.js", () => ({
 }));
 
 vi.mock("../../../gateway/agent-turn/agent-turn-service.js", () => ({
-  createAgentTurnService: () => ({ startTurn, waitForTurn: vi.fn() }),
+  createAgentTurnService: () => ({ startTurn }),
 }));
 
 vi.mock("../registry/subagent-registry-read.js", () => registryRead);
