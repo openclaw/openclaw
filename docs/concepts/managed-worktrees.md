@@ -34,6 +34,11 @@ workspace filesystem instead of a host `/tmp` tmpfs. Keep workspaces on disk and
 use the provided variables (for example, `mktemp -d "$TMPDIR/validation.XXXXXXXX"`).
 Explicit command or sandbox environment overrides remain supported.
 
+When a local workspace is read-only or its permissions prevent scratch creation,
+OpenClaw uses its private temporary directory instead. It leaves the workspace
+permissions unchanged. This fallback is outside the checkout's snapshots and
+workspace scratch cleanup.
+
 Unix-domain sockets have much shorter path limits than ordinary files. A deeply
 nested workspace can therefore fail socket creation with `AF_UNIX path too long`.
 For those tools, select a short workspace path or explicitly override the temp
