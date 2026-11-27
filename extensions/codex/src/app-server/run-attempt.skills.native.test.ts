@@ -466,32 +466,34 @@ describe("native Codex skill delivery", () => {
         expect(developerMessageText(request)).not.toContain(
           "Synthetic model-owned Default policy.",
         );
-        // Inspect the latest framed policy: historical messages may retain old persona.
-        const input = request?.input;
-        const policy = Array.isArray(input)
-          ? input.findLast(
-              (item) =>
-                isJsonObject(item) &&
-                item.role === "developer" &&
-                JSON.stringify(item).includes("<thread_policy>"),
-            )
-          : undefined;
-        expect(policy).toBeDefined();
-        const text = JSON.stringify(policy);
+        // Inspect the latest delivered section: creation policy, then in-place refreshes on
+        // the live thread (no cold resume). Historical messages may retain old persona.
+        const input = Array.isArray(request?.input) ? request.input : [];
+        const policyIndex = input.findLastIndex(
+          (item) =>
+            isJsonObject(item) &&
+            item.role === "developer" &&
+            (index === 0
+              ? JSON.stringify(item).includes("<thread_policy>")
+              : JSON.stringify(item).includes(
+                  "complete current OpenClaw refreshable thread instructions",
+                )),
+        );
+        expect(policyIndex).toBeGreaterThanOrEqual(0);
+        const text = JSON.stringify(input[policyIndex]);
+        // Everything the model sees from the latest section on.
+        const latest = JSON.stringify(input.slice(policyIndex));
         expect(text).toContain(sharedUser);
         expect(text).not.toContain("Synthetic model-owned Default policy.");
         expect(text).not.toContain("# Collaboration Mode: Default");
         expect(text).not.toContain("request_user_input");
-        if (index > 0) {
-          expect(text).toContain("All earlier collaboration-mode instructions are withdrawn");
-        }
         if (soul) {
           expect(text).toContain(soul);
         } else {
-          expect(text).not.toContain(editedSoul);
+          expect(latest).not.toContain(editedSoul);
         }
         if (index > 0) {
-          expect(text).not.toContain(firstSoul);
+          expect(latest).not.toContain(firstSoul);
         }
       }
       expect(threadIds.size).toBe(1);
