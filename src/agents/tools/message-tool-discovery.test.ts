@@ -440,6 +440,17 @@ describe("scheduled account discovery", () => {
       });
 
       expect(scoped.actions).toContain("read");
+      expect(
+        Value.Check(scoped.schema, {
+          action: "read",
+          channel: "slack",
+          target: "channel:C123",
+          readAs: "bot",
+        }),
+      ).toBe(true);
+      if (currentChannelProvider === "telegram") {
+        expect(scoped.actions).not.toContain("channel-list");
+      }
       expect(baseline.actions).not.toContain("read");
       expect(scoped.actions).toContain("poll");
       expect(baseline.properties).toHaveProperty("foreignHint");
@@ -489,4 +500,173 @@ it("uses modern raw-plugin fallback and current configuration facts", () => {
     unprepared.mockRestore();
     resetPluginRuntimeStateForTest();
   }
+});
+
+describe("channel-owned message tool fields", () => {
+  const optional = () => Type.Optional(Type.String());
+  const owned = (
+    id: string,
+    actions: ChannelMessageToolDiscovery["actions"],
+    schema: ChannelMessageToolSchemaContribution[],
+  ): DiscoveryChannel => ({
+    id,
+    reconcilesUnknownSend: false,
+    actions: { describeMessageTool: () => ({ actions, schema }) },
+  });
+  const channels = [
+    owned(
+      "discord",
+      ["send", "channel-list", "member-info", "emoji-upload"],
+      [
+        {
+          actions: ["channel-list", "member-info", "emoji-upload"],
+          visibility: "all-configured",
+          properties: { guildId: optional() },
+        },
+        {
+          actions: ["emoji-upload"],
+          visibility: "all-configured",
+          properties: { emojiName: optional() },
+        },
+        { actions: ["send"], visibility: "all-configured", properties: { components: optional() } },
+      ],
+    ),
+    owned(
+      "signal",
+      ["send", "react"],
+      [
+        {
+          actions: ["react"],
+          visibility: "all-configured",
+          properties: { targetAuthorUuid: optional() },
+        },
+      ],
+    ),
+    owned(
+      "telegram",
+      [
+        "send",
+        "delete",
+        "edit",
+        "emoji-list",
+        "poll",
+        "react",
+        "read",
+        "topic-create",
+        "topic-edit",
+      ],
+      [{ visibility: "all-configured", properties: { effectId: optional() } }],
+    ),
+  ];
+  const run = (params: Omit<MessageToolDiscoveryParams, "preparedMessageToolCatalog">) =>
+    discover({ ...params, preparedMessageToolCatalog: catalog(channels) });
+  const otherChannelFields = [
+    "guildId",
+    "roleId",
+    "roleIds",
+    "emojiName",
+    "components",
+    "targetAuthor",
+    "targetAuthorUuid",
+    "openId",
+    "unionId",
+    "memberIdType",
+    "gifPlayback",
+    "deleteDays",
+    "position",
+    "nsfw",
+    "categoryId",
+    "memberId",
+    "userId",
+  ];
+
+  it("keeps other channels' fields out of a Telegram forum-topic turn", () => {
+    const { actions, properties } = run({ cfg: {}, currentChannelProvider: "telegram" });
+    expect(actions).toEqual([
+      "delete",
+      "edit",
+      "emoji-list",
+      "poll",
+      "react",
+      "read",
+      "send",
+      "topic-create",
+      "topic-edit",
+    ]);
+    for (const field of otherChannelFields) {
+      expect(properties, field).not.toHaveProperty(field);
+    }
+    for (const field of ["effectId", "chatId", "channelId", "name", "messageId", "pollId"]) {
+      expect(properties, field).toHaveProperty(field);
+    }
+  });
+
+  it("keeps a Discord turn's own fields without other channels' fields", () => {
+    const { properties } = run({ cfg: {}, currentChannelProvider: "discord" });
+    for (const field of ["guildId", "emojiName", "components", "userId", "memberId"]) {
+      expect(properties, field).toHaveProperty(field);
+    }
+    for (const field of ["effectId", "targetAuthorUuid", "openId", "gifPlayback"]) {
+      expect(properties, field).not.toHaveProperty(field);
+    }
+  });
+
+  it("gates plugin fields by the allowlisted actions", () => {
+    // Narrowing to channel-move keeps the layout params its handler reads and
+    // drops fragments for actions the allowlist removed.
+    const layout = owned(
+      "discord",
+      ["send", "channel-move", "emoji-upload"],
+      [
+        {
+          actions: ["channel-move", "category-delete"],
+          visibility: "all-configured",
+          properties: { position: optional(), categoryId: optional() },
+        },
+        {
+          actions: ["emoji-upload"],
+          visibility: "all-configured",
+          properties: { emojiName: optional() },
+        },
+      ],
+    );
+    const { actions, properties } = discover({
+      cfg: { tools: { message: { actions: { allow: ["channel-move"] } } } },
+      currentChannelProvider: "discord",
+      preparedMessageToolCatalog: catalog([layout]),
+    });
+    expect(actions).toEqual(["channel-move"]);
+    expect(properties).toHaveProperty("position");
+    expect(properties).toHaveProperty("categoryId");
+    expect(properties).not.toHaveProperty("emojiName");
+  });
+
+  it.each([
+    { name: "WebChat", params: { currentChannelProvider: "webchat" }, clawhub: true },
+    { name: "a scheduled run", params: { isScheduledRun: true }, clawhub: false },
+  ])("keeps configured channels' fields for $name", ({ params, clawhub }) => {
+    const { properties } = run({ cfg: {}, ...params });
+    for (const field of ["guildId", "emojiName", "components", "targetAuthorUuid", "effectId"]) {
+      expect(properties, field).toHaveProperty(field);
+    }
+    expect(Object.hasOwn(properties, "clawhub")).toBe(clawhub);
+    for (const field of ["openId", "unionId", "memberIdType", "gifPlayback"]) {
+      expect(properties, field).not.toHaveProperty(field);
+    }
+  });
+
+  it("keeps fields for a bound channel's cross-channel actions", () => {
+    const { actions, properties } = run({
+      cfg: { bindings: [{ agentId: "main", match: { channel: "discord" } }] },
+      agentId: "main",
+      currentChannelProvider: "telegram",
+    });
+    expect(actions).toEqual(
+      expect.arrayContaining(["channel-list", "emoji-upload", "topic-create"]),
+    );
+    for (const field of ["guildId", "emojiName", "components", "effectId"]) {
+      expect(properties, field).toHaveProperty(field);
+    }
+    expect(properties).not.toHaveProperty("targetAuthorUuid");
+  });
 });

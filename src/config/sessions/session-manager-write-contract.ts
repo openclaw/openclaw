@@ -1,10 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { BashExecutionMessage, CustomMessage } from "../../agents/sessions/messages.js";
 import type {
-  CommittedCompactionBoundary,
-  PreparedCompactionAppend,
-} from "../../agents/sessions/session-compaction-persistence.js";
-import type {
   ModelChangeEntry,
   SessionEntry,
   SessionLeafControl,
@@ -14,7 +10,6 @@ import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import type { Message } from "../../llm/types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
-import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
@@ -26,6 +21,10 @@ import type {
   TranscriptWriteSnapshot,
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type {
+  CommittedCompactionBoundary,
+  PreparedCompactionAppend,
+} from "./session-compaction-persistence.types.js";
 import type {
   PreparedSessionTranscriptHydration as PreparedSessionTranscriptReload,
   SessionTranscriptContextSelection,
@@ -147,7 +146,6 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
         scope: MetadataTarget;
         messageJson: string;
         cwd: string;
-        cliWriter?: CliHistoryWriterFacts;
       } & SessionMetadataMessageControl;
       output: {
         snapshot: Result<
@@ -173,7 +171,6 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
         scope: MetadataTarget;
         event: Omit<SessionMessageEntry, "message"> | string;
         initialModel?: ModelChangeEntry;
-        cliWriter?: CliHistoryWriterFacts;
         message?: {
           messageJson: string;
           cwd: string;

@@ -75,7 +75,7 @@ function isRunAlreadyQueued(run: FollowupRun, items: FollowupRun[]): boolean {
 export function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
-  settings: QueueSettings,
+  requestedSettings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
@@ -83,6 +83,13 @@ export function enqueueFollowupRun(
 ): boolean {
   if (isFollowupRunAborted(run)) {
     return false;
+  }
+  const settings = run.operatorAuthority?.participationCeiling
+    ? { ...requestedSettings, mode: "followup" as const }
+    : requestedSettings;
+  if (run.operatorAuthority?.participationCeiling) {
+    run.disableCollectBatching = true;
+    run.protectFromQueueOverflow = true;
   }
   if (options.position === "front") {
     run.protectFromQueueOverflow = true;
@@ -460,6 +467,8 @@ export function claimNextQueuedFollowupRequestFrom(
   );
   if (
     !next ||
+    source.operatorAuthority?.participationCeiling ||
+    next.operatorAuthority?.participationCeiling ||
     followupMessageRouteIdentityKey(next) !== followupMessageRouteIdentityKey(source) ||
     resolveFollowupAuthorizationKey(next) !== resolveFollowupAuthorizationKey(source)
   ) {
@@ -577,7 +586,6 @@ export function reserveSteerCandidate(
           finish(true);
           return "cancelled";
         }
-        run.operatorAuthority?.assertCurrent();
         return "steer";
       } catch (error) {
         const cancelled = isFollowupRunAborted(run) || input.abortSignal.aborted;

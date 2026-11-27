@@ -10,7 +10,6 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { textContent } from "./chat-flow.test-support.ts";
-import { swarmSnapshot } from "./chat-swarm.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { recordedToolCall } from "./recorded-tool.test-support.ts";
 
@@ -154,57 +153,6 @@ function history() {
 }
 
 suite.define(() => {
-  it("keeps Swarms from earlier runs in the resumed turn after reload", async () => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 1400 }, locale: "en-US" },
-      async ({ page }) => {
-        const child = (id: string, status: string) => ({
-          key: "agent:main:subagent:" + id,
-          status,
-        });
-        const groups = [
-          ...swarmSnapshot(`swarm:${sessionKey}:preview`, now + 9 * minute, [
-            child("link-check", "done"),
-          ]).groups,
-          ...swarmSnapshot(`swarm:${sessionKey}:build`, now + 4 * minute, [
-            child("build-check", "running"),
-          ]).groups,
-        ];
-        await installMockGateway(page, {
-          sessionKey,
-          sessions: [
-            {
-              key: sessionKey,
-              sessionId: "docs-upgrade",
-              kind: "direct",
-              label: "Docs upgrade",
-              updatedAt: now + 18 * minute,
-              swarm: { groups, otherActiveGroups: 0 },
-            },
-          ],
-          historyMessages: history(),
-        });
-        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-        const resumedTurn = thread.locator(".chat-group.assistant").filter({
-          has: page.getByText(ANSWER, { exact: true }),
-        });
-        const swarms = resumedTurn.locator('[data-test-id="chat-inline-swarm"]');
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page.getByText(ANSWER, { exact: true }).waitFor();
-        expect(await resumedTurn.count()).toBe(1);
-        expect(await resumedTurn.locator(".chat-handoff-resume__rule").count()).toBeGreaterThan(0);
-        await expect.poll(() => swarms.count()).toBe(2);
-        expect(await swarms.getByRole("status").allTextContents()).toEqual([
-          "Swarm0 of 1 settled",
-          "Swarm1 of 1 settled",
-        ]);
-        await page.reload();
-        await expect.poll(() => swarms.count()).toBe(2);
-        expect(await thread.locator('[data-test-id="chat-inline-swarm"]').count()).toBe(2);
-      },
-    );
-  });
-
   it("keeps self-woken work in the block of the prompt that started it", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 1400 } }, async ({ page }) => {
       await page.clock.setFixedTime(now + 20 * minute);

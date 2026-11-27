@@ -1,11 +1,18 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { gitReleaseSlot, resolveGitReleasePrefix } from "../../infra/git-release-paths.js";
+import { createGitReleaseDirs, publishGitRelease } from "../../infra/git-release.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
 import * as exec from "../../process/exec.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
-import { retireStandaloneGitWrapper } from "./update-command-git.js";
+import {
+  exposeGlobalPackageThroughRelease,
+  resolveGitReleaseCheckout,
+  retireStandaloneGitWrapper,
+} from "./update-command-git.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const installerWrapper = (root: string) =>
@@ -128,5 +135,172 @@ describe("retireStandaloneGitWrapper", () => {
     await write("@echo off\r\necho unrelated\r\n");
     await expect(retire()).resolves.toEqual({});
     await expect(fs.readFile(wrapper, "utf8")).resolves.toContain("unrelated");
+  });
+
+  it("points the wrapper install.ps1 wrote, with its doubled backslash, at the release launcher", async () => {
+    const { base, wrapper, write, root } = await fixture("win32");
+    const installed = `@echo off\r\nnode "${root}\\dist\\\\entry.js" %*\r\n`;
+    await write(installed);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(base, "state"));
+    // The updater spells Windows paths with path.win32, also on this test host.
+    const prefix = path.win32.join(resolveGitReleasePrefix());
+    const repoint = () =>
+      retireStandaloneGitWrapper({
+        previousRoot: root,
+        replacementRoot: path.win32.join(prefix, "openclaw"),
+        platform: "win32",
+        searchDirs: [base],
+      });
+    await expect(repoint()).resolves.toEqual({});
+    const repointed = await fs.readFile(wrapper, "utf8");
+    expect(repointed).toMatch(/^@goto run\r\n@rem x*\r\n@exit \/b %errorlevel%\r\n:run\r\n/u);
+    expect(repointed).toContain(
+      `@node "${path.win32.join(prefix, "openclaw-launcher.mjs")}" %*\r\n`,
+    );
+    // cmd.exe running `openclaw update` through the old wrapper resumes at the old length.
+    expect(Buffer.from(repointed).subarray(Buffer.byteLength(installed)).toString()).toMatch(
+      /^@exit \/b %errorlevel%\r\n/u,
+    );
+    // A later update recognizes the wrapper it wrote and leaves it alone.
+    await expect(repoint()).resolves.toEqual({});
+    await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(repointed);
+    // A switch back to a package retires it.
+    await expect(
+      retireStandaloneGitWrapper({ previousRoot: root, platform: "win32", searchDirs: [base] }),
+    ).resolves.toEqual({});
+    await expect(fs.access(wrapper)).rejects.toThrow();
+    vi.unstubAllEnvs();
+  });
+
+  it("points the installer wrapper at the release launcher, so `openclaw gateway` on PATH starts a pending release", async () => {
+    const base = dirs.make("openclaw-wrapper-release-");
+    const checkout = path.join(base, "checkout");
+    const wrapper = path.join(base, "openclaw");
+    await fs.writeFile(
+      wrapper,
+      `#!/usr/bin/env bash\nset -euo pipefail\nexec ${process.execPath} ${checkout}/dist/entry.js "$@"\n`,
+      { mode: 0o755 },
+    );
+    const prefix = path.join(base, "state", "git-install");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(base, "state"));
+    const release = async (name: string) => {
+      const { releaseRoot } = await createGitReleaseDirs(prefix);
+      await fs.mkdir(path.join(releaseRoot, "dist"), { recursive: true });
+      for (const entry of ["index.js", "entry.js"]) {
+        await fs.writeFile(
+          path.join(releaseRoot, "dist", entry),
+          `console.log("${name} ${entry}");\n`,
+        );
+      }
+      return releaseRoot;
+    };
+    await publishGitRelease({ prefix, releaseRoot: await release("old"), trial: false });
+    const slot = gitReleaseSlot(prefix);
+    await expect(
+      retireStandaloneGitWrapper({
+        previousRoot: checkout,
+        replacementRoot: slot,
+        searchDirs: [base],
+      }),
+    ).resolves.toEqual({});
+    // A `--no-restart` update leaves the new release pending for the next Gateway start.
+    await publishGitRelease({
+      prefix,
+      releaseRoot: await release("new"),
+      trial: true,
+      pending: true,
+    });
+    const run = (...args: string[]) =>
+      spawnSync("bash", [wrapper, ...args], { encoding: "utf8" }).stdout;
+
+    expect(run("gateway", "status")).toBe("old entry.js\n");
+    expect(run("gateway", "run", "--help")).toBe("old entry.js\n");
+    expect(run("--", "gateway", "run")).toBe("new index.js\n");
+    expect(run("gateway", "--port", "18789")).toBe("new index.js\n");
+    expect(run("--version")).toBe("new entry.js\n");
+
+    // A later switch back to npm retires the wrapper this install's launcher now runs.
+    await expect(
+      retireStandaloneGitWrapper({ previousRoot: checkout, searchDirs: [base] }),
+    ).resolves.toEqual({});
+    await expect(fs.access(wrapper)).rejects.toThrow();
+    vi.unstubAllEnvs();
+  });
+});
+
+describe.skipIf(process.platform === "win32")("resolveGitReleaseCheckout", () => {
+  it("finds the checkout from a release worktree, as a release-driven update starts there", async () => {
+    const base = await fs.realpath(dirs.make("openclaw-release-checkout-"));
+    const checkout = path.join(base, "checkout");
+    const git = (cwd: string, ...args: string[]) =>
+      spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+    await fs.mkdir(checkout);
+    git(checkout, "init", "-q");
+    git(
+      checkout,
+      "-c",
+      "user.email=t@t",
+      "-c",
+      "user.name=t",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "x",
+    );
+    const release = path.join(base, "state", "git-install", "releases", "r1", "openclaw");
+    expect(git(checkout, "worktree", "add", "-q", "--detach", release).status).toBe(0);
+
+    await expect(resolveGitReleaseCheckout(release, release, 10_000)).resolves.toBe(checkout);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("exposeGlobalPackageThroughRelease", () => {
+  async function install(base: string) {
+    const prefix = path.join(base, "state", "git-install");
+    const { releaseRoot } = await createGitReleaseDirs(prefix);
+    await fs.mkdir(path.join(releaseRoot, "dist"), { recursive: true });
+    await fs.writeFile(path.join(releaseRoot, "dist", "entry.js"), 'console.log("release");\n');
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+    const checkout = path.join(base, "checkout");
+    await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
+    await fs.writeFile(path.join(checkout, "openclaw.mjs"), 'console.log("checkout");\n');
+    const globalRoot = path.join(base, "lib", "node_modules");
+    await fs.mkdir(globalRoot, { recursive: true });
+    return { slot: gitReleaseSlot(prefix), checkout, globalRoot };
+  }
+  const start = (entry: string, ...args: string[]) =>
+    spawnSync(process.execPath, [entry, ...args], { encoding: "utf8" }).stdout;
+
+  it("replaces an npm link to the checkout without writing the checkout", async () => {
+    const base = dirs.make("openclaw-npm-entry-");
+    const { slot, checkout, globalRoot } = await install(base);
+    const packageRoot = path.join(globalRoot, "openclaw");
+    await fs.symlink(checkout, packageRoot);
+
+    await expect(exposeGlobalPackageThroughRelease(packageRoot, slot, checkout)).resolves.toBe(
+      undefined,
+    );
+
+    expect((await fs.lstat(packageRoot)).isDirectory()).toBe(true);
+    expect(start(path.join(packageRoot, "openclaw.mjs"), "--version")).toBe("release\n");
+    expect(await fs.readFile(path.join(checkout, "openclaw.mjs"), "utf8")).toBe(
+      'console.log("checkout");\n',
+    );
+    expect((await fs.readdir(globalRoot)).filter((name) => name !== "openclaw")).toEqual([]);
+  });
+
+  it("writes through a link to another directory, as a pnpm store path", async () => {
+    const base = dirs.make("openclaw-npm-entry-");
+    const { slot, checkout, globalRoot } = await install(base);
+    const store = path.join(base, "store", "openclaw");
+    await fs.mkdir(store, { recursive: true });
+    const packageRoot = path.join(globalRoot, "openclaw");
+    await fs.symlink(store, packageRoot);
+
+    await exposeGlobalPackageThroughRelease(packageRoot, slot, checkout);
+
+    expect((await fs.lstat(packageRoot)).isSymbolicLink()).toBe(true);
+    expect(start(path.join(store, "openclaw.mjs"), "--version")).toBe("release\n");
   });
 });

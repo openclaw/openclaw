@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";

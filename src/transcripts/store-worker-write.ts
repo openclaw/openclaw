@@ -7,7 +7,6 @@ import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
 } from "../state/worker-operation-registry.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import { transcriptSessionExportKey } from "./store-artifacts.js";
 import { TranscriptSessionConflictError, TranscriptsSummaryChangedError } from "./store-errors.js";
@@ -19,6 +18,7 @@ import {
   writeMeetingTranscriptSummaryInDatabase,
 } from "./store-sqlite-write.js";
 import { appendMeetingTranscriptUtterance } from "./store-sqlite.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 type SessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 type ExportInput = {

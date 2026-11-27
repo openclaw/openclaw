@@ -35,7 +35,7 @@ describe("agent schema refresh", () => {
         }
         const db = database.db;
         db.exec("DROP INDEX idx_agent_cache_expiry");
-        invalidateOpenClawAgentDatabaseValidation(database.path);
+        invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
         revokeSqliteDatabaseAdmissions(db);
         expect(readSqliteDatabaseIntegrityVerification(db)).toBeUndefined();
         const publicationFailure = new Error("Publication was not acknowledged");

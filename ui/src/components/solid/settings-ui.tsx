@@ -5,7 +5,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-l
 import { t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "./icon.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
-import { Switch, type SwitchSize } from "./switch.tsx";
+import { Switch } from "./switch.tsx";
 import "../tooltip.ts";
 
 export type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
@@ -107,21 +107,25 @@ export function SettingsPageHeader(props: {
   let heading!: HTMLHeadingElement;
   // Resolve once: actions may own a portal, which a second read would mount again.
   const actions = children(() => props.actions);
+  const subtitle = children(() => props.subtitle);
   onSettled(() => props.registerHeading?.(heading));
   return (
     <ShellLayoutBoundary traits={{ toolbarHeader: !props.stacked }}>
       <section
         class={[
           "content-header content-header--settings",
-          { "content-header--stacked": props.stacked },
+          {
+            "content-header--stacked": props.stacked,
+            "content-header--intro": Boolean(subtitle()),
+          },
         ]}
       >
         <div>
           <h1 class="page-title" ref={(element) => (heading = element)}>
             {props.title}
           </h1>
-          <Show when={props.subtitle}>
-            <div class="page-subtitle">{props.subtitle}</div>
+          <Show when={subtitle()}>
+            <div class="page-subtitle">{subtitle()}</div>
           </Show>
         </div>
         <Show when={actions()}>
@@ -289,16 +293,6 @@ export function SettingsNavRow(
   );
 }
 
-export function SettingsToggle(
-  props: SettingsToggleControl & {
-    ariaLabel: string;
-    size?: SwitchSize;
-    inputRef?: (element: HTMLInputElement) => void;
-  },
-) {
-  return <Switch {...props} />;
-}
-
 export function SettingsToggleRow(
   props: SettingsToggleControl & {
     icon?: JSX.Element;
@@ -342,12 +336,6 @@ export function SettingsToggleRow(
         />
       </div>
     </div>
-  );
-}
-
-export function SettingsDefaultDescription(props: { value: string; overridden: boolean }) {
-  return (
-    <Show when={props.overridden}>{t("configForm.defaultValue", { value: props.value })}</Show>
   );
 }
 

@@ -26,3 +26,16 @@ const CORE_DIAGNOSTIC_PROJECTION = {
 export function sanitizeDiagnosticPayload(value: unknown): unknown {
   return projectDiagnosticValue(value, CORE_DIAGNOSTIC_PROJECTION);
 }
+
+const TRAJECTORY_EXPORT_PROJECTION = {
+  ...CORE_DIAGNOSTIC_PROJECTION,
+  unbounded: true,
+} satisfies DiagnosticProjectionPolicy;
+
+/**
+ * Removes credentials and inline media bytes but never drops content for its size or shape:
+ * trajectory exports must keep everything the model saw.
+ */
+export function sanitizeTrajectoryExportPayload(value: unknown): unknown {
+  return projectDiagnosticValue(value, TRAJECTORY_EXPORT_PROJECTION);
+}

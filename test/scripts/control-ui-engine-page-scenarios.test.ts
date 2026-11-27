@@ -1,8 +1,50 @@
+import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it, vi } from "vitest";
-import { createEnginePageScenarios } from "../../scripts/lib/control-ui-engine-page-scenarios.ts";
+import {
+  createEnginePageScenarios,
+  createEngineRouteTransitionScenarios,
+} from "../../scripts/lib/control-ui-engine-page-scenarios.ts";
+import { createScenarioFixture } from "../../scripts/lib/control-ui-interaction-scenarios.ts";
 import { createMockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e-controls.ts";
+import { createControlUiMockResponses } from "../../ui/src/test-helpers/control-ui-mock-responses.ts";
+
+it.each(["page-skills-action", "remount-from-new-session", "remount-from-skills"])(
+  "%s retains the installed inventory and registry responses for Skills readiness",
+  (id) => {
+    const scenarios = [
+      ...createEnginePageScenarios(),
+      ...createEngineRouteTransitionScenarios(async () => {}, ["/skills", "/new"]),
+    ];
+    const scenario = scenarios.find((entry) => entry.id === id);
+    assert(scenario, `Missing scenario: ${id}`);
+    const fixture = createScenarioFixture("synthetic", "synthetic", scenario, {
+      sandboxUrl: "http://127.0.0.1",
+      sandboxPort: 1,
+    });
+    const responses = createControlUiMockResponses(
+      {
+        methodResponses: fixture.methodResponses ?? {},
+        defaultAgentId: "main",
+        sessions: { list: () => [], listResponse: (response) => response },
+        groupRenames: () => [],
+      },
+      isRecord,
+    );
+
+    expect(responses.select("skills.status", {})).toHaveProperty("value.skills.length", 1000);
+    expect(responses.select("skills.search", { limit: 20 })).toHaveProperty(
+      "value.results.length",
+      20,
+    );
+    expect(responses.select("skills.search", { query: "Data skill 0999", limit: 20 })).toEqual({
+      found: true,
+      value: { results: [] },
+    });
+  },
+);
 
 it.each([
   { id: "page-cron-visit", origin: "new-session" },

@@ -285,9 +285,6 @@ export async function runAgentsApiAttempt(
     const recorder = params.userTurnTranscriptRecorder;
     const admittedMessage = recorder?.message ?? (await recorder?.resolveMessage());
     assertCurrent();
-    const historyLimits = resolveAgentHarnessHistoryLimits(
-      params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
-    );
     const historyScope = JSON.stringify([
       params.runId,
       target.agentId,
@@ -295,7 +292,6 @@ export async function runAgentsApiAttempt(
       target.sessionKey,
       target.storePath,
       params.workspaceDir,
-      historyLimits,
     ]);
     let preparedHistory: AgentsApiPromptHistory["messages"] | undefined;
     const readHistory = async () => {
@@ -314,7 +310,7 @@ export async function runAgentsApiAttempt(
         cwd: params.workspaceDir,
         admission: recorder?.getAdmissionReceipt(),
         signal: controller.signal,
-        limits: historyLimits,
+        limits: resolveAgentHarnessHistoryLimits(),
       });
       assertCurrent();
       return (preparedHistory = history.buildSessionContext().messages);

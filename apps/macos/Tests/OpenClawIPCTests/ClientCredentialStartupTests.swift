@@ -87,6 +87,31 @@ struct ClientCredentialStartupTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.capture.path))
     }
 
+    @Test func `newer shared state requires a compatible app`() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        var environment = fixture.environment
+        environment["TEST_EXIT_CODE"] = "1"
+        environment["TEST_STDERR"] =
+            "OpenClaw state database /fixture/state/openclaw.sqlite uses newer schema version 40; " +
+            "this build supports 36."
+
+        do {
+            try await ClientCredentialStartup.prepare(
+                executionRoot: fixture.executionRoot,
+                configURL: fixture.configURL,
+                bundle: fixture.bundle,
+                profile: AppProfile(environment: [:]),
+                environment: environment)
+            Issue.record("An incompatible build was admitted to credential startup")
+        } catch {
+            #expect(error.localizedDescription.contains("Install a compatible OpenClaw app"))
+            #expect(error.localizedDescription.contains("schema 40"))
+            #expect(error.localizedDescription.contains("schema 36"))
+        }
+        #expect(!FileManager.default.fileExists(atPath: fixture.externalMarker.path))
+    }
+
     private struct Fixture {
         let root: URL
         let app: URL
@@ -148,7 +173,7 @@ struct ClientCredentialStartupTests {
                 printf '%s\\n' "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_PROFILE" \\
                   "$OPENCLAW_SQLITE_LIBRARY" "$@" > "$TEST_CAPTURE"
                 if [ "${TEST_EXIT_CODE:-0}" != 0 ]; then
-                  printf '%s\\n' 'synthetic preparation failure' >&2
+                  printf '%s\\n' "${TEST_STDERR:-synthetic preparation failure}" >&2
                   exit "$TEST_EXIT_CODE"
                 fi
                 """.write(to: package.appendingPathComponent("openclaw.mjs"), atomically: true, encoding: .utf8)

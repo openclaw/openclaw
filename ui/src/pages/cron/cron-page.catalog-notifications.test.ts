@@ -34,27 +34,29 @@ it("clears a failed catalog refresh during retry without holding the task draft"
   const page = createPage(createContext(createGateway(client, true)), { render: true });
   try {
     click(page, '[data-test-id="cron-new-task"]');
-    await waitForCronPage(() => expect(page.querySelector("#cron-name")).not.toBeNull());
+    await waitForCronPage(() => expect(page.querySelector("#cron-payload-text")).not.toBeNull());
     await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/initial-model"]));
-    const name = fillInput(page, "#cron-name", "Retained task draft");
+    const prompt = fillInput(page, "#cron-payload-text", "Retained task draft");
     invalidateChatMetadataStore(client);
     await waitForCronPage(() => expect(reads).toBe(2));
     failed.reject(new Error("Catalog refresh unavailable"));
     await waitForCronPage(() => expect(page.textContent).toContain("Catalog refresh unavailable"));
-    expect(name.value).toBe("Retained task draft");
+    expect(prompt.value).toBe("Retained task draft");
 
     invalidateChatMetadataStore(client);
     await waitForCronPage(() => expect(reads).toBe(3));
     await waitForCronPage(() =>
       expect(page.textContent).not.toContain("Catalog refresh unavailable"),
     );
-    expect(page.querySelector("#cron-name")).toBe(name);
-    fillInput(page, "#cron-name", "Draft edited during retry");
-    await waitForCronPage(() => expect(page.cron.cronForm.name).toBe("Draft edited during retry"));
+    expect(page.querySelector("#cron-payload-text")).toBe(prompt);
+    fillInput(page, "#cron-payload-text", "Draft edited during retry");
+    await waitForCronPage(() =>
+      expect(page.cron.cronForm.payloadText).toBe("Draft edited during retry"),
+    );
     expect(page.cronCatalogModels).toEqual(["fixture/initial-model"]);
     retry.resolve({ models: [catalogModel("updated-model")] });
     await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/updated-model"]));
-    expect(name.value).toBe("Draft edited during retry");
+    expect(prompt.value).toBe("Draft edited during retry");
   } finally {
     failed.resolve({ models: [] });
     retry.resolve({ models: [] });

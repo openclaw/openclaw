@@ -36,7 +36,7 @@ const plugin = `export default { id: "ui-fixture", activate(host) {
 } };`;
 
 suite.define(() => {
-  it("renders a plugin receipt without sending a message and restores built-in feedback when disabled", async () => {
+  it("renders a plugin receipt without sending a message and removes it when disabled", async () => {
     await suite.withPage(
       { viewport: { width: 1160, height: 850 }, serviceWorkers: "block" },
       async ({ page }) => {
@@ -72,31 +72,17 @@ suite.define(() => {
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const notice = page.locator(".chat-run-failure");
-        const report = notice.getByRole("link", { name: "Report a bug" });
-        await report.waitFor();
         const toggle = notice.getByRole("button", { name: "Couldn’t finish this reply" });
+        await toggle.waitFor();
         await toggle.click();
         await notice.locator('[role="dialog"][data-phase="open"]').waitFor();
         expect(await notice.locator(".chat-run-failure__log").textContent()).toBe(summary);
-        const before = await takeControlUiScreenshotFrame(page, notice, [toggle, report], {
-          elements: [report],
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, "default-feedback-clean.png"), before.png);
-        await writeFile(
-          path.join(suite.artifactDir, "default-feedback-bounds.json"),
-          JSON.stringify({
-            viewport: page.viewportSize(),
-            scale: await page.evaluate(() => window.devicePixelRatio),
-            target: before.elements[0]!.bounds,
-          }),
-        );
+        expect(await notice.getByRole("link", { name: "Report a bug" }).count()).toBe(0);
         await page.getByRole("button", { name: "Use plugin feedback", exact: true }).click();
         const receipt = notice.locator("[data-plugin-failure-feedback]");
         await expect
           .poll(() => receipt.textContent())
           .toContain("Synthetic report ID: fixture-report");
-        expect(await report.count()).toBe(0);
         // The header action is an outside click; reopen the ordinary details popover.
         await toggle.click();
         await notice.locator('[role="dialog"][data-phase="open"]').waitFor();
@@ -133,8 +119,7 @@ suite.define(() => {
           diagnostics: [],
         });
         await gateway.emitGatewayEvent("plugins.controlUi.changed", { revision: "disabled" });
-        await report.waitFor();
-        expect(await receipt.count()).toBe(0);
+        await expect.poll(() => receipt.count()).toBe(0);
         expect(await notice.locator(".chat-run-failure__log").textContent()).toBe(summary);
         expect(await page.locator(".agent-chat__input textarea").count()).toBe(1);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);

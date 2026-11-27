@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, expect, vi } from "vitest";
 import { collectPackageRootModules } from "../../../scripts/lib/package-root-modules.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";

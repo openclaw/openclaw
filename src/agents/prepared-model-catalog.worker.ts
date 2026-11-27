@@ -7,6 +7,7 @@ import {
 } from "../config/resolution-facts.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { installDirectoryWatchPort } from "../infra/directory-watch-host.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
 import {
@@ -541,6 +542,9 @@ async function runCatalogRequest(
 
 if (parentPort) {
   const data = workerData as PreparedModelCatalogWorkerData;
+  if (data.directoryWatchPort) {
+    installDirectoryWatchPort(data.directoryWatchPort);
+  }
   if (data.databaseEngineSelection) {
     installDatabaseEngineSelection(data.databaseEngineSelection);
   }

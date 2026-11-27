@@ -458,6 +458,7 @@ async function readConfigSnapshot(
 export async function prepareConfigRecoveryFromContext(
   context: ConfigIoContext,
   current: ConfigFileSnapshot,
+  intent?: "doctor-repair",
 ): Promise<PreparedConfigRecovery | null> {
   return await withArtifactPreservingStateReads(async () => {
     if (
@@ -483,6 +484,7 @@ export async function prepareConfigRecoveryFromContext(
       context.transformRecoveryCandidate,
     );
     const plan = await prepareSuspiciousConfigRead({
+      intent,
       deps: previewContext.deps,
       measure: previewContext.deps.measure,
       configPath: context.configPath,
@@ -504,7 +506,14 @@ export async function prepareConfigRecoveryFromContext(
       if (isConfigReadFailure(snapshot)) {
         throw createConfigReadError(snapshot);
       }
-      return snapshot.valid ? { snapshot, pluginMetadataSnapshot, apply: plan.apply } : null;
+      return snapshot.valid
+        ? {
+            snapshot,
+            pluginMetadataSnapshot,
+            assertBackupUnchanged: plan.assertBackupUnchanged,
+            apply: plan.apply,
+          }
+        : null;
     } finally {
       // The prepared writer keeps the selected environment; candidate env.vars are preview-only.
       restoreEnvChangesIfUnchanged({

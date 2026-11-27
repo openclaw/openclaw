@@ -24,7 +24,8 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
 
-const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
+const PROJECT_CLONE_TIMEOUT_MS = 30 * 60_000;
+const PROJECT_GIT_NO_OUTPUT_TIMEOUT_MS = 2 * 60_000;
 type ProjectCloneOptions = {
   assertCurrent?: () => void;
   startRun?: GitOperationStarter;
@@ -34,7 +35,7 @@ type ProjectCloneOptions = {
   timeoutMs?: number;
   token?: string;
 };
-const PROJECT_FETCH_TIMEOUT_MS = 60_000;
+const PROJECT_FETCH_TIMEOUT_MS = 10 * 60_000;
 const log = createSubsystemLogger("projects/clone");
 const PROJECT_REF_INVENTORY_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const PROJECT_MAINTENANCE_CONFIG = [
@@ -114,10 +115,17 @@ function classifyProjectGitFailure(
   result: Awaited<ReturnType<typeof runCommandWithTimeout>>,
   operation: "clone" | "fetch",
   tokenConfigured: boolean,
+  timeoutMs: number,
 ): ProjectCloneError {
+  if (result.termination === "timeout") {
+    const limit = timeoutMs >= 60_000 ? `${timeoutMs / 60_000} minutes` : `${timeoutMs} ms`;
+    return new ProjectCloneError(
+      "clone_failed",
+      `Git ${operation === "fetch" ? "refresh" : operation} did not finish within ${limit}. The repository may be too large to clone here; retry, or ask the Gateway operator to check projects/clone logs.`,
+    );
+  }
   const detail = `${result.stderr}\n${result.stdout}`.toLowerCase();
   if (
-    result.termination === "timeout" ||
     result.termination === "no-output-timeout" ||
     /could not resolve host|connection timed out|failed to connect/u.test(detail)
   ) {
@@ -233,10 +241,11 @@ export async function cloneProjectCheckout(
   }
   await fs.mkdir(path.dirname(input.target), { recursive: true });
   const commandEnv = cloneCommandEnv(input.url, options.token, env);
+  const cloneTimeoutMs = options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS;
   const result = await withGitNetworkRetry(
     "clone",
     {
-      timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
+      timeoutMs: cloneTimeoutMs,
       signal: options.signal,
       beforeRun: options.assertCurrent,
       startRun: options.startRun,
@@ -248,6 +257,7 @@ export async function cloneProjectCheckout(
             [
               "git",
               "clone",
+              "--progress",
               ...PROJECT_MAINTENANCE_CONFIG.flatMap(([key, value]) => [
                 "--config",
                 `${key}=${value}`,
@@ -260,6 +270,7 @@ export async function cloneProjectCheckout(
             {
               env: commandEnv,
               timeoutMs,
+              noOutputTimeoutMs: PROJECT_GIT_NO_OUTPUT_TIMEOUT_MS,
               signal: options.signal,
               killProcessTree: true,
               maxOutputBytes: 256 * 1024,
@@ -292,7 +303,7 @@ export async function cloneProjectCheckout(
     }
     return;
   }
-  throw classifyProjectGitFailure(result, "clone", Boolean(options.token));
+  throw classifyProjectGitFailure(result, "clone", Boolean(options.token), cloneTimeoutMs);
 }
 
 async function withProjectCheckoutTransport<T>(
@@ -424,7 +435,7 @@ export async function refreshProjectCheckout(
       ],
     );
     if (result.code !== 0 || result.termination !== "exit") {
-      throw classifyProjectGitFailure(result, "fetch", Boolean(options.token));
+      throw classifyProjectGitFailure(result, "fetch", Boolean(options.token), result.timeoutMs);
     }
     const fetchedRefs = await readProjectRemoteRefs({ target: staging }, stagingOptions);
     const updates = [
@@ -480,7 +491,7 @@ export async function unshallowProjectCheckout(
         { lowerPriority: true, env: { GIT_NO_LAZY_FETCH: "1" } },
       );
       if (result.code !== 0 || result.termination !== "exit") {
-        throw classifyProjectGitFailure(result, "fetch", Boolean(options.token));
+        throw classifyProjectGitFailure(result, "fetch", Boolean(options.token), result.timeoutMs);
       }
       // A shallow upstream cannot supply full history; keep the original boundary.
       if ((await fs.readdir(staging)).includes("shallow")) {
@@ -564,13 +575,15 @@ function runProjectCheckoutGit(
   args: string[],
   commandOptions: GitCommandOptions = {},
 ) {
+  const gitArgs = args[0] === "fetch" ? ["fetch", "--progress", ...args.slice(1)] : args;
   return runProjectGitCommand(() =>
     executeGitCommand(
       input.target,
-      ["-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args],
+      ["-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...gitArgs],
       {
         operation: "project.clone",
-        timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
+        timeoutMs: options.timeoutMs ?? PROJECT_FETCH_TIMEOUT_MS,
+        noOutputTimeoutMs: args[0] === "fetch" ? PROJECT_GIT_NO_OUTPUT_TIMEOUT_MS : undefined,
         signal: options.signal,
         killProcessTree: true,
         maxOutputBytes: 256 * 1024,
@@ -631,7 +644,7 @@ export async function ensureProjectCheckoutCommit(
     retry: fetch,
   });
   if (fetched.code !== 0 || fetched.termination !== "exit") {
-    throw classifyProjectGitFailure(fetched, "fetch", Boolean(options.token));
+    throw classifyProjectGitFailure(fetched, "fetch", Boolean(options.token), fetched.timeoutMs);
   }
 }
 

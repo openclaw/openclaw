@@ -652,6 +652,12 @@ it("retains the imported profile and allows its models after direct refresh fail
   });
 });
 
+it("reports the provider's recommended model from a credential-only login without applying it", async () => {
+  currentConfig = { agents: { defaults: { model: "other/current" } } };
+  expect((await loginFlow({ credentialOnly: true })).defaultModel).toBe("openai/gpt-5.5");
+  expect(currentConfig.agents?.defaults?.model).toBe("other/current");
+});
+
 it("refreshes saved credentials when the settings write fails and preserves its cause", async () => {
   const cause = new Error("config write failed");
   runProviderAuth.mockResolvedValueOnce({
@@ -766,7 +772,7 @@ it("routes OAuth login and refresh to the explicit agent", async () => {
       "Scope: System / agent",
       "Agent: coder",
       "Location: the machine running OpenClaw",
-      "For personal model accounts on a Gateway, run openclaw models accounts login --help.",
+      "Personal model accounts are managed in Settings → Profile → Connected accounts.",
     ].join("\n"),
     "Provider sign-in",
   );
@@ -845,6 +851,8 @@ it("keeps workspace plugins untrusted while applying the selected login model", 
     expect(ctx.prompter.select).toBe(select);
     expect(ctx.runtime).toBe(runtime);
     expect(ctx.env).toBe(process.env);
+    // Offline CLI login runs outside the Gateway, so it has no node runtime.
+    expect(ctx.nodes).toBeUndefined();
     await ctx.openUrl("https://example.com/auth");
     expect(mocks.openUrl).toHaveBeenCalledWith("https://example.com/auth");
     expect(ctx.oauth.createVpsAwareHandlers).toBeTypeOf("function");

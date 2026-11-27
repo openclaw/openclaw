@@ -3,6 +3,84 @@ import { runPrCiSweeper } from "../../scripts/github/pr-ci-sweeper.mjs";
 import { NOW, context, fakeGithub, pr, recordingCore } from "./pr-ci-sweeper.test-support.js";
 
 describe("runPrCiSweeper", () => {
+  it("recovers a transient CI read and continues scanning without re-firing attached runs", async () => {
+    const attached = [21, 22].map((number) =>
+      Object.assign(pr(), {
+        number,
+        state: "open",
+        head: { sha: String(number).repeat(20) },
+      }),
+    );
+    const { github, calls } = fakeGithub({
+      prs: attached,
+      runsBySha: Object.fromEntries(
+        attached.map((candidate) => [candidate.head.sha, [{ conclusion: "success" }]]),
+      ),
+    });
+    const paginate = github.paginate;
+    let ciReads = 0;
+    vi.spyOn(github, "paginate").mockImplementation((endpoint, args, mapFn) => {
+      if (endpoint === github.rest.actions.listWorkflowRuns && ++ciReads === 1) {
+        return Promise.reject(Object.assign(new Error("other side closed"), { status: 500 }));
+      }
+      return paginate(endpoint, args, mapFn);
+    });
+    const { core } = recordingCore();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const result = expect(runPrCiSweeper({ github, context, core, now: NOW })).resolves.toEqual(
+        attached.map((candidate) => ({
+          number: candidate.number,
+          sha: candidate.head.sha.slice(0, 12),
+          action: "skip",
+          reason: "ci-attached",
+        })),
+      );
+      await vi.runAllTimersAsync();
+      await result;
+      expect(ciReads).toBe(3);
+      expect(calls.some((call) => call.method === "pulls.update")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { status: 500, attempts: 3 },
+    { status: 403, attempts: 1 },
+  ])(
+    "surfaces HTTP $status after $attempts reads without mutating",
+    async ({ status, attempts }) => {
+      const candidate = { ...pr(), number: 23, state: "open", head: { sha: "a".repeat(40) } };
+      const { github, calls } = fakeGithub({ prs: [candidate], runsBySha: {} });
+      const paginate = github.paginate;
+      const error = Object.assign(new Error("CI lookup failed"), { status });
+      let ciReads = 0;
+      vi.spyOn(github, "paginate").mockImplementation((endpoint, args, mapFn) => {
+        if (endpoint === github.rest.actions.listWorkflowRuns) {
+          ciReads += 1;
+          return Promise.reject(error);
+        }
+        return paginate(endpoint, args, mapFn);
+      });
+      const { core } = recordingCore();
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const result = expect(runPrCiSweeper({ github, context, core, now: NOW })).rejects.toBe(
+          error,
+        );
+        await vi.runAllTimersAsync();
+        await result;
+        expect(ciReads).toBe(attempts);
+        expect(calls.some((call) => call.method === "pulls.update")).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     { name: "missing CI", ciRuns: [], reason: "ci-run-missing" },
     {

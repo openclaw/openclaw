@@ -46,11 +46,11 @@ async function importAtCommittedOwner(
   owner: string,
   inject: () => Error | void,
 ) {
-  const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
+  const snapshot = sqliteReaders.readSessionImportValidationSnapshot;
   const spy = vi
-    .spyOn(sqliteReaders, "readOnlySqliteValidationSnapshot")
-    .mockImplementation((target) => {
-      const result = snapshot(target);
+    .spyOn(sqliteReaders, "readSessionImportValidationSnapshot")
+    .mockImplementation((target, env) => {
+      const result = snapshot(target, env);
       if (
         target.agentId === owner &&
         result.ok &&

@@ -35,6 +35,9 @@ enum ClientCredentialStartup {
         guard result.success, !result.timedOut, result.exitCode == 0 else {
             let detail = [result.preflightError, result.stderr, result.errorMessage]
                 .compactMap { $0?.nonEmpty }.first ?? "Credential preparation did not complete."
+            if !result.timedOut, let mismatch = NewerStateSchemaError(diagnostic: detail) {
+                throw mismatch
+            }
             throw OpenClawNativeStateError("Could not prepare local client credentials. " + detail.suffix(4000))
         }
     }

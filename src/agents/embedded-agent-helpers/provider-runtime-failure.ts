@@ -33,7 +33,6 @@ const SANDBOX_BLOCKED_RE =
 const OAUTH_FAILURE_PATTERNS = [
   [/\boauth refresh call\b.*\bexceeded hard timeout\b/i, "refresh_timeout"],
   [/\bcallback_timeout\b/i, "callback_timeout"],
-  [/\bcallback_validation_failed\b/i, "callback_validation"],
 ] as const;
 function isHtmlErrorResponse(raw: string, status?: number): boolean {
   if (status === undefined || status < 400) {

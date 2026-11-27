@@ -5,7 +5,11 @@ import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
-import { decodeRun, hasStoredUpdateRecovery } from "./update-run-read.kernel.js";
+import {
+  decodeRun,
+  hasStoredUpdateRecovery,
+  readUpdateRunRecord,
+} from "./update-run-read.kernel.js";
 import type {
   UpdateRunReconciliationCandidate,
   UpdateRunReconciliationInput,
@@ -63,6 +67,13 @@ function readUpdateRunReconciliationRows(
     query = query.where("run_id", "!=", input.excludeRunId);
   }
   return executeSqliteQuerySync(db, query.orderBy("run_id")).rows;
+}
+
+export function readUpdateRunReconciliationCandidate(db: EngineConnection, runId: string) {
+  return runSqliteReadSnapshotSync(db, () => {
+    const run = tableExists(db, "update_runs") ? readUpdateRunRecord(db, runId) : undefined;
+    return run ? inspectUpdateRunReconciliation(db, run, {}) : undefined;
+  });
 }
 
 export function readUpdateRunReconciliationCandidates(

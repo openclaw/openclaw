@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ForeignLaunchdJob } from "../daemon/launchd-foreign-jobs.js";
-import { noteMacForeignLaunchdJobs } from "./doctor-foreign-launchd-jobs.js";
+import {
+  checkMacForeignLaunchdJobRepairPending,
+  noteMacForeignLaunchdJobs,
+} from "./doctor-foreign-launchd-jobs.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
@@ -95,6 +98,27 @@ describe("Doctor foreign launchd jobs", () => {
     expect(runtime.log).toHaveBeenCalledWith(removed(secondJob.label));
   });
 
+  it("has pending work only while --fix would remove a stray lifecycle job", async () => {
+    await expect(checkMacForeignLaunchdJobRepairPending({ repair: true }, {})).resolves.toBe(
+      "work",
+    );
+    await expect(checkMacForeignLaunchdJobRepairPending({}, {})).resolves.toBe("none");
+    expect(mocks.repair).not.toHaveBeenCalled();
+    mocks.repair.mockResolvedValue({ removed: true, detail: removed(lifecycleJob.label) });
+    await run();
+    expect(mocks.repair).toHaveBeenCalledExactlyOnceWith(lifecycleJob, {});
+
+    mocks.find.mockResolvedValue([reportOnlyJob]);
+    await expect(checkMacForeignLaunchdJobRepairPending({ repair: true }, {})).resolves.toBe(
+      "none",
+    );
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    mocks.find.mockResolvedValue([lifecycleJob]);
+    await expect(checkMacForeignLaunchdJobRepairPending({ repair: true }, {})).resolves.toBe(
+      "none",
+    );
+  });
+
   it("reports unavailable inspection without removing jobs or aborting Doctor", async () => {
     mocks.find.mockRejectedValue(new Error("launchd inspection unavailable"));
 
@@ -136,6 +160,9 @@ describe("Doctor foreign launchd jobs", () => {
     mocks.defaultIdentity.mockReturnValue(testCase.defaultIdentity ?? true);
     mocks.manageService.mockResolvedValue(testCase.manageService ?? true);
 
+    await expect(
+      checkMacForeignLaunchdJobRepairPending({ repair: true }, testCase.env),
+    ).resolves.toBe("none");
     await run({}, testCase.env);
     await run({ repair: true }, testCase.env);
 

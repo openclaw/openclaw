@@ -253,6 +253,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     }
     const structured = inputs.some((input) => typeof input !== "string");
     const label = structured ? "structured batch" : "batch";
+    const signal = this.backgroundEmbeddingController?.signal;
     const requestItems = inputs.map((input, index) => ({
       input,
       cacheCandidate: cacheCandidates?.[index],
@@ -260,6 +261,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     try {
       return await runMemoryEmbeddingBatchRetryWithSplit({
         items: requestItems,
+        signal,
         maxInputsPerRequest: provider.maxInputsPerRequest,
         run: async (batchItems) => {
           const timeoutMs = this.resolveEmbeddingTimeout("batch", provider, generation?.runtime);
@@ -270,13 +272,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           });
           const result = await runEmbeddingOperationWithTimeout({
             timeoutMs,
+            signal,
             message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-            run: async (signal) =>
+            run: async (operationSignal) =>
               await embedMemoryDocuments(
                 provider,
                 batchItems.map((item) => item.input),
                 this.settings.inputFormat,
-                { signal },
+                { signal: operationSignal },
               ),
           });
           if (!structured) {
@@ -303,6 +306,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           await this.waitForEmbeddingRetry(
             delayMs,
             structured ? "retrying structured batch" : "retrying",
+            signal,
           );
         },
         onSplit: ({ itemCount, splitAt }) => {
@@ -312,6 +316,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         },
       });
     } catch (err) {
+      signal?.throwIfAborted();
       if (!structured) {
         log.debug("memory embeddings: batch failed", {
           provider: provider.id,

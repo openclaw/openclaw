@@ -47,6 +47,7 @@ import {
   expectCatalogAuth,
   writeFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
+import type { PreparedModelCatalogWorkerTask } from "./prepared-model-catalog-worker.types.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -67,8 +68,9 @@ import {
   usePreparedCatalogWorkerFixtures,
   writeCodexAuth,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const { makeTempDir, retireAfterTest, waitForWorkers, observeCatalogEntry } =
+const { makeTempDir, retireAfterTest, waitForWorkers, observeCatalogEntry, observeWorkers } =
   usePreparedCatalogWorkerFixtures({ observeCatalogWork: true });
 
 let receipts: FixtureReceiptChannel;
@@ -711,17 +713,55 @@ describe("prepared model catalog worker boundary", () => {
       authStore.profiles[`${provider}:default`] =
         type === "api_key" ? { type, provider, keyRef: ref } : { type, provider, tokenRef: ref };
     }
+    const ref = { provider: PROVIDER_ID, modelId: "sqlite-model" };
+    const model = makeProviderModelFixture({
+      id: ref.modelId,
+      provider: ref.provider,
+      api: "openai-completions",
+      baseUrl: "https://worker-catalog.invalid/v1",
+    });
     const worker = createPreparedModelCatalogWorker({
       agentFacts: makeCatalogAgentFacts(catalogInput(fixture, { inheritedAuthDir: undefined }), {
         authStore,
+        configuredModelRefs: [ref],
+        configuredRuntimeModels: [{ ...ref, model }],
       }),
       pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
       isCurrent: fixture.isCurrent,
       retirementSignal: fixture.retirementSignal,
     });
-    const { modelCatalog: catalog } = await worker.loadCatalog();
-
-    expect(catalog.entries).toContainEqual(catalogEntry("ref-proof-api-true-token-true"));
+    const transfers: Array<{ kind: string; refs: string[]; models: string[] }> = [];
+    const observer = observeWorkers((thread) => {
+      const post = thread.postMessage.bind(thread);
+      vi.spyOn(thread, "postMessage").mockImplementation((message, ...rest) => {
+        const task = (message as { input?: PreparedModelCatalogWorkerTask }).input;
+        if (task?.value) {
+          const { configuredModelRefs, configuredRuntimeModels } = task.value.catalogFacts;
+          transfers.push({
+            kind: task.request.kind,
+            refs: configuredModelRefs.map((row) => row.modelId),
+            models: configuredRuntimeModels.map((row) => row.modelId),
+          });
+        }
+        post(message, ...rest);
+      });
+    });
+    observer.subscribe();
+    try {
+      const refresh = () => worker.loadAuth({ providerIds: [PROVIDER_ID] });
+      expect(profileFrom(await refresh())).toMatchObject({ access: "v1:A" });
+      const { modelCatalog: catalog } = await worker.loadCatalog();
+      expect(catalog.entries).toContainEqual(catalogEntry("ref-proof-api-true-token-true"));
+      expect(profileFrom(await refresh())).toMatchObject({ access: "v1:A" });
+      const auth = { kind: "auth-refresh", refs: [], models: [] };
+      expect(transfers).toEqual([
+        auth,
+        { kind: "catalog", refs: [ref.modelId], models: [ref.modelId] },
+        auth,
+      ]);
+    } finally {
+      observer.close();
+    }
   });
 });
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";

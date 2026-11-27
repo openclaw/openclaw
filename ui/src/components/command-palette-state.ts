@@ -12,7 +12,10 @@ import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
+import {
+  resolveUiConfiguredMainKey,
+  resolveUiSelectedGlobalAgentId,
+} from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import {
   createHumanMentionMenu,
@@ -33,7 +36,7 @@ import {
 import { CommandPaletteModes, paletteDraftShape } from "./command-palette-mode.ts";
 import {
   buildCommandPaletteSessionItems,
-  SESSION_SEARCH_LIMIT,
+  listCommandPaletteSessions,
   SESSION_SEARCH_SCOPE,
 } from "./command-palette-session-search.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.tsx";
@@ -53,24 +56,26 @@ export type CommandPaletteProperties = {
 };
 /** Search and draft handoffs keep same-turn reads while Solid owns the presentation. */
 export class CommandPaletteState {
-  private publicationPending = false;
+  private reconciliationPending = false;
   private connected = false;
   readonly changed = () => {
-    if (!this.connected || this.publicationPending) {
-      return;
-    }
-    this.publicationPending = true;
-    queueMicrotask(() => {
-      if (this.connected) {
-        this.draft.synchronize();
-        this.draft.settled();
-        if (this.open) {
-          this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+    if (this.connected && !this.reconciliationPending) {
+      this.reconciliationPending = true;
+      queueMicrotask(() => {
+        if (this.connected) {
+          this.draft.synchronize();
+          this.draft.settled();
+          if (this.open) {
+            this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+          }
         }
-      }
-      this.publicationPending = false;
-    });
-    this.publish();
+        this.reconciliationPending = false;
+      });
+    }
+    // Coalesce draft reconciliation, not the changes it publishes to Solid.
+    if (this.connected) {
+      this.publish();
+    }
   };
   open = false;
   private pluginIconUrls: Record<string, string> = {};
@@ -209,8 +214,7 @@ export class CommandPaletteState {
     event,
   ) => {
     const invalidation = modelCatalogEventInvalidation(event);
-    const snapshot = this.context?.gateway.snapshot;
-    const cron = snapshot && isCronInventoryInvalidation(event, snapshot);
+    const cron = this.context && isCronInventoryInvalidation(event);
     if (invalidation === "clear") {
       this.settledModels = this.modelReader.snapshot;
       this.modelItems = getCommandPaletteModelItems(this.settledModels);
@@ -251,7 +255,6 @@ export class CommandPaletteState {
     this.gateway.dispose();
     this.mentionMenu.dispose();
     this.composing = false;
-    this.mentionInput = undefined;
     this.activeId = null;
     this.clearSessionSearch();
     this.clearCatalogSearch();
@@ -561,12 +564,8 @@ export class CommandPaletteState {
       .then((result) => ({ error: false as const, result }))
       .catch(() => ({ error: true as const, result: null }));
     try {
-      const result = await sessions.list({
-        ...SESSION_SEARCH_SCOPE,
-        source: "command-palette",
-        search,
-        limit: SESSION_SEARCH_LIMIT,
-      });
+      const reads = listCommandPaletteSessions(sessions, search);
+      const result = await reads.live;
       if (!isCurrent() || !result) {
         return;
       }
@@ -579,11 +578,16 @@ export class CommandPaletteState {
       const transcriptResult = transcriptOutcome.result;
       this.sessionSearchPartial = transcriptOutcome.error;
       this.sessionSearchIndexing = transcriptResult?.indexing === true;
-      this.sessionItems = buildCommandPaletteSessionItems({
-        visibleRows,
-        visibleKeys,
-        transcriptResult,
-        search,
+      const matches = { visibleRows, visibleKeys, transcriptResult, search };
+      this.sessionItems = buildCommandPaletteSessionItems(matches);
+      void reads.archived.then((archived) => {
+        if (isCurrent() && archived?.sessions.length) {
+          this.sessionItems = buildCommandPaletteSessionItems({
+            ...matches,
+            archivedRows: archived.sessions,
+          });
+          this.changed();
+        }
       });
     } catch {
       // Keep search failures visible rather than presenting a successful empty result.
@@ -637,9 +641,12 @@ export class CommandPaletteState {
 
   readProps() {
     const models = this.settledModels;
+    const agentsList = this.context?.agents.state.agentsList;
+    const gateway = this.context?.gateway.snapshot;
     return {
       ...this.props,
       basePath: this.context?.basePath ?? "",
+      mainKey: resolveUiConfiguredMainKey({ agentsList, hello: gateway?.hello }),
       open: this.open,
       query: this.draft.message,
       searchQuery: this.searchQuery,
@@ -686,18 +693,18 @@ export class CommandPaletteState {
         this.activeId = null;
         this.changed();
       },
-      agents: this.context?.agents.state.agentsList?.agents ?? [],
+      agents: agentsList?.agents ?? [],
       agentIdentity: this.context?.agentIdentity,
       defaultAgentId:
         this.context?.agentSelection.state.selectedId ??
-        resolveUiSelectedGlobalAgentId(this.context?.gateway.snapshot ?? {}),
+        resolveUiSelectedGlobalAgentId(gateway ?? {}),
       sessionItems: this.sessionItems,
       remoteSearchOffline:
         !this.gateway.connected && Boolean(normalizeOptionalString(this.searchQuery)),
       modelSearchError:
         this.gateway.connected && this.modelReader.failed ? t("palette.modelSearchFailed") : null,
       primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
-      canAdmin: hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
+      canAdmin: hasOperatorAdminAccess(gateway?.hello?.auth ?? null),
       nativeDeviceSettings: this.context?.nativeDeviceSettings ?? null,
       catalogItems: this.catalogItems,
       modelItems: this.modelItems,

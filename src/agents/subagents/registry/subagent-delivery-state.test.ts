@@ -1,9 +1,8 @@
 // Subagent delivery-state tests cover current registry record normalization.
 import { describe, expect, it } from "vitest";
 import {
+  completeRequesterSettleWakeState,
   normalizeSubagentRunState,
-  recordRequesterDelivery,
-  resolveRequesterDeliveryOutcome,
 } from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -70,35 +69,46 @@ describe("normalizeSubagentRunState", () => {
   });
 });
 
-it("keeps an ambiguous send when the requester consumed the result first", () => {
-  const run = baseRun();
-  recordRequesterDelivery(run, { state: "consumed", runId: "requester-turn" });
-  const outcome = {
-    delivered: false,
-    path: "direct",
-    disposition: "ambiguous",
-    error: "automatic completion delivery could not be confirmed",
-  } as const;
+describe("subagent retirement rule", () => {
+  it("folds retire intent from rows written by older builds into the row fact", () => {
+    const fromWake = normalizeSubagentRunState(
+      baseRun({
+        requesterSettleWake: { status: "pending", attemptCount: 0, retireAfterSettle: true },
+      } as Partial<SubagentRunRecord>),
+    );
+    const fromRow = normalizeSubagentRunState(
+      baseRun({ retireAfterRequesterTurn: true } as Partial<SubagentRunRecord>),
+    );
 
-  expect(resolveRequesterDeliveryOutcome([run], outcome)).toEqual(outcome);
-});
-
-it("keeps recorded send ambiguity when transcript consumption arrives later", () => {
-  const run = baseRun({
-    delivery: {
-      status: "pending",
-      disposition: "ambiguous",
-      lastError: "send returned no identity",
-    },
+    expect(fromWake.retireAfterSettle).toBe(true);
+    expect(fromWake.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
+    expect(fromRow.retireAfterSettle).toBe(true);
+    expect(fromRow).not.toHaveProperty("retireAfterRequesterTurn");
   });
-  recordRequesterDelivery(run, { state: "consumed", runId: "requester-turn" });
 
-  expect(run.delivery).toMatchObject({
-    status: "pending",
-    disposition: "ambiguous",
-    lastError: "send returned no identity",
-    requesterDelivery: { state: "consumed", runId: "requester-turn" },
+  it("keeps retire intent while the requester turn still awaits the result", () => {
+    const entry = baseRun({
+      retireAfterSettle: true,
+      requesterTurnRunId: "requester-turn",
+      requesterSettleWake: { status: "dispatching", attemptCount: 1 },
+    });
+
+    expect(completeRequesterSettleWakeState(entry)).toBe(false);
+    expect(entry.retireAfterSettle).toBe(true);
+    entry.requesterTurnRunId = undefined;
+    expect(completeRequesterSettleWakeState(entry)).toBe(true);
   });
-  const receipt = { delivered: true, path: "direct", deliveredAt: 200 } as const;
-  expect(resolveRequesterDeliveryOutcome([run], receipt)).toEqual(receipt);
+
+  it("keeps a paused child's retire intent until its next settle", () => {
+    const entry = baseRun({
+      retireAfterSettle: true,
+      pauseReason: "sessions_yield",
+      requesterSettleWake: { status: "pending", attemptCount: 0 },
+    });
+
+    expect(completeRequesterSettleWakeState(entry)).toBe(false);
+    expect(entry.retireAfterSettle).toBe(true);
+    entry.pauseReason = undefined;
+    expect(completeRequesterSettleWakeState(entry)).toBe(true);
+  });
 });

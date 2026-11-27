@@ -3,6 +3,7 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { stripOpenClawMcpToolPrefix } from "../../../../src/agents/tool-display-call.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -246,12 +247,15 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     projection.runId ??= owners?.size === 1 ? owners.values().next().value : undefined;
     return buildToolStreamIdentity(projection.runId ?? "", projection.id);
   };
+  // Native history retains the loopback prefix; live activity names the Gateway tool.
+  const nameOf = (projection: Projection) =>
+    stripOpenClawMcpToolPrefix(projection.name).toLowerCase();
   const names = new Map<string, Set<string>>();
   for (const projection of projections) {
     const key = identity(projection);
     const known = names.get(key) ?? new Set<string>();
     if (projection.name !== "tool") {
-      known.add(projection.name.toLowerCase());
+      known.add(nameOf(projection));
     }
     names.set(key, known);
   }
@@ -264,7 +268,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     const name =
       projection.name === "tool" && knownNames.size === 1
         ? knownNames.values().next().value
-        : projection.name.toLowerCase();
+        : nameOf(projection);
     const invocationKey = JSON.stringify([key, name]);
     const invocation = invocations.get(invocationKey) ?? {
       first: projection.source.index,

@@ -224,7 +224,15 @@ export async function expectMcpRelayPrincipalAuthority(params: {
             scopes: member ? ["operator.read", "operator.write"] : undefined,
           }),
           member ? "trusted-proxy" : "remote-ingress",
-          member ? ["operator.read", "operator.write"] : ["operator.admin"],
+          member
+            ? [
+                "operator.read",
+                "operator.write",
+                "operator.approvals",
+                "operator.questions",
+                "operator.talk",
+              ]
+            : ["operator.admin"],
         );
         const caller = [...params.clients].find(
           (client) => client.connect.device?.id === identity.deviceId,
@@ -358,7 +366,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
               ...params.openOptions,
               audienceId: "independent-person-consent",
               principal: { kind: "person", profileId: member.profileId },
-              operatorScopeCeiling: ["operator.admin"],
+              operatorScopeCeiling: ["operator.read", "operator.write"],
             });
             try {
               await usePeer(await params.openRemote(independentUi), async (independentPeer) => {
@@ -368,7 +376,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
                 expectHello(
                   await connect(independentPeer, { identity: independentIdentity, profileId }),
                   "remote-ingress",
-                  ["operator.admin"],
+                  ["operator.read", "operator.write"],
                 );
                 const independentCaller = [...params.clients].find(
                   (client) => client.connect.device?.id === independentIdentity.deviceId,

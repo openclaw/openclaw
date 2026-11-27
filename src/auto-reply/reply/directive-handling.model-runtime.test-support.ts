@@ -1,5 +1,5 @@
 import { expect, it, vi, type Mock } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { preparePublishedModelRuntimeChoice } from "../../agents/model-runtime-choice.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
@@ -43,10 +43,11 @@ export function registerModelRuntimeDirectiveTests({
       async () => {
         const result = await runHandleCommand("/model openai/gpt-4o", {
           sessionEntry,
-          operatorAuthority: createAdmittedRunOperatorAuthority({
+          provider: "openai",
+          model: "gpt-5",
+          operatorAuthority: createTestOperatorAuthority({
             profileId: "runtime-policy-fixture",
             scopes: ["operator.write"],
-            assertCurrent() {},
             rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
           }),
         });
@@ -61,12 +62,19 @@ export function registerModelRuntimeDirectiveTests({
     expect(persistStickyModelSelection).not.toHaveBeenCalled();
   });
 
-  it("preserves an explicit runtime pin when a model switch omits --runtime", async () => {
+  it("preserves an explicit runtime pin for a model switch within the same provider", async () => {
     const sessionEntry = createSessionEntry({
       agentRuntimeOverride: "codex",
       nativeRuntimeConsent: "codex",
     });
-    await runHandleCommand("/model openai/gpt-4o", { sessionEntry });
+    await runHandleCommand("/model openai/gpt-4o", {
+      sessionEntry,
+      cfg: { commands: { text: true }, agents: { defaults: { model: "openai/gpt-5" } } },
+      defaultProvider: "openai",
+      defaultModel: "gpt-5",
+      provider: "openai",
+      model: "gpt-5",
+    });
 
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
     expect(sessionEntry.nativeRuntimeConsent).toBe("codex");

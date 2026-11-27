@@ -14,6 +14,7 @@ import {
   normalizeForwardedContext,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
+import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import {
   isTelegramMessageCacheSourceMessage,
   parseTelegramResolvedMedia,
@@ -63,7 +64,9 @@ export function isGroupMessage(msg: Message): boolean {
 
 export function resolveReplyMessage(msg: Message) {
   if (msg.reply_to_message) {
-    return msg.reply_to_message;
+    // Telegram links each plain forum-topic message to the topic's service
+    // message. That link is not a reply and carries nothing to quote.
+    return isTelegramForumServiceMessage(msg.reply_to_message) ? undefined : msg.reply_to_message;
   }
   const externalReply = msg.external_reply;
   return externalReply?.chat && externalReply.chat.id === msg.chat?.id ? externalReply : undefined;

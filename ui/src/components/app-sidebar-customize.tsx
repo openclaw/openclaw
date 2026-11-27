@@ -1,21 +1,36 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, Errored, For, Loading, onSettled, Show } from "solid-js";
+import {
+  createDeferred,
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+  useContext,
+} from "solid-js";
 import type {
   PluginCatalogEntry,
   PluginsListResult,
 } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
-import { pathForPluginCatalogEntry, pathForRoute } from "../app-route-paths.ts";
+import {
+  pathForPluginCatalogEntry,
+  pathForPluginSettings,
+  pathForRoute,
+} from "../app-route-paths.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import { PluginArtTile } from "../pages/plugins/consent-dialog.tsx";
 import { PluginIconOwner, pluginIconFetchContext } from "../pages/plugins/plugin-icon-owner.ts";
+import { PluginArtTile } from "../pages/plugins/presentation.tsx";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { IconName } from "./icon-data.ts";
+import { SidebarScrollContext } from "./sidebar-context-controller.ts";
 import { Icon } from "./solid/icon.tsx";
 
 const CUSTOMIZE_PAGES: ReadonlyArray<readonly [NavigationRouteId, IconName, string]> = [
@@ -25,31 +40,25 @@ const CUSTOMIZE_PAGES: ReadonlyArray<readonly [NavigationRouteId, IconName, stri
   ["templates", "blobster", "tabs.templates"],
 ];
 
-// The sidebar is a shortcut list, not an inventory; the Plugins page lists everything.
-const MAX_SIDEBAR_PLUGINS = 8;
-
-type SidebarPlugin = PluginCatalogEntry & { catalogId: string };
-
-/** Plugins people added, newest install first, then the bundled ones that opted in. */
-function sidebarPlugins(plugins: readonly PluginCatalogEntry[]): SidebarPlugin[] {
+function sidebarPlugins(plugins: readonly PluginCatalogEntry[]): PluginCatalogEntry[] {
   return plugins
-    .filter(
-      (plugin): plugin is SidebarPlugin =>
-        plugin.installed &&
-        Boolean(plugin.catalogId) &&
-        (plugin.origin !== "bundled" || (plugin.enabled && plugin.sidebar === true)),
-    )
+    .filter((plugin) => plugin.installed)
     .toSorted(
       (left, right) =>
         Number(left.origin === "bundled") - Number(right.origin === "bundled") ||
         (right.installedAt ?? -1) - (left.installedAt ?? -1) ||
         left.name.localeCompare(right.name),
-    )
-    .slice(0, MAX_SIDEBAR_PLUGINS);
+    );
+}
+
+function sidebarPluginTarget(plugin: PluginCatalogEntry, basePath: string) {
+  return plugin.catalogId
+    ? { route: "plugins" as const, pathname: pathForPluginCatalogEntry(plugin.catalogId, basePath) }
+    : { route: "plugin-settings" as const, pathname: pathForPluginSettings(plugin.id, basePath) };
 }
 
 function SidebarPages(props: { host: AppSidebarRenderHost; pluginSelected: boolean }) {
-  // Enabled routes leave out Templates unless its experimental flag is on.
+  // Enabled routes respect the advanced Templates opt-out.
   const pages = () =>
     CUSTOMIZE_PAGES.filter(([route]) => props.host.enabledRouteIds?.includes(route) ?? true);
   return (
@@ -74,7 +83,7 @@ function SidebarPages(props: { host: AppSidebarRenderHost; pluginSelected: boole
   );
 }
 
-function SidebarPluginArt(props: { plugin: SidebarPlugin }) {
+function SidebarPluginArt(props: { plugin: PluginCatalogEntry }) {
   const context = useApplication();
   const [iconUrl, setIconUrl] = createSignal<string | undefined>();
   const [unavailable, setUnavailable] = createSignal(false);
@@ -112,7 +121,7 @@ function SidebarPluginArt(props: { plugin: SidebarPlugin }) {
 
 function SidebarPlugins(props: {
   host: AppSidebarRenderHost;
-  plugins: readonly SidebarPlugin[];
+  plugins: readonly PluginCatalogEntry[];
   pathname: string;
 }) {
   return (
@@ -129,19 +138,30 @@ function SidebarPlugins(props: {
         </div>
         <For each={props.plugins} keyed={(plugin) => plugin.id}>
           {(plugin) => {
-            const href = () => pathForPluginCatalogEntry(plugin().catalogId, props.host.basePath);
+            const target = () => sidebarPluginTarget(plugin(), props.host.basePath);
             return (
               <SidebarNavLink
-                href={href()}
-                active={props.pathname === href()}
+                href={target().pathname}
+                active={props.pathname === target().pathname}
                 icon={
-                  // Refresh artwork with the inventory snapshot while keeping the link mounted.
-                  <Show when={plugin()} keyed>
-                    {(entry) => <SidebarPluginArt plugin={entry} />}
+                  // A fresh list is not a new icon. Reload only for a changed installation or icon availability.
+                  <Show
+                    when={JSON.stringify([
+                      plugin().catalogId,
+                      plugin().version,
+                      plugin().installedAt,
+                      Boolean(plugin().hasIcon),
+                    ])}
+                    keyed
+                  >
+                    <SidebarPluginArt plugin={plugin()} />
                   </Show>
                 }
                 label={plugin().name}
-                onNavigate={() => props.host.onNavigate?.("plugins", { pathname: href() })}
+                onNavigate={() => {
+                  const { route, pathname } = target();
+                  props.host.onNavigate?.(route, { pathname });
+                }}
               />
             );
           }}
@@ -151,9 +171,9 @@ function SidebarPlugins(props: {
   );
 }
 
-/** The Customize section: its pages, then shortcuts to the plugins people use. */
 export function SidebarCustomize(props: { host: AppSidebarRenderHost }): JSX.Element {
   const context = useApplication();
+  const scroll = useContext(SidebarScrollContext);
   const gateway = projectGateway(context.gateway);
   const location = projectOwner(
     context.router,
@@ -167,7 +187,8 @@ export function SidebarCustomize(props: { host: AppSidebarRenderHost }): JSX.Ele
   const allowed = createMemo(() =>
     canCallGatewayMethod(gateway.read().snapshot, "plugins.list", "operator.read"),
   );
-  const inventory = createMemo(() => {
+  // Inventory refreshes must not hold route updates.
+  const inventory = createDeferred(() => {
     epoch();
     generation();
     return allowed()
@@ -179,13 +200,16 @@ export function SidebarCustomize(props: { host: AppSidebarRenderHost }): JSX.Ele
   const plugins = createMemo(() => sidebarPlugins(inventory()?.plugins ?? []));
   const pluginSelected = () =>
     plugins().some(
-      (plugin) =>
-        pathForPluginCatalogEntry(plugin.catalogId, props.host.basePath) === location.read(),
+      (plugin) => sidebarPluginTarget(plugin, props.host.basePath).pathname === location.read(),
     );
   // Pages render at once; the inventory only adds rows below them when it lands.
   const PagesOnly = () => <SidebarPages host={props.host} pluginSelected={false} />;
   return (
-    <nav class="sidebar-customize" aria-label={titleForRoute("plugins", t)}>
+    <nav
+      ref={scroll?.observeContent()}
+      class="sidebar-customize"
+      aria-label={titleForRoute("plugins", t)}
+    >
       <Errored fallback={() => <PagesOnly />}>
         <Loading on={[client(), epoch()]} fallback={<PagesOnly />}>
           <SidebarPages host={props.host} pluginSelected={pluginSelected()} />

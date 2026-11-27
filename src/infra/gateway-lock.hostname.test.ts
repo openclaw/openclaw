@@ -6,7 +6,11 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import * as machineIdentity from "./current-machine-identity.js";
 import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { defaultPayload } from "./gateway-state-owner-record.js";
-import { acquireGatewayStateOwner, resolveGatewayStateOwnerPath } from "./gateway-state-owner.js";
+import {
+  acquireGatewayStateOwner,
+  captureStateDatabaseAccess,
+  resolveGatewayStateOwnerPath,
+} from "./gateway-state-owner.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import { prepareSqliteReadOnlyLocationAwaited } from "./sqlite-snapshot-source.js";
@@ -87,7 +91,7 @@ it.each(
       expect(hasVerifiedLiveSqliteOwner(databasePath)).toBe(false);
     } else {
       expect(() => hasVerifiedLiveSqliteOwner(databasePath)).toThrow(
-        "openclaw gateway recover-lock",
+        "cannot verify Gateway ownership from this process",
       );
     }
   }
@@ -100,7 +104,12 @@ it.each(
       if (row.legacy) {
         expect(acquire).toThrow();
       } else {
-        expect(acquire).toThrow("openclaw gateway recover-lock");
+        // An unparseable record keeps its ownership as ordinary contention.
+        expect(acquire).toThrow(
+          row.kind === "malformed owner machine"
+            ? "Stop the holder before retrying"
+            : "cannot verify Gateway ownership from this process",
+        );
       }
       expect(fs.readFileSync(ownerPath, "utf8")).toBe(recorded);
     } else {
@@ -163,8 +172,23 @@ it.runIf(process.platform === "darwin" || process.platform === "linux").each([
       }
       owner.assertCurrent();
       expect(fs.readFileSync(owner.path)).toEqual(recorded);
+      const access = await captureStateDatabaseAccess(databasePath);
+      (await access.prepareAccess())();
+      const identity = vi.spyOn(fs.realpathSync, "native");
+      const persisted = vi.spyOn(fs, "readFileSync");
+      try {
+        for (let read = 0; read < 3; read++) {
+          expect(hasVerifiedLiveSqliteOwner(databasePath)).toBe(true);
+          expect(identity).not.toHaveBeenCalled();
+          expect(persisted).not.toHaveBeenCalled();
+        }
+      } finally {
+        identity.mockRestore();
+        persisted.mockRestore();
+      }
     } finally {
       owner.release();
     }
+    expect(hasVerifiedLiveSqliteOwner(databasePath)).toBe(false);
   },
 );

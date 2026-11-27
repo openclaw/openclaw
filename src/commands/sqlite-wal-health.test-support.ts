@@ -11,6 +11,7 @@ export function createSqliteWalHealth(overrides: Partial<SqliteWalHealth> = {}):
     lastCompletedAtMs: null,
     consecutiveBlocked: 2,
     warning: true,
+    bytePressure: true,
     ...overrides,
   };
 }

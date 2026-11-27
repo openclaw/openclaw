@@ -57,6 +57,17 @@ export function projectUpdateAvailableEvent(
   };
 }
 
+/**
+ * Every campaign toward a newer release or revision publishes its target. The Gateway announces
+ * one without a target only to restart on its running version and finish plugin updates that an
+ * earlier update left owed.
+ */
+export function isFinishingUpdateCampaign(
+  schedule: UpdateScheduleState | null | undefined,
+): boolean {
+  return Boolean(schedule?.campaign && !schedule.target);
+}
+
 export function formatUpdateCampaignLabel(
   schedule: UpdateScheduleState | null | undefined,
   nowMs = Date.now(),
@@ -65,10 +76,8 @@ export function formatUpdateCampaignLabel(
   if (!campaign) {
     return null;
   }
-  // Every campaign toward a newer release or revision publishes its target. The Gateway announces
-  // one without a target only to restart on its running version and finish plugin updates that an
-  // earlier update left owed. The lazy update views that call this register the finishing copy.
-  const copy = schedule?.target ? "updates.campaign" : "updates.finishing";
+  // The lazy update views that call this register the finishing copy.
+  const copy = isFinishingUpdateCampaign(schedule) ? "updates.finishing" : "updates.campaign";
   if (campaign.state === "applying") {
     return t(`${copy}.applying`);
   }

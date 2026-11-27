@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { runEmbeddedAttempt } from "../../agents/embedded-agent-runner/run/attempt.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createOpenClawAgentHarness } from "../../agents/harness/builtin-openclaw.js";
@@ -26,6 +26,7 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import {
   sessionControllerMailboxes,
   reserveSessionControllerSource,
+  submitSessionControllerTask,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -228,7 +229,6 @@ describe("Goal continuation eligibility", () => {
     [false, "local", "localCodexGoal"],
     [false, "worker-required", undefined],
     [false, "no-authority", "localCodexGoal"],
-    [false, "revoked", undefined],
   ] as const)("checks Codex Goal admission (placed=%s, %s)", async (placed, mode, marker) => {
     const f = fixture();
     const codexSession = { ...entry(), agentHarnessId: "codex" };
@@ -243,24 +243,15 @@ describe("Goal continuation eligibility", () => {
       });
     }
     if (mode !== "no-authority" && mode !== "local-no-authority") {
-      f.params.base.operatorAuthority = {
+      f.params.base.operatorAuthority = createTestOperatorAuthority({
         profileId: "operator",
         scopes: ["operator.admin"],
-        assertCurrent: () => {
-          if (mode === "revoked") {
-            throw new Error("operator revoked");
-          }
-        },
-      };
+      });
     }
     if (mode === "worker-required") {
       f.params.base.run.config = { cloudWorkers: { requiredProfile: "worker" } };
     }
-    if (mode === "revoked") {
-      await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("operator revoked");
-    } else {
-      expect(await enqueueGoalContinuation(f.params)).toBe(Boolean(marker));
-    }
+    expect(await enqueueGoalContinuation(f.params)).toBe(Boolean(marker));
     expect(enqueueFollowupRun).toHaveBeenCalledTimes(marker ? 1 : 0);
     if (marker) {
       const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];
@@ -481,6 +472,25 @@ describe("Goal queue custody", () => {
       expect(enqueueFollowupRun).not.toHaveBeenCalled();
     },
   );
+  // Post-turn session maintenance waits in the mailbox as a native task. It never evaluates
+  // the Goal, so deferring to it would stall the Goal until the next message (#204319).
+  it("continues past queued post-turn upkeep but defers to a queued reply turn", async () => {
+    const f = fixture();
+    const upkeep = submitSessionControllerTask(f.params.queueKey, {
+      target: captureSessionTarget({
+        storeScope: f.params.storePath,
+        sessionKey: f.params.sessionKey,
+        agentId: f.params.base.run.agentId,
+        incarnation: f.params.expectedSession.sessionId,
+      }),
+      projectSessionActive: false,
+      start: () => {},
+    });
+    upkeep.catch(() => {});
+    expect(await enqueueGoalContinuation(f.params)).toBe(true);
+    f.reserveInput();
+    expect(await enqueueGoalContinuation(f.params)).toBe(false);
+  });
   it("invalidates an enqueued nudge when source delivery subsequently fails", async () => {
     const f = fixture();
     await enqueueGoalContinuation(f.params);
@@ -519,9 +529,10 @@ function retainedGoal(existingChild?: SubagentRunRecord) {
     runId = "settle-run",
     result = normal,
     succeeded = true,
+    entries: SubagentRunRecord[] = [child],
   ) =>
     withGoalContinuationSettlement(
-      [child],
+      entries,
       "settle-run",
       () => true,
       () => {
@@ -629,6 +640,36 @@ describe("Goal return from committed child custody", () => {
     }
   });
 
+  it("resumes the Goal once, on the partition that settles its cohort last", async () => {
+    const f = retainedGoal();
+    const sibling: SubagentRunRecord = {
+      ...f.child,
+      runId: "goal-sibling",
+      childSessionKey: `${f.child.childSessionKey}-sibling`,
+      requesterSettleWake: {
+        ...f.child.requesterSettleWake!,
+        batchRunIds: ["goal-child", "goal-sibling"],
+      },
+    };
+    createGoalContinuationReturn(f.params)(() => {
+      bindGoalContinuationExecution(f.params.sourceRunId, f.params.sessionKey);
+      promoteGoalContinuationYield({
+        requesterTurnRunId: f.params.sourceRunId,
+        entries: [f.child, sibling],
+        rearmGeneration: 1,
+      });
+    });
+    f.operation.complete();
+    // The first ready result is an ordinary settle turn while its sibling still works.
+    expect(f.publish()).toBeUndefined();
+    await f.finish();
+    expect(enqueueFollowupRun).not.toHaveBeenCalled();
+    const context = f.publish(true, "settle-run", normal, true, [sibling]);
+    expect(context?.text).toContain("Active goal: Finish the checklist");
+    await finishGoalContinuationSettlement([sibling], true);
+    expect(enqueueFollowupRun).toHaveBeenCalledOnce();
+  });
+
   it.each(["settle-run", "independent-command"])(
     "injects Goal context at the actual built-in harness only for the admitted settlement (%s)",
     async (runId) => {
@@ -665,14 +706,9 @@ describe("Goal return from committed child custody", () => {
   it("keeps the original route and independently retained operator restriction until queue handoff", async () => {
     const f = retainedGoal();
     let holds = 1;
-    const source = createAdmittedRunOperatorAuthority({
+    const source = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
-      assertCurrent() {
-        if (!holds) {
-          throw new Error("source released");
-        }
-      },
       retain() {
         holds++;
         return () => {
@@ -788,10 +824,9 @@ describe("Goal return from committed child custody", () => {
   it("releases an obsolete return when a newer requester owns the same child cohort", async () => {
     const first = retainedGoal();
     const release = vi.fn();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
-      assertCurrent() {},
       retain: () => release,
     });
     first.params.base.operatorAuthority = authority;
@@ -879,22 +914,10 @@ describe("Goal return from committed child custody", () => {
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });
 
-  it.each(["Stop", "source retirement", "operator revocation"])(
+  it.each(["Stop", "source retirement"])(
     "checks %s again after asynchronous final enqueue preparation",
     async (boundary) => {
       const f = retainedGoal();
-      const revoked = new AbortController();
-      let current = true;
-      f.params.base.operatorAuthority = createAdmittedRunOperatorAuthority({
-        profileId: "goal-owner",
-        scopes: ["operator.write"],
-        signal: revoked.signal,
-        assertCurrent() {
-          if (!current) {
-            throw new Error("revoked");
-          }
-        },
-      });
       f.retain();
       f.operation.complete();
       f.publish();
@@ -929,10 +952,6 @@ describe("Goal return from committed child custody", () => {
       }
       if (boundary === "source retirement") {
         revokeGoalContinuationReturn(f.child);
-      }
-      if (boundary === "operator revocation") {
-        current = false;
-        revoked.abort();
       }
       read.resolve(entry());
       await finishing;

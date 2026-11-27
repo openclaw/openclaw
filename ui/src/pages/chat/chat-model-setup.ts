@@ -31,7 +31,7 @@ export function resolveChatModelSetup(
     Pick<
       Parameters<typeof resolveChatModelOverrideValue>[0],
       "chatModelCatalog" | "modelOverrides" | "sessionKey" | "sessionsResult"
-    > & { onSetup: () => void },
+    > & { onSetup: () => void; onOpenModels: (provider?: string) => void },
 ) {
   const policy = state.modelCatalogState.modelSelectionPolicy;
   const model = policy?.restricted
@@ -69,11 +69,19 @@ export function resolveChatModelSetup(
       ),
     };
   } else {
-    const message = chatModelUnavailableMessage(
-      resolveChatModelUnavailableReason(model, provider, catalog, agentRuntime),
-      inference,
-    );
-    modelUnavailableBanner = message ? createChatModelSetupBanner(onSetup, message) : undefined;
+    const reason = resolveChatModelUnavailableReason(model, provider, catalog, agentRuntime);
+    const message = chatModelUnavailableMessage(reason, inference);
+    modelUnavailableBanner = !message
+      ? undefined
+      : reason === "auth-failed"
+        ? // A rejected sign-in is fixed under Models, the same action its failed reply offers.
+          {
+            kind: "above-composer",
+            text: message,
+            actionLabel: t("chat.recovery.openModels"),
+            onAction: () => state.onOpenModels(provider),
+          }
+        : createChatModelSetupBanner(onSetup, message);
   }
   return {
     modelSetupRequired,

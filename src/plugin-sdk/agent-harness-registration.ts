@@ -2,4 +2,5 @@
 export { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { AgentHarnessPreflightError } from "../agents/harness/errors.js";
+export { resolveAgentHarnessRouteRejection } from "../agents/harness/route-support.js";
 export { VERSION as OPENCLAW_VERSION } from "../version.js";

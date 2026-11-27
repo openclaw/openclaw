@@ -23,7 +23,10 @@ falls through to guided onboarding. Use `-m`/`--message` for one request or
 
 For models that permit local execution, `setup --message` can verify inference
 without a running Gateway. Configurations with a required worker profile still
-need a Gateway placement owner.
+need a Gateway placement owner. When a built-in-runtime setup check cannot find
+the configured model locally, it waits for that provider's account catalog before
+testing inference. No manual `models list --refresh` is needed on a fresh catalog;
+the check does not save discovered model rows or change the configured model.
 
 Baseline setup (`--baseline`) works with the local Gateway running or stopped.
 With the Gateway running, setup sends only its config change (for example

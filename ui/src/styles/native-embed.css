@@ -70,7 +70,9 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
   margin-inline-start: auto;
 }
 
-.shell--embed-settings .content-header .page-title {
+/* The native Back header supplies an actual h1, unlike the floating browser title. */
+.shell--embed-settings .content-header .page-title,
+.shell--embed openclaw-plugin-page .plugin-page-title {
   display: none;
 }
 

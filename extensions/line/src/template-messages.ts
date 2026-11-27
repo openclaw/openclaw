@@ -2,14 +2,24 @@ import type { messagingApi } from "@line/bot-sdk";
 import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { messageAction, postbackAction, uriAction, type Action } from "./actions.js";
-import type { LineTemplateActionPayload, LineTemplateMessagePayload } from "./types.js";
+import type {
+  LineChannelData,
+  LineTemplateActionPayload,
+  LineTemplateMessagePayload,
+} from "./types.js";
 
 type TemplateMessage = messagingApi.TemplateMessage;
 type TextMessage = messagingApi.TextMessage;
+type LocationMessage = messagingApi.LocationMessage;
+type QuickReply = messagingApi.QuickReply;
+type QuickReplyItem = messagingApi.QuickReplyItem;
+type LineLocation = NonNullable<LineChannelData["location"]>;
 type CarouselColumn = messagingApi.CarouselColumn;
 
 const COMPACT_TEMPLATE_TEXT_LIMIT = 60;
 const TEMPLATE_ALT_TEXT_LIMIT = 1500;
+const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
+const LINE_LOCATION_LABEL_LIMIT = 100;
 
 function buildTemplatePayloadAction(action: LineTemplateActionPayload): Action {
   if (action.type === "uri" && action.uri) {
@@ -47,6 +57,50 @@ function truncateTemplateText(text: string, limit: number): string {
 
 function resolveTemplateAltText(value: string | undefined, fallback: string): string {
   return truncateTemplateText(value ?? fallback, TEMPLATE_ALT_TEXT_LIMIT);
+}
+
+export function createLocationMessage(location: LineLocation): LocationMessage | TextMessage {
+  // LINE rejects blank labels atomically. Keep the authored text and coordinates,
+  // bounded by the same label cap, when the location cannot render as a pin.
+  if (!location.title.trim() || !location.address.trim()) {
+    const authored = [location.title, location.address]
+      .map((label) => truncateUtf16Safe(label.trim(), LINE_LOCATION_LABEL_LIMIT))
+      .filter(Boolean);
+    return {
+      type: "text",
+      text: [...authored, `${location.latitude}, ${location.longitude}`].join("\n"),
+    };
+  }
+  return {
+    type: "location",
+    title: truncateUtf16Safe(location.title, LINE_LOCATION_LABEL_LIMIT),
+    address: truncateUtf16Safe(location.address, LINE_LOCATION_LABEL_LIMIT),
+    latitude: location.latitude,
+    longitude: location.longitude,
+  };
+}
+
+export function createFlexMessage(
+  altText: string,
+  contents: messagingApi.FlexContainer,
+): messagingApi.FlexMessage {
+  return {
+    type: "flex",
+    altText: truncateUtf16Safe(altText, LINE_FLEX_ALT_TEXT_LIMIT),
+    contents,
+  };
+}
+
+export function createQuickReplyItems(labels: string[]): QuickReply {
+  const items: QuickReplyItem[] = labels
+    .map((label) => label.trim())
+    .filter(Boolean)
+    .slice(0, 13)
+    .map((label) => ({
+      type: "action",
+      action: messageAction(label, label),
+    }));
+  return { items };
 }
 
 export function buildTemplateMessageFromPayload(

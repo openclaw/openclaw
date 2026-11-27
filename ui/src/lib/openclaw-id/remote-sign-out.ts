@@ -21,8 +21,11 @@ export async function signOutOfRemoteOpenClawId(): Promise<void> {
         resolve(url!);
       }
     };
+    // The loader hides this page as soon as it starts signing out, so an error shown here would
+    // never be seen. Past the deadline, its signed-out page continues to the issuer sign-out
+    // itself and shows only what the loader recorded.
     const timeout = window.setTimeout(
-      () => finish(new Error("Sign-out was not confirmed. Reload this page and try again.")),
+      () => finish(undefined, "/_loader/?stay=1&end_issuer=1"),
       10_000,
     );
     const stop = listen(

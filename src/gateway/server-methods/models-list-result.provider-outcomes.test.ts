@@ -1,9 +1,12 @@
-import { expect, it, vi } from "vitest";
+import path from "node:path";
+import { assert, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { createCatalogAttemptReporter } from "../../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { loadPluginManifest } from "../../plugins/manifest.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
 import {
@@ -280,6 +283,82 @@ it("does not apply one profile rejection to a different selected profile", () =>
     availability: true,
     selectedProfileId: "openai:accepted",
   });
+});
+
+it.each([false, true])("isolates ClawRouter cooldowns (managed=%s)", async (managed) => {
+  const bundled = loadPluginManifest(path.resolve("extensions", "clawrouter"), false);
+  assert(bundled.ok);
+  expect(bundled.manifest.managesOwnAvailability).toBe(true);
+  const scopedMetadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [{ ...bundled.manifest, managesOwnAvailability: managed }],
+  });
+  const limited = "anthropic/limited";
+  const sibling = "openai/healthy";
+  const catalog = [limited, sibling].map((id) => ({ id, name: id, provider: "clawrouter" }));
+  const now = Date.now();
+  const until = now + 15 * 60 * 60_000;
+  const keyUntil = now + 60_000;
+  for (const [cooldownReason, disabledUntil] of [
+    ["rate_limit", keyUntil],
+    ["rate_limit", now - 1],
+    ["timeout", keyUntil],
+    ["timeout", now - 1],
+  ] as const) {
+    const localCooldown = !managed || cooldownReason === "timeout";
+    const context = createModelsListTestContext({
+      catalog,
+      metadataSnapshot: scopedMetadataSnapshot,
+      preparedAuthStore: {
+        version: 1,
+        profiles: { shared: { provider: "clawrouter", type: "api_key", key: "fixture" } },
+        usageStats: {
+          shared: {
+            // ClawRouter owns rate-limit recovery; timeouts remain locally enforced.
+            cooldownReason,
+            cooldownModel: limited,
+            cooldownUntil: until,
+            disabledReason: "billing",
+            disabledUntil,
+          },
+        },
+      },
+    });
+    // Keep ambient availability policy on the prepared catalog's metadata generation.
+    const respond = await withPluginMetadataSnapshotScope(
+      scopedMetadataSnapshot,
+      () => requestModelsList(context, { view: "all" }),
+      { trustConfigIdentity: true },
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        models: expect.arrayContaining([
+          expect.objectContaining({
+            id: limited,
+            ...(!localCooldown && disabledUntil !== keyUntil
+              ? { available: true }
+              : {
+                  available: false,
+                  unavailableReason: "cooldown",
+                  unavailableUntil: localCooldown ? until : keyUntil,
+                }),
+          }),
+          expect.objectContaining({
+            id: sibling,
+            ...(disabledUntil === keyUntil
+              ? { available: false, unavailableReason: "cooldown", unavailableUntil: keyUntil }
+              : { available: true }),
+          }),
+        ]),
+      }),
+      undefined,
+    );
+    if (!localCooldown && disabledUntil !== keyUntil) {
+      const serialized = JSON.stringify(respond.mock.calls[0]?.[1]);
+      expect(serialized).not.toContain('"unavailableUntil"');
+      expect(serialized).not.toContain('"unavailableReason"');
+    }
+  }
 });
 
 it.each([false, true])("projects cooldown only when unavailable (%s)", async (available) => {

@@ -1,8 +1,10 @@
+import { isHeaderlessCsvMime } from "@openclaw/media-core/mime";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import {
   createMemo,
   createSignal,
   Errored,
+  For,
   isPending,
   latest,
   Loading,
@@ -124,6 +126,108 @@ function MarkdownAttachment(props: { text: string; label: string; onBrowseFiles?
   );
 }
 
+const CSV_PREVIEW_MAX_CELLS = 10_000;
+
+// RFC 4180: quoted fields may hold commas, doubled quotes and line breaks.
+function parseCsvRows(text: string): string[][] | null {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  let closedQuote = false;
+  let recordStart = 0;
+  let cellCount = 0;
+  const source = text.startsWith("\uFEFF") ? text.slice(1) : text;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (quoted) {
+      if (char !== '"') {
+        field += char;
+      } else if (source[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else {
+        quoted = false;
+        closedQuote = true;
+      }
+    } else if (char === '"') {
+      if (field || closedQuote) {
+        return null;
+      }
+      quoted = true;
+    } else if (char === "," || char === "\n" || char === "\r") {
+      cellCount += 1;
+      if (cellCount > CSV_PREVIEW_MAX_CELLS) {
+        return null;
+      }
+      row.push(field);
+      field = "";
+      closedQuote = false;
+      if (char === ",") {
+        continue;
+      }
+      if (char === "\r" && source[index + 1] === "\n") {
+        index += 1;
+      }
+      rows.push(row);
+      row = [];
+      recordStart = index + 1;
+    } else {
+      if (closedQuote) {
+        return null;
+      }
+      field += char;
+    }
+  }
+  if (quoted) {
+    return null;
+  }
+  if (recordStart < source.length) {
+    if (cellCount === CSV_PREVIEW_MAX_CELLS) {
+      return null;
+    }
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function CsvAttachment(props: {
+  text: string;
+  label: string;
+  rows: string[][];
+  hasHeader: boolean;
+}) {
+  return (
+    <article
+      class="sidebar-attachment-preview__markdown sidebar-attachment-preview__csv sidebar-markdown"
+      dir={detectTextDirection(props.text)}
+      aria-label={props.label}
+    >
+      <table tabindex={0}>
+        <Show when={props.hasHeader ? props.rows[0] : undefined}>
+          {(header) => (
+            <thead>
+              <tr>
+                <For each={header()}>{(cell) => <th scope="col">{cell}</th>}</For>
+              </tr>
+            </thead>
+          )}
+        </Show>
+        <tbody>
+          <For each={props.hasHeader ? props.rows.slice(1) : props.rows}>
+            {(row) => (
+              <tr>
+                <For each={row}>{(cell) => <td>{cell}</td>}</For>
+              </tr>
+            )}
+          </For>
+        </tbody>
+      </table>
+    </article>
+  );
+}
+
 type TextAttachmentProps = {
   mobile: boolean;
   plainText: boolean;
@@ -151,16 +255,26 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
     return false;
   });
   const [retry, setRetry] = createSignal(0);
-  const htmlDocument = () => !props.plainText && isHtmlDocument(props.mimeType, props.label);
-  const markdown = () => {
+  const previewKind = createMemo(() => {
+    if (props.plainText) {
+      return null;
+    }
+    if (isHtmlDocument(props.mimeType, props.label)) {
+      return "html";
+    }
     const mimeType = props.mimeType.split(";", 1)[0]?.trim().toLowerCase();
-    return (
-      !props.plainText &&
-      (mimeType === "text/markdown" ||
-        mimeType === "text/x-markdown" ||
-        /\.(?:md|markdown)$/i.test(props.label))
-    );
-  };
+    if (mimeType === "text/csv") {
+      return "csv";
+    }
+    if (mimeType === "text/markdown" || mimeType === "text/x-markdown") {
+      return "markdown";
+    }
+    if (/\.csv$/i.test(props.label)) {
+      return "csv";
+    }
+    return /\.(?:md|markdown)$/i.test(props.label) ? "markdown" : null;
+  });
+  const htmlDocument = () => previewKind() === "html";
   // Ticket renewal retains a reader; changed identity or validation retires its observers.
   const readScope = createMemo(
     () => ({
@@ -232,6 +346,12 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
       },
       { equals: (before, after) => before?.text === after?.text },
     );
+    const csvRows = createMemo(() => {
+      const content = reader();
+      return content && previewKind() === "csv" ? parseCsvRows(content.text) : null;
+    });
+    const hasPreview = () =>
+      previewKind() === "csv" ? csvRows() !== null : previewKind() !== null;
     const pending = () => isPending(result) || result().status === "empty";
     const readFailure = () => {
       const value = result();
@@ -270,7 +390,7 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
                   {t("common.retry")}
                 </button>
               </Show>
-              <Show when={(markdown() || htmlDocument()) && reader()}>
+              <Show when={reader() && hasPreview()}>
                 <button
                   class="btn btn--sm"
                   type="button"
@@ -314,22 +434,36 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
                     />
                   </div>
                 </Show>
-                {markdown() && !htmlDocument() && !source() ? (
-                  <MarkdownAttachment
-                    text={content.text}
-                    label={props.label}
-                    onBrowseFiles={props.onBrowseFiles}
-                  />
-                ) : (
-                  <pre
-                    class="sidebar-attachment-preview__text"
-                    tabindex={0}
-                    aria-label={props.label}
-                    hidden={htmlDocument() && !source()}
-                  >
-                    {content.text}
-                  </pre>
-                )}
+                <Show
+                  when={!source() && csvRows()}
+                  fallback={
+                    previewKind() === "markdown" && !source() ? (
+                      <MarkdownAttachment
+                        text={content.text}
+                        label={props.label}
+                        onBrowseFiles={props.onBrowseFiles}
+                      />
+                    ) : (
+                      <pre
+                        class="sidebar-attachment-preview__text"
+                        tabindex={0}
+                        aria-label={props.label}
+                        hidden={htmlDocument() && !source()}
+                      >
+                        {content.text}
+                      </pre>
+                    )
+                  }
+                >
+                  {(rows) => (
+                    <CsvAttachment
+                      text={content.text}
+                      label={props.label}
+                      rows={rows()}
+                      hasHeader={!isHeaderlessCsvMime(props.mimeType)}
+                    />
+                  )}
+                </Show>
               </>
             )}
           </Show>

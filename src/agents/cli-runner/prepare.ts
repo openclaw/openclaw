@@ -14,7 +14,6 @@ import {
   revokeMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
-import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
@@ -123,7 +122,7 @@ import {
   unsupportedIsolatedCompletionError,
 } from "./execution-target.js";
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
-import { replayableTarget, prepareCliHistoryBoundary } from "./history-boundary.js";
+import { admitCliHistoryAccount } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
 import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
@@ -646,23 +645,9 @@ async function prepareCliRunContextWithinReadFence(
   const canUseGatewayTools = !nodeClaudePlacement && !skipsTurnPrefix && !systemAgentMcpConfig;
   const bundleMcpEnabled =
     canUseGatewayTools && backendResolved.bundleMcp && params.disableTools !== true;
-  let mcpLoopbackRuntime = bundleMcpEnabled ? getActiveMcpLoopbackRuntime() : undefined;
-  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
-    try {
-      await ensureMcpLoopbackServer();
-    } catch (error) {
-      throw new Error(
-        `Bundled MCP is enabled, but the OpenClaw MCP loopback server failed to start: ${String(error)}`,
-        { cause: error },
-      );
-    }
-    mcpLoopbackRuntime = getActiveMcpLoopbackRuntime();
-  }
-  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
-    throw new Error(
-      "Bundled MCP is enabled, but the OpenClaw MCP loopback server did not publish a runtime after startup.",
-    );
-  }
+  const mcpLoopbackRuntime = bundleMcpEnabled
+    ? (getActiveMcpLoopbackRuntime() ?? (await mcp.startCliMcpLoopbackRuntime()))
+    : undefined;
   const { nodeWorkshopEnabled, hostOwnedTools, bridgeConfiguredMcp } =
     mcp.resolveCliMcpToolOwnership(params, {
       backend: backendResolved,
@@ -714,6 +699,9 @@ async function prepareCliRunContextWithinReadFence(
     });
   // Keep configured MCP on the bridge even when local Claude retains native
   // tools for node exec. Exact tool selection remains a separate policy.
+  const storeAdmission = params.sessionManager
+    ? undefined
+    : (params.admittedRunContext ?? params.preparedRunAdmission)?.operationalRunInstance;
   await using loopbackBundleMcp =
     mcpLoopbackRuntime &&
     mcpContextBase &&
@@ -723,6 +711,7 @@ async function prepareCliRunContextWithinReadFence(
       promptBuildRestrictsTools)
       ? await prepareCliLoopbackBundleMcp({
           run: params,
+          storeAdmission,
           config: runConfig,
           workspaceDir,
           agentId: sessionAgentId,
@@ -1038,6 +1027,7 @@ async function prepareCliRunContextWithinReadFence(
       nativeMcpPolicy:
         !systemAgentMcpConfig && !exclusiveMcp
           ? {
+              storeAdmission,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               capabilityProfile: nativeMcpCapabilityProfile,
@@ -1324,7 +1314,7 @@ async function prepareCliRunContextWithinReadFence(
         accountId: params.agentAccountId,
         requester: params,
       });
-    const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
+    const operatorAuthority = readRunOperatorAuthority(params);
     const builtSystemPrompt = isSideQuestion
       ? extraSystemPrompt
       : skipsTurnPrefix
@@ -1332,7 +1322,7 @@ async function prepareCliRunContextWithinReadFence(
         : await prepareCliSystemPrompt({
             preparedTtsPreferences: params.preparedTtsPreferences,
             preparedSessionEntry: params.sessionEntry,
-            requesterProfileId,
+            requester: { operatorAuthority, senderIsOwner: params.senderIsOwner },
             workspaceDir,
             cwd,
             config: params.config,
@@ -1379,14 +1369,13 @@ async function prepareCliRunContextWithinReadFence(
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const historyParams = (params = await admitCliRunParams(params, workspaceResolution.agentId));
     const historyIdentity = { credential: authCredential, preparedBackend: preparedBackendFinal };
-    const cliHistoryWriter = !isSideQuestion
-      ? await prepareCliHistoryBoundary(historyParams, historyIdentity)
+    const cliHistoryAdmission = !isSideQuestion
+      ? await admitCliHistoryAccount(historyParams, historyIdentity)
       : undefined;
-    // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
-    // Native compatibility and transcript account ownership are independent gates.
-    // A session-less backend starts every turn fresh, so the account-owned transcript is
-    // its only continuity; the backend's raw-reseed opt-in still decides delivery.
-    const rawTranscriptReseedReason = !(params.sessionManager || replayableTarget(cliHistoryWriter))
+    // Saved history replays unless another account already ran this session. Caller-owned
+    // memory cannot authorize durable history; a session-less backend's only continuity is
+    // the session transcript, and its raw-reseed opt-in still decides delivery.
+    const rawTranscriptReseedReason = !(params.sessionManager || cliHistoryAdmission?.target)
       ? "auth-unknown"
       : reusableCliSessionId
         ? "session-expired"
@@ -1476,7 +1465,7 @@ async function prepareCliRunContextWithinReadFence(
           promptBuildHookResult?.prependContext,
           authorizedPromptBuildResult?.prependContext,
         ],
-        requesterProfileId,
+        requesterProfileId: operatorAuthority?.profileId,
         capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
         sessionKey: params.sessionKey,
         agentId: sessionAgentId,
@@ -1487,7 +1476,7 @@ async function prepareCliRunContextWithinReadFence(
         // Operator-kept orchestration tools that survived every later native-tool cap.
         nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params, backendResolved),
         runtimeContextFragments: params.runtimeContextFragments,
-        sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
+        sessionTarget: params.isolatedCompletion ? undefined : cliHistoryAdmission?.target,
         context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));
       params.assertCurrent?.();
@@ -1573,7 +1562,7 @@ async function prepareCliRunContextWithinReadFence(
       systemPrompt,
       systemPromptReport,
       claudeSkillsPlugin,
-      ...(cliHistoryWriter ? { cliHistoryWriter } : {}),
+      ...(cliHistoryAdmission ? { cliHistoryAdmission } : {}),
       resumeContext: sessionPromptContext?.resumeContext,
       transcriptCursor: sessionPromptContext?.transcriptCursor,
       authEpoch,
