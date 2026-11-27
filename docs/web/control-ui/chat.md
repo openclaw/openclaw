@@ -401,11 +401,12 @@ clipboard, perform lookups, or recursively expand another snippet. Stored bodies
 are protected from surrounding-prose transforms. The full catalog is never sent
 to a model. Speech recognition still uses the configured transcription route.
 
-A capture pins its catalog revision. Changes to definitions, disablement,
-deletion, a changed account or connection, cancellation, and a newer capture
-invalidate pending expansion. The current catalog is checked again before
-insertion or download. Already inserted draft text is independent of later
-catalog changes.
+A capture uses the catalog revision loaded when it starts. Editing, disabling,
+or deleting snippets affects future captures, not the result already in review.
+**Add to draft** and **Download plain text** use that capture's result without
+reloading the catalog. Canceling the capture or changing the signed-in connection
+prevents it from finishing. Later catalog changes do not alter text already in
+the draft.
 
 If the original draft changes, closes, becomes unavailable, or would exceed its
 text limit (including the side chat's 400 characters), insertion stops.

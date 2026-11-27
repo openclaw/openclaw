@@ -123,6 +123,7 @@ suite.define(() => {
         const body =
           "  007 {customer}\nCafe\u0301 · 東京 👩🏽‍💻\n\n$(echo literal) insert snippet support  \n";
         const prefsKey = "dictation.snippets";
+        const catalogRead = { keys: [prefsKey] };
         const { gateway, textarea, admit, close } = await openDictation(page, {
           presenceUsers: [{ id: "synthetic-snippet-operator", self: true }],
           featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
@@ -130,7 +131,7 @@ suite.define(() => {
             "users.prefs.get": {
               cases: [
                 {
-                  match: { keys: [prefsKey] },
+                  match: catalogRead,
                   response: {
                     status: "ok",
                     entries: {
@@ -166,9 +167,24 @@ suite.define(() => {
         await admit();
         await page.mouse.up();
         await page.locator(".agent-chat__dictation-phase--listening").waitFor();
-        await gateway.waitForRequest("users.prefs.get", {
-          match: { keys: [prefsKey] },
+        const admission = await gateway.waitForRequest("users.prefs.get", {
+          match: catalogRead,
           exactParams: true,
+        });
+        // A later catalog edit applies to new captures, not to this admitted review.
+        await gateway.setMethodResponse("users.prefs.get", {
+          cases: [
+            {
+              match: catalogRead,
+              response: {
+                status: "ok",
+                entries: {
+                  [prefsKey]: { schemaVersion: 1, revision: 2, enabled: false, snippets: [] },
+                },
+              },
+            },
+            { response: { status: "ok", entries: {} } },
+          ],
         });
         expect(
           (await gateway.getRequests("talk.session.create")).map(({ params }) => params),
@@ -249,14 +265,8 @@ suite.define(() => {
           draftFrame.png,
         );
         expect(
-          (
-            await gateway.getRequests(
-              "users.prefs.get",
-              { keys: [prefsKey] },
-              { exactParams: true },
-            )
-          ).length,
-        ).toBeGreaterThanOrEqual(3);
+          await gateway.getRequests("users.prefs.get", catalogRead, { exactParams: true }),
+        ).toEqual([admission]);
         expect(
           (await gateway.getRequests()).filter(({ method }) =>
             [
