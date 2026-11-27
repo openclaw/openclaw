@@ -328,7 +328,9 @@ src/agents/github-host-runtime.ts
 src/agents/github-host.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-connect-action.ts
+src/agents/mcp-oauth-identity.ts
 src/agents/mcp-oauth-store-error.ts
+src/agents/mcp-startup-backoff.ts
 src/agents/model-auth-policy.ts
 src/agents/model-catalog-entry.ts
 src/agents/model-catalog-lookup.ts
@@ -1339,6 +1341,7 @@ src/infra/sqlite-reader-metrics.ts
 src/infra/sqlite-readonly-auth-schema.ts
 src/infra/sqlite-readonly-auth-transfer.ts
 src/infra/sqlite-readonly-location-cleanup.ts
+src/infra/sqlite-readonly-location.inspection.ts
 src/infra/sqlite-readonly-location.ts
 src/infra/sqlite-readonly-location.worker.ts
 src/infra/sqlite-readonly-native-resource.client.ts

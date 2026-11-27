@@ -23,15 +23,23 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // The budget is a ceiling set from Linux CI (macOS starts one worker fewer); lower it in
 // the PR that removes work. NODE_OPTIONS carries the ledger into descendant processes
 // that inherit the environment and into every worker; spawn calls are counted
-// separately for descendants that start with a clean environment.
-const COLD_START_BUDGET = { nodeProcesses: 4, nodeSpawns: 5, workerThreads: 17 };
+// separately for descendants that start with a clean environment. Main-thread modules
+// and bytes count the CLI process's own graph from source (this test runs the CLI
+// through tsx), so they track graph growth, not the bundled dist numbers.
+const COLD_START_BUDGET = {
+  nodeProcesses: 4,
+  nodeSpawns: 5,
+  workerThreads: 15,
+  mainModules: 11_200,
+  mainKiB: 87_000,
+};
 
 const LEDGER_PRELOAD = `
 import fs from "node:fs";
 import path from "node:path";
 import childProcess from "node:child_process";
 import workerThreads from "node:worker_threads";
-import { syncBuiltinESMExports } from "node:module";
+import { registerHooks, syncBuiltinESMExports } from "node:module";
 const ledger = process.env.OPENCLAW_TEST_COLD_START_LEDGER;
 const marker = Symbol.for("openclaw.test.coldStartLedger");
 if (ledger && !globalThis[marker]) {
@@ -39,6 +47,22 @@ if (ledger && !globalThis[marker]) {
   const record = (kind) => fs.appendFileSync(ledger, Date.now() + " " + kind + "\\n");
   if (workerThreads.isMainThread) {
     record("node-process");
+  }
+  // The CLI's own main thread; inheriting helper processes run other entry scripts.
+  if (workerThreads.isMainThread && /[\\\\/]entry\\.[cm]?[jt]s$/u.test(process.argv[1] ?? "")) {
+    const seen = new Set();
+    registerHooks({
+      load(url, context, next) {
+        const result = next(url, context);
+        if (url.startsWith("file:") && !seen.has(url)) {
+          seen.add(url);
+          const source = result.source;
+          const bytes = typeof source === "string" ? Buffer.byteLength(source) : (source?.byteLength ?? 0);
+          record("main-module " + bytes);
+        }
+        return result;
+      },
+    });
   }
   for (const name of ["spawn", "fork", "execFile", "spawnSync", "execFileSync"]) {
     const original = childProcess[name];
@@ -127,9 +151,15 @@ it.skipIf(process.platform === "win32")(
       });
       expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
       expect(JSON.parse(result.stdout)).toMatchObject({ payloads: [{ text: "cold start ok" }] });
-      const counts = { nodeProcesses: 0, nodeSpawns: 0, workerThreads: 0 };
+      const counts = {
+        nodeProcesses: 0,
+        nodeSpawns: 0,
+        workerThreads: 0,
+        mainModules: 0,
+        mainKiB: 0,
+      };
       for (const line of (await fs.readFile(ledger, "utf8")).trim().split("\n")) {
-        const [at, kind] = line.split(" ");
+        const [at, kind, bytes] = line.split(" ");
         if (Number(at) > firstRequestAt!) {
           continue;
         }
@@ -139,12 +169,18 @@ it.skipIf(process.platform === "win32")(
           counts.nodeSpawns++;
         } else if (kind === "worker-thread") {
           counts.workerThreads++;
+        } else if (kind === "main-module") {
+          counts.mainModules++;
+          counts.mainKiB += Number(bytes) / 1024;
         }
       }
+      counts.mainKiB = Math.round(counts.mainKiB);
       const report = JSON.stringify(counts);
       expect(counts.nodeProcesses, report).toBeLessThanOrEqual(COLD_START_BUDGET.nodeProcesses);
       expect(counts.nodeSpawns, report).toBeLessThanOrEqual(COLD_START_BUDGET.nodeSpawns);
       expect(counts.workerThreads, report).toBeLessThanOrEqual(COLD_START_BUDGET.workerThreads);
+      expect(counts.mainModules, report).toBeLessThanOrEqual(COLD_START_BUDGET.mainModules);
+      expect(counts.mainKiB, report).toBeLessThanOrEqual(COLD_START_BUDGET.mainKiB);
     } finally {
       await server.close();
     }

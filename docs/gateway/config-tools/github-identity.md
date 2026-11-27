@@ -147,6 +147,8 @@ The default sandbox tool policy also allows `github_publish` in managed Gateway 
 
 Publication may wait until the requesting turn finishes and its workspace is accepted. Its result is appended to the session transcript; this does not start another agent turn. When the authorized task also includes review, CI repair, or landing, the agent must arrange a separate continuation before ending the requesting turn. A draft PR or publication receipt does not complete a landing request.
 
+A publication that creates a PR uses the request's `title` and `body`. The first commit the branch adds to its base supplies each omitted field. For example, **Publish** in the Control UI supplies neither field. The PR body omits the commit's trailers. A branch with no commit of its own, such as a repository checkpoint publication, is titled `Publish <branch>`. The publication commit keeps the requested title, or `Publish <branch>`, as its subject.
+
 Use `github_publish` with `action: "inspect_pr"` and `pullRequestUrl` to inspect
 an existing PR authored by a currently verified GitHub account linked to the
 requesting person. A linked account can also continue a PR authored by the currently

@@ -12,6 +12,7 @@ import { listSessionForkTools } from "./embedded-agent-runner/session-fork-reque
 import {
   clearEmbeddedSessionPromptStates,
   prepareSessionToolSurface,
+  readSessionPinnedToolNames,
   retainEmbeddedSessionPromptState,
 } from "./embedded-agent-runner/session-prompt-state.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
@@ -132,6 +133,17 @@ function send(
 ) {
   const catalogRef = createToolSearchCatalogRef();
   onTestFinished(() => clearToolSearchCatalog({ catalogRef }));
+  const pinned = readSessionPinnedToolNames({
+    state,
+    routeKey: "listing-route",
+    toolPolicy: "listing-policy",
+    entries: [],
+    historyBoundaryCount: live.compactions ?? 0,
+  });
+  // As in a run, an established pin (none before a series' first request) owns the MCP split.
+  if (pinned) {
+    catalogRef.sessionPinnedToolNames = pinned;
+  }
   const built = createOpenClawCodingTools({
     ...options,
     toolSearchCatalogRef: catalogRef,
@@ -197,8 +209,9 @@ it("sends one tool list across user, cron, exec-wake, subagent and steer turns",
     send(chat.state, turns.user!),
     send(chat.state, turns.cron!, { node: true, mcp: true }),
   ];
-  // Each turn builds the same tool set itself; the pin is not what makes them equal. Only the
-  // computer definition follows live node facts, and the pin holds it.
+  // Each turn builds the same tool set itself; the pin is not what makes them equal, beyond
+  // owning which MCP tools are direct. Only the computer definition follows live node facts,
+  // and the pin holds it.
   const built = turnsSent.map((turn) => turn.built.map((tool) => tool.name));
   expect(built).toEqual(built.map(() => built[0]));
   const sent = turnsSent.map(definitions);

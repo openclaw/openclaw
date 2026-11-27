@@ -380,10 +380,12 @@ export function resolveConfiguredPluginAutoEnableCandidates(
   }
 
   const decisionProviderIds = new Set(getConfiguredDecisionProviderIds(params.config));
-  for (const plugin of params.registry.plugins) {
-    for (const providerId of plugin.contracts?.decisionProviders ?? []) {
-      if (decisionProviderIds.has(providerId)) {
-        changes.push({ pluginId: plugin.id, kind: "decision-provider-selected", providerId });
+  if (decisionProviderIds.size > 0) {
+    for (const plugin of params.registry.plugins) {
+      for (const providerId of plugin.contracts?.decisionProviders ?? []) {
+        if (decisionProviderIds.has(providerId)) {
+          changes.push({ pluginId: plugin.id, kind: "decision-provider-selected", providerId });
+        }
       }
     }
   }
@@ -417,29 +419,29 @@ export function resolveConfiguredPluginAutoEnableCandidates(
     }
   }
 
-  for (const [contract, configKey, kind] of [
-    ["webSearchProviders", "webSearch", "plugin-web-search-configured"],
-    ["tools", null, "plugin-tool-configured"],
-    ["webFetchProviders", "webFetch", "plugin-web-fetch-configured"],
-  ] as const) {
-    for (const plugin of params.registry.plugins) {
-      if (
-        (plugin.contracts?.[contract]?.length ?? 0) === 0 ||
-        (contract === "webSearchProviders" && (plugin.providers?.length ?? 0) === 0)
-      ) {
-        continue;
-      }
-      const config = params.config.plugins?.entries?.[plugin.id]?.config;
-      const configured = configKey
-        ? isRecord(config) && isRecord(config[configKey])
-        : hasPluginOwnedToolConfig(params.config, plugin);
-      if (configured) {
-        changes.push({ pluginId: plugin.id, kind });
+  if (hasSetupAutoEnableRelevantConfig(params.config)) {
+    for (const [contract, configKey, kind] of [
+      ["webSearchProviders", "webSearch", "plugin-web-search-configured"],
+      ["tools", null, "plugin-tool-configured"],
+      ["webFetchProviders", "webFetch", "plugin-web-fetch-configured"],
+    ] as const) {
+      for (const plugin of params.registry.plugins) {
+        if (
+          (plugin.contracts?.[contract]?.length ?? 0) === 0 ||
+          (contract === "webSearchProviders" && (plugin.providers?.length ?? 0) === 0)
+        ) {
+          continue;
+        }
+        const config = params.config.plugins?.entries?.[plugin.id]?.config;
+        const configured = configKey
+          ? isRecord(config) && isRecord(config[configKey])
+          : hasPluginOwnedToolConfig(params.config, plugin);
+        if (configured) {
+          changes.push({ pluginId: plugin.id, kind });
+        }
       }
     }
-  }
 
-  if (hasSetupAutoEnableRelevantConfig(params.config)) {
     const manifestMatchedPluginIds = new Set(changes.map((entry) => entry.pluginId));
     const setupPluginIds = resolveRelevantSetupAutoEnablePluginIds(
       params.config,
