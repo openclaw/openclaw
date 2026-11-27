@@ -155,7 +155,7 @@ export async function saveIdentityDraft(params: {
       (client) => {
         if (client !== expectedClient) {
           staleClient = true;
-          throw new Error("Connection changed before the agent identity update started.");
+          throw new Error(t("agents.identity.updateContextChanged"));
         }
         if (avatar) {
           assertUploadsEnabled(params.config);

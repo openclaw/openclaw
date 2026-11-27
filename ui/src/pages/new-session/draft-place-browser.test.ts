@@ -144,9 +144,8 @@ describe("DraftPlaceBrowser", () => {
         sessions: [
           { execCwd: "/workspace" },
           { execCwd: "/node/repo", execNode: "macbook" },
-          { execCwd: "/node/repo", execNode: "macbook" },
-          { execCwd: "/gateway/repo" },
-          { execCwd: "/gone/repo", execNode: "retired" },
+          { spawnedCwd: "/device/alpha", deviceFolder: { deviceId: "d", path: "/device/alpha" } },
+          { spawnedCwd: "/gateway/repo" },
           { execCwd: "/preferred/selected", worktree: { repoRoot: "/ignored/worktree" } },
           { worktree: { repoRoot: "/worktree/one" } },
           { execCwd: "  /cwd/two  " },
@@ -169,7 +168,7 @@ describe("DraftPlaceBrowser", () => {
     expect(
       browser.resolveProjectRecents({
         sessions: [
-          { execCwd: "/workspace/packages/app" },
+          { spawnedCwd: "/workspace/packages/app" },
           { execCwd: "/workspace-other/private" },
           { execCwd: "/node/repo", execNode: "macbook" },
         ],
@@ -459,29 +458,6 @@ describe("DraftPlaceBrowser", () => {
       expect(fixture.onProjectMissing).toHaveBeenCalled();
     },
   );
-
-  it.each([
-    ["the Gateway omits recents", async () => ({ projects: [] })],
-    [
-      "projects.list fails",
-      async () => {
-        throw new Error("projects unavailable");
-      },
-    ],
-  ])("keeps roster recents when %s", async (_label, request) => {
-    const { browser } = createBrowser(request);
-
-    await browser.refreshProjects();
-
-    expect(
-      browser.resolveProjectRecents({
-        sessions: [{ execCwd: "/workspace/recent" }],
-        workspace: "/workspace",
-        workspaceRoots: ["/workspace"],
-        isAdmin: false,
-      }),
-    ).toEqual([{ kind: "folder", folder: "/workspace/recent", displayName: "recent" }]);
-  });
 });
 
 describe("DraftGatewayState", () => {

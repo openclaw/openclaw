@@ -9,10 +9,8 @@ import {
   failPanelRefresh,
 } from "../../components/panel-refresh-status-state.ts";
 import { downloadTextFile } from "../../lib/download.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
@@ -206,46 +204,44 @@ function LogsPage() {
 
   return (
     <openclaw-logs-page>
-      <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
-        <LogsView
-          completion={completion()}
-          refreshDisabled={!gateway.connected}
-          status={status()}
-          file={file()}
-          entries={entries}
-          filterText={filterText()}
-          levelFilters={levelFilters}
-          autoFollow={autoFollow()}
-          truncated={truncated()}
-          onStreamRef={(element, scroll) => {
-            stream = element;
-            scrollToEnd = scroll;
-          }}
-          onFilterTextChange={setFilterText}
-          onLevelToggle={(level, enabled) =>
-            setLevelFilters((draft) => {
-              draft[level] = enabled;
-            })
+      <LogsView
+        completion={completion()}
+        refreshDisabled={!gateway.connected}
+        status={status()}
+        file={file()}
+        entries={entries}
+        filterText={filterText()}
+        levelFilters={levelFilters}
+        autoFollow={autoFollow()}
+        truncated={truncated()}
+        onStreamRef={(element, scroll) => {
+          stream = element;
+          scrollToEnd = scroll;
+        }}
+        onFilterTextChange={setFilterText}
+        onLevelToggle={(level, enabled) =>
+          setLevelFilters((draft) => {
+            draft[level] = enabled;
+          })
+        }
+        onToggleAutoFollow={(enabled) => {
+          setAutoFollow(enabled);
+          if (enabled) {
+            scrollToEnd?.();
           }
-          onToggleAutoFollow={(enabled) => {
-            setAutoFollow(enabled);
-            if (enabled) {
+        }}
+        onRefresh={() =>
+          void loadLogs({ reset: true }).then((current) => {
+            if (current) {
               scrollToEnd?.();
             }
-          }}
-          onRefresh={() =>
-            void loadLogs({ reset: true }).then((current) => {
-              if (current) {
-                scrollToEnd?.();
-              }
-            })
-          }
-          onExport={(lines, label) => {
-            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-            downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
-          }}
-        />
-      </ShellLayoutBoundary>
+          })
+        }
+        onExport={(lines, label) => {
+          const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+          downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
+        }}
+      />
     </openclaw-logs-page>
   );
 }

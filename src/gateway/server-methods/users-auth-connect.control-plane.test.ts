@@ -1,11 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { UserProfileAuthLink } from "../../state/user-model-accounts.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import {
   setupModelAccountConnectTest,
   prepareUserProfileSelectionAuthority,
+  prepareUserProfileRolePolicyAuthority,
   listUserProfileAuthLinks,
   listUserModelAccounts,
   readUserModelAccountSummary,
@@ -331,7 +341,7 @@ describe("users model-account control plane", () => {
       undefined,
       expect.objectContaining({
         code: "INVALID_REQUEST",
-        message: expect.stringContaining("openclaw models auth login"),
+        message: expect.stringContaining("sign the account in first"),
       }),
     );
     expect(
@@ -385,4 +395,72 @@ describe("users model-account control plane", () => {
       );
     },
   );
+});
+
+it("uses the canonical profile role for administrator access, not the membership label", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const { captureResidentUserProfileAccess } = await vi.importActual<
+      typeof import("../../state/user-profile-list.js")
+    >("../../state/user-profile-list.js");
+    prepareUserProfileRolePolicyAuthority.mockImplementation(async (reference) => {
+      const access = captureResidentUserProfileAccess(reference);
+      const profile = access.assertCurrent();
+      return {
+        profileId: profile.id,
+        role: profile.role,
+        githubLogin: profile.githubLogin,
+        isCurrent: () => access.assertCurrent().role === profile.role,
+      };
+    });
+    const profile = ensureProfileForEmail("account-admin@example.test");
+    setUserProfileRole(profile.id, "admin");
+    const config: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "reader",
+          definitions: {
+            admin: {
+              scopes: ["operator.admin"],
+              agents: "*" as const,
+              sessions: { others: "write" as const },
+            },
+            reader: {
+              scopes: ["operator.read"],
+              agents: "*" as const,
+              sessions: { others: "none" as const },
+            },
+          },
+        },
+      },
+    };
+    setConfig(config);
+    setRuntimeConfigSnapshot(config);
+    const principal = {
+      kind: "member" as const,
+      peerKey: `iroh:${"ab".repeat(32)}`,
+      accountId: "account-admin",
+      role: "reader",
+    };
+    setOpenClawIdTunnelPrincipalLookup(() => principal);
+    const admin = createClient(profile.id, ["operator.admin"]);
+    admin.internal = { openclawIdPrincipal: principal };
+    listUserModelAccounts.mockReturnValue({ accounts: [] });
+    try {
+      const response = await rpc("users.listModelAccounts", { profileId: "profile-other" }, admin);
+      expect(response).toHaveBeenCalledWith(true, {
+        profileId: "profile-other",
+        accounts: [],
+        links: [],
+      });
+      setUserProfileRole(profile.id, "reader");
+      listUserModelAccounts.mockClear();
+      expect(
+        await rpc("users.listModelAccounts", { profileId: "profile-other" }, admin),
+      ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
+    } finally {
+      setOpenClawIdTunnelPrincipalLookup(undefined);
+      clearRuntimeConfigSnapshot();
+    }
+    expect(listUserModelAccounts).not.toHaveBeenCalled();
+  });
 });

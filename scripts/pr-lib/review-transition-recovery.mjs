@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { join, resolve } from "node:path";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
-import { readRegular, requireOperationOwner } from "./baseline-refresh.mjs";
+import { readRegular, requireOperationOwner } from "./preparation-state.mjs";
 import { worktreeEntry } from "./review-transition-state.mjs";
 
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");

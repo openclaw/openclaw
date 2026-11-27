@@ -63,6 +63,7 @@ function makeContext(
 ) {
   return {
     state: () => ({
+      profiles: new Map(),
       resolved: {
         actionTimeoutMs: options?.actionTimeoutMs ?? 45_000,
         extraArgs: [],
@@ -456,6 +457,24 @@ describe("browser tab routes", () => {
       });
       expect(navigation.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
     });
+  });
+
+  it.each([
+    { route: "close by target id", targetId: "T2", query: {} },
+    { route: "close by raw target id", targetId: "T2", query: { targetIdMode: "raw" } },
+    { route: "close by index", body: { action: "close", index: 1 } },
+  ])("$route ends a blocked tab without URL policy checks", async ({ targetId, query, body }) => {
+    navigation.assertBrowserNavigationResultAllowed.mockRejectedValue(
+      Object.assign(new Error("blocked"), { name: "SsrFBlockedError" }),
+    );
+    const profileCtx = withTabs([publicTab(), internalTab()]);
+    const params = { profileCtx, ssrfPolicy: { allowPrivateNetwork: false } };
+    const response = body
+      ? await act({ ...params, body })
+      : await close({ ...params, targetId, query });
+    expectResponse(response, 200, { ok: true, targetId: "T2" });
+    expect(profileCtx.closeTab).toHaveBeenCalledWith("T2", expect.anything());
+    expect(navigation.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
 
   it.each([

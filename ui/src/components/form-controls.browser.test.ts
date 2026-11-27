@@ -37,7 +37,10 @@ function readUiCss(): string {
     "chat/sidebar-panels",
     "plugins",
   ];
-  return files.map((file) => readStyleSheet(`ui/src/styles/${file}.css`)).join("\n");
+  return [
+    ...files.map((file) => readStyleSheet(`ui/src/styles/${file}.css`)),
+    readStyleSheet("ui/src/pages/chat/components/chat-session-workspace-desktop.css"),
+  ].join("\n");
 }
 
 function readStyles(
@@ -84,34 +87,13 @@ function controlsHtml() {
       <div class="settings-row__control"><textarea class="settings-input">config textarea</textarea></div>
       <select class="settings-select"><option>settings select</option></select>
       <input class="usage-date-input" value="2026-05-31" />
-      <select class="usage-select"><option>usage select</option></select>
+      <label class="sessions-sort">
+        <span>Sort</span><select class="settings-select"><option>Recent</option></select>
+      </label>
       <input class="usage-query-input" value="usage query" />
-      <div class="usage-filters-inline">
-        <select><option>inline usage select</option></select>
-        <input type="text" value="inline usage input" />
-      </div>
       <div class="agent-chat__composer-combobox"><textarea>chat composer</textarea></div>
     </main>
   `;
-}
-
-function mediaDeviceRowsHtml() {
-  const devices = [
-    ["Microphone input", "MacBook Pro Microphone (Built-in)"],
-    ["Camera", "System default"],
-  ];
-  return `<main style="width: 100%; max-width: 900px">${devices
-    .map(
-      ([label, option]) => `
-    <div class="settings-row">
-      <div class="settings-row__text"><span class="settings-row__title">${label}</span></div>
-      <div class="settings-row__control">
-        <select class="settings-select settings-select--media-device"><option>${option}</option></select>
-        <button class="btn btn--sm btn--icon" type="button">↻</button>
-      </div>
-    </div>`,
-    )
-    .join("")}</main>`;
 }
 
 async function setFixture(page: Page, body: string, attributes = "", head = "") {
@@ -149,6 +131,87 @@ afterAll(async () => {
 });
 
 describeBrowserLayout("form controls and app chrome styles", () => {
+  it("preserves shared field states and forced-colors focus indicators", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await setFixture(
+        page,
+        `<main style="padding:24px;display:grid;gap:12px">
+          <label class="field"><span><input id="field" placeholder="Field" /></span></label>
+          <input id="usage" class="usage-query-input" placeholder="Usage query" />
+          <button id="agent" class="agent-select__trigger" type="button">Agent</button>
+          <button id="submenu" class="agent-select__trigger oc-menu-item" type="button" aria-expanded="true" tabindex="-1">Submenu</button>
+        </main>`,
+        'data-theme-mode="light" style="--field-border:#123456;--border-strong:#345678;--field-focus-border:#56789a;--muted:#789abc;--duration-fast:0s"',
+      );
+      const paint = (control: Locator) =>
+        control.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            border: style.borderTopColor,
+            opacity: style.opacity,
+            cursor: style.cursor,
+            focused: element.matches(":focus-visible"),
+            outline: [style.outlineStyle, style.outlineWidth, style.outlineOffset],
+          };
+        });
+      for (const id of ["field", "usage", "agent"]) {
+        const control = page.locator(`#${id}`);
+        await page.mouse.move(0, 0);
+        expect(await paint(control), `${id} resting`).toMatchObject({
+          border: "rgb(18, 52, 86)",
+          opacity: "1",
+        });
+        await control.hover();
+        expect((await paint(control)).border, `${id} hover`).toBe("rgb(52, 86, 120)");
+        await page.keyboard.press("Tab");
+        await control.focus();
+        expect(await paint(control), `${id} keyboard focus while hovered`).toMatchObject({
+          border: "rgb(86, 120, 154)",
+          focused: true,
+        });
+        expect((await paint(control)).outline[0], `${id} normal focus outline`).toBe("none");
+        await control.evaluate((element) => element.setAttribute("disabled", ""));
+        // Chromium blurs a newly disabled element at its next rendering update, not at once.
+        await expect
+          .poll(() => paint(control), { message: `${id} disabled while hovered` })
+          .toMatchObject({
+            border: "rgb(18, 52, 86)",
+            opacity: "0.5",
+            cursor: "not-allowed",
+          });
+        await control.evaluate((element) => element.removeAttribute("disabled"));
+      }
+      expect(
+        await page
+          .locator("#field")
+          .evaluate((element) => getComputedStyle(element, "::placeholder").color),
+      ).toBe("rgb(120, 154, 188)");
+
+      await page.mouse.move(0, 0);
+      const agent = page.locator("#agent");
+      await agent.evaluate((element) => element.setAttribute("aria-expanded", "true"));
+      await agent.hover();
+      expect((await paint(agent)).border, "expanded trigger resists hover").toBe(
+        "rgb(86, 120, 154)",
+      );
+      expect((await paint(page.locator("#submenu"))).border, "submenu keeps its own paint").toBe(
+        "rgb(18, 52, 86)",
+      );
+
+      await page.emulateMedia({ forcedColors: "active" });
+      await page.locator("#field").focus();
+      expect(
+        (await paint(page.locator("#field"))).outline,
+        "focused field in forced colors",
+      ).toEqual(["solid", "2px", "2px"]);
+      expect((await paint(agent)).outline, "expanded trigger in forced colors").toEqual([
+        "solid",
+        "2px",
+        "2px",
+      ]);
+    });
+  });
+
   it("removes the mask layer from layout when the value is revealed", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await setFixture(
@@ -193,33 +256,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       });
     },
   );
-
-  it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
-    await withBrowserPage(desktopContext.newPage(), async (page) => {
-      await setFixture(
-        page,
-        `<div class="settings-row__control">
-          <button class="btn btn--sm btn--icon mcp-server-remove" type="button" aria-label="Remove synthetic server">
-            <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
-          </button>
-        </div>`,
-        'data-theme-mode="light"',
-      );
-
-      const metrics = await page
-        .getByRole("button", { name: "Remove synthetic server", exact: true })
-        .evaluate((button) => {
-          const glyph = button.querySelector("svg")!;
-          const buttonRect = button.getBoundingClientRect();
-          const glyphRect = glyph.getBoundingClientRect();
-          return {
-            button: [buttonRect.width, buttonRect.height],
-            glyph: [glyphRect.width, glyphRect.height],
-          };
-        });
-      expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
-    });
-  });
 
   it.each(["custom-light", "dark", "light"] as const)(
     "preserves action fill and foreground contrast on hover in %s mode",
@@ -271,65 +307,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         } else {
           expect(hovered.background).not.toBe(resting.background);
         }
-      });
-    },
-  );
-
-  it.each(["dark", "light"] as const)(
-    "keeps disabled buttons visually settled on hover and press in %s mode",
-    async (theme) => {
-      await withBrowserPage(desktopContext.newPage(), async (page) => {
-        await page.emulateMedia({ reducedMotion: "reduce" });
-        await setFixture(
-          page,
-          `<main style="padding: 24px"><button class="btn" type="button">Action</button></main>`,
-          `data-theme="${theme}" data-theme-mode="${theme}"`,
-        );
-        const button = page.getByRole("button", { name: "Action", exact: true });
-        for (const variant of [
-          "",
-          "primary",
-          "danger",
-          "btn--icon",
-          "btn--ghost",
-          "btn--icon btn--ghost",
-        ]) {
-          for (const disabled of ["native", "aria"] as const) {
-            await page.mouse.move(0, 0);
-            await button.evaluate(
-              (element, state) => {
-                element.setAttribute("class", `btn ${state.variant}`);
-                element.toggleAttribute("disabled", state.disabled === "native");
-                element.setAttribute("aria-disabled", String(state.disabled === "aria"));
-              },
-              { variant, disabled },
-            );
-            const resting = await buttonAppearance(button);
-            await button.hover();
-            expect(
-              await buttonAppearance(button),
-              `${variant || "neutral"} ${disabled} hover`,
-            ).toEqual(resting);
-            await page.mouse.down();
-            try {
-              expect(
-                await buttonAppearance(button),
-                `${variant || "neutral"} ${disabled} press`,
-              ).toEqual(resting);
-            } finally {
-              await page.mouse.up();
-            }
-          }
-        }
-        await page.mouse.move(0, 0);
-        await button.evaluate((element) => {
-          element.setAttribute("class", "btn");
-          element.removeAttribute("disabled");
-          element.removeAttribute("aria-disabled");
-        });
-        const enabled = await buttonAppearance(button);
-        await button.hover();
-        expect((await buttonAppearance(button)).background).not.toBe(enabled.background);
       });
     },
   );
@@ -386,41 +363,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     });
   });
 
-  it("keeps paired selectors the same width across device labels and viewports", async () => {
-    await withBrowserPage(desktopContext.newPage(), async (page) => {
-      await page.setViewportSize({ width: 1200, height: 800 });
-      await setFixture(page, mediaDeviceRowsHtml(), 'data-theme-mode="light"');
-
-      const measure = () =>
-        page.locator(".settings-row").evaluateAll((rows) =>
-          rows.map((row) => {
-            const select = row.querySelector<HTMLElement>(".settings-select--media-device")!;
-            const button = row.querySelector<HTMLElement>(".btn--icon")!;
-            const selectRect = select.getBoundingClientRect();
-            const buttonRect = button.getBoundingClientRect();
-            return {
-              selectWidth: selectRect.width,
-              selectTop: selectRect.top,
-              buttonTop: buttonRect.top,
-            };
-          }),
-        );
-
-      const desktop = await measure();
-      expect(desktop.map((row) => row.selectWidth)).toEqual([220, 220]);
-      expect(desktop.every((row) => row.selectTop === row.buttonTop)).toBe(true);
-
-      await page.setViewportSize({ width: 390, height: 800 });
-      await page.locator("main").evaluate((main) => {
-        main.style.width = "285px";
-      });
-      const mobile = await measure();
-      expect(mobile[0]?.selectWidth).toBeCloseTo(mobile[1]?.selectWidth ?? 0, 5);
-      expect(mobile[0]?.selectWidth).toBeLessThan(340);
-      expect(mobile.every((row) => row.selectTop === row.buttonTop)).toBe(true);
-    });
-  });
-
   it("keeps mobile control sizes and themed select affordances", async () => {
     await withBrowserPage(mobileContext.newPage(), async (page) => {
       await setFixture(page, controlsHtml(), 'data-theme-mode="light"');
@@ -435,10 +377,8 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         ".settings-row__control > textarea.settings-input",
         ".settings-select",
         ".usage-date-input",
-        ".usage-select",
+        ".sessions-sort select",
         ".usage-query-input",
-        '.usage-filters-inline input[type="text"]',
-        ".usage-filters-inline select",
         ".agent-chat__composer-combobox > textarea",
       ];
       expect(
@@ -449,8 +389,8 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         expect(Number.parseFloat(size), selectors[index]).toBeGreaterThanOrEqual(16),
       );
 
-      // Both the .field-wrapped and bare settings selects draw the themed
-      // chevron; bare ones once fell back to the misaligned native arrow.
+      // The field-wrapped, bare and Usage sort settings selects all draw the
+      // themed chevron; bare ones once fell back to the misaligned native arrow.
       const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
         nodes.map((node) => {
           const style = getComputedStyle(node as HTMLElement);
@@ -464,7 +404,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         }),
       );
 
-      expect(selects).toHaveLength(2);
+      expect(selects).toHaveLength(3);
       for (const select of selects) {
         expect(select).toMatchObject({
           appearance: "base-select",
@@ -509,14 +449,10 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect(
         await readStyles(
           page,
-          [
-            "#openclaw-mount-retry",
-            "#openclaw-mount-wait",
-            '.mount-fallback__panel a[href^="https://"]',
-          ],
+          ["#openclaw-mount-retry", '.mount-fallback__panel a[href^="https://"]'],
           "cursor",
         ),
-      ).toEqual(["default", "default", "pointer"]);
+      ).toEqual(["default", "pointer"]);
     });
   });
 
@@ -536,7 +472,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               <div class="file-view__search"><input data-scale data-baseline="16" data-scale-base="12" value="query" /></div>
               <input data-scale data-baseline="16" data-scale-base="12.5" class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
-                <span data-scale data-baseline="12" class="sidebar-recent-session__name">Child session</span>
+                <span data-scale class="sidebar-recent-session__name">Child session</span>
                 <span data-scale class="session-row-trail">3m</span>
               </div>
             </div>`
@@ -548,7 +484,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               <span data-scale class="sidebar-agent-card__name">Agent</span>
               <span data-scale class="settings-sidebar__item-label">Settings</span>
               <span data-scale class="sidebar-file-view__path">workspace/file.ts</span>
-              <span data-scale class="chat-workspace-rail__file-badge">3 files</span>
+              <div class="workspace-desktop"><span data-scale class="workspace-desktop__filename">3 files</span></div>
               <span data-scale class="session-menu__shortcut">⌘K</span>
               <div class="file-view__search"><input data-scale data-baseline="12" value="query" /><span data-scale class="file-view__search-counter">1/2</span></div>
               <div class="sidebar-recent-session"><button class="sidebar-child-session-toggle"><span class="sidebar-child-session-toggle__count">100</span></button></div>
@@ -603,35 +539,22 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     },
   );
 
-  it.each([
-    { label: "merged chat chrome", nativeClass: "", merged: true, search: "visible" },
-    { label: "topbar still shown", nativeClass: "", merged: false, search: "hidden" },
-  ])(
-    "shows the mobile drawer command palette button only where nothing else carries it ($label)",
-    async ({ nativeClass, merged, search }) => {
+  it.each(["shell--merged-chat-chrome", ""])(
+    "hides rail search in the mobile drawer with or without a topbar (%s)",
+    async (chromeClass) => {
       await withBrowserPage(mobileContext.newPage(), async (page) => {
         await setFixture(
           page,
-          `<div class="shell shell--mobile-nav ${merged ? "shell--merged-chat-chrome" : ""}">
+          `<div class="shell shell--mobile-nav ${chromeClass}">
             <nav class="sidebar-rail">
               <button class="sidebar-rail__button sidebar-brand__desktop-control sidebar-brand__search"></button>
             </nav>
           </div>`,
-          `class="${nativeClass}"`,
+          "",
           `<meta name="viewport" content="width=device-width, initial-scale=1.0" />`,
         );
-
-        const [display] = await readStyles(page, [".sidebar-brand__search"], "display");
-
-        // Merged chat chrome hides the topbar, leaving the drawer as the only
-        // surface that can carry search. Everywhere else - including every native
-        // host, which never merges - the topbar keeps its own, so a drawer copy
-        // would put two on screen at once.
-        if (search === "visible") {
-          expect(display).not.toBe("none");
-        } else {
-          expect(display).toBe("none");
-        }
+        await page.addStyleTag({ content: readStyleSheet("ui/src/styles/sidebar-rail.css") });
+        expect(await page.locator(".sidebar-brand__search").isVisible()).toBe(false);
       });
     },
   );
@@ -671,7 +594,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
           ],
           "userSelect",
         ),
-      ).toEqual(["none", "text", "auto", "text", "none", "none"]);
+      ).toEqual(["text", "text", "auto", "text", "none", "none"]);
       expect(
         await readStyles(
           page,

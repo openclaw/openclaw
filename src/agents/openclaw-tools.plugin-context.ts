@@ -43,6 +43,7 @@ export type OpenClawPluginToolOptions = Pick<
   | "requesterAgentIdOverride"
   | "sessionId"
   | "conversationRecall"
+  | "skillLibraryAuthoring"
   | "oneShotCliRun"
   | "sandboxBrowserBridgeUrl"
   | "allowHostBrowserControl"

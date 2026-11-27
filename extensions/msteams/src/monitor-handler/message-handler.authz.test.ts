@@ -7,6 +7,7 @@ import {
 import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig, OpenClawConfig } from "../../runtime-api.js";
+import { resolveMSTeamsAccountConfig, withAccountScopedMSTeamsConfig } from "../accounts.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 // Preserve module setup before modules that consume it.
@@ -66,6 +67,12 @@ function accountHandler(cfg: OpenClawConfig, listenerAccount: string, peer: stri
       agentId: "main",
       accountId,
     }),
+  });
+  fixture.deps.accountPolicyCfg = cfg;
+  fixture.deps.cfg = withAccountScopedMSTeamsConfig({
+    cfg,
+    accountId: listenerAccount,
+    accountConfig: resolveMSTeamsAccountConfig(cfg, listenerAccount),
   });
   return { ...fixture, handler: createMSTeamsMessageHandler(fixture.deps) };
 }
@@ -230,6 +237,11 @@ describe("msteams message authorization and supplemental context", () => {
       setRuntimeConfigSnapshot(cfg);
       const support = accountHandler(cfg, "support", `channel:${channelId}`);
       const { handler: salesHandler } = accountHandler(cfg, "sales", `channel:${channelId}`);
+      // Retain startup allowlists after an unrelated reload, then revoke during preparation.
+      setRuntimeConfigSnapshot({
+        ...structuredClone(cfg),
+        agents: { defaults: { userTimezone: "UTC" } },
+      });
       const started = createDeferred<void>();
       const replies = createDeferred<GraphThreadMessage[]>();
       graph.fetchThreadReplies.mockImplementationOnce(() => {

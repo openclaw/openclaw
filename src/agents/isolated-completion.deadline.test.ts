@@ -389,3 +389,39 @@ it("clears the deadline after success without canceling retained cleanup", async
   }
   expect(releaseRuntimeLease).toHaveBeenCalledOnce();
 });
+
+it.each(["retired", "aborted"] as const)(
+  "does not rotate after a returned quota error when %s",
+  async (state) => {
+    prepareQuotaProfiles();
+    const controller = new AbortController();
+    let current = true;
+    const expired = new Error("Completion owner retired.");
+    const dispatch = vi.fn(async () => {
+      if (state === "retired") {
+        current = false;
+      } else {
+        controller.abort(expired);
+      }
+      return isolatedErrorReply("429 Too many requests");
+    });
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+    await expect(
+      work.run(() =>
+        runIsolatedCompletion(
+          isolatedRequest({
+            abortSignal: controller.signal,
+            assertCurrent() {
+              if (!current) {
+                throw expired;
+              }
+            },
+          }),
+        ),
+      ),
+    ).rejects.toBe(expired);
+    expect(dispatch).toHaveBeenCalledOnce();
+    await work.drain();
+    expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+  },
+);

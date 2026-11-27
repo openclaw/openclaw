@@ -196,7 +196,7 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   ],
 ]);
 
-export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
+function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
   return scenarioConfigSteps.get(scenario) ?? [];
 }
 
@@ -260,6 +260,17 @@ export function resolveUpgradeSurvivorConfigSteps(
     },
     ...sharedSteps,
     ...resolveScenarioConfigSteps(scenario),
+    ...(scenario === "base" &&
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE === "auto-auth"
+      ? [
+          {
+            // Keep the seeded Discord and WhatsApp principals out of the same DM session.
+            id: "restart-auth-dm-scope",
+            intent: "restart-auth-dm-scope",
+            argv: ["config", "set", "session.dmScope", "per-channel-peer"],
+          },
+        ]
+      : []),
     validateStep,
   ];
 }
@@ -284,6 +295,10 @@ function adaptStepForBaseline(step: ConfigStep, baselineVersion: string | null):
   }
   let value = JSON.parse(json);
   if (step.id === "agents") {
+    // beta.1 retired heartbeat defaults; those baselines are idle without the legacy setting.
+    if ((compareReleaseVersions(baselineVersion ?? "", "2026.11.5-beta.1") ?? -1) >= 0) {
+      delete value.defaults.heartbeat;
+    }
     // Keyed rosters shipped before explicit ownership; those baselines still
     // require the legacy default marker.
     if (compareReleaseVersions(baselineVersion ?? "", "2026.8.1-beta.2") === -1) {
@@ -374,25 +389,30 @@ function* adaptRecipeForBaseline(
       batchedThrough = index + 2;
       continue;
     }
-    yield adaptStepForBaseline(step, baselineVersion);
-    // 2026.10.5 shipped skills.workshop; later candidates move it into the plugin's config.
+    // Write after scenario overrides: whole-plugin config writes replace the Workshop entry.
     if (
-      step.id === "skills" &&
+      step.id === "validate" &&
       pinnedVersion &&
-      (compareReleaseVersions(pinnedVersion, "2026.10.5") ?? -1) >= 0
+      (compareReleaseVersions(pinnedVersion, "2026.10.5") ?? -1) >= 0 &&
+      steps.some((entry) => entry.id === "skills")
     ) {
+      const workshopPath =
+        (compareReleaseVersions(pinnedVersion, "2026.11.10") ?? -1) >= 0
+          ? "plugins.entries.skill-workshop.config"
+          : "skills.workshop";
       yield {
         id: "skill-workshop-settings",
         intent: "skill-workshop-settings",
         argv: [
           "config",
           "set",
-          "skills.workshop",
+          workshopPath,
           JSON.stringify({ autonomous: { mode: "off" }, maxSkillBytes: 8000 }),
           "--strict-json",
         ],
       };
     }
+    yield adaptStepForBaseline(step, baselineVersion);
   }
 }
 
@@ -471,6 +491,7 @@ function applyRecipe() {
     baselineVersion: string | null;
     scenario: string;
     acceptedIntents: string[];
+    baselineSkillLibraryToolSplit?: boolean;
     steps: ReturnType<typeof runUpgradeSurvivorOpenClawStep>[];
   } = {
     source: "baseline-cli-command-recipe",
@@ -496,6 +517,16 @@ function applyRecipe() {
       const detail = outcome.errorCode ?? outcome.signal ?? outcome.status ?? "unknown";
       throw new Error(`baseline config recipe failed at ${step.id}: ${detail}`);
     }
+  }
+  if (summary.acceptedIntents.includes("skill-library-split")) {
+    // The published CLI may already stamp post-split policy on a config write.
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is required to record baseline Skill Library policy");
+    }
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    summary.baselineSkillLibraryToolSplit = config.meta?.migrations?.skillLibraryToolSplit === true;
+    writeJson(summaryPath, summary);
   }
 }
 

@@ -15,9 +15,11 @@ import {
   Show,
 } from "solid-js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/index.ts";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ScopeUpgradeOwner } from "../../app/device-scope-upgrade-owner.runtime.ts";
 import { ScopeUpgradeActions, scopeUpgradeText } from "../../components/scope-upgrade-actions.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSectionHelp } from "../../components/solid/settings-section-help.tsx";
@@ -31,7 +33,6 @@ import {
   SettingsRow,
   SettingsSection,
   SettingsStatus,
-  SettingsToggleRow,
   SettingsValue,
   SettingsPageHeader,
 } from "../../components/solid/settings-ui.tsx";
@@ -40,19 +41,22 @@ import { GitHubConnections } from "../../features/github-connections/github-conn
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
+import "../../components/solid/viewer-facepile.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import "../../components/solid/viewer-facepile.tsx";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
-import { uploadsEnabled } from "../../lib/uploads.ts";
 import "../../styles/profile.css";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
+import { uploadsEnabled } from "../../lib/uploads.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { DiscordIdentity } from "./discord-identity.tsx";
 import { ModelAccounts } from "./model-accounts.tsx";
+import { OpenClawIdIdentity } from "./openclaw-id-identity.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
+import { ProfileAttribution } from "./profile-attribution.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 import { ProfileHero } from "./profile-hero.tsx";
 import { type IdentityChange, ProfileState } from "./profile-state.ts";
@@ -84,7 +88,8 @@ function accessSummary(scopes: readonly string[] | null) {
   );
 }
 
-export function ProfilePage() {
+export function ProfilePage(route: { routeData?: string | null }) {
+  let host!: HTMLElement;
   const context = useApplication();
   const upgrade = projectOwner(context.scopeUpgrade, (source) =>
     source.state.phase === "hidden" ? null : source.state,
@@ -184,13 +189,11 @@ export function ProfilePage() {
     );
     const stopEvents = context.gateway.subscribeEvents((event) => {
       if (
-        !state.identityBusy &&
-        event.event === "sessions.changed" &&
-        asOptionalRecord(event.payload)?.reason === "profile-identity"
+        event.event === "users.prefs.changed" ||
+        (event.event === "sessions.changed" &&
+          asOptionalRecord(event.payload)?.reason === "profile-identity")
       ) {
-        state.identityRequestId += 1;
-        state.identityLoading = false;
-        state.loadIdentity();
+        state.refreshPublishedIdentity();
       }
     });
     state.applyGatewaySnapshot(context.gateway.snapshot);
@@ -208,6 +211,30 @@ export function ProfilePage() {
   const initialIdentityPending = () =>
     view().ownProfile === null &&
     (view().identityLoading || (view().connected && !view().identityReady));
+  createScrollPosition(
+    () => {
+      const id = route.routeData;
+      if (!id) {
+        return {};
+      }
+      return {
+        reveal: {
+          identity: [id],
+          block: "start",
+          target: () => {
+            if (!hasPresentation() || initialIdentityPending()) {
+              return null;
+            }
+            const section = host.ownerDocument.getElementById(id);
+            return section && host.contains(section) && !section.closest("[hidden]")
+              ? section
+              : null;
+          },
+        },
+      };
+    },
+    { waitForRevealIn: () => host },
+  );
   const agent = () => {
     const list = agents.read();
     const id = list?.defaultId ?? "main";
@@ -311,7 +338,11 @@ export function ProfilePage() {
                       <openclaw-viewer-avatar
                         prop:user={{
                           id: profile().id,
-                          name: profile().displayName ?? undefined,
+                          name: userProfileDisplayName(
+                            profile().id,
+                            profile().displayName,
+                            profile().githubIdentity?.login,
+                          ),
                           email: profile().emails[0],
                           avatarUrl: avatarUrl() ?? undefined,
                           watchedSessions: [],
@@ -396,17 +427,16 @@ export function ProfilePage() {
                     </form>
                   }
                 />
-                <Show when={!isOwnerProfile()}>
+                <Show when={!isOwnerProfile() && profile().emails.length > 0}>
                   <SettingsRow
                     title={t("profilePage.identity.linkedEmails")}
-                    description={
-                      profile().emails.length ? (
-                        <span class="identity-emails">
-                          <For each={profile().emails}>
-                            {(email) => <span class="identity-account">{email}</span>}
-                          </For>
-                        </span>
-                      ) : undefined
+                    description={t("profilePage.identity.linkedEmailsDescription")}
+                    control={
+                      <span class="identity-emails">
+                        <For each={profile().emails}>
+                          {(email) => <span class="identity-account">{email}</span>}
+                        </For>
+                      </span>
                     }
                   />
                 </Show>
@@ -441,6 +471,9 @@ export function ProfilePage() {
                     </span>
                   }
                 />
+                <Show when={!isOwnerProfile()}>
+                  <OpenClawIdIdentity />
+                </Show>
                 <Show when={view().identityError}>
                   <div class="settings-row identity-error" role="alert">
                     <span class="settings-row__desc">{view().identityError}</span>
@@ -455,78 +488,8 @@ export function ProfilePage() {
     </Show>
   );
 
-  const AttributionSection = () => {
-    const busy = () => identityBusy() ?? (view().identityLoading ? "loading" : null);
-    const canEdit = () => latest(canWrite);
-    const isOwnerProfile = () => view().ownProfile?.id === GATEWAY_OWNER_PROFILE_ID;
-    return (
-      <Show when={view().selfUser && view().ownProfile}>
-        <div id={PROFILE_SETTINGS_TARGET_IDS.attribution}>
-          <SettingsSection
-            title={t("profilePage.identity.attribution")}
-            actions={
-              <SettingsSectionHelp
-                id="settings-profile-attribution-help"
-                section={t("profilePage.identity.attribution")}
-              >
-                <p>
-                  <strong>{t("profilePage.identity.gitCoauthor")}</strong>{" "}
-                  {t("profilePage.identity.gitCoauthorDescription")}
-                </p>
-                <p>
-                  <strong>{t("profilePage.identity.prAttribution")}</strong>{" "}
-                  {t("profilePage.identity.prAttributionDescription")}
-                </p>
-              </SettingsSectionHelp>
-            }
-          >
-            <SettingsToggleRow
-              title={t("profilePage.identity.gitCoauthor")}
-              description={
-                // Publication selects its host independently of the displayed primary account.
-                isOwnerProfile()
-                  ? t("profilePage.identity.ownerGitCoauthorDescription")
-                  : t("profilePage.identity.gitCoauthorShort")
-              }
-              checked={!isOwnerProfile() && presentation().gitCoauthorEnabled()}
-              disabled={
-                !canEdit() || (busy() !== null && busy() !== "git-coauthor") || isOwnerProfile()
-              }
-              saving={busy() === "git-coauthor"}
-              onChange={(enabled) => void saveIdentity({ kind: "git-coauthor", enabled })}
-            />
-            <SettingsToggleRow
-              title={t("profilePage.identity.prAttribution")}
-              description={
-                <>
-                  {t("profilePage.identity.prAttributionShort")}{" "}
-                  <a
-                    class="identity-attribution-link"
-                    href="https://openclaw.ai"
-                    target={EXTERNAL_LINK_TARGET}
-                    rel={buildExternalLinkRel()}
-                  >
-                    {t("profilePage.identity.prAttributionLink")}
-                  </a>
-                </>
-              }
-              checked={presentation().prAttributionEnabled()}
-              disabled={!canEdit() || busy() !== null}
-              onChange={(enabled) => void saveIdentity({ kind: "pr-attribution", enabled })}
-            />
-            <Show when={view().attributionError}>
-              <div class="settings-row identity-error" role="alert">
-                <span class="settings-row__desc">{view().attributionError}</span>
-              </div>
-            </Show>
-          </SettingsSection>
-        </div>
-      </Show>
-    );
-  };
-
   return (
-    <openclaw-profile-page>
+    <openclaw-profile-page ref={(element) => (host = element)}>
       <SettingsPageHeader
         title={titleForRoute("profile")}
         subtitle={
@@ -573,7 +536,7 @@ export function ProfilePage() {
               <Errored
                 fallback={(error, reset) => (
                   <>
-                    <div class="callout danger" role="alert">
+                    <InlineAlert tone="danger" role="alert">
                       {formatUiError(error())}{" "}
                       <button
                         class="btn btn--sm"
@@ -584,7 +547,7 @@ export function ProfilePage() {
                       >
                         {t("common.retry")}
                       </button>
-                    </div>
+                    </InlineAlert>
                     <IdentityContent pending={false} />
                   </>
                 )}
@@ -609,16 +572,26 @@ export function ProfilePage() {
               target={state.modelAccountsTarget}
               personLabel={
                 view().ownProfile
-                  ? view().ownProfile!.displayName?.trim() ||
-                    view().ownProfile!.emails[0] ||
-                    t("profilePage.modelAccounts.currentPerson")
+                  ? userProfileDisplayName(
+                      view().ownProfile!.id,
+                      view().ownProfile!.displayName,
+                      view().ownProfile!.githubIdentity?.login,
+                    ) || t("profilePage.modelAccounts.currentPerson")
                   : null
               }
             />
             <GitHubConnections />
-            <AttributionSection />
+            <ProfileAttribution
+              getView={view}
+              canEdit={latest(canWrite)}
+              busy={identityBusy() ?? (view().identityLoading ? "loading" : null)}
+              gitCoauthorEnabled={presentation().gitCoauthorEnabled()}
+              prAttributionEnabled={presentation().prAttributionEnabled()}
+              onSave={saveIdentity}
+            />
           </Show>
-          <Show when={hasPresentation()}>
+          {/* Unidentified readers need Access even when no identity read can finish. */}
+          <Show when={hasPresentation() && (!view().selfUser || !initialIdentityPending())}>
             <div id="settings-profile-access">
               <SettingsSection title={t("profilePage.access.title")}>
                 <SettingsRow

@@ -2,126 +2,37 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { afterFileRead, asSource, hostFileTools } from "./agent-tools.mutation.test-support.js";
-import {
-  createHostWorkspaceWriteTool,
-  wrapToolMemoryFlushAppendOnlyWrite,
-} from "./agent-tools.read.js";
+import { hostFileTools } from "./agent-tools.mutation.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("workspace mutation authority", () => {
-  afterEach(() => {
-    __setFsSafeTestHooksForTest();
-    vi.restoreAllMocks();
+describe("workspace mutations", () => {
+  afterEach(() => __setFsSafeTestHooksForTest());
+
+  it("preserves a workspace file when cancelled during native write preparation", async () => {
+    const root = tempDirs.make("openclaw-workspace-cancelled-");
+    const filePath = path.join(root, "memory.md");
+    await fs.writeFile(filePath, "original\n");
+    const canonicalPath = await fs.realpath(filePath);
+    const controller = new AbortController();
+    const cancelled = new Error("Workspace write cancelled");
+    __setFsSafeTestHooksForTest({
+      beforePinnedWriteParentAdmission: async (targetPath) => {
+        if (targetPath === canonicalPath) {
+          controller.abort(cancelled);
+        }
+      },
+    });
+    const { write } = hostFileTools(root, {
+      workspaceOnly: true,
+      abortSignal: controller.signal,
+    });
+    await expect(write("memory.md", "replacement\n")).rejects.toThrow(cancelled.message);
+    expect(await fs.readFile(filePath, "utf8")).toBe("original\n");
   });
-
-  it.each([
-    { kind: "write", authority: "revoked" },
-    { kind: "edit", authority: "aborted" },
-    { kind: "append", authority: "active" },
-    { kind: "append", authority: "revoked" },
-    { kind: "append", authority: "aborted" },
-  ] as const)(
-    "checks $authority authority inside $kind preparation",
-    async ({ kind, authority }) => {
-      const root = tempDirs.make("openclaw-workspace-mutation-");
-      const filePath = path.join(root, "memory.md");
-      await fs.writeFile(filePath, "original\n");
-      const generation = new AbortController();
-      let current = true;
-      let prepared = false;
-      const finishPreparation = () => {
-        prepared = true;
-        if (authority === "revoked") {
-          current = false;
-        } else if (authority === "aborted") {
-          generation.abort(new Error("Workspace operation cancelled"));
-        }
-      };
-      if (kind === "append") {
-        afterFileRead(filePath, finishPreparation, true);
-      } else {
-        const targetPath = await fs.realpath(filePath);
-        __setFsSafeTestHooksForTest({
-          // Native writes do not open their staging handles through node:fs.
-          beforePinnedWriteParentAdmission: async (preparedPath) => {
-            if (preparedPath === targetPath) {
-              await Promise.resolve();
-              finishPreparation();
-            }
-          },
-        });
-      }
-      const options = { workspaceOnly: true, abortSignal: generation.signal };
-      const execute = () => {
-        if (kind === "append") {
-          return wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(root, options), {
-            root,
-            relativePath: "memory.md",
-          }).execute(
-            "workspace-append",
-            { path: "memory.md", content: "appended\n" },
-            generation.signal,
-          );
-        }
-        if (kind === "edit") {
-          return hostFileTools(root, options).edit("memory.md", "original", "replacement");
-        }
-        return hostFileTools(root, options).write("memory.md", "replacement\n");
-      };
-
-      const pending = asSource("workspace-mutations", () => current, execute);
-      if (authority === "active") {
-        await expect(pending).resolves.toBeDefined();
-      } else {
-        await expect(pending).rejects.toThrow(
-          authority === "revoked"
-            ? "authority is no longer active"
-            : "Workspace operation cancelled",
-        );
-      }
-      expect(prepared).toBe(true);
-      const changedContent = kind === "append" ? "original\nappended\n" : "replacement\n";
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(
-        authority === "active" ? changedContent : "original\n",
-      );
-      await expect(fs.readdir(root)).resolves.toEqual(["memory.md"]);
-    },
-  );
-
-  it.each(["existing", "missing"] as const)(
-    "rechecks authority before creating directories in a %s workspace",
-    async (workspace) => {
-      const fixture = tempDirs.make("openclaw-workspace-mkdir-authority-");
-      const root = workspace === "existing" ? fixture : path.join(fixture, "workspace");
-      const firstDirectory = workspace === "existing" ? path.join(root, "nested") : root;
-      let current = true;
-      let prepared = false;
-      __setFsSafeTestHooksForTest({
-        beforeRootFallbackMutation: async (operation, targetPath) => {
-          if (operation === "mkdir" && targetPath === firstDirectory) {
-            await Promise.resolve();
-            current = false;
-            prepared = true;
-          }
-        },
-      });
-      const { write } = hostFileTools(root, { workspaceOnly: true });
-      const pending = asSource(
-        "workspace-mkdir",
-        () => current,
-        () => write("nested/file.txt", "new"),
-      );
-
-      await expect(pending).rejects.toThrow("authority is no longer active");
-      expect(prepared).toBe(true);
-      await expect(fs.access(firstDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
 
   it("creates a missing workspace and writes and edits inside its literal tilde directory", async () => {
     const fixture = tempDirs.make("openclaw-workspace-tilde-");

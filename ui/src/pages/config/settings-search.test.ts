@@ -30,6 +30,18 @@ afterEach(async () => {
   await i18n.setLocale("en");
   setCurrentThemeBranding(resolveThemeBranding(undefined));
 });
+it.each(["Code Mode", "Tool Search", "QuickJS"])(
+  "finds the normal Tools settings for %s before the schema loads",
+  (query) => {
+    expect(search(query)).toContainEqual(
+      expect.objectContaining({
+        routeId: "ai-agents",
+        search: "?section=tools",
+        hash: "#config-section-tools",
+      }),
+    );
+  },
+);
 
 it("does not advertise hidden Lobsterdex choices while retaining the rest of tab icon settings", () => {
   setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: false }));
@@ -38,7 +50,7 @@ it("does not advertise hidden Lobsterdex choices while retaining the rest of tab
   setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: true }));
   expect(search("Lobsterdex")).toContainEqual(expect.objectContaining({ routeId: "appearance" }));
 });
-it.each(["permission", "subscription", "browser support", "gateway access", "blocked"])(
+it.each(["permission", "subscription", "browser support", "notification access", "blocked"])(
   "finds Notifications by %s",
   (query) => {
     expect(search(query)).toContainEqual(expect.objectContaining({ routeId: "notifications" }));
@@ -235,6 +247,7 @@ it("searches and displays static settings blocks in the active locale", async ()
 
   expectBlocks(
     search("modelo"),
+    { routeId: "ai-agents", search: "?section=tools", hash: "#config-section-tools" },
     { routeId: "model-providers", hash: "#settings-model-behavior" },
     { routeId: "appearance", hash: "#settings-appearance-sidebar" },
   );
@@ -262,4 +275,30 @@ it("only offers personal instructions search on a multi-user Gateway", () => {
   expect(
     personal(true).some((block) => block.hash === "#settings-profile-personal-instructions"),
   ).toBe(true);
+});
+
+it("keeps the ID schema out of ordinary settings and search until enabled", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      gateway: {
+        type: "object",
+        properties: {
+          openclawId: {
+            type: "object",
+            title: "OpenClaw ID",
+            properties: { enabled: { type: "boolean", title: "OpenClaw ID remote access" } },
+          },
+          port: { type: "number", title: "Gateway Port" },
+        },
+      },
+    },
+  };
+  const params = { query: "OpenClaw ID", schema, value: {}, uiHints: {} };
+  expect(findSettingsSearchBlocks(params)).toEqual([]);
+  expect(findSettingsSearchBlocks({ ...params, openclawIdEnabled: true }).length).toBeGreaterThan(
+    0,
+  );
+  expect(findSettingsSearchBlocks({ ...params, openclawIdEnabled: false })).toEqual([]);
+  expect(schema.properties.gateway.properties).toHaveProperty("openclawId");
 });

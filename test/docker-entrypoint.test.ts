@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect } from "vitest";
+import { collectPackageRootModules } from "../scripts/lib/package-root-modules.mts";
 import { createCommandTest, type CommandFixture } from "./helpers/command-fixture.js";
 
 const it = createCommandTest();
@@ -8,7 +9,7 @@ const nodePath = `${path.dirname(process.execPath)}:/usr/bin:/bin`;
 
 function fixture(command: CommandFixture) {
   const root = command.createTempDir("docker-activation-");
-  for (const file of ["docker-entrypoint.mjs", "gateway-run-argv.mjs", "cli-root-options.mjs"]) {
+  for (const file of collectPackageRootModules(["docker-entrypoint.mjs"])) {
     fs.copyFileSync(path.resolve(file), path.join(root, file));
   }
   fs.mkdirSync(path.join(root, "dist"));

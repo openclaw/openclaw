@@ -82,21 +82,32 @@ explicit API use the generic OpenAI-compatible bridge. For ClawRouter, see
 [Text embeddings for memory](/providers/clawrouter#text-embeddings-for-memory)
 for the `/v1` base URL, explicit router credential binding, and qualified model id.
 
-For local embeddings with no API key, install and configure the official
-llama.cpp provider, then set `provider: "local"`:
+When `memory.search.provider` is unset or `"auto"`, embeddings go to the OpenAI
+provider's endpoint, which can be a custom `models.providers.openai.baseUrl`.
+If that endpoint answers its first embedding request with 404, 405, or 501, it
+has no embeddings route: OpenClaw records that for this endpoint and model, logs
+one warning, and searches by keyword with no further embedding requests, also in
+later processes. `openclaw memory status` shows the reason on its `Embeddings`
+line. The record clears when the endpoint or model changes, or when
+`openclaw memory status --index` re-checks the endpoint and it now serves
+embeddings. `openclaw memory status --deep` and **Memory → Overview → Test** in the
+Control UI report the recorded refusal. A 401, 403, 429, or 5xx answer is not recorded; search is
+keyword-only until the next readiness check. With `memory.search.fallback` set, nothing is
+recorded: each process tries the endpoint and hands off to the fallback. An explicitly
+configured provider is always used.
 
-```bash
-openclaw plugins install @openclaw/llama-cpp-provider
-```
+For local embeddings with no API key, configure the bundled llama.cpp
+provider, then set `provider: "local"`.
 
 Choose llama.cpp once in interactive setup. OpenClaw installs a verified
 `llama-server`, downloads the embedding GGUF, and writes its managed service
 configuration.
 
-Managed `local` and Ollama embeddings index one file at a time when batch
-indexing is disabled. This bounds background embedding requests during a full
-rebuild; large indexes can take longer on hosts that previously ran several
-local jobs in parallel.
+Managed `local`, Ollama, and OpenAI-compatible endpoints on loopback addresses
+(`localhost`, `127.0.0.0/8`, `::1`) index one file at a time when batch indexing
+is disabled. This limits the backlog that interactive searches share with
+background indexing. Other endpoints default to four indexing jobs. Serial
+indexing can make large rebuilds slower on servers with spare parallel capacity.
 
 EmbeddingGemma uses its trained task prefixes automatically for queries and
 indexed documents, including through Ollama, LM Studio, and OpenAI-compatible

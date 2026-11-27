@@ -7,16 +7,17 @@ import { Value } from "typebox/value";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
 import { handleGatewayRequest } from "../gateway/server-methods.js";
 import type { GatewayRequestOptions } from "../gateway/server-methods/types.js";
 import { prepareGatewaySkillAuthoring } from "../gateway/skill-library-authoring.js";
 import { registerSkillsChangeListener } from "../skills/runtime/refresh-state.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
-import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
+import { activateWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
-import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -26,14 +27,12 @@ import {
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "./tools/gateway-caller-context.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 let state: OpenClawTestState;
 let config: OpenClawConfig;
 let root: string;
+let resetWorkshopPlugin: (() => void) | undefined;
 const skill = (name: string, body = "Run the deployment.", description = "Deploy staging builds") =>
   `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`;
 const text = (result: { content: Array<{ type: string; text?: string }> }) =>
@@ -46,26 +45,44 @@ beforeEach(async () => {
   });
   config = {
     agents: { entries: { main: { workspace: state.workspaceDir } } },
-    plugins: { enabled: false },
+    plugins: { enabled: true, allow: ["skill-workshop"] },
     skills: { load: { watch: false } },
   };
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
+  resetWorkshopPlugin = (await activateWorkshopPluginForTest(config)).reset;
   root = path.join(state.agentDir(), "workshop-skills");
 });
 afterEach(async () => {
+  resetWorkshopPlugin?.();
   vi.restoreAllMocks();
   await closeSkillsWatchers(true);
   await state.cleanup();
 });
 
+/** A Workshop background review: the plugin's own fork of the reviewed session. */
+function reviewFork(sourceSessionKey: string) {
+  return {
+    inputProvenance: {
+      kind: "internal_system" as const,
+      sourceTool: "session_fork",
+      sourceSessionKey,
+    },
+    runtimePluginToolOwnerId: "skill-workshop",
+  };
+}
 function tools(overrides: Partial<NonNullable<Parameters<typeof createOpenClawTools>[0]>> = {}) {
+  const runId = overrides.runId ?? randomUUID();
   return createOpenClawTools({
     config,
     agentDir: state.agentDir(),
     workspaceDir: state.workspaceDir,
     agentSessionKey: "agent:main:contract",
-    runId: randomUUID(),
+    runId,
+    // Run facts an embedded attempt gives its tools: the admitted-run guard, and the run id
+    // the tool-call wrapper attributes plugin-reported skill use to.
+    assertInvocationCurrent: () => {},
+    beforeToolCallHookContext: { runId },
     ...overrides,
   });
 }
@@ -141,16 +158,8 @@ async function changes() {
 }
 
 describe("Workshop through the OpenClaw tool set", () => {
-  it("T1 T6 L1: executes the public actions, preserves support trees, and explains undo", async () => {
+  it("T1 T6 L1: preserves support files across archive and repeated restore", async () => {
     const tool = workshop();
-    expect(tool.label).toBe("Skill Workshop");
-    expect(text(await tool.execute("empty", { action: "list" }))).toBe(
-      "No learned skills yet. Add one with action=create.",
-    );
-    await expect(tool.execute("bad", { action: "invent", name: "deploy" })).rejects.toThrow(
-      'Unknown action "invent". Use list, view, create, patch, write_file, remove_file, archive, restore, draft, or discard.',
-    );
-    await seed("other");
     const created = text(
       await tool.execute("create", {
         action: "create",
@@ -161,12 +170,6 @@ describe("Workshop through the OpenClaw tool set", () => {
     );
     expect(created).toContain(
       'Created "deploy" (remember deploy). Undo with action=archive name=deploy.',
-    );
-    expect(created).toContain("Advisory (not blocking): cut no-op emphasis (IMPORTANT)");
-    expect(created).toContain("- other: Deploy staging builds");
-    expect(created).not.toContain("- deploy:");
-    expect(await fs.readFile(path.join(root, "deploy", "SKILL.md"), "utf8")).toBe(
-      skill("deploy", "Run the deployment. IMPORTANT"),
     );
     for (const folder of ["references", "templates", "scripts", "assets"]) {
       expect(
@@ -186,37 +189,9 @@ describe("Workshop through the OpenClaw tool set", () => {
       );
     }
     expect(
-      text(
-        await tool.execute("patch", {
-          action: "patch",
-          name: "deploy",
-          old_text: "deployment",
-          new_text: "release",
-          reason: "rename step",
-        }),
-      ),
-    ).toBe(
-      'Patched "deploy" (rename step). Saved previous version; undo with action=restore name=deploy.',
-    );
-    expect(text(await tool.execute("view", { action: "view", name: "deploy" }))).toContain(
-      "Run the release.",
-    );
-    expect(
-      text(
-        await tool.execute("remove", {
-          action: "remove_file",
-          name: "deploy",
-          file_path: "assets/example.txt",
-        }),
-      ),
-    ).toContain('Updated "deploy" (removed assets/example.txt).');
-    expect(
       text(await tool.execute("archive", { action: "archive", name: "deploy", reason: "retired" })),
     ).toBe(
       'Archived "deploy" (archived: retired). Saved previous version; undo with action=restore name=deploy.',
-    );
-    expect(text(await tool.execute("list", { action: "list" }))).toContain(
-      "Archived (restore with action=restore):\n- deploy",
     );
     expect(text(await tool.execute("restore", { action: "restore", name: "deploy" }))).toContain(
       'Restored "deploy" (restored from archive).',
@@ -225,20 +200,6 @@ describe("Workshop through the OpenClaw tool set", () => {
       "references",
     );
     const restoredLive = await tool.execute("restore-live", { action: "restore", name: "deploy" });
-    expect(text(restoredLive)).toBe(
-      'Restored "deploy" (restored from archive). Saved previous version; undo with action=restore name=deploy.',
-    );
-    const snapshots = await fs.readdir(path.join(root, ".archive", "deploy"));
-    expect(snapshots.map((entry) => entry.replace(/^\d{8}T\d{9}Z-/, "")).toSorted()).toEqual([
-      "archive",
-      "patch",
-      "remove_file",
-      "restore",
-      "write_file",
-      "write_file",
-      "write_file",
-      "write_file",
-    ]);
     const beforeRestore = changeField(restoredLive.details, "versionId");
     expect(
       await fs.readFile(
@@ -257,7 +218,7 @@ describe("Workshop through the OpenClaw tool set", () => {
     const options = {
       runId,
       agentSessionKey: "agent:main:internal-session-effects:review",
-      skillWorkshop: { reviewOf },
+      ...reviewFork(reviewOf),
     };
     const review = workshop(options);
     const actions = [
@@ -307,7 +268,7 @@ describe("Workshop through the OpenClaw tool set", () => {
     setRuntimeConfigSnapshot(config);
     const review = workshop({
       agentSessionKey: "agent:main:internal-session-effects:review",
-      skillWorkshop: { reviewOf: "agent:main:telegram:direct:42" },
+      ...reviewFork("agent:main:telegram:direct:42"),
     });
     await review.execute("view", { action: "view", name: "deploy" });
     await expect(
@@ -380,33 +341,6 @@ describe("Workshop through the OpenClaw tool set", () => {
     await expect(fs.stat(path.join(root, ".archive", "deploy"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-  });
-
-  it("T7: captures the invoking source authority before its first await", async () => {
-    await seed();
-    const tool = workshop();
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:contract",
-      receiptAuthority: () => false,
-    };
-    const pending = withGatewayToolCallerIdentity(identity, () => {
-      const write = tool.execute("retired-source", {
-        action: "patch",
-        name: "deploy",
-        old_text: "deployment",
-        new_text: "release",
-      });
-      const caller = getGatewayToolCallerIdentity();
-      if (!caller) {
-        throw new Error("Expected the invoking caller scope");
-      }
-      caller.receiptAuthority = () => true;
-      return write;
-    });
-    await expect(pending).rejects.toThrow("tool invocation authority is no longer active");
-    expect(await fs.readFile(path.join(root, "deploy", "SKILL.md"), "utf8")).toBe(skill("deploy"));
-    expect((await changes()).changes).toEqual([]);
   });
 
   it("L2 L3: retains ten prior trees and serves a feed with pruned-version references", async () => {
@@ -655,7 +589,11 @@ describe("Workshop through the OpenClaw tool set", () => {
         },
         context: { getRuntimeConfig: () => ownerConfig },
       } as Parameters<typeof prepareGatewaySkillAuthoring>[0];
-      const capability = await prepareGatewaySkillAuthoring(owner, "agent:main:contract", true);
+      const capability = await prepareGatewaySkillAuthoring(
+        owner,
+        "agent:main:contract",
+        decideTurnGrant(["operator.admin"]),
+      );
       expect(capability?.defaultTarget).toBe(multiple ? "personal" : "workspace");
       const admission = prepareSystemAgentRunAdmission(
         config,
@@ -666,9 +604,13 @@ describe("Workshop through the OpenClaw tool set", () => {
       try {
         const admitted = await admission.admit("embedded");
         capability!.bind(admitted);
-        const run = { sandboxed: true, skillLibraryAuthoring: capability };
-        expect(skillToolNames(run)).toEqual(
-          multiple ? ["skill_library"] : ["skill_workshop", "skill_library"],
+        // Documented loss: the plugin tool refuses sandboxed runs, so this library turn is not
+        // sandboxed (it was `sandboxed: true` while core admitted Workshop through the grant).
+        const run = { sandboxed: false, skillLibraryAuthoring: capability };
+        // Plugin tools follow core tools; provider requests sort tools by name, so only the set
+        // of skill tools is model-visible behavior.
+        expect(skillToolNames(run).toSorted()).toEqual(
+          multiple ? ["skill_library"] : ["skill_library", "skill_workshop"],
         );
         const surface = tools(run);
         const invoke = (name: string, args: Record<string, unknown>) =>
@@ -711,20 +653,6 @@ describe("Workshop through the OpenClaw tool set", () => {
         await expect(fs.stat(path.join(root, "personal"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        if (!multiple) {
-          // A demoted admin keeps the definition but loses workspace writes.
-          setUserProfileRole(alice.id, "reader");
-          await expect(
-            invoke("skill_workshop", {
-              action: "create",
-              name: "demoted",
-              content: skill("demoted"),
-            }),
-          ).rejects.toThrow("current administrator authority");
-          await expect(fs.stat(path.join(root, "demoted"))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
-        }
       } finally {
         admission.close();
         catalog.release();

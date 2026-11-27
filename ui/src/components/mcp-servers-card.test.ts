@@ -258,9 +258,9 @@ it("starts the selected connector and keeps a usable link when the popup is bloc
     .mockResolvedValueOnce(browserStep)
     .mockResolvedValue({ status: "cancelled" });
   expect([request.mock.calls, open.mock.calls]).toEqual([[], []]);
-  expect(card.querySelector('[aria-label="Sign in docs"]')).toBeNull();
+  expect(card.querySelector('[aria-label="Sign in to docs"]')).toBeNull();
   openRow(card, "docs");
-  expectNamedAction(card, "Sign in docs", "Sign in");
+  expectNamedAction(card, "Sign in to docs", "Sign in");
   actionButton(card, "Sign in").click();
   await waitForFast(() => expect(card.querySelector(".wizard-step__external-link")).not.toBeNull());
   expect(request).toHaveBeenCalledWith(
@@ -290,7 +290,7 @@ const unavailableLoginCases: [NonNullable<Parameters<typeof mountLoginCard>[0]>,
   [{ server: { ...oauthServer, enabled: false } }, loginCommand],
   [
     { server: { ...oauthServer, oauth: { identity: "per-requester" } } },
-    "Each person signs in through this MCP server in chat.",
+    "Each person signs in to this MCP server in Chat.",
   ],
   [
     { server: { ...oauthServer, oauth: { authProfileId: "linked-account" } } },
@@ -302,7 +302,7 @@ it.each(unavailableLoginCases)(
   async (options, alternative) => {
     const { card, request, open, harness } = await mountLoginCard(options);
     openRow(card, "docs");
-    expect(card.querySelector('[aria-label="Sign in docs"]')).toBeNull();
+    expect(card.querySelector('[aria-label="Sign in to docs"]')).toBeNull();
     expect(card.textContent).toContain(alternative);
     if (options.admin === false) {
       // Reading a server stays open to read-only operators; only changes are blocked.
@@ -313,7 +313,9 @@ it.each(unavailableLoginCases)(
       ];
       expect(controls.length).toBeGreaterThan(0);
       expect(controls.every((button) => button.disabled)).toBe(true);
-      expect(controls.every((button) => button.title.includes("operator.admin"))).toBe(true);
+      expect(
+        controls.every((button) => button.title === "You need admin access to change MCP servers."),
+      ).toBe(true);
       expect(enabledSwitch(card, "docs").disabled).toBe(true);
       enabledSwitch(card, "docs").click();
       expect(harness.patch).not.toHaveBeenCalled();
@@ -368,7 +370,7 @@ it.each(["target replacement", "agent selection", "disconnect", "capability drop
     await lateNext.promise;
     flush();
     expect(card.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(card.textContent).not.toContain("Authentication saved");
+    expect(card.textContent).not.toContain("Signed in");
     expect(replacementRequest).not.toHaveBeenCalled();
   },
 );
@@ -381,7 +383,7 @@ it.each([
       toolFilter: {},
       sslVerify: false,
     },
-    ["https://m.test/?keep=y&token=***", "tool filter · TLS verify off"],
+    ["https://m.test/?keep=y&token=***", "Tool filter · TLS verification off"],
     ["secret"],
   ],
   [
@@ -393,7 +395,7 @@ it.each([
       supportsParallelToolCalls: true,
       clientCert: "client.pem",
     },
-    ["node", "parallel · mTLS"],
+    ["node", "Parallel · mTLS"],
     ["server.js", "secret"],
   ],
   [
@@ -425,9 +427,7 @@ it.each([
   ["stdio", 'mcp "C:\\My Files\\\\"', { command: "mcp", args: ["C:\\My Files\\"] }],
 ] as const)("adds a %s server from %s", async (transport, target, expected) => {
   const { card, harness } = await mountCard();
-  expect(card.querySelector(".settings-empty")?.textContent).toContain(
-    "No MCP servers configured.",
-  );
+  expect(card.querySelector(".settings-empty")?.textContent).toContain("No MCP servers yet.");
   const setupLink = card.querySelector<HTMLAnchorElement>(".settings-empty a");
   expect(setupLink).toMatchObject({
     href: "https://docs.openclaw.ai/tools/mcp",
@@ -498,7 +498,7 @@ it("retries removal confirmation and removes arrays after queued writes settle",
     expect(card.querySelector('[data-mcp-name="docs"]')).not.toBeNull();
     expect(showConfirmDialog).toHaveBeenCalledWith({
       title: "Remove docs?",
-      message: expect.stringContaining("saved configuration"),
+      message: expect.stringContaining("saved command"),
       confirmLabel: "Remove",
       danger: true,
     });
@@ -568,51 +568,6 @@ const flushPromises = async () => {
 };
 const rowStatus = (card: HTMLElement, name: string) =>
   card.querySelector(`[data-mcp-name="${name}"] .mcp-server-row__status`)?.textContent?.trim();
-it("states each server's condition from the session's tools and shows them on demand", async () => {
-  const { card } = await mountStatusCard(
-    {
-      agentId: "main",
-      profile: "full",
-      groups: [
-        {
-          id: "mcp",
-          label: "MCP",
-          source: "mcp",
-          tools: [mcpTool("docs", "search_docs", "Search the docs."), mcpTool("broken", "stale")],
-        },
-      ],
-      notices: [
-        {
-          id: "mcp-server-diagnostic:broken",
-          severity: "warning",
-          message: 'MCP server "broken": spawn ENOENT',
-          servers: ["broken"],
-        },
-      ],
-    },
-    {
-      broken: localServer,
-      docs: docsServer,
-      empty: docsServer,
-      login: oauthServer,
-      off: { ...docsServer, enabled: false },
-    },
-  );
-  await waitForFast(() => expect(rowStatus(card, "docs")).toBe("Tools listed"));
-  expect(rowStatus(card, "broken")).toBe("Failing");
-  expect(rowStatus(card, "empty")).toBe("No tools");
-  // Sign-in state is not readable here, so an OAuth server is not told it needs one.
-  expect(rowStatus(card, "login")).toBe("No tools");
-  expect(rowStatus(card, "off")).toBe("");
-  expect(card.querySelector(".mcp-server-tools")).toBeNull();
-  openRow(card, "docs");
-  expect(card.querySelector(".mcp-server-tools")?.textContent).toContain("search_docs");
-  expect(card.querySelector(".mcp-server-tools")?.textContent).toContain("Search the docs.");
-  openRow(card, "broken");
-  expect(card.querySelector('[data-mcp-name="docs"] .mcp-server-tools')).toBeNull();
-  const panel = card.querySelector('[data-mcp-name="broken"] .mcp-server-row__note');
-  expect(panel?.textContent).toBe("spawn ENOENT");
-});
 it("clears session tools on selection changes and ignores an earlier session's response", async () => {
   const result = (name: string) => ({
     agentId: "main",
@@ -659,9 +614,10 @@ it("does not call an unused server failing before a session has connected it", a
         },
       ],
     },
-    { docs: docsServer },
+    { docs: docsServer, login: oauthServer },
   );
   await waitForFast(() => expect(rowStatus(card, "docs")).toBe("Not connected yet"));
+  expect(rowStatus(card, "login")).toBe("No tools");
   expect(card.querySelector(".settings-status--danger")).toBeNull();
   expect(card.querySelector(".settings-section__desc")).toBeNull();
   expect(card.querySelector(".settings-section__help-button")).not.toBeNull();

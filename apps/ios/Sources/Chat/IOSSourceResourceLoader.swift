@@ -29,6 +29,22 @@ actor IOSSourceResourceLoader {
         await self.loader(ifCurrentRoute: route)?.loadFavicon(host: host)
     }
 
+    func loadAgentAvatar(_ source: String, ifCurrentRoute route: GatewayNodeSessionRoute) async -> Data? {
+        guard let connection = await connectionProvider(),
+              let context = await self.loadContext(ifCurrentRoute: route),
+              let url = OpenClawSidebarAgentAvatarSource.resourceURL(source, context: context),
+              let (data, response) = try? await self.request(
+                  url: url,
+                  maximumBytes: OpenClawSidebarAgentAvatarSource.maximumBytes,
+                  connection: connection,
+                  route: route),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              response.mimeType?.lowercased().hasPrefix("image/") == true,
+              !data.isEmpty
+        else { return nil }
+        return data
+    }
+
     private func loader(ifCurrentRoute route: GatewayNodeSessionRoute) async -> OpenClawChatSourceResources? {
         guard let connection = await connectionProvider(),
               await gateway.currentGatewayID(ifCurrentRoute: route) == connection.gatewayID,

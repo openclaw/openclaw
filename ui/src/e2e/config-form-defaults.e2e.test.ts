@@ -1,6 +1,6 @@
 // Control UI tests cover schema defaults and restoring inherited config values.
 
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -31,7 +31,56 @@ const withPage = pageRunner(suite, settingsPageOptions);
 
 const capture = proof.capture;
 
+async function expectApplyChanges(page: Page) {
+  await expect
+    .poll(async () => {
+      // Let each real config.get settle before advancing the next polling window.
+      await page.clock.runFor(1_000);
+      return page.locator("openclaw-settings-save-indicator").textContent();
+    })
+    .toContain("Apply changes");
+  await page.clock.resume();
+}
+
 suite.define(() => {
+  it.each([
+    { width: 390, height: 844 },
+    { width: 820, height: 1180 },
+  ])("keeps the Automation section help aligned and tappable at $width px", async (viewport) => {
+    const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
+    await suite.withPage(
+      { ...settingsPageOptions, viewport, hasTouch: true, isMobile: true },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configSnapshot({}, "section-help"),
+            "config.schema": buildConfigSchemaCore(),
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/automation");
+        const header = page.locator("#config-section-commands > .settings-section__header");
+        const button = header.getByRole("button", { name: "Help for Commands" });
+        await button.waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        const line = await header.locator(".settings-section__desc").evaluate((p) => {
+          const range = document.createRange();
+          range.selectNodeContents(p);
+          const { top, height } = range.getBoundingClientRect();
+          return top + height / 2;
+        });
+        const glyph = await button.locator("svg").evaluate((e) => {
+          const { top, height } = e.getBoundingClientRect();
+          return top + height / 2;
+        });
+        expect(Math.abs(glyph - line)).toBeLessThanOrEqual(2);
+        await button.tap({ position: { x: 12, y: 2 } });
+        await page.getByRole("dialog", { name: "Help for Commands" }).waitFor();
+        await page.keyboard.press("Escape");
+        await page.getByRole("dialog", { name: "Help for Commands" }).waitFor({ state: "hidden" });
+      },
+    );
+  });
+
   it("shows omitted automation triggers as enabled and persists explicit overrides", async () => {
     const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
     const schema = buildConfigSchemaCore();
@@ -43,6 +92,7 @@ suite.define(() => {
       },
     });
     await withPage(async ({ page }) => {
+      await page.clock.install();
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "config.get": configSnapshot(config(), "trigger-default-initial", true),
@@ -74,9 +124,7 @@ suite.define(() => {
         const request = await gateway.waitForRequest("config.set", { after: before });
         expect(requestRaw(request)).toEqual(config(enabled));
         await gateway.resolveDeferred("config.set");
-        await expect
-          .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-          .toContain("Apply changes");
+        await expectApplyChanges(page);
         await page.reload();
         await revealControl(control);
         expect((await control.locator("option:checked").textContent())?.trim()).toBe(label);
@@ -94,6 +142,7 @@ suite.define(() => {
       },
     });
     await withPage(async ({ page }) => {
+      await page.clock.install();
       const initial = config();
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -120,9 +169,7 @@ suite.define(() => {
         const request = await gateway.waitForRequest("config.set", { after: before });
         expect(requestRaw(request)).toEqual(config(enabled));
         await gateway.resolveDeferred("config.set");
-        await expect
-          .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-          .toContain("Apply changes");
+        await expectApplyChanges(page);
         await page.reload();
         await revealControl(control);
         expect((await control.locator("option:checked").textContent())?.trim()).toBe(label);
@@ -136,6 +183,7 @@ suite.define(() => {
 
   it("shows defaults and removes cleared optional scalars from config.set", async () => {
     await withPage(async ({ page }) => {
+      await page.clock.install();
       const config = {
         runtime: {
           enabled: false,
@@ -255,9 +303,7 @@ suite.define(() => {
         .toBe("Default: 3");
 
       await gateway.resolveDeferred("config.set");
-      await expect
-        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Apply changes");
+      await expectApplyChanges(page);
       expect((await page.reload())?.status()).toBe(200);
       await gateway.waitForRequest("config.get");
 

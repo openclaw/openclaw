@@ -149,7 +149,7 @@ export async function confirmAndStartUpdateRuntime(
         ? {
             confirmLabel: t("updates.confirm.macAction"),
             message: t("updates.confirm.macMessage"),
-            title: t("chat.sidebar.updateMacAndGateway"),
+            title: t("updates.confirm.macTitle"),
           }
         : {
             confirmLabel: t("updates.confirm.action"),
@@ -158,7 +158,7 @@ export async function confirmAndStartUpdateRuntime(
                 ? "updates.confirm.message"
                 : "updates.confirm.noKnownUpdateMessage",
             ),
-            title: t("chat.sidebar.updateGateway"),
+            title: t("updates.confirm.title"),
           };
 
       const details = formatInstalledAndAvailable(updateAvailable, updateSchedule);
@@ -176,7 +176,7 @@ export async function confirmAndStartUpdateRuntime(
           : current.kind === "failed"
             ? current.message
             : current.kind === "working"
-              ? t(disconnected ? "updates.dialog.disconnected" : "updates.dialog.installing")
+              ? t(disconnected ? "updates.dialog.reconnecting" : "updates.dialog.starting")
               : `${route.message} ${t("updates.confirm.impact")}`;
       return {
         route,

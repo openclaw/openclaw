@@ -18,6 +18,7 @@ import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
 export type ClawRouterCapabilityOffer = {
   providerId: string;
   endpoint: string;
+  path: string;
   url: string;
   routeKind: "native" | "manifest" | "unified";
   methods: string[];
@@ -31,6 +32,7 @@ const UNIFIED_ROUTES: Record<string, string> = {
   "openai.responses": "/v1/responses",
   "openai.embeddings": "/v1/embeddings",
   "openai.images_generations": "/v1/images/generations",
+  "openai.images_edits": "/v1/images/edits",
   "openai.audio_speech": "/v1/audio/speech",
 };
 
@@ -163,6 +165,7 @@ export function readClawRouterCapabilityOffers(
       result.push({
         providerId,
         endpoint,
+        path,
         url,
         routeKind,
         methods: route.methods.filter((method): method is string => typeof method === "string"),
@@ -180,6 +183,8 @@ export async function fetchClawRouterCapabilityOffers(params: {
   timeoutMs: () => number;
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
+  /** Require a recent proxy-key observation for consumers without model-scoped grants. */
+  requireFreshProxyCatalog?: boolean;
 }): Promise<ClawRouterCapabilityOffer[]> {
   params.signal?.throwIfAborted();
   const remaining = createProviderOperationTimeoutResolver({
@@ -190,8 +195,9 @@ export async function fetchClawRouterCapabilityOffers(params: {
     defaultTimeoutMs: 5_000,
   });
   const { context } = params;
-  const { response, release } = await fetchWithTimeoutGuarded(
-    context.baseUrl.replace(/\/+$/u, "") + "/catalog",
+  const catalogUrl = context.baseUrl.replace(/\/+$/u, "") + "/catalog";
+  const { response, release, finalUrl } = await fetchWithTimeoutGuarded(
+    catalogUrl,
     { method: "GET", headers: context.headers, signal: params.signal },
     remaining(),
     fetch,
@@ -215,6 +221,28 @@ export async function fetchClawRouterCapabilityOffers(params: {
       maxBytes: 1024 * 1024,
       timeoutMs: remaining,
     });
+    if (params.requireFreshProxyCatalog) {
+      if (finalUrl !== catalogUrl) {
+        throw new Error(
+          "ClawRouter redirected catalog discovery. Check models.providers.clawrouter.baseUrl and configure the trusted endpoint that serves /v1/catalog directly.",
+        );
+      }
+      const catalog = asOptionalRecord(body);
+      const scope = asOptionalRecord(catalog?.scope);
+      if (scope?.authType !== "proxy_key" || !normalizeOptionalString(scope.credentialId)) {
+        throw new Error(
+          "ClawRouter returned a catalog without proxy-key scope. Configure a ClawRouter proxy key for this endpoint and retry.",
+        );
+      }
+      const observedAt =
+        typeof catalog?.observedAt === "string" ? Date.parse(catalog.observedAt) : Number.NaN;
+      const age = Date.now() - observedAt;
+      if (!Number.isFinite(age) || age < -5_000 || age > 60_000) {
+        throw new Error(
+          "ClawRouter returned a catalog without a current timestamp. Retry discovery and check the OpenClaw and ClawRouter clocks if it persists.",
+        );
+      }
+    }
     remaining();
     params.signal?.throwIfAborted();
     return readClawRouterCapabilityOffers(body, context.baseUrl);

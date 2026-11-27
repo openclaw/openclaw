@@ -44,7 +44,7 @@ export type McpServerRuntime =
  * Project one server's state from a session's effective tools. This read never
  * opens a connection: it reports what the session's runtime already knows.
  */
-export function resolveMcpServerRuntime(
+function resolveMcpServerRuntime(
   result: ToolsEffectiveResult | null,
   serverName: string,
 ): McpServerRuntime {

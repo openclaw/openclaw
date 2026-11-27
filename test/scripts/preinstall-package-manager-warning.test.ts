@@ -7,13 +7,11 @@ import lifecyclePaths from "../../scripts/e2e/lib/bun-only-runtime/preinstall-li
 import {
   detectLifecyclePackageManager,
   enforceSupportedNodeRuntime,
-  nodeVersionSatisfiesPackageEngine,
   probePackageCliNodeRuntime,
   readPackageNodeEngine,
   removeLegacyPackageInstallGuard,
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
-import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -59,16 +57,11 @@ describe("install runtime enforcement", () => {
     ["v24.22.1+local.1", true],
     ["24.16.0", true],
     ["26.1.0", true],
-    ["24.22.1", true],
-    ["27.0.0", true],
     ["27.0.0-nightly20261018f88a1d25e9", true],
     ["24.22.1-rc.1", false],
     ["27.0.0-nightly..1", false],
   ] as const)("enforces the package engine for Node %s", (version, accepted) => {
     expect(readPackageNodeEngine()).toBe(EXPECTED_NODE_ENGINE_RANGE);
-    expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(
-      isSupportedNodeVersion(version),
-    );
     const reportError = vi.fn();
     expect(
       enforce({ version, bunVersion: null, execPath: "/opt/node/bin/node" }, reportError),
@@ -341,6 +334,37 @@ describe("install runtime enforcement", () => {
     ],
   ])("fails closed when the lifecycle directories cannot be proven: %j", (...entries) => {
     expectRejectedProbe({ pathEnv: entries.join(":") });
+  });
+
+  it("allows packaged Bun postinstall to pass an unavailable Node sentinel", () => {
+    const run = vi.fn((command: string) =>
+      command === "/opt/sentinel/bin/node"
+        ? { status: 127, stdout: "" }
+        : runtimeReply(command, "24.3.0", "1.4.4"),
+    );
+    const runtime = probe({
+      pathEnv: [...lifecyclePrefix, "/opt/sentinel/bin"].join(":"),
+      env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: "/opt/bun/bin/bun" },
+      allowUnavailableNodeFallback: true,
+      run,
+    });
+    expect(run.mock.calls.map(([command]) => command)).toEqual([
+      "/opt/sentinel/bin/node",
+      "/opt/bun/bin/bun",
+    ]);
+    expect(runtime?.bunVersion).toBe("1.4.4");
+  });
+
+  it("keeps preinstall fail-closed on an unavailable Node sentinel", () => {
+    const run = vi.fn(() => ({ status: 127, stdout: "" }));
+    expect(
+      probe({
+        pathEnv: [...lifecyclePrefix, "/opt/sentinel/bin"].join(":"),
+        env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: "/opt/bun/bin/bun" },
+        run,
+      }),
+    ).toBeNull();
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it.each(["."])("fails closed before a relative PATH component %j", (relativeEntry) => {

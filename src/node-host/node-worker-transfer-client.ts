@@ -3,7 +3,6 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
-import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { boundedWorkerError } from "../gateway/worker-environments/worker-error.js";
 import {
@@ -37,22 +36,25 @@ import {
 import {
   nodeWorkspaceTransferBlobPath,
   NodeWorkerWorkspaceTransferError,
+  NodeWorkerPublicationConflictError,
   nodeWorkspaceTransferManifestPath,
   nodeWorkspaceTransferPackPath,
   nodeWorkspaceTransferReconcilePath,
   MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
-  type NodeWorkerWorkspaceTransferInput,
   type NodeWorkerWorkspaceTransferStage,
 } from "../worker/node-workspace-transfer-protocol.js";
-import {
-  prepareNodeWorkerWorkspaceOverlay,
-  type NodeWorkerPreparedWorkspaceTransfer,
-} from "./node-worker-prepared-workspace-transfer.js";
+import { withNodeWorkerFilesystemCommands } from "./node-worker-command-filesystem.js";
+import { prepareNodeWorkerWorkspaceOverlay } from "./node-worker-prepared-workspace-transfer.js";
+import { transferNodeRepositoryPublication } from "./node-worker-publication-merge.js";
 import {
   applyNodeRepositoryCheckpoint,
   readNodeRepositoryCheckpointBase,
   withNodeRepositoryPublication,
 } from "./node-worker-repository-transfers.js";
+import type {
+  WorkspaceTransferContext,
+  WorkspaceTransferOperation,
+} from "./node-worker-transfer-contract.js";
 import {
   requireNodeWorkerTransferOk as requireOk,
   downloadNodeWorkerTransferFile as downloadFile,
@@ -61,11 +63,15 @@ import {
   withNodeWorkerTransferHttpRequest,
   type NodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
-import { createNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
+import {
+  createNodeWorkerTempWorkspace,
+  withNodeWorkerTempWorkspace,
+} from "./node-worker-workspace-admission.js";
 import {
   captureManifest,
   readWorkspaceManifest,
   runWorkspaceCommand,
+  workspaceCommandEnv,
 } from "./node-worker-workspace-commands.js";
 import {
   initializeNodeWorkerGitWorkspace,
@@ -84,31 +90,6 @@ export type NodeWorkerTransferGateway = {
   tlsFingerprint?: string;
   cloudflareAccess?: CloudflareAccessCredentials;
 };
-
-type WorkspaceTransferContext = {
-  seedsRoot?: string;
-  gatewayNamespace?: string;
-  gatewayUrl: string;
-  gatewayTlsFingerprint?: string;
-  gatewayCloudflareAccess?: CloudflareAccessCredentials;
-  environmentId: string;
-  workspaceDir: string;
-  manifestHome: string;
-  transfer: NodeWorkerWorkspaceTransferInput;
-  prepared?: NodeWorkerPreparedWorkspaceTransfer;
-  hashMemo?: WorkspaceHashMemo;
-  signal?: AbortSignal;
-};
-
-type WorkspaceTransferOperation<Direction extends NodeWorkerWorkspaceTransferInput["direction"]> =
-  Omit<WorkspaceTransferContext, "transfer"> & {
-    transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: Direction }>;
-    request: Pick<
-      NodeWorkerTransferHttpRequest,
-      "gatewayUrl" | "tlsFingerprint" | "cloudflareAccess" | "token" | "signal"
-    >;
-    setStage: (stage: NodeWorkerWorkspaceTransferStage) => void;
-  };
 
 async function downloadBuffer(params: NodeWorkerTransferHttpRequest, maxBytes: number) {
   return await withNodeWorkerTransferHttpRequest(
@@ -192,6 +173,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
           sourceOverlay: Boolean(params.transfer.seedKey) && !checkpointBase,
           hashMemo: params.hashMemo,
           signal: params.signal,
+          isolation: params.isolation,
         })
       : undefined;
   const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
@@ -375,12 +357,14 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
       const observed = overlay
         ? await overlay.apply(staging)
         : await captureManifest({
+            mode: manifest.baseCommit ? "eligible" : "all",
             workspaceDir: staging,
             manifestHome: params.manifestHome,
             baseCommit: manifest.baseCommit,
             referenceManifestRef: params.transfer.manifestRef,
             hashMemo: stagingHashMemo,
             signal: params.signal,
+            isolation: params.isolation,
           });
       if (observed !== params.transfer.manifestRef) {
         throw new Error(
@@ -454,12 +438,22 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
           relativePath: "history.pack",
           maxBytes: MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
         });
-        gitHistoryNote = await restoreWorkerWorkspaceHistory({
-          root: params.workspaceDir,
-          gitHistory: params.transfer.checkpointGitHistory,
-          gitPackPath,
-          assertCurrent: () => params.signal?.throwIfAborted(),
-        });
+        gitHistoryNote = await withNodeWorkerFilesystemCommands(
+          {
+            isolation: params.isolation,
+            workspaceDir: params.workspaceDir,
+            homeDir: params.manifestHome,
+            env: workspaceCommandEnv(params.manifestHome),
+            signal: params.signal,
+          },
+          () =>
+            restoreWorkerWorkspaceHistory({
+              root: params.workspaceDir,
+              gitHistory: params.transfer.checkpointGitHistory,
+              gitPackPath,
+              assertCurrent: () => params.signal?.throwIfAborted(),
+            }),
+        );
       } catch (error) {
         params.signal?.throwIfAborted();
         gitHistoryNote = workerHistoryNotAdopted(boundedWorkerError(error));
@@ -483,6 +477,7 @@ async function uploadWorkspace(params: WorkspaceTransferOperation<"upload">): Pr
         baseCommit: publicationBaseCommit,
         baseManifestRef: transfer.baseManifestRef,
         signal: params.signal,
+        isolation: params.isolation,
       },
       (workspaceDir) =>
         uploadWorkspace({
@@ -500,6 +495,7 @@ async function uploadWorkspace(params: WorkspaceTransferOperation<"upload">): Pr
   );
   params.setStage("capture");
   const currentRef = await captureManifest({
+    mode: "all",
     workspaceDir: params.workspaceDir,
     manifestHome: params.manifestHome,
     baseCommit: base.baseCommit,
@@ -507,6 +503,7 @@ async function uploadWorkspace(params: WorkspaceTransferOperation<"upload">): Pr
     baseManifestRef: params.transfer.baseManifestRef,
     ...(params.hashMemo === undefined ? {} : { hashMemo: params.hashMemo }),
     signal: params.signal,
+    isolation: params.isolation,
   });
   const { raw: currentRaw, manifest: current } = await readWorkspaceManifest(
     params.manifestHome,
@@ -517,7 +514,7 @@ async function uploadWorkspace(params: WorkspaceTransferOperation<"upload">): Pr
   const manifestBytes = Buffer.from(currentRaw);
   const baseBytes = Buffer.from(baseRaw);
   params.setStage("snapshot");
-  return await withTempWorkspace(
+  return await withNodeWorkerTempWorkspace(
     {
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: "worker-workspace-upload-",
@@ -624,7 +621,7 @@ export async function runNodeWorkerWorkspaceTransfer(
     stage = next;
   };
   try {
-    if (!params.prepared) {
+    if (!params.prepared && params.transfer.direction !== "publication") {
       await recoverWorkspaceReplacement(params.workspaceDir);
     }
     const request = {
@@ -634,6 +631,12 @@ export async function runNodeWorkerWorkspaceTransfer(
       token: params.transfer.token,
       signal: params.signal,
     };
+    if (params.transfer.direction === "publication") {
+      return await transferNodeRepositoryPublication(
+        { ...params, transfer: params.transfer, request, setStage },
+        { download: downloadWorkspace, upload: uploadWorkspace },
+      );
+    }
     return params.transfer.direction === "download"
       ? await downloadWorkspace({
           ...params,
@@ -648,7 +651,10 @@ export async function runNodeWorkerWorkspaceTransfer(
           setStage,
         });
   } catch (error) {
-    if (error instanceof NodeWorkerWorkspaceTransferError) {
+    if (
+      error instanceof NodeWorkerWorkspaceTransferError ||
+      error instanceof NodeWorkerPublicationConflictError
+    ) {
       throw error;
     }
     if (error instanceof NodeWorkerTransferHttpError) {

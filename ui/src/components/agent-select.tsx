@@ -13,9 +13,11 @@ import { Icon } from "./solid/icon.tsx";
 import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentOptionAvatar } from "./solid/identity-avatar.tsx";
 import "../styles/select-picker.css";
+import { MenuHeading } from "./solid/menu-heading.tsx";
 
 type AgentSelectProps = {
   options: readonly AgentSelectOption[];
+  triggerAttrs?: (attrs: JSX.ButtonHTMLAttributes<HTMLButtonElement>) => typeof attrs;
   value: string;
   placeholder: string;
   accessibleLabel: string;
@@ -152,12 +154,12 @@ defineSolidBridge<AgentSelectProps>(
       menuClass: "oc-menu agent-select__menu",
       header: (
         <Show when={props.menuLabel}>
-          <div class="agent-select__menu-title">{props.menuLabel}</div>
+          <MenuHeading label={props.menuLabel} />
         </Show>
       ),
       trigger: (attributes: Accessor<JSX.ButtonHTMLAttributes<HTMLButtonElement>>) => (
         <button
-          {...attributes()}
+          {...(props.triggerAttrs?.(attributes()) ?? attributes())}
           class="agent-select__trigger"
           aria-label={
             props.accessibleLabel
@@ -224,6 +226,7 @@ defineSolidBridge<AgentSelectProps>(
   {
     properties: {
       options: { default: [], attribute: false },
+      triggerAttrs: { default: undefined, attribute: false },
       value: { default: "", attribute: false },
       placeholder: { default: "", attribute: false },
       accessibleLabel: { default: "", attribute: false },

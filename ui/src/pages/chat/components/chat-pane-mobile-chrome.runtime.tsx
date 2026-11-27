@@ -13,7 +13,6 @@ export function ChatPaneMobileChrome(props: {
   header: ChatPaneHeaderProps;
   project?: Element;
   details: Element;
-  notice: Element;
   sessionMenu: Element;
   mobile: boolean;
   presented: boolean;
@@ -97,7 +96,6 @@ export function ChatPaneMobileChrome(props: {
           actions={<Show when={props.mobile}>{props.sessionMenu}</Show>}
         />
         <Show when={props.mobile}>{props.details}</Show>
-        <Show when={props.mobile}>{props.notice}</Show>
       </div>
     </ContentPresentation>
   );

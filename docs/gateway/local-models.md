@@ -26,6 +26,7 @@ For custom servers, leave room for the full OpenClaw prompt, tools, history, and
 | ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls                     |
 | LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI                          |
+| [Llama](/providers/llama)                            | llama.cpp's desktop app: download models in a GUI and let the app run the server             |
 | [llama.cpp](/plugins/llama-cpp)                      | Hardware-aware model selection, verified downloads, and an OpenClaw-managed server           |
 | [llmman](/providers/llmman)                          | OCI-registry model pulls, upstream llama.cpp/vLLM/MLX engines, hybrid local + hosted routing |
 | [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                                     |
@@ -130,6 +131,51 @@ Setup checklist:
 
 For local-first with a hosted safety net, swap `primary`/`fallbacks` order and keep the same `providers` block and `models.mode: "merge"`.
 
+### Non-interactive hybrid setup
+
+Onboarding configures one provider per run: the `--custom-*` flags only take effect when the resolved auth choice is `custom-api-key` and are silently ignored next to a hosted `--auth-choice`. To script a hosted primary with a local fallback, onboard with the hosted provider first, then add the local server to config:
+
+```bash
+# 1. Onboard with the hosted provider (example: HuggingFace router)
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice huggingface-api-key \
+  --huggingface-api-key "$HF_TOKEN"
+```
+
+Write the local provider to `./local-provider.patch.json5`:
+
+```json5
+{
+  models: {
+    providers: {
+      local: {
+        baseUrl: "http://<host-lan-or-tailnet-ip>:8080/v1",
+        api: "openai-completions",
+        apiKey: "local",
+        models: [{ id: "my-model", name: "Local model", input: ["text"] }],
+      },
+    },
+  },
+}
+```
+
+```bash
+# 2. Add the local server as a second provider
+openclaw config patch --file ./local-provider.patch.json5
+
+# 3. Wire the fallback
+openclaw models fallbacks add "local/my-model"
+```
+
+When the Gateway runs in a container, run steps 2–3 from the host through the container-aware CLI (`openclaw --container <name> ...`) once it is up — the running gateway locks the config file. The container only sees files mounted into it, so pipe the host patch file in via stdin rather than pointing `--file` at a host path:
+
+```bash
+openclaw --container <name> config patch --stdin < ./local-provider.patch.json5
+openclaw --container <name> models fallbacks add "local/my-model"
+```
+
+See [Podman](/install/podman#reaching-model-servers-on-the-host) for the `baseUrl` choice.
+
 OpenClaw fallbacks switch models per turn on provider errors. For per-request routing that keeps small prompts on the local model and sends only oversized ones to a hosted model, see [Hybrid inference](/providers/llmman#hybrid-inference) with llmman.
 
 ### Regional hosting / data routing
@@ -187,6 +233,10 @@ Add `--custom-api-key` if the server requires authentication. Discovery uses tha
 ```
 
 Custom/local provider entries trust their exact configured `baseUrl` origin for guarded model requests, including loopback, LAN, tailnet, and private DNS hosts. Metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins remain blocked without explicit opt-in. Requests to other private origins still need `models.providers.<id>.request.allowPrivateNetwork: true`. Set the trust flag to `false` to opt out of exact-origin trust.
+
+<Note>
+With rootless Podman's default pasta networking, `host.docker.internal` / `host.containers.internal` (from `--add-host ...:host-gateway` or a Quadlet `AddHost`) normally resolve to the link-local address `169.254.1.2`. If your alias resolves to a link-local address, requests to a `baseUrl` built on it stay blocked even though it is the configured origin. Use the host's LAN or tailnet IP as the `baseUrl` instead, or set `models.providers.<id>.request.allowPrivateNetwork: true`. Check the alias address inside the container; other network backends and custom Podman settings can map it to a different range. See [Podman](/install/podman#reaching-model-servers-on-the-host).
+</Note>
 
 `models.providers.<id>.models[].id` is provider-local - do not include the provider prefix. For an MLX server started with `mlx_lm.server --model mlx-community/Qwen3-30B-A3B-6bit`:
 
@@ -283,6 +333,8 @@ It uses vLLM's native scheduler and is disabled by default.
 
 If the model loads cleanly but full agent turns misbehave, check transport first, then inspect tool use and the context budget.
 
+Setup's connection check sends a short prompt without tools, so it can pass on a model whose context window is too small for a real first turn, which also carries the system prompt and tool definitions. When the effective window is below 16,384 tokens, automatic setup skips the model, and a model you choose yourself is accepted with a warning that names the window and what to raise.
+
 1. **Check the local model responds** - no tools, no agent context:
 
    ```bash
@@ -306,11 +358,13 @@ If the model loads cleanly but full agent turns misbehave, check transport first
 OpenClaw sends the resolved model output limit to local model servers. Native
 Ollama receives it as `num_predict`; an explicit request `maxTokens` or authored
 `params.num_predict` takes precedence. Set realistic `maxTokens` and context
-limits for custom model entries. Discovered local Ollama models default to 8,192
-output tokens. Ollama Cloud models use their documented output limit, or their
-context window when a separate output limit is unavailable. Set
-`params: { num_predict: -1 }` to restore Ollama's unlimited default; an explicit
-request output cap still wins.
+limits for custom model entries. Discovered local Ollama models default to half
+of the 32,768-token local context cap (16,384 output tokens), or less for smaller
+windows. Curated Ollama Cloud models use their documented output limit;
+uncurated cloud models default to 32,768 output tokens (less for smaller
+windows), because a context window is not an output limit. Set
+`params: { num_predict: -1 }` to restore Ollama's unlimited default; an
+explicit request output cap still wins.
 
 Embedded agent runs also watch long text and reasoning from models with a known
 total parameter count in the **32B class or smaller** (less than 34 billion, to
@@ -360,7 +414,7 @@ Setup no longer writes this flag. For older installations, `openclaw doctor --fi
 
 If you already tune Tool Search globally, OpenClaw leaves that config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
 
-Lean Tool Search directories list tool names and owners without descriptions. Full descriptions and schemas remain available through Tool Search. Removing optional tools therefore cannot expand the remaining directory descriptions. Lean mode keeps the ordinary system instructions, skills, and workspace context.
+Lean mode keeps the ordinary system instructions, skills, and workspace context.
 
 In structured `tools` mode, lean runs keep `exec` directly visible beside the Tool Search controls so coding-tuned local models can still choose their familiar shell path. This changes schema visibility only: normal tool policy, sandboxing, and exec approvals still apply. Explicit `code` and `directory` modes keep their normal compaction behavior.
 

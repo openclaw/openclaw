@@ -37,7 +37,7 @@ export async function tryRunUpdateAdmissionBeforeStartup(
         `${JSON.stringify({
           protocol: 1,
           mode: "preflight",
-          coverage: "isolated-core-startup",
+          coverage: "candidate-runtime",
           candidateVersion: null,
           status: "unverified",
           reason: "preflight-execution-failed",
@@ -123,6 +123,7 @@ export async function tryRunUpdateAdmissionBeforeStartup(
     return true;
   }
   const { updateAdmitCommand } = await import("./update-cli/update-command-admit.js");
-  await updateAdmitCommand(contextPath);
+  const { withSqliteSnapshotReuse } = await import("../infra/sqlite-snapshot-reuse.js");
+  await withSqliteSnapshotReuse(() => updateAdmitCommand(contextPath));
   return true;
 }

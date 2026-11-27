@@ -22,7 +22,9 @@ Details keeps session metadata visible. Pull requests and automations appear
 expanded when they contain items; empty sections are omitted entirely. You can
 collapse populated sections without ordinary updates reopening them. Loading or
 failed automation reads show their status and retry action without an empty
-disclosure. Task progress remains independently collapsible.
+disclosure. Task progress remains independently collapsible. If the connection
+drops, progress shows **Disconnected · Activity may be outdated** while keeping
+the saved steps visible. A failed refresh keeps the last update and offers a retry.
 
 ## OpenClaw system care
 
@@ -40,7 +42,7 @@ Guided channel setup, workspace skills setup, web-search provider setup, and loc
 
 For Gateway setup, say `configure gateway` to choose the port, bind address, token or password auth, and Tailscale exposure. Before the first question, the web surface warns that applying the saved settings requires a restart that may disconnect the chat or require a new Control UI sign-in. The wizard changes config only; say `restart gateway` when you are ready to apply it. It manages only a local Gateway, so remote mode changes stay in `openclaw onboard` or `openclaw configure`.
 
-Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import assistant memory](/web/control-ui/settings#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
+Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import agent memory](/web/control-ui/settings#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
 
 Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel check, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
 
@@ -48,7 +50,11 @@ Outside onboarding, this page can show at most one dismissible event chip per vi
 
 Use the **Home** button in the sidebar footer, or in the toolbar when the sidebar is collapsed, to open the selected agent's main conversation alongside your current page. Select the **Ask OpenClaw** tab in the same dock for system setup and repair. When the same Home conversation is already open as the page, the dock stays hidden rather than showing it twice.
 
+The Home dock uses the same session read permissions as the full page. If you can read the selected Home conversation but cannot write to it, you can open it in view-only mode; sending and session actions remain unavailable. Opening Home does not change its sharing permissions or create a missing conversation for a reader.
+
 Your Home draft and attachments follow the conversation between the page and dock. Files still being prepared keep their progress and Remove action, and Send waits until preparation finishes.
+
+To see pull requests or saved task progress, open Home full page and select **Details**. Neither appears above the dock composer.
 
 Home can include a bounded, quoted work-context reference with your message. Before sending, that reference follows the page's agent, session, title, and visible file, not merely the Home conversation receiving it. You can remove it before sending.
 
@@ -101,6 +107,8 @@ Terminal sessions appear as tabs in the Chat side-panel header; choosing **Termi
 
 The unified panel also hosts **Browser**, **Files**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so on desktop switching sessions or reloading restores each session's own working layout. A chat conversation without a saved panel layout does not inherit panels open in another session. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
 
+In **Review**, choose **Sync locally** to copy the command for mirroring the session’s committed changes in a local checkout. **Files** distinguishes a search with no results (**No files match your search.**) from a filter with no matches (**No files match this filter.**).
+
 The side-panel divider follows the pointer and arrow-key direction in both
 left-to-right and right-to-left layouts.
 
@@ -110,7 +118,7 @@ A connected **Desktop** viewer stays connected for 30 seconds while its tab is h
 
 When you open a chat, the panel automatically reveals an available desktop assigned to that exact session. Discovery only reads existing resources: it never provisions a desktop or attaches an unrelated global or child-session resource. Session and inventory events refresh desktop discovery while the chat is visible. Resources without explicit session metadata remain available through the manual panel controls.
 
-Browser-tool results stay inline on desktop and mobile; they do not automatically open the Browser panel. Choose **Open** on a browser preview card, use the panel controls, or ask your agent to show it. A panel you explicitly opened still follows its saved per-session layout when you return or reload.
+Browser tool calls do not add automatic preview cards or open the Browser panel. To inspect the agent’s browser, choose **Browser** from the panel’s **+** menu or ask your agent to show it. The panel uses the session’s latest successful browser target. A panel you explicitly opened still follows its saved per-session layout when you return or reload.
 
 Automatic desktop reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered desktops stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. If discovery confirms that the desktop is no longer available, its automatic tab closes without affecting an explicitly selected desktop or disabling future automatic reveals. Mobile chat shows these panels full-width, just like manually opened panels; other narrow panes retain their bottom-docked layout. Minimizing the panel or closing a Browser or Desktop tab disables further automatic desktop reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
 
@@ -191,13 +199,15 @@ resized while its reported dimensions remain unchanged.
 
 Browser tabs appear directly in the Chat side-panel header, with the URL toolbar below. Each tab shows its page favicon when automatic favicon fetching is enabled and an icon is available. Closing the last browser tab leaves the Browser panel open so you can create another tab with **+**. When Browser is moved to the main area, its tabs appear above its own toolbar.
 
-When the Gateway browser is stopped, choose **Start browser**. The panel shows a loading indicator while startup is pending. If startup fails, it shows the error and restores **Start browser** so you can retry.
+When managed Chrome is stopped, the first nonblank edit in the address field starts it in the background. The address stays in the field until you submit it. An unused startup expires after 30 seconds; opening a page or explicitly starting the browser keeps it running. You can also choose **Start browser** without typing. The panel shows a loading indicator while startup is pending. If startup fails, it shows the error and restores **Start browser** so you can retry.
 
 While an Agent browser preview refreshes, the current page stays visible and the reload icon spins in the toolbar. A loading skeleton appears only before the first page image is available. If refreshing fails, the panel keeps the previous image and shows the error above it.
 
 To paste into an Agent browser tab or Browser dashboard, click the page's input field and press **⌘V** on macOS or **Ctrl+V** on Windows/Linux, or right-click the field and choose **Paste**. Plain text is inserted at the remote cursor, including password fields and fields inside frames. Pasting does not submit the form or copy your clipboard to the Gateway's system clipboard. This requires a managed browser; Chrome MCP existing-session profiles do not support it.
 
 In the macOS app, the same panel also hosts **Mac tabs**, rendered natively by WebKit, alongside **Agent browser tabs** from the Gateway. Mac tabs are available without `browser.request`; Agent browser tabs retain the Gateway and operator-access requirements above. External links clicked in the dashboard open as Mac tabs in the chat side panel, or in the shell-level Browser dock on non-chat routes. While Settings is open, external links open in the default browser because the Browser panel is hidden. Mac tabs have a tab strip, URL bar, back/forward/reload/stop, open-in-default-browser, and close controls. Mac tabs show the page’s own icon. Mac tabs belong to the chat session that opened them: another session starts with its own empty Browser panel, and returning restores the original session’s tabs. The window retains those tabs until they are closed or the window ends. Opening the same link reuses its existing tab only within that session, including a retained original URL after a redirect. The non-chat Browser dock has its own tabs. Login cookies remain shared within the window. Selecting another tab while a link is opening keeps your selection when the open request completes.
+
+In the macOS dashboard, press **⌘T** to open a blank Mac tab in the Browser panel without leaving the conversation. This also works while another Mac tab has focus. In a regular web browser, **⌘T** keeps its usual behavior.
 
 Session-local Mac tabs require both the Mac app and Gateway-served Control UI to support session ownership. During staggered upgrades, older app/UI combinations keep their existing shared-tab behavior so browsing continues to work. Tabs created without session ownership remain window-shared until closed or the window ends; new tabs become session-local once both sides are updated.
 
@@ -230,18 +240,23 @@ can contribute the same docked reader surface through the
 
 Click a GitHub issue, pull request, or commit link to read it in a browser-style
 tab beside the conversation. Each tab has a GitHub icon, a title, and a close
-control; the address bar and **Open on GitHub** link stay visible. Opening the
-same item from chat selects its existing tab. Links inside the reader and URLs
-entered in the address bar navigate the current tab, with independent Back and
-Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
-including their loaded documents while you switch between them.
+control. Once an item loads, **Refresh** and **Open on GitHub** appear in the
+document header. A link to an item that already has a tab selects that tab, and
+links to other supported items inside the reader open in their own tab. Use
+**+** (or choose **Link reader** from the Chat side panel's **+** menu) to open
+an empty tab where you can enter a URL. Up to ten tabs stay in memory, keeping
+their loaded documents while you switch between them.
+
+Hold Ctrl or Cmd to suppress link hover previews while opening several links.
+Pressing either key also dismisses an open preview and cancels a pending one.
+Normal hover and keyboard-focus previews resume on the next interaction after release.
 
 Loaded reader documents and link previews stay visible while the same Gateway
-reconnects. The reader refreshes after reconnect without clearing its address
-draft. Changing Gateway or losing reader access clears the protected content.
+reconnects. The reader refreshes after reconnect. Changing Gateway or losing
+reader access clears the protected content.
 
 Opening or loading an item keeps keyboard focus where you are typing. The
-**+** button focuses the address bar so you can enter a new URL.
+Adding an empty tab to a reader that is already open focuses its URL field.
 
 The reader shows descriptions, issue and pull-request discussion comments,
 commit comments, published inline PR review comments with file/line and diff

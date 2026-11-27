@@ -74,6 +74,7 @@ describe("ClawRouter capability offer projection", () => {
       {
         providerId: "tavily",
         endpoint: "search",
+        path: "/search",
         url: "https://router.example/v1/native/tavily/search",
         routeKind: "native",
         methods: ["POST"],

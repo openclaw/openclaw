@@ -75,7 +75,7 @@ it.each([
         expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull(),
       );
       expect(document.body.textContent).toContain(
-        "Changes that the previous worker did not upload may be lost.",
+        "Changes that the previous device didn’t upload may be lost.",
       );
       clickChoice(target === "cloud" ? "cloud:aws" : "gateway");
       [...document.body.querySelectorAll<HTMLButtonElement>("button")]

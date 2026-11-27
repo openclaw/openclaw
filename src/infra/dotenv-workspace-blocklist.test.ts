@@ -1,181 +1,135 @@
 // Tests workspace dotenv blocklist completeness across shipped runtime controls.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
-import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { loadDotEnv, loadDotEnvAsync, loadWorkspaceDotEnvFile } from "./dotenv.js";
+import { clearEnv, envContents, useDotEnvFixture, writeEnvFile } from "./dotenv.test-support.js";
 
-type DotEnvFixture = {
-  base: string;
-  cwdDir: string;
-  stateDir: string;
-};
-
-async function writeEnvFile(filePath: string, contents: string) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, contents, "utf8");
-}
-
-async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>) {
-  const envSnapshot = captureFullEnv();
-  try {
-    const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
-    const cwdDir = path.join(base, "cwd");
-    const stateDir = path.join(base, "state");
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    await fs.mkdir(cwdDir, { recursive: true });
-    await fs.mkdir(stateDir, { recursive: true });
-    await run({ base, cwdDir, stateDir });
-  } finally {
-    vi.restoreAllMocks();
-    envSnapshot.restore();
-  }
-}
-
-function clearEnv(keys: readonly string[]) {
-  for (const key of keys) {
-    deleteTestEnvValue(key);
-  }
-}
+const fixture = useDotEnvFixture();
 
 async function expectWorkspaceEnv(
   blocked: Record<string, string>,
   allowed: Record<string, string> = {},
 ) {
-  await withDotEnvFixture(async ({ cwdDir }) => {
-    const entries = { ...blocked, ...allowed };
-    await writeEnvFile(
-      path.join(cwdDir, ".env"),
-      Object.entries(entries)
-        .map(([key, value]) => `${key}=${value}`)
-        .join("\n"),
-    );
-    clearEnv(Object.keys(entries));
-    loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"));
-    for (const key of Object.keys(blocked)) {
-      expect(process.env[key], `${key} should be blocked by workspace .env`).toBeUndefined();
-    }
-    for (const [key, value] of Object.entries(allowed)) {
-      expect(process.env[key], key).toBe(value);
-    }
-  });
+  const { cwdDir } = fixture;
+  const entries = { ...blocked, ...allowed };
+  await writeEnvFile(path.join(cwdDir, ".env"), envContents(entries));
+  clearEnv(Object.keys(entries));
+  loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"));
+  for (const key of Object.keys(blocked)) {
+    expect(process.env[key], `${key} should be blocked by workspace .env`).toBeUndefined();
+  }
+  for (const [key, value] of Object.entries(allowed)) {
+    expect(process.env[key], key).toBe(value);
+  }
 }
 
 describe("workspace .env blocklist completeness", () => {
   it.each(["sync", "async"])(
     "keeps OCM launch context trusted with the %s loader",
     async (mode) => {
-      await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
-        try {
-          await writeEnvFile(
-            path.join(cwdDir, ".env"),
-            [
-              "OCM_SELF=workspace-executable",
-              "OCM_HOME=workspace-home",
-              "OCM_ACTIVE_ENV=workspace-environment",
-              "OCM_ACTIVE_ENV_ROOT=workspace-root",
-              "OCM_SUPERVISOR_MODE=workspace-supervisor",
-              "PROJECT_NAME=allowed",
-            ].join("\n"),
-          );
-          await writeEnvFile(
-            path.join(stateDir, ".env"),
-            "OCM_SELF=global-executable\nOCM_HOME=global-home\n",
-          );
-          const env: NodeJS.ProcessEnv = {
-            HOME: base,
-            OPENCLAW_STATE_DIR: stateDir,
-            OCM_ACTIVE_ENV: "inherited-environment",
-          };
-          vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+      const { base, cwdDir, stateDir } = fixture;
+      try {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OCM_SELF=workspace-executable",
+            "OCM_HOME=workspace-home",
+            "OCM_ACTIVE_ENV=workspace-environment",
+            "OCM_ACTIVE_ENV_ROOT=workspace-root",
+            "OCM_SUPERVISOR_MODE=workspace-supervisor",
+            "PROJECT_NAME=allowed",
+          ].join("\n"),
+        );
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          "OCM_SELF=global-executable\nOCM_HOME=global-home\n",
+        );
+        const env: NodeJS.ProcessEnv = {
+          HOME: base,
+          OPENCLAW_STATE_DIR: stateDir,
+          OCM_ACTIVE_ENV: "inherited-environment",
+        };
 
-          if (mode === "async") {
-            await loadDotEnvAsync({ env, cwd: cwdDir });
-          } else {
-            loadDotEnv({ env });
-          }
-
-          expect(env.OCM_SELF).toBe("global-executable");
-          expect(env.OCM_HOME).toBe("global-home");
-          expect(env.OCM_ACTIVE_ENV).toBe("inherited-environment");
-          expect(env.OCM_ACTIVE_ENV_ROOT).toBeUndefined();
-          expect(env.OCM_SUPERVISOR_MODE).toBeUndefined();
-          expect(env.PROJECT_NAME).toBe("allowed");
-        } finally {
-          await fs.rm(base, { recursive: true, force: true });
+        if (mode === "async") {
+          await loadDotEnvAsync({ env, cwd: cwdDir });
+        } else {
+          loadDotEnv({ env });
         }
-      });
+
+        expect(env.OCM_SELF).toBe("global-executable");
+        expect(env.OCM_HOME).toBe("global-home");
+        expect(env.OCM_ACTIVE_ENV).toBe("inherited-environment");
+        expect(env.OCM_ACTIVE_ENV_ROOT).toBeUndefined();
+        expect(env.OCM_SUPERVISOR_MODE).toBeUndefined();
+        expect(env.PROJECT_NAME).toBe("allowed");
+      } finally {
+        await fs.rm(base, { recursive: true, force: true });
+      }
     },
   );
 
   it("keeps trusted global dotenv for global plugin provider auth vars", async () => {
-    await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
-      const plugin: PluginManifestRecord = {
-        id: "runtime-cloud",
-        channels: [],
-        providers: ["runtime-cloud"],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
-        origin: "global",
-        rootDir: "/plugins/runtime-cloud",
-        source: "/plugins/runtime-cloud/index.js",
-        manifestPath: "/plugins/runtime-cloud/openclaw.plugin.json",
-        setup: { providers: [{ id: "runtime-cloud", envVars: ["RUNTIME_CLOUD_API_KEY"] }] },
-      };
-      await writeEnvFile(path.join(cwdDir, ".env"), "RUNTIME_CLOUD_API_KEY=workspace-plugin-key\n");
-      await writeEnvFile(path.join(stateDir, ".env"), "RUNTIME_CLOUD_API_KEY=global-plugin-key\n");
+    const { cwdDir, stateDir } = fixture;
+    const plugin: PluginManifestRecord = {
+      id: "runtime-cloud",
+      channels: [],
+      providers: ["runtime-cloud"],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "global",
+      rootDir: "/plugins/runtime-cloud",
+      source: "/plugins/runtime-cloud/index.js",
+      manifestPath: "/plugins/runtime-cloud/openclaw.plugin.json",
+      setup: { providers: [{ id: "runtime-cloud", envVars: ["RUNTIME_CLOUD_API_KEY"] }] },
+    };
+    await writeEnvFile(path.join(cwdDir, ".env"), "RUNTIME_CLOUD_API_KEY=workspace-plugin-key\n");
+    await writeEnvFile(path.join(stateDir, ".env"), "RUNTIME_CLOUD_API_KEY=global-plugin-key\n");
 
-      delete process.env.RUNTIME_CLOUD_API_KEY;
-      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-      setCurrentPluginMetadataSnapshot(
-        createPluginMetadataSnapshotFixture(
-          { plugins: [plugin] },
-          resolveInstalledPluginIndexPolicyHash({}),
-        ),
-        { config: {}, env: process.env },
-      );
+    delete process.env.RUNTIME_CLOUD_API_KEY;
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshotFixture(
+        { plugins: [plugin] },
+        resolveInstalledPluginIndexPolicyHash({}),
+      ),
+      { config: {}, env: process.env },
+    );
 
-      try {
-        loadDotEnv();
+    try {
+      loadDotEnv();
 
-        expect(process.env.RUNTIME_CLOUD_API_KEY).toBe("global-plugin-key");
-      } finally {
-        clearPluginMetadataLifecycleCaches();
-      }
-    });
+      expect(process.env.RUNTIME_CLOUD_API_KEY).toBe("global-plugin-key");
+    } finally {
+      clearPluginMetadataLifecycleCaches();
+    }
   });
 
   it("keeps registered provider auth vars from trusted global dotenv", async () => {
-    await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
-      const providerAuthKeys = listKnownProviderAuthEnvVarNamesCore().toSorted();
-      await writeEnvFile(
-        path.join(cwdDir, ".env"),
-        `${providerAuthKeys.map((key) => `${key}=workspace-${key}`).join("\n")}\n`,
-      );
-      await writeEnvFile(
-        path.join(stateDir, ".env"),
-        `${providerAuthKeys.map((key) => `${key}=global-${key}`).join("\n")}\n`,
-      );
+    const { cwdDir, stateDir } = fixture;
+    const providerAuthKeys = listKnownProviderAuthEnvVarNamesCore().toSorted();
+    await writeEnvFile(
+      path.join(cwdDir, ".env"),
+      `${providerAuthKeys.map((key) => `${key}=workspace-${key}`).join("\n")}\n`,
+    );
+    await writeEnvFile(
+      path.join(stateDir, ".env"),
+      `${providerAuthKeys.map((key) => `${key}=global-${key}`).join("\n")}\n`,
+    );
 
-      clearEnv(providerAuthKeys);
-      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+    clearEnv(providerAuthKeys);
 
-      loadDotEnv();
+    loadDotEnv();
 
-      for (const key of providerAuthKeys) {
-        expect(process.env[key], `${key} should come from trusted global .env`).toBe(
-          `global-${key}`,
-        );
-      }
-    });
+    for (const key of providerAuthKeys) {
+      expect(process.env[key], `${key} should come from trusted global .env`).toBe(`global-${key}`);
+    }
   });
 
   it("blocks runtime-control variables from workspace .env", async () => {
@@ -192,6 +146,7 @@ describe("workspace .env blocklist completeness", () => {
       HOMEBREW_SSH_CONFIG_PATH HOMEBREW_XDG_CONFIG_HOME IRC_HOST
       APPDATA LOCALAPPDATA DISCORD_API_URL
       MATTERMOST_URL MATRIX_HOMESERVER MINIMAX_API_HOST
+      MISE_DATA_DIR XDG_BIN_HOME
       BUZZ_RELAY_URL SMS_ALLOWED_USERS SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION
       SMS_PUBLIC_WEBHOOK_URL AWS_ACCESS_KEY_ID AWS_ACCOUNT_ID
       AWS_ACCOUNT_ID_ENDPOINT_MODE AWS_BEARER_TOKEN_BEDROCK AWS_BEDROCK_SKIP_AUTH
@@ -246,8 +201,16 @@ describe("workspace .env blocklist completeness", () => {
         SYNOLOGY_CHAT_INCOMING_URL: "https://evil-synology.example.com/incoming",
         SYNOLOGY_NAS_HOST: "evil-synology.example.com",
         AZURE_SPEECH_ENDPOINT: "https://evil-speech.example.com",
+        AZURE_OPENAI_RESOURCE_NAME: "evil.example/x",
       },
       { SAFE_PROVIDER_NAME: "allowed" },
+    );
+  });
+
+  it("blocks Perl library and shell selectors from workspace .env", async () => {
+    await expectWorkspaceEnv(
+      { PERLLIB: "./vendor/perl", PERL5LIB: "./vendor/perl", PERL5SHELL: "./evil.exe" },
+      { PERL_PROJECT_NAME: "allowed" },
     );
   });
 

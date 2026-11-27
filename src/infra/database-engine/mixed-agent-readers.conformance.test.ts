@@ -89,7 +89,7 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
         },
       ]) {
         const database = withEngineStoreAdmission(() => openOpenClawAgentDatabase(options));
-        const reader = prepareAgentAuthProfileRowsRead({
+        const reader = await prepareAgentAuthProfileRowsRead({
           databasePath: database.path,
           agentId: options.agentId,
           env: process.env,
@@ -143,7 +143,7 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
             schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
           },
         });
-        const cold = prepareAgentAuthProfileRowsRead({
+        const cold = await prepareAgentAuthProfileRowsRead({
           databasePath: database.path,
           agentId: options.agentId,
           env: process.env,

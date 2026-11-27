@@ -21,15 +21,15 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     toolPolicyAuditInfo.mockClear();
   });
 
-  const repeatedToolError =
-    "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool inputs or service, then use a changed request.";
-  const namedToolError =
-    "OpenClaw stopped this turn: the same probe call failed 3 times (tool error). Check the tool inputs or service, then use a changed request.";
+  const repeatLimitFallback =
+    "OpenClaw stopped this turn: the model repeated the same tool call too many times. Send a new message to continue.";
+  const namedRepeatLimit =
+    "OpenClaw stopped this turn: the model called probe with the same arguments 20 times in a row. Send a new message to continue.";
   it.each([
-    [namedToolError, "openclaw_repeated_tool_error", namedToolError],
-    [namedToolError + "\n", "openclaw_repeated_tool_error", repeatedToolError],
-    ["private tool diagnostics", "openclaw_repeated_tool_error", repeatedToolError],
-    ["HTTP 503 temporary failure", "openclaw_repeated_tool_error", repeatedToolError],
+    [namedRepeatLimit, "tool_repeat_limit", namedRepeatLimit],
+    [namedRepeatLimit + "\n", "tool_repeat_limit", repeatLimitFallback],
+    ["private tool diagnostics", "tool_repeat_limit", repeatLimitFallback],
+    ["HTTP 503 temporary failure", "tool_repeat_limit", repeatLimitFallback],
     [
       "HTTP 503 temporary failure",
       "openclaw_repetitive_output",

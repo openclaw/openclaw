@@ -3,7 +3,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import { downloadBlobFile } from "../../../lib/download.ts";
+import { downloadBlobFile, downloadHref } from "../../../lib/download.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
@@ -19,12 +19,15 @@ export function FileDownloadButton(props: {
   class: string;
   disabled?: boolean;
   showLabel?: boolean;
+  onDownloadStart?: () => () => void;
 }) {
   const [pending, setPending] = createOptimistic(false);
   const retired = Promise.withResolvers<void>();
   let request: AbortController | null = null;
+  let releaseRequest = () => {};
   onSettled(() => () => {
     request?.abort();
+    releaseRequest();
     retired.resolve();
   });
   const presentDownload = action(function* (completion: Promise<void>) {
@@ -38,10 +41,26 @@ export function FileDownloadButton(props: {
     const controller = new AbortController();
     const scopeKey = props.scopeKey;
     request = controller;
+    // A windowed row must survive until save/error handling finishes. Retiring
+    // its real owner still aborts and releases even when an RPC never settles.
+    const releaseOwner = props.onDownloadStart?.();
+    let released = false;
+    const release = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      if (request === controller) {
+        request = null;
+      }
+      releaseOwner?.();
+    };
+    releaseRequest = release;
     const current = () => !controller.signal.aborted && props.scopeKey === scopeKey;
     const failed = (error: unknown) => {
       if (current()) {
         showToast({
+          severity: "error",
           message: t("chat.detailPanel.downloadFailed", { error: formatUiError(error) }),
         });
       }
@@ -55,15 +74,12 @@ export function FileDownloadButton(props: {
             return;
           }
           // The browser owns the byte stream and save progress, not a JavaScript Blob.
-          const link = document.createElement("a");
-          link.href = file.url;
-          link.download = file.filename;
-          link.click();
+          downloadHref(file.url, file.filename);
         }
       } catch (error) {
         failed(error);
       } finally {
-        request = null;
+        release();
       }
     })();
     // Download callbacks may select their file. Let that owner update land first.

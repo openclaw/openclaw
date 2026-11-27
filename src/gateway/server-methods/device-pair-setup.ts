@@ -1,4 +1,5 @@
 import {
+  DevicePairErrorDetailCodes,
   ErrorCodes,
   errorShape,
   validateDevicePairSetupCodeParams,
@@ -18,6 +19,7 @@ import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import {
   decodePairingSetupCode,
   encodePairingSetupCode,
+  PAIRING_GATEWAY_LOOPBACK_ERROR,
   resolvePairingSetupFromConfig,
 } from "../../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -140,7 +142,18 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         });
         assertJoinCurrent?.();
         if (!resolved.ok) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              resolved.error,
+              // Lets the dashboard offer secure access setup instead of the raw config hint.
+              resolved.error === PAIRING_GATEWAY_LOOPBACK_ERROR
+                ? { details: { code: DevicePairErrorDetailCodes.GATEWAY_LOOPBACK_ONLY } }
+                : undefined,
+            ),
+          );
           return;
         }
         const setupCode = encodePairingSetupCode(resolved.payload);

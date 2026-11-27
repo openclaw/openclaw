@@ -3,6 +3,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
+  peekSqliteDatabaseAdmissionForPath,
   prepareSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
@@ -32,9 +33,12 @@ export function getAgentDeletionDiscovery(database: EngineConnection) {
 }
 
 export function getPreparedAgentDeletionDiscovery(statePath: string) {
-  return (
-    getOrLoadSqliteDatabaseAdmissionForPath(statePath, discoveryKey, () => undefined) ?? undefined
-  );
+  return peekSqliteDatabaseAdmissionForPath(statePath, discoveryKey) ?? undefined;
+}
+
+/** Recovery receipt writers invalidate the same discovery fact as journal writers. */
+export function invalidateAgentDeletionDiscovery(database: EngineConnection): void {
+  publishSqliteDatabaseAdmission(database, discoveryKey, null);
 }
 
 /** A slow read reply cannot replace a newer journal commit. */
@@ -97,7 +101,7 @@ export function invalidateAgentDeletionJournalStatus(
   agentId: string,
 ): void {
   publishSqliteDatabaseAdmission(database, statusKey(agentId), null);
-  publishSqliteDatabaseAdmission(database, discoveryKey, null);
+  invalidateAgentDeletionDiscovery(database);
 }
 
 export function getAgentDeletionJournalStatus(

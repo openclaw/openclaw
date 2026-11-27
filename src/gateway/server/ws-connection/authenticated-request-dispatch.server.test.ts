@@ -87,33 +87,22 @@ function createDispatcher(handler: Handler, context: Record<string, unknown> = {
   });
 }
 
-function createAuthorityScenario(change: string, handler: Handler, queued = false) {
+function createAuthorityScenario(change: string, handler: Handler) {
   let generation = "current";
-  let runtimeActive = true;
   const client = createClient();
   if (change === "shared-auth") {
     client.usesSharedGatewayAuth = true;
     client.sharedGatewaySessionGeneration = generation;
-  } else if (change === "runtime") {
-    client.internal = { agentRuntimeIdentity: createTestAgentRuntimeIdentity("pending-start") };
   }
   return {
     client,
     harness: createDispatchTestHarness({
       extraHandlers: { "test.trace": handler },
       getRequiredSharedGatewaySessionGeneration: () => generation,
-      buildRequestContext: queued
-        ? () => ({
-            getRuntimeConfig: () => ({}),
-            validateAgentRuntimeApprovalAuthority: () => runtimeActive,
-          })
-        : undefined,
     }),
     revoke(this: void) {
       if (change === "shared-auth") {
         generation = "rotated";
-      } else if (change === "runtime") {
-        runtimeActive = false;
       } else {
         Object.assign(client, { invalidated: true, invalidatedReason: "device-token-revoked" });
       }
@@ -195,56 +184,55 @@ describe("authenticated WebSocket request trace dispatch", () => {
     vi.clearAllMocks();
   });
 
-  it.each(["before dispatch", "before response"] as const)(
-    "rejects delegated authority revoked %s",
-    async (stage) => {
-      let authorityActive = stage === "before response";
-      const gate = createRequestGate();
-      const handler = vi.fn(async ({ respond }) => {
-        await gate.wait();
-        respond(true, { exposed: true }, undefined);
-      });
-      const validateAgentRuntimeApprovalAuthority = vi.fn(() => authorityActive);
-      const harness = createDispatcher(handler, { validateAgentRuntimeApprovalAuthority });
-      const client = createClient();
-      const agentRuntimeIdentity = createTestAgentRuntimeIdentity(stage);
-      client.internal = { agentRuntimeIdentity };
-      const dispatch = harness.dispatcher.dispatch(traceRequest(stage), client);
-      try {
-        if (stage === "before response") {
-          await gate.entered;
-          expect(handler).toHaveBeenCalledOnce();
-          authorityActive = false;
-        }
-      } finally {
-        gate.release();
-        await dispatch;
+  it.each([
+    { stage: "before dispatch", admitted: false },
+    { stage: "before response", admitted: true },
+  ] as const)("checks runtime authority once $stage", async ({ stage, admitted }) => {
+    let authorityActive = admitted;
+    const gate = createRequestGate();
+    const handler = vi.fn(async ({ respond }) => {
+      await gate.wait();
+      respond(true, { exposed: true }, undefined);
+    });
+    const validateAgentRuntimeApprovalAuthority = vi.fn(() => authorityActive);
+    const harness = createDispatcher(handler, { validateAgentRuntimeApprovalAuthority });
+    const client = createClient();
+    const agentRuntimeIdentity = createTestAgentRuntimeIdentity(stage);
+    client.internal = { agentRuntimeIdentity };
+    const dispatch = harness.dispatcher.dispatch(traceRequest(stage), client);
+    try {
+      if (admitted) {
+        await gate.entered;
+        expect(handler).toHaveBeenCalledOnce();
+        authorityActive = false;
       }
+    } finally {
+      gate.release();
+      await dispatch;
+    }
 
-      const failure = {
-        id: stage,
-        ok: false,
-        error: expect.objectContaining({
-          message: "agent runtime authority is no longer active",
-        }),
-      };
-      expect(await harness.awaitResponseFrame(stage)).toMatchObject(failure);
-      expect(harness.send).toHaveBeenCalledWith(expect.objectContaining(failure));
-      expectAuthorityClosed(harness, stage, "agent runtime authority closed");
-      if (stage === "before dispatch") {
-        expect(validateAgentRuntimeApprovalAuthority).toHaveBeenCalledWith(agentRuntimeIdentity);
-        expect(handler).not.toHaveBeenCalled();
-        expect(harness.setCloseCause).toHaveBeenCalledWith("agent-runtime-authority-closed", {
-          method: "test.trace",
-        });
-      }
-    },
-  );
+    const response = admitted
+      ? { id: stage, ok: true, payload: { exposed: true } }
+      : {
+          id: stage,
+          ok: false,
+          error: expect.objectContaining({
+            message:
+              "This agent run has ended, so it cannot start new Gateway requests. Start a new turn to retry.",
+          }),
+        };
+    expect(await harness.awaitResponseFrame(stage)).toMatchObject(response);
+    expect(harness.send).toHaveBeenCalledWith(expect.objectContaining(response));
+    expect(harness.close).not.toHaveBeenCalled();
+    expect(validateAgentRuntimeApprovalAuthority).toHaveBeenCalledWith(agentRuntimeIdentity);
+    if (!admitted) {
+      expect(handler).not.toHaveBeenCalled();
+    }
+  });
 
   it.each([
     { change: "shared-auth", closeReason: "gateway auth changed" },
     { change: "invalidated", closeReason: "client invalidated: device-token-revoked" },
-    { change: "runtime", closeReason: "agent runtime authority closed" },
   ] as const)("revalidates $change authority after waiting to start", async (testCase) => {
     let pendingStarted = false;
     const { client, harness, revoke } = createAuthorityScenario(
@@ -253,7 +241,6 @@ describe("authenticated WebSocket request trace dispatch", () => {
         pendingStarted ||= req.id === "pending";
         respond(true, { completed: req.id });
       },
-      true,
     );
     await warmDispatcher(harness, client);
     const dispatch = harness.dispatcher.dispatch(traceRequest("pending"), client);

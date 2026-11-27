@@ -20,6 +20,7 @@ import {
   OwnedStdioCleanupError,
   type OwnedStdioProcess,
 } from "../process/owned-stdio.js";
+import { runWithSpawnBrokerAdmission } from "../process/spawn-broker/admission.js";
 import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { parseMcpDockerCommand } from "./mcp-docker-command.js";
 import { McpStdioFrameDecoder } from "./mcp-stdio-frame-decoder.js";
@@ -96,7 +97,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
     }
 
     // Directory preparation may finish after shutdown has retired this launch.
-    if (this.startupAbort.signal.aborted) {
+    if (this.closing || this.startupAbort.signal.aborted) {
       const failure = new Error("MCP stdio transport is closed");
       materializeErrorStack(failure);
       throw failure;
@@ -115,23 +116,25 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
         const { prepareMcpDockerLaunch } = await import("./mcp-docker-custody.js");
         this.docker = await prepareMcpDockerLaunch(parsed, env, this.serverParams.cwd);
       }
-      if (this.startupAbort.signal.aborted) {
+      if (this.closing || this.startupAbort.signal.aborted) {
         throw new Error("MCP stdio transport is closed");
       }
-      const child = await createOwnedStdioProcess({
-        argv: this.docker
-          ? [this.docker.command, ...this.docker.args]
-          : [this.serverParams.command, ...(this.serverParams.args ?? [])],
-        cwd: this.serverParams.cwd,
-        env: this.docker?.env ?? env,
-        ...(this.serverParams.exactEnv ? { exactEnv: true as const } : {}),
-        // A canceled Docker client can leave an accepted daemon-side create in
-        // flight. Custody must see its CID before host-process cancellation.
-        ...(this.docker
-          ? { assertCurrent: this.docker.assertCurrent }
-          : { abortSignal: this.startupAbort.signal }),
-        stderrDestination: this.stderrStream,
-      });
+      const child = await runWithSpawnBrokerAdmission("mcp", () =>
+        createOwnedStdioProcess({
+          argv: this.docker
+            ? [this.docker.command, ...this.docker.args]
+            : [this.serverParams.command, ...(this.serverParams.args ?? [])],
+          cwd: this.serverParams.cwd,
+          env: this.docker?.env ?? env,
+          ...(this.serverParams.exactEnv ? { exactEnv: true as const } : {}),
+          // A canceled Docker client can leave an accepted daemon-side create in
+          // flight. Custody must see its CID before host-process cancellation.
+          ...(this.docker
+            ? { assertCurrent: this.docker.assertCurrent }
+            : { abortSignal: this.startupAbort.signal }),
+          stderrDestination: this.stderrStream,
+        }),
+      );
       this.process = child;
       child.onError((error) => this.notifyError(error));
       const receive = (chunk: Buffer) => {
@@ -238,11 +241,8 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
   }
 
   close(): Promise<void> {
-    if (this.starting && !this.process) {
-      this.startupAbort.abort();
-    }
     this.closing ??= (async () => {
-      // A connect timeout can request disposal while the spawn owner is admitting.
+      // Graceful close joins spawn ownership; aborting admission loses cleanup custody.
       await this.starting?.catch(() => undefined);
       try {
         const failures: unknown[] = [];
@@ -301,6 +301,9 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
 
   forceClose(): Promise<void> {
     this.forceRequested = true;
+    if (this.starting && !this.process) {
+      this.startupAbort.abort();
+    }
     if (this.docker) {
       this.docker.force();
     } else {

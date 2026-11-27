@@ -1,7 +1,7 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import {
   getAgentToolResultMiddlewareMatcherScope,
-  listAgentToolResultMiddlewares,
+  listAgentToolResultMiddlewareRegistrations,
 } from "../../plugins/agent-tool-result-middleware.js";
 import { getGlobalHookRunnerRegistry } from "../../plugins/hook-runner-global-state.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
@@ -13,7 +13,6 @@ import {
   hasBeforeToolCallPolicy,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
-import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { payloadTextResult } from "../tools/tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
@@ -25,18 +24,20 @@ import {
   readNativeHookRelayApprovalMode,
   resolveCodexUpdatedToolInput,
 } from "./native-hook-relay-codec.js";
+import type {
+  ActiveNativeHookRelayRegistration,
+  NativeHookRelayExecutionAdmission,
+  NativeHookRelayRegistration,
+} from "./native-hook-relay-contexts.js";
 import {
   runNativeHookRelayPermissionRequest,
   setNativeHookRelayPreToolUseApproval,
 } from "./native-hook-relay-permissions.js";
 import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
-  ActiveNativeHookRelayRegistration,
   NativeHookRelayEvent,
-  NativeHookRelayExecutionAdmission,
   NativeHookRelayInvocation,
   NativeHookRelayProcessResponse,
-  NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
@@ -45,10 +46,7 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
   return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
 }
 
-type NativeHookRelayPolicy = Pick<
-  ActiveNativeHookRelayRegistration,
-  "preToolUseLoopDetection" | "requirePreToolUse" | "sessionKey" | "config" | "agentId"
-> & {
+type NativeHookRelayPolicy = Pick<ActiveNativeHookRelayRegistration, "requirePreToolUse"> & {
   executionAdmissionToolNames?: readonly string[];
   postToolUseToolNames?: readonly string[];
 };
@@ -65,17 +63,6 @@ export function snapshotNativeHookRelayExecutionAdmission(
     : undefined;
 }
 
-function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayPolicy): boolean {
-  if (!registration.preToolUseLoopDetection || !registration.sessionKey) {
-    return false;
-  }
-  const loopDetection = resolveToolLoopDetectionConfig({
-    cfg: registration.config,
-    agentId: registration.agentId,
-  });
-  return loopDetection?.enabled === true;
-}
-
 export function nativeHookRelayEventHasLocalWork(
   registration: NativeHookRelayPolicy,
   event: NativeHookRelayEvent,
@@ -84,15 +71,14 @@ export function nativeHookRelayEventHasLocalWork(
     return (
       registration.requirePreToolUse === true ||
       Boolean(registration.executionAdmissionToolNames?.length) ||
-      hasBeforeToolCallPolicy() ||
-      nativePreToolUseMayRunLoopDetection(registration)
+      hasBeforeToolCallPolicy()
     );
   }
   if (event === "post_tool_use") {
     return (
       Boolean(registration.postToolUseToolNames?.length) ||
       hasGlobalHooks("after_tool_call") ||
-      listAgentToolResultMiddlewares("codex").length > 0
+      listAgentToolResultMiddlewareRegistrations("codex").length > 0
     );
   }
   if (event === "before_agent_finalize") {
@@ -106,7 +92,7 @@ export function nativeHookRelayEventToolMatcher(
   event: NativeHookRelayEvent,
 ): readonly string[] | undefined {
   if (event === "pre_tool_use") {
-    if (registration.requirePreToolUse || nativePreToolUseMayRunLoopDetection(registration)) {
+    if (registration.requirePreToolUse) {
       return undefined;
     }
     // Relay selection and policy execution must read the same scoped/root registry.
@@ -288,7 +274,7 @@ async function runNativeHookRelayPostToolUse(
   // Native results are observe-only for middleware: codex-rs PostToolUse hooks
   // cannot replace tool_response (PostToolUseOutcome has no result field), so a
   // transformed result reaches only after_tool_call observers, never the model.
-  const hasToolResultMiddleware = listAgentToolResultMiddlewares("codex").length > 0;
+  const hasToolResultMiddleware = listAgentToolResultMiddlewareRegistrations("codex").length > 0;
   const result = !hasToolResultMiddleware
     ? rawResult
     : await createAgentToolResultMiddlewareRunner({

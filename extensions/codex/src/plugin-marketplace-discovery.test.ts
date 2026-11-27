@@ -74,14 +74,14 @@ it.each([false, true])(
       const plugin = listed.marketplaces[0]!.plugins[0]!;
       if (!params.marketplaceKinds) {
         plugin.id = pluginName;
+        plugin.interface = { longDescription: `${"m".repeat(159)}🥐` };
       } else if (restricted) {
         plugin.installPolicy = "NOT_AVAILABLE";
       }
       return listed;
     });
     expect(result.plugins).toMatchObject([
-      { id: `${pluginName}@company-tools`, available: !restricted },
+      { id: `${pluginName}@company-tools`, description: "m".repeat(159), available: !restricted },
     ]);
-    expect(result.plugins).toHaveLength(1);
   },
 );

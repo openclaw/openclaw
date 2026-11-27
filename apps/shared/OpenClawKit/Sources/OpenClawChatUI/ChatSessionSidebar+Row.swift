@@ -42,6 +42,7 @@ extension ChatSessionSidebar {
             decorated: facts
                 .glyph != nil || (attention != nil && !session.isArchived),
             viewingProfileIDs: viewers)
+        let savedPin = self.menuActions.isPinnedForAction(session, at: now)
         let content = ChatSidebarRow(
             viewModel: self.viewModel,
             node: node,
@@ -60,10 +61,12 @@ extension ChatSessionSidebar {
             connected: self.viewModel.healthOK,
             mainSessionKey: self.sessionAgentID(session).map { self.viewModel.mainSessionKey(forAgent: $0) } ?? self
                 .viewModel.selectedAgentMainSessionKey,
+            savedPin: savedPin,
+            canEditPins: self.menuActions.canTogglePin(session, at: now),
             pin: {
                 self.viewModel.setSessionPinned(
                     key: session.key,
-                    pinned: session.pinned != true,
+                    pinned: !savedPin,
                     agentID: session.agentId)
             },
             archive: { Task { await self.archiveSidebarSession(session) } },
@@ -161,6 +164,8 @@ private struct ChatSidebarRow: View {
     let now: Date
     let connected: Bool
     let mainSessionKey: String
+    let savedPin: Bool
+    let canEditPins: Bool
     let pin: () -> Void
     let archive: () -> Void
     let archiving: Bool
@@ -301,13 +306,11 @@ private struct ChatSidebarRow: View {
         HStack(spacing: 1) {
             if ChatSessionSidebarEligibility.canPin(self.node.session, isChild: self.isChild) {
                 Button(action: self.pin) {
-                    Image(systemName: self.node.session.pinned == true ? "pin.slash" : "pin")
+                    Image(systemName: self.savedPin ? "pin.slash" : "pin")
                 }
-                .help(self.node.session.pinned == true ? String(localized: "Unpin") : String(localized: "Pin"))
-                .accessibilityLabel(self.node.session
-                    .pinned == true ? String(localized: "Unpin") : String(localized: "Pin"))
+                .accessibilityLabel(self.savedPin ? String(localized: "Unpin") : String(localized: "Pin"))
                 .focused(self.$focus, equals: .pin)
-                .disabled(!self.connected)
+                .disabled(!self.connected || !self.canEditPins)
             }
             Button(action: self.archive) {
                 Image(systemName: self.node.session.isArchived ? "tray.and.arrow.up" : "archivebox")

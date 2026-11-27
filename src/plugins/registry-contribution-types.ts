@@ -1,16 +1,18 @@
 /** Acyclic contracts for capabilities stored in the installed plugin registry. */
 import type { SessionDiscussionInfo } from "../../packages/gateway-protocol/src/schema/session-discussion.js";
+import type {
+  MemoryCliSearchParams,
+  MemorySearchManager,
+} from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import type {
   LegacyMemoryReadResult,
-  MemoryCliSearchParams,
   MemoryCliSearchResult,
   MemoryOriginClass,
   MemoryReadResult,
-  MemorySearchManager,
   MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
 import type {
@@ -398,11 +400,27 @@ export type LearnContribution = {
   }) => LearnGuidance;
   /** Words after /learn that this contribution handles instead of a learning request. */
   subcommands?: readonly LearnSubcommand[];
+  /**
+   * Reply when /learn cannot learn here and this contribution's medium is the only one
+   * registered (or its subcommand was asked for). Default: a generic remedy.
+   */
+  unavailableText?: string;
 };
 
 export type LearnContributionRegistration = {
   pluginId: string;
   contribution: LearnContribution;
+};
+
+/** A passive memory backend the selected slot owner may open through its provider runtime. */
+export type MemoryBackendRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  providerRuntime: MemoryProviderRuntime;
+  /** "legacy" when the host adapts a file-shaped `runtime` into the provider contract. */
+  adapter?: "native" | "legacy";
+  /** Object the backend's plugin instance is bound to; defaults to providerRuntime. */
+  instanceOwner?: object;
 };
 
 export type MemoryPluginCapabilityRegistration = {

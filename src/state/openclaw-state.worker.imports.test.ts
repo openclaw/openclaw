@@ -106,17 +106,35 @@ it.each([
   },
 );
 
+it("keeps agent database execution independent of the host SQLite broker", () => {
+  expect(
+    findSourceImportBackedges("src/state/openclaw-agent-execution.worker.ts", [
+      "src/infra/sqlite-worker-broker.ts",
+    ]),
+  ).toEqual([]);
+});
+
+it("keeps the shared writer independent of ordinary agent lease management", () => {
+  expect(
+    findSourceImportBackedges("src/state/openclaw-state.worker.ts", [
+      "src/state/openclaw-agent-db-lease.ts",
+    ]),
+  ).toEqual([]);
+});
+
 it("keeps shared-state and session-upstream workers independent of host runtime discovery", () => {
   expect(
     findSourceImportBackedges(
       [
         "src/state/openclaw-state.worker.ts",
+        "src/state/openclaw-state-read-handlers.ts",
         "src/sessions/session-upstream-links.worker.ts",
         // Loaded lazily by the shared-state worker; dynamic imports are separate entries.
         "src/infra/update-run-dispatch.worker.ts",
       ],
       [
         "src/config/io.snapshot.ts",
+        "src/cron/store/read-command.ts",
         "src/config/validation-core.ts",
         "src/plugins/loader-runtime-load.ts",
         "src/channels/plugins/registry.ts",

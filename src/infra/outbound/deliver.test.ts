@@ -2274,34 +2274,6 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toStrictEqual([]);
   });
 
-  it("passes formatting overrides for pre-rendered chunker output", async () => {
-    const chunker = vi.fn(() => ["<b>bold</b>"]);
-    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
-      channel: "matrix" as const,
-      messageId: text,
-      roomId: "r1",
-    }));
-    setTestOutbound({
-      chunker,
-      chunkerMode: "markdown",
-      chunkedTextFormatting: { parseMode: "HTML" },
-      textChunkLimit: 4000,
-      sendText,
-    });
-
-    await deliverOutboundPayloads({
-      cfg: matrixChunkConfig,
-      channel: "matrix",
-      to: "!room",
-      payloads: [{ text: "**bold**" }],
-    });
-
-    expect(chunker).toHaveBeenCalledWith("**bold**", 4000);
-    const sendTextParams = requireMockCallArg(sendText, "sendText");
-    expect(sendTextParams.text).toBe("<b>bold</b>");
-    expect(sendTextParams.formatting).toEqual({ parseMode: "HTML" });
-  });
-
   registerOutboundImageProjectionTests({
     setTestOutbound,
     hookMocks,

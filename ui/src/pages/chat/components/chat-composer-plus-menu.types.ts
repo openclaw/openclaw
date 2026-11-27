@@ -7,6 +7,7 @@ import type {
   MenuItem,
 } from "../../../components/solid/menu.tsx";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
+import type { ComposerMenuAction } from "../../../plugins/control-ui-actions.ts";
 import type { ChatComposerCapabilityHost } from "../chat-composer-capability-host.tsx";
 import type {
   ChatComposerCapabilityMenuProps,
@@ -18,6 +19,7 @@ import type { ChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 export type ChatComposerPlusMenuProps = {
   attachments: ChatAttachmentControlsProps;
   inputHandle: ChatAttachmentInputHandle;
+  pluginActions?: readonly ComposerMenuAction[];
   capabilityMenu?: ChatComposerCapabilityMenuSource;
   disabled: boolean;
   open: boolean;

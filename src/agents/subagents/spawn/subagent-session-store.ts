@@ -274,6 +274,8 @@ async function prepareCapabilityReads<T>(
   let active = true;
   const release = () => {
     active = false;
+    entries.clear();
+    scope.onRead = undefined;
     for (const cleanup of releases.splice(0)) {
       cleanup();
     }

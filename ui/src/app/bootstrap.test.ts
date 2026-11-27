@@ -260,8 +260,7 @@ describe("bootstrapApplication", () => {
       history: { location: () => currentLocation, replace: vi.fn() },
       initialLocationReady: Promise.resolve(makeLocation("/chat/main")),
       installLocation,
-      shouldInstallLocation: () =>
-        isDefaultChatLanding(currentLocation, "", applicationRoutes.routeIdFromPath),
+      shouldInstallLocation: () => isDefaultChatLanding(currentLocation, ""),
     });
 
     expect(installLocation).not.toHaveBeenCalled();

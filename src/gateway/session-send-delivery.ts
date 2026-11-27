@@ -17,7 +17,7 @@ type SessionSendDelivery = {
   sandboxed: boolean;
   message: string;
   /** Returned results owe no new reply; retain their host-authored intake instructions. */
-  returnedResult?: { extraSystemPrompt: string };
+  returnedResult?: { extraSystemPrompt: string; hideInput?: boolean };
 };
 
 type Admission = { delivery: SessionSendDelivery };

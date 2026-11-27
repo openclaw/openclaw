@@ -1,28 +1,75 @@
+import type { PreparedReadinessChecker } from "./health/types.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
-import type { ReadinessChecker } from "./server/readiness.js";
+import { announceGatewayInstallationReady } from "./stale-install.js";
 
 type GatewayReadinessLog = {
   log: { info: (message: string) => void };
-  getReadiness: ReadinessChecker;
+  getReadiness: PreparedReadinessChecker;
+  isClosing?: () => boolean;
+  startupTrace?: GatewayStartupTrace;
 };
 
-export function logGatewayReady(params: GatewayReadinessLog, message = "gateway ready"): void {
-  if (params.getReadiness().ready) {
-    params.log.info(message);
+export async function logGatewayReady(
+  params: GatewayReadinessLog,
+  updateCanary = false,
+): Promise<void> {
+  if (params.isClosing?.()) {
+    return;
+  }
+  if (!updateCanary) {
+    await announceGatewayInstallationReady(params.getReadiness);
+  }
+  const prepared = await params.getReadiness.prepare();
+  if (!params.isClosing?.() && prepared.publish().ready) {
+    params.startupTrace?.mark("ready");
+    params.log.info(
+      updateCanary ? "candidate gateway ready; autonomous sidecars suppressed" : "gateway ready",
+    );
   }
 }
 
-export function logGatewaySidecarsReady(
+export async function logGatewaySidecarsReady(
   params: GatewayReadinessLog & {
-    startupTrace?: GatewayStartupTrace;
     loadedPluginCount: number;
     postReadySidecarCount: number;
   },
-): void {
+): Promise<void> {
   params.startupTrace?.detail("sidecars.ready", [
     ["loadedPluginCount", params.loadedPluginCount],
     ["postReadySidecarCount", params.postReadySidecarCount],
   ]);
   params.startupTrace?.mark("sidecars.ready");
-  logGatewayReady(params);
+  await logGatewayReady(params);
+}
+
+export function createGatewayReadyAnnouncer(
+  params: GatewayReadinessLog & {
+    isChatSendAvailable: () => boolean;
+    areSidecarsReady: () => boolean;
+    startupTrace: GatewayStartupTrace;
+  },
+): () => Promise<void> {
+  let readyAnnounced = false;
+  return async () => {
+    if (
+      readyAnnounced ||
+      params.isClosing?.() ||
+      !params.isChatSendAvailable() ||
+      !params.areSidecarsReady()
+    ) {
+      return;
+    }
+    const prepared = await params.getReadiness.prepare();
+    if (
+      !readyAnnounced &&
+      params.isChatSendAvailable() &&
+      params.areSidecarsReady() &&
+      !params.isClosing?.() &&
+      prepared.publish().ready
+    ) {
+      readyAnnounced = true;
+      params.startupTrace.mark("ready");
+      params.log.info("gateway ready");
+    }
+  };
 }

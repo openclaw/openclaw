@@ -11,6 +11,7 @@ import {
 import { SettingsRow, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import "../../components/select-picker.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
@@ -42,8 +43,7 @@ export function TextSection(
       labelStyle: `font-family: ${metadata.stack}`,
     })),
   );
-  // The value binding rewrites the DOM whenever it reruns. Track only the stored
-  // family so unrelated settings refreshes keep an uncommitted draft.
+  // Isolate committed values from unrelated settings and translation refreshes.
   const terminalFontFamily = createMemo(() => props.terminalFontFamily ?? "");
   return (
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.typography} class="settings-section">
@@ -95,7 +95,10 @@ export function TextSection(
                           label: t("configView.appearance.fonts.themeDefault"),
                           description: t("configView.appearance.fonts.themeFace", {
                             theme: props.presentedTheme.label,
-                            face: TYPEFACES[face()].label,
+                            face:
+                              face() === "system"
+                                ? t("configView.appearance.fonts.system")
+                                : TYPEFACES[face()].label,
                           }),
                           labelStyle: `font-family: ${TYPEFACES[face()].stack}`,
                         },
@@ -132,7 +135,7 @@ export function TextSection(
                 placeholder={t("configView.appearance.fonts.terminalDefault")}
                 maxlength={100}
                 spellcheck="false"
-                value={terminalFontFamily()}
+                ref={liveValue(terminalFontFamily)}
                 onInput={(event) => event.currentTarget.setCustomValidity("")}
                 onChange={(event) => {
                   const input = event.currentTarget;

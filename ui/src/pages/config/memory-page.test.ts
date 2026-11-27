@@ -53,21 +53,6 @@ function waitAddon(element: HTMLElement, label: string, checked: boolean) {
   return waitForSolid(() => expect(addonSwitch(element, label)?.checked).toBe(checked));
 }
 
-/** Which tab body is actually mounted, rather than what the tab strip claims. */
-function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | "settings" | null {
-  const panel = element.querySelector('[role="tabpanel"]');
-  if (!panel) {
-    return null;
-  }
-  if (panel.querySelector("openclaw-agent-memory-panel")) {
-    return "dreams";
-  }
-  if (panel.querySelector('[data-settings-view="memory/memories"]')) {
-    return "memories";
-  }
-  return panel.querySelector('[data-settings-view="memory/overview"]') ? "overview" : "settings";
-}
-
 function pressTab(element: HTMLElement, tab: string, key = "Enter") {
   const event = new KeyboardEvent("keydown", {
     key,
@@ -79,9 +64,9 @@ function pressTab(element: HTMLElement, tab: string, key = "Enter") {
 }
 
 function dreamingInput(element: HTMLElement) {
-  const input = element.querySelector<HTMLInputElement>('input[aria-label="Dreaming frequency"]');
+  const input = element.querySelector<HTMLInputElement>('input[aria-label="Schedule (cron)"]');
   if (!input) {
-    throw new Error("Missing Dreaming frequency");
+    throw new Error("Missing Schedule (cron)");
   }
   return input;
 }
@@ -339,39 +324,13 @@ it("renders and clears mutation errors on only the affected add-on", async () =>
   await waitText(element, "enablement rejected");
   expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
   expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false);
-  expect(element.textContent).toContain("Could not update Active memory");
-  expect(element.textContent).not.toContain("Could not update Memory wiki");
+  expect(element.textContent).toContain("Couldn’t update Active memory. Try again.");
+  expect(element.textContent).not.toContain("Couldn’t update Memory wiki. Try again.");
 
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected", false);
-  await waitText(element, "Could not update Active memory", false);
+  await waitText(element, "Couldn’t update Active memory. Try again.", false);
   retry.resolve(committed("active-memory", false));
-});
-
-it("renders every canonical tab path and honors browser history restoration", async () => {
-  const navigate = vi.fn();
-  const { element } = createPage({ catalog: [], navigate });
-  expect(visibleTab(element)).toBe("settings");
-
-  pressTab(element, "overview");
-  expect(navigate).toHaveBeenCalledWith("memory", { pathname: "/settings/memory" });
-  element.routeData = memoryTabRoute("overview");
-  flush();
-  await waitForSolid(() => expect(visibleTab(element)).toBe("overview"));
-
-  element.routeData = memoryTabRoute("settings");
-  flush();
-  expect(visibleTab(element)).toBe("settings");
-
-  element.routeData = memoryTabRoute("memories");
-  flush();
-  await waitForSolid(() => expect(visibleTab(element)).toBe("memories"));
-
-  element.routeData = memoryTabRoute("dreams");
-  flush();
-  expect(visibleTab(element)).toBe("dreams");
-  expect(element.querySelector("openclaw-agent-select")).toBeNull();
-  expect(element.textContent).not.toContain("Dreaming frequency");
 });
 
 it("keeps Dreams empty when no configured agent is available", async () => {
@@ -381,7 +340,7 @@ it("keeps Dreams empty when no configured agent is available", async () => {
   });
   expect(element.querySelector("openclaw-agent-memory-panel")).toBeNull();
   expect(element.querySelector("openclaw-agent-select")).toBeNull();
-  expect(element.textContent).not.toContain("Dreaming frequency");
+  expect(element.textContent).not.toContain("Schedule (cron)");
 });
 
 it("loads each Dreams target once when the existing agent key changes", async () => {
@@ -646,7 +605,7 @@ it("makes a previously unsupported Dreaming schema unknown while a fresh probe i
   });
   try {
     await waitText(element, "Not available for this engine");
-    expect(element.querySelector('input[aria-label="Dreaming frequency"]')).toBeNull();
+    expect(element.querySelector('input[aria-label="Schedule (cron)"]')).toBeNull();
 
     publishPluginGeneration(1);
     await waitForSolid(() => {
@@ -735,7 +694,7 @@ it.each([
       expect(runtimeConfig.removeFormValue).toHaveBeenCalledWith(frequencyPath);
       schema.resolve({ schema: { type: "object", additionalProperties: false }, children: [] });
       await waitText(element, "Not available for this engine");
-      expect(element.querySelector('input[aria-label="Dreaming frequency"]')).toBeNull();
+      expect(element.querySelector('input[aria-label="Schedule (cron)"]')).toBeNull();
     } finally {
       schema.resolve({ type: "object" });
       element.remove();

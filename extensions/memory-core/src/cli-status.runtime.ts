@@ -1,3 +1,4 @@
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   formatMemoryIndexRebuildGuidance,
   readMemorySearchManagerStatus,
@@ -216,6 +217,7 @@ export async function runMemoryStatus(
     dreamingAudit?: DreamingArtifactsAuditSummary;
     dreamingRepair?: RepairDreamingArtifactsResult;
   }> = [];
+  const signal = getAsyncWorkSignal();
   const cfg = await withMemoryCommand({
     commandName: "memory status",
     options: opts,
@@ -299,7 +301,15 @@ export async function runMemoryStatus(
         dreamingRepair,
       });
     },
+  }).catch((error: unknown) => {
+    if (!signal?.aborted) {
+      throw error;
+    }
   });
+  // Ctrl+C owns the exit; an interrupted check prints no partial status.
+  if (!cfg || signal?.aborted) {
+    return;
+  }
   if (opts.json) {
     defaultRuntime.writeJson(allResults);
     return;
@@ -388,6 +398,9 @@ export async function runMemoryStatus(
             : "unavailable";
       addState("Embeddings", state);
       addField("Embeddings error", embeddingProbe.error, warn);
+    } else {
+      const refusal = asNullableRecord(status.custom)?.embeddingRefusal;
+      addField("Embeddings", typeof refusal === "string" ? refusal : undefined, warn);
     }
     const runtime = deep ? readLlamaCppRuntimeStatus(status) : null;
     if (runtime) {

@@ -10,13 +10,14 @@ import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   isSubagentSpawnDepthAllowed,
 } from "../../../config/agent-limits.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
+import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import { readDelegatedToolPolicy, type DelegatedToolPolicy } from "../../delegated-tool-policy.js";
 import {
   normalizeInheritedToolAllowlist,
@@ -259,15 +260,34 @@ export function isSubagentEnvelopeSession(
 /** Visible spawns are interactive sessions; a dashboard key alone grants nothing. */
 export function isVisibleSpawnedSession(
   sessionKey: string,
-  opts?: { cfg?: OpenClawConfig; store?: SessionCapabilityStore },
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+    entry?: SessionCapabilityEntry;
+  },
 ): boolean {
   if (!isDashboardSessionKey(sessionKey)) {
     return false;
   }
-  const entry = resolveSessionCapabilityEntry({ sessionKey, ...opts });
+  const entry =
+    opts?.entry ??
+    resolveSessionCapabilityEntry({ sessionKey, cfg: opts?.cfg, store: opts?.store });
   return (
-    entry?.createdVia === "spawn" && isStoredSubagentEnvelopeSession({ sessionKey, ...opts, entry })
+    entry?.createdVia === "spawn" &&
+    isStoredSubagentEnvelopeSession({ sessionKey, cfg: opts?.cfg, store: opts?.store, entry })
   );
+}
+
+export function visibleParentInputProvenance(
+  sourceSessionKey: string | undefined,
+  targetSessionKey: string,
+  entry: SessionCapabilityEntry | undefined,
+): Pick<InputProvenance, "sourceRelation"> {
+  return sourceSessionKey &&
+    entry?.spawnedBy === sourceSessionKey &&
+    isVisibleSpawnedSession(targetSessionKey, { entry })
+    ? { sourceRelation: "parent" }
+    : {};
 }
 
 /**
@@ -336,7 +356,7 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
     delegatedToolPolicy,
     ...(entry.inheritedToolPolicySource === "sender"
-      ? { inheritedToolPolicySource: "sender" as const }
+      ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
       : {}),
   };
 }

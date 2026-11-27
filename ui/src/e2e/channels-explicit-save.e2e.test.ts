@@ -2,10 +2,10 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildChannelWizardMocks } from "../../../scripts/control-ui-mock-channels.ts";
 import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
+import { answerConfirmModal } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
-  waitForConfirmModal,
 } from "../test-helpers/control-ui-e2e.ts";
 import { configSchema, objectSchema } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -96,13 +96,7 @@ async function openChannels(page: Page, current: Record<string, unknown> = snaps
 
 /** Answers the unsaved-changes prompt; the dialog behind it has its own Discard and Save. */
 async function choose(page: Page, name: "Keep editing" | "Discard" | "Save") {
-  const prompt = await waitForConfirmModal(
-    page,
-    page.locator("openclaw-modal-dialog").filter({
-      has: page.locator('dialog[open][aria-label="Unsaved changes"]'),
-    }),
-  );
-  await prompt.getByRole("button", { name, exact: true }).click();
+  await answerConfirmModal(page, /^Save changes to /u, name);
 }
 
 suite.define(() => {
@@ -121,6 +115,13 @@ suite.define(() => {
       expect(await writes()).toBe(0);
 
       await detail.getByRole("button", { name: "Close", exact: true }).click();
+      const confirmation = page.getByRole("dialog", {
+        name: "Save changes to Telegram?",
+        exact: true,
+      });
+      await expect
+        .poll(() => confirmation.textContent())
+        .toContain("Your changes to Telegram aren’t saved. Discarding removes them.");
       await choose(page, "Keep editing");
       expect(await token.inputValue()).toBe(PARTIAL);
       expect(await writes()).toBe(0);

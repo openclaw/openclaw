@@ -125,7 +125,12 @@ export function createLmstudioChatStream(): StreamFn {
       ...model,
       api: "anthropic-messages" as const,
       baseUrl: resolveLmstudioServerBase(model.baseUrl),
-      compat: { allowEmptySignature: true, supportsCacheControlOnTools: false },
+      compat: {
+        allowEmptySignature: true,
+        supportsCacheControlOnTools: false,
+        // LM Studio counts cache reads inside input_tokens.
+        inputTokensIncludeCacheRead: true,
+      },
     };
     return streamWithPayloadPatch(
       underlying,

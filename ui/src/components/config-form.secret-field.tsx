@@ -6,6 +6,8 @@ import type {
   ConfigSecretFields,
   StoredSecretSources,
 } from "../lib/config/config-secret-fields.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import { isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 
@@ -104,7 +106,7 @@ export function createSecretFieldHold(read: () => SecretFieldSource) {
       setSaving(true);
       const result = await secretFields
         .save(path, value)
-        .catch((cause: unknown) => ({ ok: false as const, error: String(cause) }));
+        .catch((cause: unknown) => ({ ok: false as const, error: formatUiError(cause) }));
       setSaving(false);
       if (!result.ok) {
         error = result.error;
@@ -134,29 +136,18 @@ function SecretFieldActions(props: {
   const held = () => props.hold.text() !== undefined;
   return (
     <Show when={held() || props.hold.saved()}>
-      <span class="cfg-secret-actions" data-saved={held() ? undefined : ""}>
-        <span class="cfg-secret-actions__buttons">
+      <span class="cfg-secret-actions state-stack">
+        <span class="cfg-secret-actions__buttons" aria-hidden={held() ? undefined : "true"}>
           <button
             type="button"
-            class="btn btn--sm primary"
+            class="btn btn--sm primary state-stack"
             aria-label={`${t("common.save")}: ${props.label}`}
             aria-busy={props.hold.saving() ? "true" : undefined}
             disabled={!held() || props.disabled || props.hold.saving()}
             onClick={() => props.onSave()}
           >
-            <span
-              class="cfg-secret-actions__label"
-              data-shown={props.hold.saving() ? undefined : ""}
-            >
-              {t("common.save")}
-            </span>
-            <span
-              class="cfg-secret-actions__label"
-              data-shown={props.hold.saving() ? "" : undefined}
-              aria-hidden="true"
-            >
-              {t("common.saving")}
-            </span>
+            <span aria-hidden={props.hold.saving() ? "true" : undefined}>{t("common.save")}</span>
+            <span aria-hidden={props.hold.saving() ? undefined : "true"}>{t("common.saving")}</span>
           </button>
           <button
             type="button"
@@ -191,17 +182,15 @@ function HeldSecretToggle(props: {
   return (
     <Show when={props.hold.text() !== undefined} fallback={props.fallback}>
       <Show when={props.hidesText}>
-        <openclaw-tooltip prop:content={label()}>
-          <button
-            type="button"
-            class="settings-secret__toggle"
-            aria-label={label()}
-            aria-pressed={props.hold.revealed() ? "true" : "false"}
-            onClick={() => props.hold.toggleRevealed()}
-          >
-            <Icon name={props.hold.revealed() ? "eye" : "eyeOff"} />
-          </button>
-        </openclaw-tooltip>
+        <button
+          type="button"
+          class="settings-secret__toggle"
+          aria-label={label()}
+          aria-pressed={props.hold.revealed() ? "true" : "false"}
+          onClick={() => props.hold.toggleRevealed()}
+        >
+          <Icon name={props.hold.revealed() ? "eye" : "eyeOff"} />
+        </button>
       </Show>
     </Show>
   );
@@ -258,6 +247,8 @@ export function secretInputProps(isSecret: () => boolean) {
     get "data-form-type"() {
       return when("other");
     },
+    // handleHeldSecretKey reads this to skip the Enter that commits an IME candidate.
+    onCompositionEnd: recordCompositionEnd,
   };
 }
 
@@ -268,6 +259,9 @@ export function handleHeldSecretKey(
   options: { multiline: boolean; onSave: () => void; onCancel: () => void },
 ): boolean {
   if (hold.text() === undefined || (event.key !== "Enter" && event.key !== "Escape")) {
+    return false;
+  }
+  if (isComposingKeyboardEvent(event)) {
     return false;
   }
   if (event.key === "Escape") {

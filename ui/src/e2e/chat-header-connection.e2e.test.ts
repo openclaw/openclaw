@@ -111,7 +111,10 @@ suite.define(() => {
                 return { x, y, width, height };
               }),
             );
-        const footer = page.locator(".chat-group.user .chat-group-footer__meta").first();
+        // Earlier user rows can leave the virtualizer; keep measuring the cached tail.
+        const footer = page
+          .locator(".chat-pane-cache__pane--visible .chat-group.user .chat-group-footer__meta")
+          .last();
         const footerGeometry = () =>
           footer.evaluate((element) => {
             const box = element.getBoundingClientRect();
@@ -121,6 +124,7 @@ suite.define(() => {
         await header.locator(".chat-pane__workspace-chip").waitFor();
         await header.locator(".session-color-dot").waitFor();
         await header.locator(".chat-header-session-menu__trigger").waitFor();
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
         const settled = await geometry();
         const settledFooter = await footerGeometry();
         const boundary = page.locator(".chat-history-boundary__action").first();
@@ -140,6 +144,7 @@ suite.define(() => {
         await page.reload({ waitUntil: "domcontentloaded" });
         await gateway.waitForRequest("connect");
         await conversation.waitFor();
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
         expect.soft(await boundary.textContent()).toBe(finalBoundary);
         await capture("boot");
         expect(await status.count()).toBe(0);
@@ -150,13 +155,47 @@ suite.define(() => {
         await page.clock.fastForward(2_000);
         await status.waitFor({ state: "visible" });
         expect.soft(await geometry()).toEqual(before);
+        // The indicator floats at the pane's top center, above the transcript, and
+        // the pane notice lane starts below it.
         expect(
           await status.evaluate((element) => {
             const indicator = element.getBoundingClientRect();
-            const bounds = element.closest(".chat-pane__header")!.getBoundingClientRect();
-            return indicator.top >= bounds.top && indicator.bottom <= bounds.bottom;
+            const headerBounds = element.closest(".chat-pane__header")!.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              indicator.left + indicator.width / 2,
+              indicator.top + indicator.height / 2,
+            );
+            const lanes = [
+              ...element
+                .closest(".chat-pane-cache__pane--visible")!
+                .querySelectorAll(
+                  ".chat-gutter-stack, .chat-main__conversation-column > .chat-topbar-notices",
+                ),
+            ].filter((lane) => lane.getClientRects().length > 0);
+            return {
+              belowHeader: indicator.top >= headerBounds.bottom,
+              centerOffset: Math.round(
+                Math.abs(
+                  indicator.left +
+                    indicator.width / 2 -
+                    (headerBounds.left + headerBounds.width / 2),
+                ),
+              ),
+              onTop: hit !== null && element.contains(hit),
+              lanesBelow:
+                lanes.length > 0 &&
+                lanes.every(
+                  (lane) =>
+                    lane.getBoundingClientRect().top +
+                      Number.parseFloat(getComputedStyle(lane).paddingTop) >=
+                    indicator.bottom,
+                ),
+            };
           }),
-        ).toBe(true);
+        ).toEqual({ belowHeader: true, centerOffset: 0, onTop: true, lanesBelow: true });
+        expect(await status.locator(".chat-pane__connection-state").textContent()).toMatch(
+          / · Saved conversation$/,
+        );
         await capture("slow");
         await gateway.resolveDeferred("connect");
         await status.waitFor({ state: "hidden" });

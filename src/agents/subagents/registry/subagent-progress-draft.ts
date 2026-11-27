@@ -2,9 +2,13 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ProgressContinuationDraft } from "../../../channels/progress-continuation.js";
 import { onAgentEventForRun, type AgentEventPayload } from "../../../infra/agent-events.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import { formatSubagentProgressReference } from "../../agent-activity-presentation.js";
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
+import { isSubagentDeliveryClosed } from "./subagent-delivery-state.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { latestSubagentRun } from "./subagent-run-generation.js";
 
 type ProgressItem = Parameters<ProgressContinuationDraft["push"]>[0];
@@ -36,11 +40,7 @@ const taskId = (entry: SubagentRunRecord) => entry.taskRunId ?? entry.runId;
  * kill intent can still roll back, so only accepted cancellation ends the debt.
  */
 function owesCompletion(entry: SubagentRunRecord | undefined): entry is SubagentRunRecord {
-  return (
-    entry?.requesterSettleWake !== undefined &&
-    entry.suppressCompletionDelivery !== true &&
-    entry.killReconciliation?.suppressTaskDelivery !== true
-  );
+  return entry?.requesterSettleWake !== undefined && !isSubagentDeliveryClosed(entry);
 }
 
 /** Steering and resumed yields replace a task's execution under the same task id. */
@@ -81,13 +81,18 @@ function projectActivity(event: AgentEventPayload, itemId: string): ProgressItem
 }
 
 function projectChild(entry: SubagentRunRecord): ProgressItem {
-  const paused = entry.pauseReason === "sessions_yield";
+  const paused = isSubagentPausedByYield(entry);
   const ended = entry.execution.status === "terminal" && !paused;
   const outcome = ended ? entry.execution.outcome?.status : undefined;
   return {
     itemId: taskId(entry),
     kind: "subagent",
-    title: truncateUtf16Safe(entry.label ?? entry.taskName ?? "Delegated work", 120),
+    title: [
+      truncateUtf16Safe(entry.label ?? entry.taskName ?? "Subagent", 120),
+      formatSubagentProgressReference(entry.childSessionKey),
+    ]
+      .filter(Boolean)
+      .join(" "),
     phase: ended ? "end" : "update",
     status:
       outcome === "ok"
@@ -185,8 +190,7 @@ export function adoptSubagentProgressDraft(
     entries.some(
       (entry) =>
         liveByTask.has(taskId(entry)) ||
-        entry.killIntent ||
-        entry.killReconciliation ||
+        hasSubagentKill(entry) ||
         // A wake that already started cannot report a re-yield to this draft.
         entry.requesterSettleWake?.status === "dispatching",
     )

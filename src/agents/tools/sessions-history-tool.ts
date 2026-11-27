@@ -1,6 +1,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
+import { ArrayOptions, ObjectOptions } from "typebox/type";
 import {
   ChatHistoryParamsSchema,
   ChatPendingInputsPageSchema,
@@ -11,7 +12,7 @@ import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import { requesterProfileSchema } from "../schema/typebox.js";
@@ -85,7 +86,23 @@ const SessionsHistoryOutputSchema = Type.Union([
       hasMore: Type.Optional(Type.Boolean()),
       totalMessages: Type.Optional(Type.Number()),
       windowReset: Type.Optional(Type.Boolean()),
-      pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
+      // Writer UI controls are not part of the model-facing history contract.
+      pendingInputs: Type.Optional(
+        Type.Object(
+          {
+            ...ChatPendingInputsPageSchema.properties,
+            items: Type.Array(
+              Type.Omit(
+                ChatPendingInputsPageSchema.properties.items.items,
+                ["steerNow"],
+                ObjectOptions(ChatPendingInputsPageSchema.properties.items.items),
+              ),
+              ArrayOptions(ChatPendingInputsPageSchema.properties.items),
+            ),
+          },
+          { additionalProperties: false },
+        ),
+      ),
     },
     { additionalProperties: false },
   ),
@@ -131,7 +148,6 @@ function sanitizeHistoryMessage(
   for (const field of ["details", "usage", "cost"]) {
     if (field in entry) {
       delete entry[field];
-      truncated = true;
     }
   }
 
@@ -332,6 +348,7 @@ function resolveSessionsHistoryPaginationMetadata(params: {
 export function createSessionsHistoryTool(opts?: {
   agentSessionKey?: string;
   sessionReadScopeKey?: string;
+  sessionReadAgentOnly?: boolean;
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -379,11 +396,12 @@ export function createSessionsHistoryTool(opts?: {
       }).sessionAgentId;
       const normalizedInputKey = sessionKeyParam.trim();
       const isCurrentSession = normalizedInputKey === "current";
-      const isConfiguredMainAlias = isSessionToolMainAlias(normalizedInputKey, { mainKey, alias });
-      const inputStoreOwner =
-        shouldResolveSessionIdInput(sessionKeyParam) && !isConfiguredMainAlias
-          ? { kind: "none" as const }
-          : resolvePersistedSessionStoreOwnerForKey(cfg, sessionKeyParam);
+      const isSessionIdInput =
+        shouldResolveSessionIdInput(sessionKeyParam) &&
+        !isSessionToolMainAlias(normalizedInputKey, { mainKey, alias });
+      const inputStoreOwner = isSessionIdInput
+        ? { kind: "none" as const }
+        : resolvePersistedSessionStoreOwnerForKey(cfg, sessionKeyParam);
       const resolvedSession = await resolveSessionReference({
         action: "history",
         sessionKey: sessionKeyParam,
@@ -391,7 +409,9 @@ export function createSessionsHistoryTool(opts?: {
           ? { agentId: requesterAgentId }
           : inputStoreOwner.kind === "configured"
             ? { agentId: inputStoreOwner.agentId }
-            : {}),
+            : opts?.sessionReadAgentOnly && isSessionIdInput
+              ? { agentId: requesterAgentId }
+              : {}),
         keyAgentId: requesterAgentId,
         alias,
         mainKey,
@@ -438,6 +458,15 @@ export function createSessionsHistoryTool(opts?: {
         resolvedAgentId: visibleSession.agentId,
         requesterAgentId,
       });
+      // An agent-qualified key already names its owner; repeating the same id
+      // only re-gates the read against the native roster and rejects configured
+      // ACP store owners (#164847).
+      const resolvedKeyAgentId = parseAgentSessionKey(resolvedKey)?.agentId;
+      const historyAgentId =
+        resolvedKeyAgentId &&
+        normalizeAgentId(resolvedKeyAgentId) === normalizeAgentId(targetAgentId)
+          ? undefined
+          : targetAgentId;
 
       const authorizationKey =
         targetAgentId !== requesterAgentId && !parseAgentSessionKey(resolvedKey)
@@ -448,6 +477,7 @@ export function createSessionsHistoryTool(opts?: {
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
+        sessionReadAgentOnly: opts?.sessionReadAgentOnly,
         mainSessionKey,
         authorizationTargetSessionKey: authorizationKey,
         targetAgentId,
@@ -480,7 +510,7 @@ export function createSessionsHistoryTool(opts?: {
             method: "chat.history",
             params: {
               sessionKey: resolvedKey,
-              agentId: targetAgentId,
+              ...(historyAgentId === undefined ? {} : { agentId: historyAgentId }),
               limit,
               ...(paginationOffset !== undefined ? { offset: paginationOffset } : {}),
               ...(pendingBefore !== undefined ? { pendingBefore } : {}),

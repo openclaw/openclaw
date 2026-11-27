@@ -247,7 +247,13 @@ export function runPluginNpmCiWithRetry(
 
   let result: SpawnResult | undefined;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    result = spawn(args, { ...options, timeout: timeoutMs });
+    // On Linux, npm can wait for a blocked fetch after SIGTERM and keep spawnSync stuck.
+    // Enforce the existing deadline; the timed-out attempt's staging tree is removed below.
+    result = spawn(args, {
+      ...options,
+      timeout: timeoutMs,
+      ...(process.platform === "linux" ? { killSignal: "SIGKILL" } : {}),
+    });
     if (!result) {
       throw new Error(`npm ci returned no result for ${pluginDir}`);
     }
@@ -650,11 +656,15 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
   try {
     const artifacts: NpmLocalPackageArtifact[] = dependencies.map(
       ({ name, version, packageDir: source }) => {
+        // npm's tar writer cannot pack duplicate inodes from pnpm's hardlink store.
+        const packSource = path.join(outputDir, name);
+        fs.cpSync(source, packSource, { recursive: true });
         const result = spawnNpmSync(
           [
             "pack",
-            source,
+            packSource,
             "--json",
+            "--loglevel=verbose",
             "--ignore-scripts",
             "--workspaces=false",
             "--pack-destination",
@@ -664,14 +674,16 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
             cwd: packageDir,
             env: process.env,
             encoding: "utf8",
-            stdio: ["ignore", "pipe", "inherit"],
+            stdio: ["ignore", "pipe", "pipe"],
           },
         );
         if (result.error) {
           throw result.error;
         }
         if (result.status !== 0) {
-          throw new Error(`packing patched runtime dependency failed: ${name}@${version}`);
+          throw new Error(
+            `packing patched runtime dependency failed: ${name}@${version}\n${String(result.stdout ?? "")}${String(result.stderr ?? "")}`,
+          );
         }
         const output = JSON.parse(String(result.stdout));
         const entries = Array.isArray(output) ? output : Object.values(output);
@@ -711,10 +723,16 @@ function shouldBundleDependencies(
   patchedDependencies: WorkspacePatchedDependency[] = [],
 ) {
   if (packageJson?.openclaw?.release?.bundleRuntimeDependencies === false) {
-    if (patchedDependencies.length > 0) {
+    const configured = packageJson.bundleDependencies ?? packageJson.bundledDependencies;
+    if (
+      patchedDependencies.some(
+        ({ name }) => !Array.isArray(configured) || !configured.includes(name),
+      )
+    ) {
       throw new Error("patched runtime dependencies conflict with bundleRuntimeDependencies=false");
     }
-    return false;
+    // Explicit patch names may ship without opting native-heavy packages into the full closure.
+    return patchedDependencies.length > 0;
   }
   return patchedDependencies.length > 0 || value === true || value === "1" || value === "true";
 }
@@ -946,18 +964,24 @@ function readGeneratedBundledChannelConfigEntries(source: string): unknown {
     }
   }
 
-  const compactMatch = source.match(
-    /const RAW_BUNDLED_CHANNEL_CONFIG_METADATA = \[([\s\S]*?)\]\.join\(""\);/u,
-  );
-  if (!compactMatch?.[1]) {
+  const rowsMatch = source.match(/^const loadPackedChannelRows = \(\) => (\[[\s\S]*?^\]);/mu);
+  const packedMatch =
+    rowsMatch ??
+    source.match(/const RAW_BUNDLED_CHANNEL_CONFIG_METADATA = (\[[\s\S]*?\])\.join\(""\);/u);
+  if (!packedMatch?.[1]) {
     return undefined;
   }
   try {
-    const chunks = JSON5.parse(`[${compactMatch[1]}]`);
-    if (!Array.isArray(chunks) || chunks.some((chunk) => typeof chunk !== "string")) {
+    const packed: unknown = JSON5.parse(packedMatch[1]);
+    const rows = rowsMatch ? packed : [packed];
+    if (
+      !Array.isArray(rows) ||
+      !rows.every((row) => Array.isArray(row) && row.every((chunk) => typeof chunk === "string"))
+    ) {
       return undefined;
     }
-    return JSON.parse(chunks.join(""));
+    const entries = rows.map((row) => JSON.parse(row.join("")));
+    return rowsMatch ? entries : entries[0];
   } catch {
     return undefined;
   }

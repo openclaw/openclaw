@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-bash-tools.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import { finalizeAgentToolAvailability } from "../../agents/agent-tool-availability.js";
+import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
 import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { resolveNodeExecutionTarget } from "../../agents/bash-tools.exec-host-node-phases.js";
@@ -11,6 +12,13 @@ import * as conversationPolicy from "../../agents/conversation-capability-profil
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { createInstalledSkillTools } from "../../agents/tools/installed-skill-tools.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticSkillUsedEvent,
+} from "../../infra/diagnostic-events.js";
+import { registerDiagnosticTracePropagationBridge } from "../../infra/diagnostic-trace-propagation.js";
+import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.js";
 import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
@@ -130,6 +138,27 @@ describe("resolveWorkerToolAuthority", () => {
       expect(await authority(overrides)).toEqual(expect.arrayContaining(["exec", "process"]));
     },
   );
+  it("exports the turn model's byProvider exec ceiling to worker exec authority", async () => {
+    const byProvider = (key: string) =>
+      ({
+        config: {
+          tools: {
+            exec: { host: "gateway", mode: "full" },
+            byProvider: { [key]: { exec: { mode: "auto" } } },
+          },
+        },
+      }) as TurnOverrides;
+    expect((await resolvedAuthority(byProvider("openai/gpt-test"))).exec).toMatchObject({
+      mode: "auto",
+      security: "allowlist",
+      ask: "on-miss",
+    });
+    expect((await resolvedAuthority(byProvider("openai/other"))).exec).toMatchObject({
+      mode: "full",
+      security: "full",
+    });
+  });
+
   it("refuses an existing delegated session before exporting worker tool authority", async () => {
     const sessionKey = "agent:main:dashboard:delegated";
     const config = {
@@ -189,22 +218,50 @@ describe("resolveWorkerToolAuthority", () => {
     const tools = createInstalledSkillTools(resolved.installedSkills);
     finalizeAgentToolAvailability(tools);
     const search = tools.find((tool) => tool.name === "skills_search")!;
-    const read = tools.find((tool) => tool.name === "skills_read")!;
-    expect((await search.execute("search", { query: "canary" })).details).toMatchObject({
-      skills: [{ name: skill.name }],
-    });
-    expect((await read.execute("read", { name: skill.name })).details).toEqual({
-      name: skill.name,
-      location: skill.filePath,
-      content: skill.readContent,
-    });
-    current = false;
-    await expect(read.execute("read-closed", { name: skill.name })).rejects.toThrow(
-      "source authority closed",
+    const runId = "worker-forwarded-skill";
+    const read = wrapToolWithBeforeToolCallHook(
+      tools.find((tool) => tool.name === "skills_read")!,
+      {
+        runId,
+        workspaceDir: "/tmp/workspace",
+        skillsSnapshot: { prompt: "", skills: [{ name: skill.name }], discoverySkills: [skill] },
+      },
     );
-    await expect(search.execute("search-closed", { query: "canary" })).rejects.toThrow(
-      "source authority closed",
-    );
+    const events: DiagnosticSkillUsedEvent[] = [];
+    const stopEvents = onInternalDiagnosticEvent((event) => {
+      if (event.type === "skill.used") {
+        events.push(event);
+      }
+    });
+    const stopTracing = registerDiagnosticTracePropagationBridge({
+      resolveTraceContext: () => undefined,
+      prepareEvent: () => {},
+    });
+    try {
+      expect((await search.execute("search", { query: "canary" })).details).toMatchObject({
+        skills: [{ name: skill.name }],
+      });
+      expect((await read.execute("read", { name: skill.name })).details).toEqual({
+        name: skill.name,
+        location: skill.filePath,
+        content: skill.readContent,
+      });
+      await waitForDiagnosticEventsDrained();
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ skillName: skill.name, activation: "read" });
+      expect(events[0]).not.toHaveProperty("skillFingerprint");
+      expect(consumeRunSkillUsage(runId)).toMatchObject([{ name: skill.name, activation: "read" }]);
+      current = false;
+      await expect(read.execute("read-closed", { name: skill.name })).rejects.toThrow(
+        "source authority closed",
+      );
+      await expect(search.execute("search-closed", { query: "canary" })).rejects.toThrow(
+        "source authority closed",
+      );
+    } finally {
+      stopTracing();
+      stopEvents();
+    }
   });
 
   it.each([

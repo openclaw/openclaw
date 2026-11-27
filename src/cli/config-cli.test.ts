@@ -22,6 +22,7 @@ import { registerConfigJsonOutputTests } from "./config-cli.json-output.test-sup
 import { registerConfigMutationSchemaTests } from "./config-cli.mutation-schema.test-support.js";
 import {
   readConfigCliSnapshotWithMetadata,
+  replaceConfigCliSnapshot,
   type ConfigCliSnapshotReader,
   type ConfigCliWriter,
 } from "./config-cli.snapshot.test-support.js";
@@ -96,6 +97,7 @@ const mockLoadChannelSecretContractApi = vi.hoisted(() =>
   }),
 );
 
+// mock-isolation: Exercise CLI mutations against synthetic snapshots without filesystem persistence.
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
     mockReadConfigFileSnapshot(...args),
@@ -107,18 +109,8 @@ vi.mock("../config/config.js", () => ({
     writeOptions: {},
   }),
   writeConfigFile: (...args: Parameters<ConfigCliWriter>) => mockWriteConfigFile(...args),
-  replaceConfigFile: (params: {
-    sourceConfig: OpenClawConfig;
-    writeOptions?: {
-      auditOrigin?: "cli";
-      unsetPaths?: string[][];
-      explicitSetPaths?: string[][];
-      assertConfigPathForWrite?: () => void;
-    };
-  }) => {
-    params.writeOptions?.assertConfigPathForWrite?.();
-    return mockWriteConfigFile(params.sourceConfig, params.writeOptions);
-  },
+  replaceConfigFile: (params: Parameters<typeof replaceConfigCliSnapshot>[1]) =>
+    replaceConfigCliSnapshot(mockWriteConfigFile, params),
 }));
 
 vi.mock("../secrets/resolve.js", () => ({

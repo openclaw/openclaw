@@ -112,7 +112,9 @@ describe("mcp-app-view localization", () => {
       await view.updateComplete;
       await vi.advanceTimersByTimeAsync(15_000);
       await view.updateComplete;
-      expect(view.querySelector(".error")?.textContent).toContain("timed out");
+      expect(view.querySelector(".error")?.textContent).toContain(
+        "This app took too long to load. Try again.",
+      );
       view.querySelector<HTMLButtonElement>(".error button")!.click();
       await vi.advanceTimersByTimeAsync(0);
       await view.updateComplete;
@@ -137,7 +139,7 @@ describe("mcp-app-view localization", () => {
     expect(view.querySelector("iframe")).toBe(frame);
     expect(transport.close).not.toHaveBeenCalled();
     await expect(bridge.updateModelContextHandler!({ structuredContent: {} })).rejects.toThrow(
-      "gateway unavailable",
+      "Couldn’t connect this app. Reconnect and try again.",
     );
     pendingContext.resolve({ state: null });
     expect(await rejected).toMatchObject({ name: "AbortError" });
@@ -245,7 +247,7 @@ describe("mcp-app-view localization", () => {
     await view.updateComplete;
     const dialog = confirmation(view);
     expect(dialog!.textContent).toContain("Parts library");
-    expect(dialog!.textContent).toContain("Send this message to the assistant?");
+    expect(dialog!.textContent).toContain("Send this message to the agent?");
     const previewElement = [...dialog!.querySelectorAll<HTMLElement>("[title]")].find(
       (element) => element.title === preview,
     )!;
@@ -471,25 +473,6 @@ describe("mcp-app-view localization", () => {
     );
   });
 
-  it("forwards update-model-context through the bound Gateway view", async () => {
-    const { bridge, request } = await mountBridge(`view-context-${crypto.randomUUID()}`);
-    expect(bridge.capabilities).toMatchObject({ updateModelContext: { text: {} } });
-    await expect(
-      bridge.updateModelContextHandler?.({
-        content: [{ type: "text", text: "selected item" }],
-      }),
-    ).resolves.toBeDefined();
-    expect(request).toHaveBeenCalledWith(
-      "mcp.app.updateModelContext",
-      {
-        sessionKey: "agent:main:main",
-        viewId: expect.any(String),
-        content: [{ type: "text", text: "selected item" }],
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-  });
-
   it("retains model context when its refresh fails and clears only a confirmed null", async () => {
     const state = {
       updateId: "retained-context",
@@ -510,6 +493,15 @@ describe("mcp-app-view localization", () => {
     request.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error("Context read interrupted"));
     await expect(bridge.updateModelContextHandler!({ content: state.content })).resolves.toEqual(
       {},
+    );
+    expect(request).toHaveBeenCalledWith(
+      "mcp.app.updateModelContext",
+      {
+        sessionKey: "agent:main:main",
+        viewId: "view-context-read-failure",
+        content: state.content,
+      },
+      { signal: expect.any(AbortSignal) },
     );
     expectHost(bridge, { "openai/modelContext": state });
     expect(received).toHaveLength(0);
@@ -706,6 +698,7 @@ describe("mcp-app-view localization", () => {
   it("does not let App parameters replace the mounted session, agent, or view", async () => {
     const viewId = "bound-view";
     const { bridge, request } = await mountBridge(viewId);
+    expect(bridge.capabilities).toMatchObject({ updateModelContext: { text: {} } });
     const hostileAppInput = {
       content: [{ type: "text", text: "context" }],
       sessionKey: "foreign",
@@ -847,7 +840,7 @@ describe("mcp-app-view localization", () => {
       );
       await expect
         .poll(() => view.querySelector(".error")?.textContent)
-        .toContain("MCP App sandbox URL is invalid");
+        .toContain("Couldn’t load this app. Check its URL and try again.");
       expect(view.querySelector("iframe")).toBeNull();
     },
   );

@@ -44,9 +44,9 @@ suite.define(() => {
         await expectBrowser(composer).toBeEnabled();
         const send = main.locator("button.chat-send-btn--send");
         await expectBrowser(send).toBeVisible();
-        await expectBrowser(page.getByText("Applying chat settings", { exact: true })).toHaveCount(
-          0,
-        );
+        await expectBrowser(
+          page.getByText("Applying session settings", { exact: true }),
+        ).toHaveCount(0);
         await expectBrowser(composer).toHaveValue(prompt);
         await expectBrowser(page.locator(".chat-queue__item")).toHaveCount(0);
         await expectBrowser(send).toBeEnabled();

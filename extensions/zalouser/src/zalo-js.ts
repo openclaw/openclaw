@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import {
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -496,6 +497,15 @@ export function normalizeZaloInboundMessage(
     normalizedOwnUserId && quoteOwnerId && quoteOwnerId === normalizedOwnUserId,
   );
   const eventMessage = buildEventMessage(data);
+  const attachmentKind =
+    data.msgType === "share.file"
+      ? "document"
+      : data.msgType === "chat.photo"
+        ? "image"
+        : data.msgType === "chat.video.msg"
+          ? "video"
+          : undefined;
+  const attachmentContent = asOptionalRecord(data.content);
   return {
     threadId,
     isGroup,
@@ -514,6 +524,17 @@ export function normalizeZaloInboundMessage(
     quotedGlobalMsgId: quotedGlobalMsgId || undefined,
     quotedBody: quotedBody || undefined,
     eventMessage,
+    attachment:
+      attachmentKind && typeof attachmentContent?.href === "string"
+        ? {
+            kind: attachmentKind,
+            url: attachmentContent.href,
+            fileName:
+              attachmentKind === "document"
+                ? normalizeOptionalString(attachmentContent.title)
+                : undefined,
+          }
+        : undefined,
   };
 }
 

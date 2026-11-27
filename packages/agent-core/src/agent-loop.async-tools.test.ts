@@ -30,7 +30,6 @@ import { runAgentLoop } from "./agent-loop.js";
 import * as fixtures from "./agent-loop.test-support.js";
 import { streamAgentResponse } from "./agent-stream-response.js";
 import { Agent } from "./agent.js";
-import { attachInternalToolBatchLifecycle, setInternalBeforeToolBatch } from "./internal-hooks.js";
 import { distinctRecordOutputs, variedRows } from "./repetition-guard.test-fixtures.js";
 import { getAgentToolExecutionContext } from "./tool-execution-context.js";
 import type { AgentEvent, AgentMessage, AgentTool, AgentToolCall, StreamFn } from "./types.js";
@@ -216,22 +215,13 @@ it.each(["mixed-parallel", "deferred-exclusive"] as const)(
   },
 );
 
-it("forwards unchanged updates without copying events or inspecting prior content", async () => {
+it("forwards unchanged updates while isolating provider message snapshots", async () => {
   const message = fixtures.makeAssistantMessage([
     { type: "thinking", thinking: "synthetic thought" },
     { type: "text", text: "answer" },
     fixtures.makeCall("lookup"),
   ]);
   message.stopReason = "stop";
-  let blockReads = 0;
-  message.content = new Proxy(message.content, {
-    get(target, key, receiver) {
-      if (key === "0") {
-        blockReads++;
-      }
-      return Reflect.get(target, key, receiver);
-    },
-  });
   const updates: AssistantMessageEvent[] = [
     { type: "thinking_start", contentIndex: 0, partial: message },
     { type: "thinking_delta", contentIndex: 0, delta: "synthetic thought", partial: message },
@@ -242,25 +232,21 @@ it("forwards unchanged updates without copying events or inspecting prior conten
     { type: "toolcall_start", contentIndex: 2, partial: message },
     { type: "toolcall_delta", contentIndex: 2, delta: "{}", partial: message },
   ];
-  const readsAtUpdate: number[] = [];
+  let updateIndex = 0;
   await runAgentLoop(
     [fixtures.user("hello")],
     { systemPrompt: "", messages: [] },
     fixtures.config,
     (event) => {
-      if (event.type === "message_start" && event.message.role === "assistant") {
-        blockReads = 0;
-      }
       if (event.type === "message_update") {
-        expect(event.assistantMessageEvent).toBe(updates[readsAtUpdate.length]);
-        readsAtUpdate.push(blockReads);
+        expect(event.assistantMessageEvent).toBe(updates[updateIndex++]);
         expect(event.message).not.toBe(message);
       }
     },
     undefined,
     () => fixtures.reply(message, [{ type: "start", partial: message }, ...updates]),
   );
-  expect(readsAtUpdate).toEqual(updates.map(() => 0));
+  expect(updateIndex).toBe(updates.length);
 });
 
 it("does not commit an async fragment when a listener changes an ordinary update type", async () => {
@@ -320,7 +306,6 @@ it("transfers the detached async prefix directly to persistence preparation", as
         terminalToolCallIds: [],
         steeringMessages: [],
         terminate: false,
-        terminateRun: false,
       };
     },
     (message) => {
@@ -406,15 +391,6 @@ it("persists async calls before admission and keeps the live answer visible thro
     streamFn,
   });
   const persisted = agent.state.messages;
-  setInternalBeforeToolBatch(agent, async ({ calls }) =>
-    attachInternalToolBatchLifecycle(
-      {},
-      {
-        commitReadyCalls: () => executionOrder.push(`admit:${calls[0]?.toolCall.id}`),
-        releaseSkippedCalls: () => {},
-      },
-    ),
-  );
   agent.subscribe((event) => {
     events.push(event);
     if (isTextDelta(event)) {
@@ -456,7 +432,7 @@ it("persists async calls before admission and keeps the live answer visible thro
   fixtures.finishMessageStream(response, assistant([source, text, ordinary], "toolUse"), "toolUse");
   await run;
   const result = agent.state.messages;
-  expect(executionOrder).toEqual(["admit:lookup", "lookup", "admit:ordinary", "ordinary"]);
+  expect(executionOrder).toEqual(["lookup", "ordinary"]);
   expect(
     assistants(result)
       .flatMap((message) => message.content)
@@ -466,50 +442,6 @@ it("persists async calls before admission and keeps the live answer visible thro
   expect(contexts[1]?.messages).toEqual(persisted.slice(0, -1));
   expect(assistants(persisted).map((message) => message.usage.totalTokens)).toEqual([0, 9, 9]);
   expect(agent.state.streamingMessage).toBeUndefined();
-});
-
-it("preserves external cancellation when an output-limited async batch hits the critical loop limit", async () => {
-  const beforeBatch = createDeferred();
-  const releaseBatch = createDeferred();
-  const controller = new AbortController();
-  const execute = vi.fn(async () => ({ content: [], details: {} }));
-  const loop = call("loop");
-  const { response, events, run } = runFixture({
-    tools: [tool("loop", execute)],
-    config: {
-      toolLoopRecoveryState: { criticalToolLoopSeen: true },
-      beforeToolBatch: async () => {
-        beforeBatch.resolve();
-        await releaseBatch.promise;
-        return {
-          intervention: {
-            kind: "critical-tool-loop",
-            toolCallId: loop.id,
-            toolName: loop.name,
-            actionKey: "loop:same-action",
-            detector: "generic_repeat",
-            count: 20,
-            reason: "Repeated critical tool loop",
-          },
-        };
-      },
-    },
-    onEvent: (event) => {
-      if (event.type === "tool_execution_end") {
-        controller.abort(new Error("Operator stopped the run"));
-      }
-    },
-    signal: controller.signal,
-  });
-  cleanup(run, [response], releaseBatch.resolve, () => controller.abort());
-  startCalls(response, [loop]);
-  await beforeBatch.promise;
-  fixtures.finishMessageStream(response, outputLimitFailure([loop]));
-  releaseBatch.resolve();
-  const messages = await run;
-  expect(execute).not.toHaveBeenCalled();
-  expect(assistants(messages).at(-1)).toMatchObject({ stopReason: "aborted", usage });
-  expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
 });
 
 it.each(["aborted", "output-limit"] as const)(

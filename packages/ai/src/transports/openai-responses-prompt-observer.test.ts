@@ -1,5 +1,12 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ResponseInput } from "openai/resources/responses/responses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../../../../src/shared/immutable-data.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
 import {
@@ -15,9 +22,18 @@ import {
 } from "../providers/openai-chatgpt-responses.test-helpers.js";
 import { streamOpenAIResponses } from "../providers/openai-responses.js";
 import { cleanupSessionResources } from "../session-resources.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
-import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
+import {
+  prepareSystemPrompt,
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+} from "../utils/system-prompt-cache-boundary.js";
+import {
+  recordResponsesContextUsage,
+  resolveResponsesContextUsageBoundary,
+} from "./openai-responses-context-usage.js";
+import { responsesContinuationPrefixFingerprint } from "./openai-responses-continuation.js";
+import { OPENAI_RESPONSES_TOOL_CALL_PROVIDERS } from "./openai-responses-contracts.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
+import { convertProviderResponsesMessages } from "./openai-responses-replay-messages-internal.js";
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sdkState = vi.hoisted(() => ({
@@ -53,7 +69,7 @@ const nativeModel = () =>
   });
 const invalidEncryptedContent = () =>
   Object.assign(new Error("invalid encrypted content"), { code: "invalid_encrypted_content" });
-const identity = { sessionId: "observer-session", authProfileId: "observer-profile" };
+const identity = { sessionId: "observer-session" };
 const sdkOptions = { apiKey: "test-key", ...identity };
 function compactionCase() {
   const model = fixtures.createModel();
@@ -330,6 +346,193 @@ describe("OpenAI Responses provider prompt observer", () => {
       expect(rewritten.boundary).toBeUndefined();
     },
   );
+
+  it("checkpoints tool history behind embedded instructions across completed responses", async () => {
+    configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
+    const model = fixtures.createModel({ reasoning: true, compat: { cachesInstructions: false } });
+    const context = fixtures.createOrphanedToolOutputCompactionContext(model, identity);
+    const toolOutput = context.messages.find((message) => message.role === "toolResult");
+    if (!toolOutput) {
+      throw new Error("missing historical tool result");
+    }
+    const toolText = "historical tool result";
+    toolOutput.content = [{ type: "text", text: toolText }];
+    context.messages = context.messages.map(freezeJsonSnapshot);
+    context.preparedSystemPrompt = prepareSystemPrompt(context.systemPrompt ?? "");
+    sdkState.outcomes = [fixtures.completedSdkResponse("resp_first")];
+    const first = await managedResult(model, context, { ...sdkOptions, transport: "sse" });
+    expect(first).toHaveProperty(
+      "openclawResponsesInputReplay.contextUsage.prefixHash",
+      "12447e970cae30a6cded1a6b2aef05da7f5f411355e2734e3838ea7d12ecda58",
+    );
+
+    context.messages.push(freezeJsonSnapshot(fixtures.userMessage("next question", 5)));
+    sdkState.outcomes = [fixtures.completedSdkResponse("resp_second")];
+    const stringify = vi.spyOn(JSON, "stringify");
+    const second = await managedResult(model, context, { ...sdkOptions, transport: "sse" });
+    const encodedToolText = stringify.mock.calls.filter(([value]) => value === toolText).length;
+    stringify.mockRestore();
+    expect(second).toHaveProperty(
+      "openclawResponsesInputReplay.contextUsage.prefixHash",
+      "ef878aea05c13d5eea96edc24246ba04e008aa28de9db69d804546feacfa0e91",
+    );
+    expect(encodedToolText).toBe(0);
+  });
+
+  it("isolates edits to embedded instructions from later requests", async () => {
+    configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
+    const model = fixtures.createModel({ reasoning: true, compat: { cachesInstructions: false } });
+    const context = fixtures.createContext("Original instructions");
+    context.preparedSystemPrompt = prepareSystemPrompt("Original instructions");
+    const options = { ...sdkOptions, transport: "sse" };
+    sdkState.outcomes = ["first", "hook", "last"].map((id) => fixtures.completedSdkResponse(id));
+    await managedResult(model, context, options);
+    await managedResult(model, context, {
+      ...options,
+      onPayload: (payload: { input: Array<{ content: Array<{ text: string }> }> }) => {
+        const instruction = payload.input[0]?.content[0];
+        if (!instruction) {
+          throw new Error("missing embedded instructions");
+        }
+        instruction.text = "Hook instructions";
+      },
+    });
+    await managedResult(model, context, options);
+    expect(sdkState.requests.map((_, index) => JSON.parse(requestInput(index))[0])).toEqual([
+      fixtures.inputMessage("Original instructions", "developer"),
+      fixtures.inputMessage("Hook instructions", "developer"),
+      fixtures.inputMessage("Original instructions", "developer"),
+    ]);
+  });
+
+  it("preserves persisted context hashes across reasoning edits, metadata and frozen replay", () => {
+    configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
+    const model = fixtures.createModel();
+    const checkpoint = { type: "compaction" as const, encrypted_content: "checkpoint" };
+    const reasoning = {
+      type: "reasoning" as const,
+      id: "rs_history",
+      status: "completed" as const,
+      summary: [{ type: "summary_text" as const, text: "summary\nwith unicode 🦞" }],
+      encrypted_content: "history-ciphertext",
+    };
+    const append = { ...reasoning, id: "rs_append", encrypted_content: "appended-ciphertext" };
+    const record = (input: ResponseInput, outputReasoning = false, reset?: () => void) => {
+      reset?.();
+      const message = fixtures.createAssistant(
+        model,
+        outputReasoning
+          ? [
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: JSON.stringify(append),
+              },
+            ]
+          : [],
+      );
+      message.usage.contextUsage = { state: "available", promptTokens: 5, totalTokens: 8 };
+      const output = convertProviderResponsesMessages(
+        model,
+        { messages: [message] },
+        OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
+        { ...identity, includeSystemPrompt: false },
+      );
+      const stripped = [...input, ...output].flatMap((item) => {
+        if (!isRecord(item) || item.type !== "reasoning") {
+          return [];
+        }
+        const { id: _id, status: _status, ...content } = item;
+        return [content];
+      });
+      const expected = sha256StableValue({
+        prefix: responsesContinuationPrefixFingerprint(input, output),
+        reasoning: stripped,
+      }).digest;
+      reset?.();
+      recordResponsesContextUsage(message, model, identity, { input }, output, "provider");
+      expect(message).toHaveProperty(
+        "openclawResponsesInputReplay.contextUsage.prefixHash",
+        expected,
+      );
+      return expected;
+    };
+    const input = [checkpoint, reasoning];
+    const original = record(input);
+    const withoutMetadata = { ...reasoning };
+    Reflect.deleteProperty(withoutMetadata, "id");
+    Reflect.deleteProperty(withoutMetadata, "status");
+    expect(record([checkpoint, withoutMetadata])).toBe(original);
+    expect(record(input, true)).not.toBe(original);
+    for (const outputReasoning of [false, true]) {
+      const frozen = freezeJsonSnapshot(structuredClone(input));
+      expect(record(frozen, outputReasoning)).toBe(record(input, outputReasoning));
+      expect(record([checkpoint, append], outputReasoning)).not.toBe(original);
+      expect(record(frozen, outputReasoning)).toBe(record(input, outputReasoning));
+    }
+    reasoning.encrypted_content = "edited-ciphertext";
+    expect(record(input)).not.toBe(original);
+    expect(record([reasoning, checkpoint])).not.toBe(record(input));
+    let phase = "before";
+    const opaque = {
+      ...fixtures.inputMessage("hook"),
+      toJSON() {
+        phase = "after";
+        return fixtures.inputMessage("hook");
+      },
+    };
+    record(
+      [
+        checkpoint,
+        {
+          type: "reasoning",
+          id: "rs_hook",
+          get encrypted_content() {
+            return phase;
+          },
+          summary: [
+            {
+              type: "summary_text",
+              get text() {
+                return phase;
+              },
+            },
+          ],
+        },
+        opaque,
+      ],
+      false,
+      () => {
+        phase = "before";
+      },
+    );
+  });
+
+  it("does not re-encode frozen reasoning across interleaved context-usage recordings", () => {
+    configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
+    const model = fixtures.createModel();
+    const ciphertexts = ["first-encrypted-reasoning", "second-encrypted-reasoning"];
+    const histories = ciphertexts.map((encrypted_content) =>
+      freezeJsonSnapshot([
+        { type: "compaction" as const, encrypted_content: "checkpoint" },
+        { type: "reasoning" as const, id: "rs_frozen", summary: [], encrypted_content },
+      ]),
+    );
+    const record = (input: ResponseInput) => {
+      const message = fixtures.createAssistant(model);
+      message.usage.contextUsage = { state: "available", promptTokens: 5, totalTokens: 8 };
+      recordResponsesContextUsage(message, model, identity, { input }, [], "provider");
+    };
+    histories.forEach(record);
+    const stringify = vi.spyOn(JSON, "stringify");
+    histories.forEach(record);
+    histories.toReversed().forEach(record);
+    const encodedCiphertexts = () =>
+      stringify.mock.calls.filter(([value]) => ciphertexts.includes(value));
+    expect(encodedCiphertexts()).toHaveLength(0);
+    histories.map((input) => structuredClone(input)).forEach(record);
+    expect(encodedCiphertexts()).toHaveLength(2);
+  });
 
   it("binds measured usage to terminal reasoning when its ciphertext changes", async () => {
     const { model, context } = compactionCase();

@@ -32,18 +32,23 @@ const subagent = (runId: string) =>
 const noop = () => {};
 
 function fixture() {
+  const cfg = {};
+  let epoch = 0;
   const context = createSessionRowProjectionContext(
     createSubagentSessionListReadView({ env: process.env }),
+    { state: () => ({ cfg, epoch, disposed: false }), prepareRegistry: () => undefined },
   );
   contexts.push(context);
-  const prepare = (epoch: number) =>
+  const prepare = (nextEpoch: number) => {
+    epoch = nextEpoch;
     context.prepare(
       epoch,
-      {},
+      cfg,
       () => [],
       noop,
       () => undefined,
     );
+  };
   prepare(0);
   return { context, prepare };
 }
@@ -125,9 +130,7 @@ it("patches list facts after keyed publications without rebuilding for progress-
   subagentRuns.set(run.runId, run);
   subagentRuns.commitOwnership(run);
   prepare(101);
-  expect(context.current.subagentRuns.getDisplaySubagentRun(child)?.execution.status).toBe(
-    "terminal",
-  );
+  expect(context.current.subagentRuns.getSessionDisplayFacts(child)?.status).toBe("done");
   expect(context.current.subagentRuns.countActiveDescendantRuns(parent)).toBe(0);
   expect(context.materializedRevisions.subagentRevision).toBe(initialRevision);
   expect(builds).toHaveBeenCalledTimes(1);
@@ -135,7 +138,7 @@ it("patches list facts after keyed publications without rebuilding for progress-
   subagentRuns.delete(run.runId);
   subagentRuns.confirmRetirement(run);
   prepare(102);
-  expect(context.current.subagentRuns.getDisplaySubagentRun(child)).toBeNull();
+  expect(context.current.subagentRuns.getSessionDisplayFacts(child)).toBeNull();
   expect(context.current.subagentRuns.runsByControllerSessionKey.has(parent)).toBe(false);
   expect(builds).toHaveBeenCalledTimes(1);
 

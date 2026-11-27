@@ -6,7 +6,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100vh;
   height: 100dvh;
   max-height: 100%;
   overflow-y: auto;
@@ -98,6 +97,12 @@
   font-size: 14px;
   line-height: 1.5;
   color: var(--muted);
+}
+
+/* Keep wrapped status text on its first line's edge, beside the spinner. */
+.login-gate__progress {
+  display: flex;
+  align-items: baseline;
 }
 
 .login-gate__hero {

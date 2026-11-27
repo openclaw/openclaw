@@ -33,7 +33,10 @@ it("offers safe community links and dismisses permanently with the keyboard", as
   const links = [...view.container.querySelectorAll<HTMLAnchorElement>(".invite__cta")];
   expect(links.map((link) => [link.getAttribute("aria-label"), link.href])).toEqual([
     ["Join the OpenClaw community on Reddit", "https://www.reddit.com/r/openclaw/"],
-    ["Join the OpenClaw community on Discord", "https://discord.gg/clawd"],
+    [
+      "Join the OpenClaw community on Discord",
+      "https://openclaw.ai/discord?from=openclaw-app-community",
+    ],
     ["Follow OpenClaw on X", "https://x.com/openclaw"],
   ]);
   for (const link of links) {

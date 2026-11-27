@@ -5,6 +5,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import {
@@ -23,6 +25,27 @@ import {
 import { writeProbeMcpServer } from "./mcp-cli.test-support.js";
 import { runCliWithExitFinalization } from "./one-shot-exit.js";
 
+const afterConfigRead = vi.hoisted(() => ({
+  once: undefined as (() => Promise<void>) | undefined,
+}));
+
+// mock-isolation: Lands a competing edit between this command's read and its write.
+vi.mock("../config/mcp-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/mcp-config.js")>();
+  return {
+    ...actual,
+    listConfiguredMcpServers: async (
+      ...args: Parameters<typeof actual.listConfiguredMcpServers>
+    ) => {
+      const loaded = await actual.listConfiguredMcpServers(...args);
+      const competing = afterConfigRead.once;
+      afterConfigRead.once = undefined;
+      await competing?.();
+      return loaded;
+    },
+  };
+});
+
 const mcp = (...args: string[]) => runMcpCommand(["mcp", ...args]);
 const flags = (options: Record<string, string | true>) =>
   Object.entries(options).flatMap(([key, value]) => (value === true ? [key] : [key, value]));
@@ -37,6 +60,24 @@ const setServer = (
   server: object | string = { command: "node", args: ["server.mjs"] },
   name = "docs",
 ) => mcp("set", name, typeof server === "string" ? server : JSON.stringify(server));
+
+it("keeps a competing edit that lands after configure reads the server", async () => {
+  await setServer({ command: "node", args: ["server.mjs"] });
+  afterConfigRead.once = async () => {
+    const disabled = await setConfiguredMcpServer({
+      name: "docs",
+      server: { command: "node", args: ["server.mjs"], enabled: false },
+    });
+    expect(disabled.ok).toBe(true);
+  };
+  await mcp("configure", "docs", "--timeout", "12");
+  expect(await readServer()).toEqual({
+    command: "node",
+    args: ["server.mjs"],
+    enabled: false,
+    requestTimeoutMs: 12_000,
+  });
+});
 
 async function readJson(...args: string[]) {
   mockLog.mockClear();
@@ -363,6 +404,20 @@ it.each([
     expect(competitorWon).toBe(true);
   }
   expect(await readServer()).toEqual({ command: "node", args: [script] });
+});
+
+it("probes a new server while holding state ownership for its launch", async () => {
+  const owned: boolean[] = [];
+  setCreateSessionMcpRuntimeOverride((params) =>
+    probeRuntime(params, "cli-probe-custody", async () => {
+      // Docker launches require this custody; a probe outside it fails before connecting.
+      owned.push(captureGatewayStateOwner(resolveOpenClawStateSqlitePath()) !== undefined);
+      return catalog({ docs: { serverName: "docs", launchSummary: "node", toolCount: 0 } });
+    }),
+  );
+  await mcp("add", "docs", "--command", "node");
+  expect(owned).toEqual([true]);
+  expect(await readServer()).toEqual({ command: "node" });
 });
 
 const filteredServer = {
@@ -722,7 +777,7 @@ it("fails named probes for disabled MCP servers", async () => {
 });
 
 it("reports omitted enabled servers while accepting omitted disabled servers", async () => {
-  const invocationExitCode = process.exitCode;
+  const invocationExitCode = process.exitCode ?? 0;
 
   let catalogServers: Record<
     string,
@@ -813,7 +868,6 @@ it("fails when removing an unknown MCP server", async () => {
 it("starts the channel bridge with parsed serve options", async () => {
   const tokenFile = path.join(workspaceDir, "gateway.token");
   await fs.writeFile(tokenFile, "secret-token\n", "utf-8");
-
   await mcp(
     "serve",
     ...flags({
@@ -823,7 +877,6 @@ it("starts the channel bridge with parsed serve options", async () => {
       "--verbose": true,
     }),
   );
-
   expect(serveOpenClawChannelMcp).toHaveBeenCalledWith({
     gatewayUrl: "ws://127.0.0.1:18789",
     gatewayToken: "secret-token",
@@ -833,14 +886,16 @@ it("starts the channel bridge with parsed serve options", async () => {
   });
 });
 
-it("points serve startup failures at the deep Gateway health diagnostic", async () => {
-  serveOpenClawChannelMcp.mockRejectedValueOnce(new Error("gateway unavailable"));
-
+it("reports serve flag errors as-is and start failures with one hint period", async () => {
+  const modeError = 'Invalid --claude-channel-mode value. Use "auto", "on", or "off".';
+  await expectFailure(modeError, "serve", "--claude-channel-mode", "bad");
+  serveOpenClawChannelMcp.mockRejectedValueOnce(new Error("gateway closed (1006)."));
   await expectFailure(
-    "MCP server failed to start: gateway unavailable. Run openclaw gateway status --deep --require-rpc to inspect Gateway health.",
+    "MCP server failed to start: gateway closed (1006). Run openclaw gateway status --deep --require-rpc to inspect Gateway health.",
     "serve",
   );
 });
+
 it("emits one JSON failure for an unknown server in show", async () => {
   expect(await readJsonFailure("show", "missing")).toMatchObject({
     ok: false,

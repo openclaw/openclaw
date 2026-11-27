@@ -1,6 +1,9 @@
 /**
  * Synthetic owner composition, not a Gateway or SQLite benchmark.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/duplicate-tool-strings-measure.ts <output-prefix>
+ * Optional trailing session/turn counts default to 24/200. Use 1000 0 for
+ * 3,000 tool-surface preparations and checkpoints without transcript seeding.
+ * Add --no-snapshot after the counts for allocation/CPU repetitions.
  * Run identical fresh-process A/A and alternating baseline/candidate samples.
  * Summarize each heap with scripts/heap-snapshot-diff.mjs --summary --labels <reviewed-labels>.
  */
@@ -15,7 +18,8 @@ import { finalizeAgentTools } from "../../src/agents/agent-tools.finalize.ts";
 import type { AnyAgentTool } from "../../src/agents/agent-tools.types.ts";
 import {
   prepareSessionToolSurface,
-  persistSessionToolSurface,
+  persistSessionSystemPrompt,
+  prepareSessionSystemPrompt,
   retainEmbeddedSessionPromptState,
 } from "../../src/agents/embedded-agent-runner/session-prompt-state.ts";
 import { SessionManager } from "../../src/agents/sessions/session-manager.ts";
@@ -27,6 +31,10 @@ import type { AssistantMessage } from "../../src/llm/types.js";
 assert(globalThis.gc);
 const output = process.argv[2];
 assert(output);
+const sessions = Number(process.argv[3] ?? 24);
+const turns = Number(process.argv[4] ?? 200);
+assert(Number.isSafeInteger(sessions) && sessions > 0);
+assert(Number.isSafeInteger(turns) && turns >= 0);
 const sourceTools: AnyAgentTool[] = Array.from({ length: 100 }, (_, i) => ({
   name: `mcp_fixture_${i}`,
   label: `Fixture tool ${i}`,
@@ -61,14 +69,14 @@ const measurements: { cpuUs: number; wallMs: number; allocatedBytes: number }[] 
 const allocationStart = getHeapStatistics().total_allocated_bytes;
 const started = performance.now();
 const cpuStart = process.threadCpuUsage();
-for (let session = 0; session < 24; session++) {
+for (let session = 0; session < sessions; session++) {
   const sessionId = `fixture-session-${session}`;
   const runId = `fixture-run-${session}-00000000-0000-4000-8000-000000000000`;
   const manager = SessionManager.inMemory("/synthetic/workspace");
   managers.push(manager);
   const lease = retainEmbeddedSessionPromptState(sessionId);
   leases.push(lease);
-  for (let turn = 0; turn < 200; turn++) {
+  for (let turn = 0; turn < turns; turn++) {
     await manager.appendMessageAsync({
       role: "user",
       content: [
@@ -125,7 +133,14 @@ for (let session = 0; session < 24; session++) {
       entries: manager.getEntries(),
       tools: finalized,
     });
-    await persistSessionToolSurface(lease.state, (kind, data) =>
+    // Every session persists its tool pin with the system-prompt series checkpoint.
+    prepareSessionSystemPrompt({
+      state: lease.state,
+      routeKey: "fixture-route",
+      systemPrompt: "fixture prompt",
+      entries: manager.getEntries(),
+    }).commit();
+    await persistSessionSystemPrompt(lease.state, (kind, data) =>
       manager.appendCustomEntryAsync(kind, data),
     );
     const payload = convertResponsesToolPayload(prepared, { strict: false });
@@ -176,7 +191,7 @@ const topology = buildSubagentRunReadTopology({
 });
 assert.equal(warmSchemaMisses, 0);
 assert(canonical.every((schema) => getPublishedRuntimeToolInputSchema(schema)));
-assert.equal(topology.runsByChildSessionKey.size, 240);
+assert.equal(topology.runsByChildSessionKey.size, sessions * 10);
 const used = process.threadCpuUsage(cpuStart);
 const elapsedMs = performance.now() - started;
 const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationStart;
@@ -189,10 +204,10 @@ writeFileSync(
   JSON.stringify(
     {
       node: process.version,
-      sessions: 24,
+      sessions,
       tools: 100,
-      messages: 9600,
-      subagents: 240,
+      messages: sessions * turns * 2,
+      subagents: sessions * 10,
       warmSchemaMisses,
       payloadHashes: [...payloadHashes],
       elapsedMs,
@@ -207,10 +222,12 @@ writeFileSync(
     2,
   ),
 );
-writeHeapSnapshot(`${output}.heapsnapshot`);
+if (!process.argv.includes("--no-snapshot")) {
+  writeHeapSnapshot(`${output}.heapsnapshot`);
+}
 
-assert.equal(managers.length, 24);
-assert.equal(toolsets.length, 24);
+assert.equal(managers.length, sessions);
+assert.equal(toolsets.length, sessions);
 for (const lease of leases) {
   lease[Symbol.dispose]();
 }

@@ -139,9 +139,6 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             ]}
             type="button"
             aria-label={t("chat.processesPanel.stop", { name: stopProps.row.name })}
-            title={
-              props.mobile ? undefined : t("chat.processesPanel.stop", { name: stopProps.row.name })
-            }
             disabled={stop.stopping()}
             onClick={() => void stop.stop()}
           >
@@ -401,10 +398,10 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             </span>
             <strong
               class="chat-processes__detail-name"
-              ref={titleScrollState}
+              ref={props.mobile ? titleScrollState : undefined}
               title={props.mobile ? undefined : selectedRow()?.name}
             >
-              {selectedRow()?.name}
+              <bdi>{selectedRow()?.name}</bdi>
             </strong>
             <Show when={selectedRow()}>
               {(row) => (
@@ -433,7 +430,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             when={selectedRow()}
             fallback={
               <Show
-                when={detailProps.loading}
+                when={detailProps.loading && !data().hasResult}
                 fallback={
                   <div class="chat-processes__empty" role="status">
                     {t(
@@ -495,7 +492,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             when={rows().length}
             fallback={
               <Show
-                when={data().hasResult && !data().error && !contentProps.loading}
+                when={data().hasResult && !data().error}
                 fallback={
                   <Show
                     when={contentProps.loading}

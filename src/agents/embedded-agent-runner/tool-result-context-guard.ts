@@ -77,11 +77,13 @@ function truncateToolResultToChars(
         Math.max(0, maxChars - reservedChars),
         { minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE },
       );
-      return replaceToolResultContent(msg, [
-        // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
-        ...(bounded as { content: unknown[] }).content,
-        ...notice,
-      ]);
+      // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
+      const boundedContent = (bounded as { content: unknown[] }).content;
+      return {
+        message: replaceToolResultContent(msg, [...boundedContent, ...notice]),
+        compactedText: boundedContent.length < retainedContent.length,
+        boundedContent,
+      };
     };
 
     // Image cost alone rules out larger prefixes. The allocator still reserves
@@ -92,21 +94,21 @@ function truncateToolResultToChars(
       const retainedContent = content.filter(
         (block) => !isImage(block) || ++seenImages <= retainedImages,
       );
-      const projected = projectContent(
+      const { message, compactedText, boundedContent } = projectContent(
         retainedContent,
         retainedImages < imageCount ? omissionNotice(retainedImages) : undefined,
       );
-      const projectedContent = (projected as { content: unknown[] }).content;
       if (
+        !compactedText &&
         retainedContent.some((block, index) => {
-          const projectedBlock = projectedContent[index];
+          const projectedBlock = boundedContent[index];
           return isText(block) && block.text && (!isText(projectedBlock) || !projectedBlock.text);
         })
       ) {
         continue;
       }
-      if (estimateMessageCharsCached(projected, cache) <= maxChars) {
-        return projected;
+      if (estimateMessageCharsCached(message, cache) <= maxChars) {
+        return message;
       }
     }
     // Dropping unfit non-text content must not flatten away surviving semantic
@@ -122,7 +124,7 @@ function truncateToolResultToChars(
         : formatContextLimitTruncationNotice(
             Math.max(1, Math.floor(omittedChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE)),
           ),
-    );
+    ).message;
   }
 
   const truncatedText = truncateToolResultText(getToolResultText(msg), maxChars, {
@@ -182,6 +184,7 @@ export function installContextEngineLoopHook(params: {
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
+  getCurrentUserIdempotencyKey?: () => string | undefined;
   onAfterTurnCheckpoint?: (messageCount: number) => void;
   deferredTurn?: { prompt: string; readonly availableTools: Set<string> };
   getRuntimeContext?: (params: {
@@ -275,9 +278,24 @@ export function installContextEngineLoopHook(params: {
       lastSourceMessages = transcriptMessages;
       // An admitted turn is not in the engine's store yet. Assemble accepted
       // history separately, then retain the host-owned user/tool exchange.
-      const historyLength = params.deferredTurn
-        ? (params.getPrePromptMessageCount?.() ?? 0)
-        : providerMessages.length;
+      let historyLength = providerMessages.length;
+      if (params.deferredTurn) {
+        historyLength = params.getPrePromptMessageCount?.() ?? 0;
+        const currentUserKey = params.getCurrentUserIdempotencyKey?.();
+        const currentUserIndex = currentUserKey
+          ? providerMessages.findLastIndex(
+              (message) =>
+                message.role === "user" &&
+                "idempotencyKey" in message &&
+                message.idempotencyKey === currentUserKey,
+            )
+          : -1;
+        // The engine replaces everything before the fence with its stored history, which
+        // cannot contain the admitted user message; a stale count must not put it there.
+        if (currentUserIndex >= 0) {
+          historyLength = Math.min(historyLength, currentUserIndex);
+        }
+      }
       const pendingMessages = providerMessages.slice(historyLength);
       const assembled = await contextEngine.assemble({
         ...sessionIdentity,
@@ -320,6 +338,9 @@ export function installContextEngineLoopHook(params: {
 
   return () => {
     mutableAgent.transformContext = originalTransformContext;
+    // The removed hook stays reachable from retained run callbacks; drop its assembled history.
+    lastAssembledView = null;
+    lastSourceMessages = null;
   };
 }
 

@@ -10,13 +10,133 @@ import * as chat from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { readQueuedMessageById } from "./chat-queue.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { chatOfflineQueueStorageError } from "./chat-send-support.ts";
 import { queued } from "./chat-thread-fixtures.test-support.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
 import { prepareInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
+import { applyChatCacheSnapshot } from "./session-message-cache.ts";
 
 useChatSendBrowserFixture();
 afterEach(() => vi.useRealTimers());
+
+it.each(["steer", "interrupt"] as const)(
+  "starts normally when initial history reveals an idle session with %s selected",
+  async (followUpMode) => {
+    const sessionKey = "agent:main:main";
+    const history = createDeferred<ChatHistoryResult>();
+    const host = chat.makeChatHost({
+      sessionKey,
+      chatMessage: "Start the next task",
+      requestHandlers: {
+        "chat.startup": () => history.promise,
+        "chat.send": { status: "started", messageSeq: 1 },
+      },
+    });
+    applyChatCacheSnapshot(host, {
+      messages: [],
+      sessionId: "current-session",
+      displayedLeafEntryId: "cached-leaf",
+      pagination: { hasMore: false, completeSnapshot: true },
+    });
+    const loading = loadChatHistory(host, { startup: true, deferBranches: true });
+    const sending = handleSendChat(host, undefined, { followUpMode });
+    try {
+      await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    } finally {
+      history.resolve({
+        messages: [],
+        sessionInfo: {
+          key: sessionKey,
+          sessionId: "current-session",
+          activeLeafEntryId: "current-leaf",
+          hasActiveRun: false,
+          status: "done",
+          kind: "direct",
+          updatedAt: 2,
+        },
+      });
+      await loading;
+      await sending;
+    }
+    expect(chat.findChatSendPayload(host)).not.toHaveProperty("queueMode");
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.chatQueue).toEqual([]);
+  },
+);
+
+it.each(["storage failure", "newer run"] as const)(
+  "handles %s after durable admission while idle history settles",
+  async (scenario) => {
+    const sessionKey = "agent:main:main";
+    const history = createDeferred<ChatHistoryResult>();
+    const host = chat.makeChatHost({
+      sessionKey,
+      chatMessage: "Keep this queued message",
+      requestHandlers: {
+        "chat.startup": () => history.promise,
+        "chat.send": { status: "in_flight", runId: "newer-run", messageSeq: 1 },
+      },
+    });
+    applyChatCacheSnapshot(host, {
+      messages: [],
+      sessionId: "current-session",
+      displayedLeafEntryId: "cached-leaf",
+      pagination: { hasMore: false, completeSnapshot: true },
+    });
+    const loading = loadChatHistory(host, { startup: true, deferBranches: true });
+    const sending = handleSendChat(host, undefined, { followUpMode: "steer" });
+    try {
+      await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
+      const id = host.chatQueue[0]!.id;
+      expect(chatOutboxOwner(host).durable(host, id)?.queue).toEqual([
+        expect.objectContaining({ id, queueMode: "steer", sendAttempts: 0 }),
+      ]);
+      expect(chat.requestCalls(host.request, "chat.send")).toEqual([]);
+      if (scenario === "storage failure") {
+        vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+          throw new DOMException("quota exceeded", "QuotaExceededError");
+        });
+      } else {
+        host.chatRunId = "newer-run";
+        host.chatStream = "Newer live reply";
+      }
+    } finally {
+      history.resolve({
+        messages: [],
+        sessionInfo: {
+          key: sessionKey,
+          sessionId: "current-session",
+          activeLeafEntryId: "current-leaf",
+          hasActiveRun: false,
+          status: "done",
+          kind: "direct",
+          updatedAt: 2,
+        },
+      });
+      await loading;
+      await sending;
+    }
+    expect(getChatHistoryLoadState(host)).toMatchObject({
+      phase: "committed",
+      sessionInfo: { hasActiveRun: false },
+    });
+    if (scenario === "storage failure") {
+      expect(chat.requestCalls(host.request, "chat.send")).toEqual([]);
+      expect(host.chatQueue).toEqual([
+        expect.objectContaining({ text: "Keep this queued message", queueMode: "steer" }),
+      ]);
+      expect(host.chatError).toBe(chatOfflineQueueStorageError());
+      expect(host.lastError).toBe(chatOfflineQueueStorageError());
+    } else {
+      expect(chat.findChatSendPayload(host)).toMatchObject({ queueMode: "steer" });
+      expect(chat.requestCalls(host.request, "chat.send")).toHaveLength(1);
+      expect(host.chatRunId).toBe("newer-run");
+      expect(host.chatStream).toBe("Newer live reply");
+    }
+  },
+);
 
 it.each([false, true])("rejects cross-account handoffs (owned: %s)", async (owned) => {
   vi.useFakeTimers();
@@ -41,7 +161,7 @@ it.each([false, true])("rejects cross-account handoffs (owned: %s)", async (owne
   );
   expect(host.chatError ?? null).toBe(
     owned
-      ? "Could not store the previous draft in browser storage. It remains available in this tab."
+      ? "Couldn’t save the previous draft. Keep this tab open or copy it before reloading."
       : null,
   );
   expect(host.lastError ?? null).toBe(host.chatError ?? null);

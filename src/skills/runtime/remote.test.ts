@@ -303,13 +303,13 @@ describe("skills-remote", () => {
   it("reuses a successful probe after reconnect and invalidates the skills snapshot", async () => {
     await closeSkillsWatchers(true);
     const { bin, workspaceDir, invoke, refresh, disconnect, connect } = remoteFixture();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const nowSpy = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
     await refresh();
 
     disconnect();
     connect();
     const beforeRestore = getSkillsSnapshotVersion(workspaceDir);
-    nowSpy.mockReturnValue(1_000_000 + 60_000);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31 * 60 * 1000);
     await refresh();
 
     expect(invoke).toHaveBeenCalledOnce();
@@ -324,7 +324,7 @@ describe("skills-remote", () => {
   it("backs off failures but probes immediately when required bins change", async () => {
     const { nodeId, cfg, invoke } = remoteFixture();
     const { cfg: changedCfg } = workspaceForBin(`bin-${randomUUID()}`);
-    vi.spyOn(Date, "now").mockReturnValue(2_000_000);
+    vi.spyOn(performance, "now").mockReturnValue(2_000_000);
     invoke.mockImplementation(async () => probeTimeout());
     const refresh = (config = cfg) => probe(nodeId, config);
 
@@ -438,7 +438,7 @@ describe("skills-remote", () => {
 
   it("coalesces replacement waiters after a failed probe", async () => {
     const { bin, invoke, refresh, connect, disconnect } = remoteFixture({ connId: "conn-old" });
-    vi.spyOn(Date, "now").mockReturnValue(2_000_000);
+    vi.spyOn(performance, "now").mockReturnValue(2_000_000);
     const { result: firstInvoke, started: firstInvokeStarted } = deferredProbe(bin, invoke);
 
     const failedRefresh = refresh();

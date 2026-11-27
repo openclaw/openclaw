@@ -1,9 +1,11 @@
-import path from "node:path";
 import type { Command } from "commander";
+import { findDecisionReason } from "../../../packages/media-understanding-common/src/format.js";
+import { resolveFilesystemPath } from "../../infra/home-dir.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
-import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
 import { runCapabilityCommand } from "./providers-command.js";
+import type { CapabilityEnvelope } from "./result-types.js";
 
 type MediaUnderstandingOptions = {
   file: string;
@@ -36,8 +38,8 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
         } = await import("./shared.js");
         const file = opts.file;
         const agent = resolveCapabilityAgentOption(actionCommand, opts.agent);
-        const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-        const { transcribeAudioFile, describeVideoFile } =
+        const { getModelsCommandSecretTargetIds } = await import("../model-secret-targets.js");
+        const { describeVideoFile, runMediaFileWithModel, transcribeAudioFile } =
           await import("../../media-understanding/runtime.js");
         const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({
           commandName: audio ? "infer audio transcribe" : "infer video.describe",
@@ -45,23 +47,45 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
           agent,
           ...(audio ? {} : { surface: "infer video describe" }),
         });
-        const activeModel = requireProviderModelOverride(opts.model);
-        const input = { filePath: path.resolve(file), cfg, agentId, agentDir, activeModel };
-        const result = audio
-          ? await transcribeAudioFile({
-              ...input,
-              language: opts.language,
-              prompt: opts.prompt,
-            })
-          : await describeVideoFile(input);
+        const modelOverride = requireProviderModelOverride(opts.model);
+        const filePath = resolveFilesystemPath(file);
+        // Video registers no --language/--prompt, so these stay undefined there.
+        const input = {
+          filePath,
+          cfg,
+          agentId,
+          agentDir,
+          language: opts.language,
+          prompt: opts.prompt,
+        };
+        const signal = getAsyncWorkSignal();
+        const execution = signal
+          ? { signal, assertCurrent: () => signal.throwIfAborted() }
+          : undefined;
+        const result = modelOverride
+          ? await runMediaFileWithModel({ ...input, capability: kind, modelOverride }, execution)
+          : audio
+            ? await transcribeAudioFile(input, execution)
+            : await describeVideoFile(input, execution);
         if (!result.text) {
           if (audio && isMissingMediaUnderstandingProvider(result)) {
             throw new Error(
               "No audio transcription provider is configured or ready. Configure an audio-capable tools.media.models entry, or pass --model <provider/model> after configuring that provider's auth/API key.",
             );
           }
+          if (audio && result.decision?.outcome === "disabled") {
+            throw new Error(
+              "Audio transcription is disabled (tools.media.audio.enabled is false).",
+            );
+          }
+          if (audio && result.decision?.outcome === "skipped") {
+            const reason = findDecisionReason(result.decision, "skipped");
+            if (reason) {
+              throw new Error(`Cannot transcribe ${filePath}: ${reason.replace(/^\w+: /u, "")}`);
+            }
+          }
           throw new Error(
-            `No ${audio ? "transcript" : "description"} returned for ${kind}: ${path.resolve(file)}`,
+            `No ${audio ? "transcript" : "description"} returned for ${kind}: ${filePath}`,
           );
         }
         return {
@@ -73,7 +97,7 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
           attempts: [],
           outputs: [
             {
-              path: path.resolve(file),
+              path: filePath,
               text: result.text,
               kind: audio ? "audio.transcription" : "video.description",
             },

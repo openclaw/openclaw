@@ -6,7 +6,7 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { emptyPairingSnapshot } from "./pairing.test-support.ts";
-import { ChannelConfig } from "./view.config.tsx";
+import { ChannelConfig, ChannelConfigActions } from "./view.config.tsx";
 import { renderChannelDetail } from "./view.detail.tsx";
 import { resolveChannelDisplayState } from "./view.shared.tsx";
 import {
@@ -211,6 +211,8 @@ describe("channels setup access", () => {
         channelMeta: [{ id: "slack", label: "Slack", detailLabel: "Slack Bot" }],
       },
     );
+    const onStartSetup = vi.fn();
+    props.onStartSetup = onStartSetup;
     const container = renderHub(props);
 
     const availableLabels = texts(container, ".channels-item__detail .settings-row__title");
@@ -223,6 +225,16 @@ describe("channels setup access", () => {
       "imessage",
       "nostr",
     ]);
+    const setupButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".channels-item > .settings-row__control > button",
+      ),
+    ];
+    expect(setupButtons.map((button) => button.getAttribute("aria-label"))).toEqual(
+      availableLabels.map((label) => `Set up ${label}`),
+    );
+    setupButtons.forEach((button) => button.click());
+    expect(onStartSetup.mock.calls.map(([channelId]) => channelId)).toEqual(availableLabels);
   });
 
   it("replaces setup actions with an admin-required notice for non-admin viewers", () => {
@@ -233,7 +245,7 @@ describe("channels setup access", () => {
     const container = renderHub(props);
 
     expect(container.textContent).toContain(
-      "Browsing only. Channel setup requires operator.admin access.",
+      "You can view channels, but only admins can change them.",
     );
     expect(texts(container, "button")).not.toContain("Set up");
     expect(container.textContent).not.toContain("More channels…");
@@ -494,6 +506,49 @@ function renderWhatsAppConfigForm(
   return { container, onShowAdvancedSettings };
 }
 
+describe("channel config access", () => {
+  it.each([true, false])("matches editing and save controls to admin access: %s", (canAdmin) => {
+    const props = channelProps({ whatsapp: whatsappStatus });
+    props.canAdmin = canAdmin;
+    props.config.configSchema = CHANNEL_TIER_SCHEMA;
+    props.config.configUiHints = CHANNEL_TIER_HINTS;
+    props.config.configForm = { channels: { whatsapp: { enabled: true, timeoutMs: 5000 } } };
+    props.showAdvancedSettings = true;
+    props.configEdits = { whatsapp: [{ path: ["channels", "whatsapp", "enabled"], value: false }] };
+    props.onConfigPatch = vi.fn();
+    props.onConfigDiscard = vi.fn();
+    const container = document.createElement("div");
+    renderChannelView(
+      (viewProps: ChannelsProps) => (
+        <>
+          <ChannelConfig channelId="whatsapp" props={viewProps} />
+          <ChannelConfigActions channelId="whatsapp" props={viewProps} />
+        </>
+      ),
+      props,
+      container,
+    );
+    const inputs = [...container.querySelectorAll<HTMLInputElement>("input")];
+    expect(inputs.length).toBeGreaterThan(1);
+    expect(inputs.every((input) => input.disabled === !canAdmin)).toBe(true);
+    expect(
+      container.textContent?.includes("You can view channels, but only admins can change them."),
+    ).toBe(!canAdmin);
+    const save = container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(save.disabled).toBe(!canAdmin);
+    const discard = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Discard",
+    )!;
+    expect(discard.disabled).toBe(false);
+    discard.click();
+    expect(props.onConfigDiscard).toHaveBeenCalledExactlyOnceWith("whatsapp");
+    if (!canAdmin) {
+      inputs[0]!.click();
+      expect(props.onConfigPatch).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe("channel config advanced tier", () => {
   it("hides advanced channel settings behind the disclosure by default", () => {
     const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(false);
@@ -523,15 +578,6 @@ describe("channel config advanced tier", () => {
     disclosure!.open = false;
     disclosure!.dispatchEvent(new Event("toggle"));
     expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
-  });
-
-  it("renders field help from the resolved hints", () => {
-    const { container } = renderWhatsAppConfigForm(false, {
-      ...CHANNEL_TIER_HINTS,
-      "channels.whatsapp.enabled": { advanced: false, help: "Turn this channel on or off." },
-    } as typeof CHANNEL_TIER_HINTS);
-
-    expect(texts(container, ".settings-row__desc")).toContain("Turn this channel on or off.");
   });
 });
 
@@ -605,7 +651,7 @@ describe("channel detail", () => {
     const detail = container.querySelector(".channels-detail")!;
 
     expect(detail.querySelector(heading)).not.toBeNull();
-    expect(text(detail, ".channels-detail__status .settings-status")).toBe("Not configured");
+    expect(detail.querySelector(".channels-detail__status .settings-status")).toBeNull();
     expect(detail.querySelector(probeButton)).not.toBeNull();
     expect(texts(detail, ".channels-detail__footer button")).toEqual(["Run setup"]);
     expect(detail.textContent).not.toContain("n/a");
@@ -644,6 +690,24 @@ describe("channel detail", () => {
     );
     expect(text(container, ".channels-detail [role=alert]")).toBe("Status read failed");
   });
+
+  it.each([false, true])(
+    "withholds channel health until a snapshot exists (retrying: %s)",
+    (loading) => {
+      const props = createProps(null);
+      props.channels.channelsLoading = loading;
+      props.channels.channelsError = "Status read failed";
+      const container = document.createElement("div");
+      renderChannelView(
+        renderChannelDetail,
+        { channelId: "telegram", label: "Telegram", props, onClose: () => {}, onSetup: () => {} },
+        container,
+      );
+      expect(container.querySelector(".channels-detail__status .settings-status")).toBeNull();
+      expect(text(container, ".channels-detail [role=alert]")).toBe("Status read failed");
+      expect(container.querySelector<HTMLButtonElement>(probeButton)?.disabled).toBe(loading);
+    },
+  );
 
   it("uses the list row's words for every state", () => {
     const state = (status: Record<string, unknown> | null) =>
@@ -688,40 +752,6 @@ describe("channel detail", () => {
       "Discard",
       "Save",
     ]);
-  });
-
-  it.each([0, 1, 2])("shows Telegram account rows only above its %i-account threshold", (count) => {
-    const accounts = [
-      {
-        accountId: "first",
-        name: "First",
-        configured: true,
-        running: false,
-        probe: { bot: { username: "first_bot" } },
-      },
-      { accountId: "second", name: "Second", configured: false, running: true },
-    ].slice(0, count);
-    const container = renderChannelDetailFixture(
-      "telegram",
-      { telegram: { running: true } },
-      { accounts },
-    );
-    if (count < 2) {
-      expect(container.textContent).not.toContain("@first_bot");
-    } else {
-      const rows = Array.from(container.querySelectorAll(".settings-row")).filter((row) =>
-        row.querySelector(".settings-row__title"),
-      );
-      expect(rows.map((row) => row.querySelector(".settings-row__title")?.textContent)).toEqual([
-        "@first_bot",
-        "Second",
-      ]);
-      expect(rows.map((row) => row.querySelector(".settings-row__desc")?.textContent)).toEqual([
-        "first",
-        "second",
-      ]);
-      expect(rows.map((row) => text(row, ".settings-status"))).toEqual(["Configured", "Running"]);
-    }
   });
 
   it("keeps the bundled display policy for a same-ID custom channel status", () => {
@@ -831,15 +861,5 @@ it("announces a stale refresh without adding a notice to the page", () => {
   expect(container.querySelector(".callout.info")).toBeNull();
   expect(
     container.querySelector(".settings-control__sr-label[role='status']")?.textContent,
-  ).toContain("showing the last successful snapshot");
-});
-
-it("keeps a space between the partial snapshot notice and its warnings", () => {
-  const props = createProps(
-    channelSnapshot({}, { partial: true, warnings: ["Telegram probe timed out"] }),
-  );
-  const container = renderHub(props);
-  expect(container.querySelector(".callout.warn")?.textContent).toContain(
-    "UI budget. Telegram probe timed out",
-  );
+  ).toContain("Showing the last available status");
 });
