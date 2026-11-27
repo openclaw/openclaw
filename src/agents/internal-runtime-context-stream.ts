@@ -269,6 +269,10 @@ function atLineStart(text: string): boolean {
   return /^[ \t\r]*$/u.test(lastLine(text));
 }
 
+function hasProvisionalProtectedOpening(text: string): boolean {
+  return lastLine(text).trim() === INTERNAL_RUNTIME_CONTEXT_BEGIN;
+}
+
 function advanceLineStart(lineStart: boolean, appended: string): boolean {
   const lastBreak = Math.max(appended.lastIndexOf("\n"), appended.lastIndexOf("\r"));
   return lastBreak >= 0
@@ -310,6 +314,7 @@ export function createRuntimeContextStreamProjector(): TextProjector {
   let eventPrefixMatch = 0;
   let withheld = "";
   let lineStart = true;
+  let provisionalProtectedOpening = false;
   let awaitingVisibleAfterTransform = false;
   let carrierProbe = createCarrierProbe();
 
@@ -358,6 +363,8 @@ export function createRuntimeContextStreamProjector(): TextProjector {
     eventPrefixMatch = primeExactPrefix(input.text, INTERNAL_RUNTIME_CONTEXT_EVENT_PREFIX);
     withheld = "";
     lineStart = atLineStart(text);
+    provisionalProtectedOpening =
+      waiting === "protected" && hasProvisionalProtectedOpening(input.text);
     carrierProbe = primeCarrierProbe(input.text);
     const delta =
       input.delta === null ? null : text.startsWith(previous) ? text.slice(previous.length) : null;
@@ -377,6 +384,16 @@ export function createRuntimeContextStreamProjector(): TextProjector {
     }
 
     if (waiting) {
+      if (provisionalProtectedOpening) {
+        const newline = appended.indexOf("\n");
+        const beforeNewline = newline < 0 ? appended : appended.slice(0, newline);
+        if (/\S/u.test(beforeNewline)) {
+          return projectFull(input);
+        }
+        if (newline >= 0) {
+          provisionalProtectedOpening = false;
+        }
+      }
       const boundaryScan = waitingTail + appended;
       if (!boundaryAppeared(waiting, boundaryScan)) {
         sourceLength = input.text.length;
@@ -420,11 +437,17 @@ export function createRuntimeContextStreamProjector(): TextProjector {
       newline >= 0 ? complete.slice(newline + 1) : withheld || lineStart ? complete : undefined;
     if (candidate !== undefined && isPartialDelimiter(candidate)) {
       // `streaming` treats the whitespace before a tentative delimiter as part
-      // of the hidden tail. Withdraw previously published whitespace too, then
-      // restore it with the candidate if the line proves to be ordinary text.
-      const visible = input.text.slice(0, input.text.length - candidate.length).trimEnd();
+      // of the hidden tail. Derive the withheld bytes from the canonical,
+      // non-streaming result so an earlier protected block cannot be restored.
+      const safe = stripInternalRuntimeContext(input.text);
+      const safeNewline = Math.max(safe.lastIndexOf("\n"), safe.lastIndexOf("\r"));
+      const safeCandidate = safe.slice(safeNewline + 1);
+      if (!isPartialDelimiter(safeCandidate)) {
+        return projectFull(input);
+      }
+      const visible = safe.slice(0, safe.length - safeCandidate.length).trimEnd();
       const previous = published;
-      withheld = input.text.slice(visible.length);
+      withheld = safe.slice(visible.length);
       sourceLength = input.text.length;
       published = visible;
       identity = false;
@@ -456,4 +479,14 @@ export function createRuntimeContextStreamProjector(): TextProjector {
 export const runtimeContextStreamingTextFilter: TextFilter = {
   transform: (text) => stripInternalRuntimeContext(text, { streaming: true }),
   create: createRuntimeContextStreamProjector,
+};
+
+export const runtimeContextFinalTextFilter: TextFilter = {
+  activationTokens: [
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    INTERNAL_RUNTIME_CONTEXT_END,
+    RUNTIME_CONTEXT_HEADER,
+    "runtime-generated",
+  ],
+  transform: stripInternalRuntimeContext,
 };

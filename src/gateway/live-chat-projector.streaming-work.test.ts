@@ -195,6 +195,49 @@ it("matches the canonical live projection when a private block arrives in one de
   expect(stream(source, undefined, source.length).text).toBe(expected);
 });
 
+it("does not republish sanitized runtime context while withholding a partial delimiter", () => {
+  const privateBlock = `Before.\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nsecret\n${INTERNAL_RUNTIME_CONTEXT_END}\nAfter.`;
+  const projection = createLiveAssistantTextProjection();
+
+  expect(projection.replace(privateBlock).text).not.toContain("secret");
+  const result = projection.append("\n<");
+
+  expect(result.text).not.toContain("secret");
+  expect(result.text).toBe(
+    normalizeLiveAssistantBufferedText(`${privateBlock}\n<`, { streaming: true }),
+  );
+});
+
+it("rechecks a protected opener when continuation proves it is ordinary text", () => {
+  const opening = `Before.\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}`;
+  const continuation = " is a literal example.\nMore text";
+  const projection = createLiveAssistantTextProjection();
+
+  expect(projection.append(opening).text).toBe("Before.");
+  expect(projection.append(continuation).text).toBe(
+    normalizeLiveAssistantBufferedText(`${opening}${continuation}`, { streaming: true }),
+  );
+});
+
+it("preserves an audio marker when code ownership changes", () => {
+  const source = "Intro `[[audio_as_voice]]`";
+  const projection = createLiveAssistantTextProjection();
+
+  projection.append("Intro ");
+  projection.append("`[[audio_as_voice]]");
+  expect(projection.append("`").text).toBe(
+    normalizeLiveAssistantBufferedText(source, { streaming: true }),
+  );
+});
+
+it("uses terminal runtime filtering for final projections", () => {
+  const projection = createLiveAssistantTextProjection({ final: true });
+  const currentContext = `${RUNTIME_CONTEXT_HEADER}\nsecret\n${RUNTIME_CONTEXT_FOOTER}\n\nVisible.`;
+
+  expect(projection.replace("Visible\n<").text).toBe("Visible\n<");
+  expect(projection.replace(currentContext).text).toBe("Visible.");
+});
+
 it.each([
   {
     name: "audio directive and Markdown",

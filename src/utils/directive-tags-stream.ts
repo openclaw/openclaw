@@ -1,3 +1,4 @@
+import { buildCodeSpanIndex } from "../../packages/markdown-core/src/code-spans.js";
 import {
   canReuseMarkdownOwnershipForAppend,
   findCodeOwnership,
@@ -83,6 +84,20 @@ const APPEND_SAFE_DELTA = /^[^[`~]*$/u;
 
 /** Removing an audio directive can change Markdown ownership before reply tags are parsed. */
 const AUDIO_DIRECTIVE = /\[\[\s*audio_as_voice\s*\]\]/iu;
+const AUDIO_DIRECTIVES = /\[\[\s*audio_as_voice\s*\]\]/giu;
+
+function hasProvisionalAudioOwnership(source: string): boolean {
+  const ownership = buildCodeSpanIndex(source);
+  if (!ownership.inlineState.open) {
+    return false;
+  }
+  for (const marker of source.matchAll(AUDIO_DIRECTIVES)) {
+    if (ownership.isInside(marker.index)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function hasUnsettledDirectiveMarker(source: string): boolean {
   const marker = source.lastIndexOf("[[");
@@ -104,6 +119,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
     let visibleMarker = false;
     let visibleHasMarker = false;
     let audioDirective = false;
+    let audioOwnershipProvisional = false;
     let ownership: ReturnType<typeof findCodeOwnership> | undefined;
     let visibleOwnership: ReturnType<typeof findCodeOwnership> | undefined;
     const projector: TextProjector = (input) => {
@@ -117,6 +133,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
         visibleMarker = hasUnsettledDirectiveMarker(visible);
         visibleHasMarker = visible.includes("[[");
         audioDirective = AUDIO_DIRECTIVE.test(source);
+        audioOwnershipProvisional = hasProvisionalAudioOwnership(source);
         identity = visible === source;
         ownership = undefined;
         visibleOwnership = undefined;
@@ -131,6 +148,12 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
       const audioAppendSafe =
         audioDirective &&
         !(visible.slice(-1) + appended).includes("[[") &&
+        (!audioOwnershipProvisional ||
+          canReuseMarkdownOwnershipForAppend(
+            source,
+            appended,
+            (ownership ??= findCodeOwnership(source)),
+          )) &&
         (!visibleHasMarker ||
           canReuseMarkdownOwnershipForAppend(
             visible,
@@ -177,6 +200,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
       visibleMarker = hasUnsettledDirectiveMarker(visible);
       visibleHasMarker = visible.includes("[[");
       audioDirective = AUDIO_DIRECTIVE.test(source);
+      audioOwnershipProvisional = hasProvisionalAudioOwnership(source);
       identity = visible === source;
       ownership = undefined;
       visibleOwnership = undefined;

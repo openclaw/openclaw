@@ -1,5 +1,8 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { runtimeContextStreamingTextFilter } from "../agents/internal-runtime-context-stream.js";
+import {
+  runtimeContextFinalTextFilter,
+  runtimeContextStreamingTextFilter,
+} from "../agents/internal-runtime-context-stream.js";
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
@@ -335,7 +338,7 @@ export function createLiveAssistantTextProjection(options?: {
   const managedMediaUrls = [...(options?.managedMediaUrls ?? [])];
   const projection = createTextProjection([
     inlineDirectiveDisplayTextFilter,
-    runtimeContextStreamingTextFilter,
+    options?.final ? runtimeContextFinalTextFilter : runtimeContextStreamingTextFilter,
     ...(options?.final ? [] : [pendingLiveAssistantTailFilter]),
     ...(managedMediaUrls.length
       ? [createMediaDirectiveDisplayFilter(managedMediaUrls, Boolean(options?.final))]
