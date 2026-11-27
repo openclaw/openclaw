@@ -135,7 +135,7 @@ export async function migrateRetiredRuntimeState(
         { env },
       );
     },
-    "Restore the archived defaultTarget and routes through Voice Wake routing settings.",
+    "Voice Wake routing is read-only. Valid legacy routing is imported only when no routing is already stored; there is no supported routing editor. Consult the archive for defaultTarget and routes.",
   );
   await migrate(
     "bindings/current-conversations.json",

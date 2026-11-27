@@ -30,9 +30,13 @@ Wake words and routing rules live in the Gateway state database, `~/.openclaw/st
 
 ### Routing (trigger to target)
 
+Routing is **read-only**. There is no supported RPC, CLI command, or settings UI to create or edit routes. Existing routes imported by Doctor from legacy `settings/voicewake-routing.json` remain in use; the legacy file is a migration input, not an editable runtime configuration. Doctor preserves existing stored routing and archives the original file bytes for inspection.
+
 | Method                  | Params | Result                               |
 | ----------------------- | ------ | ------------------------------------ |
 | `voicewake.routing.get` | none   | `{ config: VoiceWakeRoutingConfig }` |
+
+Example read response configuration (not a configuration file to edit):
 
 ```json
 {
@@ -58,7 +62,7 @@ Limits: at most 32 routes, trigger text at most 64 characters. Route triggers ar
 | `voicewake.changed`         | `{ triggers: string[] }`             |
 | `voicewake.routing.changed` | `{ config: VoiceWakeRoutingConfig }` |
 
-Both broadcast to every WebSocket client with read scope (macOS app, WebChat, and similar) and to every connected node. A node also gets both as an initial snapshot push right after it connects.
+`voicewake.changed` broadcasts trigger-list changes to every WebSocket client with read scope (macOS app, WebChat, and similar) and to every connected node. A node also gets both events as initial snapshot pushes right after it connects. `voicewake.routing.changed` carries the read-only routing snapshot on node connection; there is no supported routing writer or on-change broadcast.
 
 ## Client behavior
 

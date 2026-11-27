@@ -139,6 +139,45 @@ it("preserves meaningful settings and bindings while archiving every retired sou
   expect(await migrate()).toEqual({ changes: [], warnings: [] });
 });
 
+it.each([false, true])(
+  "reports read-only routing guidance while preserving legacy bytes (malformed: %s)",
+  async (malformed) => {
+    const routing = {
+      version: 1,
+      defaultTarget: { agentId: "work" },
+      routes: [{ trigger: "robot wake", target: { sessionKey: "agent:main:voice" } }],
+      updatedAtMs: 1730000000000,
+    };
+    const source = write(
+      "settings/voicewake-routing.json",
+      malformed ? "{malformed\n" : JSON.stringify(routing, null, 2) + "\n",
+    );
+
+    const result = await migrate();
+
+    expectArchived(source);
+    if (malformed) {
+      expect(readSetting("voicewake.routing", { env })).toBeUndefined();
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain(
+        "Could not import settings/voicewake-routing.json",
+      );
+    } else {
+      expect(readSetting("voicewake.routing", { env })).toEqual(routing);
+      expect(result.changes).toContain(
+        "Migrated settings/voicewake-routing.json → shared SQLite state (existing values retained)",
+      );
+    }
+    const guidance = result.warnings.join("\n");
+    expect(guidance).toContain(`${source.file}.migrated`);
+    expect(guidance).toContain("Voice Wake routing is read-only");
+    expect(guidance).toContain("no supported routing editor");
+    expect(guidance).toContain("Consult the archive");
+    expect(guidance).not.toContain("Restore the archived");
+    expect(guidance).not.toContain("routing settings");
+  },
+);
+
 it("keeps canonical settings and preserves a distinct earlier archive", async () => {
   writeConfigMachineState("voicewake.triggers", ["current phrase"], { env });
   const source = write(voiceFile, { triggers: ["legacy phrase"] });
