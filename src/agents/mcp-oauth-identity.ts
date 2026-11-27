@@ -58,7 +58,7 @@ function mcpOAuthPromptSignInHint(identity: McpOAuthIdentity): string {
 }
 
 /** Recovery sentence for MCP OAuth credential errors. */
-export function mcpOAuthSignInHint(identity: McpOAuthIdentity): string {
+function mcpOAuthSignInHint(identity: McpOAuthIdentity): string {
   if (identity.principal === "requester") {
     return mcpOAuthPromptSignInHint(identity);
   }
