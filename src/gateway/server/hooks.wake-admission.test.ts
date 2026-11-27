@@ -186,6 +186,33 @@ describe("authenticated immediate hook wake admission", () => {
     expect(peekSystemEvents(sessionKey)).toEqual([]);
   });
 
+  it("accepts a body over the former 256 KiB bound", async () => {
+    const { handler, warn } = fixture();
+    // A 3 h meeting transcript (332,553 bytes) was rejected with 413 under 256 KiB.
+    expectWake(await post(handler, "now", "hook-secret", "t".repeat(332_553)), 200, {
+      ok: true,
+      eventOutcome: "queued",
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("logs the path and bound of a rejected body without its content", async () => {
+    const { handler, warn } = fixture();
+    const req = Object.assign(Readable.from(['{"text":"secret-body-text']), {
+      method: "POST",
+      url: "/hooks/wake",
+      headers: { authorization: "Bearer hook-secret", "content-type": "application/json" },
+      socket: { remoteAddress: "127.0.0.1" },
+    }) as unknown as IncomingMessage;
+    const res = createMockServerResponse();
+    expect(await handler(req, res)).toBe(true);
+    expect(res.statusCode).toBe(400);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "hook request rejected for /hooks/wake: status=400 bodyLimitBytes=1048576",
+    );
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
   it.each(["failed", "cancelled"] as const)(
     "responds at acceptance and logs later %s without another handoff",
     async (status) => {

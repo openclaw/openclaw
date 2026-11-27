@@ -316,7 +316,7 @@ describe("createTelegramDraftStream", () => {
 
       await vi.advanceTimersByTimeAsync(10_000);
       expect(api.sendMessage).toHaveBeenCalledTimes(2);
-      expect(stream.sendMayHaveLanded()).toBe(true);
+      expect(stream.sendMayHaveLanded("Replacement")).toBe(true);
       expect(api.deleteMessage).not.toHaveBeenCalled();
 
       await stream.clear();
@@ -353,7 +353,7 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
-    expect(stream.sendMayHaveLanded?.()).toBe(false);
+    expect(stream.sendMayHaveLanded("Hello")).toBe(false);
     expect(stream.messageId()).toBe(17);
   });
 

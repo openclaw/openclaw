@@ -226,23 +226,17 @@ describe("resolveBuildAllStep", () => {
     );
   });
 
-  it.each([
-    { heapMb: "4352", concurrency: "1" },
-    { heapMb: "12288", concurrency: "2" },
-  ])(
-    "passes encoded import URLs literally to managed Node on Windows (heap $heapMb)",
-    ({ heapMb, concurrency }) => {
-      const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
-      expectWindowsStep(
-        {
-          ...getBuildAllStep(STEP.compile),
-          args: ["--import", importUrl, ...getBuildAllStep(STEP.compile).args.slice(2)],
-        },
-        { env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: heapMb } },
-        ["--import", importUrl, "scripts/tsdown-build.mts", "--concurrency", concurrency],
-      );
-    },
-  );
+  it("passes encoded import URLs literally to managed Node on Windows", () => {
+    const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
+    expectWindowsStep(
+      {
+        ...getBuildAllStep(STEP.compile),
+        args: ["--import", importUrl, ...getBuildAllStep(STEP.compile).args.slice(2)],
+      },
+      { env: {} },
+      ["--import", importUrl, "scripts/tsdown-build.mts"],
+    );
+  });
 
   it.each([false, true])(
     "runs plugin builds through managed Node on Windows (defer isolated: %s)",
@@ -315,6 +309,22 @@ describe("resolveBuildAllSteps", () => {
         expect(index("scripts/tsdown-build.mts")).toBeGreaterThan(generation);
       }
     }
+  });
+
+  it("keeps the worker deploy bundle in full, package and CI artifact builds", () => {
+    const workerFlag = (profile: string, env: NodeJS.ProcessEnv) =>
+      resolveBuildAllSteps(profile, env).find(({ label }) => label === "tsdown")?.env
+        ?.OPENCLAW_BUILD_WORKER_DEPLOY_BUNDLE;
+    const optOut = { OPENCLAW_BUILD_WORKER_DEPLOY_BUNDLE: "0" };
+    for (const profile of ["full", "package", "ciArtifacts"]) {
+      expect(workerFlag(profile, optOut), profile).toBe("1");
+    }
+    expect(workerFlag("package", { ...optOut, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" })).toBe("1");
+    // Runtime-only builds leave the caller's opt-out in effect.
+    expect(
+      workerFlag("full", { ...optOut, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }),
+    ).toBeUndefined();
+    expect(workerFlag("runtime", optOut)).toBeUndefined();
   });
 
   it("rebuilds UI after runtime cleanup without reusing stale build metadata", () => {
@@ -758,7 +768,6 @@ describe("resolveBuildAllSteps", () => {
       expect(compilers).toHaveLength(runtimeOnly ? 1 : 3);
       const runtimeCompiler = compilers.at(-1)!;
       expect(runtimeCompiler.args).not.toContain("--config");
-      expect(runtimeCompiler.args).toContain("--concurrency");
       for (const compiler of compilers) {
         expect(compiler.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(
           compiler === runtimeCompiler ? "1" : skipDts,
@@ -768,6 +777,13 @@ describe("resolveBuildAllSteps", () => {
         OPENCLAW_DEV_SOURCE_ROOT:
           env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? process.cwd() : "/serving-checkout",
       });
+      // The updater's marker must reach the limit checker so size budgets stay advisory.
+      const exportCheck = invocations.find((call) =>
+        call.args.includes("scripts/check-plugin-sdk-exports.mts"),
+      );
+      expect(exportCheck?.options.env.OPENCLAW_UPDATE_IN_PROGRESS).toBe(
+        env.OPENCLAW_UPDATE_IN_PROGRESS,
+      );
       expect(env).toEqual(originalEnv);
     },
   );

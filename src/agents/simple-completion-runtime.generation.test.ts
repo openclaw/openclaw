@@ -32,7 +32,7 @@ const mocks = vi.hoisted(() => ({
 // mock-isolation: generation assertions use a synthetic completion without provider I/O.
 vi.mock("../llm/stream.js", () => ({ completeSimple: mocks.complete }));
 // mock-isolation: injected registries own the test; do not install process-wide transport hooks.
-vi.mock("./ai-transport-runtime-host.js", () => ({}));
+vi.mock("./ai-transport-runtime-host.js", () => ({ configureAiTransportRuntimeHost: () => {} }));
 
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: mocks.acquireRuntimeLease,
@@ -48,13 +48,17 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
+// mock-isolation: the synthetic completion has no retained generation registry.
+vi.mock("../plugins/runtime/generation-state.js", () => ({
+  getPluginRuntimeGenerationRegistry: () => undefined,
+}));
+
 // mock-isolation: a private generation store records which generation each step reads.
 vi.mock("../plugins/runtime/generation-scope.js", async () => {
   const { AsyncLocalStorage } = await import("node:async_hooks");
   const generation = new AsyncLocalStorage<string>();
   mocks.readGeneration = () => generation.getStore() ?? mocks.publishedGeneration;
   return {
-    getPluginRuntimeGenerationRegistry: () => undefined,
     runOutsidePluginRuntimeGenerationScope: (run: () => unknown) => generation.exit(run),
     withPluginRuntimeGenerationScope: (snapshot: { testGeneration?: string }, run: () => unknown) =>
       generation.run(snapshot.testGeneration ?? "unknown", run),

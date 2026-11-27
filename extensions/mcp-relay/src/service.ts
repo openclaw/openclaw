@@ -213,7 +213,7 @@ export class RelayService {
     const config = this.#options.config();
     if (
       authority.principal.kind === "owner" &&
-      (config.gateway?.roles || config.gateway?.auth?.mode === "trusted-proxy")
+      (config.gateway?.roles?.default || config.gateway?.auth?.mode === "trusted-proxy")
     ) {
       throw new RelayError(
         "unavailable",

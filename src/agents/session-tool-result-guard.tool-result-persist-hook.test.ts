@@ -76,7 +76,7 @@ function installHook(
 function expectPersistedToolResultTextCapped(sm: SessionManager) {
   const text = toolResultText(requirePersistedToolResult(sm));
   expect(text?.length).toBeLessThanOrEqual(120);
-  expect(text).toContain("truncated");
+  expect(text).toContain("chars omitted");
 }
 function expectPersistedToolResultDetailsCapped(sm: SessionManager) {
   const { details } = requirePersistedToolResult(sm);

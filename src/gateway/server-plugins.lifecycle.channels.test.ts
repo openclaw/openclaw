@@ -9,6 +9,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
+  type RuntimeConfigWriteApplicationStatus,
 } from "../config/runtime-write-application.js";
 import * as configFileSource from "../config/source-file.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +20,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createWatcherMock } from "./config-reload.watcher.test-support.js";
+import { readHttp } from "./control-ui-fixture.test-support.js";
 import {
   INSTANCE_BINDING_PROBE_METHOD,
   installInstanceBindingProbeCoordinator,
@@ -259,9 +261,18 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     });
     expect(committed.afterWrite.mode).toBe("auto");
     expect(application.claimed).toBe(true);
-    // Persistence schedules application; await its owner before probing the replacement.
-    await expect(application.result).resolves.toBe("applied");
-    expect((await settledProbe("cold-chat")).captured?.label).toBe("installed setup");
+    // The receipt can defer while retained work retires; observe actual application below.
+    const applicationResult = await application.result;
+    if (applicationResult !== "applied") {
+      expect(applicationResult).toEqual({
+        status: "deferred",
+        reason: expect.any(String),
+        appliesWhen: expect.any(String),
+      } satisfies RuntimeConfigWriteApplicationStatus);
+    }
+    await expect
+      .poll(async () => (await settledProbe("cold-chat")).captured?.label, { timeout: 10_000 })
+      .toBe("installed setup");
     expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
     expect(await settledProbe("sibling-chat")).toEqual(sibling);
     assert.ok(configWatcher);
@@ -375,22 +386,21 @@ it.each([false, true])(
     await maintenance.settled;
     const probe = async (accountId: string) => {
       const before = handledRequests.get(accountId) ?? 0;
-      let phase = "fetch";
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {
+        // Reload assertions do not depend on idle sockets retained by startup probes.
+        const response = await readHttp(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {
           method: "POST",
         });
-        phase = "body";
         return {
           status: response.status,
-          body: await response.text(),
-          registry: response.headers.get("x-webhook-registry"),
+          body: response.text,
+          registry: response.headers["x-webhook-registry"] ?? null,
         };
       } catch (error) {
         process.stderr.write(
           `[plugin-webhook-probe] ${JSON.stringify({
             accountId,
-            phase,
+            phase: "request",
             starts: [...starts],
             handlerEntered: (handledRequests.get(accountId) ?? 0) > before,
           })}\n`,

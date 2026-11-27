@@ -64,6 +64,21 @@ export type SessionTranscriptContextSnapshot = {
   messages: AgentMessage[];
   header: unknown;
   version?: SessionTranscriptContextVersion;
+  seed?: {
+    omittedCount: number;
+    omittedNonSummary: boolean;
+    retainedInputTokens: number;
+    admittedUser?: AgentMessage;
+    summary?: AgentMessage;
+  };
+};
+
+/** Internal native-seed view; full-fidelity context reads remain unbounded. */
+export type SessionContextSeedRequest = {
+  maxBytes: number;
+  tokenBudget: number;
+  admittedKey?: string;
+  beforeAdmittedUser: boolean;
 };
 
 export type SessionCompactionPreparation = {
@@ -95,6 +110,7 @@ export type SessionPendingInputReceipt =
 
 export type SessionTranscriptEventMatch =
   | { kind: "latest" }
+  | { kind: "custom-entry"; customType: string }
   | { kind: "canvas-widget"; docId: string }
   | { kind: "visible-final"; runId: string }
   | {
@@ -130,4 +146,5 @@ export type SessionContextMessagesWorkerInput = {
   target: SessionTranscriptRuntimeTarget;
   admission?: UserTurnTranscriptAdmissionReceipt;
   expectedIdentity?: import("../../infra/sqlite-worker-identity.js").DatabaseFileIdentity;
+  seed?: SessionContextSeedRequest;
 };

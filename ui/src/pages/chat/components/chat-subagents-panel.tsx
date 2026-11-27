@@ -29,7 +29,10 @@ import { ChatSubagentsMobileList, type ChatSubagentMobileItem } from "./chat-sub
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
 import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
-import { ChatSubagentsPanelDesktop } from "./chat-subagents-panel-desktop.tsx";
+import {
+  ChatSubagentsPanelDesktop,
+  pausedSubagentStatus,
+} from "./chat-subagents-panel-desktop.tsx";
 import { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
@@ -74,6 +77,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     const readiness = createSubagentsPresentation(data);
     const emptyLoading = createMemo(
       () =>
+        !data().hasResult &&
         !data().rows.length &&
         !data().nativeSnapshot &&
         !data().nativeError &&
@@ -140,7 +144,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     const Empty = () => (
       <Show when={!data().nativeSnapshot && !data().nativeError}>
         <Show
-          when={isPending(readiness.read)}
+          when={!data().hasResult && isPending(readiness.read)}
           fallback={
             data().hasResult &&
             !data().stopError && (
@@ -266,7 +270,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
           : status === "running"
             ? t("common.running")
             : status === "waiting"
-              ? t("chat.waitingOnSubagents")
+              ? (pausedSubagentStatus(row.session) ?? t("chat.waitingOnSubagents"))
               : status === "failed"
                 ? t("common.failed")
                 : status === "stopped"
@@ -275,6 +279,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       return {
         key: row.session.key,
         title,
+        modelLabel: row.modelLabel,
         status,
         statusLabel,
         elapsed: renderElapsed(row),

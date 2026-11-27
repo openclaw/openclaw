@@ -1,3 +1,7 @@
+import type {
+  RecordDeferredShellOutcome,
+  ShellCallReceipt,
+} from "../config/sessions/transcript-shell-receipt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { ExecAsk, ExecMode, ExecSecurity } from "../infra/exec-approvals.js";
@@ -18,6 +22,16 @@ import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types
 export type DurableExecOptions = { notifyOnExit: boolean; notifyOnExitEmptySuccess: boolean };
 
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
+  /** Host-stamped participation context, never a tool argument. */
+  participation?: boolean;
+  /** Installed only by the managed embedded session that owns restart recovery. */
+  admitShellCall?: (callId: string) => Promise<ShellCallReceipt>;
+  /** Host-owned starting-directory boundary; this does not sandbox command arguments. */
+  participationRoot?: string;
+  /** Retained participant allowlist misses cannot be reopened by a host approval. */
+  participationDenyMisses?: boolean;
+  /** Stable checkout owner, independent of a command's selected working directory. */
+  scratchRoot?: string;
   hasCronTool?: boolean;
   mode?: ExecMode;
   bypassHostApprovalFloors?: boolean;
@@ -32,10 +46,14 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   config?: OpenClawConfig;
   /** Host-prepared non-secret environment and store projection exclusions. */
   preparedRunEnvironment?: PreparedGitHubToolEnvironment;
+  /** Public tool inputs prepared by the owner of this execution host. */
+  preparedLocalToolEnv?: Readonly<Record<string, string>>;
   /** An explicit snapshot, including an empty one, replaces local store access. */
   preparedStoreEnvironment?: Readonly<SecretStoreExecEnvironment>;
   /** Host-prepared routing hint; remote workers have no Gateway session database. */
   preparedSubagentExecution?: boolean;
+  /** Internal provider-attested worker fact; not an exec argument or environment override. */
+  workerMemoryBoundary?: "sandbox";
   autoReviewer?: ExecAutoReviewer;
   createApprovalTransport?: (toolCallId: string, signal?: AbortSignal) => ExecApprovalTransport;
   /** Reads current attempt context only when a command needs review. */
@@ -58,6 +76,8 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   allowBackground?: boolean;
   /** Final run-local availability of the process continuation tool. */
   processToolAvailabilityRef?: { value?: boolean };
+  /** Final run-local availability of sessions_yield, the only way a one-shot run awaits an exit. */
+  sessionsYieldAvailabilityRef?: { value?: boolean };
   scopeKey?: string;
   sessionKey?: string;
   /** Executing session when tool policy is borrowed from a different session. */
@@ -100,12 +120,14 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
 
 /** Request and approval context shared by Gateway and node execution hosts. */
 export type ExecHostCommandParams = {
+  admitShellDispatch?: () => Promise<RecordDeferredShellOutcome | undefined>;
   approvalTransport?: ExecApprovalTransport;
   command: string;
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
   timeoutSec?: number;
   defaultTimeoutSec: number;
+  participationDenyMisses?: boolean;
   security: ExecSecurity;
   ask: ExecAsk;
   bypassHostApprovalFloors?: boolean;

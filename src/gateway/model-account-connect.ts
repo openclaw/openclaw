@@ -130,7 +130,7 @@ function resolveSharedAuthProfileProvider(cfg: OpenClawConfig, authProfileId: st
 function requireLinkableProvider(provider: string | undefined, authProfileId: string): string {
   if (!provider) {
     throw new ModelAccountConnectInputError(
-      `unknown auth profile "${authProfileId}"; sign the account in first with "openclaw models auth login --provider <id> --profile-id ${authProfileId}", then link it`,
+      `unknown auth profile "${authProfileId}"; sign the account in first, then link it`,
     );
   }
   return provider;

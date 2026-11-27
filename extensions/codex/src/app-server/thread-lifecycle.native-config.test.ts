@@ -391,9 +391,13 @@ describe("Codex native configuration lifecycle", () => {
           ? undefined
           : "",
     );
-    expect(frames.at(-1)?.[1]).toMatchObject({
-      developerInstructions: "<thread_policy>\n\n</thread_policy>",
-    });
+    // Replacing OpenClaw policy does not remove native collaboration guidance;
+    // managed threads now carry that guidance in the developer instructions.
+    const developerInstructions = frames.at(-1)?.[1].developerInstructions;
+    expect(developerInstructions).toMatch(/^<thread_policy>\n<collaboration_mode>\n/);
+    expect(developerInstructions).toMatch(/<\/collaboration_mode>\n<\/thread_policy>$/);
+    expect(developerInstructions).not.toContain("personal assistant running inside OpenClaw");
+    expect(developerInstructions).not.toContain("OpenClaw has dynamic tools");
     expect(frames.at(-1)?.[1].baseInstructions).toBe(key ? undefined : "");
     expect(resumed.preparedOpenClawBaseInstructions).toBeUndefined();
   });
@@ -475,7 +479,6 @@ describe("Codex native configuration lifecycle", () => {
       const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
         profileId: "operator-parent",
         scopes: ["operator.write"],
-        assertCurrent: () => {},
       });
       try {
         const pending = startOrResumeThread({
@@ -574,7 +577,7 @@ describe("Codex native configuration lifecycle", () => {
     },
   );
 
-  it.each(["missing issuer", "policy introduced during preparation"] as const)(
+  it.each(["missing issuer", "policy present at admission"] as const)(
     "refuses an unowned route before native dispatch when %s",
     async (restriction) => {
       const fixture = await createAgentLifecycleHarness({
@@ -585,17 +588,13 @@ describe("Codex native configuration lifecycle", () => {
           return readNativeConfig(method);
         },
       });
-      let modelPolicyRequired = false;
       const closeHost =
         restriction === "missing issuer"
           ? undefined
           : await bindProductionHarnessHostCapabilitiesForTest(params, {
               profileId: "restricted-caller",
               scopes: ["operator.write"],
-              assertCurrent: () => {},
-              get modelPolicy() {
-                return modelPolicyRequired ? { models: [], allows: () => false } : undefined;
-              },
+              modelPolicy: { models: [], allows: () => false },
             });
       if (restriction === "missing issuer") {
         params.hostCapabilities = createCodexTestHostCapabilities({
@@ -603,16 +602,9 @@ describe("Codex native configuration lifecycle", () => {
         });
       }
       try {
-        await expect(
-          startOrResumeThread({
-            ...lifecycleParams(fixture.client),
-            buildFinalConfigPatch: async () => {
-              await Promise.resolve();
-              modelPolicyRequired = true;
-              return {};
-            },
-          }),
-        ).rejects.toThrow("cannot enforce your operator role's model policy");
+        await expect(startOrResumeThread(lifecycleParams(fixture.client))).rejects.toThrow(
+          "cannot enforce your operator role's model policy",
+        );
         expect(
           fixture.request.mock.calls.some(([method]) =>
             ["thread/start", "thread/resume", "thread/fork", "turn/start"].includes(method),

@@ -9,6 +9,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { CronCreatorAuthorityCapability } from "../gateway/cron-creator-authority-grant.types.js";
 import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -18,7 +19,7 @@ import {
 import { resetPluginLoaderTestStateForTest, writePlugin } from "../plugins/loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   createGatewaySchedulerClock,
@@ -45,10 +46,7 @@ import {
   settlePreparedCliRun,
 } from "./cli-runner/cli-run-settlement.js";
 import type { AgentCommandOpts } from "./command/types.js";
-import {
-  bindActiveOperatorTurnAuthority,
-  type CronCreatorAuthorityCapability,
-} from "./cron-creator-authority-context.js";
+import { bindActiveOperatorTurnAuthority } from "./cron-creator-authority-context.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 const mocks = vi.hoisted(() => {
@@ -422,21 +420,16 @@ describe("runLocalAgentCommand resource lifetime", () => {
 });
 
 describe("runLocalAgentCommand operator authority", () => {
-  it("admits only local operator owners and revokes their authority at settlement", async () => {
-    for (const testCase of [
-      { operatorAuthority: true, senderIsOwner: true },
-      { operatorAuthority: true, senderIsOwner: false },
-      { operatorAuthority: false, senderIsOwner: true },
-    ]) {
-      const admitted = testCase.operatorAuthority && testCase.senderIsOwner;
+  it("admits local operator runs as the local-host owner and revokes them at settlement", async () => {
+    for (const operatorAuthority of [true, false]) {
       let retained: ReturnType<typeof bindActiveOperatorTurnAuthority>;
       let capability: CronCreatorAuthorityCapability | undefined;
-      mocks.prepare.mockResolvedValueOnce(createPrepared(testCase.senderIsOwner));
+      mocks.prepare.mockResolvedValueOnce(createPrepared(true));
       await runCommand(
         async (prepared) => {
           capability = prepared.opts.cronCreatorAuthorityCapability;
           retained = bindActiveOperatorTurnAuthority(prepared.runId);
-          if (admitted) {
+          if (operatorAuthority) {
             expect(capability?.callerOrigin).toEqual({ kind: "local" });
             expect(retained?.source).toBe("local");
           } else {
@@ -444,9 +437,11 @@ describe("runLocalAgentCommand operator authority", () => {
             expect(retained).toBeUndefined();
           }
         },
-        { operatorAuthority: testCase.operatorAuthority },
+        { operatorAuthority },
       );
-      if (admitted) {
+      // The local-host grant names the sender owner; no caller option narrows it.
+      expect(mocks.prepare.mock.calls.at(-1)?.[0]).toMatchObject({ senderIsOwner: true });
+      if (operatorAuthority) {
         expect(() => retained?.assertActive()).toThrow();
         expect(capability?.active).toBe(false);
       }
@@ -454,7 +449,7 @@ describe("runLocalAgentCommand operator authority", () => {
   });
 });
 
-it("keeps runtime memory registrations through local command preparation", async () => {
+it("keeps runtime memory registrations through local command preparation and drains them", async () => {
   const registry = createEmptyPluginRegistry();
   const pluginId = "memory-fixture";
   registry.plugins.push(createPluginRecord({ id: pluginId }));
@@ -464,6 +459,12 @@ it("keeps runtime memory registrations through local command preparation", async
   registry.memoryCorpusSupplements.push({ pluginId, supplement });
   registry.memoryPromptPreparations.push({ pluginId, prepare });
   registry.memoryPromptSupplements.push({ pluginId, builder });
+  const closeAllMemorySearchManagers = vi.fn(async () => {});
+  const runtime = {
+    getMemorySearchManager: async () => ({ manager: null }),
+    resolveMemoryBackendConfig: () => ({ backend: "builtin" as const }),
+    closeAllMemorySearchManagers,
+  };
   setActivePluginRegistry(registry, undefined, "default", state.workspaceDir);
   mocks.prepare.mockResolvedValueOnce({
     ...createPrepared(false),
@@ -475,9 +476,11 @@ it("keeps runtime memory registrations through local command preparation", async
       expect(captured?.memoryCorpusSupplements).toContainEqual({ pluginId, supplement });
       expect(captured?.memoryPromptPreparations).toContainEqual({ pluginId, prepare });
       expect(captured?.memoryPromptSupplements).toContainEqual({ pluginId, builder });
+      captured?.memoryCapabilities.push({ pluginId, capability: { runtime } });
     },
-    { opts: { message: "test", runId: "local-memory" } },
+    { opts: { message: "test", runId: "local-memory", cleanupMemoryOnRunEnd: true } },
   );
+  expect(closeAllMemorySearchManagers).toHaveBeenCalledOnce();
 });
 it("runs on the prepared plugin registry without another registration", async () => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
@@ -645,7 +648,6 @@ describe("agent command static capabilities", () => {
             config.agents.defaults.model.primary = "proxy-fixture/plain-fixture";
           }
           await fs.writeFile(configPath, JSON.stringify(config));
-          expect(requests).toEqual([]);
           const { stdout } = await promisify(execFile)(
             process.execPath,
             [

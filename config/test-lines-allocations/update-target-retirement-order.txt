@@ -1,2 +1,0 @@
-# Real manual/background retirement publications and observer-failure timer cancellation.
-78

@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import {
   completeUnshippedDaemonRuntimePinMigrationAsync,
+  daemonRuntimePinMigrationSourcesMatch,
   type DaemonRuntimePinDatabase,
   readDaemonRuntimePinMigrationReceipt,
   withDaemonRuntimePinStore,
@@ -27,7 +28,7 @@ import { getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-attribution.js";
+import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-context.js";
 
 function writeDaemonRuntimePinMigrationReceipt(
   db: DatabaseSync,
@@ -94,7 +95,10 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
   const sourceState = resolveOpenClawStateSqlitePath(env);
   const migrationComplete = (stateEnv: NodeJS.ProcessEnv) => {
     const previous = readDaemonRuntimePinMigrationReceipt(stateEnv);
-    return previous?.phase === "complete" && previous.source_state === sourceState;
+    return (
+      previous?.phase === "complete" &&
+      daemonRuntimePinMigrationSourcesMatch(previous.source_state, sourceState)
+    );
   };
   // A completed handoff needs no offline custody, including while the Gateway runs.
   try {

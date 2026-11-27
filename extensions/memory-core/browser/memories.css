@@ -65,14 +65,36 @@
   overflow-wrap: anywhere;
 }
 
+.memory-memories__results {
+  contain: inline-size;
+}
+
 .memory-memories__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  min-width: 0;
   margin-top: 2px;
 }
 
 .memory-memories__meta code {
-  overflow-wrap: anywhere;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  direction: rtl;
+  text-align: match-parent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
+}
+
+[aria-expanded="true"] .memory-memories__meta code {
+  overflow: visible;
+  direction: inherit;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .memory-memories__chevron svg {
@@ -107,7 +129,7 @@
   border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--text);
-  font: var(--control-ui-text-sm)/1.55 var(--mono);
+  font: 12px/1.55 var(--mono);
   /* Memory files are prose: wrap them rather than scroll sideways on a phone. */
   white-space: pre-wrap;
   overflow-wrap: anywhere;

@@ -15,7 +15,7 @@ when Knowledge or the source already says.
    its namespaced alias (`email:<address>`, `github:<login>`, `discord:<user id>`,
    `slack:<user id>`); one key on two pages means a duplicate. Otherwise
    `knowledge_lookup` the full name or known alias. `found` is a candidate:
-   confirm it with `knowledge_record({id, view: "summary"})`.
+   confirm it with `knowledge_record({id, maxChars: 1000})`.
 2. Only on `missing` or `ambiguous`, `knowledge_grep` with the expected `type`
    and a small `limit` (about 5); try spelling variants and synonyms. A hit
    count is not an answer; confirm candidates with a summary read. Read a full
@@ -79,7 +79,7 @@ attention and degrades search.
   `entities` or `dependencies`.
 - An authored source → entity link gives the entity a derived backlink. The
   entity's way back to the source is its source note
-  ([profiles](profiles.md#source-notes)), not a page link.
+  ([source notes](source-notes.md)), not a page link.
 - Link the source to every identified entity that has a page. Never
   link a garbled name or a low-confidence guess: a wrong link pollutes the graph
   more than a missing one.

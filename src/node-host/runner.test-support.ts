@@ -24,7 +24,6 @@ const mocks = vi.hoisted(() => {
     capturedGatewayClientOptions: [] as GatewayClientOptions[],
     capturedConfiguredGatewayConfigs: [] as Array<{ contextPath?: string }>,
     capturedGatewayClients: [] as ReturnType<typeof createClient>[],
-    mcpDescriptors: [] as Array<Record<string, unknown>>,
     mcpDescriptorsChanged: undefined as (() => void) | undefined,
     nodePluginTools: [] as Array<Record<string, unknown>>,
     nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
@@ -135,8 +134,11 @@ vi.mock("../infra/machine-model.js", () => ({
   resolveMachineModelIdentifier: vi.fn(() => "TestMachine1,1"),
 }));
 
+// mock-isolation: runner fixtures supply synthetic binary paths without inspecting the host PATH.
 vi.mock("../infra/executable-path.js", () => ({
-  resolveExecutableFromPathEnv: vi.fn((bin: string) => mocks.resolvedExecutables.get(bin) ?? null),
+  resolveExecutableFromPathEnvAsync: vi.fn(async (bin: string) =>
+    mocks.resolvedExecutables.get(bin),
+  ),
 }));
 
 // mock-isolation: Keep host PATH mutation outside the isolated runner fixture.
@@ -176,7 +178,7 @@ vi.mock("./mcp.js", () => ({
     async (_servers: unknown, deps?: { onDescriptorsChanged?: () => void }) => {
       mocks.mcpDescriptorsChanged = deps?.onDescriptorsChanged;
       return {
-        descriptors: mocks.mcpDescriptors,
+        descriptors: [],
         callMcpTool: vi.fn(),
         close: mocks.closeMcpManager,
       };

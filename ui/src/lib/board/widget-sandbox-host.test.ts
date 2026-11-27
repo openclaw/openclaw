@@ -722,7 +722,6 @@ describe("document timeouts", () => {
     }
     await vi.advanceTimersByTimeAsync(0);
     expect(f.onLoaded).toHaveBeenCalledOnce();
-    expect(fetchMock).toHaveBeenCalledOnce();
     if (phase === "render") {
       const delivery = f.post.mock.calls.find(
         ([data]) => data.method === "ui/notifications/sandbox-resource-ready",
@@ -758,4 +757,28 @@ describe("document timeouts", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(f.onLoadFailed).not.toHaveBeenCalled();
   });
+});
+
+it("bootstraps the board shell only from the bound frame and origin before delivering content", async () => {
+  const shell = "<p>Trusted shell</p>";
+  const { send, post, ready, frame } = createHost({
+    widget: widget({ sandboxShellHtml: shell }),
+  });
+  const data = { method: "ui/notifications/sandbox-bootstrap-ready", params: { version: 1 } };
+  send(data, [], window);
+  send(data, [], frame.contentWindow, "https://other.example");
+  send({ ...data, params: { version: 2 } });
+  expect(post).not.toHaveBeenCalled();
+  send(data);
+  expect(post).toHaveBeenCalledExactlyOnceWith(
+    { jsonrpc: "2.0", method: "ui/notifications/sandbox-bootstrap-shell", params: { html: shell } },
+    SANDBOX_ORIGIN,
+  );
+  ready();
+  await vi.waitFor(() =>
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "ui/notifications/sandbox-resource-ready" }),
+      SANDBOX_ORIGIN,
+    ),
+  );
 });

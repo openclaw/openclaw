@@ -205,7 +205,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   border-radius: calc(18px * var(--openclaw-corner-radius-scale));
   background: var(--bg-elevated);
   color: var(--muted);
-  font: 400 var(--control-ui-text-sm)/calc(20px * var(--control-ui-text-scale)) var(--font-body);
+  font: 400 12px/20px var(--font-body);
 }
 
 .mobile-header__notice > svg {
@@ -331,10 +331,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     max-width: 100%;
     overflow: hidden;
     color: var(--text-strong);
-    font: 600 var(--control-ui-text-lg) / calc(20px * var(--control-ui-text-scale)) var(--font-body);
+    font: 600 16px / 20px var(--font-body);
     /* The narrowest phones leave less room than the pill takes: 15px keeps the
        settings titles whole and closer to center. */
-    font-size: calc(clamp(15px, 4.6vw, 16px) * var(--control-ui-text-scale));
+    font-size: clamp(15px, 4.6vw, 16px);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -421,7 +421,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   }
 
   /* The header carries the title; the heading stays for assistive tech. */
-  & .content .content-header .page-title {
+  & .content .content-header .page-title,
+  & .content openclaw-plugin-page .plugin-page-title {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -472,13 +473,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   border-radius: 0;
 }
 
-/* The drawer has nothing to collapse into, so the desktop controls go. Search is
-   the exception, and only where nothing else is left to carry it: merged chat
-   chrome hides the topbar above, so the drawer is the last surface standing.
-   Everywhere else the topbar keeps its own search - including every native host,
-   which never merges the chat chrome - and a drawer copy would show two. */
-.shell--mobile-nav .sidebar-brand__desktop-control:not(.sidebar-brand__search),
-.shell--mobile-nav:not(.shell--merged-chat-chrome) .sidebar-brand__search {
+.shell--mobile-nav .sidebar-rail .sidebar-brand__desktop-control {
   display: none;
 }
 
@@ -591,7 +586,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .card-title {
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
   }
 
   .stat {
@@ -600,7 +595,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .stat-value {
-    font-size: calc(18px * var(--control-ui-text-scale));
+    font-size: 18px;
   }
 
   .chat-thread {
@@ -655,18 +650,23 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .list-title {
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
   }
 
   .code-block {
     padding: 8px;
     border-radius: var(--radius-md);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
 }
 
 /* Controls take their phone size with the floating header and stacked rows. */
 @media (max-width: 640px) {
+  /* The primary heading is in the page header, outside the settings workspace. */
+  :is(openclaw-device-page, openclaw-device-permissions-page) > :focus-within:has(h1) {
+    overflow: visible;
+  }
+
   /* Page traits own the phone gutter even when a detail has no hub header.
      Full-bleed panes keep their inset if a nested SettingsPage reports a trait. */
   .shell--settings .content:not(.content--custodian),
@@ -684,6 +684,8 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     --settings-header-inline-padding: 0;
     padding: var(--space-3) var(--space-3) var(--space-4);
 
+    /* A standalone intro shares the page gutter; hub tabs and nested headers own theirs. */
+    .content-header--intro:not(.settings-page *),
     .settings-page {
       padding-inline: 0;
     }
@@ -694,12 +696,12 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .field select {
     padding: 8px 10px;
     border-radius: var(--radius-md);
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
   }
 
   .btn {
     padding: 8px 12px;
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
 }
 
@@ -727,7 +729,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .stat-value {
-    font-size: var(--control-ui-text-lg);
+    font-size: 16px;
   }
 
   .chat-bubble {
@@ -768,7 +770,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .data-table th,
   .data-table td {
     padding: 8px 6px;
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
 
   .data-table-pagination {
@@ -787,7 +789,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .data-table-search input {
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
     padding: 8px 10px;
   }
 
@@ -795,10 +797,10 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     max-width: 200px;
   }
 
-  .session-details-panel,
+  /* The Sessions drawer owns the inline inset for its headings, fields, and facts. */
   .session-details-panel__hero,
   .session-details-section {
-    padding: 12px;
+    padding-block: var(--space-3);
   }
 
   .session-details-panel__title {

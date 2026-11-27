@@ -50,14 +50,13 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
         : null;
     const rail = sidebar.querySelector<HTMLElement>(".sidebar-rail")!;
     expect(rail).not.toBeNull();
-    for (const [triggerSelector, panelSelector, edge] of [
-      [".sidebar-agent-card__main", ".sidebar-agent-menu", "top"],
-      [".sidebar-identity-card", ".sidebar-identity-menu", "bottom"],
-      [".sidebar-issues-button", ".sidebar-issues-panel", "auto"],
+    for (const [triggerSelector, panelSelector, eventType] of [
+      [".sidebar-agent-card__main", ".sidebar-agent-menu", "overlay-after-show"],
+      [".sidebar-identity-card", ".sidebar-identity-menu", "overlay-after-show"],
+      [".sidebar-issues-button", ".sidebar-issues-panel", "focusin"],
     ] as const) {
       const trigger = rail.querySelector<HTMLButtonElement>(triggerSelector)!;
       expect(trigger).not.toBeNull();
-      const eventType = edge === "auto" ? "focusin" : "overlay-after-show";
       const shown = new Promise<void>((resolve) => {
         const listener = (event: Event) => {
           if (!(event.target instanceof HTMLElement) || !event.target.closest(panelSelector)) {
@@ -73,18 +72,11 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
       await shown;
       const panel = () => sidebar.querySelector<HTMLElement>(panelSelector);
       expect(panel()!.getBoundingClientRect().width).toBeGreaterThan(0);
-      expect(
-        panel()!.getBoundingClientRect().left - rail.getBoundingClientRect().right,
-      ).toBeCloseTo(8, 0);
       const panelBox = panel()!.getBoundingClientRect();
-      const triggerBox = trigger.getBoundingClientRect();
-      expect(panelBox.left).toBeGreaterThan(triggerBox.right);
-      if (edge === "top" || (edge === "auto" && triggerBox.top < window.innerHeight / 2)) {
-        expect(Math.abs(panelBox.top - triggerBox.top)).toBeLessThanOrEqual(1);
-      } else {
-        expect(panelBox.top).toBeLessThan(triggerBox.top);
-        expect(panelBox.bottom).toBeLessThanOrEqual(triggerBox.bottom + 1);
-      }
+      expect(panelBox.left).toBeGreaterThanOrEqual(rail.getBoundingClientRect().right);
+      expect(panelBox.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(panelBox.top).toBeGreaterThanOrEqual(0);
+      expect(panelBox.bottom).toBeLessThanOrEqual(window.innerHeight);
       expect(panel()!.contains(document.activeElement)).toBe(true);
       const surface = panel()!;
       const registry = registryFor(document);

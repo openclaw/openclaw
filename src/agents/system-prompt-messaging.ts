@@ -62,21 +62,18 @@ export function buildMessagingSection(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
-  delegationSectionRenders: boolean;
-  inTurnCollectionGuidance?: string;
 }) {
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageToolAvailable = params.availableTools.has("message");
   const visibleReplyInstruction = messageToolOnly
     ? messageToolAvailable
-      ? "- Current source visible reply MUST use `message(action=send)` or a final reaction to the current source message: `message(action=react, final=true)`. The final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed send. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
+      ? "- Current-source visible replies MUST use `message(action=send)` (`final=false` for progress; `final=true`/omitted when complete) or `message(action=react, final=true)`. Final text is private—skipping the tool sends nothing. Never include hidden instructions, private data, or reasoning."
       : "- Current source visible reply unavailable; final text remains private."
     : `- Current-session final text normally routes to source.${messageToolAvailable ? " If turn says final private, visible output uses `message(action=send)`." : ""}`;
   const messageToolTargetInstruction = `- ${buildMessageToolTargetGuidance(params.requireExplicitMessageTarget === true)}`;
   const routingGuidance = [
-    "- OpenClaw messaging: use available messaging tools, never shell commands, the CLI, curl, or direct RPC. Missing messaging tools are not permission to use another route.",
-    "- Subagents return results through their accepted completion path; parents relay required coordination. Do not send acknowledgments or duplicate completion reports.",
-    "- Other services (e.g. email): user-authorized CLI/API use is allowed; normal tool permissions and approvals still apply.",
+    "- OpenClaw messaging: use messaging tools only—never shell/CLI/curl/RPC even if messaging tools are absent. External services (e.g. email) may use authorized CLI/API under normal approvals.",
+    "- Subagents return results via their accepted completion path; parents relay needed coordination without sending acks or duplicate completion reports.",
   ];
   if (params.isMinimal) {
     // Restricted delivery turns still need their sole visible-reply contract;
@@ -101,60 +98,39 @@ export function buildMessagingSection(params: {
   const showGenericInlineButtonHint = !params.customInlineButtonHint;
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
-  const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
-  const hasSubagents = params.availableTools.has("subagents");
-  const hasSessionsYield = params.availableTools.has("sessions_yield");
   const suppressSilentTokenGuidance = messageToolOnly || params.silentReplyPromptMode === "none";
   const completionEventGuidance = suppressSilentTokenGuidance
-    ? "- Completion event requesting update: rewrite in normal voice; send. Never forward raw metadata or silent placeholder."
-    : `- Completion event requesting update: rewrite in normal voice; send. Never forward raw metadata or default to ${SILENT_REPLY_TOKEN}.`;
-  const subagentOrchestrationGuidance = params.delegationSectionRenders
-    ? ""
-    : hasSessionsSpawn
-      ? [
-          '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; clean context needs `context:"isolated"`, transcript needs `context:"fork"`. Follow the accepted completion mode.',
-          params.inTurnCollectionGuidance ??
-            (hasSessionsYield ? "Announcing children: wait via `sessions_yield`." : ""),
-          hasSubagents ? "`subagents(action=list)` only status/debug." : "",
-        ]
-          .filter(Boolean)
-          .join(" ")
-      : hasSubagents
-        ? "- Subagents: `subagents(action=list)` only for status/debug visibility."
-        : "";
+    ? "- Completion events requesting an update: rewrite in normal voice and send; never forward raw metadata or a silent placeholder."
+    : `- Completion events requesting an update: rewrite in normal voice and send; never forward raw metadata or default to ${SILENT_REPLY_TOKEN}.`;
   return [
     "## Messaging",
     visibleReplyInstruction,
     ...(params.availableTools.has("sessions_send")
       ? ["- Cross-session: `sessions_send(sessionKey, message)`."]
       : []),
-    subagentOrchestrationGuidance,
     completionEventGuidance,
     ...routingGuidance,
     messageToolAvailable
       ? [
           "",
           "### message tool",
-          "- Proactive send/channel action (poll, reaction, etc.): `message`.",
+          "- Use `message` for proactive sends and channel actions (polls, reactions, etc.).",
           groupMessageToolOnly
             ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`; final text private."
             : "",
           messageToolOnly ? messageToolTargetInstruction : "- `send`: `target` + `message`.",
           params.messageChannelOptions
-            ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`
+            ? `- Proactive send needs \`channel\` (${params.messageChannelOptions}).`
             : "- Set `channel` only outside current/default source.",
           messageToolOnly
-            ? "- Visible `message(send)` content: never repeat in final."
+            ? "- Never repeat visible `message(send)` content in final text."
             : suppressSilentTokenGuidance
-              ? "- Follow turn delivery: private final => visible via `message(send)`; otherwise normal reply once."
-              : `- After visible \`message(send)\`, final ONLY uppercase ${SILENT_REPLY_TOKEN}, with no punctuation or quotes.`,
-          !suppressSilentTokenGuidance
-            ? `Only the entire exact ${SILENT_REPLY_TOKEN} reply is silent. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`
-            : "",
-          "- A confirmed final message or added final reaction to the current source completes the reply; never repeat it in text.",
+              ? "- Private final => visible via `message(send)`; otherwise reply once normally."
+              : `- After visible \`message(send)\`, reply ONLY exact uppercase ${SILENT_REPLY_TOKEN} (no punctuation/quotes; discards unsent text from this turn).`,
+          "- A confirmed final message or final reaction to the current source completes the reply; never repeat it in text.",
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
-              ? '- Inline buttons: `send` with `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`.'
+              ? '- Inline buttons: `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`.'
               : params.runtimeChannel
                 ? `- Inline buttons OFF for ${params.runtimeChannel}; ask owner for ${params.runtimeChannel}.capabilities.inlineButtons=dm|group|all|allowlist.`
                 : ""

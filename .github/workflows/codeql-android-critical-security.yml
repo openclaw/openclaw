@@ -21,7 +21,10 @@ jobs:
   android:
     name: Critical Security (android)
     if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: >-
+      ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && github.event_name == 'schedule' &&
+          github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' &&
+          'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -29,17 +32,21 @@ jobs:
         with:
           submodules: false
 
-      - name: Setup Java
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          java-version: "21"
-
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
           install-bun: "false"
+          install-deps: "false"
+
+      - name: Setup Android toolchain
+        id: android-toolchain
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: restore
+          # CodeQL must observe compilation, not restore Gradle build outputs.
+          gradle-cache-mode: "off"
+          install-native-deps: "true"
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
@@ -50,6 +57,8 @@ jobs:
 
       - name: Build Android for CodeQL
         working-directory: apps/android
+        env:
+          JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
         run: ./gradlew --no-daemon :app:assemblePlayDebug
 
       - name: Analyze

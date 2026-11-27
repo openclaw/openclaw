@@ -1,2 +1,0 @@
-# Registry-to-CLI acquisition regression and public dry-run data snapshot.
-229

@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ReplyRunAlreadyActiveError, type ReplyOperation } from "./session-controller.contracts.js";
 import {
   activeSessionOperations,
-  hasOperationBackendRunId,
+  getOperationBackendRunIds,
   findSessionControllerEntries,
   getSessionControllerOperation,
   resolveReplyRunForCurrentSessionId,
@@ -47,10 +47,6 @@ export function isSessionRunActiveForKey(sessionKey: string): boolean {
   );
 }
 
-export function listActiveReplyRunSessionKeys(): string[] {
-  return [...activeSessionOperations()].map((operation) => operation.key);
-}
-
 /** Resolves a single active physical owner, rejecting ambiguous current identities. */
 export function resolveActiveReplyOperationForSessionId(
   sessionId: string,
@@ -72,7 +68,7 @@ export function findSessionControllerOperationByRunId(runId: string): ReplyOpera
     const claim = getSessionControllerEntryForOperation(operation).mailbox?.claim;
     if (
       !operation.result &&
-      (hasOperationBackendRunId(operation, runId) ||
+      (getOperationBackendRunIds(operation)?.has(runId) ||
         (claim?.operation === operation &&
           claim.inputs.some((input) => input.protocolRunId === runId)))
     ) {

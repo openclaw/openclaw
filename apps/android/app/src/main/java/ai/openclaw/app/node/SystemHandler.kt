@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.mainActivityPendingIntent
 import android.Manifest
@@ -100,6 +100,7 @@ internal fun buildSystemNotification(
     .setSmallIcon(android.R.drawable.ic_dialog_info)
     .setContentTitle(request.title)
     .setContentText(request.body)
+    .setStyle(NotificationCompat.BigTextStyle().bigText(request.body))
     .setContentIntent(mainActivityPendingIntent(appContext, NOTIFICATION_CONTENT_REQUEST_CODE))
     .setAutoCancel(true)
     .setOnlyAlertOnce(true)
@@ -111,7 +112,7 @@ class SystemHandler internal constructor(
 ) {
   constructor(appContext: Context) : this(poster = AndroidSystemNotificationPoster(appContext))
 
-  fun handleSystemNotify(paramsJson: String?): GatewaySession.InvokeResult {
+  fun handleSystemNotify(paramsJson: String?): InvokeResult {
     val params =
       parseNotifyRequest(paramsJson)
         ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object with title/body")
@@ -120,11 +121,11 @@ class SystemHandler internal constructor(
     }
     return try {
       poster.post(params)
-      GatewaySession.InvokeResult.ok(null)
+      InvokeResult.ok(null)
     } catch (_: SecurityException) {
       nodeInvokeError("NOT_AUTHORIZED", "enable OpenClaw notifications and the selected priority in Android Settings")
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
+      InvokeResult.error(
         code = "UNAVAILABLE",
         message = "NOTIFICATION_FAILED: ${err.message ?: "notification post failed"}",
       )

@@ -4,6 +4,7 @@ import {
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import {
+  acknowledgeProfileCronFailure,
   ensureUserPreferencesSchema,
   updatesGitCoauthorPreference,
   writeUserPreferences,
@@ -28,7 +29,8 @@ export const userPreferenceOperations = {
     if (
       update.serialized.length === 0 &&
       update.deletionKeys.length === 0 &&
-      update.expected.length === 0
+      update.expected.length === 0 &&
+      !update.cronFailure
     ) {
       const profile = selectResolvedUserProfileMetadataById(database.db, input.profileId);
       return profile ? ok({ profileId: profile.id }) : undefined;
@@ -40,6 +42,15 @@ export const userPreferenceOperations = {
         const profile = selectResolvedUserProfileMetadataById(db, input.profileId);
         if (!profile) {
           return undefined;
+        }
+        if (update.cronFailure) {
+          const acknowledgedAtMs = acknowledgeProfileCronFailure(
+            db,
+            profile.id,
+            update.cronFailure,
+          );
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          return ok({ profileId: profile.id, acknowledgedAtMs });
         }
         const result = writeUserPreferences(db, profile.id, update);
         const facts: UserPreferenceCoauthorMutation | undefined =

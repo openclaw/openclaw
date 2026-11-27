@@ -10,6 +10,8 @@ import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 
 export type MessageToolOptions = {
+  /** Runtime presentation only; never records a delegated permission denial. */
+  onAvailability?: (available: boolean) => void;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   agentAccountId?: string;
   agentSessionKey?: string;
@@ -40,6 +42,7 @@ export type MessageToolOptions = {
   sandboxWorkspaceMediaReadAllowed?: boolean;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  messageToolFinalByDefault?: boolean;
   inputProvenance?: import("../../sessions/input-provenance.js").InputProvenance;
   /** Process-local completion authority: send only to the current source route. */
   sourceReplyOnly?: boolean;

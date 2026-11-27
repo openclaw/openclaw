@@ -1,3 +1,0 @@
-# Native End admission and long-stream end-destination renewal.
-# Full keyboard/stream proof lives in the existing event-load harness.
-64

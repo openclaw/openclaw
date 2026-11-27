@@ -3,6 +3,7 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
+import type { SessionsUsageAggregates } from "../../../../src/shared/usage-types.js";
 import { t } from "../../i18n/index.ts";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import {
@@ -37,6 +38,13 @@ function formatUsageTokens(n: number): string {
 // adaptive cost formatter would change labels as values cross its thresholds.
 function formatUsageCost(n: number, decimals: 2 | 4 | 6 = 2): string {
   return formatUsd(n, decimals);
+}
+
+// Usage with no known price is unpriced, never free; a genuine zero stays $0.00.
+function formatHeadlineCost(totals: UsageTotals): string {
+  return totals.totalCost === 0 && totals.missingCostEntries > 0
+    ? t("usage.overview.unpriced")
+    : formatUsageCost(totals.totalCost);
 }
 
 export function formatAnalysisCost(value: number): string {
@@ -149,6 +157,30 @@ type UsageInsightStats = {
   errorRate: number;
 };
 
+export function usageThroughputStats(
+  { latency, dailyLatency }: Pick<SessionsUsageAggregates, "latency" | "dailyLatency">,
+  selectedDays: readonly string[],
+): Pick<UsageInsightStats, "throughputTokensPerMin" | "throughputCostPerMin"> {
+  const samples = selectedDays.length
+    ? (dailyLatency ?? []).filter((day) => selectedDays.includes(day.date))
+    : latency
+      ? [latency]
+      : [];
+  let activeMs = 0;
+  let tokens = 0;
+  let cost = 0;
+  for (const sample of samples) {
+    activeMs += sample.timedMs ?? 0;
+    tokens += sample.timedTokens ?? 0;
+    cost += sample.timedCost ?? 0;
+  }
+  if (activeMs <= 0) {
+    return {};
+  }
+  const minutes = activeMs / 60_000;
+  return { throughputTokensPerMin: tokens / minutes, throughputCostPerMin: cost / minutes };
+}
+
 export type { UsageInsightStats };
 export {
   buildUsageCostWindows,
@@ -157,5 +189,6 @@ export {
   formatUsageCost,
   formatDayLabel,
   formatFullDate,
+  formatHeadlineCost,
   formatUsageTokens,
 };

@@ -1,2 +1,0 @@
-266
-# Linked-worktree diagnostics and hanging-unshallow ordering, recorded-URL Doctor transport, noninteractive auth, lease revocation and cleanup, desktop tag fetch, and environment isolation regressions.

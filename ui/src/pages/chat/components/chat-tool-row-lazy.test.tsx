@@ -123,10 +123,14 @@ it("keeps card chrome through import recovery and retains the current resolved r
   await vi.waitFor(() => expect(load).toHaveBeenCalled());
   const placeholder = root.container.querySelector<HTMLButtonElement>(".chat-tool-row[aria-busy]")!;
   expect(placeholder.disabled).toBe(true);
-  expect(placeholder.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Exec");
+  expect(placeholder.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+    "Run echo before",
+  );
   expect(placeholder.querySelector(".chat-tool-disclosure__content")).not.toBeNull();
   expect(placeholder.querySelector(".chat-tool-row__chevron")).not.toBeNull();
-  expect(root.container.querySelector(".chat-permission-card")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(root.container.querySelector(".chat-permission-card")).not.toBeNull(),
+  );
   expect(root.container.querySelector(".chat-progress-card-receipt")).not.toBeNull();
   for (const [name, verb, removed] of [
     ["edit", "Editing", "-1"],
@@ -199,7 +203,9 @@ it("keeps card chrome through import recovery and retains the current resolved r
     expect(root.container.querySelector(".chat-tool-row__cmd")?.textContent).toBe("echo after"),
   );
   expect(root.container.querySelectorAll('[role="alert"]')).toHaveLength(0);
-  expect(root.container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("tool");
+  await waitForSolid(() =>
+    expect(root.container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("tool"),
+  );
   const row = root.container.querySelector<HTMLButtonElement>("button.chat-tool-row")!;
   expect(root.container.querySelector(".chat-tool-row[aria-busy]")).toBeNull();
   row.click();

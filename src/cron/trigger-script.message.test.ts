@@ -44,7 +44,7 @@ it.each(["captured", "legacy"] as const)(
     ]);
     plugins.setActivePluginRegistry(registry);
     const jobId = "script-message-payload";
-    const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+    const marker = markCronJobActive(jobId);
     onTestFinished(() => clearCronJobActive(jobId, marker));
     const signal = new AbortController().signal;
     const beforeAttempt = vi

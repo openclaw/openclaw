@@ -351,6 +351,10 @@
   .chat-processes__detail-name {
     color: var(--text);
     font-weight: 400;
+    line-height: 1.4;
+    direction: rtl;
+    text-align: match-parent;
+    text-overflow: ellipsis;
   }
 }
 :root[data-theme-mode="light"] .chat-processes__panel[data-mobile="false"] {
@@ -492,9 +496,9 @@
   }
   .chat-processes__detail-name {
     font-family: inherit;
-    font-size: var(--mobile-panel-rail-title-size, var(--control-ui-text-md));
+    font-size: var(--mobile-panel-rail-title-size, 14px);
     font-weight: 500;
-    line-height: calc(20px * var(--control-ui-text-scale));
+    line-height: 20px;
   }
   .chat-processes__output-info {
     padding: 10px 20px 16px;

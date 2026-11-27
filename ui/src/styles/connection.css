@@ -138,9 +138,13 @@
   /* Keep the following host details still when a ping fails. */
   min-height: 1lh;
   margin: 0;
-  color: var(--warn);
+  color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
+}
+
+.connection-ping__error--failed {
+  color: var(--warn);
 }
 
 .connection-activity__note {
@@ -266,13 +270,26 @@ openclaw-connection-page
   }
 }
 
-/* Uptime stays beside the machine name instead of taking a line of its own. */
+/* Uptime belongs beside the machine name, not halfway down a wrapped address. */
 #settings-connection-host .settings-row {
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  row-gap: 0;
+
+  .settings-row__text {
+    display: contents;
+  }
+
+  .settings-row__desc {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
 
   .settings-row__control {
+    grid-row: 1;
+    grid-column: 2;
     width: auto;
-    flex-wrap: nowrap;
+    max-width: none;
   }
 }
 

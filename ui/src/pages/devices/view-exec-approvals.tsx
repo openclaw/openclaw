@@ -2,12 +2,13 @@ import { createMemo, For } from "solid-js";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
+  SettingsLoadingSkeleton,
   SettingsSection,
   SettingsRow,
   SettingsStatus,
-  SettingsToggle,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { Switch } from "../../components/solid/switch.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { clampText, formatRelativeTimestamp } from "../../lib/format.ts";
 import {
@@ -142,6 +143,8 @@ export function resolveExecApprovalsState(input: DevicesProps) {
     error: input.execApprovalsError,
     savedNotice: input.execApprovalsSavedNotice,
     loading: input.execApprovalsLoading,
+    // DevicesProps.loading is the node inventory read; until it lands, "no devices" is unknown.
+    nodesPending: input.loading && input.nodes.length === 0,
     saving: input.execApprovalsSaving,
     nativePolicy,
     form,
@@ -179,7 +182,7 @@ export function ExecApprovals(props: ExecApprovalsState) {
           ) : props.error ? (
             <LoadFailure {...props} />
           ) : props.loading ? (
-            <PolicyActionRow description={t("common.loading")} />
+            <SettingsLoadingSkeleton rows={1} />
           ) : targetReady() ? (
             <PolicyActionRow description={t("devices.execApprovals.loadHint")}>
               <button class="btn" disabled={!props.connected} onClick={() => props.onLoad()}>
@@ -260,7 +263,11 @@ function HostRow(props: ExecApprovalsState) {
   return (
     <SettingsRow
       title={t("devices.execApprovals.host")}
-      description={props.targetNodes.length > 0 ? undefined : t("devices.execApprovals.noNodes")}
+      description={
+        props.targetNodes.length > 0 || props.nodesPending
+          ? undefined
+          : t("devices.execApprovals.noNodes")
+      }
       control={
         canChoose() ? (
           <SettingsSelect
@@ -493,7 +500,7 @@ function AutoAllowField(props: {
               })}
             </button>
           ) : undefined}
-          <SettingsToggle
+          <Switch
             checked={props.override ?? props.effective.autoAllowSkills}
             disabled={props.state.disabled}
             ariaLabel={t("devices.execApprovals.autoAllowSkills")}
@@ -568,6 +575,7 @@ function Allowlist(props: {
               <IconButton
                 icon="x"
                 label={t("devices.execApprovals.remove")}
+                tooltip={false}
                 disabled={props.state.disabled}
                 onClick={() =>
                   props.state.onRemove(props.entries.length <= 1 ? path() : [...path(), index])

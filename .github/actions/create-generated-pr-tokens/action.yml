@@ -2,6 +2,9 @@ name: Create generated PR tokens
 description: Mint repo-scoped GitHub App tokens for generated branch and pull request publication.
 
 inputs:
+  repository:
+    description: Destination repository name under the workflow repository owner.
+    required: false
   contents-client-id:
     description: GitHub App client id with contents write access.
     required: true
@@ -36,7 +39,7 @@ runs:
         client-id: ${{ inputs.contents-client-id }}
         private-key: ${{ inputs.contents-private-key }}
         owner: ${{ github.repository_owner }}
-        repositories: ${{ github.event.repository.name }}
+        repositories: ${{ inputs.repository || github.event.repository.name }}
         permission-contents: write
 
     - name: Create generated PR app token
@@ -46,6 +49,6 @@ runs:
         client-id: ${{ inputs.pull-request-client-id }}
         private-key: ${{ inputs.pull-request-private-key }}
         owner: ${{ github.repository_owner }}
-        repositories: ${{ github.event.repository.name }}
+        repositories: ${{ inputs.repository || github.event.repository.name }}
         permission-contents: ${{ inputs.pull-request-contents-permission }}
         permission-pull-requests: write

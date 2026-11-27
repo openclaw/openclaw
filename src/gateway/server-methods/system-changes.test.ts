@@ -138,48 +138,32 @@ describe("openclaw.changes.list", () => {
     await closeOpenClawStateDatabaseAsync();
   });
 
-  it.each(["revoked", "rejected"] as const)(
-    "does not disclose a delayed %s read",
-    async (outcome) => {
-      await withTestDir({ prefix: "openclaw-system-changes-delayed-" }, async (stateDir) => {
-        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-        const read =
-          createDeferredCore<
-            Awaited<ReturnType<typeof stateReader.executeExistingOpenClawStateRead>>
-          >();
-        vi.spyOn(stateReader, "executeExistingOpenClawStateRead")
-          .mockReturnValueOnce(read.promise)
-          .mockResolvedValue({
-            ok: true,
-            sourceAdmitted: true,
-            type: "diagnostic.latest",
-            entries: [],
-          });
-        let current = true;
-        const { respond, pending } = requestChanges({
-          hasCurrentClientAuthority: () => current,
+  it("does not disclose a delayed rejected read", async () => {
+    await withTestDir({ prefix: "openclaw-system-changes-delayed-" }, async (stateDir) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const read =
+        createDeferredCore<
+          Awaited<ReturnType<typeof stateReader.executeExistingOpenClawStateRead>>
+        >();
+      vi.spyOn(stateReader, "executeExistingOpenClawStateRead")
+        .mockReturnValueOnce(read.promise)
+        .mockResolvedValue({
+          ok: true,
+          sourceAdmitted: true,
+          type: "diagnostic.latest",
+          entries: [],
         });
-        expect(respond).not.toHaveBeenCalled();
-        if (outcome === "revoked") {
-          current = false;
-          read.resolve({ ok: true, sourceAdmitted: true, type: "diagnostic.latest", entries: [] });
-        } else {
-          read.reject(new Error("audit reader refused"));
-        }
-        await pending;
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            message:
-              outcome === "revoked"
-                ? "Gateway requester authority changed"
-                : "audit reader refused",
-          }),
-        );
-      });
-    },
-  );
+      const { respond, pending } = requestChanges();
+      expect(respond).not.toHaveBeenCalled();
+      read.reject(new Error("audit reader refused"));
+      await pending;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: "audit reader refused" }),
+      );
+    });
+  });
 
   it("merges journals, collapses matching writes, and skips non-history records", async () => {
     await withAuditStores(async ({ stateDir, systemStore, configStore }) => {

@@ -10,7 +10,6 @@ import {
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
@@ -24,6 +23,11 @@ import {
   readResidentUserProfileId,
   readResidentUserProfileIdentity,
 } from "../../state/user-profile-list.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
+} from "../openclaw-id/tunnel-principal.js";
+import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
@@ -45,7 +49,6 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
   const workspaceDir = resolveAgentWorkspaceDir(context.getRuntimeConfig(), agentId);
   const operatorAuthority = client?.internal?.operatorRunAuthority;
   const toolCaller = getGatewayToolCallerIdentity();
-  const assertToolCurrent = captureGatewayToolCallerAssertion();
   const currentProfile = () => {
     try {
       resolveGatewayPersonalToolParticipant(client?.internal?.agentRuntimeIdentity, {
@@ -53,7 +56,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       })?.assertCurrent();
     } catch (error) {
       throw new PersonalFileAccessError(
-        "Personal instructions are unavailable in this turn. Ask in your own Control UI turn with a new message.",
+        "Personal instructions are unavailable in this turn. Ask again yourself with a new message in the OpenClaw app.",
         { cause: error },
       );
     }
@@ -86,15 +89,13 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
         !requesterAuthority?.source ||
         requesterAuthority.source !== operatorAuthority.source ||
         requesterAuthority.profileId !== operatorAuthority.profileId ||
-        !assertToolCurrent
+        !toolCaller?.operationalRunInstance
       ) {
         throw new PersonalFileAccessError("Personal instructions require an admitted user turn.");
       }
       // Dispatch may issue a narrower grant. Bind by the opaque original source
       // and subject, while retaining both the run and narrowed grant lifetimes.
       assertAdmittedRunOperatorAuthority(requesterAuthority);
-      assertToolCurrent();
-      operatorAuthority.assertCurrent();
       id = operatorAuthority.profileId;
     } else {
       if (
@@ -118,11 +119,20 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
     }
     const cfg = context.getRuntimeConfig();
     const profile = readResidentUserProfileIdentity(canonicalId);
-    const policy = resolveOperatorRolePolicyForAssignment(
-      canonicalId,
-      profile?.role ?? null,
-      cfg,
-      profile?.githubLogin ?? null,
+    // An owner device attributed to its linked profile keeps owner authority (OCF-510).
+    const principal = (operatorAuthority ?? client.internal)?.openclawIdPrincipal;
+    const policy = openclawIdSubjectRolePolicy(
+      principal?.kind === "owner" && !isOpenClawIdTunnelPrincipalCurrent(principal)
+        ? undefined
+        : principal,
+      () =>
+        resolveOperatorRolePolicyForAssignment(
+          canonicalId,
+          profile?.role ?? null,
+          cfg,
+          profile?.githubLogin ?? null,
+          operatorRoleSubject(profile),
+        ),
     );
     if (
       ![

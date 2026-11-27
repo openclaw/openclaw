@@ -2,6 +2,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
+import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -86,4 +87,41 @@ describe("AgentSession compaction correlation", () => {
       }
     },
   );
+
+  it("persists and publishes the identity a recovery caller already announced", async () => {
+    const runId = "run-recovery";
+    const sessionManager = guardSessionManager(SessionManager.inMemory(), { runId });
+    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "retained answer" }]),
+      timestamp: 2,
+    });
+    sessionManager.appendMessage({ role: "user", content: "next prompt", timestamp: 3 });
+    sessionManager.appendMessage(createAssistant(testModel, [{ type: "text", text: "answer" }]));
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "summary" }]),
+      ),
+    );
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager: createAutoCompactionSettings(),
+      resourceLoader: await createResourceLoader(createCompactionExtension()),
+    });
+    const onAgentEvent = vi.fn();
+    const subscription = subscribeEmbeddedAgentSession({ session, runId, onAgentEvent });
+    try {
+      await session[agentSessionAutomaticCompaction](undefined, undefined, "none", {
+        itemId: "ovf-recovery",
+      });
+      const compaction = sessionManager.getBranch().find((entry) => entry.type === "compaction");
+      expect(compaction).toMatchObject({ __openclaw: { runId, itemId: "ovf-recovery" } });
+      const events = onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "compaction");
+      expect(events.map(({ data }) => data.itemId)).toEqual(["ovf-recovery", "ovf-recovery"]);
+    } finally {
+      subscription.unsubscribe();
+    }
+  });
 });

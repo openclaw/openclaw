@@ -1,20 +1,26 @@
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { getEnvironmentData } from "node:worker_threads";
 import { expect, it } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { installPostgresStateFixture } from "../../state/openclaw-state-db.postgres-fixture.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { usePostgresTestHarness } from "../postgres-sync/postgres.test-support.js";
 import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { createSqliteDatabaseAdmissionRelay } from "../sqlite-worker-operation-admission.js";
+import { createUpdateRun } from "../update-run-ledger.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { conformanceWorkerResult, spawnConformanceWorker } from "./conformance.test-support.js";
 import { getDatabaseEngineSelection, installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
+import { getPostgresPhysicalFacts } from "./physical-facts.js";
 import { withPostgresConnection } from "./postgres-store-metadata.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
@@ -29,7 +35,9 @@ type Result = {
   transactions: number;
 };
 
-it.skipIf(!connection).each(["open", "ensure", "raw-fragment"] as const)(
+it
+  .skipIf(!connection)
+  .each(["open", "ensure", "raw-fragment", "write", "schema-read", "existing-write"] as const)(
   "keeps %s admission owned across a sibling publication gap",
   async (operation) => {
     const prefix = `state_owners_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
@@ -142,10 +150,20 @@ it.skipIf(!connection).each(["open", "ensure", "raw-fragment"] as const)(
           } else {
             expect(result, result.stack).toMatchObject({
               ok: true,
-              value: operation === "open" ? { admitted: 1 } : { count: 0 },
+              value:
+                operation === "open"
+                  ? { admitted: 1 }
+                  : operation === "schema-read"
+                    ? { present: true, column: true, key: ["state_key"] }
+                    : operation === "write" || operation === "existing-write"
+                      ? { present: true }
+                      : { count: 0 },
             });
-            if (operation === "ensure") {
+            if (operation === "ensure" || operation === "write" || operation === "existing-write") {
               expect(result.transactions).toBe(2);
+              if (operation === "write" || operation === "existing-write") {
+                expect(result.callbackCalls).toBe(1);
+              }
             }
           }
         } finally {
@@ -156,8 +174,7 @@ it.skipIf(!connection).each(["open", "ensure", "raw-fragment"] as const)(
             release(readerGate, index);
           }
           await Promise.allSettled([published, read]);
-          publisherRelay.finish();
-          readerRelay.finish();
+          await Promise.all([publisherRelay.finish(), readerRelay.finish()]);
           publisher.anchor.close();
           reader.anchor.close();
         }
@@ -169,5 +186,52 @@ it.skipIf(!connection).each(["open", "ensure", "raw-fragment"] as const)(
         dropPostgresTestSchemas(client, prefix),
       );
     }
+  },
+);
+
+const fragmentHarness = usePostgresTestHarness("state_fragments");
+const { prefix, client } = fragmentHarness;
+it.skipIf(!connection).each([false, true])(
+  "accepts a peer update ledger without hiding drift (drift: %s)",
+  async (drift) => {
+    await withOpenClawTestState({ label: "state-fragments" }, async (state) => {
+      const pathname = state.statePath("state", "openclaw.sqlite");
+      const env = state.env;
+      installPostgresStateFixture(connection!, prefix);
+      const options = { path: pathname, env };
+      const database = withEngineStoreAdmission(() => openOpenClawStateDatabase(options));
+      expect(withEngineStoreAdmission(() => tableExists(database.db, "update_runs"))).toBe(false);
+      const child = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          "src/infra/database-engine/state-fragments.process.test-support.ts",
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, ...env },
+          timeout: 30_000,
+          input: JSON.stringify({ connection, prefix, pathname }),
+        },
+      );
+      expect(child.status, child.stderr).toBe(0);
+      const namespace = withEngineStoreAdmission(
+        () => getPostgresPhysicalFacts(database.db)!.namespace,
+      );
+      const create = () =>
+        withEngineStoreAdmission(() =>
+          createUpdateRun({ trigger: "chat", preview: true }, options),
+        );
+      if (drift) {
+        await client.query(`ALTER TABLE "${namespace}".update_runs ADD COLUMN unexpected text`);
+        expect(create).toThrow(/schema drift/);
+      } else {
+        create();
+      }
+      const rows = await client.query(`SELECT run_id FROM "${namespace}".update_runs`);
+      expect(rows.rows).toHaveLength(drift ? 1 : 2);
+      closeOpenClawStateDatabaseForTest();
+    });
   },
 );

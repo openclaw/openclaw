@@ -1,0 +1,6 @@
+# Gateway start upgrade by copy and swap: generic-rebuild proof on every committed release
+# corpus, the e2e start test (encoded device-key marker, in-process forced fallback,
+# canonical Gateway readers), and one regression per review finding (resumed-plan handle
+# release, reference predicates, WITHOUT ROWID orphans, collision rollback, copy/diff
+# stamps, first-use feature tables, refused-config start, version-zero PostgreSQL anchors and mixed engines, agent-directory remap, external config publication).
+419

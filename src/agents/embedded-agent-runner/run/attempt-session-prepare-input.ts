@@ -1,6 +1,9 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import type { AgentSession } from "../../sessions/index.js";
+import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type EmbeddedAttemptSessionPreparationInput = {
@@ -11,7 +14,6 @@ export type EmbeddedAttemptSessionPreparationInput = {
   effectiveCwd: string;
   effectiveWorkspace: string;
   onSessionManagerCreated: (sessionManager: ReturnType<typeof guardSessionManager>) => void;
-  replayAllowedToolNames: ReadonlySet<string>;
   resolveActiveContextEnginePluginId: () => string | undefined;
   runAbortSignal: AbortSignal;
   sessionAgentId: string;
@@ -19,7 +21,7 @@ export type EmbeddedAttemptSessionPreparationInput = {
   withOwnedTranscriptWrite: <T>(operation: () => Promise<T> | T) => Promise<T>;
 };
 
-export type SessionBoundaryAttempt = Pick<
+type SessionBoundaryAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "config"
   | "inputProvenance"
@@ -27,9 +29,23 @@ export type SessionBoundaryAttempt = Pick<
   | "operation"
   | "prompt"
   | "promptCacheKey"
+  | "replayCurrentTranscript"
   | "sessionId"
   | "sessionKey"
   | "skipPreparedUserTurnMessage"
   | "suppressNextUserMessagePersistence"
   | "userTurnTranscriptRecorder"
->;
+> & { model?: Pick<EmbeddedRunAttemptParams["model"], "api" | "baseUrl"> };
+
+export type EmbeddedAttemptSessionBoundaryInput = {
+  abortSignal?: AbortSignal;
+  activeSession: Pick<AgentSession, "agent" | "subscribe">;
+  appendOnlyRuntimeContext?: boolean;
+  inHistorySystemUpdates?: boolean;
+  attempt: SessionBoundaryAttempt;
+  getUserTranscriptContexts: () => LlmBoundaryOptions["userTranscriptContexts"];
+  isRawModelRun: boolean;
+  preparedUserTurnMessage: PersistedUserTurnMessage | undefined;
+  sessionManager: ReturnType<typeof guardSessionManager>;
+  setActiveSessionSystemPrompt: (systemPrompt: string) => void;
+};

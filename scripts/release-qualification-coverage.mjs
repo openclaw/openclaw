@@ -6,22 +6,6 @@ import { isRecord } from "./lib/record-shared.mjs";
 export const QUALIFICATION_COVERAGE_PATH = "scripts/lib/release-qualification-coverage.json";
 const SCHEMA = "openclaw.release-qualification-coverage/v1";
 
-export function qualificationAdmissionContract(source) {
-  if (typeof source !== "string" || Buffer.byteLength(source) > 1024 * 1024) {
-    throw new Error("Invalid qualification workflow source");
-  }
-  const matches = [
-    ...source.matchAll(/^ {2}FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT: *([^\r\n]+)$/gmu),
-  ];
-  if (!matches.length && !source.includes("FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT")) {
-    return undefined;
-  }
-  if (matches.length !== 1 || !/^(?:"1"|'1'|1)$/u.test(matches[0][1])) {
-    throw new Error("Unsupported qualification admission workflow contract");
-  }
-  return "1";
-}
-
 function object(value, keys, label) {
   if (
     !isRecord(value) ||
@@ -137,9 +121,16 @@ export function resolveQualificationCoverage(policy, inputs) {
     throw new Error("Unsupported qualification policy schema");
   }
   const profile = inputs.release_profile;
-  if (!["beta", "stable", "full"].includes(profile) || inputs.rerun_group !== "all") {
-    throw new Error("Candidate-owned qualification requires a full profile and all groups");
+  if (
+    !["beta", "stable", "full"].includes(profile) ||
+    !["all", "build-only"].includes(inputs.rerun_group)
+  ) {
+    throw new Error(
+      "Candidate-owned qualification requires a full profile and all or build-only groups",
+    );
   }
+  // Build-only retains the full frozen inventory, but selects none of its validation
+  // children. It can prepare sealed artifacts, never establish validated coverage.
   // Policy v1 means complete fresh and backward-upgrade coverage, not merely
   // successful aggregate gates whose selected matrix may have been narrowed.
   if (inputs.mode !== "both") {
@@ -208,11 +199,13 @@ export function validateQualificationJobs(
   }
   for (const name of names(requiredNames, "required job names")) {
     const matches = jobs.filter((job) => job.name === name);
+    if (matches.length <= 1 && waivedJobNames.has(name)) {
+      continue;
+    }
     if (
       matches.length !== 1 ||
       matches[0].status !== "completed" ||
-      (matches[0].conclusion !== "success" &&
-        !(matches[0].conclusion === "failure" && waivedJobNames.has(name)))
+      matches[0].conclusion !== "success"
     ) {
       throw new Error(label + " required job did not succeed exactly once: " + name);
     }

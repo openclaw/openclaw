@@ -81,9 +81,22 @@ it.each([
     params: { pluginId: "local-tool", enabled: true },
   },
   {
-    args: { action: "install", source: "clawhub", packageName: "local-tool", version: "1.0.0" },
+    args: {
+      action: "install",
+      source: "clawhub",
+      packageName: "local-tool",
+      version: "1.0.0",
+      expectedPluginId: "local-tool",
+      expectedIntegrity: "sha256:" + "a".repeat(64),
+    },
     method: "plugins.install",
-    params: { source: "clawhub", packageName: "local-tool", version: "1.0.0" },
+    params: {
+      source: "clawhub",
+      packageName: "local-tool",
+      version: "1.0.0",
+      expectedPluginId: "local-tool",
+      expectedIntegrity: "sha256:" + "a".repeat(64),
+    },
   },
 ])(
   "routes $args.action through the authorized management owner",
@@ -232,6 +245,24 @@ it.each([false, true])(
         expect(result.details).toMatchObject({ next: expect.stringContaining("new conversation") });
         expect(JSON.stringify(result.details)).toContain("do not repeat");
       }
+    });
+  },
+);
+
+it.each(["@expediagroup/expedia-openclaw", "openclaw-travel-themes"])(
+  "finds exact package %s without guessing its plugin id",
+  async (packageName) => {
+    callGateway.mockResolvedValue({
+      plugins: [{ id: "travel-themes", packageName, state: "enabled" }],
+      mutationAllowed: true,
+    });
+    const result = await createPluginsTool().execute("package", {
+      action: "list",
+      query: packageName,
+    });
+    expect(result.details).toMatchObject({
+      plugins: [{ id: "travel-themes", packageName, state: "enabled" }],
+      matching: 1,
     });
   },
 );

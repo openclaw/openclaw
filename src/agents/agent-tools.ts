@@ -9,7 +9,6 @@ export {
   createOpenClawCodingToolsAsync,
   createOpenClawCodingToolsInternalAsync,
 } from "./agent-tools.async.js";
-export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
 /** @deprecated Use createOpenClawCodingToolsInternalAsync for runtime construction. */
 export function createOpenClawCodingToolsInternal(
@@ -27,5 +26,9 @@ export function createOpenClawCodingTools(options?: PluginCodingToolsOptions): A
     method: "createOpenClawCodingTools",
     replacement: "await createOpenClawCodingToolsAsync()",
   });
-  return createOpenClawCodingToolsInternal(options);
+  return createOpenClawCodingToolsInternal({
+    ...options,
+    unverifiedExecutionPolicy: true,
+    readDelegationConfig: undefined,
+  });
 }

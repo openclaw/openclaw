@@ -21,6 +21,7 @@ import {
 import { resolveCodeModeConfig, toToolSearchConfig } from "../../src/agents/code-mode-runtime.js";
 import { ToolSearchRuntime } from "../../src/agents/tool-search-runtime.js";
 import type { ToolSearchToolContext } from "../../src/agents/tool-search-types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const ctx: ToolSearchToolContext = {
   agentId: "main",
@@ -94,12 +95,7 @@ try {
   await setImmediate();
   gc.length = 0;
   if (allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const samples = [];
   measurementStart = performance.now();

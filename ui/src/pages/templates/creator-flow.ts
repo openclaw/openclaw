@@ -1,18 +1,20 @@
 import type {
+  TemplateDraftReviewItem,
   TemplateDraftReviewChoices,
   TemplatesDraftsCreateResult,
   TemplatesDraftsPublishResult,
   TemplatesDraftsReadResult,
   TemplatesDraftsReviewResult,
 } from "@openclaw/gateway-protocol";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { registerTemplateCreatorEnglish } from "../../i18n/locales/en-template-creator.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -22,10 +24,20 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { templateCreatorOwner, type TemplateCreator } from "./creator-publication.ts";
+import {
+  templateCreatorOwner,
+  type TemplateCreator,
+  type TemplatePackagePreview,
+  type TemplateReviewTarget,
+} from "./creator-publication.ts";
+import { TemplateCreatorSignIn } from "./creator-sign-in.ts";
+import { canCreateTemplateDraft } from "./draft-navigation.ts";
+import { readTemplatePackagePreview } from "./template-package-preview.ts";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 registerEnglishCatalog(registerTemplateCreatorEnglish);
+
+const PENDING_PUBLICATION_POLL_MS = 30_000;
 
 type Target = {
   agentId: string;
@@ -55,25 +67,36 @@ export class TemplateCreatorFlow implements TemplateCreator {
   private readonly listeners = createChangeListeners();
   private target: Target | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
-  private editTimer: ReturnType<typeof setTimeout> | null = null;
+  private presentationActive = false;
   private generation = 0;
   private reviewRequest = 0;
   private seenRevision: string | null = null;
   busy: "starting" | "reviewing" | "publishing" | null = null;
   review: TemplatesDraftsReviewResult | null = null;
-  reviewRead: { result: Promise<void> } | null = null;
   reviewCurrent = false;
-  choices: TemplateDraftReviewChoices | null = null;
-  modalOpen = false;
+  private choices: TemplateDraftReviewChoices | null = null;
+  inlineReview = false;
   publication: TemplatesDraftsPublishResult | null = null;
+  publicationIssue: "failed" | "unconfirmed" | null = null;
+  private publicationAttemptId: string | undefined;
+  private publicationReviewToken: string | undefined;
   error: string | null = null;
-  presentationLifetime = Promise.withResolvers<void>();
 
   get hasActiveDraft() {
     return this.target !== null;
   }
 
   constructor(private readonly context: ApplicationContext) {
+    // Admission installs retirement before the cold presentation can mount.
+    const router = context.router;
+    let pathname = router.getState().location.pathname;
+    router.subscribe(() => {
+      const next = router.getState().location.pathname;
+      if (next !== pathname) {
+        pathname = next;
+        this.retirePresentation();
+      }
+    });
     let client = context.gateway.snapshot.client;
     context.gateway.subscribe((snapshot) => {
       if (snapshot.client === client) {
@@ -88,10 +111,49 @@ export class TemplateCreatorFlow implements TemplateCreator {
   readonly subscribe = this.listeners.subscribe;
 
   private readonly changed = this.listeners.publish;
+  private readonly clawHubSignIn = new TemplateCreatorSignIn(this.changed, () => {
+    const target = this.target;
+    if (!target) {
+      return;
+    }
+    // Re-read this same private draft, not a new chat turn. Revision polling
+    // also covers approval while the agent is still drafting.
+    this.error = null;
+    this.seenRevision = null;
+    this.changed();
+    this.schedulePoll(target, this.generation, 0);
+  });
+
+  get signIn() {
+    return this.clawHubSignIn.state;
+  }
+
+  startClawHubSignIn() {
+    if (this.target) {
+      void this.clawHubSignIn.start(this.target);
+    }
+  }
+
+  cancelClawHubSignIn() {
+    if (this.target) {
+      void this.clawHubSignIn.cancel(this.target);
+    }
+  }
+
+  private canSignIn() {
+    return canCallGatewayMethod(
+      this.context.gateway.snapshot,
+      "templates.drafts.signIn",
+      "operator.admin",
+    );
+  }
 
   retirePresentation() {
-    this.presentationLifetime.resolve();
-    this.presentationLifetime = Promise.withResolvers<void>();
+    this.presentationActive = false;
+    this.clawHubSignIn.retire();
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+    }
   }
 
   private mainSessionKey(agentId: string) {
@@ -126,22 +188,22 @@ export class TemplateCreatorFlow implements TemplateCreator {
   private reset(target: Target | null) {
     this.retirePendingStart();
     this.retirePresentation();
+    this.clawHubSignIn.reset();
     this.generation += 1;
     this.reviewRequest += 1;
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
     }
-    if (this.editTimer) {
-      clearTimeout(this.editTimer);
-    }
     this.target = target;
     this.seenRevision = null;
     this.review = null;
-    this.reviewRead = null;
     this.reviewCurrent = false;
     this.choices = null;
-    this.modalOpen = false;
     this.publication = null;
+    this.inlineReview = false;
+    this.publicationIssue = null;
+    this.publicationAttemptId = undefined;
+    this.publicationReviewToken = undefined;
     this.error = null;
     this.changed();
     return this.generation;
@@ -192,6 +254,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         throw new Error(t("templatesDraft.sendFailed"));
       }
       this.navigate(target);
+      this.presentationActive = true;
       this.schedulePoll(target, generation);
     } catch (error) {
       if (this.context.gateway.snapshot.client === client && this.generation === generation) {
@@ -222,15 +285,82 @@ export class TemplateCreatorFlow implements TemplateCreator {
     this.busy = null;
     const generation = this.reset(target);
     this.navigate(target);
+    this.presentationActive = true;
+    this.schedulePoll(target, generation, 0);
+  }
+
+  matches(target: TemplateReviewTarget) {
+    return (
+      this.target?.client === this.context.gateway.snapshot.client &&
+      this.target.agentId === target.agentId &&
+      this.target.draftId === target.draftId &&
+      this.target.sessionKey === target.sessionKey
+    );
+  }
+
+  get sessionKey() {
+    return this.target?.sessionKey;
+  }
+
+  hydrate(agentId: string, draftId: string, sessionKey: string) {
+    const client = this.context.gateway.snapshot.client;
+    if (!client) {
+      return;
+    }
+    if (this.matches({ agentId, draftId, sessionKey })) {
+      if (this.canSignIn()) {
+        this.clawHubSignIn.show(this.target!);
+      }
+      this.inlineReview = true;
+      this.presentationActive = true;
+      this.changed();
+      if (this.busy === "publishing") {
+        return;
+      }
+      if (
+        this.publication?.publicationStatus === "pending" ||
+        this.publicationIssue === "unconfirmed"
+      ) {
+        void this.checkPublication();
+      } else if (!this.publication && !this.publicationIssue) {
+        this.schedulePoll(this.target!, this.generation, 0);
+      }
+      return;
+    }
+    this.busy = null;
+    const target = { agentId, draftId, sessionKey, client };
+    const generation = this.reset(target);
+    if (this.canSignIn()) {
+      this.clawHubSignIn.show(target);
+    }
+    this.inlineReview = true;
+    this.presentationActive = true;
+    this.changed();
     this.schedulePoll(target, generation, 0);
   }
 
   private schedulePoll(target: Target, generation: number, delay = 2500) {
-    this.pollTimer = setTimeout(() => void this.poll(target, generation), delay);
+    // A read or write can settle after the card unmounts. Keep its result, not its timer.
+    if (!this.presentationActive) {
+      return;
+    }
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+    }
+    this.pollTimer = setTimeout(() => {
+      if (!this.current(target, generation)) {
+        return;
+      }
+      if (this.publication?.publicationStatus === "pending") {
+        void this.checkPublication();
+      } else {
+        void this.poll(target, generation);
+      }
+    }, delay);
   }
 
   private async poll(target: Target, generation: number) {
-    if (!this.current(target, generation) || this.publication) {
+    if (!this.current(target, generation) || this.publication || this.publicationIssue) {
       return;
     }
     try {
@@ -250,8 +380,11 @@ export class TemplateCreatorFlow implements TemplateCreator {
           this.reviewCurrent = false;
         }
         this.seenRevision = draft.revision;
-        if (hasCompleteScope(draft.content)) {
+        if (!this.signIn && !this.clawHubSignIn.checking && hasCompleteScope(draft.content)) {
           await this.refreshReview(target, generation);
+        } else if (this.review) {
+          // No refresh will notify the card to retire its stale preview.
+          this.changed();
         }
       }
     } catch (error) {
@@ -260,7 +393,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         this.changed();
       }
     } finally {
-      if (this.current(target, generation) && !this.publication) {
+      if (this.current(target, generation) && !this.publication && !this.publicationIssue) {
         this.schedulePoll(target, generation);
       }
     }
@@ -272,7 +405,8 @@ export class TemplateCreatorFlow implements TemplateCreator {
     }
     this.busy = "reviewing";
     const request = ++this.reviewRequest;
-    const pending = (async () => {
+    this.changed();
+    try {
       const result = await target.client.request<TemplatesDraftsReviewResult>(
         "templates.drafts.review",
         {
@@ -292,16 +426,18 @@ export class TemplateCreatorFlow implements TemplateCreator {
         description: result.description,
         excluded: result.items.filter((item) => !item.included).map((item) => item.id),
       };
-      this.modalOpen = true;
       this.error = null;
-    })();
-    this.reviewRead = { result: pending };
-    this.changed();
-    try {
-      await pending;
     } catch (error) {
       if (this.current(target, generation) && request === this.reviewRequest) {
-        this.error = formatUiError(error);
+        const details =
+          error instanceof GatewayRequestError ? asOptionalRecord(error.details) : null;
+        if (this.canSignIn() && asOptionalRecord(details?.templateSignIn)?.required === true) {
+          this.clawHubSignIn.require();
+          this.clawHubSignIn.show(target);
+          this.error = null;
+        } else {
+          this.error = formatUiError(error);
+        }
       }
     } finally {
       if (this.current(target, generation) && request === this.reviewRequest) {
@@ -311,29 +447,32 @@ export class TemplateCreatorFlow implements TemplateCreator {
     }
   }
 
-  updateChoices(next: TemplateDraftReviewChoices) {
-    const target = this.target;
-    if (!target || !this.choices) {
-      return;
-    }
-    this.choices = next;
-    this.reviewCurrent = false;
-    this.changed();
-    if (this.editTimer) {
-      clearTimeout(this.editTimer);
-    }
-    const generation = this.generation;
-    this.editTimer = setTimeout(() => void this.refreshReview(target, generation), 350);
-  }
-
   async publish() {
     const target = this.target;
     const review = this.review;
     const choices = this.choices;
-    if (!target || !review || !choices || !this.reviewCurrent || this.busy) {
+    if (
+      !target ||
+      !review ||
+      !choices ||
+      !this.reviewCurrent ||
+      this.busy ||
+      this.publication ||
+      this.publicationIssue === "unconfirmed"
+    ) {
+      return;
+    }
+    if (!canCreateTemplateDraft(this.context)) {
+      this.error = t("templatesDraft.reviewUnavailable");
+      this.changed();
       return;
     }
     const generation = this.generation;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+    }
+    this.publicationReviewToken = review.reviewToken;
+    this.publicationIssue = null;
     this.busy = "publishing";
     this.reviewCurrent = false;
     this.changed();
@@ -349,18 +488,66 @@ export class TemplateCreatorFlow implements TemplateCreator {
       );
       if (this.current(target, generation)) {
         this.publication = result;
-        this.modalOpen = false;
+        this.publicationAttemptId = result.attemptId;
         this.error = null;
-        showToast({
-          severity: result.publicationStatus === "published" ? "success" : undefined,
-          message: t(
-            result.publicationStatus === "published"
-              ? "templatesDraft.published"
-              : "templatesDraft.pending",
-          ),
-          actionLabel: t("templatesDraft.viewPublication"),
-          onAction: () => openExternalUrlSafe(result.url),
-        });
+      }
+    } catch (error) {
+      if (this.current(target, generation)) {
+        const effect =
+          error instanceof GatewayRequestError
+            ? asOptionalRecord(asOptionalRecord(error.details)?.templatePublication)?.effect
+            : undefined;
+        // A lost transport is not evidence that the registry write did not happen.
+        this.publicationIssue = effect === "none" ? "failed" : "unconfirmed";
+        this.error = formatUiError(error);
+      }
+    } finally {
+      if (this.current(target, generation)) {
+        this.busy = null;
+        if (this.publication?.publicationStatus === "pending") {
+          this.schedulePoll(target, generation, PENDING_PUBLICATION_POLL_MS);
+        }
+        this.changed();
+      }
+    }
+  }
+
+  async checkPublication() {
+    const target = this.target;
+    const review = this.review;
+    if (!target || !review || this.busy || !canCreateTemplateDraft(this.context)) {
+      return;
+    }
+    const generation = this.generation;
+    this.busy = "reviewing";
+    this.changed();
+    try {
+      const result = await target.client.request<TemplatesDraftsReviewResult>(
+        "templates.drafts.review",
+        {
+          agentId: target.agentId,
+          draftId: target.draftId,
+          choices: this.choices ?? undefined,
+          checkPublication: true,
+          reviewToken: this.publicationReviewToken ?? review.reviewToken,
+          ...(this.publicationAttemptId ? { attemptId: this.publicationAttemptId } : {}),
+        },
+      );
+      if (!this.current(target, generation)) {
+        return;
+      }
+      const receipt = result.publicationState;
+      if (receipt?.status === "published" || receipt?.status === "pending") {
+        this.publication = receipt.publication;
+        this.publicationIssue = null;
+        this.error = null;
+      } else if (receipt?.status === "failed") {
+        this.publication = null;
+        this.publicationIssue = "failed";
+        this.error = t("templatesDraft.registryFailed", { reason: receipt.reason });
+      } else {
+        this.publicationIssue = "unconfirmed";
+        this.publication = null;
       }
     } catch (error) {
       if (this.current(target, generation)) {
@@ -370,28 +557,33 @@ export class TemplateCreatorFlow implements TemplateCreator {
       if (this.current(target, generation)) {
         this.busy = null;
         this.changed();
+        if (this.publication?.publicationStatus === "pending") {
+          this.schedulePoll(target, generation, PENDING_PUBLICATION_POLL_MS);
+        }
       }
     }
   }
 
-  close() {
-    this.retirePresentation();
-    this.modalOpen = false;
-    this.changed();
-  }
-
-  reopen() {
-    if (this.review) {
-      this.modalOpen = true;
-      this.changed();
-    }
-  }
-
   retryReview() {
+    if (this.publicationIssue === "unconfirmed") {
+      return;
+    }
+    this.publicationIssue = null;
     const target = this.target;
     if (target) {
       void this.refreshReview(target, this.generation);
     }
+  }
+
+  async readPackagePreview(item: TemplateDraftReviewItem): Promise<TemplatePackagePreview | null> {
+    const target = this.target;
+    const review = this.review;
+    const generation = this.generation;
+    if (!target || !review?.items.includes(item) || !item.requirement) {
+      return null;
+    }
+    const preview = await readTemplatePackagePreview(target.client, review.files, item);
+    return this.current(target, generation) && this.review === review ? preview : null;
   }
 
   private retirePendingStart() {
@@ -402,9 +594,19 @@ export class TemplateCreatorFlow implements TemplateCreator {
   }
 }
 
-export function templateCreatorFlow(context: ApplicationContext) {
+export function templateCreatorFlow(context: ApplicationContext, target?: TemplateReviewTarget) {
   const owner = templateCreatorOwner(context);
-  if (!owner.flow) {
+  if (target) {
+    const flows = (owner.inlineFlows ??= new Map());
+    const key = JSON.stringify([target.agentId, target.draftId, target.sessionKey]);
+    let flow = flows.get(key) ?? (owner.flow?.matches(target) ? owner.flow : undefined);
+    if (!flow) {
+      flow = new TemplateCreatorFlow(context);
+    }
+    flows.set(key, flow);
+    return flow;
+  }
+  if (!owner.flow || owner.flow.inlineReview) {
     owner.flow = new TemplateCreatorFlow(context);
     owner.publish();
   }

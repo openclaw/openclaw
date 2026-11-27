@@ -31,6 +31,7 @@ export class Maintenance {
   private state: State = {};
   private scheduler?: PluginServiceSchedulerV1;
   private running?: Promise<void>;
+  private starting?: Promise<void>;
   constructor(
     private readonly stores: Stores,
     private readonly log: Logger,
@@ -52,9 +53,28 @@ export class Maintenance {
   }
 
   /** Arm the schedule for this service lifetime. */
-  async start(scheduler: PluginServiceSchedulerV1) {
+  start(scheduler: PluginServiceSchedulerV1): Promise<void> {
     this.scheduler = scheduler;
-    this.state = await this.load();
+    const previous = this.starting;
+    this.starting = this.initialize(scheduler, this.stores.incarnation, previous);
+    return this.starting;
+  }
+
+  private async initialize(
+    scheduler: PluginServiceSchedulerV1,
+    epoch: number,
+    previous?: Promise<void>,
+  ) {
+    // A restart joins the preceding initialization, even when it failed.
+    await previous?.catch(() => {});
+    if (this.scheduler !== scheduler || this.stores.incarnation !== epoch) {
+      return;
+    }
+    const state = await this.load();
+    if (this.scheduler !== scheduler || this.stores.incarnation !== epoch) {
+      return;
+    }
+    this.state = state;
     if (this.configError) {
       this.log.warn(`Knowledge maintenance is not scheduled: ${this.configError}`);
     }
@@ -79,23 +99,32 @@ export class Maintenance {
       );
       return;
     }
-    await this.arm(now);
+    await this.arm(now, scheduler, epoch);
   }
 
-  /** End this service lifetime: arm nothing more and wait for a pass in flight. */
+  /** End this lifetime and join initialization, passes and schedule persistence. */
   async stop() {
     this.scheduler = undefined;
-    await this.running;
+    await Promise.allSettled([this.starting, this.running]);
   }
 
-  private async arm(after: number) {
-    if (!this.scheduler || !this.cron || !this.active) {
+  private async arm(after: number, scheduler: PluginServiceSchedulerV1 | undefined, epoch: number) {
+    if (
+      !scheduler ||
+      this.scheduler !== scheduler ||
+      this.stores.incarnation !== epoch ||
+      !this.cron ||
+      !this.active
+    ) {
       return;
     }
     const slot = nextRun(this.cron, after);
     this.state.nextRunAt = slot;
     await this.save();
-    this.scheduler.schedule({
+    if (this.scheduler !== scheduler || this.stores.incarnation !== epoch) {
+      return;
+    }
+    scheduler.schedule({
       id: "knowledge-maintenance",
       atMs: slot,
       run: () => this.pass("scheduled", slot),
@@ -104,15 +133,20 @@ export class Maintenance {
 
   /** One pass for one slot, then arm the next slot. Never overlaps itself. */
   pass(trigger: MaintenanceRun["trigger"], slot: number): Promise<void> {
-    this.running ??= this.execute(trigger, slot)
-      .catch((e: unknown) =>
-        // SAFETY: execute() rejects only with Error objects from the store runtime and storage client.
-        this.log.warn(`Knowledge maintenance pass failed: ${(e as Error).message}`),
-      )
-      .finally(() => {
-        this.running = undefined;
-      });
-    return this.running.then(() => this.arm(Math.max(slot, this.scheduler?.now() ?? Date.now())));
+    if (!this.running) {
+      const scheduler = this.scheduler,
+        epoch = this.stores.incarnation;
+      this.running = this.execute(trigger, slot)
+        .catch((e: unknown) =>
+          // SAFETY: execute() rejects only with Error objects from the store runtime and storage client.
+          this.log.warn(`Knowledge maintenance pass failed: ${(e as Error).message}`),
+        )
+        .then(() => this.arm(Math.max(slot, scheduler?.now() ?? Date.now()), scheduler, epoch))
+        .finally(() => {
+          this.running = undefined;
+        });
+    }
+    return this.running;
   }
 
   private async execute(trigger: MaintenanceRun["trigger"], slot: number) {
@@ -196,7 +230,8 @@ export class Maintenance {
     );
   }
 
-  status(): MaintenanceStatus {
+  async status(): Promise<MaintenanceStatus> {
+    await this.starting;
     const { enabled, schedule, timezone } = this.stores.policy.maintenance;
     return {
       enabled,

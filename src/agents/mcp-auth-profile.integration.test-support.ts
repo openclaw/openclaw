@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 import type { FetchLike } from "@modelcontextprotocol/client";
@@ -258,7 +258,7 @@ async function runExternalScenario(root: string): Promise<void> {
       );
     }
   };
-  const hooks = registerHooks({
+  const hooks = nodeModule.registerHooks({
     resolve(specifier, context, nextResolve) {
       observeModuleAttempt(specifier);
       const resolved = nextResolve(specifier, context);
@@ -458,6 +458,8 @@ async function runScopeScenario(root: string): Promise<void> {
   const { getPluginRegistryState } = await import("../plugins/runtime-state.js");
   const { setActivePluginRegistry } = await import("../plugins/runtime.js");
   const generationScope = await import("../plugins/runtime/generation-scope.js");
+  // Keep fresh-process imports deferred until this scenario installs its fixture.
+  const generationState = await import("../plugins/runtime/generation-state.js");
   const requestScope = await import("../plugins/runtime/gateway-request-scope.js");
   const { withMcpAuthProfileBearer } = await import("./mcp-auth-profile.js");
   const prepare = (fixture: ProviderFixture) =>
@@ -513,7 +515,7 @@ async function runScopeScenario(root: string): Promise<void> {
         pluginRegistry: generation.pluginRegistry,
         declaredProviderOwners: generation.metadataSnapshot.declaredProviderOwners,
       });
-      assert.equal(generationScope.getPluginRuntimeGenerationRegistry(), generation.pluginRegistry);
+      assert.equal(generationState.getPluginRuntimeGenerationRegistry(), generation.pluginRegistry);
       if (context) {
         assertFields(context, { config: fixture.config, agentDir: fixture.agentDir });
       }
@@ -562,7 +564,7 @@ async function runScopeScenario(root: string): Promise<void> {
     assert.equal(endpoint.requests.length, sent);
     assert(!providerEvents.some((event) => event.owner === "disabled"));
     assert.equal(requestScope.getPluginRuntimeGatewayRequestScope(), undefined);
-    assert.equal(generationScope.getPluginRuntimeGenerationRegistry(), undefined);
+    assert.equal(generationState.getPluginRuntimeGenerationRegistry(), undefined);
     assert.equal(getPluginRegistryState()?.activeRegistry, second.generation.pluginRegistry);
   } finally {
     inspectHook = undefined;

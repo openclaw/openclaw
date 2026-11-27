@@ -8,6 +8,7 @@ import {
   deriveInviteProofKey,
   deriveRootSigner,
   ed25519SignerFromSeed,
+  encodeKit,
   formatEd25519PublicKey,
   formatIrohEndpointKey,
   generateEd25519Signer,
@@ -47,13 +48,22 @@ export function memoryStore() {
   const profiles = new Map<string, Awaited<ReturnType<OpenClawIdMemberProfiles["read"]>>[string]>();
   return {
     profiles: {
+      inviteProfiles: async () => [],
+      link: async () => ({ ok: false, code: "profile_changed" }) as const,
       save: async (input: { accountId: string; name?: string | null; email?: string | null }) => {
         const previous = profiles.get(input.accountId);
         profiles.set(input.accountId, {
           id: previous?.id ?? `profile:${input.accountId}`,
           displayName: previous?.displayName ?? input.name ?? null,
           email: input.email ?? previous?.email ?? null,
+          effectiveRole: previous?.effectiveRole,
         });
+      },
+      setRole: async (accountId: string, role: string, onlyIfUnassigned: boolean) => {
+        const profile = profiles.get(accountId);
+        if (profile && (!onlyIfUnassigned || !profile.effectiveRole)) {
+          profile.effectiveRole = role;
+        }
       },
       read: async (accountIds: readonly string[]) =>
         Object.fromEntries(
@@ -64,7 +74,8 @@ export function memoryStore() {
         ),
     },
     read: async () => record,
-    write: async (next: StoredClaw) => {
+    write: async (next: StoredClaw, assertCurrent?: () => void) => {
+      assertCurrent?.();
       // Match the durable store's strict JSON contract, including absent optional fields.
       serializePluginStoreJson({
         value: next,
@@ -83,7 +94,7 @@ export function memoryStore() {
 export async function linkedClaw(
   store: {
     read: () => Promise<StoredClaw | undefined>;
-    write: (record: StoredClaw) => Promise<void>;
+    write: (record: StoredClaw, assertCurrent?: () => void) => Promise<void>;
     profiles?: OpenClawIdMemberProfiles;
   } = memoryStore(),
   // Commits the link another way (through a service) instead of the authority directly.
@@ -111,7 +122,8 @@ export async function linkedClaw(
   if ("ok" in prep) {
     throw new Error(prep.detail);
   }
-  const root = await deriveRootSigner(generateKitSecret());
+  const kitSecret = generateKitSecret();
+  const root = await deriveRootSigner(kitSecret);
   const device = await generateEd25519Signer();
   const w1 = formatIrohEndpointKey(randomBytes(32));
   const cert = await signStatement(
@@ -163,6 +175,8 @@ export async function linkedClaw(
     sign,
     clawId: prep.claw_id,
     stateDir,
+    /** The recovery kit text (`OCK1-…`) R was derived from. */
+    kit: await encodeKit(kitSecret),
   };
 }
 
@@ -211,7 +225,7 @@ export function serviceFor(
 /** An InviteCap signed by D1 for `email`, with its proof key and link secret. */
 export async function ownerInvite(
   claw: LinkedClaw,
-  params: { email: string; role?: "operator" | "viewer"; expiresIn?: number },
+  params: { email: string; role?: string; expiresIn?: number },
 ) {
   const { invite_id, secret } = generateInviteSecret();
   const proofKey = await deriveInviteProofKey(secret);
@@ -254,12 +268,14 @@ export async function redemptionMail(params: {
     "InviteRedemption",
     {
       ...parts,
+      label: "Bob browser",
       proof: await computeRedemptionProof(params.proofKey, parts),
       requested_at: nowSeconds(),
     },
     signer,
   );
   return {
+    signer,
     peerKey,
     message: {
       message_id: `m-${params.inviteId.slice(0, 6)}`,

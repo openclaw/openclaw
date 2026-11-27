@@ -109,6 +109,8 @@ struct ToolDisplayRegistryTests {
             args: AnyCodable(["command": "printf ready"])).detail)
 
         #expect(ToolDisplayRegistry.resolve(name: "mcp__github__search_issues", args: nil).name == "search_issues")
+        #expect(ToolDisplayRegistry.operationCall(name: "mcp__github__search_issues", args: nil)
+            .name == "mcp__github__search_issues")
         for raw in ["mcp__", "mcp__server", "mcp__server__"] {
             #expect(ToolDisplayRegistry.resolve(name: raw, args: nil).name == raw)
         }

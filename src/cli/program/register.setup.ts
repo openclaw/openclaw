@@ -67,6 +67,10 @@ export function registerSetupCommand(program: Command): void {
     .option("--team", "Create a coordinator with researcher, writer, and reviewer specialists")
     .option("--wizard", "Run interactive onboarding", false)
     .option(
+      "--terminal-path <launcher>",
+      "Expose an app-managed CLI in new terminals; do not run setup",
+    )
+    .option(
       "--baseline",
       "Create baseline config/workspace/session folders without onboarding",
       false,
@@ -88,6 +92,23 @@ export function registerSetupCommand(program: Command): void {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       const options = rawOptions as Record<string, unknown>;
+      if (options.terminalPath !== undefined) {
+        if (typeof options.terminalPath !== "string") {
+          throw new Error("--terminal-path requires an app-managed launcher path.");
+        }
+        const unsupported = listExplicitOptionFlagsExcept(
+          commandRuntime,
+          new Set(["terminalPath"]),
+        );
+        if (unsupported.length > 0) {
+          throw new Error(
+            "--terminal-path cannot be combined with: " + unsupported.join(", ") + ".",
+          );
+        }
+        const { installDesktopTerminalPath } = await import("../../daemon/terminal-cli.js");
+        defaultRuntime.log(await installDesktopTerminalPath(options.terminalPath, process.env));
+        return;
+      }
       const hasOnboardingFlag =
         listExplicitOptionFlagsExcept(commandRuntime, SYSTEM_AGENT_OPTION_NAMES).length > 0;
       const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);

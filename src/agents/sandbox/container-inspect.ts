@@ -1,10 +1,53 @@
 /** Read-only inspection of engine-owned container identities, state, labels and ports. */
+import { get, type IncomingMessage } from "node:http";
+import { text } from "node:stream/consumers";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DOCKER_SANDBOX_ENGINE,
   execContainer,
   type SandboxContainerEngine,
 } from "./container-engine.js";
+import { parseInspectedSandboxMounts } from "./docker-mount-source.js";
+
+function isStoppedContainerState(state: unknown): boolean {
+  return isRecord(state) && state.Running === false && state.Paused === false && state.Pid === 0;
+}
+
+/** Check for a stopped sandbox without changing its Docker target. */
+export async function dockerSandboxIsStopped(
+  engine: SandboxContainerEngine,
+  id: string,
+  signal: AbortSignal,
+  endpoint?: string,
+): Promise<boolean> {
+  if (!endpoint) {
+    const result = await execContainer(engine, ["inspect", "-f", "{{json .State}}", id], {
+      signal,
+    });
+    return isStoppedContainerState(JSON.parse(result.stdout));
+  }
+  // The captured Unix endpoint lets the warm path use Docker's inspect API directly.
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
+    get(
+      {
+        socketPath: endpoint.slice("unix://".length),
+        path: `/containers/${id}/json`,
+        signal,
+        agent: false,
+      },
+      resolve,
+    ).once("error", reject);
+  });
+  if (response.statusCode !== 200) {
+    response.resume();
+    throw new Error(`Docker could not inspect sandbox ${id} (HTTP ${response.statusCode}).`);
+  }
+  const inspected: unknown = JSON.parse(await text(response));
+  if (!isRecord(inspected) || !isRecord(inspected.State)) {
+    throw new Error("Docker inspect did not return sandbox state.");
+  }
+  return isStoppedContainerState(inspected.State);
+}
 
 /** Termination proof is stricter than provisioning's best-effort existence probe. */
 export async function containerHasTerminated(
@@ -28,7 +71,7 @@ export async function containerHasTerminated(
     throw new Error(`Could not verify sandbox ${id} termination: ${inspected.stderr.trim()}`);
   }
   const state: unknown = JSON.parse(inspected.stdout);
-  return isRecord(state) && state.Running === false && state.Paused === false && state.Pid === 0;
+  return isStoppedContainerState(state);
 }
 
 export async function readDockerContainerLabel(
@@ -107,13 +150,13 @@ export async function containerState(
   name: string,
   options: { strict?: boolean; includePaused?: boolean } = {},
 ) {
+  // .ID keeps Docker's typed template path; raw JSON can omit an empty Tmpfs field.
   const result = await execContainer(
     engine,
     [
       "inspect",
       "-f",
-      '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}' +
-        (options.includePaused ? "\n{{.State.Paused}}" : ""),
+      '{"Id":{{json .ID}},"State":{{json .State}},"Labels":{{json .Config.Labels}},"ReadonlyRootfs":{{json .HostConfig.ReadonlyRootfs}},"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}',
       name,
     ],
     { allowFailure: true },
@@ -131,19 +174,26 @@ export async function containerState(
     }
     return { exists: false as const, running: false };
   }
-  const [id, running, readOnlyRoot, ...label] = result.stdout.trim().split(/\r?\n/u);
-  if (!id || !/^[a-f0-9]{64}$/u.test(id)) {
+  const data: unknown = JSON.parse(result.stdout);
+  if (!isRecord(data) || typeof data.Id !== "string" || !/^[a-f0-9]{64}$/u.test(data.Id)) {
     throw new Error("Container inspect did not return an immutable container ID.");
   }
-  const paused = options.includePaused ? label.pop() === "true" : undefined;
-  const configHash = label.join("\n").trim();
+  if (
+    !isRecord(data.State) ||
+    typeof data.State.Running !== "boolean" ||
+    typeof data.State.Paused !== "boolean"
+  ) {
+    throw new Error("Container inspect did not return runtime state.");
+  }
+  const configHash = isRecord(data.Labels) ? data.Labels["openclaw.configHash"] : null;
   return {
     exists: true as const,
-    running: running === "true",
-    ...(options.includePaused ? { paused } : {}),
-    id,
-    readOnlyRoot: readOnlyRoot === "true",
-    configHash: configHash && configHash !== "<no value>" ? configHash : null,
+    running: data.State.Running,
+    ...(options.includePaused ? { paused: data.State.Paused } : {}),
+    id: data.Id,
+    readOnlyRoot: data.ReadonlyRootfs === true,
+    configHash: typeof configHash === "string" && configHash ? configHash : null,
+    mounts: parseInspectedSandboxMounts(data.Mounts, data.Tmpfs),
   };
 }
 

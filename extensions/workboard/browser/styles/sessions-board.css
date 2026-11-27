@@ -46,7 +46,7 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  font-size: calc(0.76rem * var(--control-ui-text-scale));
+  font-size: 0.76rem;
 }
 
 .workboard-session-tile__meta {
@@ -84,7 +84,7 @@ a.workboard-session-pr:hover {
 .workboard-sessions__empty,
 .workboard-sessions-editor__help {
   color: var(--muted);
-  font-size: calc(0.74rem * var(--control-ui-text-scale));
+  font-size: 0.74rem;
 }
 
 .workboard-sessions__empty {
@@ -97,6 +97,17 @@ a.workboard-session-pr:hover {
   border-radius: var(--radius-md);
   color: var(--warn);
   overflow-wrap: anywhere;
+}
+
+.workboard-sessions__pagination {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 4px 0 8px;
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 
 .workboard-board-kind {
@@ -133,7 +144,18 @@ a.workboard-session-pr:hover {
 .workboard-sessions-editor label {
   display: grid;
   gap: 6px;
-  font-size: calc(0.8rem * var(--control-ui-text-scale));
+  font-size: 0.8rem;
+}
+
+.workboard-sessions-editor label:has(> input[type="radio"]) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+
+  > input {
+    margin: 0;
+  }
 }
 
 .workboard-sessions-editor .settings-input {

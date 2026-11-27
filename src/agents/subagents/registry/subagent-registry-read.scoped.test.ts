@@ -84,6 +84,8 @@ it("keeps physical IDs, aliases, and requester/controller closures distinct thro
     requesterSessionKey: root,
     controllerSessionKey: controller,
     swarmRunId: "slot",
+    collect: true,
+    swarmRequesterSessionKey: root,
   });
   const second = createRun("slot", {
     requesterSessionKey: first.childSessionKey,
@@ -96,17 +98,25 @@ it("keeps physical IDs, aliases, and requester/controller closures distinct thro
   expect(lookup.selectRunIds(new Set(["slot"]))).toEqual(["slot", "second-cache-key"]);
   expect(lookup.selectRunIds(new Set(["physical"]))).toEqual(["slot"]);
   expect(lookup.selectControllers(new Set([root]))).toEqual(["second-cache-key"]);
+  expect(lookup.selectControllers(new Set([root]), true)).toEqual(["slot", "second-cache-key"]);
   expect([...lookup.selectSessions([root], lookup).sessionKeys]).toEqual([
     root,
     first.childSessionKey,
     second.childSessionKey,
   ]);
-  const moved = { ...first, requesterSessionKey: "agent:main:moved", controllerSessionKey: root };
+  const moved = {
+    ...first,
+    requesterSessionKey: "agent:main:moved",
+    controllerSessionKey: root,
+    swarmRequesterSessionKey: controller,
+  };
   lookup.set("slot", moved);
   expect(lookup.selectControllers(new Set([controller]))).toEqual([]);
+  expect(lookup.selectControllers(new Set([controller]), true)).toEqual(["slot"]);
   expect(lookup.selectControllers(new Set([root]))).toEqual(["slot", "second-cache-key"]);
   expect(lookup.selectSessions([root], lookup).cacheKeys).toEqual([]);
   lookup.set("slot", undefined);
+  expect(lookup.selectControllers(new Set([controller]), true)).toEqual([]);
   expect(lookup.selectRunIds(new Set(["slot"]))).toEqual(["second-cache-key"]);
 });
 
@@ -140,7 +150,7 @@ describe("subagent registry scoped reads", () => {
         expect(await mod.getLatestSubagentRunByChildSessionKey(childSessionKey)).toEqual(latest);
       }
       expect(
-        mod.buildSubagentSessionListReadIndex().getDisplaySubagentRun(childSessionKey),
+        mod.buildSubagentSessionListReadIndex().getSessionDisplayFacts(childSessionKey)?.identity,
       ).toEqual(source === "live" ? projectSubagentRunForSessionList(latest) : latest);
       expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledTimes(
         source === "live" ? 0 : 1,
@@ -352,7 +362,7 @@ describe("subagent registry scoped reads", () => {
     });
     const suspendedRun = row("suspended", {
       requesterSessionKey: parent,
-      delivery: { status: "suspended", disposition: "permanent_failure" },
+      delivery: { status: "suspended" },
       execution: { status: "terminal", startedAt: now - 1_500, endedAt: now - 1_100 },
     });
     const snapshot = runMap(
@@ -389,9 +399,9 @@ describe("subagent registry scoped reads", () => {
       ),
     ).toBe(true);
     expect(await mod.getLatestSubagentRunByChildSessionKey(reusedChild)).toBe(freshTerminal);
-    expect(mod.buildSubagentSessionListReadIndex(now).getDisplaySubagentRun(reusedChild)).toEqual(
-      projectSubagentRunForSessionList(freshTerminal),
-    );
+    expect(
+      mod.buildSubagentSessionListReadIndex(now).getSessionDisplayFacts(reusedChild)?.identity,
+    ).toEqual(projectSubagentRunForSessionList(freshTerminal));
     expect(mod.getLatestLiveSubagentRunByChildSessionKey(reusedChild)).toBe(freshTerminal);
     expect(mod.isSubagentSessionRunActive(parent)).toBe(false);
     expect(mod.listSubagentRunsForRequester(root)).toEqual([freshTerminal, parentRun]);

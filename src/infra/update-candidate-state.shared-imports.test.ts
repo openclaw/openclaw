@@ -11,7 +11,7 @@ const input = { stateDir, config: {}, env: { OPENCLAW_STATE_DIR: stateDir } };
 beforeEach(() => {
   vi.resetModules();
   // mock-isolation: Fail at the unused import before loading either broad graph.
-  vi.doMock("./backup-sqlite-snapshot.js", () => {
+  vi.doMock("./update-candidate-state.plugin-discovery.js", () => {
     throw new Error("prepared inventory must not load backup discovery");
   });
   // mock-isolation: Reject the snapshot barrel before its module graph can load.
@@ -20,7 +20,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
-  vi.doUnmock("./backup-sqlite-snapshot.js");
+  vi.doUnmock("./update-candidate-state.plugin-discovery.js");
   vi.doUnmock("../snapshot/database-backup.js");
   vi.doUnmock("./database-engine/physical-store.js");
   vi.doUnmock("./sqlite-schema-header-inspection.js");
@@ -72,12 +72,14 @@ it("discovers supplemental paths only when the prepared list is absent", async (
   const { files, known, alias, supplemental } = inventory();
   const discover = vi.fn().mockResolvedValue([alias, supplemental]);
   // mock-isolation: Supply discovery output without traversing real state.
-  vi.doMock("./backup-sqlite-snapshot.js", () => ({ discoverBackupDatabasePaths: discover }));
+  vi.doMock("./update-candidate-state.plugin-discovery.js", () => ({
+    discoverUpdateSupplementalDatabasePaths: discover,
+  }));
   const { collectSupplementalStateDatabasePaths } =
     await import("./update-candidate-state.shared.js");
   expect(await collectSupplementalStateDatabasePaths(input, files)).toBe(files);
   expect(discover).toHaveBeenCalledOnce();
-  expect(discover).toHaveBeenCalledWith({ ...input, agentRegistry: [] });
+  expect(discover).toHaveBeenCalledWith(input, []);
   expect([...files.values()].map(({ spellings }) => spellings)).toEqual([[known], [supplemental]]);
 });
 

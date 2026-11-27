@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navigation", () => {
-  it("traverses the actual item order and both footer controls in each direction", async () => {
+  it("traverses the actual item order and footer controls in each direction", async () => {
     await import("./app-sidebar.tsx");
     const { createGatewayHarness, createSessions, mountSidebar } =
       await import("../test-helpers/app-sidebar.ts");
@@ -30,18 +30,15 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
     expect(identity).not.toBeNull();
     const tooltip = () =>
       document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("body > openclaw-tooltip");
-    // The retained rail is icon-only: pointer and keyboard users need its identity hint.
+    // Keep the icon-only button named without surfacing its accessible label as a tooltip.
     await page.elementLocator(identity!).hover();
-    expect(tooltip()?.anchor).toBe(identity);
-    expect(tooltip()?.content).toContain("Identity and app menu for Owner");
-    expect(identity?.getAttribute("title")).toBe("");
+    expect(tooltip()).toBeNull();
     expect(page.getByRole("button", { name: /Owner/ }).elements()).toContain(identity);
     expect(identity?.getAttribute("aria-expanded")).toBe("false");
     // A pointer left over the footer can open Help as the keyboard menu appears.
     await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
     identity?.focus();
-    expect(tooltip()?.anchor).toBe(identity);
-    expect(tooltip()?.content).toContain("Identity and app menu for Owner");
+    expect(tooltip()).toBeNull();
     await userEvent.keyboard("{Enter}");
 
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
@@ -53,7 +50,14 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
     );
     const theme = menu?.querySelector<HTMLButtonElement>(".theme-mode-toggle");
     expect(theme?.getAttribute("role")).toBe("menuitem");
-    const build = menu?.querySelector<HTMLAnchorElement>(".sidebar-footer-build");
+    const footer = [
+      ...(menu?.querySelectorAll<HTMLElement>('.sidebar-identity-menu__footer [role="menuitem"]') ??
+        []),
+    ];
+    expect(footer.map((item) => item.getAttribute("data-value"))).toEqual([
+      ...(menu?.querySelector(".sidebar-footer-build") ? ["command:about"] : []),
+      "command:theme",
+    ]);
     await expect.poll(() => document.activeElement).toBe(items[0]);
     // Navigation loads on first open; until then keys are queued and replayed later
     // (menu-navigation cold tests), so wait before asserting each step synchronously.
@@ -73,25 +77,20 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
     expect(document.activeElement?.closest('[role="menu"]')).not.toBe(menu);
     await userEvent.keyboard("{ArrowLeft}");
     await expect.poll(() => document.activeElement).toBe(items.at(-1));
-    await userEvent.keyboard("{ArrowDown}");
-    if (build) {
-      expect(document.activeElement).toBe(build);
+    for (const expected of footer) {
       await userEvent.keyboard("{ArrowDown}");
+      expect(document.activeElement).toBe(expected);
     }
-    expect(document.activeElement).toBe(theme);
-    await userEvent.keyboard("{ArrowUp}");
-    if (build) {
-      expect(document.activeElement).toBe(build);
+    for (const expected of footer.slice(0, -1).toReversed()) {
       await userEvent.keyboard("{ArrowUp}");
+      expect(document.activeElement).toBe(expected);
     }
+    await userEvent.keyboard("{ArrowUp}");
     expect(document.activeElement).toBe(items.at(-1));
-    expect(items.at(-1)?.getAttribute("data-highlighted")).not.toBeNull();
-
-    if (build) {
+    for (const expected of footer) {
       await userEvent.keyboard("{ArrowDown}");
+      expect(document.activeElement).toBe(expected);
     }
-    await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(theme);
     await userEvent.keyboard("{Enter}");
     expect(context.theme.mode).toBe("light");
     await userEvent.keyboard("{Tab}");

@@ -44,8 +44,10 @@ function historyIntact(f) {
 }
 function fenced(f) { denied(invoke(f), /ENOENT|completion|durable artifact|installed closure/); }
 
-for (const laterClosure of [false, true]) test("historical successor binds the new incident with " + (laterClosure ? "later reviewed" : "unchanged completed") + " incumbent", t => {
+for (const laterClosure of [false, true]) test("historical successor after lock recreation binds the new incident with " + (laterClosure ? "later reviewed" : "unchanged completed") + " incumbent", t => {
   const f = historicalFixture(t, laterClosure);
+  replace(f.env.OPENCLAW_TEAM_LOCK_FILE, "new boot lock\n", 0o600);
+  f.protectedBefore = f.protectedNames.map(name => descriptor(join(f.root, name)));
   const { historical, ...ordinary } = f.request;
   denied(call(f, "prepare", ordinary), /ENOENT|source|completion/);
   denied(call(f, "prepare", f.request), /historical|request/);
@@ -79,7 +81,6 @@ const refusals = [
   ["ungated reviewed incumbent", f => {
     writeFileSync(f.request.oldClosure[0].path, "#!/usr/bin/env bash\nexit 0\n"); f.request.oldClosure = closure(f);
   }, /lacks the audited FD9/],
-  ["replaced canonical lock", f => replace(f.env.OPENCLAW_TEAM_LOCK_FILE, "new lock\n", 0o600), /lock inode changed/],
   ["replacement drift", f => replace(f.request.replacement[3].path, readFileSync(f.request.replacement[3].path), 0o644), /approved replacement changed/],
 ];
 for (const [name, mutate, pattern] of refusals) test("historical successor refuses " + name + " before publication", t => {

@@ -122,6 +122,20 @@ export function resetLearnedClaudeCodeVersionForTest(): void {
   learnedClaudeCodeVersion = undefined;
 }
 
+/** Whether Anthropic rejected a request because the model has no native fast mode. */
+export function isUnsupportedClaudeFastModeError(error: unknown): boolean {
+  if (!isRecord(error) || error.status !== 400) {
+    return false;
+  }
+  const body = error.errorBody ?? error.error;
+  const payload = isRecord(body) && isRecord(body.error) ? body.error : body;
+  return (
+    isRecord(payload) &&
+    typeof payload.message === "string" &&
+    payload.message.includes("does not support the `speed` parameter")
+  );
+}
+
 /** Build OAuth headers and the matching billing identity from one request snapshot. */
 export function buildAnthropicClaudeCodeIdentity(
   betaHeader: string | undefined,

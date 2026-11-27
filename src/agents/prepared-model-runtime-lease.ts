@@ -1,4 +1,5 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
+import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
@@ -9,12 +10,16 @@ import {
   prepareSharedAuthStoreOwnership,
 } from "./auth-profiles/path-resolve.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
 } from "./prepared-model-runtime-generation-scope.js";
-import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
+import {
+  capturePreparedModelRuntimeCatalog,
+  withPreparedModelRuntimePolicyConfig,
+} from "./prepared-model-runtime.capture.js";
 import { isPreparedModelRuntimeMissingOwnerError } from "./prepared-model-runtime.errors.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -25,6 +30,7 @@ import {
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolveConfiguredOwner,
+  resolveInventoryInput,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeOwner,
@@ -58,6 +64,7 @@ type PreparedModelRuntimeLeaseContext = {
   getPendingReplacement(
     input?: PreparedModelRuntimeInput,
   ): PreparedModelRuntimeReplacement | undefined;
+  ensureReady(params: { agentId: string; abortSignal?: AbortSignal }): Promise<void>;
 };
 
 function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeLeaseContext) {
@@ -125,6 +132,18 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   options: PreparedModelRuntimeLeaseOptions = {},
 ): Promise<PreparedModelRuntimeLease> {
   const assertLifetime = context.captureLifetime();
+  const generation = options.pluginGeneration ?? getPreparedModelRuntimePluginGeneration();
+  const borrowed = generation && getPreparedModelRuntimeBorrowedSnapshot(generation);
+  // Capture before preparation yields; only exact-config nested admissions inherit policy.
+  const input = {
+    ...rawInput,
+    readPolicyConfig:
+      rawInput.readPolicyConfig ??
+      (borrowed?.config === rawInput.config
+        ? getPreparedModelRuntimePolicyConfigReader(borrowed)
+        : undefined) ??
+      createRuntimeConfigReader(rawInput.config),
+  };
   const assertAdmission = () => {
     assertLifetime();
     if (options.abortSignal?.aborted) {
@@ -134,13 +153,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     }
   };
   const acquire = () =>
-    acquirePreparedModelRuntimeLeaseAttempt(
-      rawInput,
-      provenance,
-      context,
-      options,
-      assertAdmission,
-    );
+    acquirePreparedModelRuntimeLeaseAttempt(input, provenance, context, options, assertAdmission);
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await (attempt === 0
@@ -202,7 +215,10 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
     if (preparedModelRuntimeBorrowMatchesInput(borrowed, generation, input)) {
       // Admitted work must finish before replacement can drain its retained generation.
       assertAdmission();
-      return createPreparedModelRuntimeLease(borrowed, generation);
+      return createPreparedModelRuntimeLease(
+        withPreparedModelRuntimePolicyConfig(borrowed, input.readPolicyConfig),
+        generation,
+      );
     }
   }
   if (!getPreparedSharedAuthStoreOwnership(rawInput.env ?? process.env)) {
@@ -239,6 +255,17 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
   });
   if (provenance === "run" && context.getGatewayLifecycleActive()) {
     const configured = resolveConfiguredOwner(context.owners, input);
+    const recoveryAgentId = configured?.input.agentId;
+    if (configured?.catalogRecovery && configured.needsRefresh && recoveryAgentId) {
+      // A failed refresh leaves its owner for demand recovery. Run admission is demand too:
+      // OpenAI-compatible and worker turns never pass through reply dispatch first.
+      await runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+        runOutsidePluginRuntimeGenerationScope(() =>
+          context.ensureReady({ agentId: recoveryAgentId, abortSignal: options.abortSignal }),
+        ),
+      );
+      assertAdmission();
+    }
     if (configured?.pending) {
       assertPreparedModelRuntimeAdmissionCanWait(configured);
       await racePromiseWithAbortSignal(configured.pending, options.abortSignal);
@@ -338,10 +365,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       );
     }
 
-    // Gateway inventory belongs to the configured agent; the session cwd only controls execution.
-    const inventoryInput = context.getGatewayLifecycleActive()
-      ? { ...input, workspaceDir: configuredOwner?.input.workspaceDir }
-      : input;
+    const inventoryInput = resolveInventoryInput(input, configuredOwner);
     if (
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&
@@ -439,6 +463,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
+    snapshot = withPreparedModelRuntimePolicyConfig(snapshot, input.readPolicyConfig);
     const pluginGeneration = owner.pluginGeneration!;
     if (options.pluginGeneration) {
       bindPreparedPluginGenerationConfiguredBase(pluginGeneration, options.pluginGeneration);

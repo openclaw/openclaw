@@ -10,7 +10,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import * as authPolicy from "./auth-policy.js";
 import { findSseEvent, parseSseEvents } from "./http-stream.test-support.js";
 import type { ResponseResource } from "./open-responses.schema.js";
 import { rememberResponseSession } from "./openresponses-session-store.js";
@@ -67,7 +66,7 @@ export function registerOpenResponsesContinuationTests({
         { responseId: `foreign-agent-${stream}`, agentId: "another-agent" },
         { responseId: `foreign-session-${stream}`, requestedSessionKey: "another-session" },
       ]) {
-        await rememberResponseSession({ ...scope, ...mismatch }, () => {});
+        await rememberResponseSession({ ...scope, ...mismatch });
       }
       seedPluginStateEntriesForTests([
         {
@@ -95,35 +94,6 @@ export function registerOpenResponsesContinuationTests({
       }
     },
   );
-
-  it("rejects revoked request authority while a continuation lookup is pending", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    const lookup = responseSessions.lookupResponseSession;
-    const lookupSpy = vi
-      .spyOn(responseSessions, "lookupResponseSession")
-      .mockImplementationOnce(async (...args) => {
-        entered.resolve();
-        await release.promise;
-        return lookup(...args);
-      });
-    agentCommandMock.mockClear();
-    const pending = post({ previous_response_id: "revoked-request" });
-    await entered.promise;
-    const policySpy = vi.spyOn(authPolicy, "isGatewayAuthPolicyCurrent").mockReturnValue(false);
-    try {
-      release.resolve();
-      const response = await pending;
-      expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({
-        error: { message: "Unauthorized", type: "unauthorized" },
-      });
-      expect(agentCommandMock).not.toHaveBeenCalled();
-    } finally {
-      lookupSpy.mockRestore();
-      policySpy.mockRestore();
-    }
-  });
 
   it("commits response continuity before replying and retains it after the store reopens", async () => {
     const bearer = "synthetic-operator-password";

@@ -164,11 +164,11 @@ describe("worker session tool topology", () => {
     await started.promise;
     getFixture().closeSourceRun();
     prepared.resolve([]);
-    await expect(pending).rejects.toThrow(/source worker run ended|worker turn authority changed/);
+    await expect(pending).rejects.toThrow(/source worker run ended|worker turn ended/);
   });
 
-  it.each(["active", "run-ended", "operator-revoked"] as const)(
-    "reads presence as the original operator only while its authority is live (%s)",
+  it.each(["active", "run-ended"] as const)(
+    "reads presence as the original operator until its run ends (%s)",
     async (authorityState) => {
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       await placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
@@ -200,21 +200,15 @@ describe("worker session tool topology", () => {
       await entered.promise;
       if (authorityState === "run-ended") {
         getFixture().closeSourceRun();
-      } else if (authorityState === "operator-revoked") {
-        getFixture().revokeOperatorAuthority();
       }
       release.resolve();
       if (authorityState === "run-ended") {
-        await expect(pending).rejects.toThrow(
-          /source worker run ended|agent tool caller authority is no longer/,
-        );
-      } else if (authorityState === "operator-revoked") {
-        await expect(pending).rejects.toThrow(/operator.*(revoked|no longer active)/);
+        await expect(pending).rejects.toThrow(/source worker run ended|The agent run ended/);
       } else {
         expect((await pending).details).toEqual(snapshot);
         await placements.authorizeWorkerTurnTools(sourceClaim, []);
         await expect(tool.execute("revoked-presence", {})).rejects.toThrow(
-          "Worker tool authority changed",
+          "Worker turn ended or lacks this tool",
         );
       }
       expect(gatewayRequest).toHaveBeenCalledOnce();
@@ -381,7 +375,7 @@ describe("worker session tool topology", () => {
         })
       ).find((candidate) => candidate.name === "skill_library")!;
       await expect(tool.execute("revoked-call", { action: "list" })).rejects.toThrow(
-        "tool authority changed",
+        "Worker turn ended or lacks this tool",
       );
       expect(executeWorkshop).toHaveBeenCalledTimes(revokedAt === "policy" ? 0 : 1);
     },
@@ -827,9 +821,7 @@ describe.each([
       expect(gatewayRequest).toHaveBeenCalledOnce();
       if (source.admissionSource === "operator-schedule") {
         getFixture().closeSourceRun();
-        await expect(tool.execute("closed-schedule", {})).rejects.toThrow(
-          "worker turn authority changed",
-        );
+        await expect(tool.execute("closed-schedule", {})).rejects.toThrow("worker turn ended");
         expect(gatewayRequest).toHaveBeenCalledOnce();
       }
     }

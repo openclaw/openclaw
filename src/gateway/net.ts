@@ -397,8 +397,8 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   if (!normalized || !isPrivateOrLoopbackAddress(normalized)) {
     return false;
   }
-  // isPrivateOrLoopbackAddress reuses SSRF-blocking ranges for IPv6, which
-  // include unspecified (::) and multicast (ff00::/8). Exclude these —
+  // Established IPv6 locality ranges include unspecified (::) and
+  // multicast (ff00::/8). Exclude these —
   // they are not private/loopback unicast endpoints. (Multicast is UDP-only
   // so TCP/WebSocket connections would fail regardless.)
   if (net.isIP(normalized) === 6) {

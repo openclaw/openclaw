@@ -14,6 +14,7 @@ openclaw-tooltip-provider {
   position: fixed;
   inset: auto;
   --oc-overlay-distance: 8px;
+  --oc-overlay-enter-scale: 0.9;
   max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
   max-height: min(420px, calc(100dvh - 16px));
   overflow: auto;
@@ -26,38 +27,24 @@ openclaw-tooltip-provider {
   box-shadow: var(--openclaw-tooltip-shadow, var(--menu-shadow));
   backdrop-filter: var(--menu-backdrop);
   font-family: var(--font-body);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 500;
   line-height: 1.25;
   overflow-wrap: anywhere;
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
-  opacity: 0;
-  scale: 0.9;
-  transition:
-    opacity var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast)) ease,
-    scale var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast)) ease,
-    display var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast))
-      allow-discrete,
-    overlay var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast))
-      allow-discrete;
 }
 
-.tooltip-surface:popover-open:where(:not([data-phase="closing"])) {
-  opacity: 1;
-  scale: 1;
-  transition-duration: var(
-    --openclaw-tooltip-popup-show-duration,
-    var(--control-ui-transition-fast)
-  );
+/* The shared overlay keyframes; transitions never settle on anchored surfaces in WebKitGTK 2.50. */
+.tooltip-surface[data-phase="opening"] {
+  animation: oc-overlay-enter
+    var(--openclaw-tooltip-popup-show-duration, var(--control-ui-transition-fast)) ease;
 }
 
-@starting-style {
-  .tooltip-surface:popover-open {
-    opacity: 0;
-    scale: 0.9;
-  }
+.tooltip-surface[data-phase="closing"] {
+  animation: oc-overlay-exit
+    var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast)) ease forwards;
 }
 
 :host(.sidebar-hover-tooltip) .tooltip-surface[data-phase="opening"] {
@@ -80,7 +67,6 @@ openclaw-tooltip-provider {
   .tooltip-surface {
     --openclaw-tooltip-popup-show-duration: 0ms;
     --openclaw-tooltip-popup-hide-duration: 0ms;
-    transition: none;
   }
 
   .tooltip-surface[data-phase="opening"],

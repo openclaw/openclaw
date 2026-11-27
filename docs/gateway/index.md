@@ -138,10 +138,12 @@ Admin HTTP RPC (`POST /api/v1/admin/rpc`) is a separate, default-off plugin rout
 
 ### Port and bind precedence
 
-| Setting      | Resolution order                                                     |
-| ------------ | -------------------------------------------------------------------- |
-| Gateway port | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → `18789`        |
-| Bind mode    | CLI/override → `gateway.bind` → `loopback` (or `auto` in containers) |
+| Setting      | Resolution order                                                                      |
+| ------------ | ------------------------------------------------------------------------------------- |
+| Gateway port | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → named-profile default → `18789` |
+| Bind mode    | CLI/override → `gateway.bind` → `loopback` (or `auto` in containers)                  |
+
+The named-profile default is `19001` for `dev` and a port derived from the profile name for other named profiles (`--profile <name>` or `OPENCLAW_PROFILE`). When `--profile dev` selects the profile and `OPENCLAW_GATEWAY_PORT` is unset, the CLI sets `OPENCLAW_GATEWAY_PORT=19001`, so `19001` takes precedence over `gateway.port`.
 
 Installed gateway services record the resolved `--port` in supervisor metadata. After changing `gateway.port`, run `openclaw doctor --fix` or `openclaw gateway install --force` so launchd/systemd/schtasks starts the process on the new port.
 
@@ -470,3 +472,17 @@ For full diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooti
 - [Remote access](/gateway/remote)
 - [Secrets management](/gateway/secrets)
 - [CLI backends](/gateway/cli-backends) — running an external CLI agent as a Gateway backend
+
+## Resource profile and worker diagnostics
+
+Use `gateway.resources.profile` to select `auto` (default), `standard`, or `lean`.
+Auto selects lean below 8 GiB effective memory; exactly 8 GiB or more selects
+standard, regardless of CPU count. Lean runs the core SQLite, transcript, state-read and
+catalog workers as endpoints of one shared host worker and admits extra workers only within
+a memory budget (85% of a container limit, 40% of host RAM without one, or
+`gateway.resources.memoryBudgetMiB`), queueing work on existing workers otherwise.
+Standard keeps the existing worker layout and behavior.
+`openclaw status` reports the running Gateway's decision and live direct-worker
+census; `--json` exposes the same facts under `resources`. See
+[resource profile configuration](/gateway/config-gateway#gateway.resources.profile)
+for limit detection, overrides and diagnostic coverage.

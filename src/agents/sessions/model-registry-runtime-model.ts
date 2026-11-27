@@ -3,6 +3,7 @@ import { normalizeModelFamily } from "@openclaw/model-catalog-core/model-catalog
 import { ModelInferenceCapabilitiesSchema } from "@openclaw/model-catalog-core/model-inference-capabilities";
 import type { Api, Model } from "../../llm/types.js";
 import type { ProviderModelCatalog } from "../models-config.merge.js";
+import { storeModelHeaders, type RegistryProviderSources } from "./model-registry-sources.js";
 
 /** Projects one validated registry row into the runtime model the registry publishes. */
 export function createRegistryRuntimeModel(
@@ -44,4 +45,44 @@ export function createRegistryRuntimeModel(
     headers: undefined,
     compat: model.compat,
   } as Model; // SAFETY: registration validates required fields; persisted rows use `catalog`.
+}
+
+export function parseRegistryRuntimeModels(
+  providers: RegistryProviderSources,
+  modelRequestHeaders: Map<string, Record<string, string>>,
+): Model[] {
+  const models: Model[] = [];
+
+  for (const [providerName, providerConfig] of Object.entries(providers)) {
+    for (const modelDef of providerConfig.models ?? []) {
+      const api = modelDef.api ?? providerConfig.api;
+      if (!api) {
+        continue;
+      }
+
+      const baseUrl = modelDef.baseUrl ?? providerConfig.baseUrl;
+      if (!baseUrl) {
+        continue;
+      }
+
+      // Project richer persisted metadata to runtime's text/image contract.
+      // Unsupported-only rows are not runnable; explicit empty input stays valid.
+      const runtimeInput = (modelDef.input ?? ["text"]).filter(
+        (input): input is "text" | "image" => input === "text" || input === "image",
+      );
+      if ((modelDef.input?.length ?? 0) > 0 && runtimeInput.length === 0) {
+        continue;
+      }
+
+      storeModelHeaders(modelRequestHeaders, providerName, modelDef.id, modelDef.headers);
+      models.push(
+        createRegistryRuntimeModel(providerName, providerConfig, modelDef, api, {
+          baseUrl,
+          input: runtimeInput,
+        }),
+      );
+    }
+  }
+
+  return models;
 }

@@ -48,7 +48,7 @@ Examples of shared IR renderers:
 | Telegram | HTML tags (`<b>`, `<i>`, `<s>`, `<code>`, `<pre><code>`, `<a href>`, `<tg-spoiler>`) | Also supports rich-message tables and headings (`<h1>`-`<h6>`) when `richMessages` is on |
 | WhatsApp | WhatsApp style markers                                                               | Uses shared IR; styled chunks are measured after rendering                               |
 
-Slack and WhatsApp emit `>` followed by a space on each nonempty blockquote line, including lines
+Signal, Slack and WhatsApp emit `>` followed by a space on each nonempty blockquote line, including lines
 continued into later message chunks. Prefixes are added while rendering, so they
 count toward each channel's message limit without changing IR span offsets.
 Fenced code contents keep their literal lines rather than receiving quote markers.
@@ -126,6 +126,10 @@ delivery behavior across channels.
 - **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML parse mode).
 - **Signal:** `[label](url)` -> `label (url)` unless the label already
   matches the URL.
+- **Google Chat:** `[label](url)` -> `<url|label>`. A styled label renders as
+  `label (url)` instead. A label that matches the URL, or the address of a
+  `mailto:` link, is not repeated: when it is styled or holds Google Chat
+  markup characters, it renders once as plain text.
 
 ## Spoilers
 

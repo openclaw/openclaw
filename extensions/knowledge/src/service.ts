@@ -5,13 +5,14 @@ import type {
   FeatureInvocationContext,
 } from "openclaw/plugin-sdk/feature-plugin";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { getResourceProfile } from "openclaw/plugin-sdk/resource-profile";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Check } from "typebox/value";
 import { featurePrincipal, toolGrant, type VaultAccess } from "./access.js";
 import { attachWorkspaceFile } from "./attachment-file.js";
 import { SinceInput, LastSeenInput } from "./chronicle-contract.js";
 import { emptyChronicle } from "./chronicle.js";
-import { contract } from "./contract.js";
+import { contract, type FullOutputContract } from "./contract.js";
 import { knowledgeLearnContribution } from "./learn-guidance.js";
 import {
   RECORD_MAX_BYTES,
@@ -21,21 +22,22 @@ import {
 } from "./limits.js";
 import { Maintenance } from "./maintenance.js";
 import { buildKnowledgeMemoryFlushPlan } from "./memory-flush.js";
+import { resolveMemoryImportFile } from "./memory-import-file.js";
 import { registerMemoryIndexHook } from "./memory-index-hook.js";
 import { buildKnowledgeMemoryPrompt } from "./memory-prompt.js";
 import { createKnowledgeMemoryRuntime } from "./memory-provider.js";
 import { locatePluginFiles } from "./plugin-files.js";
 import { queryFreshness } from "./query-freshness.js";
 import { registerRecallGateHook } from "./recall-gate-hook.js";
-import { searchDetail } from "./search-detail.js";
 import type { StorageOperations } from "./storage-host.js";
+import { scopeKey } from "./storage-types.js";
 import { createStoreOperations } from "./store-assignments.js";
 import type { StoreRuntime } from "./store-runtime.js";
 import { parsePolicy } from "./stores-config.js";
 import type { StoreState } from "./stores-contract.js";
 import { Stores } from "./stores.js";
 
-type Handlers = FeatureHandlers<typeof contract>;
+type Handlers = FeatureHandlers<FullOutputContract>;
 // StorageClient.call with its per-operation input tuple erased, for calls made with a generic Op.
 type StorageCall<Op extends keyof StorageOperations> = (
   op: Op,
@@ -54,6 +56,7 @@ type StoreHandlers = Omit<
 >;
 const WRITE_TOOLS = new Set([
   "knowledge_remember",
+  "knowledge_memory_import_progress",
   "knowledge_relink",
   "knowledge_edit_body",
   "knowledge_extract_section",
@@ -154,11 +157,20 @@ export function createKnowledgeService(
     async start(ctx) {
       stores.start();
       if (ctx?.scheduler) {
-        await maintenance.start(ctx.scheduler);
+        const scheduler = ctx.scheduler;
+        if (getResourceProfile() === "lean") {
+          stores.onFirstUse = () => {
+            void maintenance
+              .start(scheduler)
+              .catch((error: unknown) => api.logger?.warn?.(String(error)));
+          };
+        } else {
+          await maintenance.start(scheduler);
+        }
       }
     },
-    // A maintenance pass writes through the registry, so the registry closes only
-    // after the pass has settled; the stores are fenced immediately.
+    // Initialization and passes write through the registry, which closes only
+    // after both have settled; the stores are fenced immediately.
     stop() {
       return stores.stop(maintenance.stop());
     },
@@ -175,10 +187,11 @@ export function createKnowledgeService(
     // never-provisioned store; operator inspection never does.
     const use = async <T>(
       context: FeatureInvocationContext,
-      write: boolean,
+      mode: "read" | "write" | "progress",
       work: (runtime: StoreRuntime, access: VaultAccess) => Promise<T>,
       whenEmpty?: () => T,
     ): Promise<T> => {
+      const write = mode !== "read";
       if (write && !policy.writesEnabled) {
         throw new Error("Knowledge writes are disabled.");
       }
@@ -219,7 +232,7 @@ export function createKnowledgeService(
       const result = await opened.runtime.enqueue(access.assertCurrent, () =>
         work(opened.runtime, access),
       );
-      if (write && opened.access.scope.visibility === "private") {
+      if (mode === "write" && opened.access.scope.visibility === "private") {
         opened.runtime.client.invalidate();
       }
       return result;
@@ -234,7 +247,7 @@ export function createKnowledgeService(
       (input: unknown, context: FeatureInvocationContext) =>
         use(
           context,
-          write,
+          write ? "write" : "read",
           (runtime, access) =>
             // SAFETY: the host validated input against this operation's schema; erases the per-Op rest tuple.
             (runtime.client.call as StorageCall<Op>)(op, access, input),
@@ -248,7 +261,7 @@ export function createKnowledgeService(
     const authored =
       <Op extends "save" | "createClaim" | "createRelationship">(op: Op) =>
       (input: unknown, context: FeatureInvocationContext) =>
-        use(context, true, (runtime, access) =>
+        use(context, "write", (runtime, access) =>
           // SAFETY: the host validated input against this operation's schema; erases the per-Op rest tuple.
           (runtime.client.call as StorageCall<Op>)(op, access, {
             value: input,
@@ -315,7 +328,7 @@ export function createKnowledgeService(
       recent: call("recent", false, () => ({ items: [], upperSequence: 0, nextBefore: null })),
       attach: call("attach", true),
       attach_file: (input, context) =>
-        use(context, true, (runtime, access) =>
+        use(context, "write", (runtime, access) =>
           attachWorkspaceFile(input, context, access.assertCurrent, (chunk) =>
             runtime.client.call("attach", access, chunk),
           ),
@@ -361,6 +374,48 @@ export function createKnowledgeService(
           context,
         );
       },
+      memory_import_progress: async (input, context) => {
+        if (context.source !== "tool") {
+          throw chatOnly();
+        }
+        const tool = context.tool;
+        return use(
+          context,
+          input.operation === "complete" ? "progress" : "read",
+          async (runtime, access) => {
+            const progress = api.runtime.state.openKeyedStoreV2<string>(
+              { namespace: "memory-import-progress", retention: "retained" },
+              { assertCurrent: access.assertCurrent },
+            );
+            const key = (path: string) =>
+              JSON.stringify([runtime.vaultId, access.agentId, scopeKey(access.scope), path]);
+            if (input.operation === "complete") {
+              await progress.register(key(input.file.path), input.file.sha256);
+              return { completed: [input.file.path] };
+            }
+            const files = [];
+            for (const file of input.files) {
+              const resolved = await resolveMemoryImportFile(file, tool, context.signal);
+              if (resolved) {
+                files.push(resolved);
+              }
+            }
+            const hashes = await progress.lookupMany(files.map((file) => key(file.path)));
+            return {
+              files,
+              completed: files
+                .filter((file, index) => {
+                  const current = hashes[index]!;
+                  if (!current.ok) {
+                    throw current.error;
+                  }
+                  return file.sha256 !== undefined && current.value === file.sha256;
+                })
+                .map((file) => file.path),
+            };
+          },
+        );
+      },
       relink: (input, context) =>
         input.dryRun
           ? context.source !== "tool"
@@ -392,17 +447,17 @@ export function createKnowledgeService(
             "Automatic recall approval requires the owner's private memory audience or an owner grant to read and save private knowledge.",
           );
         }
-        return use(context, true, (runtime, access) =>
+        return use(context, "write", (runtime, access) =>
           runtime.client.call("recall", access, input),
         );
       },
-      connections: call("connections"),
+      connections_detail: call("connections"),
       resume: (input, context) =>
-        use(context, true, (runtime, access) =>
+        use(context, "write", (runtime, access) =>
           runtime.client.call("resume", access, { requestId: input.requestId }),
         ),
       revision: (input, context) =>
-        use(context, false, (runtime, access) => runtime.client.call("revision", access, input)),
+        use(context, "read", (runtime, access) => runtime.client.call("revision", access, input)),
       mutation: call("mutation"),
       history: call("history", false, () => ({
         entries: [],
@@ -515,9 +570,9 @@ export function createKnowledgeService(
           issues: catalog.issues,
         };
       },
-      grep: searchDetail(call("search")),
-      lookup: searchDetail(call("lookup")),
-      records: call("records", false, () => ({
+      grep: call("search"),
+      lookup: call("lookup"),
+      records_detail: call("records", false, () => ({
         facets: { kinds: {}, origins: {} },
         records: [],
         total: 0,
@@ -525,7 +580,7 @@ export function createKnowledgeService(
         nextOffset: null,
         freshness: queryFreshness(now()),
       })),
-      record: call("record"),
+      record_detail: call("record"),
       ontology: call("ontology"),
       diagnostics: call("diagnostics", false, () => ({
         issues: [],
@@ -584,6 +639,7 @@ export function createKnowledgeService(
     ) {
       throw new Error("Maintenance status is available to authorized operators only.");
     }
+    await stores.ensure();
     return maintenance.status();
   };
   return {

@@ -9,7 +9,6 @@ struct RootSidebar: View {
     @Bindable var model: RootSidebarModel
     @State private var scrollAnchor = RootSidebarScrollAnchor()
     @State private var searchText = ""
-    @State private var collapsedGroups = SessionGroupStore.loadCollapsed()
     @State private var collapsedParents: Set<String> = []
     @State private var isSearchActive = false
     @State private var showsPagesEditor = false
@@ -39,7 +38,9 @@ struct RootSidebar: View {
             ScrollView {
                 // One 10pt unit everywhere: side insets, section gaps, and
                 // the picker card's clearance all match.
-                LazyVStack(alignment: .leading, spacing: 10) {
+                // Not lazy: with three sections it saves nothing, and a lazy stack drops a section the
+                // keyboard pushes out of view, which closes an alert or sheet opened from one of its rows.
+                VStack(alignment: .leading, spacing: 10) {
                     self.agentsSection
                     self.pagesSection(pinnedSessionNodes: sessionLayout.pinnedNodes, rowPass: rowPass)
                     self.sessionsSection(
@@ -47,11 +48,15 @@ struct RootSidebar: View {
                         hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty,
                         rowPass: rowPass)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
                 .modifier(RootSidebarAnchoredContent(anchor: self.scrollAnchor))
             }
             self.footer
+        }
+        .task(id: self.appModel.chatViewModelIdentityID) {
+            await self.appModel.sessionGroups.refresh(appModel: self.appModel)
         }
         .foregroundStyle(OpenClawSidebarPalette.text)
         .background(OpenClawSidebarPalette.background)
@@ -63,13 +68,10 @@ struct RootSidebar: View {
         }
         .sheet(isPresented: self.$showsPagesEditor) {
             RootSidebarPagesEditor(
-                destinations: RootTabs.pinnableSidebarPages.filter(self.isDestinationAvailable),
-                pinnedPages: self.storedPinnedPages,
                 onSelect: { destination in
                     self.showsPagesEditor = false
                     self.selectSidebarDestination(destination)
-                },
-                onTogglePin: self.togglePinnedPage)
+                })
         }
     }
 
@@ -83,16 +85,6 @@ struct RootSidebar: View {
 
     private func isDestinationAvailable(_ destination: RootTabs.SidebarDestination) -> Bool {
         destination != .desktop || self.appModel.isDesktopObserveAvailable
-    }
-
-    private func togglePinnedPage(_ destination: RootTabs.SidebarDestination) {
-        var pages = self.storedPinnedPages
-        if let index = pages.firstIndex(of: destination) {
-            pages.remove(at: index)
-        } else {
-            pages.append(destination)
-        }
-        self.pinnedPagesStorage = RootTabs.pinnedSidebarPagesStorage(pages)
     }
 
     /// Brand header with compact global actions. Connection and Settings live
@@ -162,7 +154,7 @@ struct RootSidebar: View {
                         {
                             ForEach(self.selectableAgents, id: \.id) { agent in
                                 Label {
-                                    Text(verbatim: Self.agentDisplayName(agent))
+                                    Text(verbatim: AgentIdentityPresentation.displayName(for: agent))
                                         .font(OpenClawType.subheadSemiBold)
                                 } icon: {
                                     self.agentMenuAvatarImage(agent)
@@ -181,7 +173,7 @@ struct RootSidebar: View {
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("RootTabs.Sidebar.AgentSelector")
                     .accessibilityLabel(String(localized: "Agent"))
-                    .accessibilityValue(Self.agentDisplayName(selectedAgent))
+                    .accessibilityValue(AgentIdentityPresentation.displayName(for: selectedAgent))
                     self.attentionBadges(for: self.model.sessions, targetID: "agent:\(selectedAgent.id)")
                 }
             }
@@ -210,11 +202,11 @@ struct RootSidebar: View {
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: Self.agentDisplayName(agent))
+                Text(verbatim: AgentIdentityPresentation.displayName(for: agent))
                     .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(OpenClawSidebarPalette.textStrong)
                     .lineLimit(1)
-                if let model = Self.agentModelLabel(agent) {
+                if let model = AgentIdentityPresentation.modelLabel(for: agent) {
                     Text(verbatim: model)
                         .font(OpenClawType.caption2Medium)
                         .foregroundStyle(OpenClawSidebarPalette.muted)
@@ -254,19 +246,6 @@ struct RootSidebar: View {
         .accessibilityLabel(String(localized: "New Chat"))
     }
 
-    /// Same key order the Agents roster uses for its model subtitles.
-    static func agentModelLabel(_ agent: AgentSummary) -> String? {
-        guard let model = agent.model else { return nil }
-        for key in ["primary", "name", "id", "model"] {
-            if let value = (model[key]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !value.isEmpty
-            {
-                return value
-            }
-        }
-        return nil
-    }
-
     private func headerIconButton(
         systemName: String,
         label: String,
@@ -289,17 +268,6 @@ struct RootSidebar: View {
         return self.appModel.gatewayDefaultAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    static func agentDisplayName(_ agent: AgentSummary) -> String {
-        let name = agent.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return name.isEmpty ? agent.id : name
-    }
-
-    static func agentBadge(name: String, identity: [String: AnyCodable]?) -> String {
-        AgentIdentityPresentation.badge(
-            avatarText: identity?["emoji"]?.value as? String,
-            displayName: name)
-    }
-
     private func agentAvatarBadge(_ agent: AgentSummary, size: CGFloat) -> some View {
         ZStack {
             Circle()
@@ -309,7 +277,9 @@ struct RootSidebar: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
+                Text(verbatim: AgentIdentityPresentation.badge(
+                    avatarText: agent.identity?["emoji"]?.value as? String,
+                    displayName: AgentIdentityPresentation.displayName(for: agent)))
                     .font(OpenClawType.caption2Bold)
                     .foregroundStyle(OpenClawSidebarPalette.textStrong)
                     .minimumScaleFactor(0.65)
@@ -380,6 +350,9 @@ struct RootSidebar: View {
         rowPass: SessionRowPass) -> some View
     {
         VStack(alignment: .leading, spacing: 6) {
+            if let failure = self.appModel.sessionGroups.failure {
+                Text(verbatim: failure).font(OpenClawType.captionMedium).foregroundStyle(OpenClawBrand.warn)
+            }
             if let sessionErrorText = self.model.sessionErrorText {
                 Text(verbatim: sessionErrorText)
                     .font(OpenClawType.captionMedium)
@@ -409,32 +382,35 @@ struct RootSidebar: View {
                     let title = section.id == "recent"
                         ? String(localized: "Sessions")
                         : (section.title ?? String(localized: "Sessions"))
-                    HStack(spacing: 0) {
-                        if section.id.hasPrefix("group:") {
-                            Button {
-                                if !self.collapsedGroups.insert(section.id).inserted {
-                                    self.collapsedGroups.remove(section.id)
-                                }
-                                SessionGroupStore.saveCollapsed(self.collapsedGroups)
-                            } label: {
-                                HStack(spacing: 0) {
-                                    self.sectionTitle(title)
-                                    Spacer(minLength: 0)
-                                    Image(systemName: self.collapsedGroups.contains(section.id)
-                                        ? "chevron.right" : "chevron.down")
-                                        .font(OpenClawType.captionSemiBold)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        } else {
+                    if section.id.hasPrefix("group:"), let name = section.title {
+                        CommandSessionGroupHeader(
+                            name: name,
+                            sessions: self.model.sessions,
+                            trailingCount: section.nodes.count,
+                            refresh: { await self.model.refreshSessions(appModel: self.appModel) },
+                            openSession: { key in
+                                self.appModel.openChat(sessionKey: key)
+                                self.selectSidebarDestination(.chat)
+                            },
+                            accessory: {
+                                self.attentionBadges(
+                                    for: Self.flattened(section.nodes).map(\.session),
+                                    targetID: "section:\(section.id)")
+                            })
+                            .foregroundStyle(OpenClawSidebarPalette.muted)
+                            // Leading inset only: the caret and count sit at the trailing edge.
+                            .padding(.leading, 10)
+                    } else {
+                        HStack(spacing: 0) {
                             self.sectionTitle(title)
                             Spacer(minLength: 0)
+                            self.attentionBadges(
+                                for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
                         }
-                        self.attentionBadges(
-                            for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
                     }
-                    if !self.searchText.isEmpty || !self.collapsedGroups.contains(section.id) {
+                    if !section.id.hasPrefix("group:") ||
+                        !self.appModel.sessionGroups.collapsed.contains(section.title ?? "") || !self.searchText.isEmpty
+                    {
                         ForEach(self.sessionNodes(for: section)) { row in
                             self.sessionTreeRow(row, rowPass: rowPass)
                         }
@@ -635,7 +611,7 @@ struct RootSidebar: View {
     }
 
     private var sessionCategories: [String] {
-        CommandSessionGrouping.categories(from: self.model.sessions, knownGroups: SessionGroupStore.load())
+        self.appModel.sessionGroups.names(for: self.model.sessions)
     }
 
     private static func flattened(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Node] {
@@ -869,39 +845,62 @@ struct RootSidebar: View {
 /// Web-parity Pages editor (the pen menu): navigate to any page, pin/unpin
 /// which ones stay in the sidebar. Home is fixed and not listed.
 struct RootSidebarPagesEditor: View {
-    let destinations: [RootTabs.SidebarDestination]
-    let pinnedPages: [RootTabs.SidebarDestination]
-    let onSelect: (RootTabs.SidebarDestination) -> Void
-    let onTogglePin: (RootTabs.SidebarDestination) -> Void
-
+    @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(RootTabs.pinnedSidebarPagesStorageKey) private var pinnedPagesStorage: String = ""
+
+    let onSelect: (RootTabs.SidebarDestination) -> Void
+    var presentedAsSheet = true
+
+    private var pinnedPages: [RootTabs.SidebarDestination] {
+        RootTabs.pinnedSidebarPages(from: self.pinnedPagesStorage)
+    }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    ForEach(self.destinations) { destination in
-                        self.pageRow(destination)
+        if self.presentedAsSheet {
+            NavigationStack {
+                self.pageList
+                    .toolbar {
+                        OpenClawSheetCloseItem { self.dismiss() }
                     }
-                } footer: {
-                    Text("Pinned pages stay in the sidebar. Home is always shown.")
-                        .font(OpenClawType.caption)
-                }
             }
-            .navigationTitle(String(localized: "Pages"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        self.dismiss()
-                    } label: {
-                        Text(String(localized: "Done"))
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                }
+            .tint(.primary)
+            .openClawSheetHeaderEdge()
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            // Below full height iOS draws the sheet as glass and the grouped rows turn a
+            // translucent gray; at full height it switches to the opaque grouped background with
+            // white rows. One opaque grouped background keeps the rows the same at every height.
+            .presentationBackground(Color(uiColor: .systemGroupedBackground))
+        } else {
+            self.pageList
+                .tint(.primary)
+        }
+    }
+
+    private var pageList: some View {
+        List {
+            ForEach(RootTabs.pinnableSidebarPages
+                .filter { $0 != .desktop || self.appModel.isDesktopObserveAvailable })
+            { destination in
+                self.pageRow(destination)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 8))
             }
         }
-        .openClawSheetChrome()
+        .listStyle(.insetGrouped)
+        .contentMargins(.top, 4, for: .scrollContent)
+        .navigationTitle(String(localized: "Pages"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func togglePinnedPage(_ destination: RootTabs.SidebarDestination) {
+        var pages = self.pinnedPages
+        if let index = pages.firstIndex(of: destination) {
+            pages.remove(at: index)
+        } else {
+            pages.append(destination)
+        }
+        self.pinnedPagesStorage = RootTabs.pinnedSidebarPagesStorage(pages)
     }
 
     private func pageRow(_ destination: RootTabs.SidebarDestination) -> some View {
@@ -912,21 +911,21 @@ struct RootSidebarPagesEditor: View {
             } label: {
                 Label {
                     Text(destination.sidebarTitle)
-                        .font(OpenClawType.subheadSemiBold)
+                        .font(SettingsType.label)
                 } icon: {
-                    Image(systemName: destination.systemImage)
+                    NativeSettingsRowIcon(systemName: RootSidebarIcon.symbolName(for: destination))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             Button {
-                self.onTogglePin(destination)
+                self.togglePinnedPage(destination)
             } label: {
                 Image(systemName: isPinned ? "pin.fill" : "pin")
-                    .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(isPinned ? OpenClawBrand.accent : Color.secondary)
+                    .font(SettingsType.label)
+                    .foregroundStyle(isPinned ? OpenClawSidebarPalette.text : OpenClawSidebarPalette.muted)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
@@ -936,6 +935,27 @@ struct RootSidebarPagesEditor: View {
                 isPinned
                     ? String(localized: "Pinned")
                     : String(localized: "Not pinned"))
+        }
+    }
+}
+
+/// One optical size for navigation and session glyphs in the sidebar.
+struct RootSidebarIcon: View {
+    let systemName: String
+    var pointSize: CGFloat = 18
+
+    var body: some View {
+        Image(systemName: self.systemName)
+            .font(.system(size: self.pointSize, weight: .medium))
+            .symbolRenderingMode(.monochrome)
+            .frame(width: 22, height: 22)
+            .accessibilityHidden(true)
+    }
+
+    static func symbolName(for destination: RootTabs.SidebarDestination) -> String {
+        switch destination {
+        case .files: "folder"
+        default: destination.systemImage
         }
     }
 }

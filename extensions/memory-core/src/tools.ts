@@ -241,8 +241,8 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           !settings.searchSources.includes("sessions")
         ) {
           return jsonResult(
-            buildMemorySearchUnavailableResult("Session transcript search is not enabled.", {
-              warning: "Session transcript search is unavailable for this agent.",
+            buildMemorySearchUnavailableResult("Chat history search is not enabled.", {
+              warning: "Chat history search is unavailable for this agent.",
               action:
                 'If an exact session-history capability is available for this run, use it. Otherwise, ask the operator to enable semantic session search by enabling memory.search.experimental.sessionMemory and adding "sessions" to memory.search.sources.',
             }),
@@ -492,7 +492,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 ...(recovery?.warning ? [recovery.warning] : []),
                 ...(memory?.outcome === "partial"
                   ? [
-                      "Only memory-file keyword matches are included; semantic memory retrieval did not finish within the search time limit. Session transcript results are not included.",
+                      "Only memory-file keyword matches are included; semantic memory retrieval did not finish within the search time limit. Chat history results are not included.",
                     ]
                   : []),
               ]);

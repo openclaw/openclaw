@@ -49,10 +49,11 @@ function write(root: string, relative: string, contents: string, mode?: number) 
 
 describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", () => {
   it.skipIf(process.getuid?.() === 0).each([
-    ["hydrate", 0],
-    ["hydrate-github", 0],
-    ["hydrate", 1],
-  ] as const)("prepares %s UI E2E prerequisites (pnpm exit %s)", (job, pnpmExit) => {
+    ["hydrate", 0, 0],
+    ["hydrate-github", 0, 0],
+    ["hydrate", 1, 0],
+    ["hydrate", 0, 100],
+  ] as const)("prepares %s UI E2E (pnpm %s, APT %s)", (job, pnpmExit, aptExit) => {
     // Physical paths: the step walks `pwd -P`, and macOS temp roots sit behind /var symlinks.
     const root = realpathSync(tempDirs.make("openclaw-ui-e2e-hydrate-"));
     const lease = path.join(root, "lease");
@@ -72,6 +73,12 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
       bin,
       "node",
       '#!/bin/sh\nprintf "node" >> "$CALLS"\nprintf " <%s>" "$@" >> "$CALLS"\nprintf "\\n" >> "$CALLS"\n',
+      0o755,
+    );
+    write(
+      bin,
+      "sudo",
+      `#!/bin/sh\nprintf "sudo" >> "$CALLS"\nprintf " <%s>" "$@" >> "$CALLS"\nprintf "\\n" >> "$CALLS"\nexit ${aptExit}\n`,
       0o755,
     );
     write(
@@ -107,7 +114,7 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
       },
       encoding: "utf8",
     });
-    expect(result.status, result.stderr).toBe(pnpmExit);
+    expect(result.status, result.stderr).toBe(aptExit || pnpmExit);
     for (const directory of [lease, workspace, artifacts]) {
       expect(lstatSync(directory).mode & 0o022, directory).toBe(0);
     }
@@ -116,8 +123,11 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
     expect(changedDirectories).not.toContain("/");
     expect(lstatSync(unowned).mode).toBe(unownedMode);
     expect(readFileSync(calls, "utf8")).toBe(
-      "node <--import> <./scripts/tsx.mjs> <scripts/ensure-playwright-chromium.mts> <--require-playwright-chromium>\n" +
-        "pnpm <--dir> <ui> <exec> <playwright> <install> <--with-deps> <webkit>\n",
+      "sudo <apt-get> <update> <--allow-releaseinfo-change-label>\n" +
+        (aptExit === 0
+          ? "node <--import> <./scripts/tsx.mjs> <scripts/ensure-playwright-chromium.mts> <--require-playwright-chromium>\n" +
+            "pnpm <--dir> <ui> <exec> <playwright> <install> <--with-deps> <webkit>\n"
+          : ""),
     );
   });
 

@@ -1,5 +1,6 @@
 import BackgroundTasks
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import os
 import SwiftUI
@@ -594,8 +595,15 @@ struct OpenClawApp: App {
         GatewaySettingsStore.bootstrapPersistence()
         (UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard)
             .removeObject(forKey: "share.defaultInstruction")
+        // Settings used to persist pasted setup codes (which carry Gateway credentials) here.
+        UserDefaults.standard.removeObject(forKey: "gateway.setupCode")
+        // Retired unattended deep-link key; no build reads it.
+        UserDefaults.standard.removeObject(forKey: "deeplink.agent.key")
         OpenClawType.installUIKitAppearance()
-        let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false, restoringSavedGatewayRoute: true)
+        let appModel = NodeAppModel(
+            voiceNoteRecorder: Self.voiceNoteRecorder,
+            audioAdmissionInitiallyAllowed: false,
+            restoringSavedGatewayRoute: true)
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--openclaw-reset-onboarding") {
             // Reruns must exercise onboarding instead of saved pairing state.
@@ -673,6 +681,15 @@ struct OpenClawApp: App {
         #else
         false
         #endif
+    }
+
+    private static var voiceNoteRecorder: OpenClawVoiceNoteRecorder {
+        #if DEBUG
+        if self.screenshotModeEnabled, ProcessInfo.processInfo.arguments.contains("--openclaw-voice-note-fixture") {
+            return OpenClawVoiceNoteRecorder(capture: VoiceNoteFixtureCapture())
+        }
+        #endif
+        return OpenClawVoiceNoteRecorder()
     }
 
     private static var screenshotNotificationGuidanceEnabled: Bool {

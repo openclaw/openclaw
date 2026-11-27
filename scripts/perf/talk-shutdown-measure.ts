@@ -10,6 +10,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -58,12 +59,7 @@ let prepareMs: number | undefined;
 try {
   global.gc();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   const hostLoad = loadavg();
   const memoryBefore = process.memoryUsage();

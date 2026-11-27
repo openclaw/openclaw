@@ -1,5 +1,5 @@
+import type { ArtifactsListResult } from "../../../../../packages/gateway-protocol/src/schema/artifacts.js";
 import { createChangeListeners } from "../../../../../src/shared/listeners.js";
-import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { showConfirmChoiceDialog } from "../../../components/confirm-dialog.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -165,9 +165,12 @@ export function loadSessionWorkspaceArtifacts(
   const client = state.client;
   const request = (async () => {
     try {
-      const result = await client.request<{
-        artifacts?: SessionWorkspaceListResult["artifacts"];
-      } | null>("artifacts.list", {
+      const atRequest = new WeakSet(
+        !messageRole
+          ? state.chatMessages?.filter((m): m is object => m !== null && typeof m === "object")
+          : undefined,
+      );
+      const result = await client.request<ArtifactsListResult | null>("artifacts.list", {
         sessionKey: workspace.sessionKey,
         agentId: workspace.agentId,
         ...(messageRole ? { messageRole } : {}),
@@ -177,6 +180,9 @@ export function loadSessionWorkspaceArtifacts(
         return;
       }
       artifacts.items = result?.artifacts ?? [];
+      artifacts.attachments = result?.attachments
+        ? { ...result.attachments, atRequest }
+        : undefined;
       artifacts.loaded = true;
       artifacts.resolved = true;
       if (!messageRole && workspace.list) {
@@ -388,17 +394,16 @@ export function loadSessionWorkspace(
   sessionWorkspaceForHost(state).publish();
 }
 
-/** Refresh workspace facts after a run, which may have created a git checkout. */
+/** Refresh workspace facts after a run, which may have created a git checkout. Returns the retired diff. */
 export function refreshSessionWorkspaceState(
   state: SessionWorkspaceHost,
   refreshFiles: boolean,
-): boolean {
+): SessionWorkspaceState["diffContent"] {
   const workspace = state.sessionWorkspaceState;
   if (!workspace || workspace.sessionKey !== state.sessionKey) {
-    return false;
+    return undefined;
   }
-  const diffOpen =
-    workspace.diffContent !== undefined && state.sidebarContent === workspace.diffContent;
+  const retiredDiff = workspace.diffContent;
   delete workspace.diffContent;
   for (const role of ["all", "assistant"] as const) {
     const artifacts = role === "all" ? workspace.artifacts : workspace.assistantArtifacts;
@@ -413,6 +418,7 @@ export function refreshSessionWorkspaceState(
       void loadSessionWorkspaceArtifacts(state, true, role === "assistant" ? role : undefined);
     }
   }
+  workspace.fileLinksRevision = (workspace.fileLinksRevision ?? 0) + 1;
   workspace.directories = Object.create(null);
   directoryLoads.delete(workspace);
   fileLoads.delete(workspace);
@@ -421,7 +427,7 @@ export function refreshSessionWorkspaceState(
   } else {
     loadSessionWorkspace(state, workspace);
   }
-  return diffOpen;
+  return retiredDiff;
 }
 
 /** Retire facts owned by one checkout without disturbing panel layout or retained drafts. */

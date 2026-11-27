@@ -11,7 +11,7 @@ import {
   createWorkboardCard,
 } from "../../lib/workboard/test/index-helpers.ts";
 import { afterWorkboardUpdate } from "../../test/settle.ts";
-import { openCardMenu } from "./view.test-support.ts";
+import { openCardMenu, requireButton } from "./view.test-support.ts";
 import {
   mountPage,
   observeSessions,
@@ -492,81 +492,111 @@ it("shows independent metadata and linked-session failures together", async () =
   });
 });
 
-it("keeps page failures visible in the board editor and prioritizes its save failure", async () => {
-  const page = mountPage({ boardId: "planning" });
-  const failedSave = createDeferred<unknown>();
-  const retriedSave = createDeferred<unknown>();
-  const successfulSave = createDeferred<unknown>();
-  let saves = 0;
-  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
-  page.request.mockImplementation(async (method, params) => {
-    if (method === "agents.list") {
-      throw new Error("Agent metadata temporarily unavailable");
+it.each(["cards", "sessions"] as const)(
+  "keeps one error in the %s board editor and prioritizes its save failure",
+  async (kind) => {
+    const page = mountPage({ boardId: "planning" });
+    const failedSave = createDeferred<unknown>();
+    const retriedSave = createDeferred<unknown>();
+    const successfulSave = createDeferred<unknown>();
+    let saves = 0;
+    const request = expectDefined(page.request.getMockImplementation(), "request implementation");
+    page.request.mockImplementation(async (method, params) => {
+      if (method === "agents.list") {
+        throw new Error("Agent metadata temporarily unavailable");
+      }
+      if (method === "workboard.cards.list") {
+        return {
+          cards: [],
+          boards: [
+            {
+              id: "planning",
+              kind,
+              total: 0,
+              active: 0,
+              archived: 0,
+              byStatus: {},
+              ...(kind === "sessions"
+                ? {
+                    sessions: {
+                      columns: [
+                        { id: "working", label: "Working", description: "Active work" },
+                        {
+                          id: "done",
+                          label: "Done",
+                          description: "Completed work",
+                          fallback: true,
+                        },
+                      ],
+                    },
+                  }
+                : {}),
+            },
+          ],
+        };
+      }
+      if (method === "workboard.boards.upsert") {
+        return [failedSave, retriedSave, successfulSave][saves++]!.promise;
+      }
+      return request(method, params);
+    });
+    page.fixture.connection.connected = true;
+    page.fixture.notify();
+    const form = await openBoardEditor(page);
+    const errorMessage = () => {
+      if (kind === "sessions") {
+        expect.soft(visibleToast(page.container)).toBeNull();
+        expect(form.querySelectorAll('[role="alert"]')).toHaveLength(1);
+        return form.querySelector('[role="alert"]')?.textContent;
+      }
+      expect(form.querySelector('[role="alert"]')).toBeNull();
+      return visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent;
+    };
+    await afterWorkboardUpdate(() => {
+      expect(errorMessage()).toBe("Agent metadata temporarily unavailable");
+    });
+    const name = expectDefined(
+      form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
+      "board name",
+    );
+    name.value = "Release planning";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(saves).toBe(1);
+    await afterWorkboardUpdate(() => {
+      expect(name.disabled).toBe(true);
+      expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+    });
+    failedSave.reject(new Error("Board update denied"));
+    await afterWorkboardUpdate(() => {
+      expect(errorMessage()).toBe("Board update denied");
+    });
+    expect(name.value).toBe("Release planning");
+    if (kind === "cards") {
+      expectDefined(
+        visibleToast(page.container)?.querySelector<HTMLButtonElement>("button"),
+        "dismiss save error",
+      ).click();
     }
-    if (method === "workboard.cards.list") {
-      return {
-        cards: [],
-        boards: [{ id: "planning", total: 0, active: 0, archived: 0, byStatus: {} }],
-      };
-    }
-    if (method === "workboard.boards.upsert") {
-      return [failedSave, retriedSave, successfulSave][saves++]!.promise;
-    }
-    return request(method, params);
-  });
-  page.fixture.connection.connected = true;
-  page.fixture.notify();
-  const form = await openBoardEditor(page);
-  await afterWorkboardUpdate(() => {
-    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
-      "Agent metadata temporarily unavailable",
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await afterWorkboardUpdate(() => {
+      expect(saves).toBe(2);
+      expect(name.disabled).toBe(true);
+      expect(errorMessage()).toBe("Agent metadata temporarily unavailable");
+    });
+    expect(name.value).toBe("Release planning");
+    retriedSave.reject(new Error("Board update denied"));
+    await afterWorkboardUpdate(() => {
+      expect(errorMessage()).toBe("Board update denied");
+    });
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    successfulSave.resolve({ board: { id: "planning", name: "Release planning" } });
+    await afterWorkboardUpdate(() =>
+      expect(page.container.querySelector(".workboard-board-draft")).toBeNull(),
     );
-  });
-  const name = expectDefined(
-    form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
-    "board name",
-  );
-  name.value = "Release planning";
-  name.dispatchEvent(new Event("input", { bubbles: true }));
-  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  expect(saves).toBe(1);
-  await afterWorkboardUpdate(() => {
-    expect(name.disabled).toBe(true);
-    expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
-  });
-  failedSave.reject(new Error("Board update denied"));
-  await afterWorkboardUpdate(() => {
-    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
-      "Board update denied",
-    );
-  });
-  expect(name.value).toBe("Release planning");
-  expectDefined(
-    visibleToast(page.container)?.querySelector<HTMLButtonElement>("button"),
-    "dismiss save error",
-  ).click();
-  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  await afterWorkboardUpdate(() => {
-    expect(saves).toBe(2);
-    expect(name.disabled).toBe(true);
-    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
-      "Agent metadata temporarily unavailable",
-    );
-  });
-  expect(name.value).toBe("Release planning");
-  retriedSave.reject(new Error("Board update denied"));
-  await afterWorkboardUpdate(() => {
-    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
-      "Board update denied",
-    );
-  });
-  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  successfulSave.resolve({ board: { id: "planning", name: "Release planning" } });
-  await afterWorkboardUpdate(() =>
-    expect(page.container.querySelector(".workboard-board-draft")).toBeNull(),
-  );
-});
+  },
+);
 
 it.each(["canWrite", "connected"] as const)(
   "preserves a board draft without saving when %s is revoked",
@@ -629,6 +659,76 @@ it("requires a canonical refresh after reconnect before mutations resume", async
   );
   expect(page.workboard.state.mutationReadiness).toBe("ready");
 });
+
+it.each(["current first", "retired first"])(
+  "keeps the reopened board's refresh status when list requests settle %s",
+  async (order) => {
+    const page = mountPage({ boardId: "orchard" });
+    const boards = [
+      { id: "orchard", name: "Orchard" },
+      { id: "harbor", name: "Harbor" },
+    ];
+    const cards = boards.map(({ id, name }) =>
+      createWorkboardCard({ id, title: `${name} task`, metadata: { automation: { boardId: id } } }),
+    );
+    const retired = createDeferred<unknown>();
+    const current = createDeferred<unknown>();
+    const list = vi
+      .fn<() => Promise<unknown>>()
+      .mockResolvedValue({ cards, boards })
+      .mockResolvedValueOnce({ cards, boards })
+      .mockReturnValueOnce(retired.promise)
+      .mockReturnValueOnce(current.promise)
+      .mockRejectedValueOnce(new Error("Manual refresh failed"));
+    const request = expectDefined(page.request.getMockImplementation(), "request implementation");
+    page.request.mockImplementation((method, params) =>
+      method === "workboard.cards.list" ? list() : request(method, params),
+    );
+    const refresh = () => requireButton(page.container, "Refresh");
+    const alert = () => visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent;
+    page.fixture.connection.connected = true;
+    page.fixture.notify();
+    await afterWorkboardUpdate(() => refresh().click());
+    await afterWorkboardUpdate(() => expect(list).toHaveBeenCalledTimes(2));
+    page.navigate("harbor");
+    page.present(false);
+    await afterWorkboardUpdate(() => expect(page.workboard.state.loading).toBe(false));
+    page.present(true);
+    await afterWorkboardUpdate(() => expect(list).toHaveBeenCalledTimes(3));
+
+    if (order === "retired first") {
+      retired.resolve({ cards: [] });
+      await afterWorkboardUpdate(() => expect(page.workboard.state.loading).toBe(true));
+    }
+    current.reject(new Error("Board list unavailable"));
+    await afterWorkboardUpdate(() => expect(alert()).toContain("Board list unavailable"));
+    if (order === "current first") {
+      retired.resolve({ cards: [] });
+    }
+    await afterWorkboardUpdate(() => {
+      expect(page.container.querySelector(".workboard-page-title")?.textContent).toBe("Harbor");
+      expect(
+        Array.from(page.container.querySelectorAll(".workboard-card h3"), (el) => el.textContent),
+      ).toEqual(["Harbor task"]);
+      expect(alert()).toContain("Board list unavailable");
+      expect(refresh().parentElement?.title).toBe("");
+      expect(refresh().classList.contains("workboard-refresh--error")).toBe(false);
+    });
+
+    refresh().click();
+    await afterWorkboardUpdate(() => {
+      expect(alert()).toContain("Manual refresh failed");
+      expect(refresh().parentElement?.title).toBe("Refresh failed");
+      expect(refresh().classList.contains("workboard-refresh--error")).toBe(true);
+    });
+    refresh().click();
+    await afterWorkboardUpdate(() => {
+      expect(alert()).toBeUndefined();
+      expect(refresh().parentElement?.title).toContain("Updated");
+      expect(refresh().classList.contains("workboard-refresh--error")).toBe(false);
+    });
+  },
+);
 
 it("releases listeners and stops refreshes when its mount is disposed", async () => {
   const page = mountPage({ connected: true });
@@ -822,26 +922,6 @@ describe("selection reconciliation", () => {
     expect(page.workboard.state.draftOpen).toBe(true);
     expect(page.workboard.state.draftTitle).toBe("New operations task");
   });
-});
-
-it("titles the unfiltered page as all boards and a selected board by name", async () => {
-  const page = mountPage({ connected: true });
-  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
-  page.request.mockImplementation(async (method, params) =>
-    method === "workboard.cards.list"
-      ? {
-          cards: [],
-          boards: [
-            { id: "planning", name: "Planning", total: 0, active: 0, archived: 0, byStatus: {} },
-          ],
-        }
-      : request(method, params),
-  );
-  page.fixture.notify();
-  const title = () => page.container.querySelector(".workboard-page-title")?.textContent?.trim();
-  await afterWorkboardUpdate(() => expect(title()).toBe("All boards"));
-  page.navigate("planning");
-  await afterWorkboardUpdate(() => expect(title()).toBe("Planning"));
 });
 
 it("saves explicit appearance clearing without sending legacy null values", async () => {

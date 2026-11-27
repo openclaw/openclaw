@@ -299,7 +299,9 @@ a captured scope retain database-wide denial. Independent keyed writes do not
 deny unrelated binding reads. Known rollback preserves the
 prior facts; compound binding cleanup publishes deletion or compensation before
 releasing denial. An unknown outcome keeps effect guards denied for that database
-identity until the Gateway restarts. Ordinary descriptive reads remain available.
+identity until the host re-reads committed state through the state worker; a later
+guarded call starts that confirmation, and a failed confirmation or a newer unknown
+outcome keeps denial. Ordinary descriptive reads remain available.
 
 Custom store adapters return `undefined` because the host cannot observe their
 writers. Keep the adapter's authoritative reader for that case. A failed prepared
@@ -476,6 +478,14 @@ arbitrary callbacks. When accepting a legacy store, check both optional methods
 before using this capability; there is no safe fallback consisting of a separate
 lookup and unconditional write.
 
+To delete the same exact keys from one or two namespaces, use
+`await store.deleteKeys(keys, { alsoFrom: peer })`. Omit the options to delete
+from one store. Both stores must belong to the same plugin and physical state
+database. The host checks both grants at commit and deletes matching rows,
+including expired rows, in one transaction. Missing keys have no effect.
+A call accepts up to 50,000 keys and applies the usual 512-byte key limit.
+Check for `deleteKeys` when accepting older hosts or third-party store adapters.
+
 For a complete operation spanning keys or namespaces, use the optional
 `store.createOperation` capability. Its named plugin module runs inside the
 existing shared-state worker, with all reads and writes in one synchronous
@@ -506,7 +516,11 @@ The worker export accepts the typed command and a
 `entries`, `set`, and `delete` methods address the captured stores by index.
 Repeated reads share the transaction's row view; `lookupMany` selects uncached
 keys together. Writes update that view and preserve existing JSON limits,
-namespace quotas, eviction, and TTL rules. The host rejects writes outside
+namespace quotas, eviction, and TTL rules. For a bounded store, pass
+`{ evictSameKeysFrom: companionIndex }` to `set` to delete matching keys from a
+second writable store whenever this write evicts rows for capacity. Both writes
+commit together. Expiry and explicit deletes have their own lifecycles.
+The host rejects writes outside
 `writeStores`, retained transaction methods used after return, and Promise or
 thenable handler results. A failure rolls back the whole operation.
 

@@ -17,6 +17,7 @@ import {
 import { handleCodexDiagnosticsFeedback } from "./command-diagnostics.js";
 import {
   buildHelp,
+  CODEX_REVIEW_USAGE,
   formatAccount,
   formatCodexDisplayText,
   formatCodexStatus,
@@ -40,7 +41,8 @@ import {
   buildCodexChoiceMenuReply,
   buildCodexSubcommandPickerReply,
   isMenuVerb,
-  splitArgs,
+  parseReviewArgs,
+  splitArgsWithTail,
 } from "./command-handler-args.js";
 import {
   bindConversation,
@@ -82,7 +84,7 @@ export async function handleCodexSubcommand(
   options: { pluginConfig?: unknown; deps: CodexCommandDeps },
 ): Promise<PluginCommandResult> {
   const { deps } = options;
-  const args = splitArgs(inputCtx.args);
+  const { args, tail, hasUnclosedQuote } = splitArgsWithTail(inputCtx.args);
   if (args.length === 0) {
     return buildCodexSubcommandPickerReply();
   }
@@ -94,15 +96,24 @@ export async function handleCodexSubcommand(
   if (CODEX_HOST_INSPECTION_SUBCOMMANDS.has(normalized) && !canMutateCodexHost(inputCtx)) {
     return { text: CODEX_HOST_INSPECTION_AUTH_ERROR };
   }
+  const reviewTarget =
+    normalized === "review" ? parseReviewArgs(rest, tail, hasUnclosedQuote) : undefined;
+  const skipsNativeExecution =
+    returnsBeforeNativeCodexExecution(normalized, rest, reviewTarget) ||
+    isReadOnlyCodexGoalCommand(normalized, rest);
   if (
     CODEX_NATIVE_CONTROL_SUBCOMMANDS.has(normalized) &&
-    !returnsBeforeNativeCodexExecution(normalized, rest) &&
-    !isReadOnlyCodexGoalCommand(normalized, rest) &&
+    !skipsNativeExecution &&
     !canMutateCodexHost(inputCtx)
   ) {
     return { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR };
   }
-  const nativePolicy = await resolveCodexNativeCommandSandboxBlock(inputCtx, normalized, rest);
+  const nativePolicy = await resolveCodexNativeCommandSandboxBlock(
+    inputCtx,
+    normalized,
+    rest,
+    skipsNativeExecution,
+  );
   try {
     if (nativePolicy.block) {
       return { text: nativePolicy.block };
@@ -119,9 +130,17 @@ export async function handleCodexSubcommand(
     const usageCommand = normalized === "unbind" ? "detach" : normalized;
     if (
       rest.length > 0 &&
-      ["status", "models", "detach", "binding", "stop", "mcp", "skills", "account"].includes(
-        usageCommand,
-      )
+      [
+        "status",
+        "models",
+        "detach",
+        "binding",
+        "stop",
+        "mcp",
+        "skills",
+        "account",
+        "compact",
+      ].includes(usageCommand)
     ) {
       return { text: `Usage: /codex ${usageCommand}` };
     }
@@ -245,8 +264,18 @@ export async function handleCodexSubcommand(
       }
       return { text: await setConversationPreference(deps, ctx, rest, normalized) };
     }
-    if (normalized === "compact" || normalized === "review") {
-      return { text: await startThreadAction(deps, ctx, pluginConfig, normalized, rest) };
+    if (normalized === "compact") {
+      return { text: await startThreadAction(deps, ctx, pluginConfig, { kind: "compact" }) };
+    }
+    if (normalized === "review") {
+      return {
+        text: reviewTarget
+          ? await startThreadAction(deps, ctx, pluginConfig, {
+              kind: "review",
+              target: reviewTarget,
+            })
+          : `Usage: ${CODEX_REVIEW_USAGE}`,
+      };
     }
     if (normalized === "diagnostics") {
       return await handleCodexDiagnosticsFeedback(deps, ctx, pluginConfig, rest.join(" "));

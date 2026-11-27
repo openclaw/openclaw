@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, onCleanup, Show } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -6,9 +6,10 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { PluginSurface } from "./control-ui-view.solid.tsx";
+import { PluginContribution, PluginSurface } from "./control-ui-view.solid.tsx";
 import {
   composerProps,
+  createInertViewHost,
   createViewRuntime,
   recordReplacement,
   replacement,
@@ -102,6 +103,51 @@ describe("native plugin surface", () => {
       warnings.mock.calls.some(([message]) => String(message).includes("STRICT_READ_UNTRACKED")),
     ).toBe(false);
     warnings.mockRestore();
+  });
+
+  it("mounts a routed page that its workspace replacement inserts after it settles", async () => {
+    const source = runtime();
+    const page = recordReplacement("workspace", "Projects page");
+    const [active, setActive] = createSignal(false, { ownedWrite: true });
+    const { signal } = new AbortController();
+    const host = createInertViewHost(signal);
+    Object.assign(source.context.plugins, {
+      registrations: () => [{ key: "example/projects", value: page.view, host, signal }],
+    });
+    const provider = createSolidApplicationContextProvider(source.context);
+    const view = mountSolid(
+      () => {
+        // Like the shell, the replacement re-inserts the same workspace nodes.
+        const workspace = (
+          <Show when={active()}>
+            <PluginContribution kind="pages" contributionKey="example/projects" props={{}} />
+          </Show>
+        );
+        return (
+          <PluginSurface
+            surface="workspace"
+            props={{ sessionKey: "main", agentId: "main", routeId: "plugin" }}
+            renderDefault={() => workspace}
+          />
+        );
+      },
+      { wrapper: provider.wrapper },
+    );
+    // The routed page is built while the replacement holds the workspace detached.
+    source.select(
+      replacement("workspace", (container, context) => {
+        setActive(true);
+        queueMicrotask(() => context.mountDefault(container));
+      }),
+    );
+    await waitForSolid(() => expect(view.getByText("Projects page")).toBeTruthy());
+    // Moving the mounted page keeps it instead of mounting it again.
+    const pageView = page.roots[0]!.closest("openclaw-plugin-view")!;
+    pageView.parentNode!.insertBefore(pageView, pageView.nextSibling);
+    flush();
+    expect(page.mount).toHaveBeenCalledOnce();
+    expect(page.dispose).not.toHaveBeenCalled();
+    view.unmount();
   });
 
   it("revokes deselected composer operations before rendering and retires replaced contexts", async () => {

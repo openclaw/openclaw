@@ -16,7 +16,7 @@
   z-index: 121;
   width: min(390px, calc(100vw - 16px));
   block-size: min(
-    560px,
+    500px,
     calc(
       100dvh -
         max(var(--sidebar-issues-panel-top, 8px), calc(8px + env(safe-area-inset-top, 0px))) -
@@ -89,7 +89,7 @@
 .sidebar-issues-panel__heading {
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: calc(var(--control-ui-text-md) + 1px);
   font-weight: 600;
   line-height: 1.2;
 }
@@ -242,6 +242,17 @@
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
   font-weight: 500;
+}
+
+.sidebar-issues-panel__empty-icon {
+  display: inline-flex;
+  margin-block-end: 12px;
+  color: var(--icon-decorative, var(--muted));
+}
+
+.sidebar-issues-panel__empty-icon svg {
+  width: 28px;
+  height: 28px;
 }
 
 .sidebar-issues-panel__overflow-cue {
@@ -532,7 +543,7 @@ footer.sidebar-issues-panel__mentions-note {
   position: absolute;
   z-index: 1;
   inset-block-start: 6px;
-  inset-inline-end: 4px;
+  inset-inline-end: 0;
   display: inline-grid;
   width: 28px;
   height: 28px;
@@ -606,6 +617,14 @@ footer.sidebar-issues-panel__mentions-note {
   pointer-events: auto;
 }
 
+.sidebar-issues-panel__update .sidebar-issues-panel__entity {
+  display: -webkit-box;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .sidebar-update-issue__body {
   padding-inline-start: calc(
     var(--sidebar-issues-row-inset) + var(--sidebar-issues-marker-size) +
@@ -615,6 +634,10 @@ footer.sidebar-issues-panel__mentions-note {
 
 .sidebar-update-issue__body .sidebar-update-card {
   margin: 0;
+}
+
+.sidebar-update-issue__body .sidebar-update-card__action {
+  max-inline-size: 100%;
 }
 
 .sidebar-update-card--compact-details {

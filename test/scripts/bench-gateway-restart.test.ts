@@ -362,8 +362,8 @@ it("finishes restart probes when ready arrives without an unavailable window", a
       unavailableMs: null,
       firstErrorKind: null,
     });
-    expect(result.ms).not.toBeNull();
-    expect(result.ms ?? 0).toBeLessThan(1_000);
+    expect(result.ms).toBeTypeOf("number");
+    expect(result.ms).toBeLessThan(1_000);
     expect(requestProbe).toHaveBeenCalledOnce();
   } finally {
     requestProbe.mockRestore();

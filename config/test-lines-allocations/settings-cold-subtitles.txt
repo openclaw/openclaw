@@ -1,3 +1,0 @@
-# Exact net growth for the held-sidebar Approvals/Labs subtitle regression.
-# Reuses the existing source-module E2E suite; catches page copy depending on sibling loading.
-35
