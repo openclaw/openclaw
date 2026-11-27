@@ -124,6 +124,82 @@ private struct ChatTypingRenderedComposer: View {
 /// XCTest keeps key-window checks outside Swift Testing's concurrent suites.
 @MainActor
 final class ChatTypingFocusTests: XCTestCase {
+    private enum TalkDraft {
+        case empty
+        case text
+        case attachment
+    }
+
+    func testEndTalkRemainsSeparateFromRunAndDraftActions() throws {
+        let appModel = NodeAppModel()
+        appModel.enterScreenshotFixtureMode()
+        appModel.chatPresentation.sync(appModel: appModel)
+        let model = try XCTUnwrap(appModel.chatPresentation.viewModel)
+        defer { model.detachTransport() }
+        let cases: [(runActive: Bool, draft: TalkDraft, activeCount: Int, inactiveCount: Int)] = [
+            (false, .empty, 1, 1),
+            (true, .empty, 2, 1),
+            (false, .text, 2, 1),
+            (true, .text, 2, 1),
+            (false, .attachment, 2, 1),
+            (true, .attachment, 2, 1),
+        ]
+        for scenario in cases {
+            model.pendingRuns = scenario.runActive ? ["accepted-run"] : []
+            model.input = scenario.draft == .text ? "Keep this draft" : ""
+            model.attachments = scenario.draft == .attachment ? [OpenClawPendingAttachment(
+                url: nil, data: Data([1, 2, 3]), fileName: "image.png", mimeType: "image/png", preview: nil)] : []
+            for talkActive in [false, true] {
+                let composer = OpenClawChatComposer(
+                    viewModel: model,
+                    style: .standard,
+                    showsSessionSwitcher: false,
+                    userAccent: nil,
+                    composerChrome: .clean,
+                    isComposerEnabled: true,
+                    isAttachmentInputEnabled: true,
+                    messagePlaceholder: nil,
+                    talkControl: OpenClawChatTalkControl(
+                        isEnabled: talkActive,
+                        isListening: talkActive,
+                        isSpeaking: false,
+                        isGatewayConnected: true,
+                        statusText: "",
+                        providerLabel: "",
+                        toggle: { _ in }),
+                    dictationControl: nil,
+                    voiceNoteControl: nil)
+                let expected = talkActive ? scenario.activeCount : scenario.inactiveCount
+                let context = "Talk=\(talkActive), run=\(scenario.runActive), draft=\(scenario.draft)"
+                // Exercise the production SwiftUI builders, not their new presentation properties.
+                // With no optional local-capture controls, the extra button must be End Talk. With nothing
+                // to stop or send, End Talk is the one primary button itself; otherwise the phone's
+                // one primary button (Talk, Send or Stop) stays beside it.
+                let separateEndTalk = talkActive && (scenario.runActive || scenario.draft != .empty)
+                XCTAssertEqual(
+                    try Self.renderedControlCount(composer.cleanCaptureAndPrimaryControls.body),
+                    expected,
+                    context)
+                XCTAssertEqual(
+                    try Self.renderedControlCount(composer.cleanTrailingControl),
+                    1,
+                    context)
+                XCTAssertEqual(expected, separateEndTalk ? 2 : 1, context)
+            }
+        }
+    }
+
+    private static func renderedControlCount(_ content: some View) throws -> Int {
+        var count = 0
+        func capture(_ subviews: SubviewsCollection) -> some View {
+            count = subviews.count
+            return Color.clear.frame(width: 1, height: 1)
+        }
+        let renderer = ImageRenderer(content: Group(subviews: content) { capture($0) })
+        _ = try XCTUnwrap(renderer.uiImage)
+        return count
+    }
+
     func testComposerShowsOnePrimaryButtonDuringResponse() throws {
         let appModel = NodeAppModel()
         appModel.enterScreenshotFixtureMode()
