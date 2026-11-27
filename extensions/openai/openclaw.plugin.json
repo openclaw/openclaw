@@ -254,7 +254,8 @@
             "compat": {
               "defaultThinkingLevel": "medium",
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"]
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
             }
           },
           {

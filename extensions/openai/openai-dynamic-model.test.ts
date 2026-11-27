@@ -48,6 +48,7 @@ describe("OpenAI dynamic model capabilities", () => {
       compat: {
         defaultThinkingLevel: "medium",
         supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+        supportsTemperature: false,
       },
     });
   });
