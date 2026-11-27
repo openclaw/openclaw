@@ -97,6 +97,24 @@ describe("Slack relay source", () => {
     });
   });
 
+  it("identifies relay.url in the connection status for a malformed address", async () => {
+    const failed = deferred<Record<string, unknown>>();
+    const monitor = startRelayMonitor({ url: "missing scheme and host" }, (status) => {
+      if (status.lastError) {
+        failed.resolve(status);
+      }
+    });
+
+    try {
+      await expect(failed.promise).resolves.toMatchObject({
+        connected: false,
+        lastError: expect.stringContaining("relay.url"),
+      });
+    } finally {
+      await monitor.stop();
+    }
+  });
+
   it("applies hello identity and acks a routed event only after durable accept", async () => {
     const { server, url } = await listenRelay();
     const ack = deferred<Record<string, unknown>>();
