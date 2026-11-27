@@ -75,7 +75,7 @@ import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-g
 import { createChatRunState } from "../server-chat-state.js";
 import * as gatewaySessionWorker from "../session-utils-store-worker.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
-import { agentWaitHandler } from "./agent-wait-handler.js";
+import { agentWaitHandler } from "./agent.js";
 import { createScopedCliClient } from "./chat-client.test-support.js";
 import {
   createFileAttachment,

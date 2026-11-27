@@ -55,7 +55,9 @@ const waitService = vi.hoisted(() => async () => ({
     wait: () => waitForTurn(params),
   }),
 }));
+// mock-isolation: Control start admission so cancellation can race the cold import.
 vi.mock("./agent-turn-service.js", service);
+// mock-isolation: Retain the real wait exports while controlling the observation boundary.
 vi.mock("./agent-wait.js", waitService);
 
 function createContext() {

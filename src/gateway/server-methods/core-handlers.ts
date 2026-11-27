@@ -12,19 +12,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 type CoreGatewayHandlerModuleLoader = () => Promise<GatewayRequestHandlers>;
 
 const CORE_GATEWAY_HANDLER_MODULES = {
-  agent: async () => ({
-    // Prepare the run handler before dispatch rechecks authority. Waits only observe the run.
-    ...createLazyCoreHandlers({
-      methods: ["agent"],
-      loadHandlers: createLazyPromise(
-        () => import("./agent.js").then((module) => module.agentHandlers),
-        {
-          cacheRejections: true,
-        },
-      ),
-    }),
-    "agent.wait": (await import("./agent-wait-handler.js")).agentWaitHandler,
-  }),
+  agent: () => import("./agent.js").then((module) => module.agentHandlers),
   "agent-identity": () =>
     import("./agent-identity.js").then((module) => module.agentIdentityHandlers),
   agents: () => import("./agents.js").then((module) => module.agentsHandlers),

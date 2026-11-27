@@ -16,6 +16,7 @@ vi.mock("./agent-run-handler.js", () => {
   return { agentRunHandler: vi.fn() };
 });
 
+// mock-isolation: Detect execution-service evaluation without starting the provider runtime.
 vi.mock("../agent-turn/agent-turn-service.js", () => {
   runStackLoaded();
   return { createAgentTurnService: unavailable };

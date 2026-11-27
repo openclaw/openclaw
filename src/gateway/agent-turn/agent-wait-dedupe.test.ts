@@ -31,7 +31,7 @@ import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleto
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { agentWaitHandler } from "../server-methods/agent-wait-handler.js";
+import { agentWaitHandler } from "../server-methods/agent.js";
 import { prepareChatAdmission } from "../server-methods/chat-send-admission.test-support.js";
 import { createPendingChatSendReservationAccess } from "../server-methods/chat-send-reservation.js";
 import { createGatewayRequestContext } from "../server-request-context.js";

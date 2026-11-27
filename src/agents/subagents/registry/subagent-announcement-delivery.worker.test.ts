@@ -39,6 +39,7 @@ type AgentTurnService = ReturnType<
 const turns = vi.hoisted(() => ({
   start: vi.fn<AgentTurnService["startTurn"]>(),
 }));
+// mock-isolation: Settle the requester locally while exercising the real registry worker.
 vi.mock("../../../gateway/agent-turn/agent-turn-service.js", () => ({
   createAgentTurnService: () => ({ startTurn: turns.start }),
 }));
