@@ -665,6 +665,27 @@ struct RootTabsPresentationTests {
         #expect(Set(layout.sections.flatMap(\.nodes).map(\.session.key)) == ["recent", "expired"])
     }
 
+    @Test func `sidebar search keeps child placement actions unavailable`() throws {
+        var parent = Self.sessionEntry(key: "agent:main:website")
+        parent.displayName = "Website refresh"
+        parent.childSessions = ["agent:main:audit"]
+        var child = Self.sessionEntry(key: "agent:main:audit")
+        child.displayName = "Landing page audit"
+        let layout = RootSidebar.sessionLayout(query: "Landing page audit") { query in
+            RootSidebarModel.sections(
+                sessions: [parent, child],
+                query: query,
+                currentSessionKey: "",
+                mainSessionKey: "main",
+                activeAgentID: "main",
+                groups: [])
+        }
+
+        let result = try #require(layout.sections.flatMap(\.nodes).first)
+        #expect(layout.sections.flatMap(\.nodes).map(\.id) == [child.key])
+        #expect(layout.placementChildKeys.contains(result.id))
+    }
+
     @Test(arguments: [false, true])
     func `sidebar retains a missing selection only while the roster is incomplete`(complete: Bool) {
         let model = RootSidebarModel()

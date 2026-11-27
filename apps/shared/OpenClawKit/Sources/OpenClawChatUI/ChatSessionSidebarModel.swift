@@ -285,17 +285,17 @@ public enum ChatSessionSidebarModel {
             return sections
             #endif
         }
-        // Explicit pin and category placement takes precedence over ancestry.
-        let pinned = self.tree(
-            from: OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true }),
-            identity: identity)
-        let unpinned = visible.filter { $0.pinned != true }
+        // Place roots only after building the tree. Child metadata is retained,
+        // but cannot split a family across pin/category sections.
+        let roots = self.tree(from: OpenClawChatSessionListOrganizer.organize(visible), identity: identity)
+        let pinned = roots.filter { $0.session.pinned == true }
+        let unpinned = roots.filter { $0.session.pinned != true }
         let orderedGroups = groups.sorted { lhs, rhs in
             lhs.position == rhs.position ? lhs.name < rhs.name : lhs.position < rhs.position
         }
         let groupNames = Set(orderedGroups.map(\.name))
         let recent = unpinned.filter { session in
-            guard let category = session.category else { return true }
+            guard let category = session.session.category else { return true }
             return !groupNames.contains(category)
         }
 
@@ -304,8 +304,7 @@ public enum ChatSessionSidebarModel {
             result.append(Section(id: "pinned", title: "Pinned", nodes: pinned))
         }
         for group in orderedGroups {
-            let nodes = self.tree(
-                from: unpinned.filter { $0.category == group.name }, identity: identity)
+            let nodes = unpinned.filter { $0.session.category == group.name }
             if !nodes.isEmpty || includeEmptyGroups {
                 result.append(Section(id: "group:\(group.name)", title: group.name, nodes: nodes))
             }
@@ -314,12 +313,19 @@ public enum ChatSessionSidebarModel {
             result.append(Section(
                 id: "recent",
                 title: result.isEmpty ? nil : "Recent",
-                nodes: self.tree(from: recent, identity: identity)))
+                nodes: recent))
         }
         return result
     }
 
-    static func tree(
+    /// Placement follows resolved roster edges, not persisted parent metadata.
+    public static func childSessionKeys(in sessions: [OpenClawChatSessionEntry]) -> Set<String> {
+        Set(self.rows(self.tree(from: sessions), showsChildren: { _ in true })
+            .filter { $0.depth > 0 }.map(\.id))
+    }
+
+    /// Resolve roster ancestry without applying sidebar visibility or status filters.
+    public static func tree(
         from sessions: [OpenClawChatSessionEntry],
         identity: (OpenClawChatSessionEntry) -> String = { $0.key }) -> [Node]
     {
