@@ -119,9 +119,7 @@ function interceptReads(hooks: {
   return { [Symbol.dispose]: () => spies.forEach((spy) => spy.mockRestore()) };
 }
 
-it("keeps captured environments on the caller while the worker qualifies existing paths", async ({
-  state,
-}) => {
+it("sends only the captured state root for physical path observations", async ({ state }) => {
   const env = {
     HOME: state.statePath("routing-home"),
     OPENCLAW_STATE_DIR: state.statePath("storage-root"),
@@ -166,8 +164,8 @@ it("keeps captured environments on the caller while the worker qualifies existin
     measureSessionStoreTargetInventoryInputBytes(directRequest),
     measureSessionStoreTargetInventoryInputBytes({ ...observedRequest, paths: inventory.paths }),
   ]);
-  expect(requests).toEqual([false, false, true]);
-  expect(replies).toEqual([false, false, true]);
+  expect(requests).toEqual([true, false, true]);
+  expect(replies).toEqual([true, false, true]);
 });
 
 it("keeps incognito inventory qualification with the captured state root", async ({ state }) => {
