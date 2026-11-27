@@ -40,8 +40,10 @@ description: Create scheduled Knowledge ingestion automations with a verified wo
      applicable, then `knowledge-ingest` or `knowledge-meeting-ingest` for content.
    - The selected workflow's verification before committing its checkpoint;
      preserve retryable work and the previous checkpoint on failure.
-   - `AUTOMATION_FAILED` on its own first line for unresolved failure, followed
-     by the reason. `NO_REPLY` is for successful no-change runs, not hidden errors.
+   - For unresolved failure, a final reply that says what failed and what it
+     tried. The scheduler treats that reply as ordinary output, not a failed run,
+     so deliver it where the owner will see it. `NO_REPLY` is for successful
+     no-change runs, not hidden errors.
 
 4. **Prove the scheduled path.** Run through the scheduler, not just interactive
    tools. Require a terminal run receipt, correct vault access, verified saved
