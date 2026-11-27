@@ -67,6 +67,7 @@ import {
   YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentInternalParams as TerminalRunParams } from "./internal-params.js";
+import { resolveSuccessfulToolNames } from "./run-attempt-result.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import {
   isEmbeddedRunTerminalAbort,
@@ -137,11 +138,17 @@ export async function resolveEmbeddedRunTerminal(input: {
   contextRecoveryState: EmbeddedRunContextRecoveryState;
 }): Promise<TerminalResolution> {
   const { runParams, attempt, retryState, sessionPromptState } = input;
-  if (attempt.toolMetas.length > 0 || attempt.clientToolCalls?.length) {
-    retryState.textToolCallPending = false;
+  const pendingToolName = retryState.pendingTextToolCallName;
+  if (
+    pendingToolName &&
+    (resolveSuccessfulToolNames(attempt).includes(pendingToolName) ||
+      attempt.clientToolCalls?.some((call) => call.name === pendingToolName))
+  ) {
+    retryState.pendingTextToolCallName = undefined;
   }
   // A text-only acknowledgement does not settle the call requested by the corrective retry.
-  const textToolCallAttempt = attempt.textToolCallAttempt || retryState.textToolCallPending;
+  const textToolCallAttempt =
+    attempt.textToolCallAttempt || Boolean(retryState.pendingTextToolCallName);
   const completionAttempt =
     textToolCallAttempt && !attempt.textToolCallAttempt
       ? { ...attempt, textToolCallAttempt: true }
@@ -248,8 +255,8 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState[emptyResponseRetryCounter] < DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT
   ) {
     retryState[emptyResponseRetryCounter] += 1;
-    if (textToolCallAttempt) {
-      retryState.textToolCallPending = true;
+    if (attempt.textToolCallName) {
+      retryState.pendingTextToolCallName = attempt.textToolCallName;
     }
     sessionPromptState.activateInternalPrompt(nextEmptyResponseRetryInstruction);
     log.warn(

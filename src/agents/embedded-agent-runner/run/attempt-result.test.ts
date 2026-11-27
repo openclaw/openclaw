@@ -243,6 +243,7 @@ describe("attempt result projection", () => {
     });
 
     expect(result.textToolCallAttempt).toBe(true);
+    expect(result.textToolCallName).toBe("write");
     expect(assistant.content).toEqual([{ type: "text", text }]);
     expect(
       completeResult({
@@ -252,6 +253,35 @@ describe("attempt result projection", () => {
         allowedToolNames: ["write"],
       }).textToolCallAttempt,
     ).toBeUndefined();
+  });
+
+  it("preserves an example split across Responses commentary and final-answer items", () => {
+    const commentary = "Here is an example";
+    const example =
+      '```json\n{"name":"write","arguments":{"path":"proof.txt","content":"OK"}}\n```';
+    const assistant = textAssistant("", {
+      api: "openai-responses",
+      content: [
+        {
+          type: "text",
+          text: commentary,
+          textSignature: JSON.stringify({ v: 1, id: "comment", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: example,
+          textSignature: JSON.stringify({ v: 1, id: "answer", phase: "final_answer" }),
+        },
+      ],
+    });
+    const result = completeResult({
+      currentAttemptCompletedAssistant: assistant,
+      assistantTexts: [commentary, example],
+      allowedToolNames: ["write"],
+    });
+
+    expect(result.textToolCallAttempt).toBeUndefined();
+    expect(result.preparedTerminalReply?.text).toBe(example);
   });
 
   it("keeps the settled result snapshot when an output hook replaces live state", () => {

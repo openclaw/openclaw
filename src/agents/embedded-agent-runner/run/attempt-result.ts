@@ -1,8 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { isPlainTextToolCallAttempt } from "../../../../packages/tool-call-repair/src/index.js";
+import { findPlainTextToolCallName } from "../../../../packages/tool-call-repair/src/index.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
-import { extractAssistantTranscriptSourceText } from "../../../shared/chat-message-content.js";
+import {
+  extractAssistantTextForPhase,
+  extractAssistantTranscriptSourceText,
+} from "../../../shared/chat-message-content.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { prepareTerminalAssistantReply } from "../../assistant-terminal-reply.js";
 import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
@@ -281,7 +284,7 @@ export function completeEmbeddedAttemptResult(
     keptAnswer?.assistant ?? terminalAssistant,
   );
   const assistant = resolveCurrentAttemptAssistant(state);
-  let textToolCallAttempt = false;
+  let textToolCallName: string | undefined;
   if (
     state.terminal.kind === "ok" &&
     assistant?.stopReason === "stop" &&
@@ -298,10 +301,18 @@ export function completeEmbeddedAttemptResult(
       assistant === terminalAssistant
         ? closingReply.text
         : prepareTerminalAssistantReply(assistant).text;
-    textToolCallAttempt =
-      allowedToolNames.size > 0 &&
-      (isPlainTextToolCallAttempt(sourceText, hasToolName) ||
-        (renderedText !== sourceText && isPlainTextToolCallAttempt(renderedText, hasToolName)));
+    const commentary = extractAssistantTextForPhase(assistant, { phase: "commentary" });
+    const renderedSource = commentary ? `${commentary}\n${renderedText}` : renderedText;
+    const name =
+      allowedToolNames.size > 0
+        ? (findPlainTextToolCallName(sourceText, hasToolName) ??
+          (renderedSource !== sourceText
+            ? findPlainTextToolCallName(renderedSource, hasToolName)
+            : undefined))
+        : undefined;
+    textToolCallName = name
+      ? (resolveToolCallName(name, allowedToolNames, undefined, true) ?? undefined)
+      : undefined;
   }
   const accessProgram = asOptionalRecord(
     sessionRuntime.transport.effectiveExtraParams.accessPrograms,
@@ -312,7 +323,7 @@ export function completeEmbeddedAttemptResult(
     accessProgram === "daybreak_red"
       ? { cyberAccessProgram: accessProgram }
       : {}),
-    ...(textToolCallAttempt ? { textToolCallAttempt: true } : {}),
+    ...(textToolCallName ? { textToolCallAttempt: true, textToolCallName } : {}),
     ...state,
     ...evidence,
     ...(attempt.inputAlreadyDelivered ? { inputAlreadyDelivered: true as const } : {}),
