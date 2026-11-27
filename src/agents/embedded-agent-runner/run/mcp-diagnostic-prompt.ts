@@ -22,7 +22,7 @@ function renderedLength(fragments: RuntimeContextFragment[]): number {
 export function buildMcpDiagnosticPromptFragments(
   diagnostics: readonly McpToolCatalogDiagnostic[],
 ): RuntimeContextFragment[] {
-  const ordered = [...diagnostics].sort(
+  const ordered = diagnostics.toSorted(
     (a, b) =>
       (a.serverName < b.serverName ? -1 : a.serverName > b.serverName ? 1 : 0) ||
       (a.message < b.message ? -1 : a.message > b.message ? 1 : 0),

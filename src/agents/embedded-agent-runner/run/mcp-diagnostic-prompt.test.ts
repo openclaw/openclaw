@@ -23,7 +23,7 @@ describe("MCP diagnostic prompt projection", () => {
     expect(legacy).toContain("MCP server server-00 unavailable");
     expect(legacy).toMatch(/\d+ additional unavailable MCP servers omitted/);
     expect(fragments.at(-1)?.text).toMatch(/^\d+ additional unavailable MCP servers omitted\.$/);
-    expect(fragments).toEqual(buildMcpDiagnosticPromptFragments([...diagnostics].reverse()));
+    expect(fragments).toEqual(buildMcpDiagnosticPromptFragments(diagnostics.toReversed()));
     expect(escaped).not.toContain("<retry>");
   });
 
