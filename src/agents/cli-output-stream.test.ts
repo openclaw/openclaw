@@ -46,20 +46,24 @@ it("keeps the running parent call separate from child usage and whole-turn billi
   expect(parser.hasTerminalResult()).toBe(false);
   expect.soft(parser.getOutput()?.usage).toMatchObject({ input: 10, cacheRead: 19_288, output: 4 });
 
-  finishFrames(
-    parser,
-    { type: "assistant", message: { id: "parent", usage: parentUsage, content: [] } },
-    {
-      type: "assistant",
-      parent_tool_use_id: "tool-1",
-      message: {
-        id: "child",
-        usage: { input_tokens: 950, output_tokens: 7 },
-        content: [],
+  parser.push(
+    joinJsonlFrames(
+      { type: "assistant", message: { id: "parent", usage: parentUsage, content: [] } },
+      {
+        type: "assistant",
+        parent_tool_use_id: "tool-1",
+        message: {
+          id: "child",
+          usage: { input_tokens: 950, output_tokens: 7 },
+          content: [],
+        },
       },
-    },
-    result("Done", { usage: { input_tokens: 960, output_tokens: 11 } }),
+      "",
+    ),
   );
+  expect(parser.hasTerminalResult()).toBe(false);
+  expect.soft(parser.getOutput()?.usage).toMatchObject({ input: 10, cacheRead: 19_288, output: 4 });
+  finishFrames(parser, result("Done", { usage: { input_tokens: 960, output_tokens: 11 } }));
   expect(parser.getOutput()).toMatchObject({
     usage: { input: 10, cacheRead: 19_288, output: 4 },
     diagnosticUsage: { input: 960, output: 11 },

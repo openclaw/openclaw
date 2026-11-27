@@ -661,6 +661,7 @@ export const gatewayMethodsTestExclude = [
 
 // Gateway server tests that need private process state or a private module graph.
 export const gatewayServerIsolatedTestFiles = [
+  "src/gateway/cli-context-usage.gateway.integration.test.ts",
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
   "src/gateway/gateway.prompt-cache.test.ts",
   "src/gateway/gateway-plugin-notice.prompt-cache.test.ts",
