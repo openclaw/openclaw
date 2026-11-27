@@ -435,6 +435,7 @@ struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTr
         idempotencyKey: String,
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
+        if ScreenshotFixtureMode.failsSends { throw ScreenshotFixtureMode.sendTimeoutError }
         if let delay = ScreenshotFixtureMode.replyDelay {
             try await Task.sleep(for: delay)
         }

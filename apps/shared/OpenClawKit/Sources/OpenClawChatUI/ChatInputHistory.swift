@@ -295,7 +295,10 @@ extension OpenClawChatViewModel {
                 return nil
             }
             let text = ChatMessageVisibleText.visibleText(in: message)
-            return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !Self.isLegacyAttachmentOnlyText(text, in: message)
+            else { return nil }
+            return text
         }
         let key = self.visibleComposerKey
         self.inputHistoriesBySession[key, default: ChatInputHistory()].seed(transcriptInputs: transcriptInputs)

@@ -620,7 +620,8 @@ private struct ChatComposerSkillsPage: View {
 
     var body: some View {
         let catalog = self.caps.facts.catalog
-        let blocked = !self.viewModel.attachments.isEmpty || !self.viewModel.preparingAttachments.isEmpty
+        let blocked = !self.viewModel.composerAttachments.isEmpty ||
+            !self.viewModel.composerPreparingAttachments.isEmpty
         let query = self.query.trimmingCharacters(in: .whitespacesAndNewlines)
         let skills = catalog.skills.filter { $0.isUsable && $0.matches(query) }
         List {

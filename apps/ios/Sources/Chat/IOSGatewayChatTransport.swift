@@ -112,9 +112,10 @@ ChatPRReaderTransport {
                 reason: OpenClawChatTransportUpgradeMessage.routingContract,
                 allowsLiveSend: true)
         }
-        let supportsSettingsCAS = await gateway.supportsServerCapability(
+        let gatewaySupportsSettingsCAS = await gateway.supportsServerCapability(
             .sessionSettingsCAS,
             ifCurrentRoute: route) == true
+        let supportsSettingsCAS = gatewaySupportsSettingsCAS && !ScreenshotFixtureMode.failsQueuedSendSettings
         guard let routingContract = try? await self.sessionRoutingContract(ifCurrentRoute: route)
         else { return .unavailable(reason: nil) }
         return .available(OpenClawChatTransportRouteLease(

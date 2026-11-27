@@ -450,16 +450,6 @@ struct OpenClawChatComposer: View {
                 })
         }
 
-        #if os(iOS)
-        if self.viewModel.attachmentStagingCount > 0 {
-            ChatAttachmentActivityRow(title: "Preparing attachments…")
-        } else if self.viewModel.isSendingAttachmentDraft {
-            ChatAttachmentActivityRow(title: "Sending attachments…")
-        } else if self.viewModel.isSubmittingDraft, !self.viewModel.attachments.isEmpty {
-            ChatAttachmentActivityRow(title: "Preparing message…")
-        }
-        #endif
-
         if self.composerChrome == .clean {
             composerCapabilityNoticeRow
         }
@@ -628,14 +618,14 @@ struct OpenClawChatComposer: View {
 
     private var attachmentsStrip: some View {
         OpenClawChatAttachmentsStrip(
-            attachments: self.viewModel.attachments,
-            preparing: self.viewModel.preparingAttachments,
+            attachments: self.viewModel.composerAttachments,
+            preparing: self.viewModel.composerPreparingAttachments,
             onRemove: { self.viewModel.removeAttachment($0) })
     }
 
     private var showsAttachmentsStrip: Bool {
         self.style == .standard
-            && (!self.viewModel.attachments.isEmpty || !self.viewModel.preparingAttachments.isEmpty)
+            && (!self.viewModel.composerAttachments.isEmpty || !self.viewModel.composerPreparingAttachments.isEmpty)
     }
 
     private var editor: some View {
@@ -757,7 +747,7 @@ struct OpenClawChatComposer: View {
                 // Read the draft in its own section so typing does not re-evaluate the whole composer.
                 ChatComposerSection {
                     Color.clear.onChange(
-                        of: self.viewModel.hasDraftToSend,
+                        of: self.viewModel.hasDraftToSend || !self.viewModel.composerPreparingAttachments.isEmpty,
                         initial: true) { self.hasComposerContent = $1 }
                 }
             }
@@ -1468,7 +1458,8 @@ extension OpenClawChatComposer {
             && self.dictationTask == nil
             && self.voiceNoteControl?.recorder.ownsPendingChatAttachment != true
             && inputModel.canSend
-            && (self.isAttachmentInputEnabled || inputModel.attachments.isEmpty)
+            && (self.isAttachmentInputEnabled ||
+                inputModel.composerAttachments.isEmpty && inputModel.composerPreparingAttachments.isEmpty)
     }
 
     private func stageCompletedVoiceNoteIfNeeded() {
@@ -1546,7 +1537,7 @@ extension OpenClawChatComposer {
             owner.addAttachments(urls: urls)
         case let .failure(error):
             if !(error is CancellationError) {
-                owner.viewModel.errorText = error.localizedDescription
+                owner.viewModel.reportFailure(String(localized: "Couldn’t add that file."), error, while: "import file")
             }
         }
     }

@@ -97,6 +97,20 @@ extension ScreenshotFixtureMode {
 }
 
 extension ScreenshotFixtureMode {
+    /// Every send fails the way a Gateway request times out, to show how a failed send reads.
+    static var failsSends: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-send-timeout-fixture")
+    }
+
+    static let sendTimeoutError = NSError(domain: "Gateway", code: 5, userInfo: [
+        NSLocalizedDescriptionKey: "gateway request timed out after 15000ms",
+    ])
+
+    /// The Gateway route claims no settings CAS, so a queued send fails before it leaves the phone.
+    static var failsQueuedSendSettings: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-send-settings-failure-fixture")
+    }
+
     static var holdsInitialChatRun: Bool {
         ProcessInfo.processInfo.arguments.contains("--openclaw-hold-initial-chat-run")
     }

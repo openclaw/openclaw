@@ -138,11 +138,11 @@ struct ChatAttachmentRailTests {
         #expect(model.preparingAttachments.isEmpty)
     }
 
-    @Test func `disabled send keeps its muted face while an image prepares`() {
+    @Test func `send works while an image prepares and keeps its muted face once it fails`() {
         let model = OpenClawChatViewModel(
             sessionKey: "main", transport: IOSGatewayChatTransport(gateway: GatewayNodeSession()))
         defer { model.detachTransport() }
-        _ = model.beginAttachmentPreparation(fileName: "draft.png", mimeType: "image/png")
+        let tile = model.beginAttachmentPreparation(fileName: "draft.png", mimeType: "image/png")
         let composer = OpenClawChatComposer(
             viewModel: model,
             style: .standard,
@@ -156,6 +156,11 @@ struct ChatAttachmentRailTests {
             dictationControl: nil,
             voiceNoteControl: nil)
 
+        // A tile still preparing goes with the message.
+        #expect(composer.phonePrimaryRole == .send)
+        #expect(composer.canSendMessage)
+
+        model.reportAttachmentFailure("Couldn’t attach draft.png.", preparation: tile)
         #expect(composer.phonePrimaryRole == .send)
         #expect(!composer.canSendMessage)
         #expect(composer.disabledSendButtonFill == OpenClawChatTheme.accent.opacity(0.4))

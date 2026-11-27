@@ -339,10 +339,9 @@ extension OpenClawChatView {
             showsSessionSwitcher: self.showsSessionSwitcher,
             userAccent: self.userAccent,
             composerChrome: self.composerChrome,
-            isComposerEnabled: self.isComposerEnabled
-                && !self.viewModel.isSendingAttachmentDraft,
-            isAttachmentInputEnabled: self.isAttachmentInputEnabled
-                && !self.viewModel.isSendingAttachmentDraft,
+            // The attachments a send took left the composer at the tap; it stays open for the next message.
+            isComposerEnabled: self.isComposerEnabled,
+            isAttachmentInputEnabled: self.isAttachmentInputEnabled,
             messagePlaceholder: self.messagePlaceholder,
             compactMessagePlaceholder: self.compactMessagePlaceholder,
             talkControl: self.talkControl,
@@ -1013,7 +1012,7 @@ extension OpenClawChatView {
                 ChatMessageReactions(viewModel: self.viewModel, message: msg)
             }
             #endif
-            if let outboxState = self.viewModel.outboxState(for: msg.id) {
+            if ChatOutboxStatusLabel.isShownUnderMessages, let outboxState = self.viewModel.outboxState(for: msg.id) {
                 ChatOutboxStatusLabel(state: outboxState, queueMode: self.viewModel.outboxQueueMode(for: msg.id))
                     .padding(.trailing, 8)
             }
@@ -1091,7 +1090,7 @@ extension OpenClawChatView {
                         }
                     }
                 })
-            })
+            }, send: ChatUserSendPresentation(message: msg, viewModel: self.viewModel))
         return bubble
         #else
         return bubble
