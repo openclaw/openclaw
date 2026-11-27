@@ -533,6 +533,39 @@ describe("dreaming view", () => {
     );
   });
 
+  it("offers native Knowledge navigation even without curated Wiki cards", () => {
+    openReviewPanel("wiki");
+    const onOpenKnowledge = vi.fn();
+    const props = buildProps({ onOpenKnowledge });
+    const populated = {
+      ...props.wikiOverview!,
+      totalItems: 0,
+      totalPages: 318,
+      clusters: [],
+      pageCounts: { synthesis: 0, entity: 0, concept: 0, source: 308, report: 10 },
+      totalClaims: 0,
+      totalQuestions: 0,
+      totalContradictions: 0,
+    };
+    const container = renderInto({
+      ...props,
+      wikiOverview: populated,
+      readOverview: () => populated,
+    });
+    expect(container.textContent).toContain("318 pages");
+    expect(container.textContent).toContain("No overview cards yet");
+    expect(container.textContent).not.toContain("No compiled wiki pages yet");
+    const form = container.querySelector<HTMLFormElement>('form[role="search"]')!;
+    const input = form.querySelector<HTMLInputElement>('input[type="search"]')!;
+    input.value = "Quartzmeadow";
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(onOpenKnowledge).toHaveBeenCalledWith("Quartzmeadow");
+    [...container.querySelectorAll("button")]
+      .find((b) => b.textContent === "Browse Knowledge")!
+      .click();
+    expect(onOpenKnowledge).toHaveBeenLastCalledWith();
+  });
+
   it("keeps non-report wiki overview rows on details", () => {
     openReviewPanel("wiki");
     const container = document.createElement("div");
