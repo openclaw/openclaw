@@ -1,10 +1,52 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { refreshSqlitePlannerStatistics } from "./sqlite-planner-statistics.js";
+import {
+  refreshSqlitePlannerStatistics,
+  sqlitePlannerStatisticsNeedRefresh,
+} from "./sqlite-planner-statistics.js";
 
-afterEach(() => vi.restoreAllMocks());
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  cleanupTempDirs(tempDirs);
+});
+
+const fill = (table: string, from: number, to: number) => `
+  WITH RECURSIVE n(v) AS (VALUES(${from}) UNION ALL SELECT v + 1 FROM n WHERE v < ${to})
+  INSERT INTO ${table} SELECT v, printf('%0200d', v) FROM n;`;
+
+/** SQLite's own answer, from a writable copy: would optimize analyze a table that changes stat1? */
+function sqliteWouldRefresh(pathname: string): boolean {
+  const copy = `${pathname}.${Math.random().toString(36).slice(2)}.oracle`;
+  fs.copyFileSync(pathname, copy);
+  using database = openNodeSqliteDatabase(copy);
+  const readStat = () => JSON.stringify(database.prepare("SELECT * FROM sqlite_stat1").all());
+  const before = database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'").get()
+    ? readStat()
+    : "[]";
+  // Debug mode lists each ANALYZE without running it; a writable connection may hold a write.
+  const planned = (
+    database.prepare("PRAGMA optimize=0x10003").all() as Array<{ optimize: string }>
+  ).map(({ optimize }) => /"main"\."(\w+)"$/u.exec(optimize)?.[1]);
+  // Reanalyzing a table with rows rewrites its stat1 rows even when the values match.
+  const reanalyzesRows = planned.some(
+    (table) => table === undefined || Boolean(database.prepare(`SELECT 1 FROM "${table}"`).get()),
+  );
+  refreshSqlitePlannerStatistics(database);
+  return reanalyzesRows || before !== readStat();
+}
+
+function readOnlyAnswer(pathname: string): boolean {
+  using database = openNodeSqliteDatabase(pathname, { readOnly: true });
+  return sqlitePlannerStatisticsNeedRefresh(database);
+}
 
 describe("SQLite planner maintenance", () => {
   it("refreshes statistics with bounded analysis on the supported SQLite 3.44 line", () => {
@@ -59,5 +101,62 @@ describe("SQLite planner maintenance", () => {
     `);
     refreshSqlitePlannerStatistics(database);
     expect(readStatistics()).not.toBe("40 1");
+  });
+
+  it("answers read-only exactly when optimize would refresh statistics", () => {
+    const pathname = path.join(makeTempDir(tempDirs, "openclaw-planner-"), "store.sqlite");
+    const writer = openNodeSqliteDatabase(pathname);
+    const observations: Array<{ step: string; readOnly: boolean; sqlite: boolean }> = [];
+    const observe = (step: string, change: string) => {
+      writer.exec(change);
+      observations.push({
+        step,
+        readOnly: readOnlyAnswer(pathname),
+        sqlite: sqliteWouldRefresh(pathname),
+      });
+    };
+    observe(
+      "never analyzed",
+      `CREATE TABLE samples (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+       CREATE INDEX samples_value ON samples(value);
+       CREATE TABLE plain (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+       CREATE TABLE idle (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+       CREATE INDEX idle_value ON idle(value);
+       ${fill("samples", 1, 3000)} ${fill("plain", 1, 400)}`,
+    );
+    observe("refreshed", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+    observe("small growth", fill("samples", 3001, 4000));
+    observe("tenfold growth", fill("samples", 4001, 60_000));
+    observe("refreshed again", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+    observe("unindexed growth", fill("plain", 401, 20_000));
+    observe("refreshed unindexed", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+    observe("leftmost rows deleted", "DELETE FROM samples WHERE id < 57000;");
+    observe("refreshed after delete", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+    observe("emptied table with statistics", "DELETE FROM plain;");
+    observe("refreshed empty", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+    writer.close();
+
+    expect(observations.map(({ step, readOnly }) => ({ step, readOnly }))).toEqual(
+      observations.map(({ step, sqlite }) => ({ step, readOnly: sqlite })),
+    );
+    // The fixture reaches both answers, so agreement is not vacuous.
+    expect(new Set(observations.map(({ sqlite }) => sqlite))).toEqual(new Set([true, false]));
+  });
+
+  it("reads a refreshed agent schema as current without writing", () => {
+    const pathname = path.join(makeTempDir(tempDirs, "openclaw-planner-agent-"), "agent.sqlite");
+    {
+      using writer = openNodeSqliteDatabase(pathname);
+      writer.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    }
+    expect(readOnlyAnswer(pathname)).toBe(sqliteWouldRefresh(pathname));
+    {
+      using writer = openNodeSqliteDatabase(pathname);
+      refreshSqlitePlannerStatistics(writer);
+    }
+    const before = fs.readFileSync(pathname);
+    expect(readOnlyAnswer(pathname)).toBe(false);
+    expect(sqliteWouldRefresh(pathname)).toBe(false);
+    expect(fs.readFileSync(pathname).equals(before)).toBe(true);
   });
 });

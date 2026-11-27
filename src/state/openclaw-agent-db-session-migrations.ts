@@ -431,6 +431,38 @@ export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void 
 }
 
 /** Adds the validity projection and settles only rows left pending by older writers. */
+/** Read-only: whether `ensureSessionEntryValidityProjection` would add the column or classify rows. */
+export function hasPendingSessionEntryValidity(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "session_nodes");
+  if (!columns) {
+    return false;
+  }
+  return (
+    !columns.has("entry_valid") ||
+    Boolean(db.prepare("SELECT 1 FROM session_nodes WHERE entry_valid = 0 LIMIT 1").get())
+  );
+}
+
+/**
+ * Read-only: whether `ensureSessionAdditiveColumns` would add a column or the
+ * route-context invalidation trigger.
+ */
+export function hasPendingSessionAdditiveSchema(db: DatabaseSync): boolean {
+  const missingColumn = STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS.some(
+    ({ tableName, columnName }) => {
+      const columns = readSqliteTableColumns(db, tableName);
+      return columns !== null && !columns.has(columnName);
+    },
+  );
+  return (
+    missingColumn ||
+    (tableExists(db, "session_conversations") &&
+      !db
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
+        .get("session_conversations_route_context_invalidate_after_update"))
+  );
+}
+
 export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
   const columns = readSqliteTableColumns(db, "session_nodes");
   if (!columns) {

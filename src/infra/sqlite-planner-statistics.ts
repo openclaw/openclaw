@@ -2,10 +2,20 @@ import type { DatabaseSync } from "node:sqlite";
 import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import { compareValidSemver } from "./semver.js";
 
+const OPTIMIZE_ALL_TABLES_SQLITE_VERSION = "3.46.0";
+// SQLite's `PRAGMA optimize` reanalyzes a table whose estimated row count left a
+// 10x band (LogEst +/-33) around its recorded count; LogEst(1048576) is a fresh table's estimate.
+const OPTIMIZE_SIZE_RANGE = 33;
+const DEFAULT_TABLE_ROW_LOG_EST = 200;
+
+function hasOptimizeAllTables(): boolean {
+  const version = captureSqliteNativeRuntimeAdmission()?.version;
+  return !version || (compareValidSemver(version, OPTIMIZE_ALL_TABLES_SQLITE_VERSION) ?? 0) >= 0;
+}
+
 /** The caller owns writer admission; sampling is bounded per index, not by elapsed time. */
 export function refreshSqlitePlannerStatistics(database: DatabaseSync): void {
-  const version = captureSqliteNativeRuntimeAdmission()?.version;
-  if (version && (compareValidSemver(version, "3.46.0") ?? 0) < 0) {
+  if (!hasOptimizeAllTables()) {
     // The supported SQLite 3.44 line lacks optimize's all-table mask;
     // analyze explicitly with the same per-index sampling bound.
     database.exec("PRAGMA analysis_limit=1000; ANALYZE main;"); // sqlite-allow-raw -- SQLite-owned planner statistics.
@@ -14,4 +24,125 @@ export function refreshSqlitePlannerStatistics(database: DatabaseSync): void {
   // Include tables this maintenance connection has not queried; SQLite only
   // analyzes missing or stale statistics instead of refreshing the whole store.
   database.exec("PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;"); // sqlite-allow-raw -- SQLite-owned planner statistics.
+}
+
+/** SQLite's sqlite3LogEst: about 10*log2(x), with LogEst(1) = 0. */
+function sqliteLogEst(value: number): number {
+  const fractions = [0, 2, 3, 5, 6, 7, 8, 9];
+  let x = value;
+  let y = 40;
+  if (x < 8) {
+    if (x < 2) {
+      return 0;
+    }
+    while (x < 8) {
+      y -= 10;
+      x *= 2;
+    }
+  } else {
+    while (x > 255) {
+      y += 40;
+      x = Math.floor(x / 16);
+    }
+    while (x > 15) {
+      y += 10;
+      x = Math.floor(x / 2);
+    }
+  }
+  return fractions[x & 7]! + y - 10;
+}
+
+/**
+ * The row estimate SQLite's optimize compares (sqlite3BtreeRowCountEst): the cell
+ * counts multiplied along the leftmost root-to-leaf path, or -1 for an empty table.
+ */
+function readTableRowLogEst(database: DatabaseSync, table: string): number {
+  // dbstat walks pages depth-first, so the leftmost path ends at the first leaf row.
+  const pages = database // sqlite-allow-raw -- Read-only planner estimate.
+    .prepare("SELECT pagetype, ncell FROM dbstat WHERE name = ? AND aggregate = FALSE")
+    .iterate(table) as Iterable<{ pagetype: string; ncell: number }>;
+  let estimate = 1;
+  for (const page of pages) {
+    if (page.pagetype === "overflow") {
+      continue;
+    }
+    estimate *= page.ncell;
+    if (page.pagetype === "leaf") {
+      return estimate === 0 ? -1 : sqliteLogEst(estimate);
+    }
+  }
+  return -1;
+}
+
+/**
+ * Read-only: whether `refreshSqlitePlannerStatistics` would change `sqlite_stat1`.
+ *
+ * SQLite cannot answer this itself on a read-only connection: debug-mode optimize
+ * still requests a write transaction once two tables need its size check. This
+ * applies the same per-table rule to the committed catalog: an indexed table with
+ * an unanalyzed index, or a table whose row estimate left the 10x band around its
+ * recorded count, is reanalyzed. Empty tables only change when they still carry rows.
+ */
+export function sqlitePlannerStatisticsNeedRefresh(database: DatabaseSync): boolean {
+  if (!hasOptimizeAllTables()) {
+    return true;
+  }
+  const hasStatTable = Boolean(
+    database // sqlite-allow-raw -- Read-only catalog inspection.
+      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'sqlite_stat1'")
+      .get(),
+  );
+  const statRows = hasStatTable
+    ? (database // sqlite-allow-raw -- Read-only planner statistics inspection.
+        .prepare("SELECT tbl, idx, stat FROM sqlite_stat1")
+        .all() as Array<{ tbl: string; idx: string | null; stat: string | null }>)
+    : [];
+  const tables = database // sqlite-allow-raw -- Read-only catalog inspection.
+    .prepare(
+      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND sql NOT LIKE 'CREATE VIRTUAL %'",
+    )
+    .all() as Array<{ name: string }>;
+  for (const { name } of tables) {
+    const withoutRowid = Boolean(
+      database // sqlite-allow-raw -- Read-only catalog inspection.
+        .prepare("SELECT wr FROM pragma_table_list WHERE schema = 'main' AND name = ?")
+        .get(name)?.wr,
+    );
+    // ANALYZE records a WITHOUT ROWID table's primary key under the table's own name.
+    const indexes = (
+      database // sqlite-allow-raw -- Read-only catalog inspection.
+        .prepare("SELECT name, origin, partial FROM pragma_index_list(?)")
+        .all(name) as Array<{ name: string; origin: string; partial: number }>
+    ).map((index) => ({
+      name: withoutRowid && index.origin === "pk" ? name : index.name,
+      partial: index.partial,
+    }));
+    const rows = statRows.filter((row) => row.tbl === name);
+    const size = readTableRowLogEst(database, name);
+    if (size < 0) {
+      // ANALYZE of an empty table only deletes its earlier rows.
+      if (rows.length > 0) {
+        return true;
+      }
+      continue;
+    }
+    const analyzed = new Set(rows.map((row) => row.idx));
+    if (indexes.some((index) => !analyzed.has(index.name))) {
+      return true;
+    }
+    // The table estimate comes from a full-table index row, else the table's own row.
+    const recorded =
+      rows.find(
+        (row) => row.idx !== null && indexes.some((i) => i.name === row.idx && i.partial === 0),
+      ) ?? rows.find((row) => row.idx === null);
+    const recordedRows = Number.parseInt(recorded?.stat ?? "", 10);
+    const threshold =
+      recorded && Number.isSafeInteger(recordedRows)
+        ? sqliteLogEst(recordedRows)
+        : DEFAULT_TABLE_ROW_LOG_EST;
+    if (size < threshold - OPTIMIZE_SIZE_RANGE || size > threshold + OPTIMIZE_SIZE_RANGE) {
+      return true;
+    }
+  }
+  return false;
 }
