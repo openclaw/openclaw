@@ -130,7 +130,12 @@ struct LocalChatFixture {
         ])
 }
 
-struct LocalFixtureChatTransport: OpenClawChatTransport {
+struct LocalFixtureChatTransport: OpenClawChatTransport, OpenClawChildStopTransport {
+    func prepareChildStop(_ target: OpenClawChildStopTarget) async -> OpenClawChildStopAction? {
+        guard ActivityPillsFixture.isEnabled, ActivityPillsFixture.child(forKey: target.key) != nil else { return nil }
+        return OpenClawChildStopAction(target: target) { try await self.store.stopChild(target) }
+    }
+
     var supportsComposerCapabilities: Bool {
         true
     }
@@ -241,17 +246,25 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        try await self.store.history(sessionKey: sessionKey)
+        if ActivityPillsFixture.nativeChildChat, ActivityPillsFixture.child(forKey: sessionKey) != nil {
+            let state = await self.store.childSnapshot(sessionKey)
+            if let child = try await ActivityPillsFixture.history(
+                sessionKey: sessionKey,
+                stopped: state.stopped,
+                liveText: state.liveText) { return child }
+        } else if let child = try await ActivityPillsFixture.history(sessionKey: sessionKey) { return child }
+        return try await self.store.history(sessionKey: sessionKey)
     }
 
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
-        guard ScreenshotFixtureMode.progressCardEnabled,
+        guard ScreenshotFixtureMode.progressCardEnabled || ActivityPillsFixture.isEnabled,
               ["progressCard.get", "progressCard.refresh"].contains(method)
         else { return nil }
         return true
     }
 
     func fetchProgressCard(sessionKey: String, agentID _: String?) async throws -> ProgressCard? {
+        if let card = ActivityPillsFixture.progressCard(sessionKey: sessionKey) { return card }
         guard ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled else { return nil }
         return ProgressCard(
             sessionkey: sessionKey,
@@ -419,6 +432,10 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 status: "running",
                 hasActiveRun: true))
         }
+        await ActivityPillsFixture.decorate(
+            sessions: &sessions,
+            parentKey: self.fixture.sessionKey,
+            stoppedAt: self.store.stoppedChildAt)
         if ScreenshotFixtureMode.groupControlsEnabled { sessions += await DrawerGroupFixture.store.sessions() }
         if ScreenshotFixtureMode.toolFailuresEnabled {
             sessions += ScreenshotFixtureMode.toolFailureChats.map { chat in
@@ -453,6 +470,9 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     }
 
     func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
+        if let children = try await ActivityPillsFixture.childSessions(
+            parentKey: parentKey,
+            stoppedAt: self.store.stoppedChildAt) { return children }
         guard ProcessInfo.processInfo.arguments.contains("--openclaw-swarm-chat-fixture") else {
             return OpenClawChatChildSessionsResult(rows: [], isComplete: true)
         }
@@ -579,6 +599,7 @@ actor LocalFixtureChatStore {
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
         let owner = ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled
+            || ActivityPillsFixture.isEnabled
             ? self.fixture.defaultAgentID : nil
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
         var startupSnapshot = self.toolRunSnapshot(sessionKey: normalizedSessionKey)
@@ -769,9 +790,15 @@ actor LocalFixtureChatStore {
 
     var fixtureToolEvents: [OpenClawAgentEventPayload] = []
 
+    private(set) var stoppedChildAt: [String: Double] = [:]
+    var childLiveText: [String: String] = [:]
+    var scheduledChildDelta: Set<String> = []
+
     private var sentComposerDraftKey: String?
     private var heldInitialRun = false
     var activeRunID: String?
+    private var goal = ActivityPillsFixture.initialGoal
+
     private var eventContinuations: [UUID: AsyncStream<OpenClawChatTransportEvent>.Continuation] = [:]
 
     func setEventContinuation(_ continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation) {
@@ -842,7 +869,32 @@ actor LocalFixtureChatStore {
         }
     }
 
+    func recordChildEnd(key: String, runID: String, error: String? = nil) {
+        let end = Date().timeIntervalSince1970 * 1000
+        self.stoppedChildAt[key] = end
+        self.publish(.sessionsChanged(.init(
+            sessionKey: key,
+            agentId: "main",
+            reason: "run",
+            status: error == nil ? "aborted" : "failed",
+            hasActiveRun: false,
+            activeRunIds: [],
+            endedAt: end)))
+        self.publish(.chat(.init(
+            runId: runID,
+            sessionKey: key,
+            state: error == nil ? "aborted" : "error",
+            message: nil,
+            errorMessage: error)))
+    }
+
     func runObservation(runId: String) -> OpenClawChatRunObservation {
+        if ActivityPillsFixture.nativeChildChat,
+           let child = ActivityPillsFixture.children.first(where: { runId == "fixture-run-\($0.id)" })
+        {
+            return self.stoppedChildAt[child.key] == nil && child
+                .status == "running" ? .checkAgain : .terminal(.completed)
+        }
         if self.activeRunID == runId,
            let sessionKey = self.duplicateReplaySessionKey,
            !self.duplicateReplayStarted,
@@ -856,6 +908,13 @@ actor LocalFixtureChatStore {
     }
 
     func abortRun(sessionKey: String, runId: String) {
+        if ActivityPillsFixture.nativeChildChat, let child = ActivityPillsFixture.child(forKey: sessionKey),
+           child.status == "running",
+           self.stoppedChildAt[sessionKey] == nil, runId == "fixture-run-\(child.id)"
+        {
+            self.recordChildEnd(key: sessionKey, runID: runId)
+            return
+        }
         guard self.activeRunID == runId else { return }
         self.activeRunID = nil
         self.duplicateReplaySessionKey = nil
@@ -899,6 +958,7 @@ actor LocalFixtureChatStore {
             effectiveFastMode: self.fastMode,
             permissionMode: self.permissionMode,
             toolOverrides: self.toolOverrides)
+        entry.goal = self.goal
         entry.visibility = .shared
         entry.sharingRole = .owner
         var sessions = [entry]

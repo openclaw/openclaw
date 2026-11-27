@@ -228,6 +228,19 @@ struct OpenClawSidebarRevealToolbarVisibility: ViewModifier {
     }
 }
 
+struct OpenClawRoundNavigationButton<Glyph: View>: View {
+    let action: () -> Void
+    @ViewBuilder let glyph: () -> Glyph
+
+    var body: some View {
+        Button(action: self.action) {
+            self.glyph().openClawToolbarHitTarget().contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+    }
+}
+
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
 
@@ -238,23 +251,15 @@ struct OpenClawSidebarControlButton: View {
     }
 
     var body: some View {
-        self.identified(self.button.buttonStyle(.plain))
-            .opacity(self.action.isShown ? 1 : 0)
+        self.identified(self.button)
     }
 
     private var button: some View {
-        Button(action: self.action.action) {
-            Label {
-                self.action.accessibilityLabel.text
-                    .font(OpenClawType.body)
-            } icon: {
-                self.icon
-            }
-            .labelStyle(.iconOnly)
-        }
-        .openClawToolbarHitTarget()
-        .contentShape(Rectangle())
-        .accessibilityLabel(self.action.accessibilityLabel.text)
+        OpenClawRoundNavigationButton(action: self.action.action) { self.icon }
+            .accessibilityLabel(self.action.accessibilityLabel.text)
+            .accessibilityValue(self.action.hasApprovalAttention
+                ? String(localized: "Needs approval")
+                : "")
     }
 
     private var icon: some View {
@@ -302,8 +307,6 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
         ToolbarItem(placement: self.placement) {
             OpenClawSidebarControlButton(action: self.action)
         }
-        // Sidebar reveal is intentionally background-free in every host;
-        // suppress the toolbar's automatic glass so it cannot reappear.
         .sharedBackgroundVisibility(.hidden)
     }
 }

@@ -135,6 +135,7 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored var liveRunStateStorage: [String: ChatLiveRunState] = [:]
     var narration = ChatNarration()
     public internal(set) var progressCard: ProgressCard?
+    var activityChildren = ChatActivityChildren()
     var progressCardStoreAvailable: Bool?
     var progressCardRefreshAvailable = false
     var progressCardRefreshPending = false
@@ -1133,6 +1134,11 @@ extension OpenClawChatViewModel {
             } else {
                 self.sessions = self.applyingLocalUnreadOverrides(to: organized)
             }
+            let parent = self.currentSessionEntry() ?? self.retainedActiveSession
+            self.activityChildren.observe(
+                page: organized,
+                parentKey: parent?.key ?? self.sessionKey,
+                advertised: parent?.childSessions ?? [])
             self.sessionDefaults = res.defaults
             self.restoreOverlappingSettingsPatch(
                 requestID: overlappingSuccessfulSettingsPatchRequestID,
@@ -1277,6 +1283,7 @@ extension OpenClawChatViewModel {
 
     /// Clears state owned by the current session/agent before a new identity can consume events.
     func clearSessionOwnedState(preservingTranscriptPresentation: Bool = false) {
+        self.activityChildren = ChatActivityChildren()
         let retained = preservingTranscriptPresentation ? self.retainedTranscriptPresentation : []
         if !preservingTranscriptPresentation { self.transcriptPresentationTarget = nil }
         self.historyDeltaMessageIDs = []

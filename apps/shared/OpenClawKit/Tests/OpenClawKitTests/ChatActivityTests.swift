@@ -1,0 +1,213 @@
+import Foundation
+import OpenClawProtocol
+import Testing
+@testable import OpenClawChatUI
+
+struct ChatActivityTests {
+    @MainActor @Test(arguments: [false, true])
+    func childStaysWorkingAcrossSessionWindows(loaded: Bool) async throws {
+        let parentKey = "agent:main:dashboard:parent"
+        let child = OpenClawChatSessionEntry(
+            key: "agent:main:subagent:paused", parentSessionKey: parentKey,
+            status: "done", hasActiveRun: false, hasActiveSubagentRun: false, subagentRunState: "paused")
+        let parent = OpenClawChatSessionEntry(key: parentKey, childSessions: [child.key])
+        let rows = [parent] + (1...100).map { OpenClawChatSessionEntry(key: "other-" + String($0)) } + [child]
+        let transport = TestChatTransport(historyResponses: [], listSessionsHook: { query in
+            let page = Array(rows.prefix(query.limit ?? rows.count))
+            return .init(ts: nil, path: nil, count: page.count, totalCount: rows.count,
+                         hasMore: page.count < rows.count, defaults: nil, sessions: page)
+        }, listChildSessionsHook: { _ in .init(rows: [child], isComplete: true) })
+        let model = OpenClawChatViewModel(sessionKey: parentKey, transport: transport)
+        func workingKeys() -> [String] {
+            let input = model.activityInput(approvalPending: false, showsProgress: false)
+            return ChatActivityRules.pills(input).first { $0.kind == .subagents }?.avatarKeys ?? []
+        }
+
+        await model.fetchSessions(limit: 200)
+        if loaded { await model.loadActivityChildren(model.activityChildrenRequest) }
+        let wide = workingKeys()
+        let wideSheet = model.activityChildren.roster.map(\.state)
+        let refresh = try #require(model.handleTransportEvent(.sessionsChanged(
+            .init(sessionKey: child.key, reason: "subagent-status"))))
+        await refresh.value
+        let narrow = workingKeys()
+        let narrowSheet = model.activityChildren.roster.map(\.state)
+        #expect(!model.sessions.contains { $0.key == child.key })
+        await model.fetchSessions(limit: 200)
+        #expect([wide, narrow, workingKeys()] == [[child.key], [child.key], [child.key]])
+        #expect([wideSheet, narrowSheet, model.activityChildren.roster.map(\.state)] == [[.waiting], [.waiting], [.waiting]])
+    }
+
+    @MainActor @Test func scopedChildListPopulatesAndRetiresOffWindowChildren() async {
+        actor Replies {
+            var calls = 0
+            func next(parent: String) throws -> OpenClawChatChildSessionsResult {
+                self.calls += 1
+                if self.calls == 2 { throw URLError(.timedOut) }
+                let child = OpenClawChatSessionEntry(
+                    key: "child", parentSessionKey: parent, status: "done", subagentRunState: "paused")
+                return .init(rows: self.calls == 1 ? [child] : [], isComplete: true)
+            }
+        }
+        let replies = Replies()
+        let model = OpenClawChatViewModel(sessionKey: "parent", transport: TestChatTransport(
+            historyResponses: [], listChildSessionsHook: { try await replies.next(parent: $0) }))
+        let request = model.activityChildrenRequest
+        await model.loadActivityChildren(request)
+        #expect(model.activityInput(approvalPending: false, showsProgress: false).children.map(\.state) == [.waiting])
+        await model.loadActivityChildren(request)
+        #expect(model.activityChildren.load == .failed)
+        #expect(model.activityChildren.roster.map(\.state) == [.waiting])
+        await model.loadActivityChildren(request)
+        #expect(model.activityChildren.load == .complete)
+        #expect(model.activityChildren.roster.isEmpty)
+    }
+
+    private func child(_ key: String, _ state: ChatActivityChild.State) -> ChatActivityChild {
+        ChatActivityChild(key: key, name: key, state: state, startedAt: nil, endedAt: nil, runtimeMs: nil, order: 0)
+    }
+
+    private func goal(_ status: OpenClawChatSessionGoal.Status = .active) -> OpenClawChatSessionGoal {
+        OpenClawChatSessionGoal(id: "g1", objective: "Ship the trip plan", status: status, createdAt: 0, updatedAt: 0)
+    }
+
+    private func plan(_ statuses: [ProgressCardStepStatus], runActive: Bool = false) -> ChatActivityPlan {
+        ChatActivityPlan(
+            steps: statuses.enumerated().map { ProgressCardStep(step: "Step \($0.offset + 1)", status: $0.element) },
+            note: nil,
+            runActive: runActive,
+            sessionStatus: nil,
+            refreshPending: false)
+    }
+
+    @Test func `no activity shows no row at all`() {
+        #expect(ChatActivityRules.pills(ChatActivityInput()).isEmpty)
+        let input = ChatActivityInput(children: [self.child("a", .done), self.child("b", .stopped)])
+        #expect(ChatActivityRules.pills(input).isEmpty)
+    }
+
+    @Test func `an active Goal never claims work in progress`() {
+        let pill = ChatActivityRules.goal(self.goal())
+        #expect(pill.label == "Goal active")
+        #expect(pill.accessibilityLabel == "Goal active: Ship the trip plan")
+        #expect(ChatActivityRules.goal(self.goal(.budgetLimited)).labelTone == .attention)
+        #expect(ChatActivityRules.goal(self.goal(.complete)).label == "Goal achieved")
+    }
+
+    @Test func `a Goal the app cannot read stays out of the row`() throws {
+        let row = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
+        {"key":"agent:main:a","goal":{"id":"g","objective":"x","status":"someday","tokensUsed":"many"}}
+        """#.utf8))
+        // The unknown state decodes without dropping the row, and shows no pill.
+        #expect(row.key == "agent:main:a")
+        #expect(row.goal?.isPresentable == false)
+        #expect(ChatActivityRules.pills(ChatActivityInput(goal: row.goal)).isEmpty)
+    }
+
+    @Test func `the progress pill names the current step and counts what is done`() {
+        let pill = ChatActivityRules.progress(self.plan([.completed, .pending, .pending]))
+        // The first pending step is current; the count is completed, not position.
+        #expect(pill.label == "Step 2")
+        #expect(pill.count == "1/3")
+        #expect(pill.badge?.label == "Pending")
+        let running = ChatActivityRules.progress(self.plan([.completed, .inProgress], runActive: true))
+        #expect(running.badge?.mark == .spinner)
+        #expect(ChatActivityRules.progress(self.plan([.completed, .completed])).badge?.label == "Completed")
+    }
+
+    @Test func `a plan note without steps never shows a cut sentence`() {
+        let note = ChatActivityPlan(
+            steps: [],
+            note: "Um par idêntico (N03). A cópia já estava encerrada; a original continua.",
+            runActive: false,
+            sessionStatus: nil,
+            refreshPending: false)
+        let pill = ChatActivityRules.progress(note)
+        #expect(pill.label == "Task progress")
+        #expect(pill.count == nil)
+        #expect(pill.badge == nil)
+    }
+
+    @Test func `children keep launch order and read their state from the row`() {
+        let parent = OpenClawChatSessionEntry(key: "agent:main:p")
+        var late = OpenClawChatSessionEntry(key: "agent:main:late", parentSessionKey: "agent:main:p", status: "running")
+        late.createdAt = 20
+        var early = OpenClawChatSessionEntry(key: "agent:main:early", spawnedBy: "agent:main:p", status: "failed")
+        early.createdAt = 10
+        let other = OpenClawChatSessionEntry(key: "agent:main:x", parentSessionKey: "agent:main:q", status: "running")
+        let swarm = OpenClawChatSessionEntry(
+            key: "agent:main:s", parentSessionKey: "agent:main:p", status: "running", swarmGroupId: "swarm:p:research")
+        var activity = ChatActivityChildren()
+        activity.observe(page: [late, other, early, parent, swarm], parentKey: parent.key, advertised: [])
+        let children = activity.roster
+        #expect(children.map(\.key) == ["agent:main:early", "agent:main:late"])
+        #expect(children.map(\.state) == [.failed, .working])
+    }
+
+    @Test func `a cleared Goal in a change removes it from the row`() {
+        var row = OpenClawChatSessionEntry(key: "agent:main:a")
+        row.goal = self.goal()
+        let cleared = OpenClawChatSessionEntry(key: "agent:main:a")
+        let merged = ChatSessionSidebarModel.mergingSessionFields(cleared, fields: ["goal"], into: row)
+        #expect(merged.goal == nil)
+        let untouched = ChatSessionSidebarModel.mergingSessionFields(cleared, fields: ["label"], into: row)
+        #expect(untouched.goal?.id == "g1")
+    }
+
+    @Test func `a subagent's order never shows OpenClaw's internal context`() {
+        func user(_ text: String) -> OpenClawChatMessage {
+            OpenClawChatMessage(role: "user", content: [.init(type: "text", text: text)], timestamp: 1)
+        }
+        let wrapped = """
+        [Wed 2026-11-25 19:06 PST] <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>
+        [Subagent Context] You are running as a subagent.
+        <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>
+        nested
+        <<<END_OPENCLAW_INTERNAL_CONTEXT>>>
+        <<<END_OPENCLAW_INTERNAL_CONTEXT>>>
+
+        Draft the packing list.
+
+        <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>
+        Begin.
+        <<<END_OPENCLAW_INTERNAL_CONTEXT>>>
+        """
+        #expect(ChatActivityChildTranscript(messages: [user(wrapped)]).order == "Draft the packing list.")
+        // A message that is only internal context is not the order; the next one is.
+        let onlyContext = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nTask setup\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"
+        #expect(ChatActivityChildTranscript(messages: [user(onlyContext), user("Check hotel reviews")])
+            .order == "Check hotel reviews")
+        // Text that only mentions a delimiter mid-line stays as written.
+        let quoted = "Why does <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> show up?"
+        #expect(ChatActivityChildTranscript(messages: [user(quoted)]).order == quoted)
+    }
+
+    @Test func `truncated internal messages never become the finished child's preview`() {
+        func user(_ text: String) -> OpenClawChatMessage {
+            OpenClawChatMessage(role: "user", content: [.init(type: "text", text: text)], timestamp: 1)
+        }
+        // Literal first line in the iPhone screenshot, intentionally without a closing delimiter.
+        let openingLine = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"
+        let authored = user("Draft the packing list.")
+        for fragment in [openingLine, openingLine + "\nPrivate task setup"] {
+            let truncated = user(fragment)
+            #expect(ChatMessageVisibleText.visibleText(in: truncated).isEmpty)
+            #expect(ChatActivityChildTranscript(messages: [truncated]).order == nil)
+            #expect(ChatActivityChildTranscript(messages: [truncated, authored]).order == "Draft the packing list.")
+        }
+        // The escaped spelling is not a delimiter: an authored quotation must not erase the rest of a message.
+        let literal = "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]\nThis is a quoted example."
+        #expect(ChatMessageVisibleText.visibleText(in: user(literal)) == literal)
+    }
+
+    @Test func `elapsed time reads like the web Goal card`() {
+        #expect(ChatActivityFormat.duration(ms: 42000) == "42s")
+        #expect(ChatActivityFormat.duration(ms: 47 * 60000) == "47m")
+        #expect(ChatActivityFormat.duration(ms: 125 * 60000) == "2h 5m")
+        #expect(ChatActivityFormat.duration(ms: 26 * 3_600_000) == "1d 2h 0m")
+        #expect(ChatActivityFormat.duration(ms: 15 * 86_400_000) == "2wk 1d 0h 0m")
+        #expect(ChatActivityFormat.tokens(184_000) == "184k")
+        #expect(ChatActivityFormat.tokens(1250) == "1.3k")
+        #expect(ChatActivityFormat.goalUsage(self.goal()) == nil)
+    }
+}

@@ -5,6 +5,7 @@ extension EnvironmentValues {
     @Entry public var openClawChatWrapCodeLines: Bool = false
     @Entry public var openClawChatUsesFloatingComposer = false
     @Entry public var openClawChatFloatingHeader: AnyView?
+    @Entry public var openClawOpenChildChat: (@MainActor (String, String) -> Void)?
     @Entry public var openClawChatComposerAccessory: AnyView?
     @Entry public var openClawChatStatusBarInset: CGFloat = 0
     @Entry public var openClawChatInteractionsDisabled = false

@@ -273,7 +273,8 @@ extension OpenClawChatView {
 
     private func composerDock(column: ChatColumnLayout, bottom: CGFloat) -> some View {
         VStack(spacing: 0) {
-            if !self.usesInlineProgressCard {
+            // On the phone the activity pills above the composer take the card's place.
+            if !self.usesInlineProgressCard, !ChatActivityDock.replacesProgressCard(showsComposer: self.showsComposer) {
                 // The composer draws its surface on the column, so the card shares its edges.
                 self.progressCard
                     .chatColumn(column)
@@ -288,6 +289,7 @@ extension OpenClawChatView {
                 .padding(.vertical, Layout.swarmPaddingVertical)
                 .padding(.top, Layout.stackSpacing)
             if self.showsComposer {
+                ChatActivityDock(self.viewModel, self.composerAccessory, column, self.$dismissedProgressCards)
                 let inset = OpenClawChatComposer.surfaceInset(style: self.style, chrome: self.composerChrome)
                 self.composer
                     .chatBehaviorProbe(.composer)

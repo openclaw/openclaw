@@ -42,6 +42,7 @@ extension OpenClawChatViewModel {
             let swarm = Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
             return Task { _ = await (models?.value, swarm.value) }
         case let .sessionsChanged(change):
+            self.observeActivityChildChange(change)
             return self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
@@ -61,6 +62,7 @@ extension OpenClawChatViewModel {
         case .questionRequested, .questionResolved:
             return self.handleQuestionEvent(evt)
         case .routeChanged, .reconnected, .seqGap:
+            self.forgetActivityChildrenOnRouteChange(evt)
             self.resetSessionReactions()
             self.invalidateSessionMetadataReadiness()
             self.syncSessionReactions(refreshMetadata: true)

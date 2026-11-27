@@ -74,6 +74,13 @@ struct RootTabs: View {
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
+    private struct SubagentChatRoute: Hashable {
+        let parent: String
+        let key: String
+        let name: String
+    }
+
+    @State private var subagentChat: SubagentChatRoute?
     @State private var isSidebarDetailRootVisible: Bool = true
     @State private var sidebarPresentation: RootSidebarPresentation
     @State private var initialSidebarVisibilityOverride: Bool?
@@ -338,6 +345,29 @@ struct RootTabs: View {
                 // Sidebar open/close rebuilds this branch with fresh closures; the gate keeps
                 // that from re-running the chat tab and its transcript (see `ChatProTab ==`).
                     .equatable()
+                    .environment(\.openClawOpenChildChat) { key, name in
+                        guard let chat = self.appModel.chatPresentation.viewModel else { return }
+                        let parent = chat.sessionKey
+                        chat.switchSession(to: key)
+                        guard chat.sessionKey == key else { return }
+                        self.subagentChat = SubagentChatRoute(parent: parent, key: key, name: name)
+                    }
+                    .navigationDestination(item: self.$subagentChat) { child in
+                        ChatProTab(
+                            childKey: child.key,
+                            childName: child.name,
+                            headerSidebarAction: nil,
+                            startFirstGatewaySetup: nil)
+                            .tint(.primary)
+                    }
+                    .onChange(of: self.appModel.chatPresentation.viewModel?.sessionKey) { _, key in
+                        if let child = self.subagentChat, key != child.key { self.subagentChat = nil }
+                    }
+                    .onChange(of: self.subagentChat) { previous, current in
+                        guard current == nil, let previous, let chat = self.appModel.chatPresentation.viewModel,
+                              chat.sessionKey == previous.key else { return }
+                        chat.switchSession(to: previous.parent)
+                    }
         case .overview:
             CommandCenterTab(
                 headerSidebarAction: self.sidebarHeaderAction,
