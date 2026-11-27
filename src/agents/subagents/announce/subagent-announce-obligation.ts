@@ -371,7 +371,7 @@ export function resolvePrivateCompletionDeliveryResult(
   return delivery;
 }
 
-export function buildRequesterCompletionDeliveryResult(
+function buildRequesterCompletionDeliveryResult(
   finalCommitted: boolean,
   text: unknown,
 ): SubagentAnnounceDeliveryResult {
@@ -669,7 +669,7 @@ export function isDirectMessageDeliveryTarget(
   return deriveSessionChatTypeFromKey(requesterSessionKey) === "direct";
 }
 
-export function hasMessagingToolDeliveryToSource(
+function hasMessagingToolDeliveryToSource(
   result: {
     didDeliverSourceReplyViaMessageTool?: unknown;
     didSendViaMessagingTool?: unknown;
