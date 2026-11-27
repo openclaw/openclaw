@@ -10,7 +10,6 @@ import {
   getNodeSqliteKysely,
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { formatMemoryEmbeddingRefusal } from "./manager-embedding-refusal.js";
 import { readMemoryEmbeddingRefusal } from "./manager-index-metadata.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 
@@ -40,9 +39,8 @@ export function collectMemoryStatusSnapshot(
       ? Number(db.prepare("SELECT COUNT(*) as c FROM memory_embedding_cache").get()?.c ?? 0)
       : 0);
   // Status opens databases that never published an index; those have no refusal to report.
-  const refusal =
+  const embeddingRefusal =
     db && tableExists(db, "memory_index_meta") ? readMemoryEmbeddingRefusal(db) : null;
-  const embeddingRefusal = refusal ? formatMemoryEmbeddingRefusal(refusal) : undefined;
   return { aggregate, storage, cacheEntries, embeddingRefusal };
 }
 

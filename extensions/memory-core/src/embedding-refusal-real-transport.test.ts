@@ -73,14 +73,14 @@ let state: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
 
 // memory.search names no provider, so embeddings follow the chat provider's endpoint implicitly.
 // With plugins isolated, the generic OpenAI-compatible adapter serves "openai" and needs a model.
-function implicitConfig(baseUrl: string): OpenClawConfig {
+function implicitConfig(baseUrl: string, model = "text-embedding-3-small"): OpenClawConfig {
   return isolateMemoryManagerTestConfig({
     models: {
       providers: {
         openai: { baseUrl, apiKey: "fixture-token", api: "openai-completions", models: [] },
       },
     },
-    memory: { search: { model: "text-embedding-3-small", query: { minScore: 0 } } },
+    memory: { search: { model, query: { minScore: 0 } } },
     agents: { defaults: { workspace }, entries: { main: {} } },
   } as OpenClawConfig);
 }
@@ -100,11 +100,12 @@ async function searchOnce(cfg: OpenClawConfig, query: string) {
   }
 }
 
-// The status line a later `openclaw memory status` prints for this agent.
-async function recordedRefusal(cfg: OpenClawConfig) {
+// What a later `openclaw memory status --deep` reports for this agent.
+async function readRecordedStatus(cfg: OpenClawConfig) {
   const { manager } = await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" });
   try {
-    return (await readMemorySearchManagerStatus(manager!)).custom?.embeddingRefusal;
+    const refusal = (await readMemorySearchManagerStatus(manager!)).custom?.embeddingRefusal;
+    return { refusal, probe: await manager!.probeEmbeddingAvailability() };
   } finally {
     await closeAllMemorySearchManagers();
   }
@@ -141,9 +142,14 @@ it("remembers an endpoint without embeddings and keeps keyword search working", 
   }
 
   expect(endpoint.statuses).toEqual(Array(refusedByFirstProcess).fill(404));
-  expect(await recordedRefusal(cfg)).toContain(
-    "refused embeddings for text-embedding-3-small (404)",
-  );
+  // Status and its read-only readiness check report the refusal instead of probing again.
+  const status = await readRecordedStatus(cfg);
+  expect(status.refusal).toContain("refused embeddings for text-embedding-3-small (404)");
+  expect(status.probe).toMatchObject({ ok: false, error: status.refusal });
+  expect(endpoint.statuses).toHaveLength(refusedByFirstProcess);
+  // A changed configuration is no longer covered by the old endpoint's refusal.
+  const changed = implicitConfig(endpoint.baseUrl, "text-embedding-3-large");
+  expect((await readRecordedStatus(changed)).refusal).toBeUndefined();
 });
 
 it("keeps semantic search through an implicit endpoint that serves embeddings", async () => {
@@ -164,5 +170,5 @@ it("does not remember an authorization failure", async () => {
   expect(await searchOnce(cfg, "Zebra deadline")).toMatchObject(hit);
 
   expect(endpoint.statuses).toContain(401);
-  expect(await recordedRefusal(cfg)).toBeUndefined();
+  expect((await readRecordedStatus(cfg)).refusal).toBeUndefined();
 });

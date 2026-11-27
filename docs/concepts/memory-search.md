@@ -88,9 +88,10 @@ If that endpoint answers its first embedding request with 404, 405, or 501, it
 has no embeddings route: OpenClaw records that for this endpoint and model, logs
 one warning, and searches by keyword with no further embedding requests, also in
 later processes. `openclaw memory status` shows the reason on its `Embeddings`
-line. The record clears when the endpoint or model changes, or when an explicit
-check succeeds (`openclaw memory status --index`, or **Memory → Overview → Test**
-in the Control UI). A 401, 403, 429, or 5xx answer is not recorded; search is
+line. The record clears when the endpoint or model changes, or when
+`openclaw memory status --index` re-checks the endpoint and it now serves
+embeddings. `openclaw memory status --deep` and **Memory → Overview → Test** in the
+Control UI report the recorded refusal. A 401, 403, 429, or 5xx answer is not recorded; search is
 keyword-only until the next readiness check. An explicitly configured provider
 is always used.
 

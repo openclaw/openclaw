@@ -23,10 +23,10 @@ import { runMemoryStatus } from "./manager-cpu-worker-runtime.js";
 import { captureMemoryDatabaseWriteOptions } from "./manager-database-admission.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
+import type { MemoryEmbeddingProviderRequirement } from "./manager-embedding-refusal-ops.js";
 import {
   resolveEffectiveMemorySearchSettings,
   resolveMemoryEmbeddingProviderRequirement,
-  type MemoryEmbeddingProviderRequirement,
 } from "./manager-provider-lifecycle.js";
 import { getLocalEmbeddingRuntimeFacts } from "./manager-provider-runtime-facts.js";
 import type { MemoryProviderLifecycleState } from "./manager-provider-state.js";
@@ -579,10 +579,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     snapshot?: ReturnType<typeof collectMemoryStatusSnapshot>,
   ): MemoryProviderStatus {
     const aggregateState = snapshot?.aggregate;
-    // A recorded refusal means search runs keyword-only, as it does after a bootstrap failure.
-    const keywordOnly = Boolean(
-      this.embeddingBootstrapFailure || (snapshot?.embeddingRefusal && !this.provider),
-    );
+    // A current recorded refusal means search runs keyword-only, as after a bootstrap failure.
+    const refusal = this.projectStatusEmbeddingRefusal(snapshot?.embeddingRefusal);
+    const keywordOnly = Boolean(this.embeddingBootstrapFailure || (refusal && !this.provider));
     if (keywordOnly) {
       this.refreshKeywordFallbackIndexIdentity();
     } else {
@@ -662,7 +661,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         providerUnavailableReason: this.providerUnavailableReason,
         indexIdentity: this.indexIdentityState,
         automaticRebuildNotice: this.automaticRebuildNotice,
-        embeddingRefusal: snapshot?.embeddingRefusal,
+        embeddingRefusal: refusal,
       },
     };
   }

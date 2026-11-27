@@ -26,7 +26,11 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { resolveEmbeddingProviderAdapterTransport } from "./embeddings.js";
 import { MemoryManagerReloadError } from "./lifecycle.js";
 import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
-import { MemoryEmbeddingRefusalOps } from "./manager-embedding-refusal-ops.js";
+import {
+  MemoryEmbeddingRefusalOps,
+  type MemoryEmbeddingBootstrapDebug,
+  type MemoryEmbeddingProviderRequirement,
+} from "./manager-embedding-refusal-ops.js";
 import { formatMemoryEmbeddingRefusal } from "./manager-embedding-refusal.js";
 import {
   resolveMemoryPrimaryProviderRequest,
@@ -44,15 +48,6 @@ import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
 
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
-
-export type MemoryEmbeddingProviderRequirement = {
-  mode: "fts-only" | "optional" | "required";
-  provider: string;
-  configuredProvider?: string;
-};
-export type MemoryEmbeddingBootstrapDebug = NonNullable<
-  MemorySearchRuntimeDebug["embeddingBootstrap"]
->;
 
 export function resolveEffectiveMemorySearchSettings(
   settings: ResolvedMemorySearchConfig,
@@ -423,9 +418,10 @@ export abstract class MemoryProviderLifecycle extends MemoryEmbeddingRefusalOps 
           return;
         }
         const providerResult = await this.createConfiguredEmbeddingProvider();
-        const refusal = options?.recheckRefusal
-          ? undefined
-          : await this.recordedEmbeddingRefusal(providerResult.runtime);
+        const refusal = await this.recordedEmbeddingRefusal(
+          providerResult.runtime,
+          options?.recheckRefusal,
+        );
         if (refusal) {
           // Same contract as a missing credential: no provider, so no embedding calls.
           await this.retireProvider(providerResult.provider);
@@ -726,8 +722,9 @@ export abstract class MemoryProviderLifecycle extends MemoryEmbeddingRefusalOps 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
     return await this.withManagerOperation(async () => {
       const cached = this.getCachedEmbeddingAvailability();
-      if (cached) {
-        return cached;
+      const recordedRefusal = cached ? undefined : this.readOnlyRecordedRefusal();
+      if (cached || recordedRefusal) {
+        return cached ?? this.cacheProbeResult({ ok: false, error: recordedRefusal });
       }
       await this.ensureProviderInitialized({ recheckRefusal: true });
       // Diagnostics must describe the provider search actually uses. A published index that

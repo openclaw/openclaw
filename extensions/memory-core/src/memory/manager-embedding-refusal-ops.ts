@@ -2,6 +2,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemoryEmbeddingProviderRuntime } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveEmbeddingProviderAdapterTransport } from "./embeddings.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import {
@@ -12,12 +13,17 @@ import {
   type MemoryEmbeddingEndpoint,
   type MemoryEmbeddingRefusal,
 } from "./manager-embedding-refusal.js";
-import type {
-  MemoryEmbeddingBootstrapDebug,
-  MemoryEmbeddingProviderRequirement,
-} from "./manager-provider-lifecycle.js";
 
 const log = createSubsystemLogger("memory");
+
+export type MemoryEmbeddingProviderRequirement = {
+  mode: "fts-only" | "optional" | "required";
+  provider: string;
+  configuredProvider?: string;
+};
+export type MemoryEmbeddingBootstrapDebug = NonNullable<
+  MemorySearchRuntimeDebug["embeddingBootstrap"]
+>;
 
 /**
  * An implicit (unset or auto) embedding provider probes its endpoint with the first real
@@ -27,17 +33,17 @@ const log = createSubsystemLogger("memory");
 export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOps {
   protected abstract readonly providerRequirement: MemoryEmbeddingProviderRequirement;
   protected activeBackgroundCleanup = new Set<Promise<void>>();
+  private statusEmbeddingRefusal?: string;
   protected abstract markEmbeddingBootstrapFailure(err: unknown): MemoryEmbeddingBootstrapDebug;
   protected abstract refreshEmbeddingBootstrapFailure(
     failure: MemoryEmbeddingBootstrapDebug,
   ): MemoryEmbeddingBootstrapDebug;
 
-  private implicitEmbeddingEndpoint(
-    runtime: MemoryEmbeddingProviderRuntime | undefined,
-  ): MemoryEmbeddingEndpoint | undefined {
+  /** The remote endpoint an implicit (unset or auto) provider calls, from its cache identity. */
+  private implicitEmbeddingEndpoint(cacheKeyData: unknown): MemoryEmbeddingEndpoint | undefined {
     return this.providerRequirement.mode === "optional" &&
       resolveEmbeddingProviderAdapterTransport(this.settings.provider, this.cfg) === "remote"
-      ? readMemoryEmbeddingEndpoint(runtime?.cacheKeyData)
+      ? readMemoryEmbeddingEndpoint(cacheKeyData)
       : undefined;
   }
 
@@ -55,7 +61,7 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
 
   protected markImplicitEmbeddingEndpointFailure(err: unknown): void {
     const failure = classifyEmbeddingEndpointFailure(err);
-    const endpoint = failure && this.implicitEmbeddingEndpoint(this.providerRuntime);
+    const endpoint = failure && this.implicitEmbeddingEndpoint(this.providerRuntime?.cacheKeyData);
     if (!failure || !endpoint || !this.provider) {
       return;
     }
@@ -86,8 +92,9 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
   /** A remembered refusal for the endpoint this provider would call; a changed endpoint forgets it. */
   protected async recordedEmbeddingRefusal(
     runtime: MemoryEmbeddingProviderRuntime | undefined,
+    recheck = false,
   ): Promise<MemoryEmbeddingRefusal | undefined> {
-    const endpoint = this.implicitEmbeddingEndpoint(runtime);
+    const endpoint = recheck ? undefined : this.implicitEmbeddingEndpoint(runtime?.cacheKeyData);
     if (!endpoint) {
       return undefined;
     }
@@ -109,5 +116,33 @@ export abstract class MemoryEmbeddingRefusalOps extends MemoryManagerEmbeddingOp
     if (published.facts.embeddingRefusal && !published.readOnly) {
       await this.writeEmbeddingRefusal(null);
     }
+  }
+
+  /**
+   * Status reads the stored refusal before any provider exists. It applies only while the
+   * configuration still resolves to that implicit endpoint; a read-only status probe reports
+   * it instead of a success it cannot record (`memory status --index` re-checks and clears).
+   */
+  protected projectStatusEmbeddingRefusal(
+    refusal: MemoryEmbeddingRefusal | null | undefined,
+  ): string | undefined {
+    const endpoint = refusal
+      ? this.implicitEmbeddingEndpoint(
+          this.providerRuntime?.cacheKeyData ?? {
+            provider: this.settings.provider,
+            baseUrl: refusal.baseUrl,
+            model: this.settings.model,
+          },
+        )
+      : undefined;
+    this.statusEmbeddingRefusal =
+      refusal && endpoint && isSameMemoryEmbeddingEndpoint(refusal, endpoint)
+        ? formatMemoryEmbeddingRefusal(refusal)
+        : undefined;
+    return this.statusEmbeddingRefusal;
+  }
+
+  protected readOnlyRecordedRefusal(): string | undefined {
+    return this.publishedDatabase.readOnly ? this.statusEmbeddingRefusal : undefined;
   }
 }
