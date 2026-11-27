@@ -17,10 +17,9 @@ extension OpenClawSnapshotUITests {
         if app.buttons["Not Now"].waitForExistence(timeout: 8) {
             app.buttons["Not Now"].tap()
         }
-        let approvalDialog = app.descendants(matching: .any)["exec-approval-review-scroll"]
-        XCTAssertTrue(approvalDialog.waitForExistence(timeout: 8))
-        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 8))
-        app.buttons["Cancel"].tap()
+        XCTAssertFalse(
+            app.descendants(matching: .any).matching(identifier: "chat-session-approval").firstMatch.exists,
+            "A request without session provenance belongs in Settings")
 
         try self.selectSidebarDestination("Settings")
         let approvals = app.buttons.containing(.staticText, identifier: "Approvals").firstMatch
@@ -50,9 +49,7 @@ extension OpenClawSnapshotUITests {
             dashboard.waitForExistence(timeout: 8),
             "Notification settings must render in the embedded Dashboard")
         XCTAssertTrue(dashboard.staticTexts["Notifications"].waitForExistence(timeout: 8))
-        XCTAssertFalse(
-            approvalDialog.exists,
-            "The approval being reviewed must not cover Dashboard notification settings")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "chat-session-approval").firstMatch.exists)
         let close = app.buttons["DashboardPage.Close"]
         XCTAssertTrue(close.exists)
         close.tap()
