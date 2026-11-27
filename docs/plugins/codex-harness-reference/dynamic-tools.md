@@ -71,8 +71,8 @@ context smaller. A small set of tools stay directly callable regardless of
 `codexDynamicToolsLoading`, because Codex tool search can be unavailable or
 resolve a connector-only universe: `agents_list`, `sessions_spawn`, and
 `sessions_yield`. Developer instructions still steer normal Codex subagents
-toward native `spawn_agent` for work using only Codex-native tools. New delegated
-work that needs OpenClaw tools uses the available `sessions_spawn` route with
+toward native `spawn_agent` for work using native tools or explicitly delegated
+host tools. Work that needs other OpenClaw tools uses the available `sessions_spawn` route with
 `runtime="subagent"` when its schema exposes that selector. Native children can
 inherit dynamic tool schemas without an OpenClaw executor. Existing native
 children keep their native follow-up path; tool failures do not migrate them
@@ -102,6 +102,91 @@ the full tool payload.
 
 For supported checks before inference, see
 [Codex pre-turn verification](/plugins/codex-harness/commands#verify-tool-access-before-a-codex-turn).
+
+## Native child host tools
+
+By default, a native Codex child cannot execute OpenClaw dynamic tools. To
+delegate selected host capabilities, set `plugins.entries.codex.config.nativeChildTools`:
+
+```json
+{
+  "allow": ["search_notes", "research__*"],
+  "deny": ["research__delete_*"]
+}
+```
+
+Use the exposed tool name, not the Codex discovery prefix (`openclaw.`).
+In this example `research` is an OpenClaw-projected MCP server. An empty or
+absent `allow` grants nothing; `deny` takes precedence. Patterns match the
+whole tool name. `*` matches zero or more characters, including `__`: for
+example, `research__get_*` matches both `research__get_` and
+`research__get_team__doc`. The wildcard also matches future eligible tools with those
+names. Prefer exact names when you need to review new capabilities individually.
+
+Both lists use OpenClaw's tool-policy aliases. The matcher trims and lowercases
+both the pattern and the tool name, then replaces whole-name aliases:
+`bash` to `exec`, `apply-patch` to `apply_patch`, `cron` to `automations`, and
+`tool_call` to `dispatch_action`. For example, an allow or deny entry of `exec`
+also matches an eligible plugin tool literally named `bash`. Matching does
+not make the built-in `exec` eligible or change Codex-native shell access.
+
+These calls use **OpenClaw host authority**. A child's native Codex sandbox and
+approval settings do not confine them. Host-side availability, tool and action
+policies and approvals still apply; an inherited tool schema is not a grant.
+Parent-session controls and reply delivery do not run on behalf of a child.
+An admitted child can keep using its granted tools after the foreground turn
+ends. Its MCP calls can return data, but cannot open an MCP form or App preview
+in the parent's session. Normal host-side tool approvals still apply.
+Execution requires a direct child on a host-owned stdio app-server connection
+and a retained requester identity. Shared WebSocket and Unix transports do
+not establish exclusive dispatch ownership. A system turn cannot borrow an
+operator's identity.
+The grant does not change native coding tools, delegation, or MCP tools run
+directly by Codex. Use the normal Gateway restart or replacement procedure
+when changing deployment policy.
+
+To preview the selection, enable debug logging and inspect the
+`codex native child tool catalog` record for the target run. It lists tool
+names, ownership where known, selection decisions and unmatched patterns.
+This is a snapshot of the parent bridge, not a promise of later availability:
+calls still require an owned, active child and an eligible host binding.
+The preview does not invoke tools.
+
+### Eligible host tools
+
+The following is the complete list of core tools you can grant to a direct
+native child. A core tool is a tool ID in OpenClaw's built-in registry, even
+if a plugin implements it. The tool must also be available to the parent
+through the OpenClaw bridge.
+
+- Files: `ls`, `read`, `write`, `edit`, `apply_patch`.
+- Skills and memory: `skills_read`, `skills_search`, `memory_search`, `memory_get`.
+- Web: `web_search`, `web_fetch`, `x_search`.
+- Documents and images: `pdf`, `view_image`.
+- Media generation: `image_generate`, `video_generate`, `music_generate`.
+
+All other core tools, including new ones, remain unsupported until OpenClaw
+adds child support for them. Neither an exact allow entry nor `allow: ["*"]`
+overrides this limit.
+
+For example, `allow: ["image_generate"]` lets a child generate an image, but
+does not grant music or video generation. A delegated generator returns the
+artifact path or provider URL to the child. It does not queue a chat job or
+send the media to the parent's conversation. The caller can pass the artifact
+reference back to the parent, which decides whether to send it. Image review
+and delivery actions require a chat session and are unavailable to the child.
+Provider costs, tool timeouts, and workspace restrictions still apply. Calling
+the same tools directly in the parent chat keeps their usual delivery behavior.
+
+Non-core tools can qualify when OpenClaw identifies their owning plugin or MCP
+server. OpenClaw excludes tools it recognizes as channel messaging tools.
+Three tools owned by the Codex plugin are also always excluded:
+`codex_session_send`, `codex_session_interrupt`, and `codex_threads`. They can
+control sessions outside the child's assignment. Neither an exact allow entry
+nor `codex_*` or `*` grants them. This exclusion does not change parent access.
+There is no fixed list of eligible plugin tools: use the catalog preview above
+to see which tools your parent session can delegate. Eligibility alone never
+grants access.
 
 ## Protected conversation continuity
 

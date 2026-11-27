@@ -23,6 +23,7 @@ import {
 } from "./context-engine-projection.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
+import { resolveNativeChildToolCatalog } from "./native-child-tool-policy.js";
 import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
@@ -59,6 +60,27 @@ export async function prepareCodexAttemptContext(
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
+  const childPolicy = connection.pluginConfig.nativeChildTools;
+  const inspectChildTools = embeddedAgentLog.isEnabled("debug");
+  const childCatalog =
+    childPolicy?.allow?.length || inspectChildTools
+      ? resolveNativeChildToolCatalog({
+          policy: childPolicy,
+          availableTools:
+            childPolicy?.allow?.length && !attemptTools.executeNativeChildTool
+              ? []
+              : toolBridge.availableTools,
+          registeredNames: toolBridge.specs.flatMap((spec) =>
+            spec.type === "namespace" ? spec.tools.map((tool) => tool.name) : [spec.name],
+          ),
+        })
+      : undefined;
+  if (inspectChildTools && childCatalog) {
+    embeddedAgentLog.debug("codex native child tool catalog", {
+      runId: params.runId,
+      ...childCatalog,
+    });
+  }
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
     sessionFile: runtimeParams.sessionFile,
@@ -204,6 +226,9 @@ export async function prepareCodexAttemptContext(
     buildDeveloperInstructions(runtimeParams, {
       // The lifecycle restores this section to creation policy if no relay is selected.
       omitConversationTurnContext: true,
+      nativeChildToolNames: childCatalog?.tools
+        .filter((tool) => tool.status === "allowed")
+        .map((tool) => tool.name),
       dynamicTools: toolBridge.specs,
       nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled:

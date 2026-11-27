@@ -22,6 +22,12 @@ import type {
   CodexNativeSubagentSubmissionAcknowledgement,
   CodexNativeSubagentSubmissionStore,
 } from "./native-subagent-submission.js";
+import type {
+  NativeChildDynamicToolExecutor,
+  NativeChildToolTurn,
+} from "./native-subagent-tool-dispatch.js";
+
+export type { NativeChildDynamicToolExecutor } from "./native-subagent-tool-dispatch.js";
 
 type DescendantCancellation = NonNullable<AgentHarness["withDescendantCancellation"]>;
 type NativeRequestCustody = NonNullable<
@@ -36,7 +42,7 @@ export type NativeSubagentMonitorRuntime = {
 
 export type NativeSubagentMonitorClient = Pick<
   CodexAppServerClient,
-  "request" | "addNotificationHandler" | "addCloseHandler"
+  "request" | "addRequestHandler" | "addNotificationHandler" | "addCloseHandler"
 >;
 
 export type NativeModelSource = NonNullable<
@@ -94,6 +100,7 @@ export type NativeModelToolInputRequest = Omit<NativeModelInputRequest, "targetT
 };
 
 export type ParentOwner = {
+  executeDynamicTool?: NativeChildDynamicToolExecutor;
   requestCustody?: NativeRequestCustody;
   cancelChildProcesses?: (
     threadId: string,
@@ -225,6 +232,7 @@ export type NativeTurnObservation = {
 };
 
 export type ChildState = NativeSubagentAssignment & {
+  toolTurn?: NativeChildToolTurn;
   requestCustody?: NativeRequestCustody;
   // Interruption releases execution admission, but explicit Stop still owes process cleanup.
   cancelProcesses?: ParentOwner["cancelChildProcesses"];

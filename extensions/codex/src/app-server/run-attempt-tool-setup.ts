@@ -29,6 +29,10 @@ import {
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
+import {
+  prepareNativeChildToolExecutor,
+  type McpExecutionOwner,
+} from "./native-child-tool-resources.js";
 import type { NativePendingChild } from "./native-subagent-monitor-types.js";
 import {
   hasCodexNativeToolCatalog,
@@ -401,9 +405,10 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     const requestInteractiveMcpApproval = async (
       approval: Parameters<HarnessMcpInteractiveApproval>[0],
       allowedDecisions: ExecApprovalDecision[],
+      hostCapabilities = params.hostCapabilities,
     ) => {
       const outcome = await requestPluginApprovalOutcome({
-        hostCapabilities: params.hostCapabilities,
+        hostCapabilities,
         signal: approval.signal,
         title: `Run MCP tool ${approval.serverName}/${approval.toolName}`,
         description: `Codex approval mode "${approval.mode}" requires an operator decision before this MCP tool runs. ${formatMcpCodexApprovalRemedy(approval.serverName)}`,
@@ -434,50 +439,64 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       policyContext,
       warn: (message: string) => embeddedAgentLog.warn(message),
     };
+    // Connections remain scoped to the originating requester. Every execution owner
+    // acquires its own view, including its own approval channel and disposal.
+    const mcpExecutionOptions = (owner?: McpExecutionOwner) => ({
+      ...mcpOptions,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      storeAdmission: owner?.host ?? params.hostCapabilities,
+      presentMcpUi: !owner,
+      isTurnTainted: owner ? () => true : mcpOptions.isTurnTainted,
+      policyContext: owner
+        ? {
+            ...policyContext,
+            runSessionKey: owner.runSessionKey,
+            sessionId: owner.sessionId,
+            runId: owner.runId,
+          }
+        : policyContext,
+    });
+    const acquireConfiguredMcp = (owner?: McpExecutionOwner) =>
+      materializeStaticMcpToolsForHarnessRun({
+        ...mcpExecutionOptions(owner),
+        agentId: sessionAgentId,
+        reservedToolNames,
+        projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
+        ...(configuredMcpSurface === "transient"
+          ? {
+              requestInteractiveCodexApproval: (approval) =>
+                requestInteractiveMcpApproval(
+                  approval,
+                  approval.mode === "prompt"
+                    ? ["allow-once", "deny"]
+                    : ["allow-once", "allow-always", "deny"],
+                  owner?.host,
+                ),
+            }
+          : {}),
+      });
+    const acquireRequesterMcp = (occupied: Iterable<string>, owner?: McpExecutionOwner) =>
+      materializeRequesterScopedMcpToolsForHarnessRun({
+        ...mcpExecutionOptions(owner),
+        // Requester servers cannot consume stored grants; Allow Always would re-prompt.
+        requestInteractiveCodexApproval: (approval) =>
+          requestInteractiveMcpApproval(approval, ["allow-once", "deny"], owner?.host),
+        requesterSenderId: params.senderId,
+        agentAccountId: params.agentAccountId,
+        messageChannel: turnSourceChannel,
+        reservedToolNames: [...reservedToolNames, ...occupied],
+      });
     configuredMcp =
       params.requireWorkspaceOnly !== true && configuredMcpSurface
-        ? await materializeStaticMcpToolsForHarnessRun({
-            ...mcpOptions,
-            storeAdmission: params.hostCapabilities,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: sessionAgentId,
-            reservedToolNames,
-            projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
-            ...(configuredMcpSurface === "transient"
-              ? {
-                  requestInteractiveCodexApproval: (approval) =>
-                    requestInteractiveMcpApproval(
-                      approval,
-                      approval.mode === "prompt"
-                        ? ["allow-once", "deny"]
-                        : ["allow-once", "allow-always", "deny"],
-                    ),
-                }
-              : {}),
-          })
+        ? await acquireConfiguredMcp()
         : undefined;
     // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
     // Specs come from the session advertised-catalog cache so fingerprints stay stable.
     scopedMcpTools =
       authenticatedScheduledMode || params.requireWorkspaceOnly === true
         ? undefined
-        : await materializeRequesterScopedMcpToolsForHarnessRun({
-            ...mcpOptions,
-            storeAdmission: params.hostCapabilities,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            // Requester servers cannot consume stored grants; Allow Always would re-prompt.
-            requestInteractiveCodexApproval: (approval) =>
-              requestInteractiveMcpApproval(approval, ["allow-once", "deny"]),
-            requesterSenderId: params.senderId,
-            agentAccountId: params.agentAccountId,
-            messageChannel: params.messageChannel ?? params.messageProvider,
-            reservedToolNames: [
-              ...reservedToolNames,
-              ...(configuredMcp?.tools.map((tool) => tool.name) ?? []),
-            ],
-          });
+        : await acquireRequesterMcp(configuredMcp?.tools.map((t) => t.name) ?? []);
     // Restricted dynamic-tool profiles (private QA, exclusion lists) gate scoped
     // MCP tools exactly like every other dynamic tool. Filter both lists with the
     // same rule so execution and advertised specs stay name-aligned.
@@ -555,6 +574,18 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       ),
       hookContext,
     });
+    const projectedStaticNames = new Set(configuredMcp?.tools.map((tool) => tool.name));
+    const projectedRequesterNames = new Set(scopedMcpTools?.tools.map((tool) => tool.name));
+    const executeNativeChildTool = prepareNativeChildToolExecutor(
+      runtime,
+      toolBridge,
+      async (name, owner) =>
+        projectedStaticNames.has(name)
+          ? acquireConfiguredMcp(owner)
+          : projectedRequesterNames.has(name)
+            ? acquireRequesterMcp(projectedStaticNames, owner)
+            : null,
+    );
     const captureCronCreatorToolAllowlist = async () => {
       await captureFinalCodexCronCreatorToolAllowlist(
         cronCreatorToolAllowlist,
@@ -670,6 +701,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       compactionPlanState,
       computerContextEpoch,
       toolBridge,
+      executeNativeChildTool,
       toolState,
       toolOutcomeOrdinals,
       suppressedDynamicToolOutcomeOrdinals,

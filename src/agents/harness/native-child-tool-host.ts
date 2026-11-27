@@ -1,0 +1,255 @@
+import { randomUUID } from "node:crypto";
+import { inheritSessionMcpStoreOwner } from "../../config/sessions/session-mcp-store-admission.js";
+import { getPluginRegistryState } from "../../plugins/runtime-state.js";
+import {
+  bindGatewayContextResolver,
+  captureGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../plugins/runtime/gateway-context-binding.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import {
+  captureAdmittedRunSourceForChild,
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../admitted-run-context.js";
+import { createAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../tools/gateway-caller-context.js";
+import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
+import type {
+  AgentHarnessHostCapabilityParams,
+  AgentHarnessHostAttempt,
+} from "./host-capability-internal.types.js";
+import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import { captureHostToolPolicyConfigReader } from "./host-capability-workspace.js";
+import type { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import { withAgentQuestionAnswerAuthority } from "./host-private-capabilities.js";
+import {
+  bindNativeChildToolSource,
+  registerNativeChildToolIssuer,
+  type NativeChildToolSource,
+} from "./native-child-tool-bindings.js";
+
+/** A physical app-server callback can still carry the already closed foreground work scope. */
+async function runWithChildToolWork<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+  const work = new AsyncWorkScope();
+  // Reconstructed tool wrappers bind to the child's lifetime, not the parent turn's
+  // refresh controller. The source config and plugin registry are still checked on every call.
+  const refresh = createAgentPluginRuntimeRefresh();
+  const stop = () => work.beginClose(signal.reason);
+  signal.throwIfAborted();
+  signal.addEventListener("abort", stop, { once: true });
+  try {
+    // Projected MCP tools consult question authority even for non-interactive calls.
+    // The child owns this call, not the foreground turn's right to ask its requester.
+    return await withAgentQuestionAnswerAuthority(undefined, () =>
+      runOutsideAsyncWorkScope(() => refresh.run(() => work.run(run))),
+    );
+  } finally {
+    try {
+      await work.drain();
+    } finally {
+      refresh.close();
+      signal.removeEventListener("abort", stop);
+    }
+  }
+}
+
+/** Bind only actual host-issued sources. Model admission or a copied handle is not a tool grant. */
+function registerNativeChildToolHost(params: {
+  createHost: typeof createAgentHarnessHostCapabilities;
+  parent: AgentHarnessHostCapabilities;
+  attempt: AgentHarnessHostAttempt;
+  source: NativeChildToolSource;
+  isPolicyCurrent: () => boolean;
+  scope?: "turn" | "conversation";
+}) {
+  const { attempt, source, parent } = params;
+  const config = attempt.config;
+  const agentId = attempt.agentId;
+  if (!config || !agentId || !attempt.sessionKey || !attempt.sessionId) {
+    return;
+  }
+  const issuer = captureAdmittedRunSourceForChild(attempt.admittedRunContext);
+  if (!issuer) {
+    return;
+  }
+  const origin = getGatewayToolCallerIdentity();
+  if (
+    origin &&
+    (origin.operationalRunInstance !== attempt.admittedRunContext.operationalRunInstance ||
+      origin.workerTurnClaim ||
+      origin.personalToolSelection ||
+      origin.receiptAdmissions?.length)
+  ) {
+    // These additional authority bindings belong to another occurrence or cannot be delegated.
+    return;
+  }
+  const requester = origin?.webchatMcpRequester;
+  if (
+    requester &&
+    (requester.sessionId !== attempt.sessionId ||
+      requester.requesterSenderId !== issuer.operator.profileId)
+  ) {
+    return;
+  }
+  requester?.assertCurrent();
+  const assertToolAllowed = origin?.assertToolAllowed;
+  const fullPermission = origin?.fullPermission === false ? false : undefined;
+  const sourceSessionKey = attempt.sessionKey;
+  const workspace = captureAgentWorkspaceReadiness(sourceSessionKey);
+  const resolveGatewayContext = captureGatewayContextResolver(
+    getGatewayContextResolver(attempt.admittedRunContext),
+  );
+  // Preserve the store witness for this requester's MCP connections only.
+  const storeOwner = {};
+  inheritSessionMcpStoreOwner(parent, storeOwner);
+  bindNativeChildToolSource(source, parent, async (request, execute) => {
+    const signal = source.signal
+      ? AbortSignal.any([source.signal, request.signal])
+      : request.signal;
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      source.assertCurrent();
+      workspace?.assertCurrent();
+      request.assertCurrent();
+      assertToolAllowed?.(request.toolName);
+      issuer.assertCurrent?.();
+      if ((resolveGatewayContext && !resolveGatewayContext()) || !params.isPolicyCurrent()) {
+        throw new Error("Native child tool source changed. Start a new parent turn.");
+      }
+    };
+    assertCurrent();
+    if (workspace) {
+      await workspace.waitUntilReady();
+      assertCurrent();
+    }
+    // Concurrent calls must not replace one another's operational admission.
+    const runId = request.childRunId + ":tool:" + randomUUID();
+    const admission = prepareAgentRunAdmission({
+      cfg: config,
+      facts: { runId, agentId, ingress: { kind: "subagent", boundary: "native-child.tool" } },
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+      operatorAuthority: issuer.operator,
+      assertSourceCurrent: assertCurrent,
+    });
+    let closeHost: (() => void) | undefined;
+    try {
+      const admittedRunContext = await admission.admit("plugin-harness", "codex");
+      bindGatewayContextResolver(admittedRunContext, resolveGatewayContext);
+      inheritSessionMcpStoreOwner(storeOwner, admittedRunContext.operationalRunInstance);
+      const owner = {
+        agentId,
+        sessionId: request.threadId,
+        sessionKey: request.childRunId,
+        runId,
+        admittedRunContext,
+      };
+      // Never borrow a foreground run's client or caller from an event handler's async context.
+      return await runWithChildToolWork(signal, () =>
+        withoutGatewayToolCallerIdentity(() =>
+          withPluginRuntimeGatewayRequestScope(
+            {
+              isWebchatConnect: () => false,
+              context: resolveGatewayContext?.(),
+              resolveGatewayContext,
+            },
+            async () => {
+              const host = params.createHost({
+                attempt: {
+                  ...owner,
+                  config,
+                  workspaceDir: attempt.workspaceDir,
+                  cwd: attempt.cwd,
+                  senderId: attempt.senderId,
+                  senderName: attempt.senderName,
+                  senderUsername: attempt.senderUsername,
+                  senderE164: attempt.senderE164,
+                  senderIsOwner: attempt.senderIsOwner,
+                  messageChannel: attempt.messageChannel,
+                  messageProvider: attempt.messageProvider,
+                  agentAccountId: attempt.agentAccountId,
+                  operatorProfileId: attempt.operatorProfileId,
+                  skillsSnapshot: attempt.skillsSnapshot,
+                  preparedModelRuntime: attempt.preparedModelRuntime,
+                  sandbox: attempt.sandbox,
+                  requireWorkspaceOnly: attempt.requireWorkspaceOnly,
+                  toolExecutionAllow: attempt.toolExecutionAllow,
+                  abortSignal: signal,
+                },
+                pluginId: "codex",
+                mediaResultOnly: true,
+              });
+              closeHost = host.close;
+              host.setToolPolicyScope(params.scope);
+              const caller = createAdmittedGatewayToolCallerIdentity({
+                ...owner,
+                requesterOrigin: attempt.requesterOrigin,
+                receiptAuthority: assertCurrent,
+                approvalSignals: [signal],
+              });
+              if (caller) {
+                caller.fullPermission = fullPermission;
+                caller.assertToolAllowed = assertToolAllowed;
+                if (requester) {
+                  caller.webchatMcpRequester = {
+                    sessionId: requester.sessionId,
+                    requesterSenderId: issuer.operator.profileId,
+                    connectionSessionKey: sourceSessionKey,
+                    assertCurrent,
+                  };
+                }
+              }
+              return await withGatewayToolCallerIdentity(caller, () =>
+                host.runWithScope(() => execute(host.capabilities, runId)),
+              );
+            },
+          ),
+        ),
+      );
+    } finally {
+      closeHost?.();
+      admission.close();
+    }
+  });
+}
+
+export function bindChildHostIssuer(
+  parent: AgentHarnessHostCapabilities,
+  params: AgentHarnessHostCapabilityParams,
+  createHost: typeof createAgentHarnessHostCapabilities,
+  readScope: () => "turn" | "conversation" | undefined,
+) {
+  if (
+    params.pluginId !== "codex" ||
+    params.toolCalls === "deny" ||
+    params.attempt.scheduledToolPolicy ||
+    getGatewayToolCallerIdentity()?.workerTurnClaim
+  ) {
+    return;
+  }
+  const readConfig = captureHostToolPolicyConfigReader(params.attempt)({
+    config: params.attempt.config,
+  });
+  // The ceiling must predate the foreground tool listing, not just the later child call.
+  const configAtAdmission = readConfig?.();
+  const registryAtAdmission = getPluginRegistryState()?.activeVersion;
+  const isPolicyCurrent = () =>
+    readConfig?.() === configAtAdmission &&
+    getPluginRegistryState()?.activeVersion === registryAtAdmission;
+  registerNativeChildToolIssuer(parent, (source) =>
+    registerNativeChildToolHost({
+      createHost,
+      parent,
+      source,
+      attempt: params.attempt,
+      isPolicyCurrent,
+      scope: readScope(),
+    }),
+  );
+}

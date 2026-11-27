@@ -4,6 +4,7 @@ export function buildQaCodexAppServerArgs(
     providerBaseUrl?: string;
     modelCatalogPath?: string;
     existingArgs?: string;
+    nativeSubagents?: boolean;
   } = {},
 ): string {
   const providerBaseUrl = params.providerBaseUrl?.trim().replace(/\/+$/u, "");
@@ -24,6 +25,7 @@ export function buildQaCodexAppServerArgs(
   }
   return [
     "app-server",
+    ...(params.nativeSubagents ? ["-c", "features.multi_agent_v2=true"] : []),
     ...(providerBaseUrl ? ["-c", `openai_base_url=${providerBaseUrl}`] : []),
     ...(params.modelCatalogPath
       ? ["-c", JSON.stringify(`model_catalog_json=${params.modelCatalogPath}`)]

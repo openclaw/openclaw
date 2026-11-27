@@ -148,6 +148,8 @@ function applyConfiguredMcpApproval(
 }
 
 type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
+  /** False for a delegated tool view with no user-facing MCP interaction channel. */
+  presentMcpUi?: boolean;
   /** Private host-issued carrier for a committed session store. */
   storeAdmission?: object;
   sessionId: string;
@@ -290,6 +292,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     : undefined;
   const liveRuntime = await materializeBundleMcpToolsForRun({
     ...acquisition,
+    presentMcpUi: params.presentMcpUi,
     agentId: params.agentId,
     operatorConnect: params.cfg
       ? {
@@ -423,6 +426,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     if (scopedRuntime) {
       liveRuntime = await materializeBundleMcpToolsForRun({
         runtime: scopedRuntime,
+        presentMcpUi: params.presentMcpUi,
         releaseLease: scopedRuntimeHandle?.releaseLease,
         assertRequesterCurrent,
         agentId: params.agentId,

@@ -3,6 +3,7 @@ import { emitAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { projectNormalizedToolItem } from "./event-projector-events.js";
 import { readItem } from "./event-projector-values.js";
+import { releaseCompletionCustody } from "./native-subagent-admission-custody.js";
 import {
   codexNativeSubagentRunId,
   normalizeIdentifier,
@@ -10,9 +11,45 @@ import {
   readNativeSubagentThreadIds,
 } from "./native-subagent-assignment.js";
 import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
-import type { ChildState, NativeExecutionWait } from "./native-subagent-monitor-types.js";
+import type {
+  ChildState,
+  KnownChild,
+  NativeExecutionWait,
+  NativeTurnObservation,
+} from "./native-subagent-monitor-types.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
+
+export function recoverPendingChildTurns(
+  previous: KnownChild | undefined,
+  nativeTurnId: string | undefined,
+  observedTurns: readonly NativeTurnObservation[],
+) {
+  const currentIndex = observedTurns.findIndex((turn) => turn.turnId === nativeTurnId);
+  const pendingTurns: KnownChild["pendingTurns"] = observedTurns
+    .filter((turn, index) => index > currentIndex && turn.turnId !== nativeTurnId)
+    .map((turn, index, turns) => ({
+      turnId: turn.turnId,
+      state: turn.state === "active" && index < turns.length - 1 ? undefined : turn.state,
+    }));
+  const retainedPending = previous?.pendingTurns.filter((pending) => pending.modelSource) ?? [];
+  for (const retained of retainedPending) {
+    const recovered = pendingTurns.find((pending) => pending.turnId === retained.turnId);
+    if (recovered) {
+      recovered.modelSource = retained.modelSource;
+      recovered.completionCustody = retained.completionCustody;
+      retained.completionCustody = undefined;
+    } else {
+      pendingTurns.push(retained);
+    }
+  }
+  for (const pending of previous?.pendingTurns ?? []) {
+    if (!pendingTurns.includes(pending)) {
+      releaseCompletionCustody(pending);
+    }
+  }
+  return pendingTurns;
+}
 
 type NativeSubagentTurnObservationCallbacks = {
   emitTaskEvent: (

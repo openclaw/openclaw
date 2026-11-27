@@ -1,5 +1,6 @@
 import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  createOwnerBackedContractTool,
   createProcessPollDeliveryContract,
   createRequiredExecRuntimeContract,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
@@ -55,10 +56,12 @@ async function startTool(
   {
     harness = createStartedThreadHarness(),
     clock = false,
+    attemptOptions,
     ...overrides
   }: Partial<ReturnType<typeof createTestParams>> & {
     harness?: ReturnType<typeof createStartedThreadHarness>;
     clock?: boolean;
+    attemptOptions?: Parameters<typeof runCodexAppServerAttempt>[1];
   } = {},
 ) {
   const params = Object.assign(
@@ -72,7 +75,7 @@ async function startTool(
   if (clock) {
     fakeClock();
   }
-  return { harness, run: runCodexAppServerAttempt(params) };
+  return { harness, run: runCodexAppServerAttempt(params, attemptOptions) };
 }
 
 async function completeRun(
@@ -118,6 +121,36 @@ function observeDiagnostics() {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it("retains Codex session control schemas for the parent without advertising them as child grants", async () => {
+    const names = [
+      "codex_plugins",
+      "codex_session_interrupt",
+      "codex_session_send",
+      "codex_threads",
+    ];
+    const { harness, run } = await startTool(
+      names.map((name) =>
+        createOwnerBackedContractTool({ name, pluginId: "codex", result: textToolResult("") }),
+      ),
+      { attemptOptions: { pluginConfig: { nativeChildTools: { allow: ["codex_*"] } } } },
+    );
+    try {
+      await run.waitForTurnAccepted();
+      await completeRun(harness, run);
+      const start = harness.requests.find(({ method }) => method === "thread/start")
+        ?.params as CodexThreadStartParams;
+      expect(
+        flattenCodexDynamicToolFunctions(start.dynamicTools ?? []).map((tool) => tool.name),
+      ).toEqual(expect.arrayContaining(names));
+      expect(start.developerInstructions).toContain(
+        "delegated OpenClaw host tools: codex_plugins.",
+      );
+    } finally {
+      harness.close();
+      await run;
+    }
+  });
+
   it("enforces Gateway policy on an owner turn's tool declarations and callbacks", async () => {
     const task = createRuntimeDynamicTool("managed_task");
     task.parameters = {

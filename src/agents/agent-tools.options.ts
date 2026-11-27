@@ -135,6 +135,7 @@ export type OpenClawCodingToolsOptions = {
   AgentRunChannelContext;
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  mediaResultOnly?: true;
   readDelegationConfig?: OpenClawToolsOptions["readDelegationConfig"];
   /** Internal listing owner pins discovery changes or renders a read-only inventory. */
   githubPublicationConfigurationAware?: true;

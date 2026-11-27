@@ -114,6 +114,12 @@ const codexSupervisionConfigSchema = z.strictObject({
 const codexPluginConfigSchema = z.strictObject({
   codexDynamicToolsLoading: z.enum(["searchable", "direct"]).optional(),
   codexDynamicToolsExclude: z.array(z.string()).optional(),
+  nativeChildTools: z
+    .strictObject({
+      allow: z.array(z.string().trim().min(1)).optional(),
+      deny: z.array(z.string().trim().min(1)).optional(),
+    })
+    .optional(),
   sessionCatalog: codexSessionCatalogConfigSchema.optional(),
   discovery: codexDiscoveryConfigSchema.optional(),
   computerUse: z
@@ -212,6 +218,11 @@ function parseCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
   }
   const parsed = codexPluginConfigSchema.safeParse(value);
   if (!parsed.success) {
+    if (parsed.error.issues.some((issue) => issue.path[0] === "nativeChildTools")) {
+      throw new Error(
+        "Invalid plugins.entries.codex.config.nativeChildTools: use allow and deny arrays of nonempty tool name patterns.",
+      );
+    }
     if (appServer?.nativeHookRelay !== undefined) {
       throw new Error(
         "Invalid plugins.entries.codex.config.appServer.nativeHookRelay configuration; remote hooks require an HTTPS URL and an absolute private credential directory.",

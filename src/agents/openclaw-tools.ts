@@ -313,10 +313,12 @@ function* createOpenClawToolsSteps(
   const mediaGenerationToolOptions = {
     ...options,
     sandboxSessionKey: options?.agentSessionKey,
-    agentSessionKey: mediaGenerationAgentSessionKey,
-    requesterRunSessionKey: trimmedRunSessionKey,
+    // No chat owner means inline artifacts, no task to deliver or review.
+    // Keep the sandbox binding above: it governs file access, not chat delivery.
+    agentSessionKey: options?.mediaResultOnly ? undefined : mediaGenerationAgentSessionKey,
+    requesterRunSessionKey: options?.mediaResultOnly ? undefined : trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
-    requesterOrigin: widgetDeliveryContext,
+    requesterOrigin: options?.mediaResultOnly ? undefined : widgetDeliveryContext,
     workspaceDir,
     sandbox,
   };

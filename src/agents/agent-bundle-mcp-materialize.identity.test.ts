@@ -7,6 +7,10 @@ import {
   createAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "./harness/host-private-capabilities.js";
+import {
+  captureMcpClientElicitation,
+  runWithMcpElicitationHandler,
+} from "./mcp-client-elicitation.js";
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn(),
   release: vi.fn(),
@@ -113,6 +117,53 @@ async function standaloneTicket() {
     toolOperationsAuthorized: true,
   });
 }
+it.each([false, true])(
+  "keeps delegated server input and App previews off the originating session (private: %s)",
+  async (privateServer) => {
+    const parentHandler = vi.fn(async () => ({ action: "cancel" as const }));
+    const replies: unknown[] = [];
+    const source = {
+      ...runtime(privateServer),
+      callTool: async () => {
+        // Use the same caller capture as the physical transport's server-request handler.
+        const request = captureMcpClientElicitation();
+        expect(request).toBeDefined();
+        for (const method of ["elicitation/create", "openai/elicitation/create"] as const) {
+          replies.push(
+            await request!.handle({
+              method,
+              params: { message: "Ask the user", requestedSchema: { type: "object" } },
+              signal: new AbortController().signal,
+            }),
+          );
+        }
+        return { content: [] };
+      },
+    };
+    const child = await materializeBundleMcpToolsForRun({
+      runtime: source,
+      agentId: "main",
+      appRequester: { kind: "gateway-profile", profileId: "parent" },
+      presentMcpUi: false,
+    });
+    try {
+      // An inherited valid handler is not permission for this view to use it.
+      await runWithMcpElicitationHandler(parentHandler, () => child.tools[0]!.execute("child", {}));
+      expect(replies).toEqual([{ action: "decline" }, { action: "decline" }]);
+      expect(parentHandler).not.toHaveBeenCalled();
+      expect(mocks.elicitation).not.toHaveBeenCalled();
+      expect(mocks.fetch).not.toHaveBeenCalled();
+
+      // Another view of this same connection still owns its normal UI channel.
+      mocks.elicitation.mockReturnValueOnce(parentHandler);
+      await execute(source, "parent");
+      expect(parentHandler).toHaveBeenCalledTimes(2);
+      expect(mocks.fetch).toHaveBeenCalledOnce();
+    } finally {
+      await child.dispose();
+    }
+  },
+);
 it("prepares model-run form previews through current tool approval and preserves its execution guard", async () => {
   const source = runtime(false);
   await execute(source, undefined, async (materialized) => {
