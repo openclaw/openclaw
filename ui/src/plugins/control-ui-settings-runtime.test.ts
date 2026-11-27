@@ -35,12 +35,9 @@ const settings = { "plugin.fixture.status.*": { label: "Status" } };
 function fixture(views: SettingsView[] = [memoryView()]) {
   packaged.push({
     pluginId: "fixture",
-    revision: "built-revision",
-    bundledDistribution: { packageName: "fixture", packageVersion: "1.0.0" },
     settingsViews: views.map((view) => ({ ...view.placement, settings })),
     entry: "/packaged/index.js",
     styles: ["/packaged/index.css"],
-    imports: [],
   });
   const view = views[0]!;
   const activate = vi.fn();

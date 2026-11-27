@@ -3,5 +3,5 @@
 # Verify the painted viewport after reconnect so a delayed second scroll cannot pass.
 # Keep the live Appearance preview active while verifying its lazy renderer.
 # Audit the populated Roles editor, including conditional fields and late-rendered scope checkboxes.
-# Verify built Chat assets exclude Settings-only row declarations while retaining plugin asset identities.
-684
+# Verify built Chat assets exclude Settings-only plugins while retaining ordinary activation identities.
+681

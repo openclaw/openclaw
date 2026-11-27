@@ -180,15 +180,16 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
           revision,
           bundledDistribution: { packageName: pkg.name, packageVersion: pkg.version },
         };
-        // Chat needs asset identities for delivery checks, not Settings placements or row IDs.
+        const assets = `entry:${urls.get(build.entryName)},styles:[${build.styles.map((name) => urls.get(name)).join(",")}]`;
+        // The Gateway never advertises Settings-only owners for activation.
+        if (controlUi.activation !== "settings-only") {
+          modules.push(`{...${JSON.stringify(metadata)},${assets},imports:[]}`);
+        }
         if (controlUi.settingsViews?.length) {
           settingsModules.push(
-            `{...controlUiPluginDistributions[${modules.length}],settingsViews:${JSON.stringify(controlUi.settingsViews)}}`,
+            `{pluginId:${JSON.stringify(pluginId)},${assets},settingsViews:${JSON.stringify(controlUi.settingsViews)}}`,
           );
         }
-        modules.push(
-          `{...${JSON.stringify(metadata)},entry:${urls.get(build.entryName)},styles:[${build.styles.map((name) => urls.get(name)).join(",")}],imports:[]}`,
-        );
         captured.add(id);
       }
       for (const id of promised) {
@@ -199,7 +200,7 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         }
       }
       source = `export const controlUiPluginDistributions = [${modules.join(",")}];`;
-      settingsSource = `import { controlUiPluginDistributions } from "./control-ui-distribution.ts"; export const controlUiSettingsDistributions = [${settingsModules.join(",")}];`;
+      settingsSource = `export const controlUiSettingsDistributions = [${settingsModules.join(",")}];`;
     },
     transform: {
       filter: { id: /\/ui\/src\/plugins\/control-ui-(?:settings-)?distribution\.ts(?:\?.*)?$/ },

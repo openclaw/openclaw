@@ -259,15 +259,15 @@ it("builds bundled and root-excluded source Settings assets while preserving sib
     await sourcePlugin(id, manifest, `export default { pluginId: "${id}", settingsViews: [] };\n`);
   }
   await compile();
-  // The fixture entry consumes only delivery URLs, as Chat does before Settings opens.
+  // Chat matches ordinary Gateway activations before Settings opens.
   const boot = await Promise.all(
     extractControlUiStartupAssetPaths(await readText(at("ui-output/index.html"))).map((file) =>
       readText(at("ui-output", file)),
     ),
   );
+  expect(boot.join("\n")).toContain("@openclaw/workboard");
   for (const { id, manifest } of settings) {
-    expect(boot.join("\n")).toContain(`@openclaw/${id}`);
-    expect(boot.join("\n")).not.toContain(`plugin.${id}.example`);
+    expect(boot.join("\n")).not.toContain(id);
     const packaged = JSON.parse(await readText(at("dist/extensions", id, "openclaw.plugin.json")));
     expect(packaged.controlUi.settingsViews).toEqual(manifest.controlUi.settingsViews);
     expect(packaged.controlUi.activation).toBe("settings-only");

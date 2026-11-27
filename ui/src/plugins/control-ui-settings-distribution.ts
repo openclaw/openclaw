@@ -1,7 +1,10 @@
 import type { PluginManifestControlUiSettingsView } from "../../../src/plugins/manifest-types.ts";
 import type { ControlUiPluginDistribution } from "./control-ui-distribution.ts";
 
-export type ControlUiSettingsDistribution = ControlUiPluginDistribution & {
+export type ControlUiSettingsDistribution = Pick<
+  ControlUiPluginDistribution,
+  "pluginId" | "entry" | "styles"
+> & {
   settingsViews: readonly PluginManifestControlUiSettingsView[];
 };
 
