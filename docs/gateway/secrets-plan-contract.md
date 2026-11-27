@@ -87,9 +87,9 @@ Plan targets are accepted for supported credential paths in [SecretRef Credentia
 
 `target.type` must be a recognized target type, and the normalized `target.path` must match that type's registered path shape.
 
-Some target types accept a compatibility alias as `target.type` for existing plans, in addition to their canonical type name:
+Some target types accept a compatibility alias as `target.type` for existing plans, in addition to their primary type name:
 
-| Canonical type                       | Accepted alias                                  |
+| Primary type                         | Accepted alias                                  |
 | ------------------------------------ | ----------------------------------------------- |
 | `models.providers.apiKey`            | `models.providers.*.apiKey`                     |
 | `skills.entries.apiKey`              | `skills.entries.*.apiKey`                       |
@@ -129,7 +129,7 @@ No writes are committed for an invalid plan: target resolution and path validati
 - Ref-only SQLite auth-profile entries (`keyRef`/`tokenRef`) are included in runtime credential resolution and audit coverage.
 - `secrets apply` writes supported `openclaw.json` targets and SQLite auth-profile targets. Two optional scrub passes are on by default:
   - `scrubEnv` removes migrated plaintext values from `.env` files in the effective state and active-config directories.
-  - `scrubAuthProfilesForProviderTargets` clears plaintext/unused-ref residue in auth stores for providers a plan just migrated.
+  - `scrubAuthProfilesForProviderTargets` clears plaintext in auth stores for providers a plan just migrated only when the profile has a valid `keyRef` or `tokenRef`. Profiles without a replacement ref keep their credentials and produce a warning; add an explicit auth-profile target for each intended account rather than reusing another account’s provider key.
 
   Set either option to `false` in the plan to skip that pass.
 

@@ -1,4 +1,5 @@
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { NodeSession } from "./node-session.types.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 
@@ -11,8 +12,32 @@ export type NodePresenceActivityUpdate = {
   observedAtMs?: number;
 };
 
-// Source follows the exact live session, never a node id reused after reconnect.
-const presenceSources = new WeakMap<NodeSession, "app" | "system">();
+function preferActiveNode<T extends NodeSession>(active: T | undefined, node: T): T | undefined {
+  return node.lastActiveAtMs !== undefined &&
+    (!active ||
+      node.lastActiveAtMs > (active.lastActiveAtMs ?? 0) ||
+      (node.lastActiveAtMs === active.lastActiveAtMs &&
+        (node.presenceUpdatedAtMs ?? 0) > (active.presenceUpdatedAtMs ?? 0)))
+    ? node
+    : active;
+}
+
+export function selectActiveNode<T extends NodeSession>(nodes: readonly T[]): T | undefined {
+  return nodes.reduce<T | undefined>(preferActiveNode, undefined);
+}
+
+export function selectActiveNodesByProfile<T extends NodeSession>(
+  nodes: readonly T[],
+): Map<string | undefined, T> {
+  const selected = new Map<string | undefined, T | undefined>();
+  for (const node of nodes) {
+    const authenticatedProfileId = node.client.authenticatedUserProfile?.profileId;
+    const profileId =
+      authenticatedProfileId === GATEWAY_OWNER_PROFILE_ID ? undefined : authenticatedProfileId;
+    selected.set(profileId, preferActiveNode(selected.get(profileId), node));
+  }
+  return new Map([...selected].flatMap(([profileId, node]) => (node ? [[profileId, node]] : [])));
+}
 
 export function updateNodePresenceActivity(
   node: NodeSession | undefined,
@@ -42,12 +67,12 @@ export function updateNodePresenceActivity(
   const lastActiveAtMs = Math.max(0, observedAtMs - params.idleSeconds * 1000);
   // App fallback replaces system history; otherwise a disabled system sample
   // could keep this Mac selected after the reporter switches to app-only input.
-  if (presenceSources.get(node) !== source) {
+  if (node.presenceActivitySource !== source) {
     node.lastActiveAtMs = lastActiveAtMs;
   } else if (params.saturated !== true || node.lastActiveAtMs === undefined) {
     node.lastActiveAtMs = Math.max(node.lastActiveAtMs ?? 0, lastActiveAtMs);
   }
-  presenceSources.set(node, source);
+  node.presenceActivitySource = source;
   node.presenceUpdatedAtMs = observedAtMs;
   return node;
 }
@@ -61,13 +86,13 @@ export function clearNodePresenceActivity(
     return null;
   }
   if (
-    (source === "system" && presenceSources.get(node) === "app") ||
+    (source === "system" && node.presenceActivitySource === "app") ||
     (node.lastActiveAtMs === undefined && node.presenceUpdatedAtMs === undefined)
   ) {
     return false;
   }
   node.lastActiveAtMs = undefined;
   node.presenceUpdatedAtMs = undefined;
-  presenceSources.delete(node);
+  node.presenceActivitySource = undefined;
   return true;
 }

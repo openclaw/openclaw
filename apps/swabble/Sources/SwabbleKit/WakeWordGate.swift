@@ -91,7 +91,6 @@ public enum WakeWordGate {
 
         guard let best else { return nil }
         let command = self.commandText(transcript: transcript, segments: segments, triggerEndTime: best.triggerEnd)
-            .trimmingCharacters(in: Self.whitespaceAndPunctuation)
         guard command.count >= config.minCommandLength else { return nil }
         return WakeWordGateMatch(
             triggerEndTime: best.triggerEnd,
@@ -120,7 +119,7 @@ public enum WakeWordGate {
         guard !text.isEmpty else { return false }
         let normalized = text.lowercased()
         for trigger in triggers {
-            let token = trigger.trimmingCharacters(in: self.whitespaceAndPunctuation).lowercased()
+            let token = self.normalizeToken(trigger)
             if token.isEmpty { continue }
             if normalized.contains(token) { return true }
         }
@@ -138,16 +137,14 @@ public enum WakeWordGate {
     }
 
     private static func normalizeTriggers(_ triggers: [String]) -> [TriggerTokens] {
-        var output: [TriggerTokens] = []
-        for trigger in triggers {
+        triggers.compactMap { trigger in
             let tokens = trigger
                 .split(whereSeparator: { $0.isWhitespace })
                 .map { self.normalizeToken(String($0)) }
                 .filter { !$0.isEmpty }
-            if tokens.isEmpty { continue }
-            output.append(TriggerTokens(source: tokens.joined(separator: " "), tokens: tokens))
+            guard !tokens.isEmpty else { return nil }
+            return TriggerTokens(source: tokens.joined(separator: " "), tokens: tokens)
         }
-        return output
     }
 
     private static func bestCandidate(
@@ -179,7 +176,7 @@ public enum WakeWordGate {
         minimumGap: TimeInterval)
     -> MatchCandidate? {
         let count = trigger.tokens.count
-        guard count > 0, index + count < tokens.count else { return nil }
+        guard index + count < tokens.count else { return nil }
         guard (0..<count).allSatisfy({ tokens[index + $0].normalized == trigger.tokens[$0] }) else {
             return nil
         }

@@ -1,10 +1,12 @@
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type {
   TranscriptStartRequest,
   TranscriptsStartResult,
   TranscriptStopRequest,
   TranscriptsStopResult,
 } from "../transcripts/provider-types.js";
+import { sleep } from "../utils/sleep.js";
 import {
   meetingCaptionParticipationSources,
   snapshotMeetingObservation,
@@ -19,6 +21,9 @@ import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
 import { MeetingSessionDurableTranscripts } from "./session-durable-transcripts.js";
 import {
   inheritMeetingBrowserTabOwnership,
+  leaveTrackedMeetingBrowserTab,
+  type MeetingBrowserTabRelease,
+  releasedMeetingBrowserHealth,
   settleMeetingRetainedBrowserTabs,
   settleMeetingRetainedBrowserTabsAfterFailure,
 } from "./session-runtime-browser-tabs.js";
@@ -58,8 +63,8 @@ export class MeetingSessionRuntime<
   TSpeechBlockedReason extends string,
 > {
   readonly #sessions = new Map<string, TSession>();
+  readonly #requesterSessionKeys = new WeakMap<TSession, string>();
   readonly #participation?: MeetingParticipation<TSession>;
-  readonly #sessionLeaves = new Map<string, Promise<MeetingSessionLeaveResult<TSession>>>();
   readonly #sessionCleanup = new MeetingSessionCleanupTracker();
   readonly #meetingLock = new KeyedAsyncQueue();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
@@ -239,6 +244,13 @@ export class MeetingSessionRuntime<
     );
   }
 
+  protected forgetMeetingRequesterSessionKey(sessionId: string): void {
+    const session = this.#sessions.get(sessionId);
+    if (session) {
+      this.#requesterSessionKeys.delete(session);
+    }
+  }
+
   async join(request: TRequest): Promise<{ session: TSession; spoken?: boolean }> {
     const resolved = this.options.resolveJoin(request);
     // Session publication follows async transport setup. Serialize every transport so
@@ -258,12 +270,37 @@ export class MeetingSessionRuntime<
       return { found: false };
     }
     this.#participation?.close(sessionId);
-    // The meeting lock fences joins and leaves before terminal transcript work;
-    // #sessionLeaves then coalesces retries owned by the same session.
+    // Joins and leaves share one queue through terminal transcript work and cleanup.
     return await this.#meetingLock.enqueue(
       this.#meetingKey(session.transport, session.url),
       async () => await this.#leaveUnlocked(sessionId, options),
     );
+  }
+
+  /** Release the tracked participant for explicit leave or failed-join cleanup. */
+  protected async releaseTrackedBrowserTab(
+    session: TSession,
+    release: MeetingBrowserTabRelease<TTab>,
+  ): Promise<boolean | undefined> {
+    if (!this.options.isBrowserTransport(session.transport)) {
+      return undefined;
+    }
+    const { left, note } = await leaveTrackedMeetingBrowserTab(
+      this.#sessions.values(),
+      this.options,
+      session,
+      release,
+    );
+    this.#noteSession(session, note);
+    session.browserLeft = left;
+    if (left) {
+      this.options.setBrowserTab(session, undefined);
+      const health = this.options.getBrowser(session)?.health;
+      if (health) {
+        this.options.setBrowserHealth(session, { ...health, ...releasedMeetingBrowserHealth });
+      }
+    }
+    return left;
   }
 
   async speak(
@@ -292,7 +329,10 @@ export class MeetingSessionRuntime<
       if (session.state !== "active") {
         return;
       }
-      const handles = await this.options.ensureRealtimeBridge(session);
+      const handles = await this.options.ensureRealtimeBridge(
+        session,
+        this.#requesterSessionKeys.get(session),
+      );
       if (handles) {
         this.#attachRuntimeHandles(session, handles);
       }
@@ -329,11 +369,9 @@ export class MeetingSessionRuntime<
       Math.max(0, this.options.waitForInCallMs),
       Math.max(0, this.options.joinTimeoutMs),
     );
-    const deadline = Date.now() + waitMs;
-    while (Date.now() < deadline) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, Math.min(250, Math.max(0, deadline - Date.now())));
-      });
+    const deadline = monotonicNow() + waitMs;
+    while (monotonicNow() < deadline) {
+      await sleep(Math.min(250, Math.max(0, deadline - monotonicNow())));
       result = await this.speak(session.id, instructions);
       if (result.spoken) {
         return true;
@@ -368,24 +406,28 @@ export class MeetingSessionRuntime<
     }
   }
 
+  protected canObserveBrowser(session: TSession): boolean {
+    return session.state !== "ended" || session.browserLeft !== true;
+  }
+
   async refreshBrowserHealth(
     session: TSession,
     options: { force?: boolean; readOnly?: boolean } = {},
   ): Promise<void> {
-    if (!this.#isManagedBrowserSession(session)) {
-      this.refreshSpeechReadiness(session);
+    if (!this.canObserveBrowser(session)) {
       return;
     }
     if (
-      !options.force &&
-      this.options.isTalkBackMode(session.mode) &&
-      this.#evaluateSpeechReadiness(session).ready
+      this.#isManagedBrowserSession(session) &&
+      (options.force ||
+        !this.options.isTalkBackMode(session.mode) ||
+        !this.#evaluateSpeechReadiness(session).ready)
     ) {
-      this.refreshSpeechReadiness(session);
-      return;
+      await this.options.refreshBrowserHealth(session, options);
     }
-    await this.options.refreshBrowserHealth(session, options);
-    this.refreshSpeechReadiness(session);
+    if (this.canObserveBrowser(session)) {
+      this.refreshSpeechReadiness(session);
+    }
   }
 
   async refreshCaptionHealth(session: TSession): Promise<void> {
@@ -421,7 +463,7 @@ export class MeetingSessionRuntime<
     this.#participation?.close(session.id);
     session.state = "ended";
     session.updatedAt = nowIso();
-    this.#dropRuntimeHandles(session.id);
+    this.#dropRuntimeHandles(session);
     this.#noteSession(session, reason);
   }
 
@@ -522,6 +564,12 @@ export class MeetingSessionRuntime<
     }
 
     const session = this.options.createSession({ request, resolved, createdAt: nowIso() });
+    // Bind only newly created sessions. A different room can fail while this one
+    // is still unpublished, and a reused meeting keeps its original requester.
+    const requester = this.options.getRequesterSessionKey?.(request);
+    if (requester) {
+      this.#requesterSessionKeys.set(session, requester);
+    }
     let delegatedSpoken: boolean;
     try {
       const result = await this.options.joinTransport({
@@ -546,8 +594,14 @@ export class MeetingSessionRuntime<
         throw new Error(this.options.messages.replacementBrowserLeaveFailed);
       }
     } catch (error) {
-      // Complete rollback now; keep only unfinished cleanup reachable for a later leave.
-      await this.#rollbackFailedJoinSession(session);
+      // Attempt cleanup once; retain unfinished work for an explicit leave retry.
+      try {
+        await this.#leaveSession(session);
+      } catch (cleanupError) {
+        this.options.logger.warn(
+          `${this.options.logScope} replacement cleanup failed: ${this.options.formatError(cleanupError)}`,
+        );
+      }
       if (this.#sessionCleanup.isPending(session.id)) {
         this.#sessionCleanup.retainFailedJoin(session.id);
         this.#sessions.set(session.id, session);
@@ -574,10 +628,6 @@ export class MeetingSessionRuntime<
     sessionId: string,
     options?: { keepBrowserTab?: boolean },
   ): Promise<MeetingSessionLeaveResult<TSession>> {
-    const inFlight = this.#sessionLeaves.get(sessionId);
-    if (inFlight) {
-      return await inFlight;
-    }
     const session = this.#sessions.get(sessionId);
     if (!session) {
       return { found: false };
@@ -587,21 +637,14 @@ export class MeetingSessionRuntime<
       !this.#sessionCleanup.isPending(sessionId) &&
       !this.#sessionCleanup.hasRuntime(sessionId)
     ) {
+      this.#requesterSessionKeys.delete(session);
       return {
         found: true,
         session,
         ...(session.browserLeft === undefined ? {} : { browserLeft: session.browserLeft }),
       };
     }
-    const leave = this.#leaveSession(session, options);
-    this.#sessionLeaves.set(sessionId, leave);
-    try {
-      return await leave;
-    } finally {
-      if (this.#sessionLeaves.get(sessionId) === leave) {
-        this.#sessionLeaves.delete(sessionId);
-      }
-    }
+    return await this.#leaveSession(session, options);
   }
 
   async #leaveSession(
@@ -610,16 +653,11 @@ export class MeetingSessionRuntime<
   ): Promise<MeetingSessionLeaveResult<TSession>> {
     this.#participation?.close(session.id);
     const firstAttempt = this.#sessionCleanup.begin(session.id, session.browserLeft);
+    // Ending fences new live reads; the capture queue drains already admitted reads.
     session.state = "ended";
     session.updatedAt = nowIso();
-    this.#dropRuntimeHandles(session.id);
-    const transcribe = this.options.isTranscribeMode(session.mode);
+    this.#dropRuntimeHandles(session);
     let transcriptStopped = false;
-    if (transcribe) {
-      // Fence new live reads before final capture; the store's capture chain drains
-      // reads already admitted before this terminal boundary.
-      this.#transcriptStore.startFinalizing(session.id);
-    }
     try {
       transcriptStopped = await this.#durableTranscripts.stop(session, {
         allowFallback: firstAttempt,
@@ -635,6 +673,7 @@ export class MeetingSessionRuntime<
       if (cleanup.browserLeft === true && browser?.health) {
         this.options.setBrowserHealth(session, {
           ...browser.health,
+          ...releasedMeetingBrowserHealth,
           inCall: false,
           micMuted: undefined,
           manualAction: undefined,
@@ -644,7 +683,7 @@ export class MeetingSessionRuntime<
         } as THealth);
       }
       if (cleanup.complete) {
-        this.#dropRuntimeHandles(session.id);
+        this.#dropRuntimeHandles(session);
         if (cleanup.unpublished) {
           this.#sessions.delete(session.id);
         }
@@ -658,29 +697,12 @@ export class MeetingSessionRuntime<
       if (transcriptStopped) {
         this.#transcriptStore.retire(session.id);
       }
-      if (transcribe) {
-        this.#transcriptStore.finishFinalizing(session.id);
-      }
     }
   }
 
   #meetingKey(transport: TTransport, url: string): string {
     const meeting = this.options.normalizeMeetingUrlForReuse(url) ?? url;
     return `${transport}:${meeting}`;
-  }
-
-  async #rollbackFailedJoinSession(session: TSession): Promise<void> {
-    await this.#sessionCleanup.rollbackFailedJoin({
-      sessionId: session.id,
-      browserLeft: session.browserLeft,
-      leave: async () => await this.#leaveSession(session),
-      hasBrowserTab: () => Boolean(this.options.getBrowser(session)?.tab),
-      releaseBrowser: async () => await this.options.releaseBrowserTab(session),
-      formatError: (error) => this.options.formatError(error),
-      warn: (message) => this.options.logger.warn(`${this.options.logScope} ${message}`),
-      onBrowserResult: (left) => (session.browserLeft = left),
-      onComplete: () => this.#dropRuntimeHandles(session.id),
-    });
   }
 
   #attachRuntimeHandles(session: TSession, handles: MeetingSessionRuntimeHandles<THealth>): void {
@@ -698,9 +720,10 @@ export class MeetingSessionRuntime<
     }
   }
 
-  #dropRuntimeHandles(sessionId: string): void {
-    this.#sessionSpeakers.delete(sessionId);
-    this.#sessionHealth.delete(sessionId);
+  #dropRuntimeHandles(session: TSession): void {
+    this.#requesterSessionKeys.delete(session);
+    this.#sessionSpeakers.delete(session.id);
+    this.#sessionHealth.delete(session.id);
   }
 
   #isManagedBrowserSession(session: TSession): boolean {

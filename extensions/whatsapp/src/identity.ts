@@ -1,6 +1,6 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
-// Whatsapp plugin module implements identity behavior.
-import { jidToE164, normalizeE164 } from "./text-runtime.js";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { jidToE164 } from "./targets-runtime.js";
 
 const WHATSAPP_LID_RE = /@(lid|hosted\.lid)$/i;
 
@@ -36,27 +36,6 @@ type LegacySelfLike = {
     selfJid?: string | null;
     selfLid?: string | null;
     selfE164?: string | null;
-  };
-};
-
-type LegacyReplyLike = {
-  quote?: {
-    context?: WhatsAppReplyContext;
-    id?: string;
-    body?: string;
-    sender?: {
-      displayName?: string;
-      jid?: string;
-      e164?: string;
-    };
-  };
-};
-
-type LegacyMentionsLike = {
-  group?: {
-    mentions?: {
-      jids?: string[];
-    };
   };
 };
 
@@ -132,7 +111,18 @@ export function getSelfIdentity(msg: LegacySelfLike, authDir?: string): WhatsApp
 }
 
 export function getReplyContext(
-  msg: LegacyReplyLike,
+  msg: {
+    quote?: {
+      context?: WhatsAppReplyContext;
+      id?: string;
+      body?: string;
+      sender?: {
+        displayName?: string;
+        jid?: string;
+        e164?: string;
+      };
+    };
+  },
   authDir?: string,
 ): WhatsAppReplyContext | null {
   if (msg.quote?.context) {
@@ -159,7 +149,13 @@ export function getReplyContext(
 }
 
 export function getMentionIdentities(
-  msg: LegacyMentionsLike,
+  msg: {
+    group?: {
+      mentions?: {
+        jids?: string[];
+      };
+    };
+  },
   authDir?: string,
 ): WhatsAppIdentity[] {
   return (msg.group?.mentions?.jids ?? []).map((jid) =>

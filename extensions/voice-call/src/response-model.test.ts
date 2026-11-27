@@ -1,7 +1,7 @@
 // Voice Call tests cover response model plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 
 const agentRuntime = {
@@ -12,61 +12,62 @@ const agentRuntime = {
 } as unknown as OpenClawPluginApi["runtime"]["agent"];
 
 describe("resolveVoiceResponseModel", () => {
-  it("falls back to the runtime default model", () => {
+  const configuredModel = "anthropic/claude-opus-5-5";
+  type Case = {
+    name: string;
+    cfg: Parameters<typeof resolveVoiceResponseModel>[0]["cfg"];
+    agentId: string;
+    responseModel?: string;
+    expected: ReturnType<typeof resolveVoiceResponseModel>;
+  };
+  it.each<Case>([
+    {
+      name: "keeps legacy single-segment overrides on the runtime default provider",
+      cfg: {},
+      agentId: "main",
+      responseModel: "gpt-5.4-mini",
+      expected: { provider: "together", model: "gpt-5.4-mini" },
+    },
+    {
+      name: "keeps explicit provider/model overrides verbatim",
+      cfg: { agents: { entries: { main: { model: configuredModel } } } },
+      agentId: "main",
+      responseModel: "openai/gpt-5.4-mini",
+      expected: { provider: "openai", model: "gpt-5.4-mini" },
+    },
+    {
+      name: "inherits the call agent's configured model when responseModel is unset",
+      cfg: { agents: { entries: { support: { model: configuredModel } } } },
+      agentId: "support",
+      expected: { provider: "anthropic", model: "claude-opus-5-5" },
+    },
+    {
+      name: "inherits the global configured default when the call agent sets no model",
+      cfg: {
+        agents: { entries: { support: {} }, defaults: { model: { primary: configuredModel } } },
+      },
+      agentId: "support",
+      expected: { provider: "anthropic", model: "claude-opus-5-5" },
+    },
+  ])("$name", ({ cfg, agentId, responseModel, expected }) => {
     expect(
       resolveVoiceResponseModel({
-        voiceConfig: VoiceCallConfigSchema.parse({}),
+        cfg,
+        agentId,
+        voiceConfig: normalizeVoiceCallConfig(responseModel ? { responseModel } : {}),
         agentRuntime,
       }),
-    ).toEqual({
-      modelRef: "together/Qwen/Qwen2.5-7B-Instruct-Turbo",
-      provider: "together",
-      model: "Qwen/Qwen2.5-7B-Instruct-Turbo",
-    });
+    ).toEqual(expected);
   });
 
-  it("uses an explicit provider/model ref", () => {
-    expect(
+  it("refuses to invent a model when nothing is configured", () => {
+    expect(() =>
       resolveVoiceResponseModel({
-        voiceConfig: VoiceCallConfigSchema.parse({
-          responseModel: "openai/gpt-5.4-mini",
-        }),
+        cfg: {},
+        agentId: "main",
+        voiceConfig: normalizeVoiceCallConfig({}),
         agentRuntime,
       }),
-    ).toEqual({
-      modelRef: "openai/gpt-5.4-mini",
-      provider: "openai",
-      model: "gpt-5.4-mini",
-    });
-  });
-
-  it("uses the runtime default provider for bare model overrides", () => {
-    expect(
-      resolveVoiceResponseModel({
-        voiceConfig: VoiceCallConfigSchema.parse({
-          responseModel: "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-        }),
-        agentRuntime,
-      }),
-    ).toEqual({
-      modelRef: "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-      provider: "meta-llama",
-      model: "Llama-4-Scout-17B-16E-Instruct",
-    });
-  });
-
-  it("keeps legacy single-segment overrides on the runtime default provider", () => {
-    expect(
-      resolveVoiceResponseModel({
-        voiceConfig: VoiceCallConfigSchema.parse({
-          responseModel: "gpt-5.4-mini",
-        }),
-        agentRuntime,
-      }),
-    ).toEqual({
-      modelRef: "gpt-5.4-mini",
-      provider: "together",
-      model: "gpt-5.4-mini",
-    });
+    ).toThrow("No model configured for voice responses.");
   });
 });

@@ -2,13 +2,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { afterEach, beforeEach, vi } from "vitest";
-import type { Bootstrap, EvidenceEnvelope, RunnerSelection } from "./ui-types.js";
+import type { Bootstrap, EvidenceEnvelope, RunnerSelection, UiState } from "./ui-types.js";
 
 const httpMock = vi.hoisted(() => {
   class QaLabHttpError extends Error {
     constructor(
       message: string,
-      readonly status: number,
       readonly payload: unknown,
     ) {
       super(message);
@@ -16,7 +15,6 @@ const httpMock = vi.hoisted(() => {
   }
   return {
     getJson: vi.fn(),
-    getJsonNoStore: vi.fn(),
     postJson: vi.fn(),
     QaLabHttpError,
   };
@@ -120,6 +118,9 @@ export async function mountRunner(
 ) {
   let bootstrap = createBootstrap(selection, controlUiUrl);
   httpMock.getJson.mockImplementation(async (url: string) => {
+    if (url === "/api/ui-version") {
+      return { version: "test" };
+    }
     if (url.startsWith("/api/evidence?")) {
       return { evidence };
     }
@@ -149,7 +150,6 @@ export async function mountRunner(
     }
     throw new Error(`unexpected GET ${url}`);
   });
-  httpMock.getJsonNoStore.mockResolvedValue({ version: "test" });
   httpMock.postJson.mockImplementation(async (url: string, body: unknown) => {
     if (url !== "/api/scenario/suite") {
       throw new Error(`unexpected POST ${url}`);
@@ -164,6 +164,27 @@ export async function mountRunner(
   return root;
 }
 
+export async function mountCapture(root: HTMLElement, events: UiState["captureEvents"] = []) {
+  const getJson = httpMock.getJson.getMockImplementation()!;
+  httpMock.getJson.mockImplementation(async (url: string) => {
+    if (url === "/api/capture/sessions") {
+      return {
+        sessions: [{ id: "capture-1", startedAt: 0, mode: "proxy", eventCount: events.length }],
+      };
+    }
+    if (url.startsWith("/api/capture/events?")) {
+      return { events };
+    }
+    if (url.startsWith("/api/capture/coverage?")) {
+      return { coverage: null };
+    }
+    return getJson(url);
+  });
+  await vi.advanceTimersByTimeAsync(1_000);
+  root.querySelector<HTMLButtonElement>('[data-tab="capture"]')!.click();
+  root.querySelector<HTMLButtonElement>("#capture-controls-toggle")!.click();
+}
+
 export function setupAppBrowserTests() {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -175,7 +196,6 @@ export function setupAppBrowserTests() {
     );
     document.head.append(styles);
     httpMock.getJson.mockReset();
-    httpMock.getJsonNoStore.mockReset();
     httpMock.postJson.mockReset();
     const storage = new Map<string, string>();
     vi.stubGlobal("localStorage", {

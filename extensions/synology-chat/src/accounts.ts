@@ -5,16 +5,12 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  SynologyChatChannelConfig,
-  ResolvedSynologyChatAccount,
-  SynologyWebhookPathSource,
-} from "./types.js";
+import type { SynologyChatChannelConfig, ResolvedSynologyChatAccount } from "./types.js";
 
 function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig | undefined {
   return cfg?.channels?.["synology-chat"] as SynologyChatChannelConfig | undefined;
@@ -35,7 +31,7 @@ const { listAccountIds, resolveAccountConfig: resolveMergedSynologyChatAccountCo
 
 export { listAccountIds };
 
-function getRawAccountConfig(
+export function getRawAccountConfig(
   channelCfg: SynologyChatChannelConfig,
   accountId: string,
 ): SynologyChatChannelConfig {
@@ -49,43 +45,11 @@ function hasExplicitWebhookPath(rawAccount: SynologyChatChannelConfig | undefine
   return typeof rawAccount?.webhookPath === "string" && rawAccount.webhookPath.trim().length > 0;
 }
 
-function resolveWebhookPathSource(params: {
-  accountId: string;
-  channelCfg: SynologyChatChannelConfig;
-  rawAccount: SynologyChatChannelConfig;
-}): SynologyWebhookPathSource {
-  if (hasExplicitWebhookPath(params.rawAccount)) {
-    return "explicit";
-  }
-  if (params.accountId !== DEFAULT_ACCOUNT_ID && hasExplicitWebhookPath(params.channelCfg)) {
-    return "inherited-base";
-  }
-  return "default";
-}
-
-function parseAllowedUserIds(raw: string | string[] | undefined): string[] {
-  if (!raw) {
-    return [];
-  }
-  if (Array.isArray(raw)) {
-    return raw.filter(Boolean);
-  }
-  return normalizeStringEntries(raw.split(","));
-}
-
 function normalizeRateLimitPerMinuteValue(raw: unknown): number | undefined {
-  if (typeof raw === "number") {
-    return Number.isSafeInteger(raw) && raw >= 0 ? raw : undefined;
-  }
-  if (typeof raw !== "string") {
+  if (typeof raw === "string" && !/^\d+$/.test(raw.trim())) {
     return undefined;
   }
-  const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = parseStrictInteger(trimmed);
-  return parsed != null && parsed >= 0 ? parsed : undefined;
+  return parseStrictNonNegativeInteger(raw);
 }
 
 export function resolveAccount(
@@ -94,8 +58,7 @@ export function resolveAccount(
 ): ResolvedSynologyChatAccount {
   const channelCfg = getChannelConfig(cfg) ?? {};
   const id = accountId || DEFAULT_ACCOUNT_ID;
-  const accountOverrides =
-    id === DEFAULT_ACCOUNT_ID ? undefined : (channelCfg.accounts?.[id] ?? undefined);
+  const accountOverrides = id === DEFAULT_ACCOUNT_ID ? undefined : channelCfg.accounts?.[id];
   const rawAccount = getRawAccountConfig(channelCfg, id);
   const merged = resolveMergedSynologyChatAccountConfig(cfg, id);
 
@@ -106,11 +69,16 @@ export function resolveAccount(
   const envAllowedUserIds = normalizeOptionalString(process.env.SYNOLOGY_ALLOWED_USER_IDS) ?? "";
   const envRateLimitValue = normalizeRateLimitPerMinuteValue(process.env.SYNOLOGY_RATE_LIMIT) ?? 30;
   const envBotName = normalizeOptionalString(process.env.OPENCLAW_BOT_NAME) ?? "OpenClaw";
-  const webhookPathSource = resolveWebhookPathSource({ accountId: id, channelCfg, rawAccount });
+  const webhookPathSource = hasExplicitWebhookPath(rawAccount)
+    ? "explicit"
+    : id !== DEFAULT_ACCOUNT_ID && hasExplicitWebhookPath(channelCfg)
+      ? "inherited-base"
+      : "default";
   const dangerouslyAllowInheritedWebhookPath =
     rawAccount.dangerouslyAllowInheritedWebhookPath ??
     channelCfg.dangerouslyAllowInheritedWebhookPath ??
     false;
+  const rawAllowedUserIds = merged.allowedUserIds ?? envAllowedUserIds;
 
   // Merge: account override > base channel config > env var
   return {
@@ -133,7 +101,11 @@ export function resolveAccount(
     }),
     dangerouslyAllowInheritedWebhookPath,
     dmPolicy: merged.dmPolicy ?? "allowlist",
-    allowedUserIds: parseAllowedUserIds(merged.allowedUserIds ?? envAllowedUserIds),
+    allowedUserIds: !rawAllowedUserIds
+      ? []
+      : Array.isArray(rawAllowedUserIds)
+        ? rawAllowedUserIds.filter(Boolean)
+        : normalizeStringEntries(rawAllowedUserIds.split(",")),
     rateLimitPerMinute:
       normalizeRateLimitPerMinuteValue(merged.rateLimitPerMinute) ?? envRateLimitValue,
     botName: merged.botName ?? envBotName,

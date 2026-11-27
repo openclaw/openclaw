@@ -298,7 +298,21 @@ for (const pid of fs.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry))
 for (const root of [path.join(os.homedir(), ".config/systemd"), path.join(os.homedir(), ".local/share/systemd"), "/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"]) {
   let entries;
   try {
-    entries = fs.readdirSync(root, { recursive: true, withFileTypes: true });
+    // Runs against historical installed releases, before current SDK helpers exist.
+    // Explicit systemd roots may be aliases; never descend through discovered links.
+    entries = [];
+    const pending = [{ directory: root, depth: 0 }];
+    while (pending.length) {
+      const { directory, depth } = pending.pop();
+      const handle = fs.opendirSync(directory);
+      try {
+        for (let entry = handle.readSync(); entry; entry = handle.readSync()) {
+          if (entries.length >= 100000 || depth >= 64) fail("systemd directory scan limit exceeded");
+          entries.push(entry);
+          if (entry.isDirectory()) pending.push({ directory: path.join(directory, entry.name), depth: depth + 1 });
+        }
+      } finally { handle.closeSync(); }
+    }
   } catch (error) {
     if (error.code === "ENOENT") continue;
     throw error;
@@ -394,6 +408,9 @@ run_update_candidate() {
   local update_stderr_file
   local update_stderr
   update_stderr_file="$(mktemp)"
+  local build_info installed_build_before
+  build_info="$(quiet_npm root -g)/$PACKAGE_NAME/dist/build-info.json"
+  installed_build_before="$(node -p 'require(process.argv[1]).buildId' "$build_info" 2>/dev/null || true)"
   set +e
   UPDATE_JSON="$(
     run_with_heartbeat "openclaw update" \
@@ -422,6 +439,8 @@ run_update_candidate() {
     UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
     UPDATE_EXPECT_OUTCOME="$expected_outcome" \
     UPDATE_TAG_URL="$UPDATE_TAG_URL" \
+    BUILD_INFO="$build_info" \
+    INSTALLED_BUILD_BEFORE="$installed_build_before" \
     node - <<'NODE'
 function parseFirstJsonObject(raw) {
   const start = raw.indexOf("{");
@@ -468,6 +487,32 @@ if (!["applied", "already-current"].includes(expectedOutcome)) {
   throw new Error(`unknown expected update outcome ${expectedOutcome}`);
 }
 const noOp = expectedOutcome === "already-current";
+// Release-aware updaters (src/update) report their update run record instead.
+if (noOp && typeof payload.runId === "string") {
+  if (payload.status !== "skipped" || payload.reason !== "already-current") {
+    throw new Error(
+      `expected skipped already-current update record, got ${JSON.stringify([payload.status, payload.reason, payload.phase])}`,
+    );
+  }
+  if ((payload.before?.version ?? null) !== baselineVersion || payload.target?.version !== expectedVersion) {
+    throw new Error(`unexpected update record versions ${JSON.stringify([payload.before, payload.target])}`);
+  }
+  const recordSteps = Array.isArray(payload.steps) ? payload.steps : [];
+  if (!recordSteps.some((step) => step?.step === "prepare:pack" && step.status === "completed")) {
+    throw new Error("already-current update record did not stage the requested artifact");
+  }
+  if (recordSteps.some((step) => ["validating", "activating"].includes(step?.step))) {
+    throw new Error("already-current update record validated or activated a release");
+  }
+  const fs = require("node:fs");
+  const before = String(process.env.INSTALLED_BUILD_BEFORE || "");
+  const after = JSON.parse(fs.readFileSync(String(process.env.BUILD_INFO || ""), "utf8")).buildId;
+  if (!before || after !== before) {
+    throw new Error(`already-current update changed or omitted installed build identity: ${before} -> ${after}`);
+  }
+  console.log("Verified already-current no-op: artifact staged, installed build unchanged, no activation");
+  process.exit(0);
+}
 const legacySameVersionApply = noOp && allowLegacySameVersionApply && payload.status === "ok";
 const expectedStatus = noOp && !legacySameVersionApply ? "skipped" : "ok";
 if (payload.status !== expectedStatus) {
@@ -505,7 +550,10 @@ if (noOp && !legacySameVersionApply) {
       !payload.before.buildId || payload.after?.buildId !== payload.before.buildId) {
     throw new Error("already-current update changed or omitted installed build identity");
   }
-  if (steps.length !== 1) {
+  const allowedNoOpSteps = new Set(["package-install", "global update", "recovery-artifact-cleanup"]);
+  const cleanupSteps = steps.filter((step) => step?.name === "recovery-artifact-cleanup");
+  if (cleanupSteps.length > 1 || cleanupSteps.some((step) => Number(step.exitCode ?? 1) !== 0) ||
+      steps.some((step) => !allowedNoOpSteps.has(step?.name))) {
     throw new Error("already-current update performed unexpected activation or maintenance steps");
   }
   console.log("Verified already-current no-op: package staged, installed build unchanged, no activation");

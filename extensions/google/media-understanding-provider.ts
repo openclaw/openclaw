@@ -11,14 +11,13 @@ import {
   readProviderJsonResponse,
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
+import type { GoogleGenerateContentResponse } from "./generate-content-response.js";
 import {
   createGoogleMediaUnderstandingProviderMetadata,
   GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS,
 } from "./generation-provider-metadata.js";
-import {
-  normalizeGoogleModelId,
-  resolveGoogleGenerativeAiHttpRequestConfig,
-} from "./runtime-api.js";
+import { resolveGoogleGenerativeAiHttpRequestConfig } from "./http-request.js";
+import { normalizeGoogleModelId } from "./model-id.js";
 
 const DEFAULT_GOOGLE_AUDIO_PROMPT = "Transcribe the audio.";
 const DEFAULT_GOOGLE_VIDEO_PROMPT = "Describe the video.";
@@ -86,13 +85,13 @@ async function generateGeminiInlineDataText(params: {
   });
 
   try {
-    await assertOkOrThrowProviderError(res, params.httpErrorLabel);
+    await assertOkOrThrowProviderError(res, params.httpErrorLabel, { requestHeaders: headers });
 
-    const payload = await readProviderJsonResponse<{
-      candidates?: Array<{
-        content?: { parts?: Array<{ text?: string }> };
-      }>;
-    }>(res, params.httpErrorLabel);
+    const payload = await readProviderJsonResponse<GoogleGenerateContentResponse>(
+      res,
+      params.httpErrorLabel,
+      { requestHeaders: headers },
+    );
     const parts = payload.candidates?.[0]?.content?.parts ?? [];
     const text = parts
       .map((part) => part?.text?.trim())
@@ -110,8 +109,12 @@ async function generateGeminiInlineDataText(params: {
 export async function transcribeGeminiAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
+  const language = params.language?.trim();
   return await generateGeminiInlineDataText({
     ...params,
+    prompt: language
+      ? `${params.prompt?.trim() || DEFAULT_GOOGLE_AUDIO_PROMPT}\nTranscription language: ${language}.`
+      : params.prompt,
     defaultModel: GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS.audio,
     defaultPrompt: DEFAULT_GOOGLE_AUDIO_PROMPT,
     defaultMime: "audio/wav",

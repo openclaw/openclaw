@@ -12,6 +12,5 @@ export type LegacyWorkspaceStateSource = {
 export type LegacyWorkspaceStateDetection = {
   sources: LegacyWorkspaceStateSource[];
   hasLegacy: boolean;
-  historicalWorkspaceDirs?: string[];
   rehearsalInventoryPaths?: string[];
 };

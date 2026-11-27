@@ -1,13 +1,14 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelUnavailableReason
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
 import ai.openclaw.app.ui.chat.ChatModelPickerAction
 import ai.openclaw.app.ui.chat.chatModelPickerAction
-import ai.openclaw.app.ui.chat.chatModelPickerSections
+import ai.openclaw.app.ui.chat.chatModelPickerChoices
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -55,14 +56,14 @@ class ChatControllerModelSelectionTest {
       controller.load("agent:beta:main")
       advanceUntilIdle()
       val favorites = listOf("fixture/published")
-      assertTrue(chatModelPickerSections(controller.modelCatalog.value, favorites, emptyList()).pinned.isEmpty())
+      assertTrue(chatModelPickerChoices(controller.modelCatalog.value, favorites, emptyList()).isEmpty())
       val historyRequests = requests.count { it.first == "chat.history" }
 
       visible = true
       controller.handleGatewayEvent("chat.metadata.changed", "{}")
       advanceUntilIdle()
 
-      val choice = chatModelPickerSections(controller.modelCatalog.value, favorites, emptyList()).pinned.single()
+      val choice = chatModelPickerChoices(controller.modelCatalog.value, favorites, emptyList()).single()
       assertEquals("published", choice.id)
       assertEquals(ChatModelPickerAction.Select, chatModelPickerAction(choice))
       assertEquals(historyRequests, requests.count { it.first == "chat.history" })
@@ -2292,7 +2293,7 @@ class ChatControllerModelSelectionTest {
         listOf(
           CancellationException("caller cancelled"),
           GatewayRequestOutcomeUnknown("request timeout"),
-          GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "metadata unavailable")),
+          GatewayRequestRejected(ErrorShape("UNAVAILABLE", "metadata unavailable")),
         )
       for (failure in failures) {
         var nextFailure: Throwable? = null

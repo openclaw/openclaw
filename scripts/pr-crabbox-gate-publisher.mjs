@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,7 +14,6 @@ import {
   validateCrabboxGatePlan,
   validateForwardAncestry,
 } from "./pr-lib/crabbox-gate-contract.mjs";
-import { resolveCrabboxGatePlan } from "./pr-lib/crabbox-gate-plan.mts";
 import { buildCrabboxGateTransport, executeCrabbox } from "./pr-lib/crabbox-gate-transport.mts";
 
 export { appendCrabboxOutputTail } from "./pr-lib/crabbox-gate-transport.mts";
@@ -208,9 +207,6 @@ function validateCrabboxConfig(value, coordinator) {
 }
 
 function parseCrabboxTiming(result, expectedLabel) {
-  if (result.exitCode !== 0) {
-    throw new Error(`Crabbox AWS command failed with exit code ${result.exitCode}`);
-  }
   const timing = result.stderr
     .trimEnd()
     .split("\n")
@@ -226,19 +222,46 @@ function parseCrabboxTiming(result, expectedLabel) {
   const report = record(timing, "Crabbox timing report");
   if (
     report.provider !== "aws" ||
-    report.runStatus !== "succeeded" ||
-    report.exitCode !== 0 ||
-    report.leaseStopped !== true ||
     report.label !== expectedLabel ||
     !RUN_ID_PATTERN.test(report.runId) ||
     !LEASE_ID_PATTERN.test(report.leaseId)
   ) {
-    throw new Error("Crabbox timing report is not a successful released AWS proof");
+    throw new Error("Crabbox timing report does not identify the requested AWS proof");
   }
-  return {
-    leaseId: report.leaseId,
-    runId: report.runId,
-  };
+  return report;
+}
+
+function validateCleanupProof(value, context, principal) {
+  const lease = record(record(value, "Crabbox lease response").lease, "Crabbox lease");
+  if (
+    lease.id !== context.leaseId ||
+    lease.owner !== principal.owner ||
+    lease.org !== principal.org ||
+    lease.provider !== "aws" ||
+    lease.state !== "released" ||
+    lease.cleanupStatus !== "complete" ||
+    typeof lease.cleanupCompletedAt !== "string" ||
+    !Number.isFinite(Date.parse(lease.cleanupCompletedAt)) ||
+    lease.host !== "" ||
+    lease.tailscale ||
+    lease.sshHostKey ||
+    lease.providerAccessExpiresAt ||
+    lease.cleanupStartedAt ||
+    lease.cleanupClaimExpiresAt ||
+    lease.cleanupFailedAt ||
+    lease.cleanupAttempts ||
+    lease.cleanupError ||
+    lease.cleanupRetryAt ||
+    lease.providerKeyCleanupPending ||
+    lease.providerKeyCleanupID ||
+    lease.provisioningRequestStartedAt ||
+    lease.provisioningPhase ||
+    lease.provisioningResourceMayExist ||
+    lease.provisioningFailureRetryable ||
+    lease.releaseDeletesServer === false
+  ) {
+    throw new Error("Crabbox exact-lease cleanup is not confirmed");
+  }
 }
 
 function sanitizedCrabboxEnvironment(env, home) {
@@ -302,7 +325,7 @@ export function validateBrokerProof({ bootstrap, context, events, log, now, prin
     proof.provider !== "aws" ||
     proof.target !== "linux" ||
     proof.state !== "succeeded" ||
-    proof.phase !== "released" ||
+    (proof.phase !== "released" && proof.phase !== "cleanup") ||
     proof.exitCode !== 0 ||
     proof.logTruncated !== false ||
     !leaseIds.has(context.leaseId)
@@ -359,6 +382,13 @@ export function validateBrokerProof({ bootstrap, context, events, log, now, prin
     if (eventType === "command.finished" && event.exitCode !== 0) {
       throw new Error("Crabbox command event did not finish successfully");
     }
+    if (
+      eventType === "lease.released" &&
+      ((event.leaseID !== undefined && event.leaseID !== context.leaseId) ||
+        (event.phase !== "released" && event.phase !== "cleanup"))
+    ) {
+      throw new Error("Crabbox terminal lease event identity or phase does not match");
+    }
   }
   const requiredOrder = [
     "run.started",
@@ -398,7 +428,8 @@ export function validateBrokerProof({ bootstrap, context, events, log, now, prin
   }
 }
 
-function resolvePlanInDetachedWorktree(context) {
+async function resolvePlanInDetachedWorktree(context) {
+  const { resolveCrabboxGatePlan } = await import("./pr-lib/crabbox-gate-plan.mts");
   const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-gate-plan-"));
   const worktree = path.join(tempRoot, "head");
   try {
@@ -426,10 +457,11 @@ function resolvePlanInDetachedWorktree(context) {
   }
 }
 
-/** @type {(context: Parameters<typeof resolvePlanInDetachedWorktree>[0]) => ReturnType<typeof resolvePlanInDetachedWorktree> | Promise<ReturnType<typeof resolvePlanInDetachedWorktree>>} */
+/** @type {(context: Parameters<typeof resolvePlanInDetachedWorktree>[0]) => Awaited<ReturnType<typeof resolvePlanInDetachedWorktree>> | ReturnType<typeof resolvePlanInDetachedWorktree>} */
 const defaultResolvePlan = resolvePlanInDetachedWorktree;
 
 export async function runPublisher({
+  phase,
   broker,
   clock = Date.now,
   event,
@@ -439,7 +471,18 @@ export async function runPublisher({
   resolvePlan = defaultResolvePlan,
   runCrabbox = executeCrabbox,
 }) {
+  if (phase !== "proof" && phase !== "publish") {
+    throw new Error("Crabbox gate publisher requires --proof or --publish");
+  }
   const context = validatePublisherRequest(event, env);
+  const outputPath = phase === "proof" ? requiredEnv(env, "GITHUB_OUTPUT") : "";
+  if (phase === "publish") {
+    context.runId = requiredEnv(env, "CRABBOX_PROOF_RUN_ID");
+    context.leaseId = requiredEnv(env, "CRABBOX_PROOF_LEASE_ID");
+    if (!RUN_ID_PATTERN.test(context.runId) || !LEASE_ID_PATTERN.test(context.leaseId)) {
+      throw new Error("Crabbox proof step outputs must be exact run and lease IDs");
+    }
+  }
   const bootstrap = readFileSync(BOOTSTRAP_PATH, "utf8");
   const localBootstrapHash = createHash("sha256").update(bootstrap).digest("hex");
   validateActiveAdminMembership(
@@ -467,57 +510,109 @@ export async function runPublisher({
     throw new Error("Crabbox gate plan does not bind the requested base and head");
   }
   const principal = validateServicePrincipal(await broker.request("/v1/whoami"));
-  const crabboxBin = requiredEnv(env, "CRABBOX_BIN");
-  const crabboxHome = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-publisher-"));
-  try {
-    const crabboxEnv = sanitizedCrabboxEnvironment(env, crabboxHome);
-    const configResult = await runCrabbox({
-      args: ["config", "show", "--provider", "aws", "--json"],
-      bin: crabboxBin,
-      env: crabboxEnv,
-    });
-    if (configResult.exitCode !== 0) {
-      throw new Error(`Crabbox config resolution failed with exit code ${configResult.exitCode}`);
-    }
-    validateCrabboxConfig(JSON.parse(configResult.stdout), requiredEnv(env, "CRABBOX_COORDINATOR"));
-    const transport = buildCrabboxGateTransport({
+  async function verifyWorkload() {
+    const runResponse = record(
+      await broker.request(`/v1/runs/${context.runId}`),
+      "Crabbox run response",
+    );
+    const eventsResponse = record(
+      await broker.request(`/v1/runs/${context.runId}/events?limit=500`),
+      "Crabbox events response",
+    );
+    validateBrokerProof({
       bootstrap,
-      command: buildCrabboxGateCommand(context.plan, localBootstrapHash),
-      headSha: context.headSha,
+      context,
+      events: eventsResponse.events,
+      log: await broker.request(`/v1/runs/${context.runId}/logs`, { text: true }),
+      now: clock(),
+      principal,
+      run: runResponse.run,
     });
-    const { args, label } = buildCrabboxRunArgs(context, transport);
-    const timing = parseCrabboxTiming(
-      await runCrabbox({
+  }
+  async function verifyCleanup() {
+    validateCleanupProof(await broker.request(`/v1/leases/${context.leaseId}`), context, principal);
+  }
+  if (phase === "proof") {
+    const crabboxBin = requiredEnv(env, "CRABBOX_BIN");
+    const crabboxHome = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-publisher-"));
+    let runAttempted = false;
+    let cleanupConfirmed = false;
+    try {
+      const crabboxEnv = sanitizedCrabboxEnvironment(env, crabboxHome);
+      const configResult = await runCrabbox({
+        args: ["config", "show", "--provider", "aws", "--json"],
+        bin: crabboxBin,
+        env: crabboxEnv,
+      });
+      if (configResult.exitCode !== 0) {
+        throw new Error(`Crabbox config resolution failed with exit code ${configResult.exitCode}`);
+      }
+      validateCrabboxConfig(
+        JSON.parse(configResult.stdout),
+        requiredEnv(env, "CRABBOX_COORDINATOR"),
+      );
+      const transport = buildCrabboxGateTransport({
+        bootstrap,
+        command: buildCrabboxGateCommand(context.plan, localBootstrapHash),
+        headSha: context.headSha,
+      });
+      const { args, label } = buildCrabboxRunArgs(context, transport);
+      runAttempted = true;
+      const result = await runCrabbox({
         args,
         bin: crabboxBin,
         env: crabboxEnv,
         input: transport.input,
         stream: true,
-      }),
-      label,
-    );
-    context.runId = timing.runId;
-    context.leaseId = timing.leaseId;
-  } finally {
-    rmSync(crabboxHome, { force: true, recursive: true });
+      });
+      const timing = parseCrabboxTiming(result, label);
+      context.runId = timing.runId;
+      context.leaseId = timing.leaseId;
+      if (result.exitCode !== 0 || timing.runStatus !== "succeeded" || timing.exitCode !== 0) {
+        throw new Error(`Crabbox AWS command failed with exit code ${result.exitCode}`);
+      }
+      await verifyWorkload();
+      // Run history is immutable; its successful workload can outlive pending cleanup.
+      const stopped = await runCrabbox({
+        args: ["stop", "--provider", "aws", "--id", context.leaseId, "--wait"],
+        bin: crabboxBin,
+        env: crabboxEnv,
+      });
+      if (
+        stopped.exitCode !== 0 ||
+        !stopped.stderr
+          .split("\n")
+          .some((line) => line.startsWith(`released lease=${context.leaseId} server=`))
+      ) {
+        throw new Error(
+          `Crabbox blocking stop did not confirm cleanup (exit code ${stopped.exitCode})`,
+        );
+      }
+      await verifyCleanup();
+      cleanupConfirmed = true;
+    } catch (error) {
+      if (runAttempted && !cleanupConfirmed) {
+        const identity = context.leaseId
+          ? `run=${context.runId} lease=${context.leaseId}; with HOME set to ${crabboxHome} and the same coordinator credentials, retry crabbox stop --provider aws --id ${context.leaseId} --wait`
+          : "inspect the retained Crabbox home to recover the run and lease IDs before retrying stop";
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${message}; recovery home retained at ${crabboxHome}; ${identity}`, {
+          cause: error,
+        });
+      }
+      throw error;
+    } finally {
+      if (!runAttempted || cleanupConfirmed) {
+        rmSync(crabboxHome, { force: true, recursive: true });
+      }
+    }
+    // App tokens expire after one hour. Hand off only joined, verified proof;
+    // the next workflow step mints fresh membership authority before publication.
+    appendFileSync(outputPath, `run_id=${context.runId}\nlease_id=${context.leaseId}\n`);
+    return { checkId: null, context };
   }
-  const runResponse = record(
-    await broker.request(`/v1/runs/${context.runId}`),
-    "Crabbox run response",
-  );
-  const eventsResponse = record(
-    await broker.request(`/v1/runs/${context.runId}/events?limit=500`),
-    "Crabbox events response",
-  );
-  validateBrokerProof({
-    bootstrap,
-    context,
-    events: eventsResponse.events,
-    log: await broker.request(`/v1/runs/${context.runId}/logs`, { text: true }),
-    now: clock(),
-    principal,
-    run: runResponse.run,
-  });
+  await verifyWorkload();
+  await verifyCleanup();
   validatePullRequest(
     await github.request("GET", `/repos/${REPOSITORY}/pulls/${context.prNumber}`),
     context,
@@ -626,7 +721,7 @@ export function createGitHubApi({ token, fetchImpl = fetch }) {
   };
 }
 
-async function main() {
+async function main(phase) {
   const event = JSON.parse(readFileSync(requiredEnv(process.env, "GITHUB_EVENT_PATH"), "utf8"));
   const brokerUrl = requiredEnv(process.env, "CRABBOX_COORDINATOR");
   const broker = createJsonApi({
@@ -639,7 +734,17 @@ async function main() {
   const organization = createGitHubApi({
     token: requiredEnv(process.env, "GH_APP_TOKEN"),
   });
-  const result = await runPublisher({ broker, env: process.env, event, github, organization });
+  const result = await runPublisher({
+    phase,
+    broker,
+    env: process.env,
+    event,
+    github,
+    organization,
+  });
+  if (phase === "proof") {
+    return;
+  }
   console.log(`published_check_id=${result.checkId}`);
   console.log(`published_head_sha=${result.context.headSha}`);
 }
@@ -652,8 +757,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       );
       const bootstrapSha256 = requiredString(process.argv[4], "bootstrap SHA-256");
       console.log(buildCrabboxGateCommand(plan, bootstrapSha256));
+    } else if (process.argv.length === 3 && ["--proof", "--publish"].includes(process.argv[2])) {
+      await main(process.argv[2].slice(2));
     } else {
-      await main();
+      throw new Error("Crabbox gate publisher requires --proof or --publish");
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

@@ -1,31 +1,27 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import * as commandExec from "../../process/exec.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
-import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
-import { resolveRepository } from "./service-preparation.js";
+import { git } from "./git-fixture.test-support.js";
+import { updateRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
+import { resolveRepository } from "./repository-paths.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 
-const execFileAsync = promisify(execFile);
-const git = async (cwd: string, ...args: string[]) =>
-  (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 const dirs = useStateDatabaseTempDirs();
 const initialize = useManagedWorktreeTestRepository();
 
 // Included in the native Windows CI inventory; also exercises the POSIX path
 // locally. No simulated platform or filesystem mode stands in for Windows.
-it.each(
-  [false, true].flatMap((missing) =>
-    [false, true].map((keepGitLink) => ({ missing, keepGitLink })),
-  ),
-)(
+it.each([
+  { missing: false, keepGitLink: false },
+  { missing: true, keepGitLink: true },
+])(
   "recovers an ordinary native Git executable, missing=$missing, keepGitLink=$keepGitLink",
   async ({ missing, keepGitLink }) => {
     const root = await fs.realpath(dirs.make("openclaw-recovery-executable-"));
@@ -46,7 +42,7 @@ it.each(
       now: Date.now(),
     });
     const repository = await resolveRepository(repo);
-    updateRegistryWorktree(env, record.id, {
+    await updateRegistryWorktree(env, record.id, {
       repositoryIdentity: { repoRoot: repo, repoFingerprint: repository.fingerprint },
     });
     const script = path.join(record.path, "tool.sh");

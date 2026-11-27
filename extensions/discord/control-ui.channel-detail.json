@@ -1,0 +1,5 @@
+{
+  "pluginId": "discord",
+  "titleKey": "channels.discord.title",
+  "subtitleKey": "channels.discord.subtitle"
+}

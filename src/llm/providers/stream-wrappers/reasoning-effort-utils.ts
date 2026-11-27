@@ -1,4 +1,3 @@
-// Reasoning effort utilities map provider thinking controls to runtime levels.
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 
 /** Reasoning effort values accepted by OpenAI-compatible providers. */

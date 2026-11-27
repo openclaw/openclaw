@@ -1,5 +1,6 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 
 /** Automatic intent bound to the complete request before creation resolves aliases. */
 export type AgentRuntimeSpawnModelAutoSelection = {
@@ -9,15 +10,22 @@ export type AgentRuntimeSpawnModelAutoSelection = {
 };
 
 export type AgentRuntimeSessionSpawnContext = {
-  /** Host-verified human requester; inherited ownership still requires a matching parent owner. */
+  /** Host-verified human requester for new work; never taken from public tool arguments. */
   requesterProfileId?: string;
+  /** Attribution only; never used to grant operator authority or ownership. */
+  gitContributorProfileId?: string;
+  /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
+  requesterSenderIsOwner?: boolean;
   completionOwnerSessionKey?: string;
+  /** Host-owned sessions_create intent, independent of spawn admission lineage. */
+  createdIndependently?: true;
   resolvedModel?: ProviderModelRef;
   inheritedPermissionMode?: SessionPermissionMode;
   inheritedToolPolicy: {
     version: 1;
     allow: string[];
     deny: string[];
+    delegatedToolPolicy?: SessionEntry["delegatedToolPolicy"];
   };
   spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
 };

@@ -6,36 +6,32 @@ import {
 import { normalizeSessionRowChatType, normalizeText } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeStatus } from "./session-accessor.sqlite-status.js";
-import {
-  projectCanonicalSessionEntryShape,
-  stripRuntimeOnlySessionSkillsFields,
-} from "./store-entry-shape.js";
+import type { SessionEntryNumericSnapshot } from "./session-entry-numeric-snapshot.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
+import { resolveSessionWindowCreatedAt } from "./session-window-created-at.js";
 import type { SessionEntry } from "./types.js";
 
-export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
-  const hasLegacyDeliveryFields = [
-    "route",
-    "deliveryContext",
-    "origin",
-    "channel",
-    "lastChannel",
-    "lastTo",
-    "lastAccountId",
-    "lastThreadId",
-  ].some((key) => key in entry);
-  const delivery =
-    entry.delivery ?? (hasLegacyDeliveryFields ? undefined : { kind: "none" as const });
-  if (typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)) {
-    if (entry.delivery === delivery) {
-      return entry;
-    }
-    return delivery ? { ...entry, delivery } : entry;
-  }
-  const updatedAt =
-    typeof entry.sessionStartedAt === "number" && Number.isFinite(entry.sessionStartedAt)
-      ? entry.sessionStartedAt
-      : Date.now();
-  return delivery ? { ...entry, delivery, updatedAt } : { ...entry, updatedAt };
+/** Doctor carries only numeric fields it converted; unrelated indexed facts stay untouched. */
+export function bindSessionEntryNumericChanges(changes: SessionEntryNumericSnapshot) {
+  return {
+    node: {
+      ...(changes.createdAt !== undefined ? { created_at: changes.createdAt } : {}),
+      ...(changes.pinnedAt !== undefined ? { pinned_at: changes.pinnedAt } : {}),
+      ...(changes.archivedAt !== undefined ? { archived_at: changes.archivedAt } : {}),
+      ...(changes.lastReadAt !== undefined ? { last_read_at: changes.lastReadAt } : {}),
+      ...(changes.lastInteractionAt !== undefined
+        ? { last_interaction_at: changes.lastInteractionAt }
+        : {}),
+      ...(changes.lastActivityAt !== undefined ? { last_activity_at: changes.lastActivityAt } : {}),
+    },
+    window:
+      changes.startedAt !== undefined || changes.endedAt !== undefined
+        ? {
+            ...(changes.startedAt !== undefined ? { started_at: changes.startedAt } : {}),
+            ...(changes.endedAt !== undefined ? { ended_at: changes.endedAt } : {}),
+          }
+        : undefined,
+  };
 }
 
 export function bindSessionRoot(params: {
@@ -50,7 +46,7 @@ export function bindSessionRoot(params: {
     session_id: params.entry.sessionId,
     session_key: params.sessionKey,
     reason: null,
-    created_at: resolveSqliteSessionCreatedAt(params.entry, updatedAt),
+    created_at: resolveSessionWindowCreatedAt(params.entry, updatedAt),
     updated_at: updatedAt,
     ...bindSessionEntryProvenance(params.entry),
     ...bindSessionWindowEntryProjection(params),
@@ -69,8 +65,8 @@ export function bindSessionWindowEntryProjection(params: {
     ended_at: finiteSqliteNumber(params.entry.endedAt),
     status: normalizeStatus(params.entry.status),
     chat_type: normalizeSessionRowChatType(params.entry.chatType),
-    channel: resolveSqliteSessionChannel(params.entry),
-    account_id: resolveSqliteSessionAccountId(params.entry),
+    channel: normalizeText(sessionDeliveryChannel(params.entry)),
+    account_id: normalizeText(deliveryContextFromSession(params.entry)?.accountId),
     model_provider: normalizeText(params.entry.modelProvider),
     model: normalizeText(params.entry.model),
     agent_harness_id: normalizeText(params.entry.agentHarnessId),
@@ -80,18 +76,19 @@ export function bindSessionWindowEntryProjection(params: {
   };
 }
 
-/** Project the canonical entry blob into the logical-node query columns. */
+/** Project canonical hot facts into the logical-node query columns. */
 export function bindSessionNode(params: {
   entry: SessionEntry;
+  entryJson: string;
   sessionKey: string;
   updatedAt: number;
 }) {
-  const canonicalEntry = projectCanonicalSessionEntryShape({ ...params.entry });
   const actor = params.entry.createdActor;
   return {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
-    entry_json: JSON.stringify(stripRuntimeOnlySessionSkillsFields(canonicalEntry)),
+    entry_json: params.entryJson,
+    ...deriveSessionPredicateColumns(params.entryJson),
     entry_valid: 1,
     updated_at: params.updatedAt,
     status: normalizeStatus(params.entry.status),
@@ -109,7 +106,7 @@ export function bindSessionNode(params: {
     label: normalizeText(params.entry.label),
     display_name: normalizeText(params.entry.displayName),
     category: normalizeText(params.entry.category),
-    icon: normalizeText(canonicalEntry.icon),
+    icon: normalizeText(params.entry.icon),
     pinned_at: finiteSqliteNumber(params.entry.pinnedAt),
     archived_at: finiteSqliteNumber(params.entry.archivedAt),
     last_read_at: finiteSqliteNumber(params.entry.lastReadAt),
@@ -150,25 +147,8 @@ function resolveSqliteSessionScope(
   return "conversation";
 }
 
-function resolveSqliteSessionCreatedAt(entry: SessionEntry, updatedAt: number): number {
-  for (const candidate of [entry.sessionStartedAt, entry.startedAt, entry.updatedAt, updatedAt]) {
-    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0) {
-      return candidate;
-    }
-  }
-  return updatedAt;
-}
-
 function finiteSqliteNumber(value: unknown): number | null {
   return asFiniteNumber(value) ?? null;
-}
-
-function resolveSqliteSessionChannel(entry: SessionEntry): string | null {
-  return normalizeText(sessionDeliveryChannel(entry));
-}
-
-function resolveSqliteSessionAccountId(entry: SessionEntry): string | null {
-  return normalizeText(deliveryContextFromSession(entry)?.accountId);
 }
 
 function resolveSqliteSessionDisplayName(entry: SessionEntry): string | null {

@@ -8,7 +8,6 @@ import { hasAnthropicVertexAvailableAuth, resolveAnthropicVertexConfigApiKey } f
 const PROVIDER_ID = "anthropic-vertex";
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 
-/** Anthropic Vertex provider discovery descriptor. */
 export const anthropicVertexProviderDiscovery = {
   id: PROVIDER_ID,
   label: "Anthropic Vertex",

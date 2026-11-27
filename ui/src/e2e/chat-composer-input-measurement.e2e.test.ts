@@ -8,6 +8,7 @@ import {
 declare global {
   interface Window {
     composerTranscriptLayoutReads: number;
+    composerTranscriptFirstLayoutRead: string | undefined;
   }
 }
 
@@ -15,7 +16,7 @@ const suite = createChatFlowE2eSuite();
 suite.define(() => {
   it("does not move ordinary native typing measurements into a later transcript frame", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         historyMessages: Array.from({ length: 50 }, (_, index) => ({
           role: index % 2 === 0 ? "user" : "assistant",
           content: `Typing performance history ${index}\n${"Transcript line\n".repeat(4)}`,
@@ -24,6 +25,9 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("Typing performance history 49", { exact: false }).waitFor();
+      // Initial roster publication also renders the pane; exclude that background
+      // startup work from the subsequent native-keystroke measurements.
+      await gateway.waitForRequest("sessions.list", { match: { spawnedBy: "agent:main:main" } });
       const textarea = page.locator(".agent-chat__composer-combobox textarea");
       await textarea.fill("Typing ");
       await waitForChatScrollIdle(page);
@@ -41,10 +45,14 @@ suite.define(() => {
         }
         const read = descriptor.get.bind(element);
         window.composerTranscriptLayoutReads = 0;
+        window.composerTranscriptFirstLayoutRead = undefined;
         Object.defineProperty(element, "scrollHeight", {
           configurable: true,
           get() {
             window.composerTranscriptLayoutReads += 1;
+            window.composerTranscriptFirstLayoutRead ??=
+              new Error(`Transcript scrollHeight read (fonts: ${document.fonts.status})`).stack ??
+              "Call stack unavailable";
             return read();
           },
         });
@@ -59,7 +67,11 @@ suite.define(() => {
         );
       }
       expect(await textarea.inputValue()).toBe("Typing abcdefghij");
-      expect(await page.evaluate(() => window.composerTranscriptLayoutReads)).toBe(0);
+      const probe = await page.evaluate(() => ({
+        reads: window.composerTranscriptLayoutReads,
+        firstRead: window.composerTranscriptFirstLayoutRead,
+      }));
+      expect(probe.reads, probe.firstRead).toBe(0);
     });
   });
 });

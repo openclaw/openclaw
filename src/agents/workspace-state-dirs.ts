@@ -80,7 +80,7 @@ export async function listWorkspaceStateDirs(params: {
   const { resolveSandboxRuntimeStatusesForPersistedSessions } =
     await import("./sandbox/runtime-status.js");
   // Empty requests retain agent/shared workspace order without reading their stores.
-  const runtimeGroups = resolveSandboxRuntimeStatusesForPersistedSessions(
+  const runtimeGroups = await resolveSandboxRuntimeStatusesForPersistedSessions(
     agentWorkspaces.map(({ agentId, sessionKeys }) => ({
       cfg: params.cfg,
       env: params.env,
@@ -93,25 +93,17 @@ export async function listWorkspaceStateDirs(params: {
       dirs.add(workspaceRoot);
       continue;
     }
-    if (sandbox.scope === "agent") {
+    const sessionKeys =
+      sandbox.scope === "agent"
+        ? [`agent:${agentId}:main`]
+        : expectDefined(runtimeGroups[index], "sandbox runtime group")
+            .filter((runtime) => runtime.sandboxed)
+            .map((runtime) => runtime.sessionKey);
+    for (const sessionKey of sessionKeys) {
       const layout = resolveSandboxWorkspaceLayoutPaths({
         cfg: { ...sandbox, workspaceRoot },
         agentId,
-        rawSessionKey: `agent:${agentId}:main`,
-        workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId, params.env),
-      });
-      dirs.add(layout.sandboxWorkspaceDir);
-      continue;
-    }
-
-    for (const runtime of expectDefined(runtimeGroups[index], "sandbox runtime group")) {
-      if (!runtime.sandboxed) {
-        continue;
-      }
-      const layout = resolveSandboxWorkspaceLayoutPaths({
-        cfg: { ...sandbox, workspaceRoot },
-        agentId,
-        rawSessionKey: runtime.sessionKey,
+        rawSessionKey: sessionKey,
         workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId, params.env),
       });
       dirs.add(layout.sandboxWorkspaceDir);
@@ -126,6 +118,7 @@ export async function assertConfiguredWorkspaceStateReady(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   operation?: "doctor";
+  blockedByStepId?: string;
 }): Promise<void> {
   const env = params.env ?? process.env;
   const homedir = os.homedir;
@@ -141,5 +134,22 @@ export async function assertConfiguredWorkspaceStateReady(params: {
       await readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true });
     }
   }
-  assertWorkspaceStateMigrationReady({ ...params, workspaceDirs, env, homedir });
+  // Sandbox code can write its copy (and, with shared scope, the whole sandbox
+  // root), so files there must not refuse every agent. Genuine legacy copies
+  // also carry a state-dir attestation, which keeps them Gateway-wide. Copy
+  // preparation refuses a file present at its first check in this process; the
+  // per-turn check caches clean results per process, so a later write waits for
+  // the next process start (an in-process restart keeps the cache).
+  const configuredDirs = new Set(listAgentWorkspaceDirs(params.cfg, env));
+  const sandboxWritableDirs =
+    params.operation === "doctor"
+      ? undefined
+      : new Set(workspaceDirs.filter((dir) => !configuredDirs.has(dir)));
+  assertWorkspaceStateMigrationReady({
+    ...params,
+    workspaceDirs,
+    sandboxWritableDirs,
+    env,
+    homedir,
+  });
 }

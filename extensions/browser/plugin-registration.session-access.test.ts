@@ -1,8 +1,5 @@
 import type { PluginControlUiDescriptor } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -18,8 +15,6 @@ it("declares a session-writer dashboard while preserving the global admin method
         id: "browser",
         runtime: createPluginRuntimeMock({
           state: {
-            openSyncKeyedStore: (options) =>
-              createPluginStateSyncKeyedStoreForTests("browser", options),
             openKeyedStore: (options) => createPluginStateKeyedStoreForTests("browser", options),
           },
         }),

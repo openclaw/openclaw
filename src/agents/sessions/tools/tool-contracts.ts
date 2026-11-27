@@ -1,8 +1,3 @@
-/**
- * Shared built-in session tool input/detail contracts.
- *
- * Keeps tool factories, renderers, and callers aligned on typed payload and metadata shapes.
- */
 import type { Static } from "typebox";
 import type {
   bashSchema,
@@ -19,8 +14,6 @@ import type {
   WriteToolOutputSchema,
 } from "./tool-schemas.js";
 import type { TruncationResult } from "./truncate.js";
-
-export { ReadToolContinuationSchema } from "./tool-schemas.js";
 
 export type BashToolInput = Static<typeof bashSchema>;
 

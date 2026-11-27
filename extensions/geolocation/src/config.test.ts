@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { expandDatabaseUrls, resolveGeolocationSettings } from "./config.js";
+import { resolveGeolocationSettings } from "./config.js";
 
 describe("geolocation settings", () => {
   it("defaults to the DB-IP source and its required credit", () => {
@@ -33,22 +33,5 @@ describe("geolocation settings", () => {
     expect(settings.databaseUrl).toContain("dbip-city-lite");
     expect(settings.attribution.text).toBe("IP Geolocation by DB-IP");
     expect(settings.refreshMs).toBe(30 * 24 * 60 * 60 * 1000);
-  });
-
-  it("offers this month and the previous month, because a build lands mid-month", () => {
-    const urls = expandDatabaseUrls(
-      "https://host.test/db-{yyyy}-{mm}.mmdb.gz",
-      new Date("2026-01-03T00:00:00Z"),
-    );
-    expect(urls).toEqual([
-      "https://host.test/db-2026-01.mmdb.gz",
-      "https://host.test/db-2025-12.mmdb.gz",
-    ]);
-  });
-
-  it("does not repeat a URL when the template ignores the month", () => {
-    expect(
-      expandDatabaseUrls("https://host.test/db.mmdb", new Date("2026-01-03T00:00:00Z")),
-    ).toEqual(["https://host.test/db.mmdb"]);
   });
 });

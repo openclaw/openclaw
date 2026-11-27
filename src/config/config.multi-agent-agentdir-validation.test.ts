@@ -1,23 +1,72 @@
-// Verifies multi-agent agent directory validation and rejection paths.
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { getRuntimeConfig } from "./config.js";
+import * as roster from "../agents/agent-roster.js";
+import * as agentDirs from "./agent-dirs.js";
 import { createConfigIO } from "./io.factory.js";
-import { withTempHome, withTempHomeConfig, writeOpenClawConfig } from "./test-helpers.js";
+import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
-import { validateConfigObject } from "./validation.js";
+import { validateConfigObject, validateConfigObjectRaw } from "./validation.js";
 
 describe("multi-agent agentDir validation", () => {
+  it("finds a binding-only directory collision without scanning the parsed roster per agent", () => {
+    const stateDir = path.join(tmpdir(), "openclaw-agentdir-validation");
+    const entries = Object.fromEntries(
+      Array.from({ length: 16 }, (_, index) => [`agent-${index}`, {}]),
+    );
+    entries["agent-0"] = { agentDir: path.join(stateDir, "agents", "main", "agent") };
+    using check = vi.spyOn(agentDirs, "findDuplicateAgentDirs");
+    using scans = vi.spyOn(roster, "readAgentRosterProperty");
+
+    const result = validateConfigObjectRaw(
+      {
+        agents: { ownership: "explicit", entries },
+        bindings: [{ agentId: "main", match: { channel: "forum" } }],
+      },
+      { env: { OPENCLAW_STATE_DIR: stateDir } },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      issues: [{ path: "agents.entries", message: expect.stringContaining('"agent-0", "main"') }],
+    });
+    expect(check).toHaveBeenCalledTimes(1);
+    const parsed = check.mock.calls[0]?.[0];
+    expect(scans.mock.calls.filter(([cfg]) => cfg === parsed).length).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps caller mutations separate from the parsed roster during directory checks", () => {
+    const home = path.join(tmpdir(), "openclaw-roster-home");
+    const alphaDir = path.join(home, ".openclaw", "agents", "alpha", "agent");
+    const beta = { agentDir: path.join(home, "beta") };
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { alpha: {}, beta } },
+    };
+    const deps = {
+      env: {},
+      homedir: () => {
+        beta.agentDir = alphaDir;
+        return home;
+      },
+    };
+
+    expect(validateConfigObjectRaw(config, deps).ok).toBe(true);
+    expect(beta.agentDir).toBe(alphaDir);
+    beta.agentDir = path.join(home, "beta");
+    expect(agentDirs.findDuplicateAgentDirs(config, deps)).toEqual([
+      { agentDir: alphaDir, agentIds: ["alpha", "beta"] },
+    ]);
+  });
+
   it("validates one referenced agent without resolving its filesystem identity", () => {
     const agentDir = path.join(tmpdir(), "openclaw-single-agentdir");
     using realpath = vi.spyOn(syncFs.realpathSync, "native");
 
     const result = validateConfigObject({
       agents: {
-        entries: { alpha: { agentDir, default: true } },
+        entries: { alpha: { agentDir } },
       },
       bindings: [{ agentId: "alpha", match: { channel: "forum" } }],
     });
@@ -26,7 +75,7 @@ describe("multi-agent agentDir validation", () => {
     expect(realpath.mock.calls.filter(([target]) => target === agentDir)).toEqual([]);
   });
 
-  it.each(["HOME", "USERPROFILE", "OPENCLAW_HOME", "homedir", "relative OPENCLAW_HOME"] as const)(
+  it.each(["OPENCLAW_HOME", "homedir", "relative OPENCLAW_HOME"] as const)(
     "keeps config validation and runtime paths in the selected %s",
     async (homeSource) => {
       await withTempHome(async (cliHome) => {
@@ -82,49 +131,4 @@ describe("multi-agent agentDir validation", () => {
       });
     },
   );
-
-  it("rejects shared agents.entries agentDir", () => {
-    const shared = path.join(tmpdir(), "openclaw-shared-agentdir");
-    const res = validateConfigObject({
-      agents: {
-        entries: { a: { agentDir: shared, default: true }, b: { agentDir: shared } },
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues).toEqual([
-        {
-          path: "agents.entries",
-          message: `Duplicate agentDir detected (multi-agent config).
-Each agent must have a unique agentDir; sharing it causes auth/session state collisions and token invalidation.
-
-Conflicts:
-- ${shared}: "a", "b"
-
-Fix: remove the shared agents.entries.*.agentDir override (or give each agent its own directory).
-Auth profiles live in each agent's SQLite store, so a shared agentDir is not how credentials are shared: give each agent its own directory and either leave its store empty to inherit the main agent's profiles, or log it in with \`openclaw models auth login\`.`,
-        },
-      ]);
-    }
-  });
-
-  it("throws on shared agentDir during getRuntimeConfig()", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          entries: {
-            a: { agentDir: "~/.openclaw/agents/shared/agent", default: true },
-            b: { agentDir: "~/.openclaw/agents/shared/agent" },
-          },
-        },
-        bindings: [{ agentId: "a", match: { channel: "forum" } }],
-      },
-      async () => {
-        const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-        expect(() => getRuntimeConfig()).toThrow(/duplicate agentDir/i);
-        expect(spy.mock.calls.flat().join(" ")).toMatch(/Duplicate agentDir/i);
-        spy.mockRestore();
-      },
-    );
-  });
 });

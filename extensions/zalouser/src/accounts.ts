@@ -24,19 +24,12 @@ const {
 export { listZalouserAccountIds, resolveDefaultZalouserAccountId };
 
 function resolveProfile(config: ZalouserAccountConfig, accountId: string): string {
-  if (config.profile?.trim()) {
-    return config.profile.trim();
-  }
-  if (process.env.ZALOUSER_PROFILE?.trim()) {
-    return process.env.ZALOUSER_PROFILE.trim();
-  }
-  if (process.env.ZCA_PROFILE?.trim()) {
-    return process.env.ZCA_PROFILE.trim();
-  }
-  if (accountId !== DEFAULT_ACCOUNT_ID) {
-    return accountId;
-  }
-  return "default";
+  return (
+    config.profile?.trim() ||
+    process.env.ZALOUSER_PROFILE?.trim() ||
+    process.env.ZCA_PROFILE?.trim() ||
+    (accountId !== DEFAULT_ACCOUNT_ID ? accountId : "default")
+  );
 }
 
 export function resolveZalouserAccountSync(params: {

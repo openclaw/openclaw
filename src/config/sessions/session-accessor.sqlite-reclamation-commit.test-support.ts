@@ -11,7 +11,7 @@ type CommitFixture = {
   gate: SharedArrayBuffer;
   progress: SharedArrayBuffer;
   holdAfterApproval?: boolean;
-  outcome?: "rollback" | "exit-before-commit" | "exit-after-commit";
+  outcome?: "rollback" | "exit-before-commit";
 };
 
 const port = parentPort;
@@ -22,7 +22,7 @@ const fixture = workerData as CommitFixture;
 const progress = new Int32Array(fixture.progress);
 await once(port, "message");
 const admitted = once(port, "message");
-port.postMessage({ type: "admission-request", operationId: 1, admissionId: 1 });
+port.postMessage({ type: "admission-request", operationId: 1 });
 await admitted;
 const database = openNodeSqliteDatabase(fixture.databasePath);
 database.exec("BEGIN IMMEDIATE; UPDATE proof SET value = 2");
@@ -41,9 +41,6 @@ try {
     throw new Error("injected worker transaction failure");
   }
   database.exec("COMMIT");
-  if (fixture.outcome === "exit-after-commit") {
-    process.exit(9);
-  }
 } catch {
   if (database.isTransaction) {
     database.exec("ROLLBACK");

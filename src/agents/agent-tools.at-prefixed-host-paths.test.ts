@@ -10,76 +10,56 @@ import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-t
 import { createContainerWorkspaceSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function withWorkspace(run: (workspaceDir: string) => Promise<void>): Promise<void> {
-  await run(tempDirs.make("openclaw-at-host-"));
+async function workspace() {
+  const root = tempDirs.make("openclaw-at-host-");
+  const file = (name: string) => path.join(root, name);
+  const writeFile = (name: string, text: string) => fs.writeFile(file(name), text, "utf8");
+  const expectFile = (name: string, text: string) =>
+    expect(fs.readFile(file(name), "utf8")).resolves.toBe(text);
+  await fs.mkdir(file("@notes"));
+  await fs.mkdir(file("notes"));
+  return { root, file, writeFile, expectFile };
 }
 
 describe("leading-@ host and mounted sandbox paths", () => {
   it.each([false, true])(
-    "preserves literal files, new descendants, and file-reference shorthand with workspaceOnly=%s",
+    "reads, writes and edits literal @ paths (workspaceOnly=%s)",
     async (workspaceOnly) => {
-      await withWorkspace(async (workspaceDir) => {
-        const literalPath = path.join(workspaceDir, "@existing.md");
-        const siblingPath = path.join(workspaceDir, "existing.md");
-        const literalParent = path.join(workspaceDir, "@notes");
-        const siblingParent = path.join(workspaceDir, "notes");
-        await fs.mkdir(literalParent);
-        await fs.mkdir(siblingParent);
-        await fs.writeFile(literalPath, "literal original", "utf8");
-        await fs.writeFile(siblingPath, "sibling original", "utf8");
-        await fs.writeFile(path.join(siblingParent, "new.md"), "sibling child", "utf8");
-        await fs.writeFile(path.join(workspaceDir, "reference.md"), "reference", "utf8");
-        const { readTool, writeTool, editTool } = expectReadWriteEditTools(
-          createOpenClawCodingTools({
-            workspaceDir,
-            config: { tools: { fs: { workspaceOnly } } },
-          }),
-        );
+      const { root: workspaceDir, writeFile, expectFile } = await workspace();
+      await writeFile("@existing.md", "literal original");
+      await writeFile("existing.md", "sibling original");
+      await writeFile("notes/new.md", "sibling child");
+      await writeFile("reference.md", "reference");
+      const { readTool, writeTool, editTool } = expectReadWriteEditTools(
+        createOpenClawCodingTools({
+          workspaceDir,
+          config: { tools: { fs: { workspaceOnly } } },
+        }),
+      );
+      let callId = 0;
+      const read = async (filePath: string, text: string) =>
+        expect(
+          getTextContent(await readTool.execute(`read-${++callId}`, { path: filePath })),
+        ).toContain(text);
+      const write = (filePath: string, content: string) =>
+        writeTool.execute(`write-${++callId}`, { path: filePath, content });
+      const edit = (filePath: string, oldText: string, newText: string) =>
+        editTool.execute(`edit-${++callId}`, { path: filePath, edits: [{ oldText, newText }] });
 
-        expect(
-          getTextContent(await readTool.execute("at-existing-read", { path: "@existing.md" })),
-        ).toContain("literal original");
-        expect(
-          getTextContent(await readTool.execute("at-reference-read", { path: "@reference.md" })),
-        ).toContain("reference");
-        await writeTool.execute("at-existing-write", {
-          path: "@existing.md",
-          content: "literal updated",
-        });
-        await editTool.execute("at-existing-edit", {
-          path: "@existing.md",
-          edits: [{ oldText: "updated", newText: "edited" }],
-        });
-        await writeTool.execute("at-parent-write", {
-          path: "@notes/nested/../new.md",
-          content: "literal child",
-        });
-
-        await expect(fs.readFile(literalPath, "utf8")).resolves.toBe("literal edited");
-        await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("sibling original");
-        await expect(fs.readFile(path.join(literalParent, "new.md"), "utf8")).resolves.toBe(
-          "literal child",
-        );
-        await expect(fs.readFile(path.join(siblingParent, "new.md"), "utf8")).resolves.toBe(
-          "sibling child",
-        );
-        expect(
-          getTextContent(
-            await readTool.execute("at-reference-literal-read", { path: "@@existing.md" }),
-          ),
-        ).toContain("literal edited");
-        await writeTool.execute("at-reference-literal-write", {
-          path: "@@existing.md",
-          content: "referenced original",
-        });
-        await editTool.execute("at-reference-literal-edit", {
-          path: "@@existing.md",
-          edits: [{ oldText: "original", newText: "edited" }],
-        });
-        await expect(fs.readFile(literalPath, "utf8")).resolves.toBe("referenced edited");
-        await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("sibling original");
-      });
+      await read("@existing.md", "literal original");
+      await read("@reference.md", "reference");
+      await write("@existing.md", "literal updated");
+      await edit("@existing.md", "updated", "edited");
+      await write("@notes/nested/../new.md", "literal child");
+      await expectFile("@existing.md", "literal edited");
+      await expectFile("existing.md", "sibling original");
+      await expectFile("@notes/new.md", "literal child");
+      await expectFile("notes/new.md", "sibling child");
+      await read("@@existing.md", "literal edited");
+      await write("@@existing.md", "referenced original");
+      await edit("@@existing.md", "original", "edited");
+      await expectFile("@existing.md", "referenced edited");
+      await expectFile("existing.md", "sibling original");
     },
   );
 
@@ -88,95 +68,41 @@ describe("leading-@ host and mounted sandbox paths", () => {
     { name: "unconfined host", workspaceOnly: false, mounted: false },
     { name: "mounted sandbox", workspaceOnly: true, mounted: true },
   ])("adds, updates, and deletes literal paths through the $name owner", async (runtime) => {
-    await withWorkspace(async (workspaceDir) => {
-      const literalParent = path.join(workspaceDir, "@notes");
-      const siblingParent = path.join(workspaceDir, "notes");
-      await fs.mkdir(literalParent);
-      await fs.mkdir(siblingParent);
-      await fs.writeFile(path.join(siblingParent, "new.md"), "sibling before\n", "utf8");
-      const patchTool = createApplyPatchTool({
-        cwd: workspaceDir,
-        workspaceOnly: runtime.workspaceOnly,
-        ...(runtime.mounted
-          ? {
-              sandbox: {
-                root: workspaceDir,
-                bridge: createContainerWorkspaceSandboxFsBridge(workspaceDir),
-                workspaceMounts: [{ containerRoot: "/workspace", hostRoot: workspaceDir }],
-              },
-            }
-          : {}),
-      });
-      const runPatch = (callId: string, lines: string[]) =>
-        patchTool.execute(callId, { input: lines.join("\n") });
-
-      await runPatch("at-patch-add", [
-        "*** Begin Patch",
-        "*** Add File: @notes/new.md",
-        "+literal before",
-        "*** End Patch",
-      ]);
-      await expect(fs.readFile(path.join(literalParent, "new.md"), "utf8")).resolves.toBe(
-        "literal before\n",
-      );
-
-      await runPatch("at-patch-update", [
-        "*** Begin Patch",
-        "*** Update File: @notes/new.md",
-        "@@",
-        "-literal before",
-        "+literal after",
-        "*** End Patch",
-      ]);
-      await expect(fs.readFile(path.join(literalParent, "new.md"), "utf8")).resolves.toBe(
-        "literal after\n",
-      );
-
-      await runPatch("at-patch-delete", [
-        "*** Begin Patch",
-        "*** Delete File: @notes/new.md",
-        "*** End Patch",
-      ]);
-      await expect(fs.stat(path.join(literalParent, "new.md"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      await expect(fs.readFile(path.join(siblingParent, "new.md"), "utf8")).resolves.toBe(
-        "sibling before\n",
-      );
+    const { root: workspaceDir, file, writeFile, expectFile } = await workspace();
+    await writeFile("notes/new.md", "sibling before\n");
+    const patchTool = createApplyPatchTool({
+      cwd: workspaceDir,
+      workspaceOnly: runtime.workspaceOnly,
+      ...(runtime.mounted
+        ? {
+            sandbox: {
+              root: workspaceDir,
+              bridge: createContainerWorkspaceSandboxFsBridge(workspaceDir),
+              workspaceMounts: [{ containerRoot: "/workspace", hostRoot: workspaceDir }],
+            },
+          }
+        : {}),
     });
-  });
-
-  it.each([
-    { sibling: false, label: "without an unprefixed sibling" },
-    { sibling: true, label: "with an unprefixed sibling" },
-  ])("keeps literal replacement paths stable $label", async ({ sibling }) => {
-    await withWorkspace(async (workspaceDir) => {
-      await fs.writeFile(path.join(workspaceDir, "@replace.md"), "old literal\n", "utf8");
-      if (sibling) {
-        await fs.writeFile(path.join(workspaceDir, "replace.md"), "sibling\n", "utf8");
-      }
-      await createApplyPatchTool({ cwd: workspaceDir }).execute("at-patch-replace", {
-        input: [
-          "*** Begin Patch",
-          "*** Delete File: @replace.md",
-          "*** Add File: @replace.md",
-          "+new literal",
-          "*** End Patch",
-        ].join("\n"),
+    const runPatch = (callId: string, lines: string[]) =>
+      patchTool.execute(callId, {
+        input: ["*** Begin Patch", ...lines, "*** End Patch"].join("\n"),
       });
 
-      await expect(fs.readFile(path.join(workspaceDir, "@replace.md"), "utf8")).resolves.toBe(
-        "new literal\n",
-      );
-      if (sibling) {
-        await expect(fs.readFile(path.join(workspaceDir, "replace.md"), "utf8")).resolves.toBe(
-          "sibling\n",
-        );
-      } else {
-        await expect(fs.stat(path.join(workspaceDir, "replace.md"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      }
+    await runPatch("at-patch-add", ["*** Add File: @notes/new.md", "+literal before"]);
+    await expectFile("@notes/new.md", "literal before\n");
+
+    await runPatch("at-patch-update", [
+      "*** Update File: @notes/new.md",
+      "@@",
+      "-literal before",
+      "+literal after",
+    ]);
+    await expectFile("@notes/new.md", "literal after\n");
+
+    await runPatch("at-patch-delete", ["*** Delete File: @notes/new.md"]);
+    await expect(fs.stat(file("@notes/new.md"))).rejects.toMatchObject({
+      code: "ENOENT",
     });
+    await expectFile("notes/new.md", "sibling before\n");
   });
 });

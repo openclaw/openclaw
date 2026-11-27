@@ -1,4 +1,3 @@
-// Detects ACP commands that should bypass normal agent dispatch.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasControlCommand } from "../command-detection.js";
 import { isCommandEnabled } from "../commands-registry-list.js";
@@ -27,17 +26,8 @@ export function shouldBypassAcpDispatchForCommand(
     return allowTextCommands;
   }
 
-  if (!candidate.startsWith("!")) {
+  if (!candidate.startsWith("!") || !ctx.CommandAuthorized || !isCommandEnabled(cfg, "bash")) {
     return false;
   }
-
-  if (!ctx.CommandAuthorized) {
-    return false;
-  }
-
-  if (!isCommandEnabled(cfg, "bash")) {
-    return false;
-  }
-
   return allowTextCommands;
 }

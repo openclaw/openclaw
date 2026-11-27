@@ -1,0 +1,155 @@
+import { createHash, type Hash } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
+import {
+  createRootFileOpenBatchSync,
+  type RootFileOpenBatchSync,
+} from "@openclaw/fs-safe/advanced";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
+import { drainPluginGenerationSteps } from "./plugin-generation-steps.js";
+import { hashPluginSourceFile } from "./plugin-source-file.js";
+import type { PluginCapturedSourceFact as PluginSourceContent } from "./plugin-source-verification.js";
+
+type PluginGenerationReceipt = { signature: string; sourceDigest: string };
+type PluginReceiptFile = {
+  target: string;
+  boundary: string;
+  sizeBytes: number;
+  native: boolean;
+  onContent: (fact: PluginSourceContent) => void;
+  onSource?: (source: string) => void;
+  content?: PluginSourceContent;
+};
+
+/** Reuse the initial raw-byte receipt only when its complete ordered inputs still match. */
+export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt) {
+  const events: Array<string | PluginReceiptFile> = [];
+  let finished: PluginGenerationReceipt | undefined;
+  const publishContent = (file: PluginReceiptFile, content: PluginSourceContent) => {
+    if (content.sizeBytes !== file.sizeBytes) {
+      throw new Error(
+        "Plugin source changed while preparing its reload; retry after the edit finishes.",
+      );
+    }
+    if (!file.content) {
+      file.content = content;
+      file.onContent(content);
+    }
+  };
+  const readContent = (
+    file: PluginReceiptFile,
+    receipt?: Hash,
+    expected = file.content,
+    openFile?: RootFileOpenBatchSync["openFile"],
+  ) => {
+    const decoder = file.onSource ? new StringDecoder("utf8") : undefined;
+    let source = "";
+    const content = hashPluginSourceFile(
+      file.target,
+      file.boundary,
+      receipt,
+      file.native ? file.content : undefined,
+      openFile,
+      decoder
+        ? (chunk) => {
+            source += decoder.write(chunk);
+          }
+        : undefined,
+    );
+    if (!file.native && expected && content.contentHash !== expected.contentHash) {
+      throw new Error(
+        "Plugin source changed while preparing its reload; retry after the edit finishes.",
+      );
+    }
+    const metrics = getPluginGenerationMetrics();
+    if (metrics) {
+      metrics.receiptFileReads++;
+      metrics.receiptReadBytes += content.sizeBytes;
+    }
+    publishContent(file, content);
+    if (decoder) {
+      file.onSource!(source + decoder.end());
+    }
+  };
+  const inputSignature = () => {
+    if (events.some((event) => typeof event !== "string" && !event.content)) {
+      return undefined;
+    }
+    const signature = createHash("sha256");
+    for (const event of events) {
+      signature.update(
+        JSON.stringify(
+          typeof event === "string"
+            ? ["marker", event]
+            : ["file", event.sizeBytes, event.content!.contentHash],
+        ),
+      );
+    }
+    return signature.digest("hex");
+  };
+  return {
+    marker(framed: string): void {
+      if (!finished) {
+        events.push(framed);
+      }
+    },
+    file(
+      params: Omit<PluginReceiptFile, "content"> & { prepared?: PluginSourceContent },
+      openFile?: RootFileOpenBatchSync["openFile"],
+    ): void {
+      const { prepared: content, ...input } = params;
+      const file: PluginReceiptFile = input;
+      if (content) {
+        if (finished && !file.native) {
+          readContent(file, undefined, content, openFile);
+        } else {
+          publishContent(file, content);
+        }
+      } else if (!file.native || finished) {
+        readContent(file, undefined, undefined, openFile);
+      }
+      if (!finished) {
+        events.push(file);
+      }
+    },
+    finish(): PluginGenerationReceipt {
+      return drainPluginGenerationSteps(this.finishSteps());
+    },
+    *finishSteps(): Generator<void, PluginGenerationReceipt, void> {
+      if (finished) {
+        return finished;
+      }
+      const metrics = getPluginGenerationMetrics();
+      if (metrics) {
+        metrics.receiptPasses++;
+      }
+      const signature = inputSignature();
+      const receipt =
+        signature !== undefined && prepared?.signature === signature
+          ? undefined
+          : createHash("sha256");
+      for (let offset = 0; offset < events.length; offset += 32) {
+        {
+          using opened = createRootFileOpenBatchSync();
+          const openFile = opened.openFile.bind(opened);
+          for (const event of events.slice(offset, offset + 32)) {
+            if (typeof event === "string") {
+              receipt?.update(event);
+            } else if (receipt || !event.content || !event.native) {
+              // Copied facts supply bytes, not pathname admission. Recheck ordinary
+              // destinations even on a receipt hit; misses also replay native raw bytes.
+              readContent(event, receipt, event.content, openFile);
+            }
+          }
+        }
+        // Release pinned roots before the asynchronous host yields to foreground work.
+        yield;
+      }
+      finished = {
+        signature: signature ?? inputSignature()!,
+        sourceDigest: receipt ? receipt.digest("hex") : prepared!.sourceDigest,
+      };
+      events.length = 0;
+      return finished;
+    },
+  };
+}

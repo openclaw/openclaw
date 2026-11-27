@@ -5,7 +5,6 @@ import type {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import {
   auditNativeToolName,
   auditNativeToolTerminalStatus,
@@ -21,15 +20,14 @@ import {
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
-import { isCodexNotificationForTurn } from "./notification-correlation.js";
-import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import {
   isJsonObject,
-  type CodexServerNotification,
+  type CodexPreparedServerNotification,
   type CodexThreadItem,
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexNativeToolLifecycleContext = Pick<
   EmbeddedRunAttemptParams,
@@ -64,11 +62,11 @@ function isMcpToolCallItemNotification(method: string, params: JsonObject): bool
 export class CodexNativeToolLifecycleProjector {
   private readonly terminalPresentationClearedItemIds = new Set<string>();
   private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
-  private readonly startedAtByItem = new Map<string, number>();
   private readonly activeItems = new Map<
     string,
     {
       toolName: string;
+      startedAt: number;
       unfinishedStatus: CodexNativeToolUnfinishedStatus;
       mcpToolCall?: CodexThreadItem;
       commandProcessId?: string | null;
@@ -121,8 +119,6 @@ export class CodexNativeToolLifecycleProjector {
     this.terminalPresentationClearedItemIds.add(item.id);
     this.context.onToolOutcome?.({
       toolName: itemName(item) ?? item.type,
-      argsHash: "",
-      resultHash: "",
       ...(toolCallOrdinal !== undefined ? { toolCallOrdinal } : {}),
       terminalPresentation: undefined,
       presentationOnly: true,
@@ -153,8 +149,7 @@ export class CodexNativeToolLifecycleProjector {
     if (
       !candidate ||
       candidate.status !== "inProgress" ||
-      typeof candidate.server !== "string" ||
-      !candidate.server.trim() ||
+      !serverName.trim() ||
       typeof candidate.tool !== "string" ||
       !candidate.tool.trim() ||
       candidate.arguments === undefined ||
@@ -165,15 +160,15 @@ export class CodexNativeToolLifecycleProjector {
     }
     return {
       id: candidate.id,
-      server: candidate.server,
+      server: serverName,
       tool: candidate.tool,
       arguments: candidate.arguments,
     };
   }
 
-  recordMcpToolCallReceipt(notification: CodexServerNotification): void {
+  recordMcpToolCallReceipt(notification: CodexPreparedServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || !isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
+    if (!params || notification.threadId !== this.threadId || notification.turnId !== this.turnId) {
       return;
     }
     // The route's receipt hook precedes its FIFO projection queue. Refuse stale
@@ -182,15 +177,15 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications += 1;
     } else if (
       notification.method === "turn/completed" &&
-      readCodexTurnCompletedNotification(params)?.turn.id === this.turnId
+      notification.completedTurn?.id === this.turnId
     ) {
       this.turnCompleted = true;
     }
   }
 
-  handleNotification(notification: CodexServerNotification): void {
+  handleNotification(notification: CodexPreparedServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || !isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
+    if (!params || notification.threadId !== this.threadId || notification.turnId !== this.turnId) {
       return;
     }
     if (
@@ -200,7 +195,7 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications -= 1;
     }
     if (notification.method === "turn/completed") {
-      const turn = readCodexTurnCompletedNotification(params)?.turn;
+      const turn = notification.completedTurn;
       if (!turn || turn.id !== this.turnId) {
         return;
       }
@@ -352,10 +347,9 @@ export class CodexNativeToolLifecycleProjector {
     const approvalFailureDisposition = this.approvalFailureDispositionByItem.get(toolCallId);
     this.approvalFailureDispositionByItem.delete(toolCallId);
     this.completedItemIds.add(toolCallId);
+    const startedAt = this.activeItems.get(toolCallId)?.startedAt;
     this.activeItems.delete(toolCallId);
     this.webSearchCompletionByItem.delete(toolCallId);
-    const startedAt = this.startedAtByItem.get(toolCallId);
-    this.startedAtByItem.delete(toolCallId);
     const endedAt = options.sourceTimestampMs ?? Date.now();
     const durationMs =
       options.itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, endedAt - startedAt));
@@ -496,8 +490,13 @@ export class CodexNativeToolLifecycleProjector {
     if (this.activeItems.has(toolCallId)) {
       return;
     }
-    this.startedAtByItem.set(toolCallId, sourceTimestampMs ?? Date.now());
-    this.activeItems.set(toolCallId, { toolName, unfinishedStatus, mcpToolCall, commandProcessId });
+    this.activeItems.set(toolCallId, {
+      toolName,
+      startedAt: sourceTimestampMs ?? Date.now(),
+      unfinishedStatus,
+      mcpToolCall,
+      commandProcessId,
+    });
     emitTrustedDiagnosticEvent({
       type: "tool.execution.started",
       ...this.buildBase(toolCallId, toolName),

@@ -6,7 +6,7 @@ import re
 import subprocess
 import tempfile
 
-from ci_git_owner import run_git, GitFailure, FetchTimeout, check_cancelled
+from ci_git_owner import run_git, GitFailure, FetchTimeout, check_cancelled, lifetime_fds
 
 workspace = os.getcwd()
 base_branch = os.environ["BASE_BRANCH"]
@@ -14,6 +14,7 @@ head_branch = os.environ["HEAD_BRANCH"]
 base_ref = f"refs/remotes/origin/{base_branch}"
 generated_paths = [p for p in os.environ["GENERATED_PATHS"].split("\n") if p]
 invalidation_paths = [p for p in os.environ["INVALIDATION_PATHS"].split("\n") if p]
+publish_mode = os.environ["PUBLISH_MODE"]
 push_log = Path(os.environ["RUNNER_TEMP"]) / "generated-pr-push.log"
 auth_key = "http.https://github.com/.extraheader"
 lease_rejection = r"stale info|non-fast-forward|fetch first"
@@ -67,6 +68,7 @@ def gh(function, *arguments, capture=False, tolerate_failure=False):
          (f'if {function} "$@"; then exit 0; else exit $?; fi'
           if function == "read_auto_merge_record_for_head" else f'{function} "$@"'), function, *arguments],
         stdout=subprocess.PIPE if capture else None,
+        pass_fds=lifetime_fds(os.environ),
     )
     check_cancelled()
     if result.returncode and not tolerate_failure:
@@ -85,13 +87,49 @@ def read_remote_head():
     return output.splitlines()[0].split()[0] if output.splitlines() else ""
 
 
+def verify_repository_auto_merge():
+    if gh("read_repository_auto_merge", capture=True) != "true":
+        fail("Repository auto-merge must be enabled before generated locale publication.")
+
+
+def fetch_generated_head(expected_head):
+    generated_ref = f"refs/remotes/origin/{head_branch}"
+    git("fetch", "--no-tags", "--depth=2", "origin",
+        f"+refs/heads/{head_branch}:{generated_ref}", timeout=120)
+    observed_head = git("rev-parse", generated_ref, capture=True).rstrip("\n")
+    if observed_head != expected_head:
+        fail("Generated branch moved before stale source reconciliation.")
+    return generated_ref
+
+
 def fetch_base():
     git("fetch", "--no-tags", "origin", f"+refs/heads/{base_branch}:{base_ref}", timeout=120)
 
 
-def entry_at(commit, path):
-    entry = git("ls-tree", commit, "--", path, capture=True).split("\t", 1)[0].rstrip("\n")
-    return entry or "__missing__"
+def entries_at(commit, paths):
+    entries, batch, size = {}, [], 0
+
+    def read():
+        if batch:
+            # Keep ancestor tree entries for directory/file replacements. NUL
+            # records preserve filenames; git() exposes them only after settlement.
+            output = git("ls-tree", "-t", "-z", "--full-tree", commit, "--", *batch, capture=True)
+            for record in output.split("\0")[:-1]:
+                metadata, path = record.split("\t", 1)
+                entries[path] = metadata
+
+    for path in paths:
+        path_size = len(os.fsencode(path)) + 1
+        # Bound argv growth on macOS too; an individually oversized path still
+        # reaches Git under the same command/error authority as a single read.
+        if batch and size + path_size > 65536:
+            read()
+            batch.clear()
+            size = 0
+        batch.append(path)
+        size += path_size
+    read()
+    return entries
 
 
 def find_owned_path_overlap():
@@ -99,20 +137,23 @@ def find_owned_path_overlap():
     for tree in (desired_commit, base_ref):
         candidates.update(git("diff", "--name-only", "-z", "--no-renames", source_commit,
                               tree, "--", *generated_paths, capture=True).split("\0")[:-1])
-    for path in sorted(candidates, key=os.fsencode):
-        source_entry = entry_at(source_commit, path)
-        desired_entry = entry_at(desired_commit, path)
-        base_entry = entry_at(base_ref, path)
+    candidates = sorted(candidates, key=os.fsencode)
+    source_entries = entries_at(source_commit, candidates)
+    desired_entries = entries_at(desired_commit, candidates)
+    base_entries = entries_at(base_ref, candidates)
+    for path in candidates:
+        source_entry = source_entries.get(path)
+        desired_entry = desired_entries.get(path)
+        base_entry = base_entries.get(path)
         if source_entry != base_entry and desired_entry != base_entry:
             return path
     return ""
 
 
 def desired_matches_tree(treeish):
-    for path in changed_paths:
-        if entry_at(desired_commit, path) != entry_at(treeish, path):
-            return False
-    return True
+    desired_entries = entries_at(desired_commit, changed_paths)
+    actual_entries = entries_at(treeish, changed_paths)
+    return all(desired_entries.get(path) == actual_entries.get(path) for path in changed_paths)
 
 
 def stale_reason():
@@ -189,10 +230,14 @@ def report_push_failure():
         print("::error::Generated branch moved concurrently; refusing to overwrite the newer head.", flush=True)
 
 
-def preserve_stale_pr():
+def preserve_stale_pr(expected_pr_url="", expected_pr_head=""):
     stale_pr_url, stale_pr_head = find_open_pr()
     if not stale_pr_url:
         return
+    if expected_pr_url and (
+        stale_pr_url != expected_pr_url or stale_pr_head != expected_pr_head
+    ):
+        fail("Generated pull request moved before stale auto-merge reconciliation.")
     if read_remote_head() != stale_pr_head:
         fail("Generated branch moved before stale auto-merge reconciliation.")
     record = gh("read_auto_merge_record_for_head", stale_pr_head, stale_pr_url, capture=True)
@@ -207,6 +252,26 @@ def preserve_stale_pr():
         fail("Generated branch moved during stale auto-merge reconciliation; rerun the publisher.")
     summary(f"Preserved stale generated pull request with auto-merge disabled: {stale_pr_url}. "
             "A fresh generator run will update it and restore the configured auto-merge policy.")
+
+
+def reconcile_stale_pr():
+    stale_pr_url, stale_pr_head = find_open_pr()
+    if not stale_pr_url:
+        return
+    if not re.fullmatch(r"[0-9a-f]{40}", stale_pr_head):
+        fail("Generated pull request returned an invalid head commit.")
+    if read_remote_head() != stale_pr_head:
+        fail("Generated branch moved before stale source reconciliation.")
+    generated_ref = fetch_generated_head(stale_pr_head)
+    commit = git("rev-list", "--parents", "-n", "1", generated_ref, capture=True).split()
+    if len(commit) != 2:
+        fail("Generated pull request head must have exactly one source parent.")
+    source_parent = commit[1]
+    if not invalidation_paths or git_test(
+        "diff", "--quiet", source_parent, source_commit, "--", *invalidation_paths
+    ):
+        return
+    preserve_stale_pr(stale_pr_url, stale_pr_head)
 
 
 def finish_nonpublication(reason):
@@ -232,8 +297,9 @@ def prepare_branch():
         print(f"::notice::Stale generated output detected because {overlap} changed on {base_branch}.", flush=True)
         return reason
     git("switch", "-C", head_branch, base_ref)
+    desired_entries = entries_at(desired_commit, changed_paths)
     for path in changed_paths:
-        if entry_at(desired_commit, path) == "__missing__":
+        if path not in desired_entries:
             git("rm", "-f", "--ignore-unmatch", "--", path)
         else:
             git("restore", f"--source={desired_commit}", "--staged", "--worktree", "--", path)
@@ -252,7 +318,7 @@ def verify_publication(published_commit):
                 summary(f"Generated pull request: {final_pr_url}")
                 return final_pr_url
             print("::notice::Generated pull request head has not converged yet; rechecking.", flush=True)
-        subprocess.run(["sleep", str(attempt)], check=True)
+        subprocess.run(["sleep", str(attempt)], check=True, pass_fds=lifetime_fds(os.environ))
         check_cancelled()
     fetch_base()
     if desired_matches_tree(base_ref):
@@ -284,7 +350,7 @@ def enable_auto_merge(published_commit, published_pr_url):
     if method:
         fail(f"Generated pull request already uses incompatible {method} auto-merge.")
     gh("merge_pr", published_pr_url, published_commit)
-    summary(f"Enabled squash auto-merge for exact generated head: {published_pr_url}")
+    summary(f"Requested squash merge for exact generated head: {published_pr_url}")
 
 
 def publish():
@@ -352,20 +418,28 @@ def cleanup_git_auth():
         pass  # Preserve ordinary missing/unset tolerance, never lifecycle failure.
 
 
-if not generated_paths:
+if publish_mode == "publish" and not generated_paths:
     import sys
     print("Generated PR publication requires at least one generated path.", file=sys.stderr)
     raise SystemExit(1)
+if publish_mode in ("preflight", "reconcile-stale"):
+    verify_repository_auto_merge()
+if publish_mode == "preflight":
+    raise SystemExit(0)
 source_commit = git("rev-parse", "HEAD", capture=True).rstrip("\n")
-git("config", "user.name", "github-actions[bot]")
-git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
-# Branch transport and PR mutations retain their separate least-privilege identities.
+if publish_mode == "publish":
+    git("config", "user.name", "github-actions[bot]")
+    git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
+# Branch transport and PR mutations retain separately scoped credentials.
 git_auth = base64.b64encode(f"x-access-token:{os.environ['CONTENTS_TOKEN']}".encode()).decode()
 print(f"::add-mask::{git_auth}", flush=True)
 git("config", "--local", auth_key, f"AUTHORIZATION: basic {git_auth}")
 del git_auth
 try:
-    publish()
+    if publish_mode == "reconcile-stale":
+        reconcile_stale_pr()
+    else:
+        publish()
 except PublicationFailure as error:
     raise SystemExit(error.code)
 finally:

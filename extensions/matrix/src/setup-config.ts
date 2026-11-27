@@ -1,4 +1,3 @@
-// Matrix helper module supports setup config behavior.
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
@@ -57,13 +56,6 @@ export type MatrixSetupInput = ChannelSetupInput & {
   initialSyncLimit?: number;
 };
 
-function cloneIfObject<T>(value: T): T {
-  if (value && typeof value === "object") {
-    return structuredClone(value);
-  }
-  return value;
-}
-
 function resolveExistingMatrixAccountKey(
   accounts: Record<string, Record<string, unknown>>,
   targetAccountId: string,
@@ -118,7 +110,7 @@ export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): Co
 
   const nextAccount: Record<string, unknown> = { ...accounts[resolvedTargetAccountId] };
   for (const key of keysToMove) {
-    nextAccount[key] = cloneIfObject(base[key]);
+    nextAccount[key] = base[key];
   }
   return patchTopLevelChannelConfigSection({
     cfg,

@@ -1,4 +1,3 @@
-// Safe local-file helpers for plugin runtime media and bridge code.
 import { removePathWithinRoot as removePathWithinRootCore } from "../infra/fs-safe-remove.js";
 import { statRegularFileSync as inspectRegularFileSync } from "../infra/fs-safe.js";
 
@@ -33,7 +32,7 @@ export {
 export { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 export { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 export { writeFileWindowFully } from "../infra/file-descriptor.js";
-export { openRootFile } from "../infra/boundary-file-read.js";
+export { describeRootFileOpenFailure, openRootFile } from "../infra/boundary-file-read.js";
 export {
   ensureDurableDirectory,
   sha256File,
@@ -50,6 +49,38 @@ export const removePathWithinRoot: (params: {
 export { basenameFromMediaSource, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 export { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
 export { getFileWatchCapacityCode } from "../infra/fs-watch-errors.js";
+export type { Root as ObservationRoot } from "@openclaw/fs-safe/root";
+export {
+  watch,
+  type WatchEntry,
+  type WatchHealth,
+  type WatchInvalidation,
+  type WatchOptions,
+  type WatchScope,
+  type WatchSubscription,
+} from "@openclaw/fs-safe/watch";
+export {
+  resolveFsObservationMode,
+  resolveFsObservationIntervalMs,
+} from "../infra/fs-observation-mode.js";
+export { createFileWatchNotifier } from "../infra/file-watch-notifier.js";
+export { admitObservationRoot, observationPrefixKind } from "../infra/fs-observation-root.js";
+export {
+  readObservationSnapshot,
+  ObservationSampleCloseError,
+} from "../infra/fs-observation-snapshot.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export { readFileRangeAsync } from "../config/sessions/file-range.js";
 export { createStagedInputPathMatcher } from "../media/staged-inputs.js";
+export {
+  createBoundedRemoteFileReader,
+  type RemoteWorkspaceFileReader,
+} from "../media/remote-workspace-file.js";
+
+export {
+  listDirectoryTreeStrict,
+  listDirectoryTreeStrictSync,
+  DirectoryWalkLimitError,
+  type DirectoryWalkEntry,
+  type DirectoryWalkOptions,
+} from "../infra/directory-walk.js";

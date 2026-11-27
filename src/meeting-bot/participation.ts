@@ -1,4 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
 import type {
   MeetingParticipationAttempt,
@@ -26,9 +28,7 @@ function fingerprint(value: unknown): string {
     }
     return input;
   };
-  return createHash("sha256")
-    .update(JSON.stringify(canonical(value)))
-    .digest("hex");
+  return sha256Hex(JSON.stringify(canonical(value)));
 }
 
 type LiveSource = MeetingParticipationSource & {
@@ -421,9 +421,7 @@ export class MeetingParticipation<TSession> {
       }
       assertCurrent();
     } catch (error) {
-      return await finish(
-        result("rejected", error instanceof Error ? error.message : String(error)),
-      );
+      return await finish(result("rejected", coerceErrorMessage(error)));
     }
     let outcome: MeetingParticipationResult;
     try {
@@ -446,7 +444,7 @@ export class MeetingParticipation<TSession> {
     } catch (error) {
       outcome = result(
         "uncertain",
-        `The action outcome is unknown: ${error instanceof Error ? error.message : String(error)}. Do not retry it.`,
+        `The action outcome is unknown: ${coerceErrorMessage(error)}. Do not retry it.`,
       );
     }
     return await finish(outcome);

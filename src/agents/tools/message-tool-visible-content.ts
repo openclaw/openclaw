@@ -8,21 +8,39 @@ import {
   getBootEchoContextForSession,
   stripBootEchoFromOutboundText,
 } from "../../gateway/boot-echo-guard.js";
-import {
-  parseInteractiveParam,
-  parseJsonMessageParam,
-} from "../../infra/outbound/message-action-params.js";
+import { parseJsonMessageParam } from "../../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { readStringArrayParam, readToolStringParam } from "./common.js";
+
+const ESCAPED_LINE_BREAKS = /\\r\\n|\\n|\\r/g;
+
 export function normalizeEscapedLineBreaksForVisibleText(text: string): string {
   if (!text.includes("\\")) {
     return text;
   }
   // The send path turns literal "\n" sequences into line breaks later; match
   // that before privacy stripping so escaped delimiter lines cannot bypass it.
-  return text.replace(/\\r\\n|\\n|\\r/g, "\n");
+  return text.replace(ESCAPED_LINE_BREAKS, "\n");
+}
+
+function sliceLiteralPollBody(literal: string, start: number, end: number): string {
+  // Map the formatter's two UTF-16 boundaries back across the decoded escapes.
+  let literalStart = start;
+  let literalEnd = end;
+  for (const match of literal.matchAll(ESCAPED_LINE_BREAKS)) {
+    if (match.index >= literalEnd) {
+      break;
+    }
+    const extra = match[0].length - 1;
+    if (match.index < literalStart) {
+      literalStart += extra;
+    }
+    literalEnd += extra;
+  }
+  return literal.slice(literalStart, literalEnd).replace(/\r\n/g, "\n");
 }
 
 export type VisibleTextSuppressionReason =
@@ -31,14 +49,12 @@ export type VisibleTextSuppressionReason =
   | "poll_vote_echo";
 
 function sanitizeUserVisibleToolTextResult(
-  text: string,
+  strippedReasoning: string,
   bootPrompt: string | undefined,
 ): {
   text: string;
   suppressionReason?: VisibleTextSuppressionReason;
 } {
-  const normalized = normalizeEscapedLineBreaksForVisibleText(text);
-  const strippedReasoning = stripFormattedReasoningMessage(normalized);
   const strippedInternal = stripInternalRuntimeContext(strippedReasoning);
   const strippedBoot = stripBootEchoFromOutboundText(strippedInternal, bootPrompt);
   const strippedInbound = hasInboundMetadataSentinel(strippedBoot)
@@ -60,59 +76,13 @@ function sanitizeUserVisibleToolTextResult(
   };
 }
 
-function sanitizeStringParam(
-  params: Record<string, unknown>,
-  field: string,
-  bootPrompt: string | undefined,
-): VisibleTextSuppressionReason | undefined {
-  if (typeof params[field] !== "string") {
-    return undefined;
-  }
-  const sanitized = sanitizeUserVisibleToolTextResult(params[field], bootPrompt);
-  params[field] = sanitized.text;
-  return sanitized.suppressionReason;
-}
-
-function sanitizeStringArrayParam(
-  params: Record<string, unknown>,
-  field: string,
-  bootPrompt: string | undefined,
-): VisibleTextSuppressionReason | undefined {
-  const value = params[field];
-  if (typeof value === "string") {
-    const sanitized = sanitizeUserVisibleToolTextResult(value, bootPrompt);
-    params[field] = sanitized.text;
-    return sanitized.suppressionReason;
-  }
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  let suppressionReason: VisibleTextSuppressionReason | undefined;
-  params[field] = value.map((entry) => {
-    if (typeof entry !== "string") {
-      return entry;
-    }
-    const sanitized = sanitizeUserVisibleToolTextResult(entry, bootPrompt);
-    suppressionReason ??= sanitized.suppressionReason;
-    return sanitized.text;
-  });
-  return suppressionReason;
-}
-
-function sanitizePresentationTextFieldsResult(
+function sanitizePresentationTextFields(
   value: unknown,
-  bootPrompt: string | undefined,
-): { value: unknown; suppressionReason?: VisibleTextSuppressionReason } {
+  sanitizeText: (text: string, trim?: boolean) => string,
+): unknown {
   if (!isRecord(value)) {
-    return { value };
+    return value;
   }
-  let suppressionReason: VisibleTextSuppressionReason | undefined;
-  const sanitizeText = (text: string, trim = false) => {
-    const sanitized = sanitizeUserVisibleToolTextResult(text, bootPrompt);
-    // Keep sanitizing after suppression; the first reason only labels the outcome.
-    suppressionReason ??= sanitized.suppressionReason;
-    return trim ? sanitized.text.trim() : sanitized.text;
-  };
   const sanitizeFields = (record: Record<string, unknown>, fields: string[], trim = false) => {
     for (const field of fields) {
       if (typeof record[field] === "string") {
@@ -215,26 +185,23 @@ function sanitizePresentationTextFieldsResult(
           return sanitizedButton;
         });
       }
-      if (Array.isArray(sanitizedBlock.options)) {
-        sanitizedBlock.options = sanitizeRecordArray(sanitizedBlock.options, "label");
-      }
-      if (Array.isArray(sanitizedBlock.categories)) {
-        sanitizedBlock.categories = sanitizeStrings(sanitizedBlock.categories);
-      }
-      if (Array.isArray(sanitizedBlock.segments)) {
-        sanitizedBlock.segments = sanitizeRecordArray(sanitizedBlock.segments, "label");
-      }
-      if (Array.isArray(sanitizedBlock.series)) {
-        sanitizedBlock.series = sanitizeRecordArray(sanitizedBlock.series, "name");
+      for (const field of ["options", "categories", "segments", "series"]) {
+        const entries = sanitizedBlock[field];
+        if (Array.isArray(entries)) {
+          sanitizedBlock[field] =
+            field === "categories"
+              ? sanitizeStrings(entries)
+              : sanitizeRecordArray(entries, field === "series" ? "name" : "label");
+        }
       }
       return sanitizedBlock;
     });
   }
-  return { value: presentation, ...(suppressionReason ? { suppressionReason } : {}) };
+  return presentation;
 }
 
-function readFirstStringParam(params: Record<string, unknown>, keys: readonly string[]): string {
-  for (const key of keys) {
+function readAttachmentMediaParam(params: Record<string, unknown>): string {
+  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"]) {
     const value = readToolStringParam(params, key);
     if (value) {
       return value;
@@ -272,9 +239,7 @@ export function hasSanitizedSendPayloadContent(params: Record<string, unknown>):
   const attachmentMedia = readStructuredAttachmentMediaParam(params.attachments);
   const hasPayload = hasReplyPayloadContent({
     text,
-    mediaUrl:
-      readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]) ||
-      attachmentMedia,
+    mediaUrl: readAttachmentMediaParam(params) || attachmentMedia,
     mediaUrls,
     presentation: params.presentation,
     interactive: params.interactive,
@@ -288,22 +253,45 @@ export function sanitizeMessageToolVisiblePayload(
   params: Record<string, unknown>,
   agentSessionKey?: string,
 ): VisibleTextSuppressionReason | undefined {
-  // Sanitize outbound text fields in three layers:
-  //
-  // 1. `stripFormattedReasoningMessage` — drops reasoning blocks
-  //    that some models emit into tool arguments.
-  // 2. `stripInternalRuntimeContext` — removes internal-runtime-context
-  //    delimited blocks (the same strip applied to final replies via
-  //    `sanitizeUserFacingText`). Catches wrapped BOOT.md or webchat
-  //    runtime-context echoes that preserve the marker lines.
-  // 3. `stripBootEchoFromOutboundText` — defense-in-depth check against
-  //    the active boot prompt for this session. Catches verbatim echoes
-  //    that paraphrase out the wrapper markers but reproduce a
-  //    substantial chunk of the boot prompt content. Refs #53732.
   const bootPromptForSession = getBootEchoContextForSession(agentSessionKey);
   let suppressedVisiblePayloadReason: VisibleTextSuppressionReason | undefined;
+  const filterVisibleText = (text: string) => {
+    const sanitized = sanitizeUserVisibleToolTextResult(text, bootPromptForSession);
+    // Keep sanitizing after suppression; the first reason only labels the outcome.
+    suppressedVisiblePayloadReason ??= sanitized.suppressionReason;
+    return sanitized.text;
+  };
+  const sanitizeText = (text: string, trim = false) => {
+    const visible = filterVisibleText(
+      stripFormattedReasoningMessage(normalizeEscapedLineBreaksForVisibleText(text)),
+    );
+    return trim ? visible.trim() : visible;
+  };
+  const sanitizePollText = (text: string) => {
+    const normalized = normalizeEscapedLineBreaksForVisibleText(text);
+    if (normalized === text) {
+      return filterVisibleText(stripFormattedReasoningMessage(text));
+    }
+    let literalBody: string | undefined;
+    const reasoningStripped = stripFormattedReasoningMessage(normalized, (source, start, end) => {
+      const literal =
+        source === normalized ? text : stripReasoningTagsFromText(text, { trim: "none" });
+      if (source === normalized || normalizeEscapedLineBreaksForVisibleText(literal) === source) {
+        literalBody = sliceLiteralPollBody(literal, start, end);
+      }
+    });
+    const visible = filterVisibleText(reasoningStripped);
+    if (!visible) {
+      return visible;
+    }
+    const literal = sanitizeUserVisibleToolTextResult(
+      literalBody ?? stripFormattedReasoningMessage(text),
+      bootPromptForSession,
+    ).text;
+    return normalizeEscapedLineBreaksForVisibleText(literal) === visible ? literal : visible;
+  };
   parseJsonMessageParam(params, "presentation");
-  parseInteractiveParam(params);
+  parseJsonMessageParam(params, "interactive");
   for (const field of [
     "text",
     "content",
@@ -312,20 +300,23 @@ export function sanitizeMessageToolVisiblePayload(
     "SendMessage",
     "quoteText",
     "quote_text",
-    "pollQuestion",
-    "poll_question",
   ]) {
-    const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
-    suppressedVisiblePayloadReason ??= suppressionReason;
+    if (typeof params[field] === "string") {
+      params[field] = sanitizeText(params[field]);
+    }
   }
-  for (const field of ["pollOption", "poll_option"]) {
-    const suppressionReason = sanitizeStringArrayParam(params, field, bootPromptForSession);
-    suppressedVisiblePayloadReason ??= suppressionReason;
+  for (const field of ["pollQuestion", "poll_question", "pollOption", "poll_option"]) {
+    const value = params[field];
+    if (typeof value === "string") {
+      params[field] = sanitizePollText(value);
+    } else if ((field === "pollOption" || field === "poll_option") && Array.isArray(value)) {
+      params[field] = value.map((entry) =>
+        typeof entry === "string" ? sanitizePollText(entry) : entry,
+      );
+    }
   }
   for (const field of ["presentation", "interactive"]) {
-    const sanitized = sanitizePresentationTextFieldsResult(params[field], bootPromptForSession);
-    params[field] = sanitized.value;
-    suppressedVisiblePayloadReason ??= sanitized.suppressionReason;
+    params[field] = sanitizePresentationTextFields(params[field], sanitizeText);
   }
   return suppressedVisiblePayloadReason;
 }

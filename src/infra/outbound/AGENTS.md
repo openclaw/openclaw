@@ -1,8 +1,4 @@
-# Outbound Test Performance
-
-Outbound helpers sit on hot reply, action, media, and channel contract paths.
-Keep argument and payload tests narrow unless they are intentionally exercising
-real delivery.
+# Outbound Delivery
 
 ## Durable Delivery Ownership
 
@@ -36,7 +32,5 @@ real delivery.
 
 ## Verification
 
-- Benchmark the affected outbound test file before/after with
-  `pnpm test <file>`.
-- Run the closest media/action/payload contract test when changing a shared
-  outbound helper.
+- Shared helper change: run `src/channels/plugins/contracts/outbound-payload.contract.test.ts`
+  and `src/infra/outbound/message-action-execution*.test.ts`.

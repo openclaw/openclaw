@@ -21,3 +21,17 @@ export function registerListener<T>(
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
+
+/** Synchronous changes propagate errors; iteration is live unless a snapshot is requested. */
+export function createChangeListeners(options?: { snapshot?: boolean }) {
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    publish: () => {
+      for (const listener of options?.snapshot ? [...listeners] : listeners) {
+        listener();
+      }
+    },
+    clear: () => listeners.clear(),
+  };
+}

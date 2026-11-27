@@ -19,6 +19,7 @@ function retiredNostrStateMigration(namespace: string, label: string): PluginDoc
   return {
     id: `nostr-${namespace}-json-to-plugin-state`,
     label,
+    collectBackupResources: () => [],
     async detectLegacyState({ stateDir }) {
       return (await hasLegacyState(stateDir)) ? { preview: [warning] } : null;
     },

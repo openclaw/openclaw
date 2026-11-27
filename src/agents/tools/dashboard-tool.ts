@@ -92,36 +92,14 @@ const DashboardToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type DashboardCommandEmitter = (
-  params: {
-    sessionKey: string;
-    agentId?: string;
-    command: BoardCommand;
-  },
-  resolveGatewayContext?: GatewayContextResolver,
-) => number;
-
-type DashboardGatewayContext = {
-  getClientConnIds?: (
-    predicate: (client: { connect: { client: { id: string } } }) => boolean,
-  ) => Set<string>;
-  broadcastToConnIds: (event: "board.command", payload: unknown, connIds: Set<string>) => void;
-};
-
 type DashboardToolOptions = {
   agentSessionKey?: string;
   agentId?: string;
+  /** Fails once the board's owner no longer authorizes this run, checked again inside each board write. */
+  assertTargetCurrent?: () => void;
   callGateway?: InProcessGatewayCaller;
-  emitCommand?: DashboardCommandEmitter;
+  emitCommand?: typeof emitBoardCommand;
 };
-
-function requireSessionKey(value: string | undefined): string {
-  const sessionKey = value?.trim();
-  if (!sessionKey) {
-    throw new ToolInputError("agent session required");
-  }
-  return sessionKey;
-}
 
 function requireInteger(params: Record<string, unknown>, key: string): number {
   const value = readNumberParam(params, key, { required: true, integer: true, strict: true });
@@ -139,28 +117,12 @@ function readTabId(params: Record<string, unknown>): string {
   return tabId;
 }
 
-function readOptionalTabId(params: Record<string, unknown>): string | undefined {
-  const tabId = readToolStringParam(params, "tabId");
-  if (tabId !== undefined && !BOARD_TAB_ID_REGEX.test(tabId)) {
-    throw new ToolInputError("tabId must be a lowercase slug up to 40 characters");
-  }
-  return tabId;
-}
-
 function readPresentation(params: Record<string, unknown>): "split" | "expanded" {
   const presentation = readToolStringParam(params, "presentation", { required: true });
   if (presentation !== "split" && presentation !== "expanded") {
     throw new ToolInputError("presentation must be split or expanded");
   }
   return presentation;
-}
-
-function readPluginProps(params: Record<string, unknown>): Record<string, unknown> | undefined {
-  const props = asOptionalRecord(params.props);
-  if (params.props !== undefined && !props) {
-    throw new ToolInputError("props must be an object");
-  }
-  return props;
 }
 
 function opForAction(action: string, params: Record<string, unknown>): BoardOp {
@@ -229,9 +191,7 @@ function emitBoardCommand(
   },
   resolveGatewayContext?: GatewayContextResolver,
 ): number {
-  const context = getInProcessGatewayToolContext(resolveGatewayContext) as
-    | DashboardGatewayContext
-    | undefined;
+  const context = getInProcessGatewayToolContext(resolveGatewayContext);
   if (!context) {
     throw new ToolInputError("dashboard command unavailable outside gateway runtime");
   }
@@ -246,9 +206,8 @@ function emitBoardCommand(
 const WIDGET_CONTENT_UPDATE_PATHS = {
   html: "Use its HTML authoring capability; discover it in the tool catalog and update the same name.",
   plugin: "Use widget_put with the same name and pluginKind.",
-  registered:
-    "Use its registered-source authoring capability; discover it in the tool catalog and update the same source kind and name.",
   "mcp-app": "Update through the originating MCP app.",
+  registered: "This widget format was retired; remove it and recreate it as HTML.",
 } as const;
 
 function snapshotResult(
@@ -274,16 +233,6 @@ function snapshotResult(
   );
 }
 
-function commandResult(delivered: number) {
-  return delivered === 0
-    ? textResult("Dashboard unavailable. Connect Control UI and retry.", {
-        status: "unavailable",
-        code: "UNAVAILABLE",
-        message: "Connect Control UI and retry.",
-      })
-    : textResult(`Dashboard command sent to ${delivered} client(s)`, { ok: true, delivered });
-}
-
 export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTool {
   const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
   const emitCommand = opts.emitCommand ?? emitBoardCommand;
@@ -291,16 +240,25 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
     label: "Dashboard",
     name: "dashboard",
     description:
-      "Read and arrange this session dashboard; widget_put updates plugin widgets only. Follow the widget authoring tool's current placement guidance. Actions: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab opens the dashboard side panel; set_presentation shows the dashboard alongside chat (split) or across the task area (expanded). focus_tab and set_presentation require a connected Control UI and do not save a default. set_default_presentation saves split or expanded for subsequent opens without requiring a connected UI; read returns the effective defaultPresentation (split when unset). Personal viewer overrides still take precedence. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Prefer session:report for data reports with text, metrics, tables, charts, and links; it renders directly without a document frame. Use session:progress props {sessionKey?} for live session progress (omit sessionKey for the current session). Use session:website props {url} for a live HTTPS website; size full and expanded presentation fill the task area. Other widget kinds are supplied by enabled plugins. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
+      "Read and arrange this session dashboard; widget_put updates plugin widgets only. Layout/plugin widgets, not HTML authoring or browser side panels. Use focus_tab with tabId for saved widgets; never create/expand a dashboard to open another panel. Inspect widgets in their chat/dashboard frame, not hosting URLs as browser pages; verify interaction or say unverified. Follow the widget authoring tool's current placement guidance. Actions: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab opens the dashboard side panel; set_presentation shows the dashboard alongside chat (split) or across the task area (expanded). focus_tab and set_presentation require a connected Control UI and do not save a default. set_default_presentation saves split or expanded for subsequent opens without requiring a connected UI; read returns the effective defaultPresentation (split when unset). Personal viewer overrides still take precedence. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Prefer session:report for data reports with text, metrics, tables, charts, and links; it renders directly without a document frame. Use session:progress props {sessionKey?} for live session progress (omit sessionKey for the current session). Use session:website props {url} for a live HTTPS website; size full and expanded presentation fill the task area. Other widget kinds are supplied by enabled plugins. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
     parameters: DashboardToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
-      const sessionKey = requireSessionKey(opts.agentSessionKey);
+      const sessionKey = opts.agentSessionKey?.trim();
+      if (!sessionKey) {
+        throw new ToolInputError("agent session required");
+      }
+      const assertTargetCurrent = opts.assertTargetCurrent;
+      assertTargetCurrent?.();
       const admittedResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
-      const gatewayOptions = admittedResolver
-        ? { resolveGatewayContext: admittedResolver }
-        : undefined;
+      const gatewayOptions =
+        admittedResolver || assertTargetCurrent
+          ? {
+              ...(admittedResolver ? { resolveGatewayContext: admittedResolver } : {}),
+              ...(assertTargetCurrent ? { sessionMutationCommitGuard: assertTargetCurrent } : {}),
+            }
+          : undefined;
       const callGateway = <T>(method: string, gatewayParams: Record<string, unknown>) =>
         gatewayCall<T>(method, gatewayParams, gatewayOptions);
       if (action === "read") {
@@ -342,9 +300,18 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
                 kind: "set_chat_dock",
                 dock: readPresentation(params) === "expanded" ? "hidden" : "right",
               };
-        return commandResult(
-          emitCommand({ sessionKey, agentId: opts.agentId, command }, admittedResolver),
+        assertTargetCurrent?.();
+        const delivered = emitCommand(
+          { sessionKey, agentId: opts.agentId, command },
+          admittedResolver,
         );
+        return delivered === 0
+          ? textResult("Dashboard unavailable. Connect Control UI and retry.", {
+              status: "unavailable",
+              code: "UNAVAILABLE",
+              message: "Connect Control UI and retry.",
+            })
+          : textResult(`Dashboard command sent to ${delivered} client(s)`, { ok: true, delivered });
       }
       if (action === "widget_put") {
         const pluginKind = readToolStringParam(params, "pluginKind", { required: true });
@@ -352,10 +319,16 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
           throw new ToolInputError("pluginKind must use the <pluginId>:<name> format");
         }
         const title = readToolStringParam(params, "title");
-        const tabId = readOptionalTabId(params);
+        const tabId = readToolStringParam(params, "tabId");
+        if (tabId !== undefined && !BOARD_TAB_ID_REGEX.test(tabId)) {
+          throw new ToolInputError("tabId must be a lowercase slug up to 40 characters");
+        }
         const size = readToolStringParam(params, "size");
         const after = readToolStringParam(params, "after");
-        const props = readPluginProps(params);
+        const props = asOptionalRecord(params.props);
+        if (params.props !== undefined && !props) {
+          throw new ToolInputError("props must be an object");
+        }
         return snapshotResult(
           await callGateway<BoardSnapshot>("board.widget.put", {
             sessionKey,

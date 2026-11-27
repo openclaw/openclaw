@@ -31,7 +31,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { budget: undefined, expected: 5_000 },
+  { budget: undefined, expected: 60_000 },
   { budget: 5_000, expected: 5_000 },
   { budget: 60_000, expected: 60_000 },
   { budget: 750, expected: 750 },
@@ -41,7 +41,7 @@ it.each([
     detail: "service runtime inspection failed",
     inspectionFailure: {
       code: "service-runtime-inspection-failed",
-      detail: `Scheduled Task probe timed out after ${expected} ms (ETIMEDOUT).`,
+      detail: `Scheduled Task check timed out after ${expected} ms (ETIMEDOUT).`,
       timeoutMs: expected,
     },
     missingUnit: false,

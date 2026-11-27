@@ -1,13 +1,15 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty as normalizePolicyChannelId,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   execApprovalsPolicyShapeFinding,
   ingressPolicyShapeFinding,
   scopedDataHandlingPolicyShapeFinding,
 } from "./access-shapes.js";
 import { createOrderedPolicyShape, firstPolicyShapeFinding } from "./ordered-shape.js";
-import { normalizePolicyChannelId } from "./policy-runtime.js";
 import { duplicateScopedPolicyFieldFinding } from "./policy-scope.js";
 import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { ocPathSegment } from "./utils.js";

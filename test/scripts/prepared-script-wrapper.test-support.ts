@@ -1,5 +1,19 @@
 import { Buffer } from "node:buffer";
 
+/** Runner mode belongs to the fixture, not the test harness's ambient CI environment. */
+export function testRunnerFixtureEnv(
+  overrides: NodeJS.ProcessEnv = {},
+  inherited: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env = { ...inherited };
+  delete env.CI;
+  delete env.GITHUB_ACTIONS;
+  delete env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE;
+  delete env.OPENCLAW_CI_TEST_RUNTIME_POLICY;
+  delete env.OPENCLAW_CI_TEST_RUNTIME;
+  return { ...env, ...overrides };
+}
+
 /** Keep real wrappers and source main guards while borrowing the prepared module graph. */
 export function preparedScriptWrapperPreload(
   entries: ReadonlyArray<readonly [source: URL, prepared: URL]>,
@@ -26,10 +40,10 @@ export function preparedScriptWrapperPreload(
 `
     : "";
   return `import { readFileSync } from "node:fs";
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 const modules = ${JSON.stringify(modules)};
 const sources = new Map(Object.entries(modules).map(([source, prepared]) => [prepared, source]));
-registerHooks({
+nodeModule.registerHooks({
   resolve(specifier, context, nextResolve) {
 ${resolveVirtual}    const prepared = modules[context.parentURL];
     const resolved = nextResolve(specifier, prepared && specifier.startsWith(".")

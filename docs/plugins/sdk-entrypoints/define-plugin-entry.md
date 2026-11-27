@@ -59,18 +59,53 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  A catalog row can declare its `exportPolicy`. Set `origin` to `native-local` for
+  a native session on this Gateway, `imported` for a received copy, or `federated`
+  for a remote source. Set `automatic: true` only when this source permits
+  background export. An unknown origin requires explicit selection. Assign the
+  policy at the receiving Gateway when projecting a peer's rows. Declare
+  `stableHostThreadIdentity: true` only when the host ID and thread ID uniquely
+  identify one historical publication across agents, source homes, and restarts.
+  Bind each read to the selected source. Refuse ambiguous backing records and
+  mutable host aliases that could address a previously released publication under a new ID.
+
+  A background service can declare `catalogExports: { allowlistPath: ["mirror", "catalogs"] }`.
+  The path resolves inside the service owner's plugin config. Its `ctx.catalogExports`
+  lists only operator-selected catalogs with an `automaticExportHosts` declaration.
+  Each listed local source grants bounded visible-text reads for the current service
+  and agent. Preserve its exact host, thread and optional source home on every page.
+  Passing that locator as `source` to the reader's list method requests an exact
+  match. Providers receive `exportSource` and use their native membership checks.
+  To list another page, pass a host's opaque `nextCursor` as
+  `catalog.list({ cursors: { [host.hostId]: host.nextCursor } })`. Omit hosts
+  that should start at their first page. A fresh catalog handle can resume from
+  a saved cursor for the same catalog and host. Each list checks current access
+  before granting reads on the returned rows. Use a separate call for an exact `source` lookup.
+  Finish reading rows from the current page before requesting the next one.
+  The reader returns catalog times as Unix epoch milliseconds.
+  Listing again, reloading config, or stopping the service retires original grants.
+
+  Providers whose rows require current source authorization declare
+  `requiresFreshList: true`. Each list, search, and page request must reauthorize
+  its rows at the source. The Gateway bypasses cached pages for these providers;
+  clients withdraw previous rows while refresh is pending or failed. Expanded
+  windows are rebuilt from fresh pages, and a failed expansion offers Retry from
+  the current authorized head. This declaration adds no operator setting.
+
   The optional `allowPartialResults` flag is true only when a connected caller
   explicitly opts in while receiving host progress on a list without host selection
   or cursors. When true, a provider may return retained host snapshots or mark a
   still-loading host `pending: true`, then publish its completed snapshot through
-  `onHost` and `waitUntil`. Pending hosts preserve existing client rows and cursors;
+  `onHost` and `waitUntil`. Unless `requiresFreshList` is true, pending hosts preserve
+  existing client rows and cursors;
   omitted hosts are removed. Clear `pending` on a completed host.
   Each `onHost` publication must be authoritative for that host: the Gateway
   includes the latest publication for each retained host in the aggregate response
   even when another provider or visibility projection delays delivery. The final
   host set is authoritative: an omitted host is withdrawn, not restored from an
   earlier publication. Preserve the last known
-  rows while refreshing; do not publish an empty host to represent pending work.
+  rows while refreshing unless `requiresFreshList` is true; fresh providers return
+  empty pending hosts until authorization succeeds.
   When the flag is absent or false, return the complete compatibility snapshot.
   Targeted host lookups and pagination retain that complete-response contract.
 
@@ -103,6 +138,13 @@ export default definePluginEntry({
   and `listNodes` hook must be released when `list` settles, or when the optional
   list operation below closes. Prepare the facts needed by late host mapping
   before that boundary.
+
+  `sessionEntries.revision`, when present, is an opaque token for immutable local
+  entry facts, including configuration and selection scope. Providers may weakly
+  cache derived metadata by that token, together with their own query and config
+  inputs. A new token invalidates those facts; an absent token requires reading
+  the entries again. Do not retain the snapshot or entry objects after listing,
+  or use this token as current authorization or as a revision of native host data.
 
   Providers with a multi-step fill can implement the optional
   `SessionCatalogProvider.createListOperation(params)` hook. Its synchronous
@@ -152,6 +194,12 @@ export default definePluginEntry({
   policy checks, rollback, and untrusted-content wrapping. The provider supplies
   transcript text through `read(...)`; it must not write the destination session.
 
+  A provider with a durable continuation can implement `resolveGatewayConversation`.
+  After checking source and destination read access and the destination’s stored
+  origin, `sessions.catalog.resolve` returns its `sessionKey` and current
+  `sessionId`. An unbound source returns `null`. Looking up a destination starts
+  no session and sends no message.
+
   A read-only catalog of sessions published by another Gateway may set
   `audience: "session-viewers"`. Viewers need `operator.read`; configured roles
   must also allow viewing others' sessions (`sessions.others: "view"`,
@@ -191,6 +239,23 @@ export default definePluginEntry({
   one result with no next page; multiple rows or `nextCursor` are explicitly
   ambiguous and never select the first row.
 
+  Call `sessions.catalog.route` with either `{ routeSegment }` from a share link
+  or `{ catalogId }` from a canonical session link. It returns
+  `{ catalogId, routeSegment, methods }` for an available route and `null`
+  otherwise. The query requires `operator.sessions.read` and returns only the
+  operations the caller can attempt. Use the returned catalog ID for listing.
+  Resolve again when the connection or plugin registration changes.
+
+  A provider can declare `ownedRoute.methods` for `list`, `read`, `resolve`, and
+  `continue`. Register each named method on the same plugin with a required
+  profile and a session-scoped permission. Set `ownedRoute.requiredGrantPluginId`
+  when these operations require admission by a particular policy plugin. Each
+  operation still checks the caller's authority for the requested transcript.
+  The Gateway returns a route when the caller has both list and read access.
+  It chooses the shared or owned method independently for each operation, so a
+  caller can have shared read and publisher-only continuation. An owned
+  continuation requires `operator.sessions.write`.
+
   Named share links use `/<routeSegment>/<title-slug>-<id-prefix>` with the same
   bounded slug as regular session links. Return the title in the catalog row's
   `name`; the Control UI uses it to refresh the decorative slug. Only the id
@@ -199,7 +264,7 @@ export default definePluginEntry({
 
   `routeSegment` must not use the first segment of a built-in Control UI route
   or alias, and it must be unique across active session catalogs. Invalid,
-  unsupported, reserved, or multiply owned descriptors fail closed; catalog
+  unsupported, reserved, or multiply owned descriptors are rejected; catalog
   sessions remain available through the generic
   `/chat/<agent>?catalog=...&host=...&thread=...` URL. The shared session URL
   contract owns the built-in reservation decision: its share-path builder
@@ -209,7 +274,7 @@ export default definePluginEntry({
   those obligations cannot drift.
 
   CLI-backed catalogs that expose the same local-plus-paired-node shape can use
-  `createSessionCatalogFamily(...)`. The family composer owns canonical cursor
+  `createSessionCatalogFamily(...)`. The family composer owns shared cursor
   validation, node payload validation, host projection, adopted-session
   projection, per-host publication, read routing, single-flight continuation
   per resolved agent and source, and terminal plan routing. Different agents
@@ -292,3 +357,16 @@ export default definePluginEntry({
   node's Gateway declaration. OpenClaw evaluates it against the node-local
   startup config; command handlers should still validate availability when
   invoked.
+
+Session Share keeps the legacy list/read contracts unchanged. Optional node
+catalog commands are `openclaw.sessions.catalog.list.v1` and
+`openclaw.sessions.catalog.read.v1`, explicitly allowed on the receiver and
+advertised/approved on the source. Node list accepts `profileRelation` and
+`includeOriginalPath`; read accepts `profileRelation`. The only source target is
+`{ type: "github-account", id: "123" }`, with relationship `owned` or `involving`.
+The outbound Gateway pair is `session-share.catalog.list/read`, advertised in
+`features.methods`. Its list accepts `profileRelation`, but never `includeOriginalPath`;
+Gateway sources cannot supply original links. Receivers use the advertised catalog
+pair for every list/read, and the legacy pair only when the catalog pair is absent.
+These selectors narrow publication, not reader authority.
+See [Session Share](/plugins/session-share) for numbered setup and disclosure.

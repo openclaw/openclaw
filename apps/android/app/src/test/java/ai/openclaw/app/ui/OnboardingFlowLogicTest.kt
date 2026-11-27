@@ -42,27 +42,20 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun onboardingBackDestinationsMatchTheVisibleFlow() {
+  fun onboardingBackStateMatchesTheVisibleFlow() {
     assertEqualsCases(
-      null to onboardingBackDestination(OnboardingStep.Welcome),
-      OnboardingBackDestination(OnboardingStep.Welcome) to onboardingBackDestination(OnboardingStep.Gateway),
-      OnboardingBackDestination(OnboardingStep.Gateway) to onboardingBackDestination(OnboardingStep.SetupCode),
-      OnboardingBackDestination(OnboardingStep.SetupCode) to onboardingBackDestination(OnboardingStep.EnterSetupCode),
-      OnboardingBackDestination(OnboardingStep.Gateway) to onboardingBackDestination(OnboardingStep.Manual),
-      OnboardingBackDestination(OnboardingStep.Recovery) to onboardingBackDestination(OnboardingStep.NodeApproval),
-      OnboardingBackDestination(OnboardingStep.NodeApproval) to onboardingBackDestination(OnboardingStep.Permissions),
+      null to onboardingBackStateAfterBack(OnboardingStep.Welcome),
+      OnboardingBackState(OnboardingStep.Welcome) to onboardingBackStateAfterBack(OnboardingStep.Gateway),
+      OnboardingBackState(OnboardingStep.Gateway) to onboardingBackStateAfterBack(OnboardingStep.SetupCode),
+      OnboardingBackState(OnboardingStep.SetupCode) to onboardingBackStateAfterBack(OnboardingStep.EnterSetupCode),
+      OnboardingBackState(OnboardingStep.Gateway) to onboardingBackStateAfterBack(OnboardingStep.Manual),
+      OnboardingBackState(OnboardingStep.Recovery) to onboardingBackStateAfterBack(OnboardingStep.NodeApproval),
+      OnboardingBackState(OnboardingStep.NodeApproval) to onboardingBackStateAfterBack(OnboardingStep.Permissions),
     )
   }
 
   @Test
   fun directPermissionsBackReturnsToRecovery() {
-    assertEquals(
-      OnboardingBackDestination(OnboardingStep.Recovery),
-      onboardingBackDestination(
-        step = OnboardingStep.Permissions,
-        accessStage = OnboardingAccessStage.DirectPermissions,
-      ),
-    )
     assertEquals(
       OnboardingBackState(step = OnboardingStep.Recovery),
       onboardingBackStateAfterBack(
@@ -74,13 +67,6 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun permissionReapprovalBackReturnsThroughPermissionsToRecovery() {
-    assertEquals(
-      OnboardingBackDestination(OnboardingStep.Permissions),
-      onboardingBackDestination(
-        step = OnboardingStep.NodeApproval,
-        accessStage = OnboardingAccessStage.PermissionReapproval,
-      ),
-    )
     assertEquals(
       OnboardingBackState(step = OnboardingStep.Permissions),
       onboardingBackStateAfterBack(
@@ -128,37 +114,26 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun onboardingBackStateClearsScannerOriginAfterBack() {
-    assertEquals(
-      OnboardingBackState(step = OnboardingStep.SetupCode, inlineQrScannerActive = true, setupCodeEntryOpenedFromScanner = false),
-      onboardingBackStateAfterBack(
-        step = OnboardingStep.EnterSetupCode,
-        setupCodeEntryOpenedFromScanner = true,
-      ),
-    )
-  }
-
-  @Test
   fun recoveryBackRestoresInlineScannerOnlyForScannerConnections() {
     assertEquals(
-      OnboardingBackDestination(OnboardingStep.SetupCode, inlineQrScannerActive = true),
-      onboardingBackDestination(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.SetupScanner),
+      OnboardingBackState(OnboardingStep.SetupCode, inlineQrScannerActive = true),
+      onboardingBackStateAfterBack(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.SetupScanner),
     )
     assertEquals(
-      OnboardingBackDestination(OnboardingStep.SetupCode, inlineQrScannerActive = false),
-      onboardingBackDestination(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.SetupGallery),
+      OnboardingBackState(OnboardingStep.SetupCode, inlineQrScannerActive = false),
+      onboardingBackStateAfterBack(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.SetupGallery),
     )
     assertEquals(
-      OnboardingBackDestination(OnboardingStep.SetupCode, inlineQrScannerActive = false),
-      onboardingBackDestination(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.SetupEntry),
+      OnboardingBackState(OnboardingStep.SetupCode, inlineQrScannerActive = false),
+      onboardingBackStateAfterBack(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.SetupEntry),
     )
   }
 
   @Test
   fun recoveryBackReturnsToManualFormAfterManualConnection() {
     assertEquals(
-      OnboardingBackDestination(OnboardingStep.Manual),
-      onboardingBackDestination(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.Manual),
+      OnboardingBackState(OnboardingStep.Manual),
+      onboardingBackStateAfterBack(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.Manual),
     )
   }
 
@@ -766,7 +741,6 @@ class OnboardingFlowLogicTest {
       GatewayRecoveryPrimaryAction.Finish to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Connected),
       GatewayRecoveryPrimaryAction.Back to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Failed),
       GatewayRecoveryPrimaryAction.Retry to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.ApprovalRequired),
-      null to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.NodeCapabilityApprovalPending),
       null to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Pairing),
       null to gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Finishing),
     )

@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe("released updater registry retirement", () => {
-  it.each(["2026.9.1", "2026.9.2", "2026.9.3"])(
+  it.each(["2026.9.1", "2026.9.2/2026.9.3"])(
     "preserves %s admission state while adding current ownership",
     async (version) => {
       const registry = createEmptyPluginRegistry();

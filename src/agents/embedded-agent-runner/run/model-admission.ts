@@ -41,12 +41,7 @@ export function assertInitialOperatorModelPolicy(
   if (!operatorAuthority?.modelPolicy || resolveSessionPinnedHarnessId(entry)) {
     return;
   }
-  const selection = resolveInitialEmbeddedRunModel({
-    config: params.config,
-    agentId: params.agentId,
-    provider: params.provider,
-    model: params.model,
-  });
+  const selection = resolveInitialEmbeddedRunModel({ ...params, config: params.config });
   const selected = resolveModelCandidateChain({
     cfg: params.config,
     agentId: params.agentId,

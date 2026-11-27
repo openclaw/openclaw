@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isCodexNoActiveTurnInterruptError } from "./attempt-client-cleanup.js";
@@ -12,7 +11,6 @@ import {
   readCodexNotificationTurnId,
 } from "./notification-correlation.js";
 import { isJsonObject } from "./protocol.js";
-import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 
 type CodexNativeCompactionCompletion =
   | { completed: true; turnId?: string; itemId?: string; tokensAfter?: number }
@@ -152,10 +150,7 @@ export function watchCodexNativeCompactionCompletion(params: {
     completionTimeout.unref?.();
   };
   removeNotificationHandler = params.client.addNotificationHandler((notification) => {
-    if (!requestStarted) {
-      return;
-    }
-    if (!isJsonObject(notification.params)) {
+    if (!requestStarted || !isJsonObject(notification.params)) {
       return;
     }
     if (readCodexNotificationThreadId(notification.params) !== params.threadId) {
@@ -208,22 +203,15 @@ export function watchCodexNativeCompactionCompletion(params: {
     const status = typeof turn?.status === "string" ? turn.status : undefined;
     if (admissionFailure) {
       fail(admissionFailure);
-      return;
-    }
-    if (status !== "completed") {
+    } else if (status !== "completed") {
       fail(`codex app-server compaction turn ended with status ${status ?? "unknown"}`);
-      return;
+    } else if (!compactionItemId) {
+      fail("codex app-server compaction turn completed without a compaction item");
+    } else if (!compactionItemCompleted) {
+      fail("codex app-server compaction turn completed before its compaction item");
+    } else {
+      complete();
     }
-    const incompleteReason = !compactionItemId
-      ? "codex app-server compaction turn completed without a compaction item"
-      : !compactionItemCompleted
-        ? "codex app-server compaction turn completed before its compaction item"
-        : undefined;
-    if (incompleteReason) {
-      fail(incompleteReason);
-      return;
-    }
-    complete();
   });
   removeCloseHandler = params.client.addCloseHandler(() => {
     retireUnconfirmed("codex app-server closed before native compaction completed");
@@ -259,45 +247,4 @@ export function watchCodexNativeCompactionCompletion(params: {
       }
     },
   };
-}
-
-export async function runExclusiveCodexNativeCompaction<T>(
-  threadId: string,
-  signal: AbortSignal | undefined,
-  run: () => Promise<T>,
-): Promise<T> {
-  return await runWithAsyncWorkResources(async (onAcquired) => {
-    signal?.throwIfAborted();
-    let started = false;
-    const queued = withCodexAppServerThreadMutation(threadId, async () => {
-      started = true;
-      signal?.throwIfAborted();
-      return run();
-    });
-    onAcquired({
-      release: async () => {
-        await Promise.allSettled([queued]);
-      },
-    });
-    if (!signal) {
-      return queued;
-    }
-    let removeAbortListener = () => {};
-    const aborted = new Promise<never>((_, reject) => {
-      const onAbort = () => {
-        if (!started) {
-          reject(signal.reason instanceof Error ? signal.reason : new Error("compaction aborted"));
-        }
-      };
-      removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
-    try {
-      // The canceled promise settles immediately, but its queued task remains
-      // behind its predecessor so later compactions cannot overtake active work.
-      return await Promise.race([queued, aborted]);
-    } finally {
-      removeAbortListener();
-    }
-  });
 }

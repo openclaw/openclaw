@@ -1,8 +1,8 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 /**
  * Read-only agent workspace browsing schemas.
@@ -13,16 +13,14 @@ import { NonEmptyString } from "./primitives.js";
  * reviewed mutation contract exists.
  */
 
-/** One file or folder in an agent workspace directory listing. */
 export const AgentsWorkspaceEntrySchema = closedObject({
   path: NonEmptyString,
   name: NonEmptyString,
-  kind: Type.Union([Type.Literal("file"), Type.Literal("directory")]),
+  kind: stringLiteralUnion(["file", "directory"]),
   size: Type.Optional(Type.Integer({ minimum: 0 })),
   updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
-/** Lists one directory of an agent workspace. */
 export const AgentsWorkspaceListParamsSchema = closedObject({
   agentId: NonEmptyString,
   path: Type.Optional(Type.String()),
@@ -40,14 +38,13 @@ export const AgentsWorkspaceListResultSchema = closedObject({
   offset: Type.Integer({ minimum: 0 }),
 });
 
-/** One workspace file preview payload (UTF-8 text or base64 image). */
 export const AgentsWorkspaceFileSchema = closedObject({
   path: NonEmptyString,
   name: NonEmptyString,
   size: Type.Integer({ minimum: 0 }),
   updatedAtMs: Type.Integer({ minimum: 0 }),
   mimeType: NonEmptyString,
-  encoding: Type.Union([Type.Literal("utf8"), Type.Literal("base64")]),
+  encoding: stringLiteralUnion(["utf8", "base64"]),
   content: Type.String(),
 });
 
@@ -57,7 +54,6 @@ export const AgentsWorkspaceGetParamsSchema = closedObject({
   path: NonEmptyString,
 });
 
-/** Result for reading one workspace file. */
 export const AgentsWorkspaceGetResultSchema = closedObject({
   agentId: NonEmptyString,
   file: AgentsWorkspaceFileSchema,

@@ -1,6 +1,3 @@
-// Bridges embedded-runner execution milestones onto the diagnostic bus as
-// session-correlated run.execution_phase events, so external status surfaces
-// can observe turn startup without a control-UI subscription.
 import {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
@@ -15,15 +12,7 @@ type ExecutionPhaseParams = Pick<
   "onExecutionPhase" | "onSessionIdChanged" | "runId" | "sessionId" | "sessionKey"
 >;
 
-/**
- * Wraps params.onExecutionPhase so every phase transition also emits a
- * run.execution_phase diagnostic event. Applied once at the runner entry;
- * downstream call sites all read the forwarded callback. Session compaction
- * can rotate the session id mid-run, so the wrapper tracks the current id via
- * onSessionIdChanged instead of capturing the initial value. The returned
- * params always carry both callbacks (the wrapper installs them), so callers
- * can invoke them unconditionally.
- */
+/** Tracks session rotation so diagnostics keep the current identity after compaction. */
 export function withExecutionPhaseDiagnostics<T extends ExecutionPhaseParams>(
   params: T,
 ): T & { onExecutionPhase: ExecutionPhaseCallback; onSessionIdChanged: SessionIdChangedCallback } {

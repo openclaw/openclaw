@@ -1,10 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
-import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
+import {
+  isOAuthRefreshFence,
+  isPendingOAuthRefreshFence,
+} from "./auth-profiles/oauth-refresh-marker.js";
 import { hasOAuthIdentity } from "./auth-profiles/oauth-shared.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { SelectedModelCredential } from "./model-auth-selected-credential.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
@@ -26,6 +32,79 @@ export type PreparedModelRuntimeAuthScope = Readonly<{
 }>;
 
 /** Inventory follows identified accounts; credential use still follows the current auth owner. */
+export function preparedModelCatalogAuthIdentity(
+  source: Pick<PreparedModelCatalogAuth, "authStore" | "credentials">,
+  includesProvider: (provider: string) => boolean = () => true,
+) {
+  const profiles = Object.entries(source.authStore.profiles).filter(([, profile]) =>
+    includesProvider(profile.provider),
+  );
+  const identifiedOAuth = profiles.filter(
+    ([, profile]) =>
+      profile.type === "oauth" &&
+      hasOAuthIdentity(profile) &&
+      // A pending fence is the same sign-in mid-refresh; a failed one has ended.
+      (!isOAuthRefreshFence(profile) || isPendingOAuthRefreshFence(profile)),
+  );
+  // The usable credential map omits a fenced profile, so its account still owns the
+  // provider until the refresh owner settles or fails the claim.
+  const refreshingProviders = new Map<string, string[]>();
+  for (const [id, profile] of identifiedOAuth) {
+    const provider = normalizeProviderId(profile.provider);
+    if (
+      profile.type === "oauth" &&
+      isPendingOAuthRefreshFence(profile) &&
+      !Object.keys(source.credentials ?? {}).some((key) => normalizeProviderId(key) === provider)
+    ) {
+      refreshingProviders.set(provider, [...(refreshingProviders.get(provider) ?? []), id]);
+    }
+  }
+  return {
+    profiles: Object.fromEntries(
+      profiles.map(([id, profile]) => {
+        if (profile.type !== "oauth" || !identifiedOAuth.some(([key]) => key === id)) {
+          return [id, profile];
+        }
+        // A refresh fence drops token-bound fields; the account identity stays.
+        const {
+          access: _access,
+          refresh: _refresh,
+          expires: _expires,
+          idToken: _idToken,
+          copyToAgents: _copyToAgents,
+          ...account
+        } = profile;
+        return [id, account];
+      }),
+    ),
+    credentials: Object.fromEntries([
+      ...[...refreshingProviders].map(([provider, profileIds]) => [
+        provider,
+        { profileIds: profileIds.toSorted() },
+      ]),
+      ...Object.entries(source.credentials ?? {})
+        .filter(([provider]) => includesProvider(provider))
+        .map(([provider, credential]) => {
+          if (credential.type !== "oauth") {
+            return [provider, credential];
+          }
+          const profileIds = identifiedOAuth
+            .flatMap(([id, profile]) =>
+              profile.type === "oauth" &&
+              normalizeProviderId(profile.provider) === normalizeProviderId(provider) &&
+              profile.access === credential.access &&
+              profile.refresh === credential.refresh &&
+              profile.expires === credential.expires
+                ? [id]
+                : [],
+            )
+            .toSorted();
+          return [provider, profileIds.length ? { profileIds } : credential];
+        }),
+    ]),
+  };
+}
+
 export function hasSamePreparedModelCatalogAuth(
   previous: Pick<PreparedModelCatalogAuth, "authStore" | "credentials"> | undefined,
   next: Pick<PreparedModelCatalogAuth, "authStore" | "credentials">,
@@ -34,62 +113,59 @@ export function hasSamePreparedModelCatalogAuth(
   if (!previous?.credentials || !next.credentials) {
     return false;
   }
-  const identity = (authStore: AuthProfileStore, credentials: Readonly<AuthStorageData>) => {
-    const profiles = Object.entries(authStore.profiles).filter(([, profile]) =>
-      includesProvider(profile.provider),
-    );
-    const identifiedOAuth = profiles.filter(
-      ([, profile]) =>
-        profile.type === "oauth" && hasOAuthIdentity(profile) && !isOAuthRefreshFence(profile),
-    );
-    return {
-      profiles: Object.fromEntries(
-        profiles.map(([id, profile]) => {
-          if (profile.type !== "oauth" || !identifiedOAuth.some(([key]) => key === id)) {
-            return [id, profile];
-          }
-          const {
-            access: _access,
-            refresh: _refresh,
-            expires: _expires,
-            idToken: _idToken,
-            ...account
-          } = profile;
-          return [id, account];
-        }),
-      ),
-      credentials: Object.fromEntries(
-        Object.entries(credentials)
-          .filter(([provider]) => includesProvider(provider))
-          .map(([provider, credential]) => {
-            if (credential.type !== "oauth") {
-              return [provider, credential];
-            }
-            const profileIds = identifiedOAuth
-              .flatMap(([id, profile]) =>
-                profile.type === "oauth" &&
-                normalizeProviderId(profile.provider) === normalizeProviderId(provider) &&
-                profile.access === credential.access &&
-                profile.refresh === credential.refresh &&
-                profile.expires === credential.expires
-                  ? [id]
-                  : [],
-              )
-              .toSorted();
-            return [provider, profileIds.length ? { profileIds } : credential];
-          }),
-      ),
-    };
-  };
   return isDeepStrictEqual(
-    identity(previous.authStore, previous.credentials),
-    identity(next.authStore, next.credentials),
+    preparedModelCatalogAuthIdentity(previous, includesProvider),
+    preparedModelCatalogAuthIdentity(next, includesProvider),
   );
 }
 
+export type ModelServiceTierObservation = {
+  modelId: string;
+  runtimeId: string;
+  api: string;
+  baseUrl: string;
+  requestedTier: string;
+  responseTier?: string;
+};
+
+/** Selected-account inventory belongs to the prepared generation, not an RPC projector. */
+export type PreparedAccountCatalogAccess = {
+  reconcileAuth: (
+    authStore: AuthProfileStore,
+    includesProvider: (provider: string) => boolean,
+    profileIds?: readonly string[],
+  ) => void;
+  readServiceTierObservations: (params: {
+    identityKey: string;
+    modelId: string;
+    runtimeId: string;
+    api: string;
+    baseUrl: string;
+  }) => Pick<ModelServiceTierObservation, "requestedTier" | "responseTier">[];
+  prepareServiceTierObserver: (params: {
+    selectedCredential: SelectedModelCredential;
+    credential?: AuthProfileCredential;
+  }) => (observation: ModelServiceTierObservation) => boolean;
+  acquire: (params: {
+    profileId: string;
+    credential: AuthProfileCredential;
+    allowDiscovery: boolean;
+    refresh?: boolean;
+    load: () => Promise<readonly ProviderCatalogOutcome[]>;
+  }) => Promise<{
+    outcomes: readonly ProviderCatalogOutcome[];
+    /** Distinguishes an authoritative empty publication from a cold private catalog. */
+    hasPublishedCatalog: boolean;
+    isCurrent: () => boolean;
+  }>;
+};
+
 /** Private auth facts owned by an immutable prepared model generation. */
 type RuntimeAuthBinding = {
+  /** Host-only admission binding; never exposed on public model snapshots. */
+  readPolicyConfig?: () => OpenClawConfig;
   store?: AuthProfileStore;
+  readUsage?: (store: AuthProfileStore) => AuthProfileStore;
   labels?: ModelCatalogAuthLabels;
   materializations?: readonly RuntimeAuthMaterialization[];
   load?: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
@@ -108,8 +184,15 @@ export function bindPreparedModelRuntimeAuth(snapshot: object, binding: RuntimeA
   runtimeAuth.set(snapshot, { ...runtimeAuth.get(snapshot), ...binding });
 }
 
+export function getPreparedModelRuntimePolicyConfigReader(
+  snapshot: object | undefined,
+): (() => OpenClawConfig) | undefined {
+  return snapshot ? runtimeAuth.get(snapshot)?.readPolicyConfig : undefined;
+}
+
 export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileStore | undefined {
-  return runtimeAuth.get(snapshot)?.store;
+  const binding = runtimeAuth.get(snapshot);
+  return binding?.store ? (binding.readUsage?.(binding.store) ?? binding.store) : undefined;
 }
 
 export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalogAuthLabels {
@@ -118,6 +201,14 @@ export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalo
     throw new Error("Prepared model runtime omitted auth display labels");
   }
   return labels;
+}
+
+// Auth bindings can outlive publication; do not retain the catalog access scope.
+export function createPreparedModelCatalogUsageReader(
+  isCurrent: () => boolean,
+  readUsage: (store: AuthProfileStore) => AuthProfileStore,
+) {
+  return (store: AuthProfileStore) => (isCurrent() ? readUsage(store) : store);
 }
 
 export function setPreparedModelFullCatalogAuth(
@@ -156,7 +247,7 @@ export async function loadPreparedModelRuntimeAuth(
   if (load) {
     return await load(scope);
   }
-  const authStore = binding?.store;
+  const authStore = getPreparedModelRuntimeAuthStore(snapshot);
   return authStore ? { authStore, authModes: snapshot.authModes ?? {} } : undefined;
 }
 

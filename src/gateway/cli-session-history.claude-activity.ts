@@ -1,10 +1,10 @@
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";
 import {
   decodeClaudeCliProjectEntry,
   parseClaudeCliHistoryEntry,
   resolveClaudeCliPromptTextCandidates,
-  resolveClaudeCliTimestampMs,
   type ClaudeCliProjectEntry,
 } from "./cli-session-history.claude.js";
 
@@ -45,10 +45,10 @@ function classifyClaudeCliHistoryEntry(params: {
     new Map(),
     { reseedMode: "preserve" },
   );
-  if (parsed?.role !== "user") {
+  if (parsed?.role !== "user" || parsed.display === false) {
     return { humanTurn: false };
   }
-  const occurredAt = resolveClaudeCliTimestampMs(entry.timestamp);
+  const occurredAt = parseDateStringTimestampMs(entry.timestamp);
   return {
     humanTurn: true,
     userText: candidates[0]?.text,

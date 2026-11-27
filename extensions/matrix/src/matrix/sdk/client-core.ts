@@ -1,21 +1,15 @@
-import { createHash } from "node:crypto";
-import {
-  EventType,
-  MatrixError,
-  MatrixEventEvent,
-  MsgType,
-  Preset,
-  type MatrixEvent,
-} from "matrix-js-sdk/lib/matrix.js";
+import { EventType, MatrixError, MsgType, Preset } from "matrix-js-sdk/lib/matrix.js";
 import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import type { MatrixSyncIngressHandler } from "../client/file-sync-store.js";
 import { formatMatrixErrorReason } from "../errors.js";
 import { MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
 import { MatrixClientBase } from "./client-base.js";
 import { matrixEventToRaw, parseMxc } from "./event-helpers.js";
 import { noop } from "./logger.js";
 import type { MatrixMessageWireDispatch } from "./message-wire-dispatch.js";
-import { captureMatrixSendCurrentness, withoutMatrixSendCurrentness } from "./send-currentness.js";
+import { captureMatrixSendContext, withoutMatrixSendCurrentness } from "./send-currentness.js";
 import type { HttpMethod, QueryParams } from "./transport.js";
 import type { MatrixRawEvent, MatrixRelationsPage, MessageEventContent } from "./types.js";
 
@@ -62,7 +56,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
   }
 
   async getTransactionScopeId(): Promise<string> {
-    captureMatrixSendCurrentness(this)?.();
+    captureMatrixSendContext(this)?.assertCurrent();
     if (this.transactionScopeId) {
       return this.transactionScopeId;
     }
@@ -92,15 +86,9 @@ export abstract class MatrixClientCore extends MatrixClientBase {
         this.transactionScopeDeviceId = deviceId;
         // Include both device and token identities. This deliberately fails closed
         // across credential rotation even where a homeserver could reuse a device txn scope.
-        return createHash("sha256")
-          .update(this.transactionScopeHomeserver)
-          .update("\0")
-          .update(userId)
-          .update("\0")
-          .update(deviceId ?? "")
-          .update("\0")
-          .update(this.transactionScopeAccessTokenHash)
-          .digest("hex");
+        return sha256Hex(
+          `${this.transactionScopeHomeserver}\0${userId}\0${deviceId ?? ""}\0${this.transactionScopeAccessTokenHash}`,
+        );
       });
     this.transactionScopePromise = active;
     try {
@@ -193,11 +181,11 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     beforeWireDispatch?: (dispatch: MatrixMessageWireDispatch) => Promise<void>,
   ): Promise<string> {
     // Keep ephemeral sends on the same per-wire guard as durable transaction IDs.
-    const assertCurrent = captureMatrixSendCurrentness(this);
+    const assertCurrent = captureMatrixSendContext(this)?.assertCurrent;
     const wireTransactionId =
       transactionId ?? (beforeWireDispatch || assertCurrent ? this.client.makeTxnId() : undefined);
-    return await this.sendQueue.enqueue(roomId, async () => {
-      return await this.messageWireDispatchGuards.run({
+    return await this.sendQueue.enqueue(roomId, () =>
+      this.messageWireDispatchGuards.run({
         transactionId: wireTransactionId,
         guard: beforeWireDispatch,
         assertCurrent,
@@ -215,8 +203,9 @@ export abstract class MatrixClientCore extends MatrixClientBase {
                 return existingId;
               }
               if (existing.status === EventStatus.NOT_SENT && room) {
-                await this.prepareRoomForMessageSend(roomId, existing.getContent());
-                const resent = await this.client.resendEvent(existing, room);
+                const resent = await this.withPreparedRoom(roomId, existing.getContent(), () =>
+                  this.client.resendEvent(existing, room),
+                );
                 return resent.event_id;
               }
               throw new Error(
@@ -224,12 +213,24 @@ export abstract class MatrixClientCore extends MatrixClientBase {
               );
             }
           }
-          await this.prepareRoomForMessageSend(roomId, content);
-          const sent = await this.client.sendMessage(roomId, content as never, wireTransactionId);
+          const sent = await this.withPreparedRoom(roomId, content, () =>
+            this.client.sendMessage(roomId, content as never, wireTransactionId),
+          );
           return sent.event_id;
         },
-      });
-    });
+      }),
+    );
+  }
+
+  private async withPreparedRoom<T>(
+    roomId: string,
+    content: MessageEventContent,
+    send: () => Promise<T>,
+  ): Promise<T> {
+    const context = captureMatrixSendContext(this);
+    return (await this.prepareRoomForMessageSend(roomId, content)) === "m.room.encrypted"
+      ? await this.withLiveEncryptedRoom(roomId, send, context)
+      : await send();
   }
 
   async getMessageWireEventType(roomId: string): Promise<"m.room.message" | "m.room.encrypted"> {
@@ -313,10 +314,11 @@ export abstract class MatrixClientCore extends MatrixClientBase {
             : "Matrix encrypted wire events must be generated by the SDK",
         );
       }
-      if (eventType !== MATRIX_REACTION_EVENT_TYPE) {
-        await this.prepareRoomForMessageSend(roomId, content);
-      }
-      const sent = await this.client.sendEvent(roomId, eventType as never, content as never);
+      const send = () => this.client.sendEvent(roomId, eventType as never, content as never);
+      const sent =
+        eventType === MATRIX_REACTION_EVENT_TYPE
+          ? await send()
+          : await this.withPreparedRoom(roomId, content, send);
       return sent.event_id;
     });
   }
@@ -425,25 +427,17 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     return uploaded.content_uri;
   }
 
-  async getEvent(roomId: string, eventId: string): Promise<Record<string, unknown>> {
-    const rawEvent = (await this.client.fetchRoomEvent(roomId, eventId)) as Record<string, unknown>;
+  async getEvent(roomId: string, eventId: string): Promise<MatrixRawEvent> {
+    const rawEvent = await this.client.fetchRoomEvent(roomId, eventId);
     if (rawEvent.type !== "m.room.encrypted") {
-      return rawEvent;
+      // SAFETY: This endpoint returns a complete room event despite the SDK Partial<IEvent> type.
+      return rawEvent as MatrixRawEvent;
     }
 
     const mapper = this.client.getEventMapper();
     const event = mapper(rawEvent);
-    let decryptedEvent: MatrixEvent | undefined;
-    const onDecrypted = (candidate: MatrixEvent) => {
-      decryptedEvent = candidate;
-    };
-    event.once(MatrixEventEvent.Decrypted, onDecrypted);
-    try {
-      await this.client.decryptEventIfNeeded(event);
-    } finally {
-      event.off(MatrixEventEvent.Decrypted, onDecrypted);
-    }
-    return matrixEventToRaw(decryptedEvent ?? event);
+    await this.client.decryptEventIfNeeded(event);
+    return matrixEventToRaw(event);
   }
 
   async getRelations(
@@ -468,6 +462,23 @@ export abstract class MatrixClientCore extends MatrixClientBase {
       nextBatch: result.nextBatch ?? null,
       prevBatch: result.prevBatch ?? null,
     };
+  }
+
+  async bindSyncIngress(handler: MatrixSyncIngressHandler): Promise<() => void> {
+    if (!this.syncStore) {
+      throw new Error("Matrix sync ingress requires a persistent sync store");
+    }
+    return await this.syncStore.bindSyncIngress(async (sync, context) => {
+      try {
+        await handler(sync, context);
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        // The SDK only logs a rejected store callback; the monitor must retire
+        // this generation instead of leaving a stopped sync loop marked healthy.
+        this.emitter.emit("sync.unexpected_error", failure);
+        throw failure;
+      }
+    });
   }
 
   async hydrateEvents(

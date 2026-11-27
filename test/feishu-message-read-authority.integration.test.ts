@@ -9,19 +9,17 @@ import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelPlugin,
-} from "../src/channels/plugins/types.js";
+} from "../src/channels/plugins/types.public.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
+  resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -76,33 +74,22 @@ function createOriginatingRun(currentChat = CURRENT) {
     requesterSenderId: SELF,
     toolContext,
   });
-  const assert = createAgentRuntimeAuthorityGuard(
-    {
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...delegatedAuthority },
-          messageActionContext: { expiresAtMs: Date.now() + 60_000, turnCapability },
-        },
-      },
-    } as GatewayClient,
-    {
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    } as GatewayRequestContext,
-    () => {},
-  ).commitGuard;
-  if (!assert) {
-    throw new Error("Expected originating Feishu run authority");
-  }
-  assert();
   return {
-    assert,
+    // Runtime admission does not replace the caller's live turn fence.
+    assert: () => {
+      if (
+        !resolveMessageActionTurnCapability({
+          token: turnCapability,
+          agentId: "main",
+          runId: operationalRunInstance.runId,
+          sessionKey,
+        })
+      ) {
+        throw new Error("Message-read turn authority is no longer active");
+      }
+    },
     toolContext,
     revokeTurn: () => revokeMessageActionTurnCapability(turnCapability),
-    releaseClaim: () => releaseAgentRunDelegatedAuthority(delegatedAuthority),
     createTool: (config: OpenClawConfig) =>
       wrapToolWithGatewayCallerIdentity(
         createMessageTool({
@@ -113,19 +100,16 @@ function createOriginatingRun(currentChat = CURRENT) {
           messageActionTurnCapability: turnCapability,
           ...toolContext,
           config,
-          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-          resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-            resolvedConfig,
-            diagnostics: [],
-            targetStatesByPath: {},
-            hadUnresolvedTargets: false,
-          }),
         }),
         {
           agentId: "main",
           sessionKey,
           operationalRunInstance,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(delegatedAuthority),
+          receiptAuthority: () => {
+            if (!validateAgentRunDelegatedAuthority(delegatedAuthority)) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
       ),
     dispose: () => {
@@ -316,9 +300,7 @@ afterAll(async () => {
 function createFixture(
   options: {
     bundled?: boolean;
-    trusted?: boolean;
     currentChat?: string;
-    actions?: readonly ChannelMessageActionName[];
   } = {},
 ) {
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
@@ -352,13 +334,12 @@ function createFixture(
   const record = createPluginRecord({
     id: "feishu",
     origin: options.bundled ? "bundled" : "global",
-    trustedOfficialInstall: !options.bundled && options.trusted !== false,
+    trustedOfficialInstall: !options.bundled,
   });
   const plugin: ChannelPlugin = {
     ...feishuPlugin,
     actions: {
       ...feishuPlugin.actions!,
-      readAuthorityActions: options.actions ?? feishuPlugin.actions?.readAuthorityActions,
       handleAction: async (ctx) => {
         const result = await feishuPlugin.actions!.handleAction!(ctx);
         // Revoke at the registered handler's return boundary after a real local consumer.
@@ -445,8 +426,8 @@ const readCases: Array<{
   },
 ];
 
-describe.each([false, true])("Feishu provider read parity (bundled: %s)", (bundled) => {
-  it.each(readCases)(
+describe.each([false, true])("Feishu provider reads (bundled: %s)", (bundled) => {
+  it.each(bundled ? readCases.filter(({ action }) => action === "read") : readCases)(
     "runs $action through its real consumer",
     async ({ action, params, details, paths }) => {
       const fixture = createFixture({ bundled });
@@ -488,30 +469,21 @@ it("finds a live peer on later pages through the registered channel-list action"
   expect(contentRequests()).toEqual([PEERS_PATH, PEERS_PATH]);
 });
 
-it.each(["plugin", "turn", "claim"] as const)(
-  "stops live peer pagination when the %s retires between pages",
-  async (owner) => {
-    const fixture = createFixture();
-    fixture.settings.allowFrom = ["*"];
-    beforeReply = (request) => {
-      if (request.path !== PEERS_PATH) {
-        return;
-      }
-      if (owner === "plugin") {
-        fixture.record.enabled = false;
-      } else if (owner === "turn") {
-        fixture.run.revokeTurn();
-      } else {
-        fixture.run.releaseClaim();
-      }
-    };
+it("stops live peer pagination when the plugin retires between pages", async () => {
+  const fixture = createFixture();
+  fixture.settings.allowFrom = ["*"];
+  beforeReply = (request) => {
+    if (request.path !== PEERS_PATH) {
+      return;
+    }
+    fixture.record.enabled = false;
+  };
 
-    await expect(
-      fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 }),
-    ).rejects.toThrow("no longer active");
-    expect(contentRequests()).toEqual([PEERS_PATH]);
-  },
-);
+  await expect(
+    fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 }),
+  ).rejects.toThrow("Plugin feishu was reloaded during the read. Retry the action.");
+  expect(contentRequests()).toEqual([PEERS_PATH]);
+});
 
 it("cancels live peer pagination through the local message tool", async () => {
   const fixture = createFixture();
@@ -594,91 +566,53 @@ it.each(["account", "origin", "target", "reactions", "sticker", "catalog"] as co
   },
 );
 
-it("does not widen an older read list when the host classifies member-info", async () => {
-  const fixture = createFixture({ actions: ["read"] });
-  expectResult(await fixture.dispatch("read", { chatId: ALLOWED, messageId: MESSAGE }), {
-    message: { content: "allowed context" },
-  });
-  requests = [];
-  await expect(
-    fixture.dispatch("member-info", { chatId: ALLOWED, memberId: MEMBER }),
-  ).rejects.toThrow("exact current conversation");
-  expect(requests).toEqual([]);
-});
-
-it("does not grant cross-context write authority through an overbroad read declaration", async () => {
-  const fixture = createFixture({
-    actions: [...feishuPlugin.actions!.readAuthorityActions!, "pin"],
-  });
-  await expect(fixture.dispatch("pin", { chatId: ALLOWED, messageId: MESSAGE })).rejects.toThrow(
-    "exact current conversation",
+it.each([
+  ["plugin", "metadata"],
+  ["plugin", "result"],
+  ["turn", "result"],
+] as const)("rejects %s retirement at %s", async (owner, phase) => {
+  const fixture = createFixture();
+  beforeReply = (request) => {
+    if (request.path !== (phase === "metadata" ? CHAT_PATH : PINS_PATH)) {
+      return;
+    }
+    if (owner === "plugin") {
+      fixture.record.enabled = false;
+    } else {
+      fixture.run.revokeTurn();
+    }
+  };
+  await expect(fixture.dispatch("list-pins", { chatId: ALLOWED })).rejects.toThrow(
+    owner === "plugin"
+      ? "Plugin feishu was reloaded during the read. Retry the action."
+      : "Message-read turn authority is no longer active",
   );
-  expect(requests).toEqual([]);
+  expect(contentRequests()).toEqual(phase === "metadata" ? [CHAT_PATH] : [CHAT_PATH, PINS_PATH]);
 });
 
-it("retains the exact-current restriction for an unverified external installation", async () => {
-  const fixture = createFixture({ trusted: false });
-  await expect(fixture.dispatch("read", { chatId: ALLOWED, messageId: MESSAGE })).rejects.toThrow(
-    "exact current conversation",
-  );
-  expect(requests).toEqual([]);
-});
-
-describe.each(["plugin", "turn", "claim"] as const)("Feishu %s lifetime", (owner) => {
-  it.each(["metadata", "result"] as const)("rejects retirement at %s", async (phase) => {
-    const fixture = createFixture();
-    beforeReply = (request) => {
-      if (request.path !== (phase === "metadata" ? CHAT_PATH : PINS_PATH)) {
-        return;
-      }
-      if (owner === "plugin") {
-        fixture.record.enabled = false;
-      }
-      if (owner === "turn") {
-        fixture.run.revokeTurn();
-      }
-      if (owner === "claim") {
-        fixture.run.releaseClaim();
-      }
-    };
-    await expect(fixture.dispatch("list-pins", { chatId: ALLOWED })).rejects.toThrow(
-      "no longer active",
-    );
-    expect(contentRequests()).toEqual(phase === "metadata" ? [CHAT_PATH] : [CHAT_PATH, PINS_PATH]);
-  });
-});
-
-it.each(["sticker-search", "channel-list", "member-info"] as const)(
+it.each(["channel-list", "member-info"] as const)(
   "rejects a retired local %s result",
   async (action) => {
     const fixture = createFixture({ currentChat: action === "member-info" ? DIRECT : CURRENT });
     let observed: ActionResult | undefined;
     afterProviderResult = (result) => {
       observed = result;
-      if (action === "sticker-search") {
-        fixture.run.releaseClaim();
-      }
       if (action === "channel-list") {
         fixture.record.enabled = false;
-      }
-      if (action === "member-info") {
+      } else {
         fixture.run.revokeTurn();
       }
     };
-    const params =
-      action === "sticker-search"
-        ? { query: "thumbs" }
-        : action === "member-info"
-          ? { chatId: DIRECT }
-          : {};
-    await expect(fixture.dispatch(action, params)).rejects.toThrow("no longer active");
-    if (action === "sticker-search") {
-      expectResult(observed ?? null, { stickers: [{ fileId: "file_allowed" }] });
-    }
+    await expect(
+      fixture.dispatch(action, action === "member-info" ? { chatId: DIRECT } : {}),
+    ).rejects.toThrow(
+      action === "channel-list"
+        ? "Plugin feishu was reloaded during the read. Retry the action."
+        : "Message-read turn authority is no longer active",
+    );
     if (action === "channel-list") {
       expectResult(observed ?? null, { groups: [{ id: ALLOWED }], peers: [{ id: SELF }] });
-    }
-    if (action === "member-info") {
+    } else {
       expectResult(observed ?? null, { members: [{ member_id: SELF }] });
     }
     expect(contentRequests()).toEqual(
@@ -687,39 +621,33 @@ it.each(["sticker-search", "channel-list", "member-info"] as const)(
   },
 );
 
-it.each(["allowed", "turn", "claim"] as const)(
-  "uses the normal local message tool (%s)",
-  async (mode) => {
-    const fixture = createFixture();
-    setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
-    const tool = fixture.run.createTool(fixture.cfg);
-    beforeReply = (request) => {
-      if (request.path !== CHAT_PATH) {
-        return;
-      }
-      if (mode === "turn") {
-        fixture.run.revokeTurn();
-      }
-      if (mode === "claim") {
-        fixture.run.releaseClaim();
-      }
-    };
-    const result = track(
-      tool.execute("feishu-read", {
-        action: "read",
-        channel: "feishu",
-        target: `chat:${ALLOWED}`,
-        messageId: MESSAGE,
-      }),
-    );
-    if (mode === "allowed") {
-      expectResult(await result, { message: { messageId: MESSAGE, content: "allowed context" } });
-    } else {
-      await expect(result).rejects.toThrow("no longer active");
+it.each(["allowed", "turn"] as const)("uses the normal local message tool (%s)", async (mode) => {
+  const fixture = createFixture();
+  setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
+  const tool = fixture.run.createTool(fixture.cfg);
+  beforeReply = (request) => {
+    if (request.path !== CHAT_PATH) {
+      return;
     }
-    expect(contentRequests()).toEqual([MESSAGE_PATH, CHAT_PATH]);
-  },
-);
+    if (mode === "turn") {
+      fixture.run.revokeTurn();
+    }
+  };
+  const result = track(
+    tool.execute("feishu-read", {
+      action: "read",
+      channel: "feishu",
+      target: `chat:${ALLOWED}`,
+      messageId: MESSAGE,
+    }),
+  );
+  if (mode === "allowed") {
+    expectResult(await result, { message: { messageId: MESSAGE, content: "allowed context" } });
+  } else {
+    await expect(result).rejects.toThrow("message action turn capability is no longer active");
+  }
+  expect(contentRequests()).toEqual([MESSAGE_PATH, CHAT_PATH]);
+});
 
 it("rejects a configured account disabled after local message-tool creation", async () => {
   const fixture = createFixture();

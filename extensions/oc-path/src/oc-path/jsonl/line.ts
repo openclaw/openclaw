@@ -14,13 +14,7 @@ export function pickJsonlLineIndex(ast: JsonlAst, addr: string): number {
     return ast.lines.findIndex((line) => line.kind === "value");
   }
   if (addr === POS_LAST) {
-    for (let index = ast.lines.length - 1; index >= 0; index -= 1) {
-      const line = ast.lines[index];
-      if (line !== undefined && line.kind === "value") {
-        return index;
-      }
-    }
-    return -1;
+    return ast.lines.findLastIndex((line) => line?.kind === "value");
   }
   const match = /^L(\d+)$/.exec(addr);
   if (match === null || match[1] === undefined) {
@@ -28,4 +22,19 @@ export function pickJsonlLineIndex(ast: JsonlAst, addr: string): number {
   }
   const target = Number(match[1]);
   return ast.lines.findIndex((line) => line.line === target);
+}
+
+/**
+ * A recursive wildcard in the line slot can also consume JSONC keys inside the
+ * line. Only the line address belongs in the section slot; move the rest into
+ * the value slots, merging so emitted paths keep at most three slots.
+ */
+export function keepOnlyLineAddressInSection(runs: string[][]): string[][] {
+  const lineRun = runs[0];
+  if (lineRun === undefined || lineRun.length <= 1) {
+    return runs;
+  }
+  const rest = runs.slice(1);
+  const [head = [], ...tail] = rest.length < 2 ? [[], ...rest] : rest;
+  return [lineRun.slice(0, 1), [...lineRun.slice(1), ...head], ...tail];
 }

@@ -1,8 +1,8 @@
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { sha256File } from "../infra/crypto-digest.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
 import { isCaseSensitiveDirectory, TRANSCRIPT_EXPORT_FILE_NAMES } from "./store-artifacts.js";
 import {
@@ -106,10 +106,8 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
   try {
     await fs.access(params.exportRootDir);
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
+    ignoreMissingPath(error);
+    return false;
   }
   if (await isCaseSensitiveDirectory(params.exportRootDir)) {
     return false;
@@ -119,10 +117,8 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
   try {
     entries = await fs.readdir(sessionDir, { withFileTypes: true });
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return true;
-    }
-    throw error;
+    ignoreMissingPath(error);
+    return true;
   }
   const artifactCaseSensitive = await isCaseSensitiveDirectory(sessionDir);
   const artifacts = entries.flatMap((entry) => {
@@ -140,10 +136,9 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
     if (metadataStat.isSymbolicLink() || !metadataStat.isFile()) {
       return false;
     }
-    let handle;
     try {
-      handle = await fs.open(metadataPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
-      const metadata = JSON.parse(await handle.readFile("utf8")) as {
+      const { buffer } = await readRegularFile({ filePath: metadataPath });
+      const metadata = JSON.parse(buffer.toString("utf8")) as {
         sessionId?: unknown;
         startedAt?: unknown;
       };
@@ -152,8 +147,6 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
       );
     } catch {
       return false;
-    } finally {
-      await handle?.close();
     }
   }
   if (!owner && !metadataArtifact) {

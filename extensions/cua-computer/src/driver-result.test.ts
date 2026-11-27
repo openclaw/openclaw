@@ -8,7 +8,6 @@ import { browserObservation, windowObservation } from "./driver-result.js";
 
 const observations = [
   { kind: "window", mimeType: "image/png", fields: CUA_DRIVER_CONTRACT_FIXTURES.windowState },
-  { kind: "zoom", mimeType: "image/jpeg", fields: { width: 300, height: 200, format: "jpeg" } },
   { kind: "browser", mimeType: "image/png", fields: CUA_DRIVER_CONTRACT_FIXTURES.browserSnapshot },
 ] as const;
 
@@ -21,7 +20,7 @@ function project(kind: (typeof observations)[number]["kind"], result: CuaToolRes
         targetId: CUA_DRIVER_CONTRACT_FIXTURES.browserSnapshot.target_id,
         tabId: CUA_DRIVER_CONTRACT_FIXTURES.browserSnapshot.tab_id,
       })
-    : windowObservation(result, state, "test-window", { fromZoom: kind === "zoom" });
+    : windowObservation(result, state, "test-window");
 }
 
 describe.each(observations)("CUA $kind observation images", ({ kind, mimeType, fields }) => {

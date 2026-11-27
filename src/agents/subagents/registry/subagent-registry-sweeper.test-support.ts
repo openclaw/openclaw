@@ -1,25 +1,36 @@
 import { onTestFinished, vi } from "vitest";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
+import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-state-worker-contract.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
+import {
+  acknowledgeMockSubagentRegistryWrite,
+  createSubagentRunRecord,
+} from "../../subagent-test-fixtures.test-helpers.js";
+import * as subagentMemory from "./subagent-registry-memory.js";
 import { createSubagentRegistrySweeper } from "./subagent-registry-sweeper.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+type SweeperOptions = Parameters<typeof createSubagentRegistrySweeper>[0];
 
 export function createSubagentSweeperRun(): SubagentRunRecord {
   return createSubagentRunRecord({
     runId: "interrupted-run",
     childSessionKey: "agent:main:subagent:interrupted",
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
+    childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
     task: "recover after restart",
-    cleanup: "keep",
     createdAt: Date.now() - 60_000,
     startedAt: Date.now() - 55_000,
   });
 }
 
-export const createSubagentSweeperChildLookup =
-  (runs: Map<string, SubagentRunRecord>) => (childSessionKey: string) =>
-    [...runs.values()].filter((entry) => entry.childSessionKey === childSessionKey);
+export function mockSubagentSweeperChildLookup(runs: Map<string, SubagentRunRecord>) {
+  return vi
+    .spyOn(subagentMemory, "getSubagentRunsForChildSession")
+    .mockImplementation((childSessionKey) =>
+      [...runs.values()].filter((entry) => entry.childSessionKey === childSessionKey),
+    );
+}
 
 export function createArchivedSubagentSweeperRun(
   overrides: Partial<SubagentRunRecord> = {},
@@ -34,72 +45,72 @@ export function createArchivedSubagentSweeperRun(
 }
 
 export function createSubagentSweeperHarness(
-  runtime: { current?: GatewayRecoveryRuntime },
   entry = createSubagentSweeperRun(),
+  runs = new Map<string, SubagentRunRecord>(),
 ) {
-  const runs = new Map([[entry.runId, entry]]);
-  const finalizeInterruptedSubagentRun = vi.fn(
-    async (_params: {
-      runId: string;
-      expectedEntry?: SubagentRunRecord;
-      error: string;
-      endedAt?: number;
-    }) => 0,
-  );
-  const completeSubagentRunWithRecovery = vi.fn();
-  const completeCleanupBookkeeping = vi.fn();
-  const discardTerminalDelivery =
-    vi.fn<Parameters<typeof createSubagentRegistrySweeper>[0]["discardTerminalDelivery"]>();
-  const emitSubagentEndedHookForRun = vi.fn();
-  const notifyContextEngineSubagentEnded = vi.fn();
-  const callGateway = vi.fn();
-  const resumeRequesterSettleWake = vi.fn();
-  const warn = vi.fn();
-  const sweeper = createSubagentRegistrySweeper({
-    runs,
-    resumedRuns: new Set(),
-    persist: vi.fn(),
-    clearPendingLifecycleError: vi.fn(),
-    clearPendingLifecycleTimeout: vi.fn(),
+  runs.set(entry.runId, entry);
+  const execute = stateWorker.runOpenClawStateWorkerOperation;
+  const worker = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementation(async (owner, run, options) => {
+      options?.assertCurrent?.();
+      return run({
+        execute: vi
+          .fn()
+          .mockImplementation(
+            async (
+              command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
+              executeOptions: Parameters<DomainScope["execute"]>[1],
+            ) => {
+              if (command.type !== "subagents.persistChanges") {
+                return execute(owner, (scope) => scope.execute(command, executeOptions), options);
+              }
+              // Scheduling tests exercise publication through the real owner; native CAS has worker coverage.
+              await acknowledgeMockSubagentRegistryWrite(
+                options?.createAdmission,
+                command.input.writeId,
+              );
+            },
+          ),
+      });
+    });
+  const callbacks = {
     sweepPendingLifecycle: vi.fn(),
-    completeSubagentRunWithRecovery,
-    getGatewayRecoveryRuntime: () => runtime.current,
-    finalizeInterruptedSubagentRun,
-    resumeRequesterSettleWake,
-    startSubagentAnnounceCleanupFlow: vi.fn(() => true),
-    completeCleanupBookkeeping,
-    discardTerminalDelivery,
-    shouldEmitEndedHookForRun: vi.fn(() => false),
-    emitSubagentEndedHookForRun,
-    callGateway,
-    cleanupCollectorLaunchResources: vi.fn(async () => true),
+    completeSubagentRunWithRecovery: vi.fn(),
+    notifyContextEngineSubagentEnded: vi.fn(),
     runContextEngineSubagentEnded: vi.fn(),
-    notifyContextEngineSubagentEnded,
-    retireSupersededRun: vi.fn(),
-    getRunsForChildSession: createSubagentSweeperChildLookup(runs),
-    getRunsForCollectorGroup: (requesterSessionKey, groupId) =>
-      [...runs].filter(
-        ([, candidate]) =>
-          candidate.collect &&
-          candidate.groupId === groupId &&
-          (candidate.swarmRequesterSessionKey ?? candidate.requesterSessionKey) ===
-            requesterSessionKey,
-      ),
-    warn,
-  });
-  onTestFinished(() => sweeper.reset());
-  return {
-    entry,
-    runs,
-    callGateway,
-    completeCleanupBookkeeping,
-    completeSubagentRunWithRecovery,
-    discardTerminalDelivery,
-    emitSubagentEndedHookForRun,
-    finalizeInterruptedSubagentRun,
-    notifyContextEngineSubagentEnded,
-    resumeRequesterSettleWake,
-    sweeper,
-    warn,
+    callGateway: vi.fn(),
+    warn: vi.fn(),
+    startSubagentAnnounceCleanupFlow: vi.fn(() => true),
+    resumeRequesterSettleWake: vi.fn(),
   };
+  const childLookup = mockSubagentSweeperChildLookup(runs);
+  const collectorLookup: SweeperOptions["getRunsForCollectorGroup"] = (
+    requesterSessionKey,
+    groupId,
+  ) =>
+    [...runs].filter(
+      ([, candidate]) =>
+        candidate.collect &&
+        candidate.groupId === groupId &&
+        (candidate.swarmRequesterSessionKey ?? candidate.requesterSessionKey) ===
+          requesterSessionKey,
+    );
+  const sweeper = createSubagentRegistrySweeper({
+    ...callbacks,
+    runs,
+    clearPendingLifecycleError: vi.fn(),
+    resumePendingRequesterSettlements: () => false,
+    cleanupCollectorLaunchResources: vi.fn(async () => true),
+    retireSupersededRun: vi.fn(),
+    retireObligations: vi.fn(async () => {}),
+    getRunsForChildSession: childLookup,
+    getRunsForCollectorGroup: collectorLookup,
+  });
+  onTestFinished(async () => {
+    await sweeper.reset();
+    childLookup.mockRestore();
+    worker.mockRestore();
+  });
+  return { ...callbacks, entry, runs, sweeper };
 }

@@ -1,19 +1,30 @@
 import {
+  ProviderAuthFailure,
+  resolveOpenAICodexAccessTokenExpiry,
+} from "openclaw/plugin-sdk/provider-auth";
+import {
+  createOAuthRefreshResponseError,
+  type OAuthRefreshOutcome,
   resolveOAuthTokenExpiresAt,
-  resolveOAuthTokenLifetimeMs,
   throwIfOAuthLoginAborted,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   isRecord,
   normalizeBoundedOptionalString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
+import {
+  createOpenAIAuthorizationCodeForm,
+  OPENAI_CODEX_CLIENT_ID,
+  withOpenAIOAuthResponse,
+} from "./openai-oauth-http.runtime.js";
 
-const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OAUTH_TOKEN_SSRF_POLICY = {
   allowRfc2544BenchmarkRange: true,
@@ -41,13 +52,10 @@ type TokenFailure = {
   errorType?: string;
   reason?: TokenFailureReason;
   status?: number;
+  retryAfterMs?: number;
+  oauthRefreshOutcome?: OAuthRefreshOutcome;
 };
 type TokenResult = TokenSuccess | TokenFailure;
-type TokenResponseJson = {
-  access_token?: string;
-  refresh_token?: string;
-  expires_in?: number;
-};
 type TokenRequestOptions = {
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -61,26 +69,53 @@ const TOKEN_FAILURE_REASON_BY_CODE: Readonly<Record<string, TokenFailureReason>>
   refresh_token_invalidated: "token_invalidated",
   refresh_token_reused: "refresh_token_reused",
 };
-const TOKEN_FAILURE_CODES = new Set(Object.keys(TOKEN_FAILURE_REASON_BY_CODE));
+const REGION_BLOCKED_CODE = "unsupported_country_region_territory";
+const TOKEN_FAILURE_CODES = new Set([
+  ...Object.keys(TOKEN_FAILURE_REASON_BY_CODE),
+  REGION_BLOCKED_CODE,
+]);
 
-function normalizeTokenErrorSummary(value: unknown): string | undefined {
-  const normalized = normalizeBoundedOptionalString(value, OAUTH_TOKEN_ERROR_SUMMARY_MAX_CHARS * 4)
-    ?.replace(/\s+/gu, " ")
-    .trim();
-  return normalized
+/** The one OpenAI auth error-text sanitizer: single line, no terminal controls, redacted, bounded. */
+export function normalizeTokenErrorSummary(value: unknown): string | undefined {
+  const normalized = normalizeBoundedOptionalString(value, OAUTH_TOKEN_ERROR_SUMMARY_MAX_CHARS * 4);
+  const text = normalized && sanitizeTerminalText(normalized.replace(/\s+/gu, " ")).trim();
+  return text
     ? normalizeBoundedOptionalString(
-        redactSensitiveText(normalized, { mode: "tools" }),
+        redactSensitiveText(text, { mode: "tools" }),
         OAUTH_TOKEN_ERROR_SUMMARY_MAX_CHARS,
       )
     : undefined;
 }
 
-function normalizeTokenErrorFact(
-  value: unknown,
-  allowlist: ReadonlySet<string>,
-): string | undefined {
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
-  return normalized && allowlist.has(normalized) ? normalized : undefined;
+/**
+ * Sign-in failure for an OpenAI auth endpoint answer. `status` is absent when the request
+ * itself failed. Refresh failures keep their own `oauthRefreshFailure` facts instead.
+ */
+export function createOpenAISignInFailure(
+  failure: { status?: number; code?: string; summary?: string; retryAfterMs?: number },
+  rejected: "grant_rejected" | "device_code_denied" = "grant_rejected",
+): ProviderAuthFailure {
+  const cause = failure.summary ? new Error(failure.summary) : undefined;
+  if (!failure.status) {
+    return new ProviderAuthFailure("network", { cause });
+  }
+  if (failure.status === 429) {
+    return new ProviderAuthFailure("rate_limited", { retryAfterMs: failure.retryAfterMs, cause });
+  }
+  if (failure.status >= 500) {
+    return new ProviderAuthFailure("provider_unavailable", { cause });
+  }
+  if (failure.code === REGION_BLOCKED_CODE) {
+    return new ProviderAuthFailure("host_network_blocked", {
+      providerDetail:
+        "OpenAI does not allow sign-in from this computer's country, region, or network route. If you normally use a proxy, make sure the OpenClaw process uses it.",
+      cause,
+    });
+  }
+  return new ProviderAuthFailure(rejected, {
+    ...(rejected === "grant_rejected" ? { providerDetail: failure.summary } : {}),
+    cause,
+  });
 }
 
 function buildTokenResponseFailure(params: {
@@ -95,10 +130,10 @@ function buildTokenResponseFailure(params: {
     // Non-JSON responses use the bounded generic message below.
   }
   const error = asOptionalRecord(body?.error);
-  const code = normalizeTokenErrorFact(
+  const rawCode = normalizeOptionalString(
     error?.code ?? (typeof body?.error === "string" ? body.error : body?.code),
-    TOKEN_FAILURE_CODES,
-  );
+  )?.toLowerCase();
+  const code = rawCode && TOKEN_FAILURE_CODES.has(rawCode) ? rawCode : undefined;
   const rawType = normalizeOptionalString(error?.type ?? body?.type)?.toLowerCase();
   const errorType =
     rawType === "invalid_grant" || rawType === "invalid_request_error" ? rawType : undefined;
@@ -106,32 +141,28 @@ function buildTokenResponseFailure(params: {
   const summary =
     normalizeTokenErrorSummary(error?.message ?? body?.error_description ?? body?.message) ??
     `OpenAI Codex token ${params.operation} failed (HTTP ${params.response.status}).`;
+  const retryAfterSeconds = parseRetryAfterHeaderSeconds(
+    params.response.headers.get("retry-after"),
+  );
   return {
     type: "failed",
     operation: params.operation,
     summary,
     status: params.response.status,
+    ...(retryAfterSeconds === undefined ? {} : { retryAfterMs: retryAfterSeconds * 1000 }),
+    ...(params.operation === "refresh"
+      ? {
+          oauthRefreshOutcome: createOAuthRefreshResponseError(
+            "OpenAI token refresh",
+            params.response.status,
+            body,
+          ).oauthRefreshOutcome,
+        }
+      : {}),
     ...(code ? { code } : {}),
     ...(errorType ? { errorType } : {}),
     ...(reason ? { reason } : {}),
   };
-}
-
-function formatMissingTokenResponseFields(
-  json: TokenResponseJson,
-  existingRefreshToken?: string,
-): string {
-  const missing: string[] = [];
-  if (!json.access_token) {
-    missing.push("access_token");
-  }
-  if (!json.refresh_token && !existingRefreshToken) {
-    missing.push("refresh_token");
-  }
-  if (resolveOAuthTokenLifetimeMs(json.expires_in) === undefined) {
-    missing.push("expires_in");
-  }
-  return missing.join(", ");
 }
 
 function formatTokenRequestError(
@@ -154,61 +185,84 @@ function formatTokenRequestError(
   );
 }
 
-async function postTokenForm(
+async function requestOpenAIToken(
   body: URLSearchParams,
+  operation: "exchange" | "refresh",
   options: TokenRequestOptions = {},
-): Promise<Response> {
+  existingRefreshToken?: string,
+): Promise<TokenResult> {
   const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
-  throwIfOAuthLoginAborted(options.signal);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: TOKEN_URL,
-    // Match device-code login's operator proxy policy. The guard keeps direct DNS
-    // pinning when no proxy applies; the exact-host policy also permits fake-IP DNS.
-    mode: "trusted_env_proxy",
-    policy: OAUTH_TOKEN_SSRF_POLICY,
-    init: {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    },
-    timeoutMs,
-    signal: options.signal,
-    beforeRequest: options.assertCurrent,
-    auditContext: "openai-chatgpt-oauth-token",
-  });
   try {
-    const responseBody = await readResponseWithLimit(
-      response,
-      OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES,
+    throwIfOAuthLoginAborted(options.signal);
+    const { response: tokenResponse, text } = await withOpenAIOAuthResponse(
       {
-        onOverflow: ({ size, maxBytes }) =>
-          new Error(
-            `OpenAI Codex OAuth token response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
-          ),
+        url: TOKEN_URL,
+        // Keep direct DNS pinning without a proxy; the exact-host policy permits fake-IP DNS.
+        mode: "trusted_env_proxy",
+        policy: OAUTH_TOKEN_SSRF_POLICY,
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body,
+        },
+        timeoutMs,
+        signal: options.signal,
+        beforeRequest: options.assertCurrent,
+        auditContext: "openai-chatgpt-oauth-token",
+      },
+      async (response) => {
+        const bytes = await readResponseWithLimit(response, OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES, {
+          onOverflow: ({ size, maxBytes }) =>
+            new Error(
+              `OpenAI Codex OAuth token response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+            ),
+        });
+        return { response, text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
       },
     );
-    return new Response(new Uint8Array(responseBody), {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
-  } finally {
-    await release();
+    const result = readOpenAITokenResponse(tokenResponse, text, operation, existingRefreshToken);
+    return result.type === "failed" && operation === "refresh"
+      ? {
+          ...result,
+          oauthRefreshOutcome: result.oauthRefreshOutcome ?? {
+            version: 1,
+            phase: "after-token-response",
+            outcome: "unknown",
+            status: tokenResponse.status,
+          },
+        }
+      : result;
+  } catch (error) {
+    return {
+      type: "failed",
+      operation,
+      ...(operation === "refresh"
+        ? {
+            oauthRefreshOutcome: {
+              version: 1,
+              phase: "token-response",
+              outcome: "unknown",
+            } as const,
+          }
+        : {}),
+      ...(options.signal?.aborted ? { cancelled: true } : {}),
+      summary: formatTokenRequestError(operation, error, timeoutMs, options.signal),
+    };
   }
 }
 
-async function readOpenAITokenResponse(
+function readOpenAITokenResponse(
   response: Response,
+  text: string,
   operation: "exchange" | "refresh",
   existingRefreshToken?: string,
-): Promise<TokenResult> {
+): TokenResult {
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
     return buildTokenResponseFailure({ response, operation, text });
   }
-  let json: TokenResponseJson;
+  let json: unknown;
   try {
-    json = (await response.json()) as TokenResponseJson;
+    json = JSON.parse(text);
   } catch {
     return {
       type: "failed",
@@ -223,18 +277,33 @@ async function readOpenAITokenResponse(
       summary: `OpenAI Codex token ${operation} failed: expected JSON object response`,
     };
   }
-  const expires = resolveOAuthTokenExpiresAt(json.expires_in);
-  const refreshToken = json.refresh_token || existingRefreshToken;
-  if (!json.access_token || !refreshToken || expires === undefined) {
+  if (json.error !== undefined) {
+    return buildTokenResponseFailure({ response, operation, text });
+  }
+  const access = normalizeOptionalString(json.access_token);
+  // Sign-in responses may omit expires_in; the access token's own JWT expiry then applies.
+  const expires =
+    resolveOAuthTokenExpiresAt(json.expires_in) ??
+    (operation === "exchange" && access ? resolveOpenAICodexAccessTokenExpiry(access) : undefined);
+  const refreshToken =
+    json.refresh_token === undefined
+      ? existingRefreshToken
+      : normalizeOptionalString(json.refresh_token);
+  if (!access || !refreshToken || expires === undefined) {
+    const missing = [
+      access ? "" : "access_token",
+      refreshToken ? "" : "refresh_token",
+      expires === undefined ? "expires_in" : "",
+    ];
     return {
       type: "failed",
       operation,
-      summary: `OpenAI Codex token ${operation} response missing fields: ${formatMissingTokenResponseFields(json, existingRefreshToken)}`,
+      summary: `OpenAI Codex token ${operation} response missing fields: ${missing.filter(Boolean).join(", ")}`,
     };
   }
   return {
     type: "success",
-    access: json.access_token,
+    access,
     refresh: refreshToken,
     expires,
   };
@@ -246,51 +315,30 @@ export async function exchangeOpenAIAuthorizationCode(
   redirectUri: string,
   options: TokenRequestOptions = {},
 ): Promise<TokenResult> {
-  const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
-  let response: Response;
-  try {
-    response = await postTokenForm(
-      new URLSearchParams({
-        grant_type: "authorization_code",
-        client_id: CLIENT_ID,
-        code,
-        code_verifier: verifier,
-        redirect_uri: redirectUri,
-      }),
-      { ...options, timeoutMs },
-    );
-  } catch (error) {
-    return {
-      type: "failed",
-      operation: "exchange",
-      ...(options.signal?.aborted ? { cancelled: true } : {}),
-      summary: formatTokenRequestError("exchange", error, timeoutMs, options.signal),
-    };
-  }
-  return await readOpenAITokenResponse(response, "exchange");
+  return await requestOpenAIToken(
+    createOpenAIAuthorizationCodeForm({
+      clientId: OPENAI_CODEX_CLIENT_ID,
+      code,
+      verifier,
+      redirectUri,
+    }),
+    "exchange",
+    options,
+  );
 }
 
 export async function refreshOpenAIAccessToken(
   refreshToken: string,
   options: TokenRequestOptions = {},
 ): Promise<TokenResult> {
-  const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
-  try {
-    const response = await postTokenForm(
-      new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-        client_id: CLIENT_ID,
-      }),
-      { ...options, timeoutMs },
-    );
-    return await readOpenAITokenResponse(response, "refresh", refreshToken);
-  } catch (error) {
-    return {
-      type: "failed",
-      operation: "refresh",
-      ...(options.signal?.aborted ? { cancelled: true } : {}),
-      summary: formatTokenRequestError("refresh", error, timeoutMs, options.signal),
-    };
-  }
+  return await requestOpenAIToken(
+    new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: OPENAI_CODEX_CLIENT_ID,
+    }),
+    "refresh",
+    options,
+    refreshToken,
+  );
 }

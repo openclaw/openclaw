@@ -1,4 +1,5 @@
 import type {
+  WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardClaim,
   WorkboardExecution,
@@ -25,6 +26,7 @@ export const MAX_WORKER_CONTEXT_RECENT_CARDS = 5;
 export const MAX_ATTACHMENT_BYTES = 256 * 1024;
 export const MAX_CARD_DIAGNOSTICS = 12;
 export const MAX_CARD_NOTIFICATIONS = 20;
+export const MAX_RUN_ID_LENGTH = 512;
 export const MAX_CARD_METADATA_BYTES = 24 * 1024;
 export const DEFAULT_CLAIM_TTL_MS = 30 * 60 * 1000;
 export const DEFAULT_WORKBOARD_DISPATCH_OWNER = "workboard-dispatcher";
@@ -50,11 +52,16 @@ export function workboardCardConsumesOwnerSlot(card: WorkboardOwnerSlotCard, now
   const activeClaim = claim && isFutureDateTimestampMs(claim.expiresAt, { nowMs: now });
   return (
     !card.metadata?.archivedAt &&
+    card.status !== "done" &&
     !isWorkboardClaimReclaimable(claim, now) &&
-    (card.status === "running" ||
-      (card.status !== "done" && activeClaim) ||
-      card.execution?.status === "running")
+    (card.status === "running" || activeClaim || card.execution?.status === "running")
   );
+}
+
+export function workboardBoardOwnerSlotLimit(
+  board: Pick<WorkboardBoardMetadata, "orchestration"> | undefined,
+): number {
+  return board?.orchestration?.maxActivePerOwner ?? 1;
 }
 
 export function workboardCardSlotOwner(card: WorkboardOwnerSlotCard, now?: number): string {

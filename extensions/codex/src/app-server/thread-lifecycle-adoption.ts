@@ -1,18 +1,27 @@
 import path from "node:path";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
+import { CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS } from "./attempt-client-cleanup.js";
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
+  usesManagedCodexThreadUnloading,
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
-import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
-import { resolveCodexAppServerClientInstanceId } from "./client.js";
+import {
+  isCodexAppServerLiveThreadClaimed,
+  isCodexAppServerLiveThreadProtected,
+  unsubscribeCodexAppServerLiveThread,
+} from "./client-runtime.js";
+import { CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS } from "./client-thread-closure.js";
+import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
 import {
   sessionBindingIdentity,
   resolveCodexSessionBinding,
+  type CodexBindingAuthority,
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
@@ -25,11 +34,14 @@ import {
   CodexThreadBindingConflictError,
 } from "./thread-lifecycle-errors.js";
 import { resumeExistingCodexThread } from "./thread-lifecycle-io.js";
-import { resolveCodexThreadAgentDir } from "./thread-lifecycle-preflight.js";
+import {
+  resolveCodexThreadAgentDir,
+  withCodexThreadWriteCurrent,
+  type CodexThreadRequestContext,
+} from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
-  CodexThreadRequestContext,
   CodexThreadResumePreparation,
 } from "./thread-lifecycle-types.js";
 import { releaseCodexConsumedLiveThread } from "./thread-lifecycle-warm.js";
@@ -48,8 +60,9 @@ export async function withCodexThreadLifecycleBinding(
   run: (
     identity: CodexAppServerBindingIdentity,
     binding: CodexAppServerThreadBinding | undefined,
-    assertCurrent: () => void,
+    authority: CodexBindingAuthority,
   ) => Promise<CodexAppServerThreadLifecycleBinding>,
+  onFailure?: (error: unknown) => Promise<never>,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const identity = sessionBindingIdentity({
     sessionId: params.params.sessionId,
@@ -57,8 +70,13 @@ export async function withCodexThreadLifecycleBinding(
     agentId: params.agentId ?? params.params.agentId,
     config: params.params.config,
   });
-  const { binding: snapshot, assertCurrent } = await resolveCodexSessionBinding({
+  const {
+    binding: snapshot,
+    authority,
+    release,
+  } = await resolveCodexSessionBinding({
     reclaimStale: true,
+    authority: params.authority,
     bindingStore: params.bindingStore,
     identity,
     config: params.params.config,
@@ -73,37 +91,51 @@ export async function withCodexThreadLifecycleBinding(
           assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership)
       : undefined,
   });
+  using _ = { [Symbol.dispose]: release };
+  const assertCurrent = authority.assertCurrent;
   const runWithLease = () =>
-    params.bindingStore.withLease(identity, async () => {
-      const binding = params.bindingStore.read(identity);
-      assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership);
-      // Never prepare a replacement under the queue selected for an obsolete snapshot.
-      if (binding?.threadId !== snapshot?.threadId || binding?.clientId !== snapshot?.clientId) {
-        throw new CodexThreadBindingConflictError(
-          binding?.threadId ?? snapshot?.threadId ?? params.params.sessionId,
-          "acquiring thread lifecycle ownership",
-        );
-      }
-      assertCurrent();
-      return await run(identity, binding, assertCurrent);
-    });
+    params.bindingStore.withLease(
+      identity,
+      async () => {
+        const binding = await params.bindingStore.readAsync(identity);
+        assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership);
+        // Never prepare a replacement under the queue selected for an obsolete snapshot.
+        if (binding?.threadId !== snapshot?.threadId || binding?.clientId !== snapshot?.clientId) {
+          throw new CodexThreadBindingConflictError(
+            binding?.threadId ?? snapshot?.threadId ?? params.params.sessionId,
+            "acquiring thread lifecycle ownership",
+          );
+        }
+        assertCurrent();
+        return await run(identity, binding, authority);
+      },
+      { assertCurrent, authority },
+    );
   // Ordinary resumes own their binding key even when a legacy row omits sessionId.
   // Foreign-owner rejection belongs to adoption, not an upgrade of that same binding.
-  return snapshot?.pendingResumeConfiguration
-    ? await withExclusiveCodexAppServerThread({
-        bindingStore: params.bindingStore,
-        identity,
-        threadId: snapshot.threadId,
-        run: runWithLease,
-      })
-    : snapshot
-      ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
-      : await runWithLease();
+  try {
+    return snapshot?.pendingResumeConfiguration
+      ? await withExclusiveCodexAppServerThread({
+          bindingStore: params.bindingStore,
+          identity,
+          threadId: snapshot.threadId,
+          run: runWithLease,
+        })
+      : snapshot
+        ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
+        : await runWithLease();
+  } catch (error) {
+    // Failed publication still owns cleanup, including failures settling the lease.
+    if (onFailure) {
+      return await onFailure(error);
+    }
+    throw error;
+  }
 }
 
 type PendingResumeContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
-  clearCurrentBinding: (operation: string) => Promise<void>;
+  stageBindingReplacement: (operation: string) => void;
   releaseRetainedThread: (threadId: string, assertCurrent: () => void) => Promise<boolean>;
   transientRestriction: boolean;
 };
@@ -134,7 +166,7 @@ export async function resumePendingCodexThread(
   const prebuiltPluginThreadConfig = params.pluginThreadConfig?.enabled
     ? await lifecycleTiming.measure("plugin-config-build", () => params.pluginThreadConfig?.build())
     : undefined;
-  const clientId = resolveCodexAppServerClientInstanceId(params.client);
+  const clientId = params.client.getInstanceId();
   const resumed = await resumeExistingCodexThread(params, {
     ...context,
     prebuiltPluginThreadConfig,
@@ -150,8 +182,10 @@ export async function resumePendingCodexThread(
           lifecycleTiming,
           threadId: binding.threadId,
           assertCurrent,
+          withCurrent: params.authority?.withCurrent,
         });
       }
+      return true;
     },
   });
   if (!resumed) {
@@ -182,24 +216,12 @@ async function preparePendingCodexThreadResume(
   ) {
     throw fail("configuration adoption requires an OpenClaw-owned local Codex home");
   }
-  if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
-    throw fail("the thread is claimed by active work; stop that run before resuming");
-  }
-  const assertClient = captureCodexAppServerClientLifetime(params.client, "native-process");
-  const assertCurrent = () => {
-    params.params.hostCapabilities.assertActive();
-    params.assertCurrent?.();
-    params.signal?.throwIfAborted();
-    assertClient();
-    if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
-      throw new CodexAdoptedThreadActiveError();
-    }
-  };
+  const assertCurrent = captureCodexThreadResumeAuthority(params, binding, "native-process");
   assertCurrent();
   const { thread } = await params.client.request(
     "thread/read",
     { threadId: binding.threadId, includeTurns: false },
-    { signal: params.signal, assertCurrent },
+    { signal: params.signal, assertCurrent, withCurrent: params.authority?.withCurrent },
   );
   assertCurrent();
   if (thread.id !== binding.threadId || !isCodexThreadNonRunning(thread.status)) {
@@ -207,7 +229,6 @@ async function preparePendingCodexThreadResume(
   }
   assertCodexThreadAcceptsDirectInput(thread);
   const observation = observeCodexThreadConfiguration(params, thread, assertCurrent);
-  const dispose = observation.dispose;
   try {
     const rolloutPath = thread.path ?? binding.rolloutPath;
     const metadata = rolloutPath
@@ -226,15 +247,9 @@ async function preparePendingCodexThreadResume(
       throw fail("its immutable native tool catalog does not match the current OpenClaw tools");
     }
     assertCurrent();
-    return {
-      modelProvider: observation.modelProvider,
-      assertConfigured: observation.assertConfigured,
-      assertCurrent,
-      dispose,
-      settledSystemError: observation.settledSystemError,
-    };
+    return { ...observation, assertCurrent };
   } catch (error) {
-    dispose();
+    observation.dispose();
     throw error;
   }
 }
@@ -245,19 +260,11 @@ export async function prepareCodexThreadResume(
   binding: CodexAppServerThreadBinding,
   context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
 ): Promise<CodexThreadResumePreparation> {
-  const assertClient = captureCodexAppServerClientLifetime(
-    params.client,
+  const assertCurrent = captureCodexThreadResumeAuthority(
+    params,
+    binding,
     binding.connectionScope === "supervision" ? "connection" : "thread-configuration",
   );
-  const assertCurrent = () => {
-    params.params.hostCapabilities.assertActive();
-    params.assertCurrent?.();
-    params.signal?.throwIfAborted();
-    assertClient();
-    if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
-      throw new CodexAdoptedThreadActiveError();
-    }
-  };
   assertCurrent();
   let thread: CodexThread;
   try {
@@ -271,16 +278,52 @@ export async function prepareCodexThreadResume(
     // A failed read cannot authorize recovery after its physical or host owner closes.
     assertCurrent();
   }
+  // Reuse the lifecycle read so a missing unused thread reaches its recovery owner.
+  if (
+    params.inferenceRoute &&
+    binding.clientId === params.client.getInstanceId() &&
+    !getCodexInferenceThread(params.client, binding.threadId) &&
+    thread.status?.type !== "notLoaded"
+  ) {
+    throw new Error("Codex loaded thread has no owned inference route; reconnect before retrying");
+  }
   // Known supervision keeps its native home; manual adoption's stricter home and catalog
   // checks remain in preparePendingCodexThreadResume, before this common handoff.
   assertCodexSupervisionThreadLineage(binding, thread);
   return { ...observeCodexThreadConfiguration(params, thread, assertCurrent), assertCurrent };
 }
 
+function captureCodexThreadResumeAuthority(
+  params: CodexStartOrResumeThreadParams,
+  binding: CodexAppServerThreadBinding,
+  scope: Parameters<typeof captureCodexAppServerClientLifetime>[1],
+): () => void {
+  const assertClient = captureCodexAppServerClientLifetime(params.client, scope);
+  return () => {
+    params.params.hostCapabilities.assertActive();
+    params.assertCurrent?.();
+    params.signal?.throwIfAborted();
+    assertClient();
+    if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
+      throw new CodexAdoptedThreadActiveError();
+    }
+  };
+}
+
 function isCodexThreadNonRunning(
   status: CodexThread["status"],
 ): status is Exclude<NonNullable<CodexThread["status"]>, { type: "active" }> {
   return status?.type === "idle" || status?.type === "notLoaded" || status?.type === "systemError";
+}
+
+// Allow for the bundled Codex idle delay. A remote server can retain the thread longer.
+const CODEX_REMOTE_THREAD_UNLOAD_DELAY_MS = 60_000;
+
+function remoteCodexRecoveryError(
+  userMessage: string,
+  cause?: unknown,
+): AgentHarnessPreflightError {
+  return new AgentHarnessPreflightError(userMessage, { userMessage, cause });
 }
 
 function observeCodexThreadConfiguration(
@@ -294,27 +337,160 @@ function observeCodexThreadConfiguration(
     throw new CodexAdoptedThreadActiveError();
   }
   const settledSystemError = thread.status.type === "systemError";
+  const remoteSystemError = settledSystemError && params.appServer.start.transport === "websocket";
+  if (remoteSystemError && thread.ephemeral === true) {
+    throw remoteCodexRecoveryError(
+      "Codex cannot unload this in-memory thread without losing its history. Continue it on its current Codex client.",
+    );
+  }
+  const managedThreadUnloading = usesManagedCodexThreadUnloading(params.appServer.start);
   let unloaded = thread.status.type === "notLoaded";
+  let closed = false;
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onUnload: (() => void) | undefined;
   const dispose = params.client.addNotificationHandler((notification) => {
+    const isClosed = notification.method === "thread/closed";
     if (
-      notification.method === "thread/status/changed" &&
       isJsonObject(notification.params) &&
       notification.params.threadId === thread.id &&
-      isJsonObject(notification.params.status) &&
-      notification.params.status.type === "notLoaded"
+      (isClosed ||
+        // Native idle-override reload inside resume emits notLoaded, without closed.
+        (!managedThreadUnloading &&
+          notification.method === "thread/status/changed" &&
+          isJsonObject(notification.params.status) &&
+          notification.params.status.type === "notLoaded"))
     ) {
+      closed ||= isClosed;
       unloaded = true;
+      onUnload?.();
     }
   });
+  // Unsubscribe acknowledges removal of our subscription. Teardown is asynchronous,
+  // including with a zero post-unsubscribe retention delay.
+  const waitForUnload = async (requireClosed = false) => {
+    assertCurrent();
+    // One budget covers teardown and a closing rejection; a replay cannot renew it.
+    const timeoutMs =
+      CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS +
+      (remoteSystemError ? CODEX_REMOTE_THREAD_UNLOAD_DELAY_MS : 0);
+    timer ??= setTimeout(() => {
+      expired = true;
+      onUnload?.();
+    }, timeoutMs);
+    if (!(requireClosed ? closed : unloaded) && !expired) {
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          removeCloseHandler?.();
+          params.signal?.removeEventListener("abort", finish);
+          onUnload = undefined;
+          resolve();
+        };
+        const removeCloseHandler = remoteSystemError
+          ? params.client.addCloseHandler(finish)
+          : undefined;
+        onUnload = finish;
+        params.signal?.addEventListener("abort", finish, { once: true });
+        if (params.signal?.aborted) {
+          finish();
+        }
+      });
+    }
+    assertCurrent();
+    return (requireClosed ? closed : unloaded) && !expired;
+  };
+  const releaseFailedRemoteRuntime = async (releasedOnCurrentClient: boolean) => {
+    if (!remoteSystemError) {
+      return;
+    }
+    // External servers retain their process and idle policy across socket replacement.
+    // Guard writes on this connection without disturbing another subscriber or thread.
+    const assertReleaseCurrent = () => {
+      assertCurrent();
+      if (isCodexAppServerLiveThreadProtected(params.client, thread.id)) {
+        throw new CodexAdoptedThreadActiveError();
+      }
+    };
+    const options = {
+      signal: params.signal,
+      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      assertCurrent: assertReleaseCurrent,
+      withCurrent: params.authority?.withCurrent,
+    };
+    const readUnloaded = async () => {
+      const { thread: current } = await params.client.request(
+        "thread/read",
+        { threadId: thread.id, includeTurns: false },
+        options,
+      );
+      assertReleaseCurrent();
+      if (current.id !== thread.id) {
+        throw new Error("Codex returned another thread during remote unload");
+      }
+      assertCodexThreadAcceptsDirectInput(current);
+      if (current.status?.type === "active") {
+        throw new CodexAdoptedThreadActiveError();
+      }
+      if (!isCodexThreadNonRunning(current.status)) {
+        throw new Error("Codex returned an unknown thread status during remote unload");
+      }
+      return current.status.type === "notLoaded";
+    };
+    try {
+      if (!releasedOnCurrentClient) {
+        await unsubscribeCodexAppServerLiveThread(
+          params.client,
+          thread.id,
+          CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+          assertReleaseCurrent,
+          (write) => withCodexThreadWriteCurrent(params, write),
+        );
+        assertReleaseCurrent();
+      }
+      // The exact read covers missed notifications and verifies a closure receipt
+      // still describes the current native thread.
+      if (await readUnloaded()) {
+        unloaded = true;
+      } else {
+        await waitForUnload();
+        unloaded = await readUnloaded();
+      }
+    } catch (cause) {
+      assertReleaseCurrent();
+      if (cause instanceof AgentHarnessPreflightError) {
+        throw cause;
+      }
+      throw remoteCodexRecoveryError(
+        "Codex could not confirm release of the previous remote thread runtime. The saved thread is preserved. Reconnect before retrying.",
+        cause,
+      );
+    }
+    if (!unloaded) {
+      throw remoteCodexRecoveryError(
+        "Codex still retains the previous remote thread runtime. The saved thread is preserved. Close it in other Codex clients and retry after the app-server unloads it.",
+      );
+    }
+    // The resume response cannot prove that native applied all requested settings.
+    // End this failed-runtime attempt before acquiring a new subscription.
+    throw remoteCodexRecoveryError(
+      "Codex unloaded the failed remote runtime. Retry your message to continue the saved conversation.",
+    );
+  };
   return {
+    model: thread.model,
     modelProvider: thread.modelProvider,
-    dispose,
+    dispose: () => {
+      clearTimeout(timer);
+      dispose();
+    },
     settledSystemError,
+    releaseFailedRemoteRuntime,
+    waitForUnload,
     assertConfigured: () => {
       assertCurrent();
       // Native resume can acknowledge ignored overrides when another subscriber
-      // or failed shutdown retains the session. notLoaded proves teardown, not a
-      // reservation against native-internal reloads outside OpenClaw's thread queue.
+      // or failed shutdown retains the session. An initially cold thread or its
+      // close receipt permits admission, without reserving against native reloads.
       if (!unloaded) {
         throw new Error(
           "Codex did not confirm unloading its previous configuration. The thread is preserved; stop competing native work and reconnect before retrying.",

@@ -1,5 +1,6 @@
 import {
   asBoolean,
+  asFiniteNumber,
   asRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -10,31 +11,26 @@ export type FaceTimeCallStatusEvent = {
 };
 
 type FaceTimeCallStatusData = {
-  audio_mode?: unknown;
-  call_status?: unknown;
-  call_uuid?: unknown;
+  call_status: number;
+  call_uuid: string;
   dial_id?: unknown;
-  proxy_identifier?: unknown;
-  conversation_group_uuid?: unknown;
-  conversation_uuid?: unknown;
-  conversation_audio_enabled?: unknown;
-  conversation_video_enabled?: unknown;
-  conversation_av_mode?: unknown;
-  conversation_resolved_audio_video_mode?: unknown;
-  disconnected_reason?: unknown;
-  ended_error?: unknown;
-  ended_reason?: unknown;
-  has_ended?: unknown;
+  proxy_identifier?: string;
+  conversation_group_uuid?: string;
+  conversation_uuid?: string;
+  conversation_audio_enabled?: boolean;
+  conversation_video_enabled?: boolean;
+  conversation_av_mode?: number;
+  conversation_resolved_audio_video_mode?: number;
+  has_ended?: boolean;
   handle?: unknown;
-  is_conversation?: unknown;
-  is_outgoing?: unknown;
-  is_sending_audio?: unknown;
-  is_sending_transmission?: unknown;
-  is_sending_video?: unknown;
-  is_uplink_muted?: unknown;
-  local_meter_level?: unknown;
-  remote_meter_level?: unknown;
-  transport?: unknown;
+  is_outgoing?: boolean;
+  is_sending_audio?: boolean;
+  is_sending_transmission?: boolean;
+  is_sending_video?: boolean;
+  is_uplink_muted?: boolean;
+  local_meter_level?: number;
+  remote_meter_level?: number;
+  transport?: ReturnType<typeof normalizeCallTransport>;
 };
 
 // Verified against the current TelephonyUtilities TUCall state machine. Native
@@ -44,48 +40,24 @@ const TU_CALL_STATUS = {
   active: 1,
   outgoingRinging: 3,
   incomingRinging: 4,
+  disconnected: 6,
 } as const;
 
-type FaceTimeCallTransport =
-  | {
-      kind: "facetime";
-      classifierVersion: "tu-provider-v1";
-      service: 2 | 3;
-      faceTimeTransportType?: number;
-      providerClassified: true;
-      providerIsFaceTime: true;
-      providerIsTelephony: false;
-      isUsingBaseband: false;
-      isWifiCall: false;
-      isVoip: true;
-      isEmergency: false;
-    }
-  | {
-      kind: "cellular" | "unknown";
-      classifierVersion: "tu-provider-v1";
-      service?: number;
-      faceTimeTransportType?: number;
-      providerClassified?: boolean;
-      providerIsFaceTime?: boolean;
-      providerIsTelephony?: boolean;
-      isUsingBaseband?: boolean;
-      isWifiCall?: boolean;
-      isVoip?: boolean;
-      isEmergency?: boolean;
-    };
-
-export type AuthenticatedFaceTimeOwner = {
+/** A caller listed in `allowedCallers`; owner status comes from `commands.ownerAllowFrom`. */
+export type AuthenticatedFaceTimeCaller = {
   senderId: string;
-  senderIsOwner: true;
 };
 
 function readFiniteNumber(value: unknown): number | undefined {
-  const number =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  return Number.isFinite(number) ? number : undefined;
+  return asFiniteNumber(typeof value === "string" ? Number(value) : value);
 }
 
-function normalizeCallTransport(value: unknown): FaceTimeCallTransport {
+function readInteger(value: unknown): number | undefined {
+  const number = readFiniteNumber(value);
+  return Number.isInteger(number) ? number : undefined;
+}
+
+function normalizeCallTransport(value: unknown) {
   const transport = asRecord(value);
   const base = {
     classifierVersion: "tu-provider-v1" as const,
@@ -103,7 +75,7 @@ function normalizeCallTransport(value: unknown): FaceTimeCallTransport {
     isVoip: asBoolean(transport.is_voip ?? transport.isVoip),
     isEmergency: asBoolean(transport.is_emergency ?? transport.isEmergency),
   };
-  if (
+  const verifiedFaceTime =
     transport.kind === "facetime" &&
     (transport.classifier_version === "tu-provider-v1" ||
       transport.classifierVersion === "tu-provider-v1") &&
@@ -114,26 +86,9 @@ function normalizeCallTransport(value: unknown): FaceTimeCallTransport {
     base.isUsingBaseband === false &&
     base.isWifiCall === false &&
     base.isVoip === true &&
-    base.isEmergency === false
-  ) {
-    return {
-      kind: "facetime",
-      classifierVersion: base.classifierVersion,
-      service: base.service,
-      ...(base.faceTimeTransportType !== undefined
-        ? { faceTimeTransportType: base.faceTimeTransportType }
-        : {}),
-      providerClassified: true,
-      providerIsFaceTime: true,
-      providerIsTelephony: false,
-      isUsingBaseband: false,
-      isWifiCall: false,
-      isVoip: true,
-      isEmergency: false,
-    };
-  }
+    base.isEmergency === false;
   return {
-    kind: transport.kind === "cellular" ? "cellular" : "unknown",
+    kind: verifiedFaceTime ? "facetime" : transport.kind === "cellular" ? "cellular" : "unknown",
     classifierVersion: base.classifierVersion,
     ...(base.service !== undefined ? { service: base.service } : {}),
     ...(base.faceTimeTransportType !== undefined
@@ -182,21 +137,15 @@ function collectHandleCandidates(
   seen.add(value);
   const record = asRecord(value);
   for (const [key, nested] of Object.entries(record)) {
-    if (handleValueKeys.has(key)) {
-      collectHandleCandidates(nested, candidates, seen);
-    } else if (nested && typeof nested === "object") {
+    if (handleValueKeys.has(key) || (nested && typeof nested === "object")) {
       collectHandleCandidates(nested, candidates, seen);
     }
   }
   return candidates;
 }
 
-function normalizeFaceTimeHandleCandidates(value: unknown): string[] {
-  return [...new Set(collectHandleCandidates(value).map((candidate) => candidate.trim()))];
-}
-
 export function normalizeFaceTimeHandle(value: unknown): string | undefined {
-  return normalizeFaceTimeHandleCandidates(value)[0];
+  return collectHandleCandidates(value)[0];
 }
 
 function canonicalizeFaceTimeHandle(value: string): string {
@@ -210,6 +159,11 @@ function canonicalizeFaceTimeHandle(value: string): string {
   return stripped.includes("@") ? stripped : stripped.replace(/[^\d+]/g, "");
 }
 
+/** The `commands.ownerAllowFrom` entry, and the sender id, for one FaceTime handle. */
+export function faceTimeSenderId(handle: string): string {
+  return `facetime:${canonicalizeFaceTimeHandle(handle)}`;
+}
+
 export function normalizeFaceTimeCallEvent(value: unknown): FaceTimeCallStatusEvent | undefined {
   const record = asRecord(value);
   if (record.event !== "ft-call-status-changed") {
@@ -220,25 +174,8 @@ export function normalizeFaceTimeCallEvent(value: unknown): FaceTimeCallStatusEv
   const proxyIdentifier = normalizeOptionalString(data.proxy_identifier);
   const conversationUUID = normalizeOptionalString(data.conversation_uuid);
   const conversationGroupUUID = normalizeOptionalString(data.conversation_group_uuid);
-  const conversationAVMode =
-    typeof data.conversation_av_mode === "number"
-      ? data.conversation_av_mode
-      : typeof data.conversation_av_mode === "string"
-        ? Number(data.conversation_av_mode)
-        : undefined;
-  const conversationResolvedAVMode =
-    typeof data.conversation_resolved_audio_video_mode === "number"
-      ? data.conversation_resolved_audio_video_mode
-      : typeof data.conversation_resolved_audio_video_mode === "string"
-        ? Number(data.conversation_resolved_audio_video_mode)
-        : undefined;
-  const status =
-    typeof data.call_status === "number"
-      ? data.call_status
-      : typeof data.call_status === "string"
-        ? Number(data.call_status)
-        : undefined;
-  if (!callUUID || !Number.isInteger(status)) {
+  const status = readInteger(data.call_status);
+  if (!callUUID || status === undefined) {
     return undefined;
   }
   return {
@@ -252,10 +189,10 @@ export function normalizeFaceTimeCallEvent(value: unknown): FaceTimeCallStatusEv
       conversation_group_uuid: conversationGroupUUID,
       conversation_audio_enabled: data.conversation_audio_enabled === true,
       conversation_video_enabled: data.conversation_video_enabled === true,
-      conversation_av_mode: Number.isInteger(conversationAVMode) ? conversationAVMode : undefined,
-      conversation_resolved_audio_video_mode: Number.isInteger(conversationResolvedAVMode)
-        ? conversationResolvedAVMode
-        : undefined,
+      conversation_av_mode: readInteger(data.conversation_av_mode),
+      conversation_resolved_audio_video_mode: readInteger(
+        data.conversation_resolved_audio_video_mode,
+      ),
       is_outgoing: data.is_outgoing === true,
       has_ended: data.has_ended === true,
       is_sending_audio: data.is_sending_audio === true,
@@ -269,26 +206,22 @@ export function normalizeFaceTimeCallEvent(value: unknown): FaceTimeCallStatusEv
   };
 }
 
-export function resolveAuthorizedFaceTimeOwner(params: {
+export function resolveAuthorizedFaceTimeCaller(params: {
   event: FaceTimeCallStatusEvent;
-  ownerHandles: readonly string[];
-}): AuthenticatedFaceTimeOwner | undefined {
+  allowedCallers: readonly string[];
+}): AuthenticatedFaceTimeCaller | undefined {
   if (!isVerifiedFaceTimeTransport(params.event)) {
     return undefined;
   }
-  const ownerHandles = new Set(params.ownerHandles.map(canonicalizeFaceTimeHandle).filter(Boolean));
-  const senderId = normalizeFaceTimeHandleCandidates(params.event.data.handle)
+  const allowed = new Set(params.allowedCallers.map(canonicalizeFaceTimeHandle).filter(Boolean));
+  const handle = collectHandleCandidates(params.event.data.handle)
     .map(canonicalizeFaceTimeHandle)
-    .find((candidate) => ownerHandles.has(candidate));
-  if (!senderId) {
-    return undefined;
-  }
-  // Admission and owner authorization are one contract; this plugin has no guest caller tier.
-  return { senderId, senderIsOwner: true };
+    .find((candidate) => allowed.has(candidate));
+  return handle ? { senderId: faceTimeSenderId(handle) } : undefined;
 }
 
 export function isVerifiedFaceTimeTransport(event: FaceTimeCallStatusEvent): boolean {
-  return isVerifiedFaceTimeTransportEvidence(event.data.transport);
+  return event.data.transport?.kind === "facetime";
 }
 
 export function isVerifiedFaceTimeTransportEvidence(value: unknown): boolean {
@@ -297,12 +230,12 @@ export function isVerifiedFaceTimeTransportEvidence(value: unknown): boolean {
 
 export function isAuthorizedFaceTimeHandle(params: {
   handle: string;
-  ownerHandles: readonly string[];
+  allowedCallers: readonly string[];
 }): boolean {
   const canonicalHandle = canonicalizeFaceTimeHandle(params.handle);
   return (
     canonicalHandle.length > 0 &&
-    params.ownerHandles.some((entry) => canonicalizeFaceTimeHandle(entry) === canonicalHandle)
+    params.allowedCallers.some((entry) => canonicalizeFaceTimeHandle(entry) === canonicalHandle)
   );
 }
 
@@ -325,7 +258,9 @@ export function isOutgoingRingingCall(event: FaceTimeCallStatusEvent): boolean {
 }
 
 export function isEndedCall(event: FaceTimeCallStatusEvent): boolean {
-  return event.data.has_ended === true;
+  // TUCall may publish disconnected before dateEnded is populated. Waiting for
+  // that timestamp retains a dead carrier and blocks subsequent incoming calls.
+  return event.data.has_ended === true || event.data.call_status === TU_CALL_STATUS.disconnected;
 }
 
 export function isUnknownCallStatus(event: FaceTimeCallStatusEvent): boolean {

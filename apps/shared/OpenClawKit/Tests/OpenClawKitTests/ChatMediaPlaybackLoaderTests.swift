@@ -33,10 +33,8 @@ struct ChatMediaPlaybackLoaderTests {
     @Test func `retries preparing responses until rendition bytes are ready`() async throws {
         let expected = OpenClawChatMediaData(data: Data([1, 2, 3]), mimeType: "audio/mp4")
         let sequence = PlaybackLoadSequence([.preparing, .preparing, .data(expected)])
-        let policy = ChatMediaPlaybackRetryPolicy(delays: [.seconds(1), .seconds(2)])
 
         let loaded = try await ChatMediaPlaybackLoader.load(
-            policy: policy,
             request: { sequence.request() },
             onPreparing: { sequence.notePreparing() },
             sleep: { sequence.sleep($0) })
@@ -53,21 +51,16 @@ struct ChatMediaPlaybackLoaderTests {
     }
 
     @Test func `exhausted preparation retries return unavailable result`() async throws {
-        let sequence = PlaybackLoadSequence([.preparing, .preparing, .preparing])
-        let policy = ChatMediaPlaybackRetryPolicy(delays: [.seconds(1), .seconds(2)])
+        let sequence = PlaybackLoadSequence(Array(repeating: .preparing, count: 12))
 
         let loaded = try await ChatMediaPlaybackLoader.load(
-            policy: policy,
             request: { sequence.request() },
             onPreparing: { sequence.notePreparing() },
             sleep: { sequence.sleep($0) })
 
         #expect(loaded == nil)
-        #expect(sequence.requestCount == 3)
-        #expect(sequence.preparingCount == 3)
-    }
-
-    @Test func `production retry budget is capped at two minutes`() {
-        #expect(ChatMediaPlaybackRetryPolicy.bounded.delays.reduce(.zero, +) == .seconds(120))
+        #expect(sequence.requestCount == 12)
+        #expect(sequence.preparingCount == 12)
+        #expect(sequence.sleeps.reduce(.zero, +) == .seconds(120))
     }
 }

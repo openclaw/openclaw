@@ -21,14 +21,10 @@ export function isAmbientCredentialAllowedByProviderAuthPin(params: {
     ...params.authAliasLookupParams,
   });
   const auth = direct?.auth ?? findNormalizedProviderValue(providers, providerAuthKey)?.auth;
-  if (auth === "api-key") {
-    return params.type === "api_key";
-  }
-  if (auth === "oauth") {
-    return params.type === "oauth" || params.type === "token";
-  }
-  if (auth === "token") {
-    return params.type === "token";
-  }
-  return auth === undefined;
+  return (
+    auth === undefined ||
+    (auth === "api-key" && params.type === "api_key") ||
+    (auth === "oauth" && (params.type === "oauth" || params.type === "token")) ||
+    (auth === "token" && params.type === "token")
+  );
 }

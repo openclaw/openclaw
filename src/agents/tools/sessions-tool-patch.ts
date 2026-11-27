@@ -1,5 +1,6 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
 import {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
   type SessionsPatchManyResult,
@@ -7,23 +8,36 @@ import {
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
-import { readToolStringParam, ToolInputError } from "./common.js";
+import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { recordSessionToolActionFact } from "./sessions-access.js";
 
 const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
+const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
 
-export function sessionsToolResultFitsBudget(payload: Record<string, unknown>): boolean {
-  const compactSize = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
-  return (
-    compactSize.complete &&
-    compactSize.bytes <= SESSIONS_TOOL_RESULT_MAX_BYTES &&
-    Buffer.byteLength(JSON.stringify(payload, null, 2), "utf8") <= SESSIONS_TOOL_RESULT_MAX_BYTES
-  );
+function sessionsToolResultFitsBudget(payload: Record<string, unknown>): boolean {
+  const size = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
+  return size.complete && size.bytes <= SESSIONS_TOOL_RESULT_MAX_BYTES;
+}
+
+export function withBoundedSessionsResolved(
+  acknowledgement: Record<string, unknown>,
+  resolved: NonNullable<SessionsPatchResult["resolved"]> | undefined,
+): Record<string, unknown> {
+  if (!resolved) {
+    return acknowledgement;
+  }
+  const completeResult = { ...acknowledgement, resolved };
+  if (sessionsToolResultFitsBudget(completeResult)) {
+    return completeResult;
+  }
+  return {
+    ...acknowledgement,
+    resolvedOmitted: { reason: RESOLVED_OMITTED_REASON },
+  };
 }
 
 export function readSessionsToolPatch(params: Record<string, unknown>): SessionsPatchMutation {
@@ -44,11 +58,10 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
     patch.attention = attention === "clear" ? null : attention;
   }
   if (params.ttlMinutes !== undefined) {
-    if (!Number.isInteger(params.ttlMinutes)) {
+    if (typeof params.ttlMinutes !== "number" || !Number.isInteger(params.ttlMinutes)) {
       throw new ToolInputError("ttlMinutes must be an integer");
     }
-    // SAFETY: Number.isInteger accepts only integer numbers.
-    patch.ttlMinutes = params.ttlMinutes as number;
+    patch.ttlMinutes = params.ttlMinutes;
   }
   for (const field of ["pinned", "archived"] as const) {
     const value = params[field];
@@ -59,27 +72,40 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
       patch[field] = value;
     }
   }
-  for (const field of ["model", "thinkingLevel"] as const) {
-    if (params[field] !== undefined) {
-      patch[field] = readToolStringParam(params, field, { required: true });
+  if (params.snoozedUntil !== undefined) {
+    const until = params.snoozedUntil;
+    if (until !== null && (typeof until !== "number" || !Number.isInteger(until) || until < 1)) {
+      throw new ToolInputError(
+        "snoozedUntil must be a positive epoch millisecond timestamp or null",
+      );
     }
+    patch.snoozedUntil = until;
   }
-  if (Object.keys(patch).length === 0) {
+  if (params.model !== undefined) {
+    patch.model =
+      normalizeToolModelOverride(readToolStringParam(params, "model", { required: true })) ?? null;
+  }
+  if (params.thinkingLevel !== undefined) {
+    patch.thinkingLevel = readToolStringParam(params, "thinkingLevel", { required: true });
+  }
+  const fields = Object.keys(patch);
+  if (patch.pinned !== undefined && fields.length > 1) {
+    throw new ToolInputError("Send pinned separately from shared session settings.");
+  }
+  if (fields.length === 0) {
     throw new ToolInputError("Patch setting required");
   }
   return patch;
 }
 
-type ResolvedPatchTarget = {
-  agentId: string;
-  key: string;
-  isRequesterSession: boolean;
-};
-
 export async function runSessionsToolPatchMany(params: {
   targets: unknown;
   patch: SessionsPatchMutation;
-  resolveTarget: (sessionKey: string) => Promise<ResolvedPatchTarget>;
+  resolveTarget: (sessionKey: string) => Promise<{
+    agentId: string;
+    key: string;
+    isRequesterSession: boolean;
+  }>;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
   if (
@@ -104,10 +130,16 @@ export async function runSessionsToolPatchMany(params: {
           "Archive the current session with a single patch; it is deferred until this run finishes.",
         );
       }
-      const expectedSessionId = normalizeOptionalString(
-        readToolStringParam(input, "expectedSessionId"),
-      );
-      if (typeof params.patch.archived === "boolean" && !expectedSessionId) {
+      if (typeof params.patch.snoozedUntil === "number" && target.isRequesterSession) {
+        throw new ToolInputError(
+          "Snooze the current session with a single patch; it is deferred until this run finishes.",
+        );
+      }
+      const expectedSessionId = readToolStringParam(input, "expectedSessionId");
+      if (
+        (typeof params.patch.archived === "boolean" || params.patch.snoozedUntil !== undefined) &&
+        !expectedSessionId
+      ) {
         throw new ToolInputError("Session lifecycle action requires a durable session identity");
       }
       targets.push({

@@ -1,6 +1,5 @@
-// Defines process supervisor marker labels for gateway diagnostics.
 import { GATEWAY_LAUNCH_AGENT_LABEL, resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
-import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.js";
+import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
 import { isGatewayExternallySupervised } from "./gateway-supervision.js";
 
 const SUPERVISOR_HINTS = {
@@ -12,6 +11,7 @@ const SUPERVISOR_HINTS = {
 /** Environment keys that imply the gateway process is supervised by an external respawner. */
 export const SUPERVISOR_HINT_ENV_VARS = [
   "OPENCLAW_SUPERVISOR_MODE",
+  "OPENCLAW_LAUNCHER_IPC",
   "LAUNCH_JOB_LABEL",
   "LAUNCH_JOB_NAME",
   "XPC_SERVICE_NAME",
@@ -93,12 +93,11 @@ export function detectGatewayRespawnSupervisor(
   return detectRespawnSupervisor(env, platform, options);
 }
 
-export function detectGatewayRespawnSupervisorIdentity(
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-  options: DetectRespawnSupervisorOptions = {},
-): GatewayOwnerSupervisor | null {
-  const kind = detectGatewayRespawnSupervisor(env, platform, options);
+export function detectGatewayRespawnSupervisorIdentity(): GatewayOwnerSupervisor | null {
+  const env = process.env;
+  const kind = detectGatewayRespawnSupervisor(env, process.platform, {
+    includeLinuxOpenClawGatewayServiceMarker: true,
+  });
   if (!kind) {
     return null;
   }

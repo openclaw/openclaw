@@ -28,7 +28,7 @@ export type ExporterHealthUpdate = {
 };
 
 type FailureReason = ExporterHealthReason | "unspecified";
-type PublicExporterHealthUpdate = Omit<ExporterHealthUpdate, "status"> & {
+export type PublicExporterHealthUpdate = Omit<ExporterHealthUpdate, "status"> & {
   status: Exclude<ExporterHealthUpdate["status"], "recovered">;
 };
 type PublicSignalState = {
@@ -43,10 +43,7 @@ function publicFailureKey(event: ExporterHealthUpdate): string {
 
 /** Owns route transitions so one producer cannot recover another producer's failure. */
 export function createExporterHealthEventEmitter(publish: (event: ExporterHealthUpdate) => void) {
-  const failures = new Map<
-    string,
-    { active: Map<FailureReason, ExporterHealthUpdate>; reported?: FailureReason }
-  >();
+  const failures = new Map<string, Map<FailureReason, ExporterHealthUpdate>>();
   return (event: ExporterHealthUpdate) => {
     const key = `${event.exporter}\u0000${event.signal}\u0000${event.transport}`;
     if (event.status === "started" || event.status === "dropped") {
@@ -56,28 +53,25 @@ export function createExporterHealthEventEmitter(publish: (event: ExporterHealth
     }
     const reason = event.reason ?? "unspecified";
     if (event.status === "failure") {
-      const route = failures.get(key) ?? {
-        active: new Map<FailureReason, ExporterHealthUpdate>(),
-      };
-      failures.set(key, route);
-      if (route.active.has(reason)) {
+      const active = failures.get(key) ?? new Map<FailureReason, ExporterHealthUpdate>();
+      if (active.has(reason)) {
         return;
       }
-      route.active.set(reason, event);
-      if (route.reported === undefined) {
-        route.reported = reason;
+      active.set(reason, event);
+      failures.set(key, active);
+      if (active.size === 1) {
         publish(event);
       }
       return;
     }
-    const route = failures.get(key);
-    if (!route?.active.delete(reason) || route.reported !== reason) {
+    const active = failures.get(key);
+    const reported = active?.keys().next().value;
+    if (!active?.delete(reason) || reported !== reason) {
       return;
     }
-    const next = route.active.entries().next().value;
+    const next = active.values().next().value;
     if (next) {
-      route.reported = next[0];
-      publish(next[1]);
+      publish(next);
       return;
     }
     failures.delete(key);
@@ -157,9 +151,8 @@ export function observeOtlpExporterHealth<TExporter extends ObservableOtlpExport
     signal: ExporterHealthUpdate["signal"];
   },
 ): TExporter {
-  const observed = exporter;
-  const exportItems = observed.export.bind(observed);
-  const shutdown = observed.shutdown.bind(observed);
+  const exportItems = exporter.export.bind(exporter);
+  const shutdown = exporter.shutdown.bind(exporter);
 
   const emit = (
     status: ExporterHealthUpdate["status"],
@@ -176,7 +169,7 @@ export function observeOtlpExporterHealth<TExporter extends ObservableOtlpExport
     });
   };
 
-  observed.export = (items, resultCallback) => {
+  exporter.export = (items, resultCallback) => {
     let dependencyCallbackInvoked = false;
     try {
       exportItems(items, (result) => {
@@ -198,7 +191,7 @@ export function observeOtlpExporterHealth<TExporter extends ObservableOtlpExport
     }
   };
 
-  observed.shutdown = async () => {
+  exporter.shutdown = async () => {
     try {
       await shutdown();
     } catch (error) {

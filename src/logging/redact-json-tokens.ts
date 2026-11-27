@@ -45,6 +45,70 @@ export type EncodedEdit = {
   replacement: string;
 };
 
+export function isPlainRedactableObject(value: object): value is Record<string, unknown> {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/** Serializes native values and records their protection origin in the same pass. */
+export function serializeRedactionRecord(
+  record: Record<string, unknown>,
+  shouldMaskPrimitive: (field: Pick<RedactionField, "key" | "path" | "objectPath">) => boolean,
+) {
+  const ordinary = { structured: true, primitiveMask: false };
+  const origins: RedactionOrigins = { value: ordinary, children: new Map() };
+  const ancestors: {
+    value: object;
+    path: string[];
+    key: string;
+    origins: RedactionOrigins;
+    structured: boolean;
+  }[] = [];
+  const json = JSON.stringify(record, function (this: object, key, value: unknown) {
+    while (ancestors.length > 0 && ancestors.at(-1)?.value !== this) {
+      ancestors.pop();
+    }
+    const parent = ancestors.at(-1);
+    const array = Array.isArray(this);
+    const fieldKey = array && parent ? parent.key : key;
+    const path = array && parent ? parent.path : parent ? [...parent.path, key] : [];
+    const source = value;
+    const structured =
+      (parent?.structured ?? true) &&
+      (source === null ||
+        typeof source !== "object" ||
+        Array.isArray(source) ||
+        isPlainRedactableObject(source));
+    const primitiveMask =
+      structured &&
+      ["number", "boolean", "bigint"].includes(typeof source) &&
+      shouldMaskPrimitive({ key: fieldKey, path, objectPath: !array });
+    const circular =
+      value !== null &&
+      typeof value === "object" &&
+      ancestors.some((frame) => frame.value === value);
+    const emitted = circular ? "[Circular]" : typeof value === "bigint" ? String(value) : value;
+    const container = emitted !== null && typeof emitted === "object";
+    let node = origins;
+    if (parent && parent.structured && (container || !structured || primitiveMask || circular)) {
+      node = {
+        value: { structured: structured && !circular, primitiveMask },
+        children: new Map(),
+      };
+      parent.origins.children.set(key, node);
+    } else if (parent) {
+      node = parent.origins;
+    } else {
+      origins.value = { structured, primitiveMask };
+    }
+    if (container) {
+      ancestors.push({ value: emitted, path, key: fieldKey, origins: node, structured });
+    }
+    return emitted;
+  });
+  return { json, origins };
+}
+
 type FieldContext = Pick<RedactionField, "key" | "path" | "objectPath"> & {
   origins?: RedactionOrigins;
   origin: RedactionScalarOrigin;
@@ -61,6 +125,19 @@ type JsonContainer = {
 };
 
 const JSON_TOKEN_RE = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}[\]]/g;
+
+function skipWhitespace(text: string, start: number): number {
+  let offset = start;
+  while (
+    text[offset] === " " ||
+    text[offset] === "\t" ||
+    text[offset] === "\r" ||
+    text[offset] === "\n"
+  ) {
+    offset += 1;
+  }
+  return offset;
+}
 
 export function readScalarTokens(text: string, origins: RedactionOrigins): ScalarToken[] {
   const tokens: ScalarToken[] = [];
@@ -123,15 +200,7 @@ export function readScalarTokens(text: string, origins: RedactionOrigins): Scala
     const end = start + raw.length;
     const string = raw.startsWith('"');
     const value: string = string ? JSON.parse(raw) : raw;
-    let next = end;
-    while (
-      text[next] === " " ||
-      text[next] === "\t" ||
-      text[next] === "\r" ||
-      text[next] === "\n"
-    ) {
-      next += 1;
-    }
+    const next = skipWhitespace(text, end);
     const isKey = string && text[next] === ":";
     let context: FieldContext;
     if (isKey) {
@@ -145,15 +214,7 @@ export function readScalarTokens(text: string, origins: RedactionOrigins): Scala
         rootKey: inherited.rootKey,
         rootValueStart: inherited.rootValueStart,
       };
-      let valueStart = next + 1;
-      while (
-        text[valueStart] === " " ||
-        text[valueStart] === "\t" ||
-        text[valueStart] === "\r" ||
-        text[valueStart] === "\n"
-      ) {
-        valueStart += 1;
-      }
+      const valueStart = skipWhitespace(text, next + 1);
       container.field = {
         key: value,
         path: [...inherited.path, value],

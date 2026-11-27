@@ -1,4 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type * as ChannelOperatorAuthority from "../gateway/channel-operator-authority.js";
+import {
+  withArtifactPreservingStateReads,
+  withSynchronousArtifactPreservingStateSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { resolveInstallationTarget } from "./installation-target-context.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
@@ -24,11 +30,21 @@ export function resolveManagedUpdateRequester(
 }
 
 export class UpdateRequesterRevokedError extends Error {
-  readonly code = "requester-revoked";
+  readonly code: "requester-revoked" | "interrupted" = "requester-revoked";
+
+  constructor(message = "requester-revoked") {
+    super(message);
+    this.name = "UpdateRequesterRevokedError";
+  }
+}
+
+/** Forward work stops exactly as for a revocation, but the requester kept its authority. */
+export class UpdateInterruptedError extends UpdateRequesterRevokedError {
+  override readonly code = "interrupted";
 
   constructor() {
-    super("requester-revoked");
-    this.name = "UpdateRequesterRevokedError";
+    super("interrupted");
+    this.name = "UpdateInterruptedError";
   }
 }
 
@@ -37,18 +53,39 @@ export async function createManagedUpdateRequesterAuthority(
   requester: UpdateRequester,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<UpdateRequesterAuthority> {
-  return captureManagedUpdateRequester(requester, env, (auth) => auth.resolveCommandOwnerAuthority);
+  return captureManagedUpdateRequester(
+    requester,
+    env,
+    (auth) => auth.resolveChannelOperatorAdminAuthority,
+  );
+}
+
+/** Reconstruct delegated authority from the source recorded by the original admission. */
+export function createDelegatedUpdateRequesterAuthority(
+  requester: UpdateRequester,
+  runId: string,
+  executor: UpdateRecoveryFence,
+  env?: NodeJS.ProcessEnv,
+): Promise<UpdateRequesterAuthority> {
+  return requester.authorizationSource?.startsWith("profile:")
+    ? createManagedUpdateRequesterContinuationAuthority(requester, { runId, executor }, env)
+    : captureManagedUpdateRequester(
+        requester,
+        env ?? process.env,
+        (auth) => auth.resolveChannelOperatorAdminAuthority,
+        { projectDoctorConfig: true },
+      );
 }
 
 /** Identity facts alone grant no effects; the helper composes them with its native owner. */
-export async function prepareManagedUpdateRequesterIdentity(
+export async function prepareUpdateRequesterIdentity(
   requester: UpdateRequester,
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const identity = await captureManagedUpdateRequester(
     requester,
     env,
-    (auth) => auth.resolveUpdateRequesterIdentityAuthority,
+    (auth) => auth.resolveUpdateChannelOperatorAdminIdentityAuthority,
   );
   return Object.freeze({
     requester: identity.requester,
@@ -79,7 +116,7 @@ export async function createManagedUpdateRequesterContinuationAuthority(
   ) {
     throw new UpdateRequesterRevokedError();
   }
-  const identity = await prepareManagedUpdateRequesterIdentity(admittedRequester, authorityEnv);
+  const identity = await prepareUpdateRequesterIdentity(admittedRequester, authorityEnv);
   assertOperationCurrent();
   return Object.freeze({
     requester: identity.requester,
@@ -95,60 +132,118 @@ async function captureManagedUpdateRequester(
   env: NodeJS.ProcessEnv,
   selectResolver: (
     auth: Pick<
-      typeof import("../auto-reply/command-auth.js"),
-      "resolveCommandOwnerAuthority" | "resolveUpdateRequesterIdentityAuthority"
+      typeof ChannelOperatorAuthority,
+      "resolveChannelOperatorAdminAuthority" | "resolveUpdateChannelOperatorAdminIdentityAuthority"
     >,
-  ) => typeof import("../auto-reply/command-auth.js").resolveCommandOwnerAuthority,
+  ) => typeof ChannelOperatorAuthority.resolveChannelOperatorAdminAuthority,
+  options: { projectDoctorConfig?: boolean } = {},
 ): Promise<UpdateRequesterAuthority> {
   // Released drivers knew only configured owners. They must not acquire a newly linked profile
   // when an installed runtime later reconstructs their authority.
   const authorizationSource = requester.authorizationSource ?? "configured-owner";
   const admittedRequester = Object.freeze({ ...requester });
   try {
-    const authorityEnv = { ...env };
-    const target = resolveInstallationTarget(authorityEnv);
-    const [
-      {
-        isConfiguredCommandOwner,
-        resolveCommandOwnerAuthority,
-        resolveUpdateRequesterIdentityAuthority,
-      },
-      { readCurrentConfigForPolicyCheck },
-      { ensureCliPluginRegistryLoaded },
-    ] = await Promise.all([
-      import("../auto-reply/command-auth.js"),
-      // Keep synchronous authority checks on the reader loaded at admission.
-      import("../config/io.js"),
-      import("../cli/plugin-registry-loader.js"),
-    ]);
-    const readCurrentConfig = () =>
-      readCurrentConfigForPolicyCheck({
-        env: authorityEnv,
-        configPath: target.configPath,
+    return await withArtifactPreservingStateReads(async () => {
+      const authorityEnv = { ...env };
+      const target = resolveInstallationTarget(authorityEnv);
+      const [
+        { captureCommandOwnerIdentity, isConfiguredCommandOwner },
+        {
+          resolveChannelOperatorAdminAuthority,
+          resolveUpdateChannelOperatorAdminIdentityAuthority,
+        },
+        { readCurrentConfigForPolicyCheck },
+        { ensureCliPluginRegistryLoaded },
+        { PluginLoadFailureError },
+      ] = await Promise.all([
+        import("../auto-reply/command-owner-facts.js"),
+        import("../gateway/channel-operator-authority.js"),
+        // Keep synchronous authority checks on the reader loaded at admission.
+        import("../config/io.js"),
+        import("../cli/plugin-registry-loader.js"),
+        import("../plugins/loader-shared.js"),
+      ]);
+      const doctor = options.projectDoctorConfig
+        ? await Promise.all([
+            import("../commands/doctor/legacy-config-repair.js"),
+            import("../plugins/doctor-contract-registry.js"),
+            import("../plugins/plugin-setup-module.js"),
+          ])
+        : undefined;
+      const readCurrentConfig = () =>
+        readCurrentConfigForPolicyCheck({
+          env: authorityEnv,
+          configPath: target.configPath,
+          projectInvalidConfig: doctor
+            ? (snapshot) => {
+                if (!isRecord(snapshot.parsed)) {
+                  return undefined;
+                }
+                const [repair, registry, setup] = doctor;
+                // Doctor defers repairs of plugins whose source is unavailable, such as during a
+                // pending state migration. Plan the same way: owners are core config.
+                const deferred: string[] = [];
+                for (;;) {
+                  try {
+                    const plan = deferred.length
+                      ? registry.withDeferredPluginDoctorMigrations(deferred, () =>
+                          repair.planLegacyConfigForUpdateChannel(snapshot),
+                        )
+                      : repair.planLegacyConfigForUpdateChannel(snapshot);
+                    return plan?.changes.length ? plan.config : undefined;
+                  } catch (error) {
+                    if (
+                      !(error instanceof setup.PluginSetupPreparationRequiredError) ||
+                      deferred.includes(error.record.id)
+                    ) {
+                      throw error;
+                    }
+                    deferred.push(error.record.id);
+                  }
+                }
+              }
+            : undefined,
+        });
+      let migrationDeferredChannels: string[] = [];
+      await ensureCliPluginRegistryLoaded({
+        scope: "configured-channels",
+        routeLogsToStderr: true,
+        config: readCurrentConfig(),
+      }).catch((error: unknown) => {
+        // Post-install Doctor runs these migrations, so their channel plugins cannot load before
+        // its authority check. Owner matching then uses bundled channel metadata (#178291).
+        if (!(error instanceof PluginLoadFailureError && error.onlyPendingStateMigrations)) {
+          throw error;
+        }
+        migrationDeferredChannels = error.registry.plugins
+          .filter((plugin) => plugin.status === "error")
+          .flatMap((plugin) => plugin.channelIds);
       });
-    await ensureCliPluginRegistryLoaded({
-      scope: "configured-channels",
-      routeLogsToStderr: true,
-      config: readCurrentConfig(),
-    });
-    const authority =
-      authorizationSource === "configured-owner"
-        ? undefined
-        : selectResolver({ resolveCommandOwnerAuthority, resolveUpdateRequesterIdentityAuthority })(
-            readCurrentConfig(),
-            admittedRequester,
-            {
-              env: authorityEnv,
+      const authority =
+        authorizationSource === "configured-owner"
+          ? undefined
+          : captureCommandOwnerIdentity(
+              readCurrentConfig(),
+              admittedRequester,
+              { env: authorityEnv },
+              selectResolver({
+                resolveChannelOperatorAdminAuthority,
+                resolveUpdateChannelOperatorAdminIdentityAuthority,
+              }),
+            );
+      return Object.freeze({
+        requester: admittedRequester,
+        isCurrent: () =>
+          withSynchronousArtifactPreservingStateSnapshot(
+            () => {
+              const config = readCurrentConfig();
+              return authorizationSource === "configured-owner"
+                ? isConfiguredCommandOwner(config, admittedRequester, { migrationDeferredChannels })
+                : authority?.source === authorizationSource && authority.isCurrent(config);
             },
-          );
-    return Object.freeze({
-      requester: admittedRequester,
-      isCurrent: () => {
-        const config = readCurrentConfig();
-        return authorizationSource === "configured-owner"
-          ? isConfiguredCommandOwner(config, admittedRequester)
-          : authority?.source === authorizationSource && authority.isCurrent(config);
-      },
+            { current: { env: authorityEnv } },
+          ),
+      });
     });
   } catch (error) {
     // Admission and worker startup precede run failure reporting. Surface failed

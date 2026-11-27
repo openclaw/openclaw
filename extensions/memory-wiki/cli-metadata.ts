@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements cli metadata behavior.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 export default definePluginEntry({

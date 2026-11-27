@@ -18,11 +18,10 @@ const SURFACE_PATTERNS = [
   ["app", /^(?:apps\/|Swabble\/|appcast(?:-(?:arm64|x86_64))?\.xml$)/u],
   ["rootTest", /^test\//u],
   ["testFixture", /^test-fixtures\//u],
-  // These hidden helpers own maintainer reports and release artifact validation.
-  // Match the reviewed leaf exactly so unreviewed skill executables still fail safe.
+  // Match reviewed skill owners so other hidden executables still fail safe.
   [
     "rootTooling",
-    /^\.agents\/skills\/(?:openclaw-pr-maintainer\/scripts\/github-activity\.sh|openclaw-changelog-update\/scripts\/verify-release-notes\.mjs)$/u,
+    /^\.agents\/skills\/(?:openclaw-pr-maintainer\/scripts\/github-activity\.sh|openclaw-changelog-update\/scripts\/verify-release-notes\.mjs|update-team-server\/controller\/[^/]+)$/u,
   ],
   [
     "rootTooling",
@@ -66,6 +65,18 @@ export function getChangedPathFacts(inputPath) {
     isTestOnly: TEST_ONLY_PATH_RE.test(path),
     isNativeOnly: NATIVE_ONLY_PATH_RE.test(path),
   };
+}
+
+/** Numeric test-budget records stay guarded, but cannot change compiler inputs.
+ * @param {string} path
+ */
+export function isTestLineAllocationPath(path) {
+  return (
+    path.startsWith("config/test-lines-allocations/") &&
+    path.endsWith(".txt") &&
+    posix.normalize(path) === path &&
+    !path.includes("\\")
+  );
 }
 
 /** @param {string} arg */

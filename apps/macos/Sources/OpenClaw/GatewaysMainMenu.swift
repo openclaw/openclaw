@@ -89,7 +89,6 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
     private var loggedMissingMenu = false
     private var isMenuOpen = false
     private var refreshTask: Task<Void, Never>?
-    private var openingID: UUID?
     private var rows: [(gateway: DashboardGatewayMenuItem, item: NSMenuItem)] = []
     private var rowSignature: [RowSignature]?
     private var profiles: [String: MacGatewayCatalogProfile] = [:]
@@ -127,7 +126,6 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         // SwiftUI owns the top-level item; AppKit owns the view-based submenu.
         if topLevelItem.submenu !== self.ownedMenu {
             topLevelItem.submenu = self.ownedMenu
-            self.logger.debug("Attached AppKit Gateways submenu")
         }
         self.rebuildRowsIfNeeded()
         return true
@@ -220,8 +218,6 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         }
         guard !self.isMenuOpen else { return }
         self.isMenuOpen = true
-        let openingID = UUID()
-        self.openingID = openingID
         let state = AppStateStore.shared
         let connectivity = GatewayConnectivityCoordinator.shared
         self.primaryLabels = GatewayMenuEndpointLabels.primary(
@@ -234,14 +230,14 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         // Probe the rows that exist now; a catalog refresh can take seconds while
         // a profile window is open, and cards must not wait for it.
         self.store.beginProbing(targets: self.rows.map(\.gateway.target)) { [weak self] in
-            guard let self, self.openingID == openingID else { return }
+            guard let self, self.isMenuOpen else { return }
             self.updateCards()
         }
         self.updateCards()
         self.refreshTask = Task { [weak self] in
             async let refresh: Void = DashboardManager.shared.refreshGatewaySnapshots()
             let profiles = try? await MacGatewayProfileStore.shared.catalogProfiles()
-            guard let self, !Task.isCancelled, self.openingID == openingID else { return }
+            guard let self, !Task.isCancelled else { return }
             if let profiles {
                 self.profiles = Dictionary(uniqueKeysWithValues: profiles.map { ($0.profile.id, $0) })
             } else {
@@ -249,14 +245,13 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             }
             self.updateCards()
             await refresh
-            guard !Task.isCancelled, self.openingID == openingID else { return }
+            guard !Task.isCancelled else { return }
             self.updateCards()
         }
     }
 
     func menuDidClose(_ menu: NSMenu) {
         self.isMenuOpen = false
-        self.openingID = nil
         self.refreshTask?.cancel()
         self.refreshTask = nil
         self.store.endProbing { Self.activeConsumerCount(for: $0) }
@@ -306,18 +301,15 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             browserSessionExpiresAt: profile?.browserSessionExpiresAt,
             lastSeen: facts?.lastSeen,
             isProbing: self.store.isProbing(gateway.target))
+        let activate = { [weak self, weak item] in
+            guard let self, let item else { return }
+            item.menu?.cancelTracking()
+            self.openGateway(item)
+        }
         let card = GatewayMenuCard(model: model, now: now)
             .contentShape(Rectangle())
-            .onTapGesture { [weak self, weak item] in
-                guard let self, let item else { return }
-                item.menu?.cancelTracking()
-                self.openGateway(item)
-            }
-            .accessibilityAction { [weak self, weak item] in
-                guard let self, let item else { return }
-                item.menu?.cancelTracking()
-                self.openGateway(item)
-            }
+            .onTapGesture(perform: activate)
+            .accessibilityAction(.default, activate)
         StatusMenuRenderer.configureHostedView(item, rootView: card, highlights: true)
     }
 

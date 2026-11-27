@@ -1,6 +1,3 @@
-/**
- * Normalizes and logs provider-specific tool schemas at runtime.
- */
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
@@ -9,7 +6,6 @@ import {
   inspectProviderToolSchemasWithPlugin,
   normalizeProviderToolSchemasWithPlugin,
 } from "../../plugins/provider-runtime.js";
-import type { ProviderToolSchemaDiagnostic } from "../../plugins/types.js";
 import type { AgentTool } from "../runtime/index.js";
 import { log } from "./logger.js";
 
@@ -29,19 +25,18 @@ type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = u
 function buildProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = unknown>(
   params: ProviderToolSchemaParams<TSchemaType, TResult>,
 ) {
-  const provider = params.provider.trim();
-  return {
+  const context = {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    provider,
+    provider: params.provider.trim(),
+  };
+  return {
+    ...context,
     runtimeHandle: params.runtimeHandle,
     allowRuntimePluginLoad: params.allowRuntimePluginLoad,
     context: {
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      provider,
+      ...context,
       modelId: params.modelId,
       modelApi: params.modelApi,
       model: params.model,
@@ -66,19 +61,18 @@ export function normalizeProviderToolSchemas<
     : params.tools;
 }
 
-/**
- * Logs provider-owned tool-schema diagnostics after normalization.
- */
 export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParams): void {
   const diagnostics = inspectProviderToolSchemasWithPlugin(buildProviderToolSchemaParams(params));
-  if (!Array.isArray(diagnostics)) {
-    return;
-  }
-  if (diagnostics.length === 0) {
+  if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
     return;
   }
 
-  const summary = summarizeProviderToolSchemaDiagnostics(diagnostics);
+  const visible = diagnostics.slice(0, 6).map((diagnostic) => {
+    const violationCount = diagnostic.violations.length;
+    return `${diagnostic.toolName || "unknown"} (${violationCount} ${violationCount === 1 ? "violation" : "violations"})`;
+  });
+  const remaining = diagnostics.length - visible.length;
+  const summary = remaining > 0 ? `${visible.join(", ")}, +${remaining} more` : visible.join(", ");
   log.warn(
     `provider tool schema diagnostics: ${diagnostics.length} ${diagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
     {
@@ -94,15 +88,4 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
       })),
     },
   );
-}
-
-function summarizeProviderToolSchemaDiagnostics(
-  diagnostics: readonly ProviderToolSchemaDiagnostic[],
-) {
-  const visible = diagnostics.slice(0, 6).map((diagnostic) => {
-    const violationCount = diagnostic.violations.length;
-    return `${diagnostic.toolName || "unknown"} (${violationCount} ${violationCount === 1 ? "violation" : "violations"})`;
-  });
-  const remaining = diagnostics.length - visible.length;
-  return remaining > 0 ? `${visible.join(", ")}, +${remaining} more` : visible.join(", ");
 }
