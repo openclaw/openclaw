@@ -7,7 +7,6 @@ import {
 } from "../../infra/sqlite-database-admission.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { resolveTimestamp } from "./lifecycle-timestamps.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
@@ -23,6 +22,7 @@ import type {
   SessionExactEntriesWorkerRequest,
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
+import { sessionMemberSharingFacts } from "./session-member-access-facts.js";
 import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import {
@@ -227,10 +227,7 @@ export function readRetainedSessionEntryFacts(
       if (facts.members) {
         members[key] = facts.members;
         if (request.projection === "sharing") {
-          sharingMembers.push({
-            sessionKey: key,
-            identityIds: facts.members.map(({ identityId }) => identityId),
-          });
+          sharingMembers.push(sessionMemberSharingFacts(key, facts.members));
         }
       }
       if (facts.participants?.length) {
@@ -382,11 +379,9 @@ export async function readSessionEntriesWithRetainedFacts(
   if (cached) {
     return cached;
   }
-  const before =
-    !isArtifactPreservingStateRead("agent") ||
-    getSqliteDatabaseAdmissionIdentityForPath(database.path)
-      ? readSqliteDatabaseWriteTokenForPath(database.path)
-      : undefined;
+  const before = getSqliteDatabaseAdmissionIdentityForPath(database.path)
+    ? readSqliteDatabaseWriteTokenForPath(database.path)
+    : undefined;
   const result = await read();
   retainSessionEntryReadFacts(database, request, result, before);
   return result;
@@ -412,11 +407,9 @@ export async function readSessionEntryWithRetainedFacts(
   if (cached) {
     return { ...ok(cached.entries[0]?.entry), source: cached.source };
   }
-  const before =
-    !isArtifactPreservingStateRead("agent") ||
-    getSqliteDatabaseAdmissionIdentityForPath(database.path)
-      ? readSqliteDatabaseWriteTokenForPath(database.path)
-      : undefined;
+  const before = getSqliteDatabaseAdmissionIdentityForPath(database.path)
+    ? readSqliteDatabaseWriteTokenForPath(database.path)
+    : undefined;
   const result = await read();
   if (result.ok && result.facts) {
     retainSessionEntryReadFacts(database, request, result.facts, before);

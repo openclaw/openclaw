@@ -2,9 +2,13 @@ import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { containsComposed, registryFor } from "../../../components/overlay-registry.ts";
 import { composerInputElement, focusComposerInput } from "../../../lib/composer-input.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { createMediaQuery } from "../../../lib/reactive/platform.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+
+const PHONE_COMPOSER_QUERY =
+  "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
 
 export function createComposerMobileInteraction(
   context: () => ReturnType<typeof createChatComposerContext>,
@@ -16,6 +20,10 @@ export function createComposerMobileInteraction(
   const [keyboardNavigation, setKeyboardNavigation] = createSignal(false);
   const editingScope = createMemo(() => context().draftKey);
   const mobileComposer = createMemo(() => props.mobileComposer === true);
+  const phoneLayout = createMediaQuery(
+    PHONE_COMPOSER_QUERY,
+    globalThis.matchMedia(PHONE_COMPOSER_QUERY).matches,
+  );
   // Pane props refresh when the host consumes editing. Only changed scope/mode
   // values may reset this local interaction state, not that props invalidation.
   const [editing, setEditing] = createSignal(() => {
@@ -52,10 +60,10 @@ export function createComposerMobileInteraction(
     setEditing(next);
   };
   const mobileEditing = createMemo(() => mobileComposer() && editing());
-  // Leaving the editor with a typed draft keeps the open surface and its controls;
-  // only an empty composer rests as the one-line capsule.
+  // Drawer navigation also serves wider windows; only phones rest on one line.
+  // A typed draft keeps the open surface and its controls after leaving the editor.
   const mobileResting = createMemo(
-    () => mobileComposer() && !editing() && !context().visibleDraft.trim(),
+    () => mobileComposer() && phoneLayout() && !editing() && !context().visibleDraft.trim(),
   );
   const editingTransition = createMemo(
     () => ({
@@ -172,6 +180,11 @@ export function createComposerMobileInteraction(
       );
     };
     let pointerOrigin: EventTarget | undefined;
+    const retargetedEditorTap = (event: MouseEvent) =>
+      props.mobileComposer &&
+      isEditorTarget(pointerOrigin) &&
+      !isEditorTarget(event.composedPath()[0]) &&
+      event.detail > 0;
     let disposed = false;
     const stops = [
       listen(
@@ -209,16 +222,24 @@ export function createComposerMobileInteraction(
       ),
       listen(
         doc,
+        "mousedown",
+        (event) => {
+          // Chrome hit-tests the compatibility mouse events after touchend. The
+          // keyboard can move the entire composer before then; click is too
+          // late to prevent mousedown's default action from blurring the editor.
+          if (retargetedEditorTap(event)) {
+            event.preventDefault();
+          }
+        },
+        true,
+      ),
+      listen(
+        doc,
         "click",
         (event) => {
           // Expansion can move the toolbar under the first textarea tap. That tap
           // belongs to the editor, never to the action now occupying its position.
-          if (
-            props.mobileComposer &&
-            isEditorTarget(pointerOrigin) &&
-            event.composedPath()[0] !== pointerOrigin &&
-            event.detail > 0
-          ) {
+          if (retargetedEditorTap(event)) {
             event.preventDefault();
             event.stopPropagation();
           }

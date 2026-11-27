@@ -87,6 +87,7 @@ export async function cleanupSessionBeforeMutation(params: {
     target: params.target,
     sessionId: params.entry?.sessionId,
     sessionLifecycleRevision: params.entry?.lifecycleRevision,
+    cause: params.reason === "session-delete" ? "deleted" : undefined,
     assertCurrent: params.assertCurrent,
   });
   if (cleanupError) {

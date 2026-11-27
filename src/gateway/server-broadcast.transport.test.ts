@@ -292,7 +292,7 @@ describe("broadcast transport retirement", () => {
     peers[0]!.socket.send.mockImplementationOnce(() => {
       revoked = true;
     });
-    broadcast("presence", { presence: visible });
+    broadcast("presence", Object.freeze({ presence: visible }));
 
     const frames = peers.map((peer) => peer.socket.send.mock.lastCall![0]);
     expect(frames[0]).toBeInstanceOf(SerializedGatewayFrame);

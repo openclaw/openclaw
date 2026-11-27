@@ -1,8 +1,9 @@
 // Warm captured-target patches through the real agent worker with 5,000 synthetic rows.
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-entry-patch-admission-measure.mjs
 //   --checkout <baseline-or-candidate> --root <new-synthetic-directory>
-//   --iterations 200 --mode timing|allocation
-// Alternate A1/B/A2 for five rounds in each mode. Counts cover main-thread DB stats;
+//   --iterations 200 --mode count|timing|allocation
+// Count separately; alternate A1/B/A2 five times for timing and sampled allocation.
+// Timing/allocation use the original filesystem builtins. Counts cover main-thread DB stats;
 // whole-Gateway filesystem counts and syscall stacks require the Gateway workload.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -23,7 +24,7 @@ const { values } = parseArgs({
   },
 });
 assert(values.root && global.gc, "Use --root and --expose-gc");
-assert(["timing", "allocation"].includes(values.mode));
+assert(["count", "timing", "allocation"].includes(values.mode));
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 const root = path.resolve(values.root);
@@ -90,16 +91,8 @@ const requestSource = {
   },
 };
 const retained = capture(options);
-let active = false;
 let syncCalls = 0;
 const stat = fs.statSync;
-fs.statSync = function (...args) {
-  if (active && String(args[0]) === seeded.path) {
-    syncCalls++;
-  }
-  return Reflect.apply(stat, this, args);
-};
-syncBuiltinESMExports();
 let target;
 let sequence = 0;
 const cycle = async () => {
@@ -124,6 +117,15 @@ try {
   for (let i = 0; i < 50; i++) {
     await cycle();
   }
+  if (values.mode === "count") {
+    fs.statSync = function (...args) {
+      if (String(args[0]) === seeded.path) {
+        syncCalls++;
+      }
+      return Reflect.apply(stat, this, args);
+    };
+    syncBuiltinESMExports();
+  }
   global.gc();
   if (values.mode === "allocation") {
     inspector.connect();
@@ -136,11 +138,9 @@ try {
   const cpu = process.cpuUsage();
   const thread = process.threadCpuUsage();
   const started = performance.now();
-  active = true;
   for (let i = 0; i < iterations; i++) {
     await cycle();
   }
-  active = false;
   const elapsedMs = performance.now() - started;
   const threadCpu = process.threadCpuUsage(thread);
   const processCpu = process.cpuUsage(cpu);
@@ -158,16 +158,17 @@ try {
       sourceSha256: createHash("sha256").update(source).digest("hex"),
       iterations,
       sessions: 5000,
-      syncCalls,
-      elapsedMs: elapsedMs / iterations,
-      threadUs: (threadCpu.user + threadCpu.system) / iterations,
-      processUs: (processCpu.user + processCpu.system) / iterations,
+      syncCalls: values.mode === "count" ? syncCalls : undefined,
+      elapsedMs: values.mode === "count" ? undefined : elapsedMs / iterations,
+      threadUs:
+        values.mode === "count" ? undefined : (threadCpu.user + threadCpu.system) / iterations,
+      processUs:
+        values.mode === "count" ? undefined : (processCpu.user + processCpu.system) / iterations,
       bytes,
       load: loadavg(),
     }),
   );
 } finally {
-  active = false;
   fs.statSync = stat;
   syncBuiltinESMExports();
   await retained.release();

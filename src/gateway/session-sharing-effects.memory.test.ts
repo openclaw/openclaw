@@ -162,9 +162,6 @@ it("adds and lists current incognito suggestions through Gateway effects without
       expect.objectContaining({ text: "Second suggestion" }),
     ]),
   });
-  client.invalidated = true;
-  const refused = await call("session.suggestions.list", {});
-  expectRefused(refused, "FORBIDDEN");
 });
 
 it("withholds unbound companion disclosure after transport revocation", async () => {

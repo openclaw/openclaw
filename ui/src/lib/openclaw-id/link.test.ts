@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   decodeKit,
   deriveRootSigner,
@@ -51,7 +51,11 @@ describe("Make reachable ceremony", () => {
       now,
     });
     expect(change.ok).toBe(true);
-    expect(signed.ownerDevice.body).toMatchObject({ seq: 1, target: { op: "add_owner_device" } });
+    expect(signed.ownerDevice.body.seq).toBe(1);
+    const target = signed.ownerDevice.body.target;
+    assert(target.op === "add_owner_device");
+    expect(target.cert.body.device_pub).toBe(formatEd25519PublicKey(device.publicKey));
+    expect((await verifyOwnerStatement(target.cert, anchor, { now })).ok).toBe(true);
   });
 
   it("gives overlapping kit requests one kit, whose root signs the binding", async () => {

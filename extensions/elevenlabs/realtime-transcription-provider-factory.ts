@@ -1,4 +1,4 @@
-import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
@@ -108,9 +108,13 @@ function resolveElevenLabsRealtimeApiKey(
 
 export function buildElevenLabsRealtimeTranscriptionProvider({
   createRealtimeTranscriptionWebSocketSession,
+  isProviderAuthProfileConfiguredAsync,
+  resolveProviderAuthProfileApiKey,
 }: Pick<
-  PluginCapabilityCatalogContext,
-  "createRealtimeTranscriptionWebSocketSession"
+  PluginCapabilityCatalogHostContext,
+  | "createRealtimeTranscriptionWebSocketSession"
+  | "isProviderAuthProfileConfiguredAsync"
+  | "resolveProviderAuthProfileApiKey"
 >): RealtimeTranscriptionProviderPlugin {
   const isConfigured: NonNullable<RealtimeTranscriptionProviderPlugin["isConfigured"]> = ({
     providerConfig,
@@ -124,13 +128,20 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    // A key saved for ElevenLabs (the store voice notes read) counts when the Voice Call config
+    // and the environment have none, and only for the provider that config or the
+    // request names. Automatic selection ranks providers as it does without one.
+    isConfiguredAsync: async (ctx) =>
+      isConfigured(ctx) ||
+      (ctx.selectedExplicitly === true &&
+        (await isProviderAuthProfileConfiguredAsync({
+          provider: "elevenlabs",
+          cfg: ctx.cfg,
+          profileTypes: ["api_key"],
+        }))),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = resolveElevenLabsRealtimeApiKey(config);
-      if (!apiKey) {
-        throw new Error("ElevenLabs API key missing");
-      }
+      const directApiKey = resolveElevenLabsRealtimeApiKey(config);
       const baseUrl = normalizeElevenLabsRealtimeBaseUrl(config.baseUrl);
       const sampleRate = config.sampleRate ?? ELEVENLABS_REALTIME_DEFAULT_SAMPLE_RATE;
       const commitStrategy = config.commitStrategy ?? ELEVENLABS_REALTIME_DEFAULT_COMMIT_STRATEGY;
@@ -169,7 +180,20 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
           }
           return url.toString();
         },
-        headers: { "xi-api-key": apiKey },
+        // createSession stays synchronous; the saved key is read for each (re)connect.
+        headers: async () => {
+          const apiKey =
+            directApiKey ||
+            (await resolveProviderAuthProfileApiKey({
+              provider: "elevenlabs",
+              cfg: req.cfg,
+              profileTypes: ["api_key"],
+            }));
+          if (!apiKey) {
+            throw new Error("ElevenLabs API key missing");
+          }
+          return { "xi-api-key": apiKey };
+        },
         connectTimeoutMessage: "ElevenLabs realtime transcription connection timeout",
         reconnectLimitMessage: "ElevenLabs realtime transcription reconnect limit reached",
         sendAudio: (audio, transport) => {

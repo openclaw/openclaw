@@ -1,0 +1,6 @@
+# One owner for provider sign-in failures: the failure matrix (every typed reason through the
+# Gateway result, chat text and CLI renderer, plus browser-redirect refusal and paste cases),
+# the shared paste parser table, wizard progress reasons, and the Control UI paste/recovery
+# views. The matrix is red on main and replaces per-plugin failure-text tests that this PR
+# deletes. Exact measured net test-line growth above the allowance at the head.
+161

@@ -39,7 +39,6 @@ import {
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
 import {
-  TSDOWN_MAX_OLD_SPACE_MB_ENV,
   TSDOWN_DECLARATION_EXTENSIONS,
   TSDOWN_PACKAGES_CACHE_INPUT,
   listTsdownOutputRoots,
@@ -415,7 +414,7 @@ function resolveBuildAllTsdownPlan(
   const plan = resolveTsdownBuildPlan({ ...params, env });
   return {
     // Direct Node steps need NODE_OPTIONS; tsdown descendants also need the frozen budget.
-    env: { ...plan.env, [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(plan.maxOldSpaceMb) },
+    env: plan.env,
     heapShortfall: plan.heapShortfall,
   };
 }

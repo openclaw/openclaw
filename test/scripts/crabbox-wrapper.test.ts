@@ -218,7 +218,7 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
   }
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.83.0"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.83.2"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -327,7 +327,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
         `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
         "  fi",
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.83.0}"`,
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.83.2}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -380,7 +380,7 @@ function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
     String.raw`
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
-  console.log("crabbox 0.83.0");
+  console.log("crabbox 0.83.2");
 } else if (args[0] === "run" && args[1] === "--help") {
   setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
 }`,
@@ -780,6 +780,7 @@ type WrapperCleanupProof =
     }
   | { kind: "readiness" }
   | { kind: "preparation"; cleanupFails?: boolean }
+  | { kind: "prepared" }
   | { kind: "stdin"; target: "macos" | "capsule" }
   | { kind: "escaped" }
   | { kind: "removal"; target: "script" | "source"; exitCode: 0 | 23 };
@@ -815,7 +816,12 @@ function expectMirrorDirectories(syncRoot: string, repository: string, allocatio
   return { key, id };
 }
 
-function expectIdleSourceMirror(source: string, repository: string, syncRoot: string) {
+function expectIdleSourceMirror(
+  source: string,
+  repository: string,
+  syncRoot: string,
+  users: "none" | "settled" = "settled",
+) {
   const allocation = path.dirname(path.dirname(source));
   const { key, id } = expectMirrorDirectories(syncRoot, repository, allocation);
   expect(lstatSync(source).isDirectory()).toBe(true);
@@ -826,8 +832,8 @@ function expectIdleSourceMirror(source: string, repository: string, syncRoot: st
     repository: realpathSync(repository),
     kind: "capsule",
     durable: true,
-    users: "settled",
-    state: "preserved",
+    users,
+    state: users === "none" ? "prepared" : "preserved",
     mirror: { key, idle: true },
   });
   expect(receipt.hold).toBeUndefined();
@@ -939,7 +945,14 @@ if (entry === ${JSON.stringify(implementationPath)}) {
   const spawnSync = childProcess.spawnSync;
   childProcess.spawnSync = (command, args, options) => {
     if (args?.[0] === "sync-plan") phase("preparing source capsule");
-    return spawnSync(command, args, options);
+    const result = spawnSync(command, args, options);
+    if (${proof.kind === "prepared"} && args?.[0] === "sync-plan" && result.status === 0 && !fs.existsSync(${JSON.stringify(preparationPath)})) {
+      fs.writeFileSync(${JSON.stringify(preparationPath)}, JSON.stringify({ pid: process.pid, parentPid: process.ppid, cwd: options.cwd }));
+      // Queue cancellation while synchronous preparation finishes; the wrapper's
+      // first checkpoint must preserve the completed mirror without admitting a run.
+      process.kill(process.pid, "SIGTERM");
+    }
+    return result;
   };
   if (${proof.kind === "stdin"}) {
     const readFile = fs.readFileSync;
@@ -1309,14 +1322,19 @@ child.once("exit", (code, signal) => {
           code: expectedStatus,
         });
         const retained = path.join(producer, ".crabbox", "wrapper-artifacts");
-        if (proof.kind === "preparation" || proof.kind === "stdin") {
+        if (proof.kind === "preparation" || proof.kind === "prepared" || proof.kind === "stdin") {
           if (proof.kind === "stdin" && proof.target === "capsule") {
             expect(output).toContain("syncing from temporary full checkout");
           }
           expect(existsSync(runSpawnedPath), output).toBe(false);
           expect(existsSync(identityPath)).toBe(false);
           expect(existsSync(claimPath)).toBe(false);
-          if (preparationCleanupFailure) {
+          if (proof.kind === "prepared") {
+            preparationIdentity = readJson(preparationPath);
+            expect(output).toContain("source mirror cold:");
+            expectIdleSourceMirror(preparationIdentity!.cwd, producer, syncRoot, "none");
+            expectFileText(preparationIdentity!.cwd, "fixture.txt", "original source\n");
+          } else if (preparationCleanupFailure) {
             const payload = path.dirname(preparationIdentity!.cwd);
             const allocation = path.dirname(payload);
             expect(readJson(removalFailurePath)).toEqual({
@@ -1498,7 +1516,7 @@ child.once("exit", (code, signal) => {
             (entrypoint === "pnpm" && !terminalCommandPid) ||
             (runReceiptRequired && !identity) ||
             (hasDescendant && !descendantPid) ||
-            (proof.kind === "preparation" && !preparationIdentity) ||
+            ((proof.kind === "preparation" || proof.kind === "prepared") && !preparationIdentity) ||
             (proof.kind === "stdin" && !existsSync(stdinReadyPath)))
         ) {
           throw new Error("fixture ownership receipts are incomplete");
@@ -1807,13 +1825,16 @@ describe("scripts/crabbox-wrapper", () => {
       target: "node22",
       plugins: [
         {
-          name: "fs-safe-source-owner",
+          name: "package-asset-source-owner",
           setup(builder) {
-            // Relocated fixtures keep the parser beside its package-owned WASM asset.
-            builder.onResolve({ filter: /^@openclaw\/fs-safe(?:\/|$)/ }, (args) => ({
-              path: pathToFileURL(require.resolve(args.path)).href,
-              external: true,
-            }));
+            // Relocated fixtures keep WASM and native binaries beside their owning packages.
+            builder.onResolve(
+              { filter: /^(?:@openclaw\/fs-safe(?:\/|$)|@resvg\/resvg-js$)/ },
+              (args) => ({
+                path: pathToFileURL(require.resolve(args.path)).href,
+                external: true,
+              }),
+            );
           },
         },
         {
@@ -1915,7 +1936,7 @@ describe("scripts/crabbox-wrapper", () => {
       const stateDir = path.join(root, "state");
       const platform = process.platform;
       const arch = process.arch === "x64" ? "amd64" : process.arch;
-      const managed = path.join(stateDir, "tools/crabbox/0.83.0", `${platform}-${arch}`, "crabbox");
+      const managed = path.join(stateDir, "tools/crabbox/0.83.2", `${platform}-${arch}`, "crabbox");
       mkdirSync(path.dirname(managed), { recursive: true });
       // Keep candidate and managed commands distinguishable at the executable boundary.
       const fake = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox-node");
@@ -1941,7 +1962,7 @@ describe("scripts/crabbox-wrapper", () => {
       };
       const result = runDefaultWrapper(runArgs(provider, "--", "true"), options);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain(`version=0.83.0 provider=${provider}`);
+      expect(result.stderr).toContain(`version=0.83.2 provider=${provider}`);
       expect(readInvocations(candidateLog)).toEqual([["--version"]]);
       const calls = readInvocations(log);
       expect(calls[0]).toEqual(["--version"]);
@@ -2664,7 +2685,7 @@ describe("scripts/crabbox-wrapper", () => {
       const env = testHomeEnv(home);
       if (customState) {
         env.XDG_STATE_HOME = path.join(home, "selected state");
-        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.83.0";
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.83.2";
         const legacyKey = path.join(
           testCrabboxConfigDir(home),
           "testboxes",
@@ -2687,16 +2708,16 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it.each([
-    { id: "tbx_default", createKey: true, state: "", version: "0.83.0", selectedKey: false },
-    { id: "tbx_selected", createKey: true, state: "state", version: "0.83.0", selectedKey: true },
-    { id: "blue-hermit", createKey: false, state: "", version: "0.83.0", selectedKey: false },
+    { id: "tbx_default", createKey: true, state: "", version: "0.83.2", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.83.2", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.83.2", selectedKey: false },
     ...(process.platform === "win32"
       ? [
           {
             id: "tbx_namespaced",
             createKey: true,
             state: "namespaced",
-            version: "0.83.0",
+            version: "0.83.2",
             selectedKey: true,
           },
         ]
@@ -2755,14 +2776,14 @@ describe("scripts/crabbox-wrapper", () => {
       env: {
         ...testHomeEnv(home),
         XDG_STATE_HOME: stateRoot,
-        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.83.0",
+        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.83.2",
       },
     });
     expect(result).toMatchObject({ status: 2, stdout: "" });
     expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
-  it.each([{ version: "0.83.0", stateDirectory: "state " }])(
+  it.each([{ version: "0.83.2", stateDirectory: "state " }])(
     "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
     ({ version, stateDirectory }) => {
       const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
@@ -6883,6 +6904,7 @@ cp.spawnSync = (command, args, options) => {
     { kind: "signal", entrypoint: "pnpm", repeated: false, cooperative: true, provider: "aws" },
     { kind: "preparation" },
     { kind: "preparation", cleanupFails: true },
+    { kind: "prepared" },
     { kind: "stdin", target: "macos" },
     { kind: "stdin", target: "capsule" },
     { kind: "escaped" },

@@ -6,6 +6,7 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import { readWindowsTaskSupervisorRestartExitCode } from "./windows-task-supervisor-contract.js";
@@ -148,7 +149,10 @@ export function readWindowsProcessSnapshot(
   ) {
     return null;
   }
-  const processTimeoutMs = Math.min(resolveIntegerOption(timeoutMs, 5_000), 5_000);
+  const processTimeoutMs = resolveIntegerOption(
+    timeoutMs,
+    WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+  );
   const processSnapshot = spawnSync(
     getWindowsPowerShellExePath(),
     [

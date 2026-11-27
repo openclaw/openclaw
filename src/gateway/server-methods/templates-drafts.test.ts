@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateTemplateDraftDocument } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   templateDraftRevision,
@@ -19,6 +20,7 @@ import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
+import * as sessionAuthorization from "../session-sharing-authorization-async.js";
 import type { GatewayClient } from "./client-types.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import { templatesDraftsHandlers } from "./templates-drafts.js";
@@ -27,7 +29,7 @@ import type { RespondFn } from "./types.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function requestDraft(
-  operation: "create" | "save" | "review" | "publish",
+  operation: "create" | "save" | "review" | "publish" | "signIn",
   workspace: string,
   params: Record<string, unknown> = {},
   condition?: string,
@@ -38,7 +40,9 @@ async function requestDraft(
   // SAFETY: These are the live socket fields read by draft authority.
   const client = {
     connId: "draft-author",
-    authenticatedUserProfile: gatewayProfile("creator"),
+    authenticatedUserProfile: gatewayProfile(
+      condition === "other-person" ? "creator" : GATEWAY_OWNER_PROFILE_ID,
+    ),
     connect: { role: "operator", scopes: ["operator.admin"] },
     internal: { syntheticClient: condition === "synthetic", operatorRoleActor: { kind: "system" } },
   } as GatewayClient;
@@ -67,6 +71,43 @@ async function requestDraft(
 }
 
 describe("Template draft human authority", () => {
+  it("finishes an admitted sign-in poll after administrator scope removal", async () => {
+    const workspace = tempDirs.make("template-sign-in-");
+    using _ = vi
+      .spyOn(sessionAuthorization, "resolveSessionMutationAuthorizationAsync")
+      .mockImplementationOnce(async (request) => {
+        request.assertInvocationCurrent?.();
+        request.client!.connect.scopes = [];
+        return { error: null };
+      });
+    const reply = await requestDraft("signIn", workspace, {
+      action: "poll",
+      sourceSessionKey: "agent:research:template",
+      draftId: "12345678-1234-4234-8234-123456789abc",
+      requestId: "12345678-1234-4234-8234-123456789abc",
+    });
+    expect(reply[0]).toBe(true);
+    expect(reply[1]).toEqual({ status: "expired" });
+  });
+
+  it("stops a sign-in poll when its connection ends", async () => {
+    const workspace = tempDirs.make("template-sign-in-");
+    using _ = vi
+      .spyOn(sessionAuthorization, "resolveSessionMutationAuthorizationAsync")
+      .mockImplementationOnce(async (request) => {
+        request.assertInvocationCurrent?.();
+        request.client!.invalidated = true;
+        return { error: null };
+      });
+    const reply = await requestDraft("signIn", workspace, {
+      action: "poll",
+      sourceSessionKey: "agent:research:template",
+      draftId: "12345678-1234-4234-8234-123456789abc",
+      requestId: "12345678-1234-4234-8234-123456789abc",
+    });
+    expect(reply[0]).toBe(false);
+  });
+
   it("registers draft methods only for administrators", () => {
     for (const method of Object.keys(templatesDraftsHandlers)) {
       expect(coreGatewayHandlers[method]).toBeDefined();
@@ -149,10 +190,18 @@ async function reviewDraft(
   assert(typeof payload.reviewToken === "string" && typeof payload.name === "string");
   assert(Array.isArray(payload.files));
   const files = payload.files.map((file: unknown) => {
-    assert(isRecord(file) && typeof file.path === "string" && typeof file.content === "string");
+    assert(isRecord(file) && typeof file.path === "string");
+    // Only the packaged avatar is binary and therefore listed without text content.
+    assert(typeof file.content === "string" || file.path === "assets/icon.png");
     return { path: file.path, content: file.content, workspacePaths: file.workspacePaths };
   });
-  return { reviewToken: payload.reviewToken, name: payload.name, files, items: payload.items };
+  return {
+    reviewToken: payload.reviewToken,
+    name: payload.name,
+    files,
+    items: payload.items,
+    iconUrl: payload.iconUrl,
+  };
 }
 
 const proposal = createResearchBriefProposal();
@@ -246,7 +295,7 @@ async function publicationFixture(name = "@maker/research-brief") {
       name,
       family: "template",
       channel: "community",
-      ownerHandle: "maker",
+      ownerHandle: name.startsWith("@") ? name.slice(1).split("/")[0] : "maker",
       expectedArtifactSha256: digest,
     });
     uploads.push(bytes);
@@ -345,6 +394,19 @@ describe("Template draft reviewed publication", () => {
     expect(registryErrors.splice(0)).toEqual([]);
   });
 
+  it("asks a different administrator to sign in rather than borrowing the host account", async () => {
+    const fixture = await publicationFixture();
+    const reply = await requestDraft(
+      "review",
+      fixture.workspaceDir,
+      { draftId: fixture.draft.draftId },
+      "other-person",
+    );
+    expect(reply[0]).toBe(false);
+    expect(reply[2]).toMatchObject({ details: { templateSignIn: { required: true } } });
+    expect(fixture.uploads).toHaveLength(0);
+  });
+
   it("publishes exactly the reviewed selections under the personal publisher", async () => {
     const fixture = await publicationFixture("@maker/public-researcher");
     const { workspaceDir, draft, uploads } = fixture;
@@ -379,7 +441,7 @@ Research public sources.
     );
     const choices = {
       name: "public-researcher",
-      description: "Researches public sources for a new user.",
+      description: "Researches public sources for a new user. ",
       excluded: [
         "file:workspace/checklist.md",
         "package:skill:clawhub:@maker/sources",
@@ -453,6 +515,44 @@ Research public sources.
     for (const file of review.files) {
       expect(await readFile(join(extracted.packageRoot, file.path), "utf8")).toBe(file.content);
     }
+  });
+
+  it("publishes exactly the reviewed avatar and requires a fresh review when the image changes", async () => {
+    const fixture = await publicationFixture();
+    const { workspaceDir, draft, uploads } = fixture;
+    const svg = (fill: string) =>
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="${fill}"/></svg>`;
+    await writeFile(join(workspaceDir, "harbor.svg"), svg("#f60"));
+    await writeFile(draft.path, JSON.stringify({ ...proposal, avatar: "harbor.svg" }));
+
+    const review = await fixture.review();
+    expect(review.files.find((file) => file.path === "assets/icon.png")).toEqual({
+      path: "assets/icon.png",
+      content: undefined,
+      workspacePaths: ["avatars/avatar.png"],
+    });
+    expect(review.iconUrl).toMatch(/^data:image\/png;base64,/u);
+
+    await writeFile(join(workspaceDir, "harbor.svg"), svg("#06f"));
+    const stale = await fixture.publish(review.reviewToken);
+    expect(stale[0]).toBe(false);
+    expect(stale[2]).toMatchObject({
+      details: { templatePublication: { effect: "none", code: "draft_review_required" } },
+    });
+    expect(fixture.posts).toBe(0);
+
+    const current = await fixture.review();
+    assert(typeof current.iconUrl === "string" && current.iconUrl !== review.iconUrl);
+    const result = await fixture.publish(current.reviewToken);
+    expect(result[0], JSON.stringify(result[2])).toBe(true);
+    const artifact = join(workspaceDir, "published.tgz");
+    await writeFile(artifact, uploads[0]!);
+    await using extracted = await extractBuiltTemplateArtifact(artifact);
+    const icon = await readFile(join(extracted.packageRoot, "assets/icon.png"));
+    expect(`data:image/png;base64,${icon.toString("base64")}`).toBe(current.iconUrl);
+    expect(await readFile(join(extracted.packageRoot, "CLAW.md"), "utf8")).toContain(
+      "avatar: avatars/avatar.png",
+    );
   });
 
   it("does not infer an attempt from matching public release reads without an attempt ID", async () => {
@@ -607,10 +707,45 @@ Research public sources.
         code: change === "authority" ? "FORBIDDEN" : "INVALID_REQUEST",
         message:
           change === "authority"
-            ? "Create, review, and publish Templates from an active administrator Control UI connection."
+            ? "Create, review, and publish Templates from the OpenClaw app while connected as an administrator."
             : "The draft or publisher changed. Review the current files before publishing.",
       });
       expect(fixture.posts).toBe(0);
     },
   );
+
+  it("normalizes mixed-case and padded /whoami handles to lowercase personal publishers", async () => {
+    const fixture = await publicationFixture("@mertbasar0/research-brief");
+    fixture.identity.publisher = "  MertBasar0  ";
+    const review = await fixture.review();
+    expect(review.name).toBe("@mertbasar0/research-brief");
+
+    const accepted = await fixture.publish(review.reviewToken);
+    expect(accepted[0], JSON.stringify(accepted[2])).toBe(true);
+    expect(accepted[1]).toMatchObject({
+      name: "@mertbasar0/research-brief",
+      url: `${registryUrl}/mertbasar0/templates/research-brief`,
+      publicationStatus: "pending",
+      attemptId: "fixture_attempt",
+    });
+
+    fixture.registry.attemptStatus = "finalized";
+    const checked = await fixture.check({
+      reviewToken: review.reviewToken,
+      attemptId: "fixture_attempt",
+    });
+    expect(checked[0], JSON.stringify(checked[2])).toBe(true);
+    expect(checked[1]).toMatchObject({
+      publisher: "mertbasar0",
+      publicationState: {
+        status: "published",
+        publication: {
+          name: "@mertbasar0/research-brief",
+          url: `${registryUrl}/mertbasar0/templates/research-brief`,
+          publicationStatus: "published",
+        },
+      },
+    });
+    expect(fixture.posts).toBe(1);
+  });
 });

@@ -196,16 +196,13 @@ extension RootTabs {
         navigationPath.last ?? baseRoute
     }
 
-    static func shouldShowSidebarRevealInDestinationHeader(
+    /// The destination header's sidebar control hides the sidebar only beside a visible
+    /// split sidebar; a drawer is dismissed from its own header, scrim, or swipe.
+    static func sidebarHeaderControlHidesSidebar(
         isSidebarVisible: Bool,
         layoutMode: SidebarLayoutMode) -> Bool
     {
-        switch layoutMode {
-        case .split:
-            true
-        case .drawer:
-            !isSidebarVisible
-        }
+        layoutMode == .split && isSidebarVisible
     }
 
     static func requestedInitialSidebarVisibility(arguments: [String]) -> Bool? {
@@ -246,6 +243,15 @@ extension RootTabs {
             return .onboarding
         }
         return .settings
+    }
+
+    /// A pending registry read is not evidence of a fresh install.
+    static func shouldOfferFirstGatewaySetup(
+        hasConnectedOnce: Bool,
+        hasSavedGateway: Bool?,
+        hasRuntimeOrLegacyGatewayConfig: Bool) -> Bool
+    {
+        !hasConnectedOnce && hasSavedGateway == false && !hasRuntimeOrLegacyGatewayConfig
     }
 
     static func shouldPresentQuickSetup(

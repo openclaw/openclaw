@@ -219,7 +219,11 @@ function EngineSection(props: MemoryViewProps) {
       <>
         <SettingsRow
           title={t("memoryPage.engine.rowTitle")}
-          description={<>{!available() && t("memoryPage.engine.catalogUnavailable")}</>}
+          description={
+            !available() && props.catalog.kind !== "loading"
+              ? t("memoryPage.engine.catalogUnavailable")
+              : undefined
+          }
           control={
             available() ? (
               <SettingsSelect
@@ -383,7 +387,7 @@ function MemoryCatalogSections(props: MemoryViewProps) {
 function SettingsTab(props: MemoryViewProps) {
   const catalogScope = createMemo(() => props.catalogScope);
   return (
-    <ShellLayoutBoundary traits={{ settingsPage: true }}>
+    <>
       <div class="settings-page">
         <Errored
           fallback={(_error) => (
@@ -417,7 +421,7 @@ function SettingsTab(props: MemoryViewProps) {
           )}
         </SettingsSection>
       </div>
-    </ShellLayoutBoundary>
+    </>
   );
 }
 

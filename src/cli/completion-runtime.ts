@@ -17,6 +17,10 @@ import {
 import { hasTerminalControl, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isErrno } from "../infra/errors.js";
+import {
+  appendShellProfilePath as appendCompletionProfilePath,
+  resolveShellConfigRoot,
+} from "../infra/shell-profile.js";
 import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import { escapeRegExp, pathExists } from "../utils.js";
@@ -161,17 +165,6 @@ function formatCompletionSourceLine(shell: CompletionShell, cachePath: string): 
     return `test -f ${quotedPath}; and source ${quotedPath}`;
   }
   return `[ -f ${quotedPath} ] && source ${quotedPath}`;
-}
-
-function appendCompletionProfilePath(
-  directory: string,
-  pathApi: typeof path.posix,
-  ...segments: string[]
-): string {
-  // Shell startup resolves symlinks before `..`; path.join would select a different profile.
-  const nativeDirectory = pathApi.sep === "\\" ? directory.replaceAll("/", pathApi.sep) : directory;
-  const separator = nativeDirectory.endsWith(pathApi.sep) ? "" : pathApi.sep;
-  return `${nativeDirectory}${separator}${segments.join(pathApi.sep)}`;
 }
 
 /** Formats a current-shell command to load a profile or cached completion script. */
@@ -402,7 +395,7 @@ export function resolveCompletionProfilePath(shell: CompletionShell): string {
   const pathApi = platform === "win32" ? path.win32 : path.posix;
   const home = env.HOME || os.homedir();
   if (shell === "zsh") {
-    const profileDirectory = env.ZDOTDIR === undefined ? home : env.ZDOTDIR || pathApi.sep;
+    const profileDirectory = resolveShellConfigRoot("zsh", env, home, pathApi);
     return appendCompletionProfilePath(profileDirectory, pathApi, ".zshrc");
   }
   if (shell === "bash") {
@@ -413,11 +406,7 @@ export function resolveCompletionProfilePath(shell: CompletionShell): string {
       : appendCompletionProfilePath(home, pathApi, ".bash_profile");
   }
   if (shell === "fish") {
-    const configuredHome = env.XDG_CONFIG_HOME;
-    const configHome =
-      configuredHome && pathApi.isAbsolute(configuredHome)
-        ? configuredHome
-        : appendCompletionProfilePath(home, pathApi, ".config");
+    const configHome = resolveShellConfigRoot("fish", env, home, pathApi);
     return appendCompletionProfilePath(configHome, pathApi, "fish", "config.fish");
   }
   if (platform === "win32") {

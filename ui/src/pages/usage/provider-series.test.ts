@@ -37,5 +37,5 @@ it("keeps known providers on fixed colors and folds overflow into the shared ton
   const assigned = unknown.slice(0, 4).map(colorOf);
   expect(new Set(assigned).size).toBe(4);
   expect(assigned).not.toContain("var(--chart-series-1)");
-  expect(colorOf("fresh-e")).toBe("var(--oc-border-strong)");
+  expect(colorOf("fresh-e")).toBe("var(--muted-strong)");
 });

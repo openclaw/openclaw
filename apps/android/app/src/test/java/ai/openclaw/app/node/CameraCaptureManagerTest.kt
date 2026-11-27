@@ -193,6 +193,83 @@ class CameraCaptureManagerTest {
     }
 
   @Test
+  fun earlyClipFinalizeFailureSettlesAndReleasesOwnershipBeforeDuration() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val handler = handler()
+      val filesBefore = cameraTemporaryFiles()
+      val clip = async { handler.handleClip(SILENT_CLIP) }
+      try {
+        drainCaptureTasks()
+        advanceTimeBy(1_500)
+        drainCaptureTasks()
+        assertEquals(1, HeldPendingRecording.started)
+        assertEquals(1, (cameraTemporaryFiles() - filesBefore).size)
+
+        // A recording without a terminal callback must still retain its duration and ownership.
+        advanceTimeBy(1_000)
+        drainCaptureTasks()
+        assertFalse(clip.isCompleted)
+        assertEquals(0, HeldRecording.closed)
+        assertEquals(2, CaptureProvider.bound.size)
+
+        val event = Shadow.newInstanceOf(VideoRecordEvent.Finalize::class.java)
+        ReflectionHelpers.setField(event, "mError", VideoRecordEvent.Finalize.ERROR_ENCODING_FAILED)
+        checkNotNull(HeldPendingRecording.listener).accept(event)
+        drainCaptureTasks()
+        assertTrue("terminal failure must settle before the requested duration", clip.isCompleted)
+        assertFalse("terminal failure must not cancel the caller", clip.isCancelled)
+        val result = clip.await()
+        assertEquals("UNAVAILABLE", result.error?.code)
+        assertNull(result.payloadJson)
+        assertTrue(CaptureProvider.bound.isEmpty())
+        assertEquals(filesBefore, cameraTemporaryFiles())
+        assertTrue(HeldRecording.closed > 0)
+        assertNextSnapReachesCamera(handler)
+      } finally {
+        clip.cancelAndJoin()
+      }
+    }
+
+  @Test
+  fun clipDurationStopsRecordingAndLateSuccessStillTransfersPayload() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      val handler = handler()
+      val filesBefore = cameraTemporaryFiles()
+      val clip = async { handler.handleClip(SILENT_CLIP) }
+      try {
+        drainCaptureTasks()
+        advanceTimeBy(1_500)
+        drainCaptureTasks()
+        // Synthetic CameraX output exercises ownership and encoding, not the physical codec.
+        (cameraTemporaryFiles() - filesBefore).single().writeBytes(byteArrayOf(1, 2, 3))
+        advanceTimeBy(9_999)
+        drainCaptureTasks()
+        assertFalse(clip.isCompleted)
+        assertEquals(0, HeldRecording.closed)
+        advanceTimeBy(1)
+        drainCaptureTasks()
+        assertFalse("stopping still waits for finalization", clip.isCompleted)
+        assertEquals(1, HeldRecording.closed)
+
+        val event = Shadow.newInstanceOf(VideoRecordEvent.Finalize::class.java)
+        ReflectionHelpers.setField(event, "mError", VideoRecordEvent.Finalize.ERROR_NONE)
+        checkNotNull(HeldPendingRecording.listener).accept(event)
+        val result = clip.await()
+        assertNull(result.error)
+        val payload = Json.parseToJsonElement(checkNotNull(result.payloadJson)).jsonObject
+        assertEquals("AQID", payload.getValue("base64").jsonPrimitive.content)
+        assertEquals(10_000, payload.getValue("durationMs").jsonPrimitive.int)
+        assertTrue(CaptureProvider.bound.isEmpty())
+        assertEquals(filesBefore, cameraTemporaryFiles())
+        assertNextSnapReachesCamera(handler)
+      } finally {
+        clip.cancelAndJoin()
+      }
+    }
+
+  @Test
   fun clipFinalizeFailureReleasesOwnership() =
     runTest {
       Dispatchers.setMain(StandardTestDispatcher(testScheduler))

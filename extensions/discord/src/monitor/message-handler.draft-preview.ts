@@ -40,7 +40,6 @@ export function createDiscordDraftPreviewController(params: {
   discordConfig: DiscordConfig;
   accountId: string;
   abortSignal?: AbortSignal;
-  isPolicyCurrent?: () => boolean;
   sourceRepliesAreToolOnly: boolean;
   groupThread?: boolean;
   isRoomEvent?: boolean;
@@ -302,20 +301,11 @@ export function createDiscordDraftPreviewController(params: {
       assertCurrent();
       const retainedEntry = params.discordConfig;
       const retainedLog = params.log;
-      const retainedIsPolicyCurrent = params.isPolicyCurrent;
       let retired = false;
-      const assertChannelCurrent = () => {
-        // Explicit flushes may run outside the captured async scope. The transport
-        // still revalidates its original channel owner at every admission.
-        assertChannelAuthority?.();
-        if (retainedIsPolicyCurrent?.() === false) {
-          throw new Error("Discord channel policy is no longer current");
-        }
-      };
       const assertRetainedCurrent = () => {
-        assertChannelCurrent();
+        assertChannelAuthority?.();
         if (retired) {
-          throw new Error("Discord retained progress authority is no longer current");
+          throw new Error("Discord retained progress ended. Start a new turn to retry.");
         }
       };
       const retainedCompositor = createChannelProgressDraftCompositor({
@@ -368,7 +358,7 @@ export function createDiscordDraftPreviewController(params: {
             retired = true;
             retainedCompositor.markFinalReplyStarted();
             enqueue(() =>
-              withDiscordRequestAuthority(assertChannelCurrent, async () => {
+              withDiscordRequestAuthority(assertChannelAuthority, async () => {
                 await stream.clear();
                 await stream.cleanupPendingMessages();
               }),

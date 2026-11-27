@@ -128,9 +128,14 @@ export type PluginRuntimeCore = {
     }) => Promise<RuntimeConfigReplaceResult>;
   };
   agent: {
+    /**
+     * @deprecated No model is configured by default anymore; these are the retired implicit
+     * values. Read the agent's model with `modelConfig.resolveDefaultModelForAgent`, which
+     * returns undefined when none is configured. Kept for the SDK deprecation window.
+     */
     defaults: {
-      model: typeof import("../../agents/defaults.js").DEFAULT_MODEL;
-      provider: typeof import("../../agents/defaults.js").DEFAULT_PROVIDER;
+      model: string;
+      provider: string;
     };
     resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
     resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
@@ -149,7 +154,7 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
-    /** Admit a turn for this exact trusted channel plugin and its authenticated sender. */
+    /** Run a turn for this plugin's own channel; the host decides owner from `runContext.senderId`. */
     runCommandFromIngress: (
       opts: import("../../agents/command/types.js").AgentCommandIngressOpts,
       runtime: import("../../runtime.js").RuntimeEnv,

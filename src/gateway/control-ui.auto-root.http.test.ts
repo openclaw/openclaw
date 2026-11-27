@@ -67,7 +67,7 @@ describe("handleControlUiHttpRequest prepared root lifecycle", () => {
     expect(res.statusCode).toBe(503);
     expect(setHeader).not.toHaveBeenCalledWith("Retry-After", expect.anything());
     expect(String(end.mock.calls[0]?.[0] ?? "")).toBe(
-      "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`.",
+      "Web app assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`.",
     );
   });
 });

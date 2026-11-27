@@ -6,6 +6,7 @@ import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-input.types.js";
 import {
   attachRuntimeUserTurnTranscriptRecorder,
   takeRuntimeUserTurnTranscriptContext,
@@ -14,7 +15,6 @@ import {
 import {
   mergePreparedUserTurnMessageForRuntime,
   restorePreparedUserTurnOperationalMetaForRuntime,
-  type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
@@ -73,7 +73,9 @@ function publishPersistedUserEnvelope(
   for (const key of Object.keys(runtime)) {
     Reflect.deleteProperty(runtime, key);
   }
-  Object.assign(runtime, persisted, { content });
+  // String keys only: copying the persisted copy's enumerable symbols would
+  // overwrite read-only runtime carriers (steering context) and crash the writer.
+  Object.assign(runtime, Object.fromEntries(Object.entries(persisted)), { content });
   if (imageFactIndexes) {
     runtime["__openclaw"] = {
       ...runtime["__openclaw"],

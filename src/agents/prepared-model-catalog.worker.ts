@@ -7,13 +7,13 @@ import {
 } from "../config/resolution-facts.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { installDirectoryWatchPort } from "../infra/directory-watch-host.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
 import {
   captureRemoteModelCatalogStartupSnapshot,
   withRemoteModelCatalogSnapshot,
 } from "../model-catalog/remote-overlay.js";
-import { withHandedOffCodexClientVersion } from "../plugin-sdk/codex-client-version-handoff.internal.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -57,6 +57,7 @@ import { replaceRuntimeAuthProfileStoreSnapshotsAsync } from "./auth-profiles/ru
 import { loadAuthProfileStoreForCatalogAsync } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
+import { parseModelCatalogJson } from "./model-catalog-json.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
@@ -450,10 +451,12 @@ async function runCatalogRequest(
     }
     // Saved catalogs seed the template registry. Every provider this plan saves publishes its
     // live rows, so an accepted empty listing withdraws the saved ones.
-    const plannedProviders = source.pluginCatalogs.flatMap(({ contents }) =>
-      // SAFETY: the models.json plan serializes each generated catalog with a providers record.
-      Object.keys((JSON.parse(contents) as { providers?: object }).providers ?? {}),
-    );
+    const plannedProviders = source.pluginCatalogs.flatMap(({ contents }) => {
+      // A merge with no discoveries reuses the stored catalog, including accepted JSONC.
+      // SAFETY: provider keys are read from the same catalog input as the model registry.
+      const catalog = parseModelCatalogJson(contents, true) as { providers?: object };
+      return Object.keys(catalog.providers ?? {});
+    });
     for (const provider of [
       ...(facts.modelCatalog.providerOutcomes ?? []).map((outcome) => outcome.provider),
       ...plannedProviders,
@@ -542,6 +545,9 @@ async function runCatalogRequest(
 
 if (parentPort) {
   const data = workerData as PreparedModelCatalogWorkerData;
+  if (data.directoryWatchPort) {
+    installDirectoryWatchPort(data.directoryWatchPort);
+  }
   if (data.databaseEngineSelection) {
     installDatabaseEngineSelection(data.databaseEngineSelection);
   }
@@ -629,39 +635,36 @@ if (parentPort) {
                     withTemplateInstallSchemaVersionFacts(
                       request.templateInstallSchemaVersions,
                       () =>
-                        // Never select a Codex binary here; report the parent's decision.
-                        withHandedOffCodexClientVersion(request.codexClientVersion, () =>
-                          work.run(() =>
-                            runCatalogRequest(
-                              value,
-                              config,
-                              request,
-                              work,
-                              async () => {
-                                if (previous?.fingerprint === fingerprint) {
-                                  return previous.prepared;
-                                }
-                                replacing =
-                                  previous?.registrationFingerprint !== registrationFingerprint;
-                                return (attempted = await prepareWorkerGeneration(
-                                  value,
-                                  config,
-                                  replacing ? undefined : previous?.prepared,
-                                ));
-                              },
-                              async () => {
-                                // Admission can outlast a refresh on slow filesystems; only completed
-                                // generation preparation starts the provider-discovery deadline.
-                                stopProgress();
-                                const response = await channel?.request(null);
-                                response?.consumed();
-                                if (response && response.input !== true) {
-                                  throw new Error(
-                                    "prepared model catalog request retired before discovery",
-                                  );
-                                }
-                              },
-                            ),
+                        work.run(() =>
+                          runCatalogRequest(
+                            value,
+                            config,
+                            request,
+                            work,
+                            async () => {
+                              if (previous?.fingerprint === fingerprint) {
+                                return previous.prepared;
+                              }
+                              replacing =
+                                previous?.registrationFingerprint !== registrationFingerprint;
+                              return (attempted = await prepareWorkerGeneration(
+                                value,
+                                config,
+                                replacing ? undefined : previous?.prepared,
+                              ));
+                            },
+                            async () => {
+                              // Admission can outlast a refresh on slow filesystems; only completed
+                              // generation preparation starts the provider-discovery deadline.
+                              stopProgress();
+                              const response = await channel?.request(null);
+                              response?.consumed();
+                              if (response && response.input !== true) {
+                                throw new Error(
+                                  "prepared model catalog request retired before discovery",
+                                );
+                              }
+                            },
                           ),
                         ),
                     ),

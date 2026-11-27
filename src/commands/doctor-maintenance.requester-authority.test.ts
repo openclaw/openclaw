@@ -39,7 +39,8 @@ vi.mock("../cli/plugin-registry-loader.js", () => ({
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+  const mocked = { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+  return { ...mocked, default: mocked };
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -192,9 +193,9 @@ it.each(["configured-owner", "profile"] as const)(
           // Child custody and post-repair work check outside the scope (#178291);
           // the held owner lends custody to the delegated check.
           expect(policy.assertCurrent).not.toThrow();
-          // The Doctor flow leaves runChecks before its post-repair cleanup.
+          // The Doctor flow leaves runChecks before its post-repair SQLite work.
           // Draining those readers requires fresh admission before restoration.
-          await maintenance!.cleanupRetainedRuntimes();
+          await maintenance!.enableSqliteReclamation([]);
           await maintenance!.run(async () => {
             if (source === "profile") {
               unlinkUserChannelIdentity(profile.id, identity);

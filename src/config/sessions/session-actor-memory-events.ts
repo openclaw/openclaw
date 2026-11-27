@@ -3,11 +3,6 @@ import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import { readBackgroundResultPlacement } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
-import {
-  advanceCliHistoryBoundary,
-  cliHistoryOwnerHolds,
-  getCliHistoryWriter,
-} from "./cli-history-boundary.js";
 import type { TranscriptEventAppendOptions } from "./session-accessor.sqlite-contract.js";
 import { pruneSessionActorMemoryReactions } from "./session-actor-memory-reactions.js";
 import type { SessionActorMemoryState } from "./session-actor-memory-state.js";
@@ -126,27 +121,6 @@ export function createSessionActorMemoryEvents(options: {
       updatedAt: Math.max(Date.now(), (state.hot.transcript.version.updatedAt ?? -1) + 1),
     };
     state.hot.transcript.watermark = { generation, maxSeq: rawSeq };
-    const writer = getCliHistoryWriter({
-      agentId,
-      storePath: path,
-      sessionId: requireEntry().sessionId,
-      sessionKey: state.hot.target.sessionKey,
-    });
-    if (writer) {
-      const next = advanceCliHistoryBoundary(
-        state.hot.entry,
-        requireEntry().sessionId,
-        generation,
-        { first: rawSeq, last: rawSeq },
-        writer,
-      );
-      if (next) {
-        writer.assertCurrent();
-        if (cliHistoryOwnerHolds(writer, writer.confirmsOwner)) {
-          state.hot.entry = next;
-        }
-      }
-    }
     if (isRecord(event) && typeof event.id === "string" && event.type === "message") {
       const key = readMessageIdempotencyKey(event.message);
       if (
@@ -269,6 +243,22 @@ export function createSessionActorMemoryEvents(options: {
         }
       : { appended: false as const };
   };
+  /**
+   * Append a navigation control under a rotated transcript generation.
+   *
+   * An in-place rewind or branch switch keeps the session id, so the rotated
+   * generation is what retires pre-cut readers: a raw-delta cursor captured
+   * before the cut must fail with `generation_mismatch`, exactly as it does on
+   * the SQLite path. `writeEvent` carries the rotated token into the version and
+   * the watermark together.
+   */
+  const appendNavigationControl = (event: unknown) => {
+    state.hot.transcript.version = {
+      ...state.hot.transcript.version,
+      generation: randomUUID(),
+    };
+    return appendRaw(event);
+  };
   const replaceRows = (
     rows: SessionActorMemoryState["events"],
     replacement?: { preserveGeneration?: boolean },
@@ -326,6 +316,7 @@ export function createSessionActorMemoryEvents(options: {
     checkMutation,
     rebasePrepared,
     appendRaw,
+    appendNavigationControl,
     replaceRows,
   };
 }

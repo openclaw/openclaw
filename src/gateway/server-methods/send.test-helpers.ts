@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
@@ -10,6 +10,7 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
+  type AgentRuntimeMessageActionContext,
 } from "../message-action-turn-capability.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -17,18 +18,28 @@ export function messageActionClientForTests(
   sessionKey: string,
   overrides: Partial<Pick<AgentRuntimeIdentity, "agentId" | "messageActionContext">> = {},
 ) {
-  return {
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime" as const,
-        agentId: "main",
-        sessionKey,
-        operationalRunInstance: createOperationalRunInstanceRef("message-action-test-run"),
-        messageActionContext: messageActionContextFromSessionKeyForTests(sessionKey),
-        ...overrides,
-      },
-    },
+  const identity = {
+    kind: "agentRuntime" as const,
+    agentId: "main",
+    sessionKey,
+    operationalRunInstance: createOperationalRunInstanceRef("message-action-test-run"),
+    messageActionContext: messageActionContextFromSessionKeyForTests(sessionKey),
+    ...overrides,
   };
+  if (identity.messageActionContext && !identity.messageActionContext.turnCapability) {
+    const turnCapability = mintMessageActionTurnCapability({
+      ...identity.messageActionContext,
+      agentId: identity.agentId,
+      runId: identity.operationalRunInstance.runId,
+      sessionKey,
+      expiresWithRun: true,
+    });
+    identity.messageActionContext = { ...identity.messageActionContext, turnCapability };
+    onTestFinished(() => {
+      revokeMessageActionTurnCapability(turnCapability);
+    });
+  }
+  return { internal: { agentRuntimeIdentity: identity } };
 }
 
 export function resolveAgentIdFromSessionKeyForTests(params: {
@@ -45,7 +56,9 @@ export function resolveAgentIdFromSessionKeyForTests(params: {
   return sessionAgentId ?? explicitAgentId ?? "main";
 }
 
-function messageActionContextFromSessionKeyForTests(sessionKey: string) {
+function messageActionContextFromSessionKeyForTests(
+  sessionKey: string,
+): AgentRuntimeMessageActionContext {
   const [provider, peerKind, ...peer] = sessionKey.split(":").slice(2);
   const peerId = peer.join(":");
   const currentChatType: "direct" | "group" | "channel" | undefined =
@@ -191,7 +204,9 @@ export function createMessageActionTurnClientForTests(params: {
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     } as GatewayRequestContext,
     client: createAgentRuntimeGatewayClientForTests({
-      ...messageActionClientForTests(params.sessionKey).internal.agentRuntimeIdentity,
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: params.sessionKey,
       operationalRunInstance,
       delegatedAuthority: { kind: "local", ...delegatedAuthority },
       messageActionContext: {

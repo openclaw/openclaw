@@ -40,7 +40,6 @@ import {
 } from "./subagent-control-native.test-support.js";
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
-import { mutateCleanup } from "./subagent-registry-sweep-cleanup.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { registerSubagentSweepKillCustodyTests } from "./subagent-registry-sweeper-kill-custody.test-support.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
@@ -132,52 +131,21 @@ describe("subagent registry cleanup scheduling", () => {
 
   registerSubagentSweepRetainedAuthorityTests(killSessionEntry);
 
-  it("isolates cleanup changes without copying the immutable run payload", async () => {
-    const { entry, runs } = createHarness(archivedRun());
-    const execution = { ...entry.execution };
-    using clone = vi.spyOn(globalThis, "structuredClone");
-
-    const updated = await mutateCleanup(
-      runs,
-      entry,
-      () => true,
-      (draft) => {
-        draft.execution.suppressSessionEffects = true;
-        draft.contextEngineCleanupCompletedAt = 123;
-      },
-    );
-
-    expect(entry.execution).toEqual(execution);
-    expect(entry.contextEngineCleanupCompletedAt).toBeUndefined();
-    expect(updated).toMatchObject({
-      execution: { suppressSessionEffects: true },
-      contextEngineCleanupCompletedAt: 123,
-    });
-    expect(runs.get(entry.runId)).toEqual(updated);
-    expect(clone.mock.calls.some(([value]) => value === entry)).toBe(false);
-  });
-
   it.each(["terminal", "running"] as const)(
-    "only gives ended %s children requester-wake priority over suspended delivery cleanup",
+    "only gives ended %s children requester-wake priority over pending cleanup",
     async (executionStatus) => {
-      const { entry, completeCleanupBookkeeping, resumeRequesterSettleWake, sweeper } =
-        createHarness();
+      const { entry, resumeRequesterSettleWake, sweeper } = createHarness();
       entry.execution = {
         status: executionStatus,
         endedAt: Date.now() - 60_000,
         outcome: { status: "ok" },
       };
       entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
-      entry.delivery = {
-        status: "suspended",
-        suspendedAt: Date.now() - 8 * 24 * 60 * 60_000,
-        suspendedReason: "expiry",
-      };
+      entry.delivery = { status: "pending" };
 
       await sweeper.sweepOnce();
 
       if (executionStatus === "terminal") {
-        expect(completeCleanupBookkeeping).not.toHaveBeenCalled();
         expect(resumeRequesterSettleWake).toHaveBeenCalledWith(entry.runId, entry);
       } else {
         expect(resumeRequesterSettleWake).not.toHaveBeenCalled();

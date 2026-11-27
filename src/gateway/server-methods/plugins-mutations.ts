@@ -26,7 +26,6 @@ import {
 } from "../../plugins/management-mutations.js";
 import { uninstallManagedPlugin } from "../../plugins/management-uninstall.js";
 import { withPluginLifecycleLeaseAsync } from "../../plugins/plugin-lifecycle-lease.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { pluginLifecycleError } from "./plugins-lifecycle-error.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
@@ -49,16 +48,7 @@ function lifecycleHandler<T>(
     client: Parameters<GatewayRequestHandler>[0]["client"],
   ) => Promise<PluginLifecycleResult>,
 ): GatewayRequestHandler {
-  return async ({
-    req,
-    params,
-    respond,
-    context,
-    signal,
-    sessionMutationCommitGuard,
-    client,
-    hasCurrentClientAuthority,
-  }) => {
+  return async ({ req, params, respond, context, signal, sessionMutationCommitGuard, client }) => {
     if (!assertValidParams(params, validate, method, respond)) {
       return;
     }
@@ -70,16 +60,6 @@ function lifecycleHandler<T>(
         throw new Error("Plugin lifecycle changes require a running Gateway.");
       }
       const beforePersistentApply = () => {
-        // Ordinary reconnects retain the request; credential revocation must fence every effect.
-        if (
-          hasCurrentClientAuthority?.() === false ||
-          (client &&
-            (client.invalidated ||
-              (client.connect.role ?? "operator") !== "operator" ||
-              !client.connect.scopes?.includes(ADMIN_SCOPE)))
-        ) {
-          throw new Error("Plugin mutation authority is no longer active.");
-        }
         signal?.throwIfAborted();
         sessionMutationCommitGuard?.();
       };

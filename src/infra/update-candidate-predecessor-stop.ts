@@ -11,7 +11,10 @@ import {
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { defaultRuntime } from "../runtime.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateWorkerContext,
+  prepareOpenClawStateReadSource,
+} from "../state/openclaw-state-worker-context.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
 import {
   createSqliteLifecycleAggregateError,
@@ -121,12 +124,14 @@ async function recordCapturedPredecessorStop(
     const [
       { acquireDoctorGatewayMaintenanceOwner },
       { createOpenClawDatabaseMaintenanceScope },
+      { closeOpenClawStateDatabaseWorkersByPathAsync },
       { resolveOpenClawStateSqlitePath },
       { withStateDatabaseSchemaMaintenance },
       { recordUpdateRunStep },
     ] = await Promise.all([
       import("../commands/doctor-maintenance-foreground.js"),
       import("../state/openclaw-state-db-async-lifecycle.js"),
+      import("../state/openclaw-state-db-cache.js"),
       import("../state/openclaw-state-db.paths.js"),
       import("./state-database-maintenance.js"),
       import("./update-run-ledger.js"),
@@ -149,6 +154,10 @@ async function recordCapturedPredecessorStop(
         assertDatabaseAccess: owner.assertDatabaseAccess,
       });
       const scope = resources;
+      await owner.run(() => scope.run(() => capture.admit("predecessor-stop")));
+      // Service probing can leave warm token readers outside this maintenance scope.
+      // Release their connections before the attributed receipt takes native exclusion.
+      await owner.run(() => closeOpenClawStateDatabaseWorkersByPathAsync(pathname));
       result = owner.run(() =>
         withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () =>
           scope.run(() =>
@@ -215,6 +224,10 @@ export async function stopSupervisedPredecessorGateway(
   const runId = input.runId;
   const env = cloneEnvWithPlatformSemantics(process.env);
   const context = captureOpenClawStateWorkerContext({ env });
+  // Captured receipt cleanup renews admission while retaining this original source.
+  const source = params.databaseWriteCapture
+    ? prepareOpenClawStateReadSource({ path: context.admission.databasePath, env })
+    : undefined;
   let recorded = false;
   let receipt: Promise<void> | undefined;
   const record = (state: PreManagedServiceStop) => {
@@ -227,7 +240,7 @@ export async function stopSupervisedPredecessorGateway(
     const persist = () =>
       recordUpdateRunStepAsync(runId, recordedStep, {
         env,
-        context,
+        context: source?.workerContext() ?? context,
         assertCurrent: params.assertCurrent,
         retainSettlement(completion) {
           const release = registerSignalExitGate(completion);

@@ -6,6 +6,7 @@ import {
 } from "@openclaw/ai/transports";
 import {
   appendTextDeltaToAssistantMessage,
+  DEGENERATE_OUTPUT_ERROR_CODE,
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   REPETITIVE_OUTPUT_ERROR_CODE,
 } from "@openclaw/llm-core";
@@ -28,6 +29,7 @@ import { createStreamSteering } from "./stream-steering.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
 import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
 import { resolveAgentAssistantTurnId } from "./tool-execution-context.js";
+import type { ToolRepeatVerdict } from "./tool-repeat-guard.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
   AgentContext,
@@ -37,7 +39,6 @@ import type {
   AgentToolCall,
   AgentToolResult,
   StreamFn,
-  ToolLoopIntervention,
   ToolResultContentSource,
 } from "./types.js";
 
@@ -55,10 +56,29 @@ export type ExecutedToolCallBatch = {
   terminalToolCallIds: string[];
   steeringMessages: AgentMessage[];
   terminate: boolean;
-  terminateRun: boolean;
-  intervention?: ToolLoopIntervention;
+  /** The repeat guard capped this batch; the turn ends with `tool_repeat_limit`. */
+  repeatStop?: ToolRepeatVerdict;
   fatal?: { error: unknown };
 };
+
+// Argument JSON escapes newlines, so real indentation runs stay far below 4 KiB.
+// Live runaways stream 100-200 whitespace chars/s until the provider's output cap.
+const DEGENERATE_WHITESPACE_RUN_CHARS = 4 * 1024;
+const DEGENERATE_OUTPUT_ERROR_MESSAGE =
+  "Tool-call argument stream exceeded the consecutive whitespace limit";
+
+/** Trailing whitespace run after `delta`; an all-whitespace delta extends `previous`. */
+function trailingWhitespaceRun(delta: string, previous = 0): number {
+  let tail = 0;
+  while (
+    tail < delta.length &&
+    tail < DEGENERATE_WHITESPACE_RUN_CHARS &&
+    /\s/u.test(delta.charAt(delta.length - 1 - tail))
+  ) {
+    tail += 1;
+  }
+  return tail === delta.length ? previous + tail : tail;
+}
 
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
   if (message.stopReason === "toolUse") {
@@ -217,16 +237,16 @@ export async function streamAgentResponse(
     : executionAbort.signal;
   const modelAbort = new AbortController();
   const requestSignal = AbortSignal.any([executionSignal, modelAbort.signal]);
-  let repeatedToolErrorTerminated = false;
+  let toolRepeatStopped = false;
   const onTerminalLoop = () => {
     // Stop sampling before ordered publication waits for already-started effects.
-    repeatedToolErrorTerminated = true;
+    toolRepeatStopped = true;
     modelAbort.abort(new Error("Tool batch terminated"));
   };
   const abortFailedResponse = (message?: AssistantMessage) => {
     if (
       message &&
-      !repeatedToolErrorTerminated &&
+      !toolRepeatStopped &&
       (message.stopReason === "error" || message.stopReason === "aborted") &&
       message.errorCode !== REPETITIVE_OUTPUT_ERROR_CODE &&
       !isResponsesOutputLimitToolCallError(message)
@@ -298,9 +318,8 @@ export async function streamAgentResponse(
       .then(async () => {
         // Later queued batches complete as unstarted calls without cancelling active work.
         let batchSignal = executionSignal;
-        if (repeatedToolErrorTerminated) {
-          batchSignal = AbortSignal.abort(new Error("Tool-loop recovery ended"));
-          // Suppressed batches skip admission and its lifecycle publication barrier.
+        if (toolRepeatStopped) {
+          batchSignal = AbortSignal.abort(new Error("Tool repeat limit reached"));
           // Sampling already stopped; keep their synthetic results behind earlier work.
           await previousExecutions;
         }
@@ -311,11 +330,8 @@ export async function streamAgentResponse(
           hasUnobservedAsyncToolResults,
         });
         batches.push(batch);
-        if (
-          batch.fatal ||
-          (batch.terminateRun && batch.intervention?.detector !== "repeated_tool_error")
-        ) {
-          executionAbort.abort(batch.fatal?.error ?? new Error("Tool batch terminated"));
+        if (batch.fatal) {
+          executionAbort.abort(batch.fatal.error);
         }
       })
       .catch((error: unknown) => {
@@ -344,6 +360,7 @@ export async function streamAgentResponse(
         const repetitionGuard = config.repetitionGuard?.(config.model)
           ? new AssistantRepetitionGuard()
           : undefined;
+        const whitespaceRuns = new Map<number, number>();
         let partialMessage: AssistantMessage | null = null;
         let partialIndex: number | undefined;
         let committedContentCount = 0;
@@ -434,6 +451,26 @@ export async function streamAgentResponse(
                 if (event.contentIndex < committedContentCount) {
                   break;
                 }
+                if (event.type === "toolcall_delta") {
+                  const run = trailingWhitespaceRun(
+                    event.delta,
+                    whitespaceRuns.get(event.contentIndex),
+                  );
+                  if (run >= DEGENERATE_WHITESPACE_RUN_CHARS) {
+                    modelAbort.abort(
+                      Object.assign(new Error(DEGENERATE_OUTPUT_ERROR_MESSAGE), {
+                        code: DEGENERATE_OUTPUT_ERROR_CODE,
+                      }),
+                    );
+                    return await finalizeAssistantMessage({
+                      ...message,
+                      stopReason: "error",
+                      errorCode: DEGENERATE_OUTPUT_ERROR_CODE,
+                      errorMessage: DEGENERATE_OUTPUT_ERROR_MESSAGE,
+                    });
+                  }
+                  whitespaceRuns.set(event.contentIndex, run);
+                }
                 const stopped = repetitionGuard?.check(
                   message,
                   committedContentCount,
@@ -510,8 +547,10 @@ export async function streamAgentResponse(
         return await finalizeAssistantMessage();
 
         async function finalizeAssistantMessage(terminal?: AssistantMessage) {
+          // Stream-owner stops win over the aborted provider result they caused.
           const stoppedTerminal =
-            terminal?.errorCode === REPETITIVE_OUTPUT_ERROR_CODE
+            terminal?.errorCode === REPETITIVE_OUTPUT_ERROR_CODE ||
+            terminal?.errorCode === DEGENERATE_OUTPUT_ERROR_CODE
               ? terminal
               : terminal && repetitionGuard?.check(terminal, committedContentCount);
           if (stoppedTerminal) {

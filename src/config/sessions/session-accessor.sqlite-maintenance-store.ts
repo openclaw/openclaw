@@ -239,6 +239,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
             readPreserveKeys,
             preserveRecentMs: maintenance.preserveRecentMs,
             nowMs: plannedAt,
+            deferArchiving: readPreservation().archivingDeferred === true,
             excludedKeys: new Set([...removalReasons.keys(), ...archivedKeys]),
           });
           durableNoCandidates = candidates.durableNoCandidates;

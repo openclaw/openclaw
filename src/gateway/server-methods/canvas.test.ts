@@ -147,10 +147,12 @@ describe("canvas.document.view", () => {
   it("reports missing documents and unavailable sandbox listeners without exposing file paths", async () => {
     const { context, invoke } = createHarness();
     readDocument.mockRejectedValueOnce(new Error("ENOENT: /private/state/canvas/secret"));
+    context.getMcpAppSandboxPort = () => undefined;
+    vi.mocked(context.ensureSandboxHostPort!).mockRejectedValue(new Error("sandbox port occupied"));
     const missing = await invoke();
     expect(missing.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expect(missing.mock.calls[0]?.[2]).not.toHaveProperty("retryable", true);
     expect(JSON.stringify(missing.mock.calls)).not.toContain("/private/state");
-    context.getMcpAppSandboxPort = () => undefined;
     context.ensureSandboxHostPort = undefined;
     expect((await invoke()).mock.calls[0]?.[0]).toBe(false);
   });
@@ -159,6 +161,19 @@ describe("canvas.document.view", () => {
 describe.each(["canvas.document.view", "canvas.document.preview"])("%s embed policy", (method) => {
   const params =
     method === "canvas.document.view" ? { docId: "cv_widget" } : { html: "<p>Preview</p>" };
+
+  it("allows retry after sandbox startup fails and returns the unchanged successful view", async () => {
+    const { context, invoke } = createHarness(method);
+    const successful = (await invoke(params)).mock.calls;
+    context.getMcpAppSandboxPort = () => undefined;
+    vi.mocked(context.ensureSandboxHostPort!)
+      .mockRejectedValueOnce(new Error("sandbox port occupied"))
+      .mockResolvedValue(18790);
+    const failed = await invoke(params);
+    expect(failed.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+    expect(JSON.stringify(failed.mock.calls)).not.toContain("sandbox port occupied");
+    expect((await invoke(params)).mock.calls).toEqual(successful);
+  });
 
   it.each(["strict", "scripts", "trusted"] satisfies ControlUiEmbedSandboxMode[])(
     "returns the effective %s ceiling without changing the isolated host",

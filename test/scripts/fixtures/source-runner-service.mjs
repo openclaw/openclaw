@@ -1,4 +1,4 @@
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -19,7 +19,7 @@ export function registerSourceRunnerServiceFixture(sourceRoot) {
       "export async function resolveLiveManagedGatewayDistFence() { return { refuse: false }; }",
     ],
   ]);
-  registerHooks({
+  nodeModule.registerHooks({
     load(url, context, nextLoad) {
       // The real wrappers load both source and prepared legacy-finalizer modules.
       const source = url.startsWith(rootUrl)

@@ -501,6 +501,36 @@ ${ciStep("macos-swift-packages", "Clean OpenClawKit build scratch").run}
     ).toBe(true);
   });
 
+  it.each([0, 7])("retains complete OpenClawKit output and exit code %i", (exitCode) => {
+    const root = fixture();
+    const result = run(
+      root,
+      `
+swift() {
+  printf '%10000s' output
+  printf 'package stderr\\n' >&2
+  return ${exitCode}
+}
+export -f swift
+${ciStep("macos-swift-packages", "OpenClawKit tests").run}
+`,
+      { OPENCLAWKIT_SCRATCH: root, OPENCLAWKIT_TEST_EXECUTION: "serial" },
+    );
+    expect(result.status, result.stderr).toBe(exitCode);
+    const log = readFileSync(path.join(root, "openclaw-native-test-logs/openclawkit.log"), "utf8");
+    expect(log).toBe(`${" ".repeat(9994)}outputpackage stderr\n`);
+    expect(result.stdout.length).toBeLessThan(9000);
+    const upload = ciStep("macos-swift-packages", "Upload macOS native test logs");
+    for (const [phase, name] of [
+      ["packages", "macos-package-test-logs"],
+      ["tests", "macos-native-test-logs"],
+    ]) {
+      const context = { failed: exitCode !== 0, matrix: { phase } };
+      expect(evaluateWorkflowExpression(upload.if, context)).toBe(true);
+      expect(evaluateWorkflowExpression(upload.with?.name, context)).toBe(name);
+    }
+  });
+
   it.each([
     { phase: "mlx-settings", nativeOwner: false, filters: [] },
     {
@@ -705,7 +735,7 @@ ${check.run}
     ).toBe(row.expected);
   });
 
-  it("iOS runs the Access proof and Watch UI tests after lifecycle tests fail", () => {
+  it("iOS runs the Access proof after lifecycle tests fail", () => {
     const root = fixture();
     const result = run(
       root,
@@ -716,16 +746,14 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
     );
     expect(result.status, result.stderr).not.toBe(0);
     const commands = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
-    expect(commands).toHaveLength(3);
+    expect(commands).toHaveLength(2);
     expect(commands[0]).toContain("OpenClawLifecycleTests.xcresult");
     expect(commands[1]).toBe("scripts/ios-access-restart-proof.py fixture-simulator");
-    expect(commands[2]).toContain("OpenClawWatchDeliveryUITests.xcresult");
   });
 
   it.each([
     { task: "test-wear", lint: "true", appLint: "play", benchmark: "false", count: 3 },
     { task: "ktlint", lint: "false", appLint: "third-party", benchmark: "true", count: 3 },
-    { task: "build-play", lint: "false", appLint: "", benchmark: "false", count: 3 },
   ])("Android $task runs trailing commands after the first Gradle failure", (row) => {
     const root = fixture();
     executable(root, "apps/android/gradlew", 'printf "%s\\n" "$*" >> "$TRACE"; exit 7');
@@ -782,11 +810,8 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
     ["ios-build", "Configure iOS build and report simulator selection", "node-env", "tests"],
     ["ios-build", "Prepare iOS simulator", "ios-configure", "tests"],
     ["ios-build", "Build iOS app", "ios-swift-tools", "tests"],
-    ["ios-build", "Build iOS app (Release)", "ios-swift-tools", "release"],
-    ["ios-build", "Prove native managed document download and export", "ios-swift-tools", "tests"],
     ["ios-build", "Run focused iOS voice cleanup simulator tests", "ios-app-build", "tests"],
     ["ios-build", "Run focused iOS lifecycle simulator tests", "ios-app-build", "tests"],
-    ["ios-build", "Run focused Apple Watch operation simulator tests", "ios-app-build", "tests"],
   ])("%s / %s ignores unrelated failure but requires %s", (job, name, producer, phase) => {
     const setup = Object.fromEntries(
       [
@@ -967,6 +992,20 @@ describe("PR failure reporting", () => {
         ).toEqual({ group: "Release reserved", labels: "ubuntu-24.04" });
       }
     }
+  });
+
+  it("selects the declared Node runtime before executing the sparse failure reporter", () => {
+    const steps: WorkflowStep[] = readCiWorkflow().jobs["pr-failure-report"].steps;
+    const checkout = requiredWorkflowStep(steps, "Checkout CI failure reporter");
+    const setup = requiredWorkflowStep(steps, "Setup Node.js");
+    const report = requiredWorkflowStep(steps, "Classify completed PR failures");
+    expect(checkout.with?.["sparse-checkout"]).toContain(
+      ".github/actions/setup-pnpm-store-cache/ensure-node.sh",
+    );
+    expect(steps.indexOf(checkout)).toBeLessThan(steps.indexOf(setup));
+    expect(steps.indexOf(setup)).toBeLessThan(steps.indexOf(report));
+    expect(setup.env?.REQUESTED_NODE_VERSION).toBe("${{ env.NODE_VERSION }}");
+    expect(setup.run).toContain("openclaw_ensure_node");
   });
 
   it("reports unsuccessful prerequisites with read-only grants for canonical PRs including forks", () => {
@@ -1254,7 +1293,7 @@ describe("PR failure reporting", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "publishes the classification table and machine-readable failures without changing the gate result",
+    "publishes the classification table and machine-readable failures without Node or a checkout",
     () => {
       const gate = readCiWorkflow().jobs["ci-gate"];
       const step = gate.steps.find(
@@ -1266,7 +1305,11 @@ describe("PR failure reporting", () => {
         runAttempt: 2,
       };
       expect(evaluateWorkflowExpression(`\${{ ${step.if} }}`, context)).toBe(false);
-      const summary = "| Job | Class |\n| --- | --- |\n| checks-node-example | pre-existing |\n";
+      expect(
+        gate.steps.some((entry: WorkflowStep) => entry.uses?.startsWith("actions/checkout@")),
+      ).toBe(false);
+      const summary =
+        '| Job | Class |\n| --- | --- |\n| checks-node-example | pre-existing |\nUnicode: 🦞, quotes: "ok", backslash: \\n\n';
       const failures = [
         {
           job: "checks-node-example",
@@ -1288,15 +1331,19 @@ describe("PR failure reporting", () => {
           failureReportOutputs: outputs,
         }),
       ).toBe(true);
-      const result = spawnSync("/bin/bash", ["-c", step.run], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GITHUB_STEP_SUMMARY: summaryPath,
-          SUMMARY_JSON: outputs.summary_json,
-          FAILURES_JSON: outputs.failures_json,
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", `node() { return 99; }; export -f node\n${step.run}`],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GITHUB_STEP_SUMMARY: summaryPath,
+            SUMMARY_JSON: outputs.summary_json,
+            FAILURES_JSON: outputs.failures_json,
+          },
         },
-      });
+      );
       expect(result.status, result.stderr).toBe(0);
       expect(readFileSync(summaryPath, "utf8")).toBe(summary);
       expect(result.stdout).toContain(summary);

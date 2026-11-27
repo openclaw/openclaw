@@ -477,6 +477,24 @@ export {};`,
   expect(firstExport(changed)?.closureHash).not.toBe(firstExport(baseline)?.closureHash);
 });
 
+it("keeps resolved runtime-only side-effect imports out of the declaration closure", async () => {
+  const source = "export type Fixture = string;";
+  const baseline = await renderSourceFixture(source);
+  const withRuntime = await renderSourceFixture({
+    "fixture.ts": `import "../../runtime.mjs";
+${source}`,
+    "../../runtime.mjs": "globalThis.fixtureInitialized = true;",
+  });
+
+  expect(withRuntime).toEqual(baseline);
+});
+
+it("rejects a missing runtime side-effect import instead of dropping it", async () => {
+  await expect(
+    renderSourceFixture('import "../../missing.mjs";\nexport type Fixture = string;'),
+  ).rejects.toThrow("src/plugin-sdk/fixture.ts -> ../../missing.mjs");
+});
+
 it("ignores unreachable declarations beside a transitive export", async () => {
   const render = (extra = "") =>
     renderSourceFixture({
@@ -522,6 +540,43 @@ it("bounds repeated work inside a cyclic declaration fanout without sharing part
   expect(second).toEqual(first);
   // A dense cycle previously printed 3,914 declarations for these two roots.
   expect(print.mock.calls.length).toBeLessThan(100);
+});
+
+it("reuses complete namespace fallbacks without caching partial cycle roots", () => {
+  const repoRoot = tempDirs.make("openclaw-plugin-sdk-namespace-");
+  const files = ["fixture.d.ts", "a.d.ts", "b.d.ts"].map((name) => path.join(repoRoot, name));
+  writeFiles(repoRoot, {
+    "fixture.d.ts": [
+      'export declare const first: typeof import("./a.js");',
+      'export declare const second: typeof import("./a.js");',
+      'export declare const other: typeof import("./b.js");',
+    ].join("\n"),
+    "a.d.ts": 'import type { B } from "./b.js"; export interface A { a: string; b: B }',
+    "b.d.ts": 'import type { A } from "./a.js"; export interface B { b: number; a: A }',
+  });
+  using native = nativeProject(repoRoot, files, tsOptions);
+  const { program, checker } = native.project;
+  void checker.getSymbolAtLocation;
+  const resolve = vi.spyOn(checker, "getSymbolAtLocation");
+  const render = createDeclarationClosureRenderer({
+    project: native.project,
+    printer: native.api.printer,
+    sourceProgram: program,
+    emittedSources: new Set(),
+    repoRoot,
+  });
+  const source = program.getSourceFile(files[0]!)!;
+  const first = render(source, "first");
+  resolve.mockClear();
+  const second = render(source, "second");
+  // Resolve this export's import literal, but do not traverse A -> B -> A again.
+  expect(resolve).toHaveBeenCalledTimes(1);
+  const other = render(source, "other");
+  const wholeFiles = (closure: typeof first) =>
+    closure?.sections.filter(({ name }) => name === "*");
+  expect(wholeFiles(first)).toHaveLength(2);
+  expect(wholeFiles(second)).toEqual(wholeFiles(first));
+  expect(wholeFiles(other)).toEqual(wholeFiles(first));
 });
 
 it("keeps cycle members complete across cached export walks", async () => {

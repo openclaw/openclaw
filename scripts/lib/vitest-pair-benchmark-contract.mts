@@ -77,6 +77,191 @@ export type BenchmarkRunRecord = Omit<BenchmarkRunPlan, "lane"> & {
 
 export type BenchmarkInventory = ReturnType<typeof assertInventoryAvailable>;
 
+type FileIdentity = { path: string; bytes: number; sha256: string };
+type ExecutionCase = {
+  file: string;
+  fullName: string;
+  line: number;
+  column: number;
+  status: "passed";
+};
+export type NodeCacheTreatment = "disabled" | "seeded";
+export type NodeCacheManifest = {
+  version: 2;
+  mode: "node-compile-cache";
+  workloadSha: string;
+  lane: BenchmarkLane;
+  expected: ExecutionCase[];
+  runtime: {
+    node: string;
+    v8: string;
+    platform: string;
+    architecture: string;
+    executableSha256: string;
+  };
+  pnpmSha256: string;
+  inputs: FileIdentity[];
+  seed: { files: FileIdentity[] };
+};
+export type NodeCacheMeasurement = {
+  pair: number;
+  treatment: "disabled" | "seeded";
+  inclusiveMs: number | null;
+  status: "success" | "failure";
+};
+
+function executionInventoryKey(
+  entries: Array<{ file: string; fullName?: string; line: number; column: number; status: string }>,
+) {
+  return JSON.stringify(
+    entries
+      .map((entry) =>
+        JSON.stringify([entry.file, entry.fullName, entry.line, entry.column, entry.status]),
+      )
+      .toSorted(),
+  );
+}
+
+export function validateNodeCacheManifest(value: unknown): NodeCacheManifest {
+  const fail = (message: string): never => {
+    throw new Error(`Node cache manifest: ${message}`);
+  };
+  const digest = (candidate: unknown) =>
+    typeof candidate === "string" && /^[0-9a-f]{64}$/u.test(candidate);
+  if (!isRecord(value) || value.version !== 2 || value.mode !== "node-compile-cache") {
+    return fail("expected version 2 node-compile-cache mode");
+  }
+  if (typeof value.workloadSha !== "string" || !SHA_RE.test(value.workloadSha)) {
+    return fail("invalid workload SHA");
+  }
+  const lane = value.lane;
+  if (
+    !isRecord(lane) ||
+    typeof lane.id !== "string" ||
+    !/^[a-z0-9-]+$/u.test(lane.id) ||
+    !Array.isArray(lane.files) ||
+    lane.files.length === 0
+  ) {
+    return fail("one nonempty lane is required");
+  }
+  assertSafeRelativePath(lane.config, "lane.config");
+  for (const file of lane.files) {
+    assertSafeRelativePath(file, "lane.files");
+  }
+  if (new Set(lane.files).size !== lane.files.length) {
+    return fail("duplicate lane files");
+  }
+  if (!Array.isArray(value.expected) || value.expected.length === 0) {
+    return fail("expected passed inventory is required");
+  }
+  for (const entry of value.expected) {
+    if (
+      !isRecord(entry) ||
+      !lane.files.includes(entry.file) ||
+      typeof entry.fullName !== "string" ||
+      !entry.fullName ||
+      !Number.isSafeInteger(entry.line) ||
+      Number(entry.line) <= 0 ||
+      !Number.isSafeInteger(entry.column) ||
+      Number(entry.column) <= 0 ||
+      entry.status !== "passed"
+    ) {
+      return fail("invalid expanded passed case");
+    }
+  }
+  if (new Set(value.expected.map((entry) => entry.file)).size !== lane.files.length) {
+    return fail("expected inventory must cover every file");
+  }
+  const runtime = value.runtime;
+  if (
+    !isRecord(runtime) ||
+    runtime.node !== "v24.22.1" ||
+    runtime.platform !== "linux" ||
+    typeof runtime.v8 !== "string" ||
+    !runtime.v8 ||
+    typeof runtime.architecture !== "string" ||
+    !runtime.architecture ||
+    !digest(runtime.executableSha256) ||
+    !digest(value.pnpmSha256)
+  ) {
+    return fail("pinned Linux Node runtime and pnpm digests required");
+  }
+  const files = (entries: unknown, label: string) => {
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return fail(`${label} must be nonempty`);
+    }
+    for (const entry of entries) {
+      if (!isRecord(entry)) {
+        return fail(`invalid ${label} entry`);
+      }
+      assertSafeRelativePath(entry.path, `${label}.path`);
+      if (!Number.isSafeInteger(entry.bytes) || Number(entry.bytes) < 0 || !digest(entry.sha256)) {
+        return fail(`invalid ${label} identity`);
+      }
+    }
+    if (new Set(entries.map((entry) => entry.path)).size !== entries.length) {
+      return fail(`duplicate ${label} path`);
+    }
+    return entries;
+  };
+  const inputs = files(value.inputs, "inputs");
+  for (const file of [...lane.files, lane.config, "scripts/run-vitest.mjs"]) {
+    if (!inputs.some((entry) => entry.path === file)) {
+      return fail("lane input identity is missing");
+    }
+  }
+  if (!isRecord(value.seed)) {
+    return fail("sealed seed is required");
+  }
+  files(value.seed.files, "seed files");
+  return value as NodeCacheManifest;
+}
+
+export function buildNodeCacheSchedule() {
+  return Array.from({ length: 20 }, (_, pair) =>
+    (pair % 2 === 0 ? (["disabled", "seeded"] as const) : (["seeded", "disabled"] as const)).map(
+      (treatment) => ({ pair: pair + 1, treatment }),
+    ),
+  ).flat();
+}
+
+export function analyzeNodeCacheBenchmark(records: NodeCacheMeasurement[]) {
+  const schedule = buildNodeCacheSchedule();
+  if (
+    records.length !== schedule.length ||
+    records.some((record, index) => {
+      const planned = schedule[index]!;
+      return (
+        record.pair !== planned.pair ||
+        record.treatment !== planned.treatment ||
+        record.status !== "success" ||
+        record.inclusiveMs === null ||
+        !Number.isFinite(record.inclusiveMs) ||
+        record.inclusiveMs <= 0
+      );
+    })
+  ) {
+    throw new Error("Node cache benchmark requires the complete ordered 20 valid pairs");
+  }
+  const ratios = Array.from({ length: 20 }, (_, index) => {
+    const pair = records.slice(index * 2, index * 2 + 2);
+    return (
+      pair.find((record) => record.treatment === "seeded")!.inclusiveMs! /
+      pair.find((record) => record.treatment === "disabled")!.inclusiveMs!
+    );
+  });
+  const medianRatio = median(ratios);
+  const fasterPairs = ratios.filter((ratio) => ratio < 1).length;
+  return {
+    valid: true,
+    ratios,
+    medianRatio,
+    fasterPairs,
+    continueScreen: medianRatio <= 0.9 && fasterPairs >= 15,
+    claim: "Local inclusive treatment timing; no attributable cache-hit or remote-cache claim.",
+  };
+}
+
 function assertFiniteRatio(value: unknown, name: string): asserts value is number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     throw new Error(`${name} must be a positive finite number`);
@@ -224,6 +409,7 @@ export function parseVitestExecutionReport(
   reportFile: string,
   checkoutRoot: string,
   lane: BenchmarkLane,
+  expected?: NodeCacheManifest["expected"],
 ) {
   const report = JSON.parse(readFileSync(reportFile, "utf8")) as unknown;
   if (!isRecord(report)) {
@@ -304,6 +490,7 @@ export function parseVitestExecutionReport(
             );
           }
           return {
+            ...(expected ? { fullName: assertion.fullName } : {}),
             line: Number(assertion.location.line),
             column: Number(assertion.location.column),
             status: assertion.status,
@@ -314,7 +501,8 @@ export function parseVitestExecutionReport(
           (left, right) =>
             left.line - right.line ||
             left.column - right.column ||
-            left.status.localeCompare(right.status),
+            left.status.localeCompare(right.status) ||
+            (left.fullName ?? "").localeCompare(right.fullName ?? ""),
         );
       return {
         path: normalizeReportedTestPath(
@@ -342,6 +530,22 @@ export function parseVitestExecutionReport(
   const assertionCount = files.reduce((total, file) => total + file.assertions.length, 0);
   if (assertionCount !== counts.numTotalTests) {
     throw new Error(`Vitest JSON report assertion count differs for lane ${lane.id}`);
+  }
+  if (expected) {
+    const actual = files.flatMap((file) =>
+      file.assertions.map((assertion) => ({ file: file.path, ...assertion })),
+    );
+    if (
+      counts.numPassedTests !== expected.length ||
+      counts.numPendingTests !== 0 ||
+      counts.numTodoTests !== 0 ||
+      counts.numPendingTestSuites !== 0 ||
+      counts.numPassedTestSuites === 0 ||
+      actual.some((assertion) => assertion.status !== "passed") ||
+      executionInventoryKey(actual) !== executionInventoryKey(expected)
+    ) {
+      throw new Error("Node cache execution differs from the expected passed inventory");
+    }
   }
   const canonical = {
     version: 1,
@@ -676,11 +880,13 @@ export function writeJsonAtomic(file: string, value: unknown): void {
 export async function withTerminalManifest<T>(
   outputDir: string,
   task: () => Promise<T>,
+  assertOutputOwner?: () => void,
 ): Promise<T> {
   const terminalPath = path.join(outputDir, "terminal-manifest.json");
   const startedAt = new Date().toISOString();
   try {
     const result = await task();
+    assertOutputOwner?.();
     writeJsonAtomic(terminalPath, {
       version: 1,
       status: "success",
@@ -689,6 +895,7 @@ export async function withTerminalManifest<T>(
     });
     return result;
   } catch (error) {
+    assertOutputOwner?.();
     writeJsonAtomic(terminalPath, {
       version: 1,
       status: "failure",

@@ -6,7 +6,10 @@ import {
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { PluginHostObject } from "../plugins/plugin-instance-owned-values.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tool-metadata.js";
-import { copyAgentToolAvailability } from "./agent-tool-availability.js";
+import {
+  copyAgentToolAvailability,
+  isAgentToolExecutionAvailable,
+} from "./agent-tool-availability.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
   copyBeforeToolCallMetadata,
@@ -159,10 +162,14 @@ export function copyAgentToolMetadata<T extends AnyAgentTool>(
   if (source === target) {
     return target;
   }
+  // A refusing copy must not inherit the source's preparer: callers prefer it over execute.
+  const refused = !isAgentToolExecutionAvailable(target);
   copyBeforeToolCallWrapperMetadata(source, target);
   copyBeforeToolCallMetadata(source, target, wrapExecution);
   copyCronScheduledToolProjection(source, target);
-  copyInternalToolExecutionPreparer(source, target);
+  if (!refused) {
+    copyInternalToolExecutionPreparer(source, target);
+  }
   return target;
 }
 

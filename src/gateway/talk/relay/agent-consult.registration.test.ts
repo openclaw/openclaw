@@ -15,6 +15,7 @@ import {
   registerRpcSource,
   requestRpcSourceCancellation,
   retireRpcSource,
+  updateRpcSourceSessionId,
 } from "../../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db-lifecycle.js";
@@ -24,11 +25,9 @@ import {
   captureClientVoiceSessionSettlement,
   prepareClientVoiceSessionClose,
 } from "../../../talk/client-voice-session-lifecycle.js";
+import type { ClientVoiceSessionWriter } from "../../../talk/client-voice-session-source.js";
 import { readVoiceSessionRecord } from "../../../talk/client-voice-session-store.js";
-import {
-  ensureClientVoiceAgentSessionEntry,
-  type ClientVoiceSessionWriter,
-} from "../../../talk/client-voice-session-write.js";
+import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-contexts.js";
@@ -748,3 +747,22 @@ it.for(["current", "caller", "relay", "controller"] as const)(
     }
   },
 );
+
+it("keeps the real relay registration current only for its retained committed successor", async () => {
+  const { target, chat } = await createRegistrationFixture();
+  const registration = await registerRun(target);
+  try {
+    expect(registration.isCurrent()).toBe(true);
+    updateRpcSourceSessionId(chat.source, "committed-successor");
+    expect(registration.isCurrent("completion")).toBe(false);
+    registration.onSessionIdChanged?.("committed-successor");
+    expect(registration.isCurrent("completion")).toBe(true);
+    expect(() => registration.onSessionIdChanged?.("uncommitted-session")).toThrow();
+    expect(registration.isCurrent("completion")).toBe(true);
+    requestRpcSourceCancellation(chat.source);
+    expect(registration.isCurrent("completion")).toBe(false);
+  } finally {
+    registration.release();
+    await chat.cleanup();
+  }
+});

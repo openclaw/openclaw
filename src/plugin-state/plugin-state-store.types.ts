@@ -58,7 +58,12 @@ export type PluginStateOperationTransaction = {
   lookup(store: number, key: string): unknown;
   lookupMany<T = unknown>(keys: readonly { store: number; key: string }[]): Array<T | undefined>;
   entries<T = unknown>(store: number): PluginStateEntry<T>[];
-  set(store: number, key: string, value: unknown, options?: { ttlMs?: number }): void;
+  set(
+    store: number,
+    key: string,
+    value: unknown,
+    options?: { ttlMs?: number; evictSameKeysFrom?: number },
+  ): void;
   delete(store: number, key: string): boolean;
 };
 
@@ -159,6 +164,11 @@ type PluginStateKeyedStoreBase<T> = {
     key: string,
     opts?: { assertCurrent?: () => void; signal?: AbortSignal },
   ): Promise<boolean>;
+  /** Deletes up to 50,000 exact keys from this store and an optional peer in one commit. */
+  deleteKeys?: (
+    keys: readonly string[],
+    options?: { alsoFrom: Pick<PluginStateKeyedStore<unknown>, "lookup" | "entries"> },
+  ) => Promise<void>;
   entries(): Promise<PluginStateEntry<T>[]>;
   /** Reads a lexical key range with ordering and limit applied by storage. */
   entriesInKeyRange?: (range: PluginStateKeyRange) => Promise<PluginStateEntry<T>[]>;
@@ -174,8 +184,10 @@ type PluginStateKeyedStoreBase<T> = {
 
 /** Version 2 is an action-bound, data-only view; legacy stores remain source-compatible. */
 export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extends 2
-  ? Required<Omit<PluginStateKeyedStoreBase<T>, "update" | "deleteIf" | "createOperation">> &
-      Pick<PluginStateKeyedStoreBase<T>, "createOperation">
+  ? Required<
+      Omit<PluginStateKeyedStoreBase<T>, "update" | "deleteIf" | "createOperation" | "deleteKeys">
+    > &
+      Pick<PluginStateKeyedStoreBase<T>, "createOperation" | "deleteKeys">
   : PluginStateKeyedStoreBase<T> & {
       /** Bind current action authority through read completion and final write admission. */
       withCurrent?: (authority: PluginStateActionAuthority) => PluginStateKeyedStore<T, 2>;

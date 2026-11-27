@@ -1,11 +1,13 @@
 /** Scribe dialogs: the start dialog with each scribe's options and prompt, and the turn-off confirmation. */
 import { button, choice, el } from "./page-dom.js";
+import { slackFields } from "./scribe-slack-fields.js";
 import {
   CONVERSATIONS_SCHEDULE,
   defaultOptions,
   GRANOLA_SCHEDULE,
   REVIEW_NIGHTLY_SCHEDULE,
   REVIEW_WEEKLY_SCHEDULE,
+  runPrompt,
   scribeLabel,
   scribeSetup,
   setupPrompt,
@@ -20,6 +22,7 @@ import {
   type ScribeMode,
   type ScribeOptions,
   type ScribePlugin,
+  type ScribeSetup,
 } from "./scribes-catalog.js";
 import { neededPluginState, type PluginReadiness, type ScribeDetection } from "./scribes-state.js";
 import { icon } from "./ui-icons.js";
@@ -28,13 +31,17 @@ import { icon } from "./ui-icons.js";
 export type StartDialogInput = {
   scribe: ScribeDefinition;
   agentName: string;
-  storeName: string;
   detection: ScribeDetection;
   canWrite: boolean;
+  /** An ongoing scribe is an automation, which only an administrator writes. */
+  canAdmin: boolean;
   /** The Control UI's base path, for links to the Plugins page. */
   basePath: string;
-  /** Starts the scribe with the prompt shown; a rejection keeps the dialog open with the error. */
-  start: (prompt: string) => Promise<void>;
+  /**
+   * Starts the scribe with its choices and the text shown: a once run's prompt, or an ongoing
+   * scribe's run message. A rejection keeps the dialog open with the error.
+   */
+  start: (setup: ScribeSetup, text: string) => Promise<void>;
 };
 
 /** Scribe tile: the catalog icon on its tone's wash. */
@@ -65,7 +72,8 @@ const PLUGIN_ACTION: Record<Exclude<PluginReadiness, "ready">, (name: string) =>
 
 /**
  * Button that opens the plugin's page under Plugins, where it is installed, turned on and signed
- * in to. It leaves the Knowledge page; the Scribes tab reads the new state when it loads again.
+ * in to; a channel plugin connects its account on its own page (Channels for Slack). It leaves the
+ * Knowledge page; the Scribes tab reads the new state when it loads again.
  */
 export function pluginButton(
   basePath: string,
@@ -73,7 +81,10 @@ export function pluginButton(
   readiness: Exclude<PluginReadiness, "ready">,
   className = "knowledge-button knowledge-primary knowledge-small",
 ) {
-  const href = `${basePath}/plugins/${plugin.catalogPath}`;
+  const href =
+    readiness === "needs-sign-in" && plugin.channel
+      ? `${basePath}/${plugin.channel.accountPath}`
+      : `${basePath}/plugins/${plugin.catalogPath}`;
   return button(
     PLUGIN_ACTION[readiness](plugin.name),
     () => window.location.assign(href),
@@ -84,8 +95,8 @@ export function pluginButton(
 const count = (n: number, one: string, many = `${one}s`) =>
   `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
-// Modal frame shared by both dialogs: head with close, body, feedback line and actions.
-function dialogFrame(title: string, lead?: HTMLElement) {
+/** Modal frame shared by the scribe dialogs: head with close, body, feedback line and actions. */
+export function dialogFrame(title: string, lead?: HTMLElement) {
   const dialog = el("dialog", undefined, "knowledge-store-dialog knowledge-surface scribe-dialog");
   // SAFETY: only focus() is called on it, which every focusable HTML or SVG element implements.
   const previousFocus = document.activeElement as HTMLElement | null;
@@ -120,20 +131,25 @@ function dialogFrame(title: string, lead?: HTMLElement) {
   return { dialog, body, feedback, footer, close };
 }
 
-// Open inside the page so its styles apply; the modal top layer handles stacking.
-function show(dialog: HTMLDialogElement) {
+/** Open inside the page so its styles apply; the modal top layer handles stacking. */
+export function show(dialog: HTMLDialogElement) {
   (document.querySelector(".knowledge-page") ?? document.body).append(dialog);
   dialog.showModal();
 }
 
 const SINCE: readonly ConversationSince[] = ["30d", "90d", "all", "today"];
 
-// "How often", "Which conversations" and "Starting from" for the conversations scribe.
-function conversationFields(detection: ScribeDetection, changed: () => void) {
+// "How often", "Which conversations" and "Starting from" for the conversations scribe, from
+// `initial` options when given.
+export function conversationFields(
+  detection: ScribeDetection,
+  changed: () => void,
+  initial = defaultOptions("conversations"),
+) {
   const state: { mode: ScribeMode; scope: ConversationScope; since: ConversationSince } = {
     mode: "ongoing",
-    scope: "active",
-    since: "30d",
+    scope: initial.scope,
+    since: initial.since,
   };
   const often = el("fieldset", undefined, "knowledge-choices");
   often.append(el("legend", "How often"));
@@ -181,7 +197,7 @@ function conversationFields(detection: ScribeDetection, changed: () => void) {
         state.scope = "active";
         changed();
       },
-      true,
+      state.scope === "active",
       "scribe-which",
     ),
     choice(
@@ -194,7 +210,7 @@ function conversationFields(detection: ScribeDetection, changed: () => void) {
         state.scope = "all";
         changed();
       },
-      false,
+      state.scope === "all",
       "scribe-which",
     ),
   );
@@ -223,19 +239,25 @@ function conversationFields(detection: ScribeDetection, changed: () => void) {
   );
   return {
     nodes: [often, which, since],
+    which,
     mode: () => state.mode,
-    options: () => ({ scope: state.scope, since: state.since, schedule: CONVERSATIONS_SCHEDULE }),
+    options: () => ({
+      scope: state.scope,
+      since: state.since,
+      schedule: initial.schedule ?? CONVERSATIONS_SCHEDULE,
+    }),
   };
 }
 
 const GRANOLA_SINCE: readonly GranolaSince[] = ["7d", "30d", "today"];
 
-// "How often", "Which meetings" and "Starting from" for the Granola scribe.
-function granolaFields(changed: () => void) {
+// "How often", "Which meetings" and "Starting from" for the Granola scribe, from `initial`
+// options when given.
+export function granolaFields(changed: () => void, initial = defaultOptions("granola")) {
   const state: { mode: ScribeMode; meetings: GranolaMeetings; since: GranolaSince } = {
     mode: "ongoing",
-    meetings: "mine",
-    since: "7d",
+    meetings: initial.meetings,
+    since: initial.since,
   };
   const set = (patch: Partial<typeof state>) => () => {
     Object.assign(state, patch);
@@ -275,7 +297,7 @@ function granolaFields(changed: () => void) {
       "Meetings you recorded or were invited to.",
       false,
       set({ meetings: "mine" }),
-      true,
+      state.meetings === "mine",
       "scribe-granola-which",
     ),
     choice(
@@ -285,7 +307,7 @@ function granolaFields(changed: () => void) {
       "Also notes others shared with you and Team Space meetings.",
       false,
       set({ meetings: "all" }),
-      false,
+      state.meetings === "all",
       "scribe-granola-which",
     ),
   );
@@ -312,8 +334,13 @@ function granolaFields(changed: () => void) {
   );
   return {
     nodes: [often, which, since],
+    which,
     mode: () => state.mode,
-    options: () => ({ meetings: state.meetings, since: state.since, schedule: GRANOLA_SCHEDULE }),
+    options: () => ({
+      meetings: state.meetings,
+      since: state.since,
+      schedule: initial.schedule ?? GRANOLA_SCHEDULE,
+    }),
   };
 }
 
@@ -436,24 +463,29 @@ function memoryFields(detection: ScribeDetection, agentName: string, changed: ()
 
 // What starting does, in the dialog's own words.
 function effectText(input: StartDialogInput, mode: ScribeMode) {
-  const { scribe, storeName } = input;
+  const { scribe } = input;
   const effect = el("div", undefined, "knowledge-effect");
   const lead = el("p");
-  lead.append(
-    "Knowledge will start a conversation called ",
-    el("strong", scribeLabel(scribe)),
-    ` as you, with ${storeName}’s private access, and send it the prompt above. `,
-    mode === "once"
-      ? `It works through ${scribe.id === "memory" ? "Memory" : "them"} once and reports back here. Nothing is scheduled.`
-      : scribe.id === "claim-consolidation"
-        ? "It sets up its own schedule and does one test run first."
-        : "If you keep it learning, it sets up its own schedule and does one test run first.",
-  );
+  if (mode === "once") {
+    lead.append(
+      "Knowledge will send the prompt above to the ",
+      el("strong", scribeLabel(scribe)),
+      ` conversation, creating it if needed. It works through ${scribe.id === "memory" ? "Memory" : "them"} once and reports back here. Nothing is scheduled.`,
+    );
+  } else {
+    lead.append(
+      "Knowledge will create an automation that sends the run message above on its schedule, each run in a fresh session of the ",
+      el("strong", scribeLabel(scribe)),
+      " conversation (created if needed), and requests its first run now.",
+    );
+  }
   effect.append(
     lead,
     el(
       "p",
-      `Uses ${input.agentName}’s default model. You can read everything it does in that conversation${mode === "once" ? "." : ", and pause or turn it off from Scribes."}`,
+      mode === "once"
+        ? "This request uses the conversation’s model settings. Follow its progress there."
+        : "Runs use the conversation’s model settings. Manage the automation from Scribes.",
       "knowledge-muted",
     ),
   );
@@ -461,8 +493,9 @@ function effectText(input: StartDialogInput, mode: ScribeMode) {
 }
 
 /**
- * The editable "Prompt" area: the full message Start sends. It follows the choices until the
- * operator types in it; then it keeps their text until they ask for the generated one again.
+ * The editable "Prompt" area: the full message a once run sends, or the run message each run of
+ * an ongoing scribe receives. It follows the choices until the operator types in it; then it
+ * keeps their text until they ask for the generated one again or switch between once and ongoing.
  */
 function promptField(generate: () => string, changed: () => void) {
   const details = el("details", undefined, "scribe-prompt");
@@ -500,7 +533,11 @@ function promptField(generate: () => string, changed: () => void) {
   const foot = el("span", undefined, "scribe-prompt-foot");
   foot.append(note, reset);
   details.append(el("summary", "Prompt"), text, foot);
-  return { node: details, sync, value: () => text.value, edited: () => edited };
+  const discard = () => {
+    edited = false;
+    sync();
+  };
+  return { node: details, sync, discard, value: () => text.value, edited: () => edited };
 }
 
 /** Open the start dialog for one scribe. Starting is disabled without write access. */
@@ -508,6 +545,7 @@ export function openStartDialog(input: StartDialogInput) {
   const { scribe } = input;
   const frame = dialogFrame(scribe.dialogTitle, scribeTile(scribe));
   const effectSlot = el("div");
+  const permission = el("p", "", "knowledge-muted");
   let mode: () => ScribeMode = () => scribe.modes[0]!;
   let options: () => ScribeOptions[ScribeId] = () => defaultOptions(scribe.id);
   let valid = () => true;
@@ -517,14 +555,30 @@ export function openStartDialog(input: StartDialogInput) {
   // A needed plugin must be ready. A hand-edited prompt then only needs text; a generated one
   // needs valid choices.
   const ready = () => pluginReady && (prompt.edited() ? Boolean(prompt.value().trim()) : valid());
+  const allowed = () => input.canWrite && (input.canAdmin || mode() === "once");
   const refresh = () => {
-    submit.disabled = starting || !input.canWrite || !ready();
+    submit.disabled = starting || !allowed() || !ready();
     submit.textContent = starting ? "Starting…" : scribe.submitLabel;
     effectSlot.replaceChildren(effectText(input, mode()));
+    permission.textContent = !input.canWrite
+      ? "Starting a scribe needs write access to this Gateway."
+      : allowed()
+        ? ""
+        : "An ongoing scribe is an automation, which needs a Gateway administrator (operator.admin).";
   };
-  const prompt = promptField(() => setupPrompt(scribeSetup(scribe.id, mode(), options())), refresh);
-  // A changed choice regenerates the prompt unless it was edited by hand.
+  const setup = () => scribeSetup(scribe.id, mode(), options());
+  const prompt = promptField(
+    () => (mode() === "once" ? setupPrompt(setup()) : runPrompt(setup())),
+    refresh,
+  );
+  // A changed choice regenerates the prompt unless it was edited by hand; switching between
+  // once and ongoing changes what the text is, so it discards a hand edit.
+  let shownMode = mode();
   const changed = () => {
+    if (mode() !== shownMode) {
+      shownMode = mode();
+      prompt.discard();
+    }
     prompt.sync();
     refresh();
   };
@@ -545,6 +599,12 @@ export function openStartDialog(input: StartDialogInput) {
     frame.body.append(...fields.nodes);
     mode = fields.mode;
     options = fields.options;
+  } else if (scribe.id === "slack") {
+    const fields = slackFields(input.detection, changed);
+    frame.body.append(...fields.nodes);
+    mode = fields.mode;
+    valid = fields.valid;
+    options = fields.options;
   } else if (scribe.id === "claim-consolidation") {
     const fields = reviewFields(changed);
     frame.body.append(...fields.nodes);
@@ -555,12 +615,9 @@ export function openStartDialog(input: StartDialogInput) {
     valid = fields.valid;
     options = fields.options;
   }
+  shownMode = mode();
   prompt.sync();
-  frame.body.append(prompt.node, effectSlot);
-  if (!input.canWrite) {
-    frame.feedback.textContent = "Starting a scribe needs write access to this Gateway.";
-    frame.feedback.classList.add("knowledge-muted");
-  }
+  frame.body.append(prompt.node, effectSlot, permission);
   // Start once with the prompt shown; keep the dialog and its text when the Gateway rejects it.
   async function run() {
     if (starting || submit.disabled) {
@@ -571,7 +628,7 @@ export function openStartDialog(input: StartDialogInput) {
     frame.feedback.textContent = "";
     frame.feedback.className = "knowledge-dialog-feedback";
     try {
-      await input.start(prompt.value());
+      await input.start(setup(), prompt.value());
       frame.close();
     } catch (error) {
       frame.feedback.textContent = `The scribe was not started. ${error instanceof Error ? error.message : String(error)}`;

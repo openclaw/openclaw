@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough, type Readable } from "node:stream";
+import { PassThrough } from "node:stream";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
@@ -51,13 +51,17 @@ defineDiscordVoiceTests(
     receiveRecordedSpeech,
   }) => {
     const lastAgentCommandTools = () => {
-      const args = lastAgentCommandArgs();
-      if (typeof args.senderIsOwner !== "boolean") {
-        throw new Error("expected agent command owner identity");
+      const { runContext } = lastAgentCommandArgs();
+      const senderId =
+        runContext && typeof runContext === "object" && "senderId" in runContext
+          ? runContext.senderId
+          : undefined;
+      if (typeof senderId !== "string") {
+        throw new Error("expected agent command sender identity");
       }
       return createOpenClawCodingTools({
         config: {},
-        senderIsOwner: args.senderIsOwner,
+        senderIsOwner: senderId === "100000000000000001",
         messageProvider: "discord",
         workspaceDir: "/tmp/openclaw-discord-voice-tools",
         agentDir: "/tmp/openclaw-discord-voice-agent",
@@ -199,7 +203,7 @@ defineDiscordVoiceTests(
           expect(agentCommandMock).not.toHaveBeenCalled();
         } else if (scenario.expectedOwner !== undefined) {
           expect(agentCommandMock).toHaveBeenCalledWith(
-            expect.objectContaining({ senderIsOwner: scenario.expectedOwner }),
+            expect.objectContaining({ runContext: { senderId: scenario.userId } }),
             expect.anything(),
           );
         }
@@ -214,7 +218,7 @@ defineDiscordVoiceTests(
             );
             const result = await tool.execute("voice-non-owner-" + name, {});
             expect(result.details).toMatchObject({ gated: true });
-            expect(JSON.stringify(result.content)).toContain(name + " needs the owner's authority");
+            expect(JSON.stringify(result.content)).toContain(`I did not run ${name}.`);
           }
         }
       },
@@ -245,7 +249,8 @@ defineDiscordVoiceTests(
       await entry.playbackQueue;
 
       expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-        getToolAuthorityOverlay: expect.any(Function),
+        assertCurrent: expect.any(Function),
+        getToolAuthorityOverlayAsync: expect.any(Function),
         sessionKey: entry.route?.sessionKey,
         text: "use the smaller implementation",
       });
@@ -529,7 +534,7 @@ defineDiscordVoiceTests(
       await receiveVoiceUtterance(manager, "u-role");
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
       const expectedSpeaker = {
-        senderIsOwner: false,
+        runContext: { senderId: "u-role" },
         message: expect.stringContaining('speaker "Role Speaker"'),
       };
       expect(lastAgentCommandArgs()).toMatchObject(expectedSpeaker);
@@ -646,17 +651,12 @@ defineDiscordVoiceTests(
       const decodeReady = new Promise<void>((resolve) => {
         resolveDecode = resolve;
       });
-      decodeOpusStreamChunksMock.mockImplementationOnce(
-        async (
-          input: Readable,
-          callbacks: { onChunk: (pcm: Buffer, packet: Buffer) => void | Promise<void> },
-        ) => {
-          for await (const packet of input) {
-            await decodeReady;
-            await callbacks.onChunk(Buffer.alloc(96_000), packet);
-          }
-        },
-      );
+      decodeOpusStreamChunksMock.mockImplementationOnce(async (input, callbacks) => {
+        for await (const packet of input) {
+          await decodeReady;
+          await callbacks.onChunk(Buffer.alloc(96_000), packet);
+        }
+      });
       const manager = createManager(
         makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-speaker"] }),
       );

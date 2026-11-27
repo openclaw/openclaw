@@ -308,7 +308,7 @@ it.each(["current", "revoked"] as const)(
         });
         expectCalls(1, createSandbox);
       } else {
-        await expect(sandbox).rejects.toThrow("placement authority changed");
+        await expect(sandbox).rejects.toThrow("placement changed");
         expectCalls(0, createSandbox);
       }
     } finally {

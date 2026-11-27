@@ -403,22 +403,38 @@ class ShareLaunchTest {
     }
 
   @Test
-  fun claimedShareCannotRetargetAcrossComposerNavigation() =
+  fun claimedSharesMigrateTogetherWithoutRetargetingAnotherOwner() =
     runBlocking {
-      val queue = ChatShareDraftQueue(capacity = 1)
+      val queue = ChatShareDraftQueue(capacity = 3)
       val share = ChatShareDraft(id = 1, text = "private", attachments = emptyList(), droppedAttachmentCount = 0)
+      val otherShare = ChatShareDraft(id = 2, text = "other", attachments = emptyList(), droppedAttachmentCount = 0)
+      val nextShare = ChatShareDraft(id = 3, text = "next", attachments = emptyList(), droppedAttachmentCount = 0)
       val ownerA = composerOwner("agent-a", "session-a")
       val ownerB = composerOwner("agent-b", "session-b")
       val resolvedA = ownerA.copy(sessionKey = "agent:agent-a:device")
       queue.enqueue(share, ownerA)
+      queue.enqueue(otherShare, ownerB)
+      queue.enqueue(nextShare, ownerA)
 
       assertTrue(queue.withHeadLease(share.id, ownerA) {})
       assertFalse(queue.withHeadLease(share.id, ownerB) {})
       assertFalse(queue.acknowledgeHead(share.id, ownerB))
+      assertFalse(queue.withHeadLease(nextShare.id, ownerA) {})
 
       queue.migrateOwner(ownerA, resolvedA)
+      assertEquals(listOf(share, otherShare, nextShare), queue.queued.value)
+      assertEquals(resolvedA, queue.ownerOf(share.id))
+      assertEquals(ownerB, queue.ownerOf(otherShare.id))
+      assertEquals(resolvedA, queue.ownerOf(nextShare.id))
+      assertEquals(1L, queue.ownerRevision.value)
+      queue.migrateOwner(ownerA, resolvedA)
+      assertEquals(1L, queue.ownerRevision.value)
+
       assertTrue(queue.withHeadLease(share.id, resolvedA) {})
       assertTrue(queue.acknowledgeHead(share.id, resolvedA))
+      assertTrue(queue.withHeadLease(nextShare.id, resolvedA) {})
+      assertTrue(queue.acknowledgeHead(nextShare.id, resolvedA))
+      assertEquals(listOf(otherShare), queue.queued.value)
     }
 
   @Test

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
+import { resolveNodeRuntimeExecutableAsync } from "../infra/node-runtime-executable.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   materializeWindowsSpawnProgram,
@@ -75,6 +75,7 @@ export async function spawnTerminalPty(
   lifecycle?: {
     abortSignal?: AbortSignal;
     assertCurrent?: () => void;
+    prepareCurrent?: () => Promise<void>;
     initiateSpawn?: SpawnInitiation;
   },
 ): Promise<TerminalPtyHandle> {
@@ -91,7 +92,8 @@ export async function spawnTerminalPty(
     params.executionIntent === "agent-tool"
       ? getAgentExecCgroup(params.executionScopeKey)
       : undefined;
-  const canIsolate = execCgroup && (needsNodeFlowControl || resolveNodeRuntimeExecutable());
+  const canIsolate =
+    execCgroup && (needsNodeFlowControl || (await resolveNodeRuntimeExecutableAsync()));
   if (execCgroup && !canIsolate) {
     process.emitWarning(
       "Agent exec isolation is partial: Node is unavailable for the terminal helper; native PTY commands remain in the Gateway cgroup. Add node to PATH to isolate them.",
@@ -102,13 +104,19 @@ export async function spawnTerminalPty(
     // The broker launches the existing helper, which owns PTY I/O and exec cgroup placement.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
     assertCurrent();
-    const pty = await spawnNodeTerminalPty(params, assertCurrent, lifecycle?.initiateSpawn);
+    const pty = await spawnNodeTerminalPty(
+      params,
+      assertCurrent,
+      lifecycle?.initiateSpawn,
+      lifecycle?.prepareCurrent,
+    );
     if (pty.pid > 0) {
       recordSpawn?.();
     }
     return pty;
   }
   const launch = await prepareTerminalPty(params);
+  await lifecycle?.prepareCurrent?.();
   assertCurrent();
   return lifecycle?.initiateSpawn ? lifecycle.initiateSpawn(launch) : launch();
 }

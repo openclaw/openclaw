@@ -152,6 +152,9 @@ export class PaletteSessionDraft {
       (this.preferences.failed ? t("commandPalette.settingsSaveFailed") : null)
     );
   }
+  get blockedSubmitNotice(): string | undefined {
+    return this.draft?.submission.blockedSubmitNotice({ includePageRendered: true });
+  }
   get disabledReason(): string | undefined {
     return this.draft?.submission.submitDisabledReason();
   }
@@ -204,7 +207,7 @@ export class PaletteSessionDraft {
     this.synchronizePresentationScope();
     const props = this.attachmentProps();
     if (this.read().open && !this.messageLocked && props) {
-      handleChatAttachmentPaste(event, props);
+      handleChatAttachmentPaste(event, props, { imagesOnly: true });
     }
   };
 

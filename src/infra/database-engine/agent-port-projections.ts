@@ -3,11 +3,16 @@ import {
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_META_TABLE,
 } from "../../../packages/memory-host-sdk/src/host/memory-schema-base.js";
-import { createSessionTranscriptFtsInserter } from "../../config/sessions/session-transcript-fts.js";
+import {
+  compilePostgresSessionTranscriptFtsBatch,
+  createSessionTranscriptFtsInserter,
+} from "../../config/sessions/session-transcript-fts.js";
+import type { TranscriptIndexEntry } from "../../config/sessions/session-transcript-projection-append.js";
 import {
   prepareProjectionSource,
   prepareSessionTranscriptProjection,
 } from "../../config/sessions/session-transcript-projection-rebuild.js";
+import { TRANSCRIPT_INSERT_BATCH_SIZE } from "../../config/sessions/transcript-payload.js";
 import type { PortEndpoint } from "./port-types.js";
 
 export const AGENT_PORT_PROJECTION_TABLES = [
@@ -81,16 +86,23 @@ export async function rebuildAgentPortProjections(target: PortEndpoint): Promise
         insertFts([row]);
       }
     } else {
+      // The port runs over the network, so each bounded batch costs one round trip, not one per row.
+      let batch: TranscriptIndexEntry[] = [];
+      const flush = async () => {
+        if (batch.length === 0) {
+          return;
+        }
+        const write = compilePostgresSessionTranscriptFtsBatch(sessionId, batch);
+        batch = [];
+        await target.db.query(write.sql, [...write.parameters]);
+      };
       for (const row of plan.ftsRows) {
-        await target.db.query(
-          `WITH inserted AS (
-            INSERT INTO session_transcript_fts_rows (session_id, message_id) VALUES ($1, $2)
-            RETURNING id
-          ) INSERT INTO session_transcript_fts ("rowid", text, session_id, message_id, role, timestamp)
-            SELECT id, $3, $1, $2, $4, $5 FROM inserted`,
-          [sessionId, row.messageId, row.text, row.role, row.timestamp],
-        );
+        batch.push(row);
+        if (batch.length === TRANSCRIPT_INSERT_BATCH_SIZE) {
+          await flush();
+        }
       }
+      await flush();
     }
   }
   // The command invokes the selected memory owner after publishing and releasing port custody.

@@ -44,8 +44,10 @@ function frames(f: Pick<Fixture, "socket">) {
   return f.socket.send.mock.calls.map(([data]) => JSON.parse(data.toString()));
 }
 function lastSnapshot(f: Fixture) {
-  return frames(f).findLast((frame) => frame.event === "controlUi.sessionPullRequests.changed")
-    ?.payload.sessions[sessionKey];
+  return frames(f).findLast(
+    (frame) =>
+      frame.event === "controlUi.sessionPullRequests.changed" && frame.payload.sessions[sessionKey],
+  )?.payload.sessions[sessionKey];
 }
 
 async function identifyOwner(f: Fixture) {

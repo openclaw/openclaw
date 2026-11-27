@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
@@ -24,18 +24,12 @@ export function createMediaModelPolicyFixture(
       },
     },
   };
-  let active = true;
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId,
     scopes: ["operator.write"],
     retain: () => {
       changeHolds(1);
       return () => changeHolds(-1);
-    },
-    assertCurrent: () => {
-      if (!active) {
-        throw new Error("requester retired");
-      }
     },
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
@@ -45,9 +39,6 @@ export function createMediaModelPolicyFixture(
   });
   return {
     cfg,
-    setActive(this: void, value: boolean) {
-      active = value;
-    },
     runWithRequester<T>(this: void, run: () => Promise<T>) {
       return source === "direct"
         ? withOperatorToolGatewayAuthority(

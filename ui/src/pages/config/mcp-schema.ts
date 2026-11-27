@@ -2,7 +2,10 @@
 // with no rendering imports.
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHints } from "../../api/types.ts";
+import { registerMcpManagementEnglish } from "../../i18n/locales/en-mcp-management.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+
+registerMcpManagementEnglish();
 
 // Stable schema identity keeps the config view's analysis cached across renders.
 const mcpSettingsSchemas = new WeakMap<Record<string, unknown>, unknown>();
