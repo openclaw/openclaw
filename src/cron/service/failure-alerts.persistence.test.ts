@@ -243,6 +243,7 @@ it("persists an incident and suppresses repeats after a service reload past cool
   const reloadedState = createAlertState({
     storePath: store.storePath,
     nowMs: () => now,
+    cronConfig: state.deps.cronConfig,
     sendCronFailureAlert: send,
   });
   await finalize("error", "first failure", currentJob, now, reloadedState);
@@ -255,7 +256,6 @@ it.each([1, 3])(
   async (after) => {
     let now = Date.parse("2026-08-01T15:00:00Z");
     const { job, state, quiet, outcome, send } = alertFixture(() => now);
-    state.deps.cronConfig = { failureAlert: { after, cooldownMs: 60_000 } };
     const fail = (source: "trigger" | "payload", code: "timeout" | "plugin_reload_failed") =>
       outcome({
         status: "error",
@@ -263,7 +263,9 @@ it.each([1, 3])(
         ...cronScriptFailureMetadata(source, code),
       });
     await fail("trigger", "timeout");
-    job.failureAlert = true;
+    state.deps.cronConfig = {
+      failureAlert: { ...state.deps.cronConfig?.failureAlert, after },
+    };
     now += 1_000;
     await fail("payload", "timeout");
     expect(send).toHaveBeenCalledOnce();

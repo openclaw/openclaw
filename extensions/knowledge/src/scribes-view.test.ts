@@ -109,6 +109,7 @@ it("shows an On Granola scribe's weekday schedule and a disconnected plugin in i
   ui.s.scribe = "granola";
   const view = await render();
   expect(view.textContent).toMatch(/ScheduleWeekdays, 10:00\sAM, 2:00\sPM and 6:00\sPM/);
+  expect(view.textContent).toContain("Failure alerts on");
   expect(view.textContent).toContain(
     "SourceGranola plugin installed, not connected to your Granola account",
   );
@@ -372,7 +373,6 @@ it.each([false, true])(
     let view = await render();
     expect(view.textContent).toContain("1 recent run, all succeeded");
     expect(view.querySelector(".scribe-run span")?.textContent).toBe("9 filed · 2 pages created");
-    expect(view.textContent).toContain("Alert after 2 failed runs");
     expect(view.textContent).toMatch(/Weekly on Sunday, 3:45\sAM/);
     buttonNamed(view, "Run now").click();
     await flush();

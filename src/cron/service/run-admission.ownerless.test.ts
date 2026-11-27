@@ -287,6 +287,9 @@ describe("ownerless skip transaction guards", () => {
       () => currentDefault,
     );
     state.deps.defaultAgentId = testCase.configuredDefault;
+    state.deps.cronConfig = {
+      failureAlert: { channel: "last", cooldownMs: 0, includeSkipped: true },
+    };
     const database = openOpenClawStateDatabase().db;
     let switched = false;
     const stopObserving = observeCronStoreCommits(storePath, () => {

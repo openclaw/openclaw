@@ -35,7 +35,7 @@ export function createAlertState(params: {
     storePath: params.storePath,
     nowMs: params.nowMs,
     cronConfig: params.cronConfig ?? {
-      failureAlert: { after: 1, cooldownMs: 60_000, includeSkipped: true },
+      failureAlert: { channel: "last", after: 1, cooldownMs: 60_000, includeSkipped: true },
     },
     sendCronFailureAlert: params.sendCronFailureAlert,
     runIsolatedAgentJob: vi.fn(),

@@ -201,6 +201,7 @@ describe("cron service run admission", () => {
     let edited = false;
     let persistedStatusAtEvent: string | undefined;
     const { state } = await createCronRunFixture(store.storePath, job, {
+      cronConfig: { failureAlert: { channel: "last", includeSkipped: true } },
       sendCronFailureAlert,
       runIsolatedAgentJob: vi.fn(),
       onEvent: (event) => {

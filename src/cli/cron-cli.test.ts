@@ -831,9 +831,17 @@ it.each([
     [...EDIT, "--webhook", "https://example.invalid/cron", "--announce"],
     "Choose at most one of --announce, --no-deliver, or --webhook",
   ],
-  [[...EDIT, "--failure-alert-after", "3"], "unknown option"],
 ])("rejects %j before Gateway access", async (args, error) => {
   await expectCronCommandExit(args);
   expectRuntimeErrorContaining(error);
+  expect(callGatewayFromCli).not.toHaveBeenCalled();
+});
+
+it("rejects the removed --failure-alert-after option before Gateway access", async () => {
+  await expect(runCronCommand([...EDIT, "--failure-alert-after", "3"])).rejects.toMatchObject({
+    code: "commander.unknownOption",
+    exitCode: 1,
+    message: expect.stringContaining("unknown option '--failure-alert-after'"),
+  });
   expect(callGatewayFromCli).not.toHaveBeenCalled();
 });

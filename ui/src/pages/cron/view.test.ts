@@ -82,7 +82,7 @@ describe("cron view editor", () => {
   it("falls back to configured channel labels when metadata has no label", async () => {
     const container = await renderEditor(
       {
-        failureAlert: true,
+        deliveryMode: "announce",
       },
       {
         channels: ["telegram"],
@@ -91,7 +91,7 @@ describe("cron view editor", () => {
       },
     );
     await updatePickers(container);
-    const channel = picker(container, "cron-failure-alert-channel");
+    const channel = picker(container, "cron-delivery-channel");
     await openPicker(channel);
     expect(text(channel, '[data-value="telegram"] .picker-select__label')?.trim()).toBe(
       "Telegram fallback",
