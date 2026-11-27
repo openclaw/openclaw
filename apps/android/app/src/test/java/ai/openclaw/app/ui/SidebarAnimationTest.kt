@@ -93,9 +93,12 @@ class SidebarAnimationTest {
       if (state.currentOffset < 0f && state.currentOffset > -expectedWidth) {
         assertEquals("Drawer content must not reflow while sliding at offset ${state.currentOffset}", expectedWidth, contentWidth)
       }
-      val visibleOffset = state.currentOffset.roundToInt().coerceAtMost(0)
-      val expectedX = if (direction == LayoutDirection.Ltr) visibleOffset else rootWidth - expectedWidth - visibleOffset
-      assertEquals("Content must translate rigidly and never pass its open anchor", expectedX.toFloat(), contentX, 1f)
+      // Material leaves the fully closed drawer measured but unplaced.
+      if (state.currentOffset > -expectedWidth) {
+        val visibleOffset = state.currentOffset.roundToInt().coerceAtMost(0)
+        val expectedX = if (direction == LayoutDirection.Ltr) visibleOffset else rootWidth - expectedWidth - visibleOffset
+        assertEquals("Content must translate rigidly and never pass its open anchor", expectedX.toFloat(), contentX, 1f)
+      }
       if (state.currentOffset > 0f) {
         sawOvershoot = true
         val bitmap = composeRule.onRoot().captureToImage().asAndroidBitmap()

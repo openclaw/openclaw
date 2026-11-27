@@ -27,6 +27,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
@@ -394,6 +395,35 @@ class SessionDiffContentTest {
     } finally {
       if (previousClip == null) clipboard.clearPrimaryClip() else clipboard.setPrimaryClip(previousClip)
     }
+  }
+
+  @Test
+  fun tapWithMoveDismissesSelectionAndActionTapStillDispatches() {
+    val snapshot = snapshot()
+    val files = prepareSessionDiffFiles(snapshot)
+    val references = mutableListOf<String>()
+    composeRule.setContent {
+      ClawDesignTheme {
+        SessionDiffContent(snapshot, files, false, null, {}, {}, Modifier.fillMaxSize(), { references += it })
+      }
+    }
+    val line = composeRule.onNodeWithText("+ const retries = 3;", substring = true)
+    line.performSemanticsAction(SemanticsActions.OnLongClick) { assertTrue(it()) }
+    composeRule.onNodeWithText("To chat").assertIsDisplayed()
+    composeRule.onNodeWithText("− const retries = 1;").performTouchInput {
+      down(center)
+      // A small unconsumed move must not make the tap observer miss the following release.
+      moveTo(center + Offset(1f, 0f))
+      up()
+    }
+    composeRule.onNodeWithText("To chat").assertDoesNotExist()
+    line.assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+    line.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+
+    line.performSemanticsAction(SemanticsActions.OnLongClick) { assertTrue(it()) }
+    composeRule.onNodeWithText("To chat").performTouchInput { click() }
+    composeRule.runOnIdle { assertEquals(1, references.size) }
+    composeRule.onNodeWithText("To chat").assertDoesNotExist()
   }
 
   @Test

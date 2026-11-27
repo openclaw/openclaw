@@ -1,10 +1,10 @@
 AndroidX CameraX
 Artifacts:
-- androidx.camera:camera-camera2:1.6.2
-- androidx.camera:camera-core:1.6.2
-- androidx.camera:camera-lifecycle:1.6.2
-- androidx.camera:camera-view:1.6.2
-- androidx.camera:camera-video:1.6.2
+- androidx.camera:camera-camera2:1.7.0
+- androidx.camera:camera-core:1.7.0
+- androidx.camera:camera-lifecycle:1.7.0
+- androidx.camera:camera-view:1.7.0
+- androidx.camera:camera-video:1.7.0
 
 Copyright 2019-2026 The Android Open Source Project
 License: Apache License 2.0

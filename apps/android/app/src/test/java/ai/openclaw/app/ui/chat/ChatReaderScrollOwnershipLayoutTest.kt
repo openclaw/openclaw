@@ -87,6 +87,8 @@ class ChatReaderScrollOwnershipLayoutTest {
       override val scaleFactor = 1f
     }
 
+  // Keep implicit input-mode selection and the real animation context used by reader ownership checks.
+  @Suppress("DEPRECATION")
   @get:Rule
   val composeRule = createComposeRule(effectContext = animationScale)
 

@@ -390,7 +390,8 @@ private fun SessionDiffFiles(
     modifier.pointerInput(files, collapsed) {
       awaitEachGesture {
         awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
-        if (waitForUpOrCancellation(PointerEventPass.Final) != null) selection = null
+        // The helper checks Final internally; start in Main to inspect the same event.
+        if (waitForUpOrCancellation(PointerEventPass.Main) != null) selection = null
       }
     },
   ) {

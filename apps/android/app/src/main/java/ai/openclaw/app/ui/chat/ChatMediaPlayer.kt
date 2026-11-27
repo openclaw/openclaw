@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -556,10 +557,13 @@ private fun MediaPlaybackPresentation.AudioPlayerSurface(
           MediaPlaybackStatus()
         }
       }
+      val seekPosition = positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L)).toFloat()
+      val seekRange = 0f..durationMs.coerceAtLeast(1L).toFloat()
+      val seekState = remember(seekRange) { SliderState(value = seekPosition, trackRange = seekRange) }
+      seekState.value = seekPosition
       Slider(
-        value = positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L)).toFloat(),
+        state = seekState,
         onValueChange = onSeek,
-        valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
         enabled = seekEnabled && durationMs > 0L && error == null && !playbackBlocked,
       )
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

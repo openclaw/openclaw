@@ -15,9 +15,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -192,7 +193,11 @@ class FoldAwareSheetTest {
       val lifecycle = LocalLifecycleOwner.current.lifecycle
       val geometry = remember { FoldAwareSheetState(activity, activityView, lifecycle) { unsafe++ } }
       val publication = rememberWindowDisplayFeatureState(geometry::publishFeatures)
-      val native = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+      val native =
+        rememberBottomSheetState(
+          initialValue = SheetValue.Hidden,
+          enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
+        )
       SideEffect {
         state = geometry
         sheetState = native

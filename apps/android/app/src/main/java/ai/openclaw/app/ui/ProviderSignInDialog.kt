@@ -44,6 +44,8 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+// The value-based editor keeps dialog-owned API-key state masked during provider changes.
+@Suppress("DEPRECATION")
 @Composable
 internal fun ProviderSignInDialog(
   controller: ProviderAuthController,
@@ -161,6 +163,8 @@ internal fun ProviderSignInDialog(
   )
 }
 
+// The value-based editor keeps step-owned answers and recreates masking when sensitivity changes.
+@Suppress("DEPRECATION")
 @Composable
 private fun ProviderSignInAnswer(
   step: JsonObject,

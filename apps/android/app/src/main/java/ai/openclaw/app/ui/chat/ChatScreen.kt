@@ -182,13 +182,14 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -3275,6 +3276,8 @@ private fun minimumChatInputHeight(): Dp {
   }
 }
 
+// The value-based editor preserves caller-owned drafts, IME composition, and disabled-input admission.
+@Suppress("DEPRECATION")
 @Composable
 private fun ChatComposer(
   onInputPositioned: (LayoutCoordinates) -> Unit,
@@ -3804,7 +3807,7 @@ internal fun ChatEffortSliderControl(
       SliderState(
         value = selectedPosition.optionIndex.coerceAtLeast(0).toFloat(),
         steps = (options.size - 2).coerceAtLeast(0),
-        valueRange = 0f..options.lastIndex.coerceAtLeast(0).toFloat(),
+        trackRange = 0f..options.lastIndex.coerceAtLeast(0).toFloat(),
       )
     }
   var active by remember(sliderState) { mutableStateOf(true) }
@@ -3837,21 +3840,6 @@ internal fun ChatEffortSliderControl(
       resetPreview()
     }
   }
-  sliderState.onValueChange = { value ->
-    if (active && enabled) {
-      sliderState.value = value
-      previewing = true
-      onPreviewChange(options.getOrNull(sliderState.value.roundToInt())?.id)
-    }
-  }
-  sliderState.onValueChangeFinished = {
-    if (active && enabled && previewing) {
-      options.getOrNull(sliderState.value.roundToInt())?.let { option ->
-        if (!option.id.equals(selectedId, ignoreCase = true)) onSelect(option.id)
-      }
-    }
-    resetPreview()
-  }
   val sliderIndex = sliderState.value.roundToInt()
   val previewOption = if (previewing) options.getOrNull(sliderIndex) else null
   val selectedLabel =
@@ -3874,6 +3862,21 @@ internal fun ChatEffortSliderControl(
     if (options.size > 2 && selectedPosition.anchored) {
       Slider(
         state = sliderState,
+        onValueChange = { value ->
+          if (active && enabled) {
+            sliderState.value = value
+            previewing = true
+            onPreviewChange(options.getOrNull(sliderState.value.roundToInt())?.id)
+          }
+        },
+        onValueChangeFinished = {
+          if (active && enabled && previewing) {
+            options.getOrNull(sliderState.value.roundToInt())?.let { option ->
+              if (!option.id.equals(selectedId, ignoreCase = true)) onSelect(option.id)
+            }
+          }
+          resetPreview()
+        },
         enabled = enabled,
         interactionSource = interactionSource,
         modifier =
@@ -4034,7 +4037,11 @@ private fun BranchSwitcherSheet(
   AppModalBottomSheet(
     modifier = Modifier.foldAwareSheet(opening.geometry),
     onDismissRequest = onDismiss,
-    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    sheetState =
+      rememberBottomSheetState(
+        initialValue = SheetValue.Hidden,
+        enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
+      ),
     containerColor = ClawTheme.colors.surface,
     contentColor = ClawTheme.colors.text,
   ) {
@@ -4103,6 +4110,8 @@ internal fun branchMetadataText(branch: SessionBranch): String {
   return if (updated == null) count else nativeString("\$count · \$updated", count, updated)
 }
 
+// The value-based editor keeps query changes synchronous with the picker session admission check.
+@Suppress("DEPRECATION")
 @Composable
 private fun ChatModelPickerContent(
   models: List<GatewayModelSummary>,

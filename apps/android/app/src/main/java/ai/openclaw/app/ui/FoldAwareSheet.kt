@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import android.app.Activity
 import android.os.IBinder
 import android.view.View
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.recalculateWindowInsets
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -181,6 +182,8 @@ internal fun Modifier.foldAwareSheet(state: FoldAwareSheetState): Modifier {
     }
     rememberOverlayWindowGeometry(state.activity, state.activityView, destination, state::publishMapping)
     this
+      // Choose a fold pane inside the keyboard viewport; descendants inherit consumed IME insets.
+      .imePadding()
       .then(SheetHostElement(state, direction))
       .clipToBounds()
       .recalculateWindowInsets()

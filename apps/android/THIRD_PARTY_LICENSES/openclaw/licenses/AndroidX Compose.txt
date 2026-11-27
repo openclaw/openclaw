@@ -1,6 +1,6 @@
 AndroidX Compose
 Artifacts:
-- androidx.compose.material3:material3:1.4.0
+- androidx.compose.material3:material3:1.5.0
 
 Copyright 2020 The Android Open Source Project
 

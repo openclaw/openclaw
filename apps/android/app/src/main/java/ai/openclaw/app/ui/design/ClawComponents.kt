@@ -579,6 +579,8 @@ internal fun <T> ClawSegmentedControl(
   }
 }
 
+// The value-based editor keeps caller-owned text and recreates only the editor when secret masking changes.
+@Suppress("DEPRECATION")
 @Composable
 internal fun ClawTextField(
   value: String,
