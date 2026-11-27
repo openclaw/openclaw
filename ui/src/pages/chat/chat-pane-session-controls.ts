@@ -1,5 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
@@ -196,6 +197,8 @@ export function renderChatPaneComposerControls(params: {
   const preferenceAgentId = scopedAgentListParamsForSession(state, sessionKey).agentId;
   const client = state.client;
   const accountSelection = state.chatAccountSelection;
+  // Listing accounts needs operator.read; session-only operators keep the model picker.
+  const canListAccounts = hasOperatorReadAccess(state.hello?.auth ?? null);
   const connectionIsCurrent = captureChatConnectionOwner(state);
   const agentScope = scopedAgentParamsForSession(state, sessionKey);
   const affectedAgentId = scopedAgentListParamsForSession(state, sessionKey).agentId;
@@ -293,7 +296,7 @@ export function renderChatPaneComposerControls(params: {
             owner: state,
             client,
             ownsScope: ownsRoute,
-            selection: accountSelection,
+            selection: canListAccounts ? accountSelection : undefined,
             modelAuthStatusResult: state.modelAuthStatusResult,
             model: accountModel,
             disabled:
@@ -384,7 +387,11 @@ export function renderChatPaneComposerControls(params: {
             ? switchChatSetting(state, { kind: "contextWindow", value: next }, targetSessionKey)
             : Promise.resolve(false),
         onModelPickerOpen: () => {
-          if (modelAccess.allowed && selectedSession?.modelSelectionLocked !== true) {
+          if (
+            canListAccounts &&
+            modelAccess.allowed &&
+            selectedSession?.modelSelectionLocked !== true
+          ) {
             prefetchChatModelAccounts({ owner: state, client, ownsScope: ownsRoute });
           }
           return refreshChatModelCatalogOnDemand(state);

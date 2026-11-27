@@ -5,10 +5,8 @@ import {
 } from "@openclaw/ai/transports";
 import { getRuntimeConfig } from "../config/config.js";
 import { applySessionEntryOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  readSessionEntryReadOnlyInWorker,
-  readSessionEntrySummariesInWorker,
-} from "../config/sessions/session-entry-read-runtime.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { readPromptCacheRecoveryKeysInWorker } from "../config/sessions/session-prompt-cache-recovery.js";
 import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { resolveAllAgentSessionStoreTargetsAsync } from "../config/sessions/targets-runtime.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
@@ -24,7 +22,6 @@ import { resolveExtraParams } from "./embedded-agent-runner/extra-params.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { parseCacheRetention } from "./embedded-agent-runner/prompt-cache-retention.js";
 import {
-  isPromptCacheKeepWarmSessionKey as isWarmableSessionKey,
   MAX_WARM_TTL_MS,
   nextPromptCacheKeepWarmDueAtMs as nextDueAtMs,
   promptCacheKeepWarmCandidateKey as candidateKey,
@@ -146,19 +143,8 @@ export function readObservedPromptCacheTtlMs(
 async function recoverCandidates(cfg: OpenClawConfig, now: number): Promise<void> {
   const targets = await resolveAllAgentSessionStoreTargetsAsync(cfg);
   for (const target of targets) {
-    const rows = await readSessionEntrySummariesInWorker({
-      agentId: target.agentId,
-      storePath: target.storePath,
-    });
-    for (const { sessionKey, entry } of rows) {
-      // Mid-series rows have an old activity time and a recent recorded prewarm.
-      const touchedAt = Math.max(
-        entry.lastActivityAt ?? 0,
-        entry.promptCacheKeepWarm?.lastPingAt ?? 0,
-      );
-      if (touchedAt < now - MAX_WARM_TTL_MS || !isWarmableSessionKey(sessionKey)) {
-        continue;
-      }
+    const keys = await readPromptCacheRecoveryKeysInWorker(target, now - MAX_WARM_TTL_MS);
+    for (const sessionKey of keys) {
       const key = candidateKey(target.agentId, sessionKey);
       if (!state.candidates.has(key)) {
         state.candidates.set(key, {

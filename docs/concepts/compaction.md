@@ -122,6 +122,14 @@ consume the remaining headroom before a safe boundary, in which case OpenClaw
 keeps the existing client-side fallback rather than dropping pending content.
 Manual `/compact` and overflow recovery keep their existing behavior.
 
+After a tool batch has fully settled, the request boundary can defer soft
+compaction for one ordinary model call so the agent can answer from the intact
+history. This requires the larger of the outgoing and maintenance input estimates
+plus the full output allowance to fit within the effective context window. There
+is at most one such deferral per turn, including retries. If the model requests
+more tools, compaction is reevaluated at the next boundary. Unfinished tool work,
+hard overflow, and insufficient output headroom do not qualify.
+
 If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling. If a Gateway restart later interrupts that continuing run, recovery preserves the accepted input even when compaction has summarized it.
 
 For OpenAI-compatible Chat Completions, an automatically context-capped response that ends with `length` also enters this recovery. OpenClaw withholds the incomplete candidate and its tool calls until the finish reason is known. This buffering is bounded; an oversized response resumes ordinary streaming and retains its normal `length` result. Explicit output limits retain their normal behavior.
