@@ -163,11 +163,11 @@ describe("happy path prompt snapshots", () => {
       (sum, match) => sum + Buffer.byteLength(match[2], "utf8"),
       0,
     );
-    expect(promptBytes).toBeLessThanOrEqual(CODEX_APP_SERVER_PROMPT_BUDGET_BYTES);
+    expect.soft(promptBytes).toBeLessThanOrEqual(CODEX_APP_SERVER_PROMPT_BUDGET_BYTES);
     const tools = JSON.stringify(JSON.parse(content("codex-dynamic-tools.telegram-direct.json")));
-    expect(Buffer.byteLength(tools, "utf8")).toBeLessThanOrEqual(
-      CODEX_APP_SERVER_TOOLS_BUDGET_BYTES,
-    );
+    expect
+      .soft(Buffer.byteLength(tools, "utf8"))
+      .toBeLessThanOrEqual(CODEX_APP_SERVER_TOOLS_BUDGET_BYTES);
   });
 
   it("rejects invalid Codex dynamic-tool materialization scenarios", async () => {
