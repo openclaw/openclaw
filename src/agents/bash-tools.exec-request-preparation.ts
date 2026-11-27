@@ -443,6 +443,7 @@ export function resolvePreparedExecEnvironment(params: {
 }): {
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
+  legacyScratchRequestedEnv?: Record<string, string>;
   executionContext?: SystemRunExecutionContext;
 } {
   if (params.localProcessEnv && params.host !== "gateway") {
@@ -627,6 +628,17 @@ export function resolvePreparedExecEnvironment(params: {
 
   return {
     env: executionEnv,
+    ...(params.host === "gateway" && params.scratchEnv
+      ? {
+          legacyScratchRequestedEnv: {
+            ...storeEnv,
+            ...params.storeSecretEnv,
+            ...executionOverrides,
+            ...routingEnv,
+            ...preparedEnv,
+          },
+        }
+      : {}),
     ...(params.host === "node" && routingEnv ? { executionContext } : {}),
     ...(params.host !== "node" && Object.keys(preparedEnv).length > 0
       ? { requestedEnv: { ...forwardedEnv, ...preparedEnv } }
