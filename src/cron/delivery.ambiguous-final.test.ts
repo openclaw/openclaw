@@ -70,7 +70,7 @@ describe("automation results after an ambiguous transport failure", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const pending = Symbol("pending");
     for (let step = 0; step < 60; step++) {
-      if ((await Promise.race([work, pending])) !== pending) {
+      if ((await Promise.race([work, Promise.resolve(pending)])) !== pending) {
         break;
       }
       await vi.advanceTimersByTimeAsync(1_000);
