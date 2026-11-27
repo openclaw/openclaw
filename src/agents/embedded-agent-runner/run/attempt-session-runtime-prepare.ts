@@ -2,7 +2,10 @@ import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/trans
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  readRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
@@ -36,6 +39,8 @@ import {
   prepareSessionToolUsageRanking,
   prepareSessionToolSurface,
   prepareSessionPublicationToolListing,
+  promoteSessionTool,
+  readSessionPinnedToolNames,
   retireSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import { retireUserRowPromptUpdates } from "../session-prompt-update.js";
@@ -209,24 +214,30 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       catalogIds: toolSearchCatalogRef?.current?.entries.map((entry) => entry.id) ?? [],
       inherited: inheritedRanking,
       now,
-      readRankedIds: async () => {
+      readUsage: async (sightings) => {
         try {
-          const { readAgentToolUsage } = await import("../../../config/sessions/tool-usage.js");
-          const usage = await readAgentToolUsage({
+          const { readAgentToolUsageForRanking } =
+            await import("../../../config/sessions/tool-usage.js");
+          const usage = await readAgentToolUsageForRanking({
             agentId: sessionAgentId,
             config: attempt.config,
+            sightings,
+            now,
           });
           sessionPreparation.assertCurrent();
-          return usage
-            .toSorted(
-              (a, b) =>
-                decayToolUsage(b, now) - decayToolUsage(a, now) ||
-                (a.toolId < b.toolId ? -1 : a.toolId > b.toolId ? 1 : 0),
-            )
-            .map((row) => row.toolId);
+          return {
+            rankedIds: usage.rows
+              .toSorted(
+                (a, b) =>
+                  decayToolUsage(b, now) - decayToolUsage(a, now) ||
+                  (a.toolId < b.toolId ? -1 : a.toolId > b.toolId ? 1 : 0),
+              )
+              .map((row) => row.toolId),
+            firstSeen: usage.firstSeen,
+          };
         } catch (error) {
           log.warn(`Tool usage ranking unavailable: ${String(error)}`);
-          return [];
+          return { rankedIds: [], firstSeen: {} };
         }
       },
     });
@@ -250,18 +261,32 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   if (usesSystemPromptSeries) {
     beginSessionSystemPrompt(sessionPromptState);
   }
-  const toolPolicyDigest = resolveSessionToolPolicyDigest(attempt.config, sessionAgentId);
+  const toolPolicyDigest = resolveSessionToolPolicyDigest(
+    attempt.config,
+    sessionAgentId,
+    readRunOperatorAuthority(attempt)?.participationCeiling,
+  );
   if (usesSystemPromptSeries) {
-    const changed = await input.toolCatalog.installToolListingPin((tools, refresh) =>
-      prepareSessionPublicationToolListing({
-        state: sessionPromptState,
-        routeKey: promptRouteKey,
-        toolPolicy: toolPolicyDigest,
-        getEntries: () => sessionManager[sessionManagerReadTranscriptBranch](),
-        historyBoundaryCount: sessionManager.getBoundaryCount(),
-        tools,
-        refresh,
-      }),
+    const changed = await input.toolCatalog.installToolListingPin(
+      (tools, refresh) =>
+        prepareSessionPublicationToolListing({
+          state: sessionPromptState,
+          routeKey: promptRouteKey,
+          toolPolicy: toolPolicyDigest,
+          getEntries: () => sessionManager[sessionManagerReadTranscriptBranch](),
+          historyBoundaryCount: sessionManager.getBoundaryCount(),
+          tools,
+          refresh,
+        }),
+      // A restored pin that already sends an on-demand tool keeps it direct on this turn.
+      () =>
+        readSessionPinnedToolNames({
+          state: sessionPromptState,
+          routeKey: promptRouteKey,
+          toolPolicy: toolPolicyDigest,
+          entries: sessionManager[sessionManagerReadTranscriptBranch](),
+          historyBoundaryCount: sessionManager.getBoundaryCount(),
+        }),
     );
     if (changed) {
       const prepare = systemPrompt.prepareToolPrompt;
@@ -331,8 +356,16 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           if (prepared.restart && resources.session) {
             await retireSystemPromptUpdates();
             restartRecorded = true;
-            resources.session.agent.state.messages = resources.session.messages.filter(
-              (message) => getOpenClawSystemUpdateKind(message) !== "prompt-update",
+            const messages = resources.session.messages;
+            const retired = (message: (typeof messages)[number]) =>
+              getOpenClawSystemUpdateKind(message) === "prompt-update";
+            // Retiring history rows moves this turn's first message; the fence follows it,
+            // or its readers would file the current user message under accepted history.
+            state.prePromptMessageCount -= messages
+              .slice(0, state.prePromptMessageCount)
+              .filter(retired).length;
+            resources.session.agent.state.messages = messages.filter(
+              (message) => !retired(message),
             );
           }
           if (resources.session) {
@@ -397,6 +430,18 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
               deferredDirectoryToolsCallable: input.toolCatalog.deferredDirectoryToolsCallable,
               effectiveTools,
               pinTools,
+              onPromoteTool: (tool) => {
+                // Later catalog refreshes in this run keep the tool direct.
+                if (toolSearchCatalogRef) {
+                  toolSearchCatalogRef.promotedToolNames = new Set([
+                    ...(toolSearchCatalogRef.promotedToolNames ?? []),
+                    tool.name,
+                  ]);
+                }
+                if (usesSystemPromptSeries && promoteSessionTool(sessionPromptState, tool)) {
+                  declarePromptToolPin(attempt);
+                }
+              },
               replaySafetyOptions,
               sandboxSessionKey,
               sessionAgentId,
@@ -626,10 +671,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sandboxSessionKey,
     ...(sandbox !== undefined ? { sandbox } : {}),
     codeModeControlsEnabled: codeModeControlsEnabledForRun,
+    // Names the model may call without a declaration; history calls to them stay native.
     getDeferredToolEntries: () =>
       input.toolCatalog.deferredDirectoryToolsCallable
         ? toolSearchCatalogRef?.current?.entries
-        : undefined,
+        : toolSearchCatalogRef?.current?.entries.filter((entry) => entry.onDemand),
     providerPromptState: {
       state: getProviderPromptState(attempt.runId),
       effectiveContextTokenBudget: Math.max(

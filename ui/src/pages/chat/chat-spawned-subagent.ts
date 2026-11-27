@@ -263,7 +263,8 @@ export function addressedSession(
   }
   const row = rows?.find((candidate) => areUiSessionKeysEquivalent(candidate.key, key));
   if (
-    call.name.trim().toLowerCase() === "sessions_history" &&
+    (call.name.trim().toLowerCase() === "sessions_history" ||
+      call.name.trim().toLowerCase() === "sessions_send") &&
     !(
       row &&
       [row.label, row.displayName, row.derivedTitle].some(
@@ -284,9 +285,16 @@ export function isSubagentsPanelSession(row: GatewaySessionRow): boolean {
   return row.classification === "subagent" || isSubagentSessionKey(row.key);
 }
 
-/** A subagent that handed off to its own subagents is still at work. */
+/**
+ * A subagent that handed off to its own subagents, or paused on sessions_yield
+ * and still owes its result, is still at work.
+ */
 export function isUnfinishedSubagent(row: GatewaySessionRow): boolean {
-  return isSessionRunStateActive(row) || row.hasActiveSubagentRun === true;
+  return (
+    isSessionRunStateActive(row) ||
+    row.hasActiveSubagentRun === true ||
+    row.subagentRunState === "paused"
+  );
 }
 
 function finishedRuntimeMs(row: GatewaySessionRow): number | null {

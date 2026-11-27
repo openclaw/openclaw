@@ -46,6 +46,10 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Prepare Git capabilities
+        shell: bash
+        run: bash .github/actions/setup-node-env/ensure-git.sh
+
       - name: Setup Node.js
         shell: bash
         run: |

@@ -113,7 +113,7 @@ try {
       const url = pathToFileURL(path.resolve(ownerPath));
       const { abortControlledSubagents } = (await import(
         url.href
-      )) as typeof import("../../src/gateway/server-methods/chat-abort-descendants.js");
+      )) as typeof import("../../src/agents/subagents/cancel-descendants.js");
       return {
         name,
         abortControlledSubagents,
@@ -121,7 +121,7 @@ try {
       };
     };
     const candidate = await loadOwner(
-      values.owner ?? "src/gateway/server-methods/chat-abort-descendants.ts",
+      values.owner ?? "src/agents/subagents/cancel-descendants.ts",
       values.owner ? "selected" : "candidate",
     );
     const owners = values["baseline-owner"]

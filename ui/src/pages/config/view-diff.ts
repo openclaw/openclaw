@@ -34,12 +34,7 @@ function computeDiff(
     if (orig.length !== curr.length || orig.length > MAX_CONFIG_DIFF_ARRAY_COMPARE_ITEMS) {
       return true;
     }
-    for (let index = 0; index < orig.length; index += 1) {
-      if (compare(orig[index], curr[index], null, depth + 1)) {
-        return true;
-      }
-    }
-    return false;
+    return orig.some((value, index) => compare(value, curr[index], null, depth + 1));
   }
 
   // A null path compares array contents without emitting their individual fields.

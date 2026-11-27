@@ -8,12 +8,12 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { button } from "./cloud-worker-snapshots-dom.test-support.ts";
 import {
   buildEnvironmentFixture,
   snapshotListFixture,
 } from "./cloud-worker-snapshots.test-support.ts";
 import {
+  button,
   setupSnapshotTests,
   sheet,
   click,

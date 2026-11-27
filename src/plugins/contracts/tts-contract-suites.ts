@@ -86,8 +86,6 @@ function createResolvedModel(provider: string, modelId: string) {
       contextWindow: 128000,
       maxTokens: 8192,
     } satisfies Model<"openai-completions">,
-    authStorage: { profiles: {} },
-    modelRegistry: { find: vi.fn() },
   };
 }
 

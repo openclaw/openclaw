@@ -34,8 +34,8 @@ export type MemoryAudienceGrant = { audience: MemoryAudience; release: () => voi
 
 /**
  * Why no audience was granted, classified by its repair:
- * - `stale-lineage`: the session's recorded lineage no longer matches its ancestors or
- *   predates lineage receipts; only respawning or recreating the session restores access.
+ * - `stale-lineage`: an ancestor was removed, recreated or reassigned after the session's
+ *   receipt, or the session predates lineage receipts; only respawning restores access.
  * - `unverified`: storage could not verify the lineage now; a later turn resolves again.
  * - `ineligible`: the lineage carries no audience by design, for example a host-run,
  *   rowless-parent, or chat-less root session, or cross-agent lineage that is not
@@ -215,15 +215,16 @@ export async function resolveMemoryAudienceFromEntry(
   params: MemoryAudienceResolutionParams,
   admittedEntry: InternalSessionEntry,
 ): Promise<MemoryAudienceResolution> {
-  let { sessionKey, sessionId, senderIsOwner } = params;
-  const { agentId } = params;
+  let { sessionKey, senderIsOwner } = params;
+  const { agentId, sessionId } = params;
   let hopAgentId = agentId;
   let crossedAgents = false;
   const assertCallerCurrent = params.assertCallerCurrent ?? (() => {});
   const seen = new Set<string>();
   const record: AudienceRecord = { leases: [], state: "current", holders: 0 };
-  let requiredLifecycleRevision: string | undefined;
-  let sessionIdOnly = false;
+  // Creation time of the hop that named the current ancestor. A reset keeps the
+  // ancestor's node and owner, so its current incarnation serves the lineage.
+  let childCreatedAt: number | undefined;
   // A scheduled occurrence's requester check caps owner status for the whole
   // lineage: no spawn receipt on any hop can restore what this run lost.
   const scheduledOwnerCap = params.scheduledParent?.senderIsOwner;
@@ -234,7 +235,7 @@ export async function resolveMemoryAudienceFromEntry(
 
   try {
     for (let depth = 0; depth < MAX_LINEAGE_HOPS; depth += 1) {
-      // Every hop must name its agent and exact durable session incarnation.
+      // Every hop must name its agent; the admitted session names its incarnation.
       // Session-key shape alone never grants authority; the receipt walk below
       // decides whether a hop may leave the turn's agent.
       if (
@@ -260,17 +261,17 @@ export async function resolveMemoryAudienceFromEntry(
             });
       if (
         !entry ||
-        entry.sessionId !== sessionId ||
-        (depth > 0 && !sessionIdOnly && entry.lifecycleRevision !== requiredLifecycleRevision)
+        (depth === 0 && entry.sessionId !== sessionId) ||
+        Math.max(entry.createdAt ?? 0, entry.owner?.assignedAt ?? 0) > (childCreatedAt ?? Infinity)
       ) {
-        // The admitted row moving under this turn is transient. An ancestor reset or
-        // removal after the spawn is permanent: the receipt names a lost incarnation.
+        // The admitted row moving under this turn is transient. An ancestor removed,
+        // recreated or reassigned after its child was created is permanent.
         if (depth === 0) {
           return deny("unverified", `session ${sessionKey} no longer matches its admitted turn`);
         }
         return deny(
           "stale-lineage",
-          `session ${params.sessionKey} has stale lineage: ancestor ${sessionKey} was reset or removed after its child was spawned. Respawn or recreate it from a current session to restore memory access; resetting it keeps the stale lineage.`,
+          `session ${params.sessionKey} has stale lineage: ancestor ${sessionKey} was removed, recreated or reassigned to another owner after its child was spawned. Respawn it from a current session to restore memory access.`,
         );
       }
       // The lease re-verifies this exact incarnation against current storage,
@@ -288,28 +289,15 @@ export async function resolveMemoryAudienceFromEntry(
         );
       }
       record.leases.push(lease);
-      sessionIdOnly = false;
+      childCreatedAt = entry.createdAt;
 
       const parent = depth === 0 ? params.scheduledParent : undefined;
       if (parent?.sessionKey === sessionKey) {
-        // An in-session run executes on its parent's own row: that row must still be
-        // the linked incarnation, and this occurrence's owner bit replaces the sender's.
-        if (
-          entry.sessionId !== parent.sessionId ||
-          (parent.lifecycleRevision !== undefined &&
-            entry.lifecycleRevision !== parent.lifecycleRevision)
-        ) {
-          return deny(
-            "stale-lineage",
-            `scheduled run session ${sessionKey} was reset or replaced after its automation was linked to it`,
-          );
-        }
+        // An in-session run executes on its parent's own row; this occurrence's
+        // owner bit replaces the sender's.
         senderIsOwner = parent.senderIsOwner;
       } else if (parent && entry.spawnedBy === undefined) {
         sessionKey = parent.sessionKey;
-        sessionId = parent.sessionId;
-        requiredLifecycleRevision = parent.lifecycleRevision;
-        sessionIdOnly = parent.lifecycleRevision === undefined;
         senderIsOwner = parent.senderIsOwner;
         continue;
       }
@@ -320,23 +308,13 @@ export async function resolveMemoryAudienceFromEntry(
       const receipt =
         depth > 0 && entry.spawnedBy === undefined ? entry.scheduledMemoryParent : undefined;
       if (receipt?.senderIsOwner && senderIsOwner === true) {
-        if (receipt.lifecycleRevision === "") {
-          return deny(
-            "ineligible",
-            `scheduled run session ${sessionKey} has a malformed parent receipt`,
-          );
-        }
         sessionKey = receipt.sessionKey;
-        sessionId = receipt.sessionId;
-        requiredLifecycleRevision = receipt.lifecycleRevision;
-        sessionIdOnly = receipt.lifecycleRevision === undefined;
         continue;
       }
       if (entry.spawnedBy !== undefined) {
-        // A child inherits only the owner bit and exact parent incarnation stamped
-        // by the spawn owner. Its launch turn and copied chat metadata are not grants.
-        // Every receipt carries the owner bit; a parent row without a lifecycle
-        // revision (such as a channel-created row) is recorded by its absence.
+        // A child inherits only the owner bit stamped by the spawn owner. Its
+        // launch turn and copied chat metadata are not grants. A rowless parent
+        // records no session id and never an owner grant.
         if (typeof entry.spawnedBySenderIsOwner !== "boolean") {
           return deny(
             "stale-lineage",
@@ -347,8 +325,7 @@ export async function resolveMemoryAudienceFromEntry(
         if (
           !entry.spawnedBy ||
           (entry.parentSessionKey !== undefined && entry.parentSessionKey !== entry.spawnedBy) ||
-          !isSessionId(entry.spawnedBySessionId) ||
-          entry.parentSessionLifecycleRevision === ""
+          !isSessionId(entry.spawnedBySessionId)
         ) {
           return deny("ineligible", `spawned session ${sessionKey} has malformed lineage receipts`);
         }
@@ -367,8 +344,6 @@ export async function resolveMemoryAudienceFromEntry(
           hopAgentId = parentAgentId;
         }
         sessionKey = entry.spawnedBy;
-        sessionId = entry.spawnedBySessionId;
-        requiredLifecycleRevision = entry.parentSessionLifecycleRevision;
         senderIsOwner = entry.spawnedBySenderIsOwner;
         continue;
       }
@@ -398,7 +373,7 @@ export async function resolveMemoryAudienceFromEntry(
         return {
           status: "granted",
           ...mintMemoryAudience(
-            { kind: "conversation", agentId, sessionKey, sessionId },
+            { kind: "conversation", agentId, sessionKey, sessionId: entry.sessionId },
             params.sessionKey,
             record,
           ),

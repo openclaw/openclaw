@@ -116,8 +116,8 @@ it("refuses newer agent schemas before repairing the registry", async () => {
       agentPath,
       `
       PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};
-      CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, agent_id TEXT);
-      INSERT INTO schema_meta VALUES ('primary', 'main');
+      CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, agent_id TEXT, role TEXT, schema_version INTEGER);
+      INSERT INTO schema_meta VALUES ('primary', 'main', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION + 1});
     `,
     );
     const paths = [state.configPath, databasePath, agentPath];

@@ -232,6 +232,13 @@ and, only if missing, create it with
 Run the candidate from a clean tracked worktree whose HEAD is the Release SHA,
 with its frozen dependencies installed. The helper creates and relaunches trusted
 Tooling SHA code itself; starting in the tooling checkout fails the target HEAD check.
+
+Stable/full still default to local Parallels smoke. Before dispatching or waiting
+for FRV, the checklist checks that the host has registered Parallels guests,
+a detectable shared network address, and the smoke provider credential.
+Use a configured host or, with explicit authorization to omit the local smoke,
+pass `--skip-parallels`. This does not waive required hosted validation.
+
 Then consume existing validation against the untagged Release SHA:
 
 ```bash

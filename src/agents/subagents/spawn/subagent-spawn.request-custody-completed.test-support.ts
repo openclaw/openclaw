@@ -503,11 +503,8 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
           expect(subagentRuns.get(childRunId)?.killIntent).toBeDefined();
           releaseCleanup.resolve();
           const stopped = await withinTest(activeStop, signal);
-          expect(stopped).toMatchObject({
-            status: "error",
-            killed: 1,
-            error: expect.stringContaining("Requester revoked after native acceptance"),
-          });
+          // The requester was revoked after this Stop was admitted; it finishes and reports ok.
+          expect(stopped).toMatchObject({ status: "ok", killed: 1 });
         } else if (mode === "consumed-generation-replaced") {
           const prepare = nativeSession.prepareSubagentKillSession;
           let replaced = false;

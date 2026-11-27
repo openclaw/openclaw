@@ -26,7 +26,6 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import { ExitError } from "../../runtime.js";
@@ -37,6 +36,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
+import {
+  createLegacyLauncherFixture,
+  legacyLauncherSource,
+} from "../../update/legacy-launcher.test-support.js";
 import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
@@ -153,6 +156,16 @@ afterEach(async () => {
 });
 
 describe("update repair ledger recovery", () => {
+  it("refreshes the selected legacy launcher only after repair admission", async () => {
+    const fixture = createLegacyLauncherFixture(process.env.OPENCLAW_STATE_DIR!);
+    mocks.resolveRoot.mockResolvedValue(fixture.root);
+    mocks.ownershipAllowed.mockRejectedValueOnce(new Error("read-only fixture"));
+    await expect(updateRepairCommand({ json: true })).rejects.toThrow("read-only fixture");
+    expect(fs.readFileSync(fixture.launcher, "utf8")).toBe(legacyLauncherSource);
+    await updateRepairCommand({ json: true });
+    expect(fs.readFileSync(fixture.launcher, "utf8")).not.toBe(legacyLauncherSource);
+    expect(fs.readFileSync(fixture.trial, "utf8")).toBe(fixture.record);
+  });
   it("tells operators to stop the live Gateway owner before repair", async () => {
     const run = seedRun();
     mocks.ownershipAllowed.mockRejectedValueOnce(
@@ -287,7 +300,6 @@ describe("update repair ledger recovery", () => {
           expect.arrayContaining(captureSteps.map((step) => expect.objectContaining(step))),
         );
       }
-      expect(renderUpdateRunReport(lastRun).headline).not.toContain("update failed");
       expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({
           status: "ok",
@@ -472,13 +484,14 @@ describe("update repair ledger recovery", () => {
       );
       expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
       const repaired = getUpdateRun(run.runId)!;
-      expect(renderUpdateRunReport(repaired).markdown).not.toContain("openclaw triage");
       expect(
         formatUpdateRestartStatusValue(
           { kind: "update", status: "error", ts: now, stats: { runId: run.runId } },
           { warn: (message) => `warning: ${message}`, muted: (message) => `muted: ${message}` },
         ),
-      ).toBe("muted: ℹ️ OpenClaw abandoned update reconciled.");
+      ).toBe(
+        "muted: ℹ️ OpenClaw abandoned update reconciled.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
+      );
       expect(getUpdateRun(run.runId)).toEqual(repaired);
       await updateRepairCommand({});
       expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, [], undefined, undefined);

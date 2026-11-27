@@ -91,9 +91,11 @@ direct messages and group DMs are included.
 
 6. **Normalize.** Run `scripts/slack-read-normalize.mjs` over the saved
    results of the channel, with `--team` set to the listing's `teamId` and
-   `--channel`. Item IDs are `<channel>/<ts>`. Authors are named only from what
-   `read` returned (profile or bot name), otherwise by their stable Slack user
-   ID; never look names up with another action. Run
+   `--channel`. Item IDs are `<channel>/<ts>`. Authors and mentioned users are
+   named only from what `read` returned (author profile, bot name or
+   `userProfiles`), otherwise by their stable Slack user ID; never look names
+   up with another action. Write a mentioned user by the name the transcript
+   shows, not as `<@U…>`. Run
    `scripts/chat-transcript.mjs` with the source key for a line-stable
    transcript.
 7. **Snapshot and plan.** Follow steps 1, 3 and 4 of the procedure: find the

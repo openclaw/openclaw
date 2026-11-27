@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
 import {
@@ -23,7 +22,7 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { isImmutableGitCommitRef, parseGitPluginSpec } from "./git-source-spec.js";
-import { resolveDefaultPluginGitDir } from "./install-paths.js";
+import { resolveDefaultPluginGitDir, resolvePluginGitRepoDir } from "./install-paths.js";
 import {
   preflightPluginGitInstallPolicy,
   type InstallSafetyOverrides,
@@ -100,12 +99,7 @@ export async function installPluginFromGitSpec(
 
   const { workTimeoutMs } = resolveTimedInstallModeOptions(params, {});
   const gitRoot = params.gitDir ? resolveUserPath(params.gitDir) : resolveDefaultPluginGitDir();
-  const redactedSpec = redactSensitiveUrlLikeString(parsed.normalizedSpec);
-  const persistentRepoDir = path.join(
-    gitRoot,
-    `git-${sha256HexPrefixCore(redactedSpec, 16)}`,
-    "repo",
-  );
+  const persistentRepoDir = resolvePluginGitRepoDir(gitRoot, parsed.normalizedSpec);
   const effectiveMode =
     params.mode === "update" && (await pathExists(persistentRepoDir)) ? "update" : "install";
   const availability = await ensureInstallTargetAvailableForMode({

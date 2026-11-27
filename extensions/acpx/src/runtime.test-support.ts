@@ -15,7 +15,7 @@ import {
 import { AcpxRuntime } from "./runtime.js";
 import { resolveAcpxSessionResource } from "./session-owner.js";
 
-export type TestSessionStore = {
+type TestSessionStore = {
   load(sessionId: string): Promise<Record<string, unknown> | undefined>;
   save(record: Record<string, unknown>): Promise<void>;
 };

@@ -1,7 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -16,10 +16,13 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it.each([1280, 820, 400])(
-    "keeps failed-reply copy compact with reachable feedback at %ipx",
+    "keeps failed-reply text on one line without resending or losing the draft at %ipx",
     async (width) => {
-      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page, context }) => {
+      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
         const sessionKey = "agent:main:main";
+        const diagnostic =
+          "The model provider interrupted the connection before the reply finished. The example gateway returned upstream status 502.\nRequest ID: example-7942.";
+        const draft = "Can you also pull out the action items?";
         const gateway = await installMockGateway(page, {
           sessionKey,
           sessions: [
@@ -28,71 +31,74 @@ suite.define(() => {
               status: "failed",
               hasActiveRun: false,
               lastRunId: "failed-run",
-              lastRunError: "Synthetic reply failure for layout verification.",
+              lastRunError: diagnostic,
             },
           ],
           historyMessages: [{ role: "user", content: "Check the example operation." }],
         });
         await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
-        const notice = page.locator(".chat-error");
-        const title = notice.locator(".app-toast__message");
-        const description = notice.locator(".app-toast__description");
+        const notice = page.locator(".chat-error.chat-error--reply");
+        const message = notice.locator(".app-toast__message");
         const refresh = notice.getByRole("button", { name: "Refresh", exact: true });
-        const report = notice.getByRole("link", { name: "Report a bug", exact: true });
-        await report.waitFor();
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          notice,
-          [title, description, refresh, report],
-          {
-            elements: [notice, title, description, refresh, report],
-            animations: "disabled",
-          },
+        const dismiss = notice.getByRole("button", { name: "Dismiss error", exact: true });
+        await waitForControlUiProofSurface(notice, [message, refresh, dismiss]);
+        const input = page.locator(".agent-chat__input textarea");
+        await input.fill(draft);
+        expect(await message.textContent()).toBe(diagnostic);
+        expect(await message.getAttribute("role")).toBe("alert");
+        expect(await notice.evaluate((element) => element.classList.contains("app-toast"))).toBe(
+          false,
         );
-        const bounds = frame.elements.map((element) => element.bounds);
-        const [cardBox, titleBox, descriptionBox] = bounds;
-        const fontSize = await report.evaluate((element) => getComputedStyle(element).fontSize);
-        await writeFile(path.join(suite.artifactDir, `layout-${width}.png`), frame.png);
-        await writeFile(
-          path.join(suite.artifactDir, `layout-${width}.json`),
-          JSON.stringify(
-            {
-              viewport: page.viewportSize(),
-              bounds,
-              fontSize,
-              gap: descriptionBox!.y - titleBox!.y - titleBox!.height,
-            },
-            null,
-            2,
-          ),
-        );
-        const gap = descriptionBox!.y - titleBox!.y - titleBox!.height;
-        expect.soft(gap).toBeGreaterThanOrEqual(2);
-        expect.soft(gap).toBeLessThanOrEqual(6);
-        expect
-          .soft(fontSize)
-          .toBe(await description.evaluate((element) => getComputedStyle(element).fontSize));
-        if (width === 1280) {
-          expect.soft(cardBox!.height).toBeLessThanOrEqual(104);
-        }
-        await context.route("https://github.com/**", (route) =>
-          route.fulfill({ body: "Issue form destination verified" }),
-        );
-        const popupPromise = page.waitForEvent("popup");
-        await report.click();
-        const popup = await popupPromise;
-        await popup.waitForLoadState();
-        expect(new URL(popup.url()).pathname).toBe("/openclaw/openclaw/issues/new");
-        await popup.close();
-        await notice.locator("summary").press("Enter");
-        await notice.getByLabel("Error details", { exact: true }).waitFor();
-        expect(await notice.locator("details").getAttribute("open")).not.toBeNull();
+        expect(
+          await notice
+            .locator(
+              "details, summary, [aria-expanded], .lazy-view-error__chevron, .lazy-view-error__detail, .app-toast__description, .report-issue-link",
+            )
+            .count(),
+        ).toBe(0);
+        expect(await notice.getByRole("button").count()).toBe(2);
+        const layout = await notice.evaluate((element) => {
+          const messageNode = element.querySelector<HTMLElement>(".app-toast__message")!;
+          const refreshNode = element.querySelector(".chat-error__refresh")!;
+          const dismissNode = element.querySelector(".chat-error__dismiss.app-toast__dismiss")!;
+          const style = getComputedStyle(messageNode);
+          const bounds = [messageNode, refreshNode, dismissNode].map((node) =>
+            node.getBoundingClientRect(),
+          );
+          const centers = bounds.map((rect) => rect.y + rect.height / 2);
+          return {
+            whiteSpace: style.whiteSpace,
+            overflow: style.overflowX,
+            textOverflow: style.textOverflow,
+            textHeight: bounds[0]!.height,
+            lineHeight: Number.parseFloat(style.lineHeight),
+            clipped: messageNode.scrollWidth > messageNode.clientWidth,
+            sameRow: Math.max(...centers) - Math.min(...centers),
+            ordered: bounds[0]!.right <= bounds[1]!.left && bounds[1]!.right <= bounds[2]!.left,
+            contained:
+              element.scrollWidth <= element.clientWidth &&
+              bounds[2]!.right <= element.getBoundingClientRect().right,
+          };
+        });
+        expect(layout).toMatchObject({
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          clipped: true,
+          ordered: true,
+          contained: true,
+        });
+        expect(layout.textHeight).toBeLessThanOrEqual(layout.lineHeight + 1);
+        expect(layout.sameRow).toBeLessThanOrEqual(1);
         const reads = (await gateway.getRequests("chat.history")).length;
         await refresh.click();
         await gateway.waitForRequest("chat.history", { after: reads });
+        expect(await input.inputValue()).toBe(draft);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        await notice.getByRole("button", { name: "Dismiss error", exact: true }).click();
+        await dismiss.click();
         await notice.waitFor({ state: "hidden" });
+        expect(await input.inputValue()).toBe(draft);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       });
     },
   );

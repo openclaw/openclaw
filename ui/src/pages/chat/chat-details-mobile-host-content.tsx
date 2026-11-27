@@ -36,7 +36,7 @@ import {
   retainedPublication,
 } from "./components/chat-pull-requests.ts";
 import { syncSessionPanelInputs, useSessionPanel } from "./components/chat-session-panel.tsx";
-import { createChatSessionSharingMobileAdapter } from "./components/chat-session-sharing-mobile-adapter.tsx";
+import { createChatSessionSharingMobileAdapter } from "./components/chat-session-sharing-mobile-adapter.ts";
 import type { PreparedChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
 import type { ChatSessionVersionsMobileProps } from "./components/chat-session-versions-mobile.tsx";
 import { createSessionAutomationInventory } from "./components/chat-summary-automations.tsx";
@@ -408,10 +408,7 @@ function MobileHostContent(
           sharing,
           labels: {
             people: t("chat.sessionHeader.people"),
-            viewingNow: t("presence.card.viewingNow"),
-            creator: t("chat.sessionSharing.creator"),
             owner: t("chat.sessionSharing.owner"),
-            participants: t("chat.sessionHeader.peopleParticipants"),
             mention: t("chat.sessionHeader.mention"),
             mentionPerson: (name) => t("chat.sessionHeader.mentionPerson", { name }),
             morePeople: (count) => t("chat.sessionHeader.morePeople", { count: String(count) }),

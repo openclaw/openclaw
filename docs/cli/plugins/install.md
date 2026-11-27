@@ -249,6 +249,8 @@ A Git install with consistent recorded provenance is reported as `third-party-gi
 
 Reinstalling the same Git source and ref without `--force` refuses an existing managed checkout, even if the repository now declares a different plugin id. Use `openclaw plugins update <id>` for a tracked upgrade, or `openclaw plugins install git:<repo>@<ref> --force` to intentionally reinstall the same plugin id. `--force` does not migrate an existing install record to a different plugin id.
 
+After a managed host switches releases, OpenClaw refreshes Git plugin host links in the active profile and keeps each checkout and commit. Run `openclaw doctor --fix` for the affected profile from the current release, then restart its Gateway.
+
 After installing from git, use `openclaw plugins inspect <id> --runtime --json` to verify runtime registrations such as gateway methods and CLI commands. If the plugin registered a CLI root with `api.registerCli`, run that command directly through the OpenClaw root CLI, for example `openclaw demo-plugin ping`.
 
 ### Archives

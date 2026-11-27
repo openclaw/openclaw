@@ -11,6 +11,7 @@ import {
   writeConfigMachineStateInDatabase,
 } from "../state/config-machine-state-write.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -35,7 +36,6 @@ import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-ru
 import {
   decodeUpdateRecovery,
   inspectUpdateRecovery,
-  isUpdateRecoveryPending,
   type UpdateRecoveryInspection,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
@@ -157,7 +157,11 @@ export function loadPluginCohortRecovery(
   runId: string,
   options: OpenClawStateDatabaseOptions & { allowNativeRead?: true } = {},
 ): PluginCohortRecoveryPair | undefined {
-  return withUpdateRunRead(({ db }) => readPluginCohortRecoveryInDatabase(db, runId), options);
+  return withUpdateRunRead(
+    ({ db }) => readPluginCohortRecoveryInDatabase(db, runId),
+    options,
+    openDoctorStateSchemaReadAdmission,
+  );
 }
 
 export function readPluginCohortRecoveryInDatabase(
@@ -171,42 +175,22 @@ export function readPluginCohortRecoveryInDatabase(
     : undefined;
 }
 
-/** Runtime consumers retain the existing read worker and its selected database admission. */
-export async function inspectPluginCohortRecoveriesAsync(
+/** Runtime consumers read only their named pair through the existing database worker. */
+export async function loadPluginCohortRecoveryAsync(
+  runId: string,
   options: OpenClawStateDatabaseOptions = {},
-): Promise<PluginCohortRecoveryPair[]> {
+): Promise<PluginCohortRecoveryPair | undefined> {
   const { executeExistingOpenClawStateRead } =
     await import("../state/openclaw-state-db-readonly.js");
   const result = await executeExistingOpenClawStateRead(
     options,
-    { type: "updateRuns.pluginCohortRecoveries" },
+    { type: "updateRuns.pluginCohortRecovery", runId },
     { current: true },
   );
-  return result?.pairs ?? [];
+  return result?.pair;
 }
 
-/** Recovery can restore an older index; leave all snapshot generations until it settles. */
-export function canCollectPluginSourceSnapshotsInDatabase(db: EngineConnection): boolean {
-  return (
-    inspectPluginCohortRecoveryRows(db).length === 0 &&
-    !inspectRecoveryRows(db).some(({ record }) => isUpdateRecoveryPending(record))
-  );
-}
-
-export async function canCollectPluginSourceSnapshots(
-  options: OpenClawStateDatabaseOptions = {},
-): Promise<boolean> {
-  const { executeExistingOpenClawStateRead } =
-    await import("../state/openclaw-state-db-readonly.js");
-  const result = await executeExistingOpenClawStateRead(
-    options,
-    { type: "updateRuns.pluginSnapshotCollection" },
-    { current: true },
-  );
-  return result?.allowed === true;
-}
-
-export function inspectPluginCohortRecoveryRows(db: EngineConnection): PluginCohortRecoveryPair[] {
+function inspectPluginCohortRecoveryRows(db: EngineConnection): PluginCohortRecoveryPair[] {
   if (!tableExists(db, "config_machine_state")) {
     return [];
   }

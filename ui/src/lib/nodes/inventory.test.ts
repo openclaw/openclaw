@@ -30,6 +30,39 @@ function duplicate(deviceId: string, overrides: Partial<PairedDevice> = {}) {
   return device({ deviceId, displayName: "megaclaw", ...overrides });
 }
 
+it("preserves interleaved groups, tied ordering, and first-admitted source records", () => {
+  const paired = [
+    device({ deviceId: "z", displayName: "Beta", lastSeenAtMs: 1_000 }),
+    device({ deviceId: "y", displayName: "Alpha", lastSeenAtMs: 1_000 }),
+    device({ deviceId: "c", displayName: "BETA", lastSeenAtMs: 1_000 }),
+    device({ deviceId: "b", displayName: "ALPHA", lastSeenAtMs: 1_000 }),
+    device({ deviceId: "a", displayName: "beta", lastSeenAtMs: 1_000 }),
+    device({ deviceId: "c", displayName: "Ignored", connected: true, lastSeenAtMs: 9_000 }),
+    device({ deviceId: "x", displayName: "alpha", lastSeenAtMs: 1_000 }),
+  ];
+  const node = { nodeId: "a", paired: true, lastSeenAtMs: 1_000 };
+  const presence = { deviceId: "A", ts: 1_000 };
+  const groups = inventory(paired, [node], [presence]);
+
+  expect(
+    groups.map(({ key, name, primary, duplicates }) => ({
+      key,
+      name,
+      ids: [primary.id, ...duplicates.map((entry) => entry.id)],
+    })),
+  ).toEqual([
+    { key: "name:beta", name: "beta", ids: ["a", "c", "z"] },
+    { key: "name:alpha", name: "ALPHA", ids: ["b", "x", "y"] },
+  ]);
+  for (const group of groups) {
+    for (const entry of [group.primary, ...group.duplicates]) {
+      expect(entry.device).toBe(paired.find((source) => source.deviceId === entry.id));
+    }
+  }
+  expect(firstGroup(groups).primary.node).toBe(node);
+  expect(firstGroup(groups).primary.presence).toBe(presence);
+});
+
 it.each([
   [true, "Mac", undefined, "iPad", "iPad"],
   [true, "Mac", undefined, undefined, "Mac"],

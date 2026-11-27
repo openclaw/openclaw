@@ -230,7 +230,7 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
       }
       const result = await prepareTools(params);
       if (
-        (c?.scenario === "mixed-owner-group" || c?.scenario === "owner-revoked-before-start") &&
+        c?.scenario === "mixed-owner-group" &&
         c.original &&
         params.attempt.sessionKey === c.sessionKey &&
         params.attempt.prompt.includes(c.queuedText)

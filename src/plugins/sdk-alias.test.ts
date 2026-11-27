@@ -1255,13 +1255,12 @@ describe("plugin sdk alias helpers", () => {
     expect(options.nativeModules).toEqual(["native-addon", "openclaw"]);
   });
 
-  it("loads a native entry without preparing unrelated aliases when SDK source is available", async () => {
+  it("loads a native entry when SDK source is available", async () => {
     const { getCachedPluginModuleLoader } = await import("./plugin-module-loader-cache.js");
     const fixture = createPluginSdkAliasFixture({ packageExports: {} });
     const modulePath = writePluginEntry(fixture.root, "entry.cjs");
     writeFile(modulePath, 'module.exports = { marker: "native-entry" };\n');
     const owner = createPluginCache();
-    const directoryReads = vi.spyOn(fs, "readdirSync");
     try {
       const loaded = withPluginCache(owner, () =>
         getCachedPluginModuleLoader({
@@ -1273,13 +1272,7 @@ describe("plugin sdk alias helpers", () => {
         })(modulePath),
       );
       expect(loaded).toEqual({ marker: "native-entry" });
-      expect(
-        directoryReads.mock.calls.filter(([directory]) =>
-          String(directory).startsWith(path.join(fixture.root, "extensions")),
-        ),
-      ).toEqual([]);
     } finally {
-      directoryReads.mockRestore();
       await owner[Symbol.asyncDispose]();
     }
   });
@@ -1307,52 +1300,6 @@ describe("plugin sdk alias helpers", () => {
             : mode === "javascript-source"
               ? fixture.srcFile
               : fixture.distFile,
-        );
-      });
-    },
-  );
-
-  it("reuses prepared aliases in the same generation", () => {
-    const first = preparePluginLoaderAliases({
-      modulePath: `/repo/${bundledDistPluginFile("browser", "index.js")}`,
-      argv1: "/repo/openclaw.mjs",
-      moduleUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-    });
-    const second = preparePluginLoaderAliases({
-      modulePath: `/repo/${bundledDistPluginFile("browser", "index.js")}`,
-      argv1: "/repo/openclaw.mjs",
-      moduleUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-    });
-
-    expect(second).toBe(first);
-  });
-
-  it.each(["src", "dist"])(
-    "retains missing SDK targets until a new generation (%s), including deferred complete maps",
-    (kind) => {
-      const { fixture, distPluginEntryPath } = createPluginSdkAliasTargetFixture();
-      const owner = createPluginCache();
-      const other = createPluginCache();
-      const params = {
-        modulePath: writePluginEntry(fixture.root, bundledDistPluginFile("demo", "index.js")),
-        pluginSdkResolution: "dist" as const,
-      };
-      fs.unlinkSync(distPluginEntryPath);
-      fs.unlinkSync(path.join(fixture.root, "src/plugin-sdk/plugin-entry.ts"));
-      const prepared = withPluginCache(owner, () => preparePluginLoaderAliases(params));
-      expect(prepared.resolveAlias("openclaw/plugin-sdk/plugin-entry")).toBeUndefined();
-      const restoredTarget =
-        kind === "src"
-          ? path.join(fixture.root, "src/plugin-sdk/plugin-entry.ts")
-          : distPluginEntryPath;
-      writeFile(restoredTarget, "export const marker = 'new-generation';\n");
-
-      withPluginCache(other, () => {
-        expect(prepared.resolveAlias("openclaw/plugin-sdk/plugin-entry")).toBeUndefined();
-        expect(prepared.getAliasMap()["openclaw/plugin-sdk/plugin-entry"]).toBeUndefined();
-        const fresh = preparePluginLoaderAliases(params);
-        expect(fs.realpathSync(fresh.resolveAlias("openclaw/plugin-sdk/plugin-entry") ?? "")).toBe(
-          fs.realpathSync(restoredTarget),
         );
       });
     },

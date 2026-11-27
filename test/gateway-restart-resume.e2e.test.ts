@@ -40,6 +40,7 @@ import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 const RESUME =
   "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+const UNKNOWN_SHELL = "Its effect is unknown. I paused this turn without retrying the command.";
 const CASES = ["stream", "tool", "parent", "background", "idle", "compact"] as const;
 type Case = (typeof CASES)[number];
 const agent = (name: Case) => (name === "stream" || name === "tool" ? "other" : "main");
@@ -88,7 +89,7 @@ function hasNewResumeInput(body: Record<string, unknown>): boolean {
     );
 }
 
-async function providerFixture(signal: AbortSignal) {
+async function providerFixture(signal: AbortSignal, childTimer = false) {
   const failed = createDeferred<never>();
   void failed.promise.catch(() => {});
   const ready = new Map<string, ReturnType<typeof createDeferred<void>>>();
@@ -194,6 +195,23 @@ async function providerFixture(signal: AbortSignal) {
           });
           if (name === "child") {
             gate(`child:${cycle}`).resolve();
+            if (childTimer && !issued.has(`child-timer:${cycle}`)) {
+              issued.add(`child-timer:${cycle}`);
+              const script = `fetch(${JSON.stringify(`${origin}/timer`)},{method:'POST',body:'{}'}).then(()=>setInterval(()=>{},1000))`;
+              const args = {
+                command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+                yieldMs: 120_000,
+                timeoutSeconds: 600,
+              };
+              const wireName = tools.includes("exec") ? "exec" : "dispatch_action";
+              writeRestartToolCall(
+                response,
+                "child",
+                wireName,
+                wireName === "exec" ? args : { id: "exec", args },
+                requestOrdinal,
+              );
+            }
             // The parent resumes; its child settles quietly instead of being adopted.
             return;
           }
@@ -226,7 +244,7 @@ async function providerFixture(signal: AbortSignal) {
                 }
               } else {
                 gate(`resume:${cycle}:${name}`).resolve();
-                if (name === "compact" || name === "tool") {
+                if (name === "compact") {
                   issued.add(`gateway:${cycle}:${name}`);
                   tool("sessions_list", { limit: 20, search: `restart-resume-${cycle}-${name}` });
                   return;
@@ -361,6 +379,114 @@ async function providerFixture(signal: AbortSignal) {
       ),
   };
 }
+
+it.skipIf(process.platform === "win32").for(["SIGKILL", "SIGTERM"] as const)(
+  "settles a timer child and tells its yielded parent after %s",
+  { timeout: 180_000 },
+  async (killSignal, { signal, onTestFailed }) => {
+    const provider = await providerFixture(signal, true);
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-child-crash",
+      signal,
+      gracefulShutdownTimeoutMs: 60_000,
+      config: restartResumeConfig(buildMockOpenAiResponsesProvider(provider.baseUrl)),
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    onTestFailed(() => {
+      process.stderr.write(instance.logs());
+    });
+    const sessionKey = key(0, "parent");
+    let client: GatewayClient | undefined;
+    const storedChild = () => {
+      const db = new DatabaseSync(resolveOpenClawStateSqlitePath(instance.env), { readOnly: true });
+      try {
+        const row = db
+          .prepare("SELECT run_id, payload_json FROM subagent_runs WHERE requester_session_key = ?")
+          .get(sessionKey);
+        assert(row && typeof row.payload_json === "string", "Spawn must persist the child");
+        const payload = asRecord(JSON.parse(row.payload_json));
+        return { runId: row.run_id, ...asRecord(payload.parentCompletion ?? payload) };
+      } finally {
+        db.close();
+      }
+    };
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request("sessions.create", {
+          key: sessionKey,
+          agentId: "main",
+          permissionMode: "full",
+        });
+        await client.request("chat.send", {
+          sessionKey,
+          message: marker(0, "parent"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("/timer");
+        await provider.wait("ready:0:parent");
+        const parent = readRestartSession(instance.state.agentDir(), sessionKey);
+        assert(parent?.lifecycleRunId, "Parent must retain its yielded lifecycle");
+        expect(
+          await client.request("agent.wait", { runId: parent.lifecycleRunId, timeoutMs: 30_000 }),
+        ).toMatchObject({ status: "ok", yielded: true });
+        const original = storedChild();
+        expect(original).toMatchObject({
+          execution: { status: "running" },
+          delivery: { status: "pending" },
+        });
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const pid = child.pid;
+        const closed = once(child, "close");
+        expect(child.kill(killSignal)).toBe(true);
+        await closed;
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        expect(storedChild()).toMatchObject({
+          runId: original.runId,
+          execution: { status: killSignal === "SIGKILL" ? "running" : "terminal" },
+        });
+        provider.restart();
+        await instance.startGateway();
+        expect(instance.child?.pid).not.toBe(pid);
+        client = await connectRestartClient(instance, {}, signal);
+        await vi.waitFor(
+          async () => {
+            const history = await client!.request<{
+              messages: unknown[];
+              sessionInfo: { hasActiveRun: boolean };
+            }>("chat.history", { sessionKey });
+            expect(storedChild()).toMatchObject({
+              runId: original.runId,
+              execution: { status: "terminal", outcome: { status: "error" } },
+              delivery: { status: "delivered" },
+            });
+            expect(JSON.stringify(history.messages)).toContain("HANDLED_NEW_INPUT");
+            expect(history.sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 15_000 },
+        );
+        const notices = provider.calls.filter(
+          (call) =>
+            call.name === "parent" &&
+            call.current.includes(
+              killSignal === "SIGKILL"
+                ? "Its run did not survive the restart"
+                : "status: error: Gateway stopped",
+            ),
+        );
+        expect(notices).toHaveLength(1);
+        expect(provider.calls.filter((call) => call.name === "child")).toHaveLength(1);
+      },
+      () => client?.stopAndWait(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
 
 it.skipIf(process.platform === "win32")(
   "resumes the interrupted predecessor after SIGKILL and incomplete shutdown marking",
@@ -830,7 +956,7 @@ it.skipIf(process.platform === "win32")(
         );
         expect(instance.logs()).toContain(key(0, "stream"));
         expect(instance.logs()).toContain(
-          "Your operator role no longer allows sending messages; ask an administrator to restore access.",
+          "I did not run your queued request. Your role on this Gateway does not allow it. Ask a Gateway admin to do it, or to add the permission to your role.",
         );
         assert(deniedRunId);
         expect(instance.logs()).toContain(deniedRunId);
@@ -1101,10 +1227,10 @@ it.skipIf(process.platform === "win32").for([
   },
 );
 
-// A turn that started before SIGTERM has its user entry in the transcript. Restart resume
-// continues that turn; the accepted input is not replayed and its tool does not run again.
+// A shell interrupted before its result is saved must not replay its input or tool.
+// A separate queued message keeps its own admission after the Gateway restarts.
 it.skipIf(process.platform === "win32")(
-  "continues a turn stopped mid-tool-call without replaying its input",
+  "pauses a turn stopped mid-shell and drains its queued input without replay",
   { timeout: 180_000 },
   async ({ signal, onTestFailed }) => {
     const provider = await providerFixture(signal);
@@ -1120,13 +1246,15 @@ it.skipIf(process.platform === "win32")(
       process.stderr.write(`${instance.logs()}\n`);
     });
     const sessionKey = key(3, "tool");
+    const independent = queued(3, 1);
     const inputKey = randomUUID();
     let client: GatewayClient | undefined;
     const history = () =>
-      client!.request<{ messages: unknown[]; sessionInfo: { hasActiveRun: boolean } }>(
-        "chat.history",
-        { sessionKey, limit: 100 },
-      );
+      client!.request<{
+        messages: unknown[];
+        pendingInputs?: { items: Array<{ state: string; message: unknown }> };
+        sessionInfo: { hasActiveRun: boolean };
+      }>("chat.history", { sessionKey, limit: 100 });
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
@@ -1137,6 +1265,21 @@ it.skipIf(process.platform === "win32")(
           { expectFinal: false },
         );
         await provider.wait("/tool/3/tool");
+        await client.request(
+          "chat.send",
+          { sessionKey, message: independent, queueMode: "followup", idempotencyKey: randomUUID() },
+          { expectFinal: false },
+        );
+        await vi.waitFor(
+          async () =>
+            expect(
+              (await history()).pendingInputs?.items.some(
+                (input) =>
+                  input.state === "queued" && JSON.stringify(input.message).includes(independent),
+              ),
+            ).toBe(true),
+          { timeout: 5_000 },
+        );
         const child = instance.child;
         assert(child?.pid, "Owned Gateway process unavailable");
         const closed = once(child, "close");
@@ -1148,11 +1291,11 @@ it.skipIf(process.platform === "win32")(
         await instance.stopGateway();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
-        await provider.wait("resume:3:tool");
         await vi.waitFor(
           async () => {
             const { messages, sessionInfo } = await history();
-            expect(JSON.stringify(messages)).toContain("RESUMED_3_tool");
+            expect(JSON.stringify(messages)).toContain(UNKNOWN_SHELL);
+            expect(JSON.stringify(messages)).toContain(`HANDLED_${independent}`);
             expect(sessionInfo.hasActiveRun).toBe(false);
           },
           { timeout: 30_000 },
@@ -1165,8 +1308,18 @@ it.skipIf(process.platform === "win32")(
             JSON.stringify(message).includes(marker(3, "tool")),
         );
         expect(userEntries).toHaveLength(1);
-        // A replayed input would reach the model as a new turn and be answered with HANDLED_*.
-        expect(JSON.stringify(messages)).not.toContain("HANDLED_");
+        expect(
+          messages.filter(
+            (message) =>
+              isRecord(message) &&
+              message.role === "assistant" &&
+              JSON.stringify(message.content).includes(UNKNOWN_SHELL),
+          ),
+        ).toHaveLength(1);
+        const toolCalls = provider.calls.filter((call) => call.cycle === 3 && call.name === "tool");
+        expect(toolCalls.filter((call) => call.resumeInput)).toHaveLength(0);
+        expect(toolCalls.filter((call) => call.current.includes(independent))).toHaveLength(1);
+        expect(JSON.stringify(messages)).not.toContain("HANDLED_NEW_INPUT");
         expect(provider.callbacks("/tool/3/tool")).toBe(1);
         await client.stopAndWait();
         client = undefined;
@@ -1622,7 +1775,10 @@ it.skipIf(process.platform === "win32").for([true, false])(
                   name !== "background" &&
                   name !== "parent",
               )
-              .map((name) => ({ name, text: `RESUMED_${cycle}_${name}` })),
+              .map((name) => ({
+                name,
+                text: name === "tool" ? UNKNOWN_SHELL : `RESUMED_${cycle}_${name}`,
+              })),
             // The stopped background command is reported as its own input, not as a resume.
             ...(cases.includes("background")
               ? [{ name: "background" as const, text: "HANDLED_NEW_INPUT" }]
@@ -1684,9 +1840,24 @@ it.skipIf(process.platform === "win32").for([true, false])(
             expect(
               resumes,
               `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(name === "idle" || name === "background" || name === "parent" ? 0 : 1);
+            ).toHaveLength(
+              name === "idle" || name === "background" || name === "parent" || name === "tool"
+                ? 0
+                : 1,
+            );
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
+            if (name === "tool") {
+              expect(provider.callbacks(`/tool/${cycle}/tool`)).toBe(1);
+              expect(
+                result.messages.filter(
+                  (message) =>
+                    isRecord(message) &&
+                    message.role === "assistant" &&
+                    JSON.stringify(message.content).includes(UNKNOWN_SHELL),
+                ),
+              ).toHaveLength(1);
+            }
             expect(
               result.pendingInputs?.items.some((item) => item.state === "interrupted"),
             ).not.toBe(true);

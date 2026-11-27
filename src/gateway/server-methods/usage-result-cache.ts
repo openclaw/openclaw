@@ -45,7 +45,11 @@ const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageSnapshot
 function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string {
   return dayBucket
     ? dayBucket.mode === "time-zone"
-      ? `time-zone:${dayBucket.timeZone}`
+      ? JSON.stringify([
+          dayBucket.timeZone,
+          dayBucket.civilDays?.from,
+          dayBucket.civilDays?.through,
+        ])
       : `utc-offset:${dayBucket.utcOffsetMinutes}`
     : "gateway";
 }
@@ -63,7 +67,6 @@ type SessionsUsageCacheKeyParams = {
   groupingMode: UsageGroupingMode;
   specificKey: string | null;
   includeContextWeight: boolean;
-  overview: boolean;
   /** Overview rows fold quarter summaries; detail rows carry per-quarter arrays. */
   projection: "overview" | "detail";
   includeAllContext: boolean;
@@ -81,7 +84,6 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.specificKey,
     params.includeContextWeight,
     params.creatorKey,
-    params.overview,
     params.projection,
     params.includeAllContext,
     ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),

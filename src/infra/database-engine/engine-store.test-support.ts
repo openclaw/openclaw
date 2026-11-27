@@ -10,7 +10,13 @@ import { openEngineStore, readEngineAnchor } from "./open.js";
 export function openPostgresEngineTestStore(
   params: Pick<
     Parameters<typeof openEngineStore>[0],
-    "anchor" | "schema" | "input" | "existingVersion" | "existingOnly" | "reusePostgresConnection"
+    | "anchor"
+    | "schema"
+    | "input"
+    | "existingVersion"
+    | "existingOnly"
+    | "reusePostgresConnection"
+    | "assertMigrationCurrent"
   > & { openSqlite?: () => void },
 ) {
   return openEngineStore({
@@ -33,6 +39,7 @@ export function createPostgresEngineTestFixture(params: {
   connection: string;
   schemaPrefix: string;
   schema: StoreSchema;
+  assertMigrationCurrent?: () => void;
 }) {
   const anchor = openNodeSqliteDatabase(path.join(params.directory, "anchor.sqlite"));
   const opened: PostgresSyncConnection[] = [];
@@ -42,6 +49,7 @@ export function createPostgresEngineTestFixture(params: {
         anchor,
         schema,
         existingVersion,
+        assertMigrationCurrent: params.assertMigrationCurrent,
         input: { connection: params.connection, schemaPrefix: params.schemaPrefix },
       });
       if (!(db instanceof PostgresSyncConnection)) {

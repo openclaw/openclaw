@@ -131,7 +131,6 @@ async function partialPublication(rerun?: "bound" | "later") {
     reference: {
       releaseTag: "v2026.8.27",
       targetSha: "a".repeat(40),
-      validationEvidenceDigest: `sha256:${"a".repeat(64)}`,
     },
     delta: { commits: 30, added: 16000, deleted: 2 },
     artifacts: [
@@ -349,7 +348,7 @@ it("digests full-size validation manifests beyond the source-admission byte cap"
   expect(releaseFastTrackDigest({ runId: "1", childEvidence, version: 4 })).toBe(digest);
 });
 
-it("recomputes the bounded delta against a matching published fully validated baseline, not a previous fast-track", async () => {
+it("recomputes the bounded delta against a shipped baseline release, not a previous fast-track", async () => {
   const root = roots.make("fast-track-publisher-baseline-");
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], {
@@ -369,26 +368,19 @@ it("recomputes the bounded delta against a matching published fully validated ba
   git("add", "source.txt");
   git("commit", "-m", "candidate");
   const candidateSha = git("rev-parse", "HEAD");
-  const f = candidatePublicationFixture({ candidateSha });
+  const f = candidatePublicationFixture({ candidateSha, releaseProfile: "stable" });
   assert(f.source.projection);
-  const baselineManifest = {
-    ...f.manifest,
-    targetSha: baselineSha,
-    sourceAdmission: { ...f.source, projection: { ...f.source.projection, version: "2026.8.27" } },
-  };
-  const reference = { current: { targetSha: baselineSha, manifest: baselineManifest } };
   const request: FastTrackRequest = {
     schemaVersion: 1,
     policy: "approved-fast-track-v1",
     action: "Approve skipping release validation",
     repository: f.repository,
-    releaseTag: "v2026.8.28-beta.1",
-    channel: "beta",
+    releaseTag: "v2026.8.28",
+    channel: "latest",
     candidateSha,
     reference: {
       releaseTag: "v2026.8.27",
       targetSha: baselineSha,
-      validationEvidenceDigest: releaseFastTrackDigest(baselineManifest),
     },
     delta: { commits: 1, added: 1, deleted: 0 },
     artifacts: [
@@ -405,8 +397,6 @@ it("recomputes the bounded delta against a matching published fully validated ba
   const packet = {
     request,
     digest: fastTrackRequestDigest(request),
-    referenceRunId: "99",
-    referenceRunAttempt: "1",
   };
   const release = {
     draft: false,
@@ -419,7 +409,6 @@ it("recomputes the bounded delta against a matching published fully validated ba
     manifest: f.manifest,
     jobs: [],
     repositoryRoot: root,
-    loadReference: async () => reference,
     readPublishedRelease: () => release,
   };
   await expect(authenticateFastTrackPolicy(operation)).resolves.toMatchObject({
@@ -432,7 +421,7 @@ it("recomputes the bounded delta against a matching published fully validated ba
   ]) {
     await expect(
       authenticateFastTrackPolicy({ ...operation, readPublishedRelease: () => changedRelease }),
-    ).rejects.toThrow("published fully validated release");
+    ).rejects.toThrow("published release that was not itself fast-tracked");
   }
   const wrongDelta = { ...request, delta: { commits: 1, added: 0, deleted: 0 } };
   await expect(
@@ -441,6 +430,43 @@ it("recomputes the bounded delta against a matching published fully validated ba
       packet: { ...packet, request: wrongDelta, digest: fastTrackRequestDigest(wrongDelta) },
     }),
   ).rejects.toThrow("Publisher-computed delta");
+});
+
+it("admits a beta-prerelease fast-track without a baseline release or delta ceiling", async () => {
+  const f = candidatePublicationFixture();
+  const request: FastTrackRequest = {
+    schemaVersion: 1,
+    policy: "approved-fast-track-v1",
+    action: "Approve skipping release validation",
+    repository: f.repository,
+    releaseTag: "v2026.8.28-beta.1",
+    channel: "beta",
+    candidateSha: f.c,
+    artifacts: [
+      {
+        name: "publication-artifacts",
+        digest: releaseFastTrackDigest(f.manifest.publicationArtifacts),
+      },
+    ],
+    publicationScope: [`publication:${releaseFastTrackDigest(f.source.publicationSelection)}`],
+    run: { id: f.runId, attempt: "1" },
+    requestId: "00000000-0000-4000-8000-000000000001",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  };
+  const readPublishedRelease = vi.fn(() => {
+    throw new Error("Beta fast-track must not require a baseline release");
+  });
+  // No Git history: the publisher must not measure a delta for beta prereleases.
+  await expect(
+    authenticateFastTrackPolicy({
+      packet: { request, digest: fastTrackRequestDigest(request) },
+      manifest: f.manifest,
+      jobs: [],
+      repositoryRoot: roots.make("fast-track-beta-no-history-"),
+      readPublishedRelease,
+    }),
+  ).resolves.toMatchObject({ disposition: "validation skipped by approved fast-track" });
+  expect(readPublishedRelease).not.toHaveBeenCalled();
 });
 
 it("generates truthful failed-decision evidence and validates it without passing the strict FRV verdict", async () => {

@@ -10,6 +10,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { retainSessionColdNavigationInTransaction } from "../config/sessions/session-cold-storage-navigation.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { readSessionPendingInput } from "../config/sessions/session-pending-input-history.js";
+import { createLiveRestartResumeMarker } from "../config/sessions/session-restart-resume-scope.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -19,11 +20,30 @@ import * as gatewayDispatch from "./server-in-process-dispatch.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { resumeMarkedSessions } from "./session-restart-resume.js";
-import * as systemTurnAuthority from "./session-system-turn-authority.js";
+import * as systemTurnAuthority from "./session-sharing-authorization-async.js";
 
 const cfg = { agents: { entries: { main: {} } } };
 const setScope = (scope: string | undefined) =>
   vi.stubEnv("OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE", scope);
+
+it("retains the interrupted source across shutdown only within the same pending continuation", () => {
+  const entry = { resumeAfterRestart: { scope: "first", sourceRunId: "original" } };
+  try {
+    setScope("first");
+    expect(createLiveRestartResumeMarker(entry, {}).sourceRunId).toBe("original");
+    const active = { ...entry, lifecycleRunId: "replacement" };
+    expect(
+      createLiveRestartResumeMarker(active, { sourceRunId: "original" }).sourceRunId,
+    ).toBeUndefined();
+    expect(createLiveRestartResumeMarker(active, { sourceRunId: "replacement" }).sourceRunId).toBe(
+      "replacement",
+    );
+    setScope("second");
+    expect(createLiveRestartResumeMarker(entry, {}).sourceRunId).toBeUndefined();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
 
 /** A session whose process was lost (no graceful marker) with a message queued behind its work. */
 async function crashSession(
@@ -175,6 +195,7 @@ it("keeps a recovered crash marker in scope across a second restart", () =>
       ).rejects.toThrow();
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
         scope: "token-a",
+        sourceRunId: "crash-twice-run",
       });
       await resumeMarkedSessions({
         context: createContext([], () => cfg),

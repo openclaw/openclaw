@@ -20,6 +20,7 @@ import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
+import * as sessionAuthorization from "../session-sharing-authorization-async.js";
 import type { GatewayClient } from "./client-types.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import { templatesDraftsHandlers } from "./templates-drafts.js";
@@ -28,7 +29,7 @@ import type { RespondFn } from "./types.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function requestDraft(
-  operation: "create" | "save" | "review" | "publish",
+  operation: "create" | "save" | "review" | "publish" | "signIn",
   workspace: string,
   params: Record<string, unknown> = {},
   condition?: string,
@@ -70,6 +71,43 @@ async function requestDraft(
 }
 
 describe("Template draft human authority", () => {
+  it("finishes an admitted sign-in poll after administrator scope removal", async () => {
+    const workspace = tempDirs.make("template-sign-in-");
+    using _ = vi
+      .spyOn(sessionAuthorization, "resolveSessionMutationAuthorizationAsync")
+      .mockImplementationOnce(async (request) => {
+        request.assertInvocationCurrent?.();
+        request.client!.connect.scopes = [];
+        return { error: null };
+      });
+    const reply = await requestDraft("signIn", workspace, {
+      action: "poll",
+      sourceSessionKey: "agent:research:template",
+      draftId: "12345678-1234-4234-8234-123456789abc",
+      requestId: "12345678-1234-4234-8234-123456789abc",
+    });
+    expect(reply[0]).toBe(true);
+    expect(reply[1]).toEqual({ status: "expired" });
+  });
+
+  it("stops a sign-in poll when its connection ends", async () => {
+    const workspace = tempDirs.make("template-sign-in-");
+    using _ = vi
+      .spyOn(sessionAuthorization, "resolveSessionMutationAuthorizationAsync")
+      .mockImplementationOnce(async (request) => {
+        request.assertInvocationCurrent?.();
+        request.client!.invalidated = true;
+        return { error: null };
+      });
+    const reply = await requestDraft("signIn", workspace, {
+      action: "poll",
+      sourceSessionKey: "agent:research:template",
+      draftId: "12345678-1234-4234-8234-123456789abc",
+      requestId: "12345678-1234-4234-8234-123456789abc",
+    });
+    expect(reply[0]).toBe(false);
+  });
+
   it("registers draft methods only for administrators", () => {
     for (const method of Object.keys(templatesDraftsHandlers)) {
       expect(coreGatewayHandlers[method]).toBeDefined();

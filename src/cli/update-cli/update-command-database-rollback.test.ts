@@ -26,8 +26,8 @@ import {
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
@@ -703,7 +703,11 @@ it.each([
               verifySettledHistory = () => {
                 const record = getUpdateRun(run.runId, { env });
                 assert(record);
-                expect(renderUpdateRunReport(record).lines.join("\n")).toContain(reason);
+                expect(record.verification.rollbackOutcome).toMatchObject({
+                  status: "not-attempted",
+                  reason: expect.stringContaining(reason),
+                });
+                expect(renderUpdateRunSummary(record)).toContain(reason);
                 if (preservesMigrated) {
                   expect(record).toMatchObject({
                     status: "failed",
@@ -716,9 +720,6 @@ it.each([
                     },
                   });
                   expect(record.verification.recovery).not.toHaveProperty("dataAtRisk");
-                  expect(renderUpdateRunReport(record).lines.join("\n")).toContain(
-                    "running on the retained state",
-                  );
                 }
               };
               return;
@@ -858,9 +859,18 @@ it.each([
                     },
               );
               assert(record);
-              const report = renderUpdateRunReport(record).lines.join("\n");
-              expect(report).toContain("Databases snapshotted at");
-              expect(report).toContain("Migrated database file retained");
+              expect(record.steps).toContainEqual(
+                expect.objectContaining({
+                  step: "diagnostic:database snapshot",
+                  detail: expect.stringContaining("Databases snapshotted at "),
+                }),
+              );
+              expect(record.steps).toContainEqual(
+                expect.objectContaining({
+                  step: expect.stringMatching(/^diagnostic:database rollback/),
+                  detail: expect.stringContaining("Migrated database file retained"),
+                }),
+              );
             };
             expect(await fs.readFile(swapFixture.launcher, "utf8")).toBe("old launcher\n");
             for (const entry of execution.databaseBackup!.databases) {

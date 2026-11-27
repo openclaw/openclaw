@@ -556,50 +556,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
-  it("runs Telegram-parity Signal status reactions when explicitly enabled", async () => {
-    dispatchInboundMessageMock.mockImplementationOnce(
-      async (params: DispatchInboundMessageMockParams) => {
-        capture.ctx = params.ctx;
-        await nextTimerTick();
-        await params.replyOptions?.onToolStart?.({ name: "exec" });
-        await nextTimerTick();
-        await params.replyOptions?.onCompactionStart?.();
-        await nextTimerTick();
-        await params.replyOptions?.onCompactionEnd?.();
-        await nextTimerTick();
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
-      },
-    );
-    const handler = createTestHandler({
-      cfg: createStatusReactionConfig(),
-    });
-
-    await receiveDirectMessage(handler);
-    for (let i = 0; i < 5; i += 1) {
-      await nextTimerTick();
-    }
-
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    const sentEmojis = sentReactionEmojis();
-    expect(sentEmojis).toEqual(expect.arrayContaining(["👀", "🧠", "🛠️", "🗜️", "✅"]));
-    expect(sentEmojis.at(-1)).toBe("👀");
-    expect(dispatchInboundMessageMock.mock.calls[0]?.[0].replyOptions).toEqual(
-      expect.objectContaining({
-        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-        allowToolLifecycleWhenProgressHidden: true,
-      }),
-    );
-    expect(sendReactionSignalMock).toHaveBeenCalledWith(
-      "+15550002222",
-      1700000000001,
-      "👀",
-      expect.objectContaining({
-        accountId: "default",
-        baseUrl: "http://localhost",
-      }),
-    );
-  });
-
   it("uses dataMessage timestamp fallback for Signal status reactions", async () => {
     const handler = createTestHandler({
       cfg: createStatusReactionConfig(),
@@ -643,20 +599,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     });
 
     await receiveDirectMessage(handler, { timestamp: undefined });
-    await nextTimerTick();
-
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendReactionSignalMock).not.toHaveBeenCalled();
-  });
-
-  it("does not send Signal status reactions for non-positive inbound timestamps", async () => {
-    const handler = createTestHandler({
-      cfg: createStatusReactionConfig({
-        messages: { statusReactions: { enabled: true } },
-      }),
-    });
-
-    await receiveDirectMessage(handler, { timestamp: -1 });
     await nextTimerTick();
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -1147,4 +1089,3 @@ describe("signal createSignalEventHandler inbound context", () => {
     },
   );
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

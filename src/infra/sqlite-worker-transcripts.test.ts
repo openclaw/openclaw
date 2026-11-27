@@ -505,8 +505,14 @@ it("returns complete stored reads and typed errors after existing-only status an
     expect(await store.readUtterancesForSession(session)).toEqual(
       storedUtterances(session, utterances),
     );
-    expect((await store.readSummarySnapshot(session, 3))?.utterances).toEqual(
-      storedUtterances(session, utterances.slice(-3)),
+    const snapshot = await store.readSummarySnapshot(session, 3);
+    expect(snapshot?.nextSequence).toBe(20);
+    expect(snapshot?.utteranceCount).toBe(3);
+    expect(snapshot?.turns).toEqual(
+      [17, 18, 19].map((index) => ({
+        speakerLabel: "Speaker",
+        text: `Meeting text ${index} 🦞\\n`,
+      })),
     );
     expect((await store.readSummary(session)).summary).toEqual(summary);
     const { transcript: _transcript, ...notes } = summary;

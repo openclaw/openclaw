@@ -90,6 +90,8 @@ export type DurableDraftModelSelection = {
 
 export type DurableComposerDraft = {
   revision: number;
+  /** Unchanged attachments keep their identity across caption edits. */
+  attachmentVersion?: string;
   text: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
@@ -162,7 +164,11 @@ export type ChatGuardianNotice = {
 
 export type { ToolApprovalReview } from "../../../../src/shared/tool-approval-reviews.js";
 
-export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true };
+export type ChatQueueDisplayItem = ChatQueueItem & {
+  serverQueued?: true;
+  removing?: boolean;
+  cancelled?: true;
+};
 
 export type ChatQueueItem = {
   id: string;
@@ -216,7 +222,22 @@ export type ChatQueueItem = {
   sender?: SenderIdentity;
 };
 
+export type ChatCompaction = {
+  kind: "compaction";
+  key: string;
+  compactionId?: string;
+  phase: "active" | "complete";
+  label: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  durationMs?: number;
+  timestamp: number;
+  /** An actual agent run, never the standalone manual operation ID. */
+  runId?: string;
+};
+
 export type ChatItem =
+  | ChatCompaction
   | {
       kind: "message";
       key: string;
@@ -256,8 +277,6 @@ export type ChatItem =
   | {
       kind: "divider";
       key: string;
-      compaction?: "active" | "complete";
-      compactionId?: string;
       systemEvent?: "info";
       label: string;
       icon?: IconName;
@@ -361,6 +380,8 @@ export function accumulatedStreamText(
 
 /** A group of consecutive messages from the same role (Slack-style layout) */
 export type MessageGroup = {
+  /** Presentation of a real compaction event; no synthetic message or model call. */
+  compaction?: ChatCompaction;
   /** A hidden narrative message separates this activity from preceding tools. */
   startsActivityGroup?: true;
   kind: "group";
@@ -369,6 +390,8 @@ export type MessageGroup = {
   senderLabel?: string | null;
   senderSession?: { sessionKey?: string; agentId?: string; label?: string } | null;
   sender?: SenderIdentity;
+  /** Author credited on an approved suggestion; the sender is the approver. */
+  suggestedBy?: SenderIdentity;
   sourceClients?: MessageClientSource[];
   replyToSender?: SenderIdentity;
   replyToMessage?: { message: unknown; key: string };
@@ -481,6 +504,8 @@ export type NormalizedMessage = {
   senderLabel?: string | null;
   senderSession?: { sessionKey?: string; agentId?: string; label?: string } | null;
   sender?: SenderIdentity;
+  /** Author credited on an approved suggestion; the sender is the approver. */
+  suggestedBy?: SenderIdentity;
   sourceClients?: MessageClientSource[];
   audioAsVoice?: boolean;
   replyPreview?: { text: string; senderLabel?: string | null };

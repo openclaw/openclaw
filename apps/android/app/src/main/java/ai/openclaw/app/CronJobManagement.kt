@@ -1,9 +1,8 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
-import ai.openclaw.app.i18n.resolveNativeText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -70,14 +69,7 @@ sealed interface GatewayCronActionState {
     val message: NativeText,
     val kind: GatewayCronNoticeKind,
     val deleted: Boolean = false,
-  ) : GatewayCronActionState {
-    constructor(
-      id: String,
-      message: String,
-      kind: GatewayCronNoticeKind,
-      deleted: Boolean = false,
-    ) : this(id = id, message = nativeText(message), kind = kind, deleted = deleted)
-  }
+  ) : GatewayCronActionState
 }
 
 /** Owns one queued manual run id per job so a stale tracker cannot clear a newer run. */
@@ -291,10 +283,6 @@ internal enum class GatewayCronRunSkipReason(
   RestartRecoveryPending(nativeText("Gateway restart recovery is still in progress.")),
   InvalidSpec(nativeText("Automation has an invalid configuration.")),
   Stopped(nativeText("Cron scheduler is stopped.")),
-  ;
-
-  val message: String
-    get() = messageText.resolveNativeText()
 }
 
 internal sealed interface GatewayCronRunOutcome {
@@ -330,7 +318,7 @@ internal fun cronRunCompletionNotice(
   return GatewayCronActionState.Notice(id = jobId, message = message, kind = kind)
 }
 
-internal fun isCronJobRevisionConflict(error: GatewaySession.ErrorShape): Boolean = error.details?.code == "CRON_JOB_CHANGED"
+internal fun isCronJobRevisionConflict(error: ErrorShape): Boolean = error.details?.code == "CRON_JOB_CHANGED"
 
 internal fun GatewayCronJobDetail.toCronJobEdit(): GatewayCronJobEdit =
   GatewayCronJobEdit(

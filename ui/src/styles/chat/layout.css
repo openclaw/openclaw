@@ -9,68 +9,96 @@ openclaw-pending-session-create {
   width: 100%;
   max-width: var(--chat-thread-max-width, 48rem);
   align-self: center;
-}
 
-/* Persistent errors keep their recovery action beside the title in every
- * state: expanding details must not move it, and narrow panes must not strand
- * it on its own row. Details span the full width below. */
-.chat-error .app-toast__content {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 2px 12px;
-}
+  .app-toast__content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 2px 12px;
+  }
 
-.chat-error .app-toast__body {
-  display: contents;
-}
+  .app-toast__body {
+    display: contents;
+  }
 
-.chat-error .app-toast__message,
-.chat-error .app-toast__description {
-  grid-column: 1;
-}
+  .app-toast__message,
+  .app-toast__description {
+    grid-column: 1;
+  }
 
-.chat-error .app-toast__body > .lazy-view-error__details {
-  grid-column: 1 / -1;
-}
-
-.chat-error .chat-error__actions {
-  grid-template-rows: subgrid;
-  grid-row: 1 / span 2;
-  gap: 2px;
-  grid-column: 2;
-  margin-block-start: -4px;
-}
-
-/* The long discard label would squeeze the message into a sliver on phones. */
-@media (max-width: 560px) {
-  .chat-error__actions:has(> .chat-error__discard) {
-    grid-template-rows: none;
-    grid-row: auto;
-    gap: 12px;
+  .lazy-view-error__details {
     grid-column: 1 / -1;
-    justify-self: start;
-    margin-block-start: 6px;
+  }
+
+  .chat-error__actions {
+    grid-template-rows: subgrid;
+    grid-row: 1 / span 2;
+    gap: 2px;
+    grid-column: 2;
+    margin-block-start: -4px;
+  }
+
+  > .app-toast__dismiss {
+    position: static;
+    flex: none;
+    margin: -1px -6px 0 -4px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--muted);
+    opacity: 1;
+    scale: 1;
   }
 }
 
-/* Persistent errors do not time out, so their dismiss control stays visible
- * and sits inside the card: a corner badge would be clipped by scrolling
- * composer containers on phones. */
-.chat-error > .app-toast__dismiss {
-  position: static;
-  flex: none;
-  margin: -1px -6px 0 -4px;
-  background: transparent;
-  box-shadow: none;
-  color: var(--muted);
-  opacity: 1;
-  scale: 1;
+.chat-error--reply.chat-composer-neighbor-card {
+  column-gap: 8px;
+  min-height: 0;
+  padding-block: 7px;
+
+  .app-toast__message {
+    grid-column: 2;
+    min-width: 0;
+    overflow: hidden;
+    font-size: calc(13px * var(--control-ui-text-scale));
+    font-weight: 400;
+    line-height: calc(18px * var(--control-ui-text-scale));
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-error__actions {
+    grid-row: 1;
+    grid-column: 3;
+    gap: 4px;
+    height: 30px;
+    margin: 0;
+  }
+
+  .chat-error__refresh {
+    white-space: nowrap;
+  }
+
+  .chat-error__dismiss {
+    position: relative;
+    inset: auto;
+    opacity: 1;
+    scale: 1;
+    box-shadow: none;
+  }
 }
 
+/* Keep long discard labels below the message on phones. */
 @media (max-width: 560px) {
-  .chat-error__discard,
-  .chat-error__refresh {
+  .chat-error__actions:has(> .chat-error__discard) {
+    grid-template-rows: none;
+    grid-area: auto / 1 / auto / -1;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-self: start;
+    margin-block-start: 6px;
+  }
+
+  .chat-error__discard {
     white-space: normal;
     text-align: start;
   }
@@ -147,6 +175,12 @@ openclaw-pending-session-create {
 
 .chat[data-attachment-drop-active]::after {
   opacity: 0.1;
+}
+
+/* An iframe swallows the drag events of a file dropped over it, so widgets
+   and previews yield to the chat until the drag ends. */
+.chat[data-attachment-drop-active] iframe {
+  pointer-events: none;
 }
 
 /* Center search in its own pane, including narrow split views. */
@@ -276,22 +310,18 @@ openclaw-pending-session-create {
 /* Composer neighbors share one quiet card frame. Status color belongs to the
    item, never to the surface: only the icon, heading and a low-opacity edge
    carry tone while the card keeps the composer's own surface and geometry. */
-:is(.chat-composer-neighbor-card, .session-suggestion, .chat-pr.chat-pr) {
+:is(.chat-composer-neighbor-card, .chat-pr.chat-pr) {
   border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
 }
 
-.chat-composer-neighbor-card,
-.session-suggestion {
+.chat-composer-neighbor-card {
   display: grid;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
   background: var(--chat-composer-surface, var(--popover));
   color: var(--text);
-}
-
-.chat-composer-neighbor-card {
   grid-template-columns: 18px minmax(0, 1fr) auto;
   width: calc(100% - 36px);
   max-width: var(--chat-thread-max-width, 48rem);
@@ -1613,66 +1643,113 @@ openclaw-chat-video-player {
   box-shadow: 0 8px 18px color-mix(in srgb, var(--bg) 32%, transparent);
 }
 
+/* The tray is a .chat-queue; rows lead with the author's avatar, not a queue glyph. */
 .session-suggestions {
-  display: grid;
-  gap: 6px;
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .session-suggestion {
-  grid-template-columns: fit-content(30%) minmax(0, 1fr) auto;
-  min-height: 38px;
-  border: 1px solid var(--border);
-  font-size: 13px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
 
-  > b,
-  > small {
-    font-size: 11px;
-    white-space: nowrap;
-  }
-  > b {
-    border-radius: 999px;
-    padding: 3px 8px;
-    font-weight: 600;
-    color: var(--chat-text-link, var(--link));
-    background: var(--person-reference-bg);
-  }
-  > small {
-    color: var(--muted);
-  }
-  > div {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-  }
-  &.preview > :is(b, span) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  &:not(.preview) {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    background: color-mix(in srgb, var(--panel-strong) 74%, transparent);
-    > b {
-      background: var(--panel-hover);
-      color: var(--text-strong);
-    }
-    > small {
-      padding: 3px 8px;
-      font-weight: 600;
-    }
-    > span {
-      max-height: 12rem;
-      overflow: auto;
-      overflow-wrap: anywhere;
-      white-space: pre-wrap;
-    }
-    @media (max-width: 640px) {
-      grid-template-columns: auto minmax(0, 1fr);
-      > :is(div, small) {
-        grid-column: 1 / -1;
-        justify-self: end;
-      }
-    }
+.session-suggestion + .session-suggestion {
+  border-top: 1px solid var(--chat-queue-divider, var(--border));
+}
+
+.session-suggestion__details {
+  min-width: 0;
+  grid-area: 1 / 1;
+}
+
+.session-suggestion__details[open] {
+  grid-column: 1 / -1;
+}
+
+.session-suggestion__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  white-space: nowrap;
+}
+
+.session-suggestion__summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The collapsed row previews one line; opening it shows the body. */
+.session-suggestion__preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-suggestion__author {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.session-suggestion__details[open] .session-suggestion__text {
+  display: none;
+}
+
+.session-suggestion__body {
+  max-height: 12rem;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 0 10px 10px 40px;
+  white-space: pre-wrap;
+}
+
+.session-suggestion__actions {
+  display: flex;
+  grid-area: 1 / 2;
+  align-self: start;
+  gap: 2px;
+  padding: 2px 4px 2px 0;
+}
+
+.session-suggestion__state {
+  padding: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.session-suggestion__action {
+  opacity: 0;
+}
+
+.session-suggestion:hover .session-suggestion__action,
+.session-suggestion:focus-within .session-suggestion__action {
+  opacity: 1;
+}
+
+.session-suggestions__more {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--chat-queue-divider, var(--border));
+  padding: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+}
+
+.session-suggestion__summary:hover,
+.session-suggestions__more:hover {
+  background: var(--panel-hover);
+}
+
+.session-suggestion__summary:focus-visible,
+.session-suggestions__more:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+@media (hover: none) {
+  .session-suggestion__action {
+    opacity: 1;
   }
 }
 

@@ -5,6 +5,7 @@ import {
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
+import { validateCronModelThinkingSelection } from "../../lib/cron/model-thinking-validation.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
 import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
@@ -91,9 +92,17 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     });
   }
   const eventSource = page.eventSource.view;
+  const persistedPayload = cron.cronEditingJob?.payload;
   const fieldErrors = {
     ...page.cron().cronFieldErrors,
     ...validateCronEventSelection(page.cron().cronForm, eventSource),
+    ...validateCronModelThinkingSelection(
+      page.cron().cronForm,
+      models.catalog,
+      persistedPayload?.kind === "agentTurn"
+        ? { model: persistedPayload.model, thinking: persistedPayload.thinking }
+        : undefined,
+    ),
   };
   return {
     ...page.actions,
@@ -114,7 +123,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     createOpen: page.cron().cronCreateOpen,
     activityOpen: page.activityOpen(),
     detailTab: page.detailTab(),
-    error: page.cron().cronError ?? page.cron().cronRunsError ?? page.deliveryDirectory.error,
+    error: page.cron().cronError ?? page.deliveryDirectory.error,
     notice: page.cron().cronNotice,
     busy: page.cron().cronBusy,
     form: page.cron().cronForm,
@@ -125,6 +134,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
     runs: page.cron().cronRuns,
     runsState: getCronRunsViewState(page.cron()),
+    runsError: page.cron().cronRunsError,
     highlightedRunId: page.cron().cronRunsRunId,
     runsHasMore: page.cron().cronRunsHasMore,
     runsLoadingMore: page.cron().cronRunsLoadingMore,

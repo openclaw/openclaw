@@ -9,7 +9,6 @@ export function initialDoctorHealthContribution(id: string) {
     runGatewayConfigHealth: unrelatedContribution,
     runAuthProfileMigration: unrelatedContribution,
     runAuthProfileHealth: unrelatedContribution,
-    runGatewayAuthHealth: unrelatedContribution,
     runLegacyStateHealth: unrelatedContribution,
   }).find((entry) => entry.id === id);
   if (!contribution) {

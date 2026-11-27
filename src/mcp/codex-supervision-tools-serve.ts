@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import type { Server } from "@modelcontextprotocol/server";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { LOCAL_HOST } from "../gateway/operator-admission.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
@@ -23,7 +24,6 @@ const LEGACY_TOOL_NAMES = [
   "codex_session_interrupt",
 ] as const;
 const LEGACY_TOOL_NAME_SET = new Set<string>(LEGACY_TOOL_NAMES);
-const TRUSTED_STANDALONE_MCP_OWNER_CONTEXT = { senderIsOwner: true as const };
 
 function requireCompleteCodexSupervisionToolSet(tools: readonly AnyAgentTool[]): void {
   const loadedNames = new Set(tools.map((tool) => tool.name));
@@ -78,9 +78,7 @@ export async function serveCodexSupervisionToolsMcp(): Promise<void> {
         config,
         runtimeConfig: config,
         getRuntimeConfig: () => config,
-        // This local stdio bridge is operator-launched and intentionally receives
-        // the same trusted owner capability as an owner-authenticated agent turn.
-        ...TRUSTED_STANDALONE_MCP_OWNER_CONTEXT,
+        senderIsOwner: LOCAL_HOST.grant.owner,
       };
       const toolAllowlist = [...LEGACY_TOOL_NAMES];
       const acquisition = await acquireStandalonePluginToolRegistry({

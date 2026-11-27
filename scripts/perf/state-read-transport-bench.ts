@@ -30,6 +30,7 @@ import { getHeapStatistics } from "node:v8";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
 import type { captureOpenClawStateReadSource } from "../../src/state/openclaw-state-read-worker.js";
 import type { OpenClawStateReadCommand } from "../../src/state/openclaw-state-read.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -181,12 +182,7 @@ const memoryBefore = process.memoryUsage();
 const inspector = new Session();
 try {
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const cpuBefore = process.threadCpuUsage();
   const allocatedBefore: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");

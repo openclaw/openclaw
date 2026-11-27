@@ -34,7 +34,6 @@ function FailureNotice(props: ChatNoticeProps) {
       onStartNewSession: recovery.onStartNewSession
         ? () => recovery.onStartNewSession?.(initialRunId, initialSummary)
         : undefined,
-      editSource: recovery.failedMessageEditSource,
     };
   });
   return (
@@ -46,6 +45,7 @@ function FailureNotice(props: ChatNoticeProps) {
       <ChatRunFailureNotice
         feedback={feedback()}
         summary={failure().summary}
+        summaryAsTitle={failure().summaryAsTitle}
         cause={failure().cause}
         presentation={props.modelCatalog?.find(
           (model) => model.provider === failure().cause?.provider,
@@ -53,8 +53,6 @@ function FailureNotice(props: ChatNoticeProps) {
         repeatCount={props.item.repeatCount}
         onRetry={actions()?.onRetry}
         onStartNewSession={actions()?.onStartNewSession}
-        editSource={actions()?.editSource}
-        onFocusComposer={props.recovery?.onFocusComposer}
       />
     </div>
   );
