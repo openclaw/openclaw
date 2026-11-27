@@ -116,5 +116,6 @@ export function decodeGatewayOwnerLease(
     // Expiry cannot revoke the separate physical Gateway coordinator.
     state: readStateLeaseProcessOwnerStatus(processOwner, row.heartbeatAt ?? row.createdAt),
     expired: row.expiresAt === null || row.expiresAt <= Date.now(),
+    ...(processOwner.processNamespace === undefined ? { expiresAt: row.expiresAt } : {}),
   };
 }

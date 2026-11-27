@@ -199,6 +199,12 @@ previous release, not manual edits made to the new one.
 
 ## Update implementation contract
 
+Candidate Doctor reads both legacy shared-auth rows under maintenance custody.
+If both rows are absent, Doctor records the ownership and migration receipts
+without reopening the agent database for cleanup. The complete repair plan still
+migrates queued outbound deliveries and imports session data. The installed
+updater needs no change.
+
 ### Release updates
 
 `src/update/` owns updates of Git checkouts and npm, pnpm and Bun global installs.
@@ -1744,6 +1750,12 @@ See [container image updates](/install/docker#upgrading-container-images),
 [backups](/install/backups), and the
 [downgrade limitation](/install/updating/rollback-and-recovery#downgrade) before
 changing images or restoring an older OpenClaw version.
+
+## Upgrading after a legacy Linux Gateway crash
+
+Candidate Doctor can recover namespace-less Gateway locks from 2026.9.7 and later after the lock's recorded creation time is more than five minutes old and its matching SQLite Gateway owner lease is missing or expired. Doctor waits for that shipped lease window; a live Gateway in another container continues renewing its lease and still blocks maintenance. Expired legacy SQLite leases also stop blocking the subsequent maintenance check. The candidate supplies this repair; the published updater needs no change.
+
+Older records and unreadable lease state retain their refusal, with [explicit recovery guidance](/gateway/gateway-lock#recovering-an-older-legacy-record). Lock-file mtime and local PID observations do not authorize this recovery.
 
 ## Upgrading very old versions
 

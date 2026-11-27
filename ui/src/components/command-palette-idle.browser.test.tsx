@@ -9,6 +9,72 @@ import {
 import "./command-palette.tsx";
 import "../styles.css";
 
+it("keeps interleaved catalog groups and keyboard selection in displayed order", async () => {
+  const { gateway } = createGateway(true, {
+    methods: ["skills.status"],
+    request: async (method) =>
+      method === "skills.status"
+        ? { skills: [{ skillKey: "bravo", name: "zzgroup Bravo", description: "Command" }] }
+        : { models: [] },
+  });
+  const context = createContext(gateway);
+  context.agents.ensureList = async () => ({
+    defaultId: "main",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: [
+      { id: "alpha", name: "zzgroup Alpha" },
+      { id: "shared-first", name: "zzgroup Shared" },
+      { id: "shared-second", name: "zzgroup Shared" },
+    ],
+  });
+  const { palette, provider } = await mountPalette(context);
+  onTestFinished(() => {
+    provider.remove();
+    vi.useRealTimers();
+  });
+  palette.openPalette();
+  await palette.updateComplete;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const input = palette.querySelector<HTMLTextAreaElement>("textarea")!;
+  input.focus();
+  await userEvent.keyboard("zzgroup");
+  await vi.advanceTimersByTimeAsync(200);
+  await expect.poll(() => palette.querySelectorAll('[role="option"]').length).toBe(4);
+  expect(
+    [...palette.querySelectorAll(".cmd-palette__group-label")].map((group) => group.textContent),
+  ).toEqual(["Agents3", "Skills1"]);
+  const rows = [...palette.querySelectorAll('[role="option"]')];
+  expect(rows.map((row) => row.querySelector(".cmd-palette__item-title")?.textContent)).toEqual([
+    "zzgroup Alpha",
+    "zzgroup Shared",
+    "zzgroup Shared",
+    "zzgroup Bravo",
+  ]);
+  expect(rows.map((row) => row.getAttribute("href"))).toEqual([
+    "/settings/agents/alpha",
+    "/settings/agents/shared-first",
+    "/settings/agents/shared-second",
+    "/skills",
+  ]);
+  for (const [key, index] of [
+    ["{ArrowUp}", 3],
+    ["{ArrowDown}", 0],
+    ["{ArrowDown}", 1],
+    ["{ArrowDown}", 2],
+  ] as const) {
+    await userEvent.keyboard(key);
+    await palette.updateComplete;
+    expect(palette.querySelector('[role="option"][aria-selected="true"]')).toBe(rows[index]);
+    expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(rows[index]);
+  }
+  await userEvent.keyboard("{Enter}");
+  expect(palette.onNavigate).toHaveBeenCalledExactlyOnceWith("agents", {
+    pathname: "/settings/agents/shared-second",
+  });
+  expect(palette.isOpen).toBe(false);
+});
+
 it("keeps an idle search settled across usage updates and still accepts command changes", async () => {
   let skillName = "zzidlequery old skill";
   let modelName = "zzidlequery old model";

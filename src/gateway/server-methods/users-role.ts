@@ -10,11 +10,13 @@ import {
 } from "../../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { listProfiles } from "../../state/user-profiles.js";
+import { stopWorkStartedBy } from "../chat-abort-stop-work.js";
 import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import {
   invalidateOperatorRolePolicy,
   resolveOperatorRoleSelection,
   resolveOperatorRoleSelfLockout,
+  roleChangeLosesAccess,
 } from "../operator-role-policy.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { respondError } from "./response.js";
@@ -47,6 +49,7 @@ export async function handleUsersSetRole(
   }
   holdGatewayPolicyResponse(respond);
   let recorded: Promise<void> | undefined;
+  let lostAccess: string | undefined;
   const write = setCanonicalUserProfileRole(profileId, role, {
     assertCurrent: () => {
       assertCurrent();
@@ -64,6 +67,9 @@ export async function handleUsersSetRole(
     },
     onRoleChanged: (change) => {
       recorded = recordRoleAssignmentChange(change, options.client, context.logGateway);
+      if (roleChangeLosesAccess(context.getRuntimeConfig(), change, target)) {
+        lostAccess = change.profileId;
+      }
     },
   });
   // Committed history lands before the reply or a result-delivery error.
@@ -71,6 +77,10 @@ export async function handleUsersSetRole(
     () => recorded,
     () => recorded,
   );
+  // The new role is committed, so the person's next message is admitted against it.
+  if (lostAccess) {
+    await stopWorkStartedBy(context, { profileId: lostAccess, stopReason: "access-reduced" });
+  }
   respond(true, { profile: await write });
 }
 

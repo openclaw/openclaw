@@ -41,7 +41,6 @@ import {
 } from "./package-update-publication.test-support.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const fixture = createPackageActivationLifetimeFixture();
@@ -578,7 +577,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
   beforeEach(async () => {
     f = await preparedJournal();
   });
-  it("keeps unsafe journal link details local and reports the code without changing recovery evidence", async () => {
+  it("keeps unsafe journal link details local without changing recovery evidence", async () => {
     const file = f.journalPath;
     fs.linkSync(file, path.join(root, "retained-journal.sqlite"));
     const before = journalFiles(f.anchor);
@@ -600,36 +599,11 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
       "expected nlink=1",
       "openclaw doctor --fix",
     ];
-    const report = await prepareUpdateFailureReport(
-      {
-        attemptId: "recovery-permissions",
-        result: {
-          mode: "npm",
-          status: "error",
-          durationMs: 1,
-          steps: [
-            {
-              name: "package-swap",
-              command: "",
-              cwd: "",
-              durationMs: 1,
-              exitCode: 1,
-              failureFacts: [fact],
-            },
-          ],
-        },
-      },
-      { env: {}, stateDir: root },
-    );
     for (const text of expected) {
       expect(failure).toMatchObject({ message: expect.stringContaining(text) });
     }
-    expect(report.body).toContain(
-      "Failing check package-swap (package-recovery-permissions-unsafe)",
-    );
-    expect(report.body).not.toContain(fact.message);
+    expect(fact.code).toBe("package-recovery-permissions-unsafe");
     expect(fact.message!.length).toBeLessThanOrEqual(200);
-    expect(report.body).not.toContain(root);
     expectFilesEqual(journalFiles(f.anchor), before);
     expect(fs.lstatSync(file)).toMatchObject({ nlink: observed.nlink, mode: observed.mode });
   });

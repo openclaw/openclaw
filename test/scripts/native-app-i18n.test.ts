@@ -842,7 +842,7 @@ describe("native app i18n inventory", () => {
     expectSourceAtSite("Reply", (site) => site.path.endsWith("/ChatMessageActions.kt"));
     expectSourceAtSite("Share message", (site) => site.path.endsWith("/ChatMessageActions.kt"));
     expectSourceAtSite(
-      "Share Apple Health summaries with the Gateway?",
+      "Share Apple Health summaries with OpenClaw?",
       (site) =>
         site.path === "apps/ios/Sources/Settings/DeviceSettings/IOSDeviceSettingsConsent.swift",
     );
@@ -921,7 +921,7 @@ describe("native app i18n inventory", () => {
       ),
     ).toBe(false);
     expectSourceAtSite(
-      "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
+      "Your watch gets a one-time pairing code and its own credentials, with read and Talk access (no admin access). The microphone only starts when you tap Start on the watch. Away from your iPhone, OpenClaw needs a secure address the watch can reach.",
       (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
     );
     expect(

@@ -61,16 +61,26 @@ type Payload = {
   messages: Array<{ role: string; content: string | Array<Record<string, unknown>> }>;
   [key: string]: unknown;
 };
-type Reply = "summary" | "tool" | "length" | "done";
+// "tool-unless-none" calls a tool unless the request forbids tool calls.
+type Reply = "summary" | "tool" | "length" | "done" | "summary+tool" | "tool-unless-none";
 let requests: Payload[];
 let replies: Reply[];
 
-const anthropicEvents = (reply: Reply) => {
-  const block =
-    reply === "tool"
-      ? { type: "tool_use", id: "toolu_fixture", name: "lookup", input: {} }
-      : { type: "text", text: "" };
-  const text = reply === "summary" ? "## Goal\nKeep the codeword copper." : "done";
+const anthropicEvents = (reply: Exclude<Reply, "tool-unless-none">) => {
+  const toolBlock = { type: "tool_use", id: "toolu_fixture", name: "lookup", input: {} };
+  const text =
+    reply === "summary" || reply === "summary+tool" ? "## Goal\nKeep the codeword copper." : "done";
+  const textBlocks = [
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+    { type: "content_block_stop", index: 0 },
+  ];
+  const toolBlocks = (index: number) => [
+    { type: "content_block_start", index, content_block: toolBlock },
+    { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: "{}" } },
+    { type: "content_block_stop", index },
+  ];
+  const calls = reply === "tool" || reply === "summary+tool";
   return [
     {
       type: "message_start",
@@ -80,19 +90,12 @@ const anthropicEvents = (reply: Reply) => {
         usage: { input_tokens: 30, output_tokens: 0 },
       },
     },
-    { type: "content_block_start", index: 0, content_block: block },
-    reply === "tool"
-      ? {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "input_json_delta", partial_json: "{}" },
-        }
-      : { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
-    { type: "content_block_stop", index: 0 },
+    ...(reply === "tool" ? toolBlocks(0) : textBlocks),
+    ...(reply === "summary+tool" ? toolBlocks(1) : []),
     {
       type: "message_delta",
       delta: {
-        stop_reason: reply === "tool" ? "tool_use" : reply === "length" ? "max_tokens" : "end_turn",
+        stop_reason: calls ? "tool_use" : reply === "length" ? "max_tokens" : "end_turn",
       },
       usage: { input_tokens: 30, output_tokens: 5 },
     },
@@ -107,7 +110,14 @@ beforeEach(() => {
   const captureFetch: typeof fetch = async (input, init) => {
     const payload = JSON.parse(await new Request(input, init).text()) as Payload;
     requests.push(payload);
-    const body = anthropicEvents(replies.shift() ?? "done")
+    const next = replies.shift() ?? "done";
+    const reply =
+      next === "tool-unless-none"
+        ? (payload.tool_choice as { type?: string } | undefined)?.type === "none"
+          ? "summary"
+          : "tool"
+        : next;
+    const body = anthropicEvents(reply)
       .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
       .join("");
     return new Response(body, { headers: { "content-type": "text/event-stream" } });
@@ -291,7 +301,7 @@ describe("warm text compaction at the request boundary", () => {
     }
   });
 
-  it("sends the unchanged request plus one unmarked summarize item", async () => {
+  it("sends the cached prefix unchanged plus one unmarked summarize item", async () => {
     const plain = await fixture({ boundary: false });
     await plain.submit();
     const [normal] = requests;
@@ -304,14 +314,46 @@ describe("warm text compaction at the request boundary", () => {
     expect(requests).toHaveLength(1);
     const warm = requests[0]!;
     expect(isSummaryRequest(warm)).toBe(true);
-    // System, tools, parameters, every earlier message and its cache markers are unchanged.
+    // System, tools, every earlier message and its cache markers are unchanged. Anthropic keeps
+    // tool_choice out of its cache key, so the summary forbids tool calls.
     const { messages: warmMessages, ...warmParams } = warm;
     const { messages: normalMessages, ...normalParams } = normal!;
-    expect(warmParams).toEqual(normalParams);
+    expect(warmParams).toEqual({ ...normalParams, tool_choice: { type: "none" } });
     expect(warmMessages.slice(0, -1)).toEqual(normalMessages);
     const appended = warmMessages.at(-1)!;
     expect(appended.role).toBe("user");
     expect(JSON.stringify(appended)).not.toContain("cache_control");
+  });
+
+  it("forbids a tool call in the summary where tool_choice is outside the cache key", async () => {
+    replies = ["tool-unless-none"];
+    const f = await fixture();
+    await f.submit();
+    expect(requests).toHaveLength(1);
+    expect(completedCompactions(f.events)).toHaveLength(1);
+  });
+
+  it("uses summary text that arrives beside a tool call", async () => {
+    replies = ["summary+tool"];
+    const f = await fixture();
+    await f.submit();
+    expect(requests).toHaveLength(1);
+    expect(completedCompactions(f.events)).toHaveLength(1);
+    expect(
+      f.sessionManager.getEntries().findLast((entry) => entry.type === "compaction"),
+    ).toMatchObject({
+      summary: expect.stringContaining("Keep the codeword copper"),
+    });
+  });
+
+  it("keeps warm compaction for later boundaries after a tool-only summary reply", async () => {
+    replies = ["tool", "summary"];
+    const f = await fixture();
+    await f.submit();
+    expect(completedCompactions(f.events)).toHaveLength(0);
+    await f.submit("next request");
+    expect(requests.map(isSummaryRequest)).toEqual([true, true]);
+    expect(completedCompactions(f.events)).toHaveLength(1);
   });
 
   it("commits the summary with the retained tail and continues from it", async () => {

@@ -2294,11 +2294,11 @@ struct ChatViewModelTests {
         let oldRequest = vm.beginHistoryRequest()
         vm.clearProgressCard()
         vm.applyProgressCard(progressCard(sessionKey: "agent:research:global", revision: 1, markdown: "Retained"))
-        _ = vm.applyHistoryPayload(
+        _ = await vm.applyHistoryPayload(
             history,
             for: oldRequest,
             preservingOptimisticLocalMessages: false,
-            decodedMessages: await OpenClawChatViewModel.decodeMessages(
+            decodedMessages: OpenClawChatViewModel.decodeMessages(
                 history.messages ?? [], activity: history.activity))
         await vm.scheduleProgressCardFetch()?.value
         #expect(await capabilityReturned.current() == 1)
@@ -2338,11 +2338,11 @@ struct ChatViewModelTests {
         vm.handleTransportEvent(.health(ok: true))
         await historyGate.waitUntilBlocked()
         #expect(await historyCalls.current() == 1)
-        _ = vm.applyHistoryPayload(
+        _ = await vm.applyHistoryPayload(
             oldHistory,
             for: oldRequest,
             preservingOptimisticLocalMessages: false,
-            decodedMessages: await OpenClawChatViewModel.decodeMessages(
+            decodedMessages: OpenClawChatViewModel.decodeMessages(
                 oldHistory.messages ?? [], activity: oldHistory.activity))
         await historyGate.release()
         await recovery?.value
@@ -14989,11 +14989,11 @@ struct ChatHistoryDeltaTests {
             thinkingLevel: nil,
             kind: "delta",
             deltaCursor: "broken-tip")
-        #expect(!model.applyHistoryPayload(
+        #expect(await !model.applyHistoryPayload(
             malformed,
             for: model.beginHistoryRequest(),
             preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeHistoryDelta(malformed)))
+            decodedMessages: OpenClawChatViewModel.decodeHistoryDelta(malformed)))
         #expect(model.historyDeltaCursor == "0")
         // Exercise the refresh owner too: the invalid row is not accepted by the wire-to-transcript path.
         let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
@@ -15142,16 +15142,16 @@ struct ChatHistoryDeltaTests {
         let payload = try await script.read(
             sessionKey: "main",
             cursor: "0")
-        #expect(model.applyHistoryPayload(
+        #expect(await model.applyHistoryPayload(
             payload,
             for: newer,
             preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeHistoryDelta(payload)))
-        #expect(!model.applyHistoryPayload(
+            decodedMessages: OpenClawChatViewModel.decodeHistoryDelta(payload)))
+        #expect(await !model.applyHistoryPayload(
             payload,
             for: older,
             preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeHistoryDelta(payload)))
+            decodedMessages: OpenClawChatViewModel.decodeHistoryDelta(payload)))
         #expect(model.messages.count == 3)
         #expect(model.historyDeltaCursor == "2")
     }

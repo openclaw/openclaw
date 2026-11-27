@@ -80,9 +80,11 @@ must not predict it from history length or treat `status: "started"` as persiste
 Chat admission rechecks current committed session access independently of sidebar
 refreshes. Durable input custody still checks that authority at the write boundary.
 The Control UI replaces its provisional source with accepted custody, then with
-the saved transcript row. Accepted inputs stay below saved conversation history until
-they are committed to the transcript. Its renderer keeps a loaded local preview in the same image
-element during this handoff while saved media metadata and image bytes load.
+the saved transcript row. Accepted queued inputs initially follow saved conversation
+history. In an open chat pane, an input already displayed stays before later user
+turns, including turns that arrive as saved rows without a local send. Its renderer
+keeps a loaded local preview in the same image element during this handoff while
+saved media metadata and image bytes load.
 Authoritative text, media replacements, and removals still win. Unavailable or
 access-denied media shows a visible reason.
 Once custody, a consumption record, or a committed user-message receipt retires
