@@ -184,7 +184,7 @@ beforeEach(async () => {
   service.readCommand.mockReset().mockResolvedValue(null);
   await fs.writeFile(
     path.join(state, "openclaw.json"),
-    JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),
+    JSON.stringify({ gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } } }),
   );
   // Model an installed package, not an unowned dist-like path.
   await fs.writeFile(path.join(home, "package.json"), JSON.stringify({ name: "openclaw" }));
@@ -232,6 +232,17 @@ it.each([false, true])("retains a pre-write install refusal (rebind=%s)", async 
   });
   expect(runtimeErrors).toEqual([]);
   expect(service.install).not.toHaveBeenCalled();
+});
+
+it("runs the delegated install when legacy history cannot be prepared", async () => {
+  supplyExecutorInput();
+  const history = await import("../../update/legacy-trial.js");
+  vi.spyOn(history, "prepareLegacyTrialRun").mockRejectedValueOnce(
+    new Error("history unavailable"),
+  );
+  const install = vi.fn(async () => {});
+  await runGatewayServiceUpdateCommand("run", "install", install);
+  expect(install).toHaveBeenCalledOnce();
 });
 
 it.each([

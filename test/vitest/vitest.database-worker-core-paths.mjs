@@ -5,6 +5,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/talk/client-gateway-control.mailbox.test.ts",
   "src/gateway/test/talk-client-agent-consult.requester-final.test.ts",
   "src/update/gateway-trial.test.ts",
+  "src/update/legacy-trial.test.ts",
   "src/update/prepare.test.ts",
   "src/update/prepare-failure.test.ts",
   "src/state/state-upgrade.large-agent-db.test.ts",
