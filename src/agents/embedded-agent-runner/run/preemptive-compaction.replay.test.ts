@@ -77,6 +77,13 @@ describe("provider checkpoint prompt pressure", () => {
     expect(unmeasured).toBeLessThan(90_000);
   });
 
+  it("does not anchor this checkpoint on usage another route measured", () => {
+    const owner = checkpoint("retained content ".repeat(8_000));
+    // Another route's own compacted window can be far smaller than this replay window.
+    const otherRoute = { ...assistant(2_001), provider: "anthropic", model: "other-model" };
+    expect(pressure([owner, otherRoute])).toBeGreaterThan(20_000);
+  });
+
   it("counts async tool results persisted before the terminal usage record as new input", () => {
     const owner = checkpoint("retained content ".repeat(8_000));
     const terminal: AssistantMessage = {

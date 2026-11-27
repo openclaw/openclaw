@@ -212,13 +212,28 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
       : checkpoint.mode === "complete-window"
         ? estimateResponsesInput(checkpoint.output, estimate, checkpoint.outputTokens)
         : estimate.text(checkpoint.item.encrypted_content);
-  // The checkpoint-producing request predates its replacement window; later usage
-  // measures the window this replay continues.
+  // The checkpoint-producing request predates its replacement window, and another
+  // route measured its own window. Later same-route usage measures this replay.
   const { contextUsage: _staleContextUsage, ...usage } = checkpoint.owner.usage;
+  const tail: T[] = [];
+  for (const message of messages.slice(ownerIndex + 1)) {
+    if (
+      !isAssistantReplayMessage(message) ||
+      message.usage.contextUsage === undefined ||
+      (message.provider === model.provider &&
+        message.api === model.api &&
+        message.model === model.id)
+    ) {
+      tail.push(message);
+      continue;
+    }
+    const { contextUsage: _otherRouteContextUsage, ...billedUsage } = message.usage;
+    tail.push({ ...message, usage: billedUsage });
+  }
   return {
     messages: [
       { ...owner, content: checkpoint.owner.content.slice(checkpoint.replayIndex), usage },
-      ...messages.slice(ownerIndex + 1),
+      ...tail,
     ],
     prefixTokens,
   };
