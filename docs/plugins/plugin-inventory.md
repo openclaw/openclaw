@@ -178,6 +178,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[policy](/plugins/reference/policy)** (`@openclaw/policy`) - included in OpenClaw. Adds policy-backed doctor checks for workspace conformance.
 
+- **[rapid-mlx](/plugins/reference/rapid-mlx)** (`@openclaw/rapid-mlx-provider`) - included in OpenClaw. Adds Rapid Mlx model provider support to OpenClaw.
+
 - **[reef](/plugins/reference/reef)** (`@openclaw/reef`) - included in OpenClaw. Guarded end-to-end encrypted claw channel.
 
 - **[requesty](/plugins/reference/requesty)** (`@openclaw/requesty-provider`) - included in OpenClaw. Adds Requesty model provider support to OpenClaw.

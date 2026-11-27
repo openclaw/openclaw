@@ -143,3 +143,23 @@ describe("live discovery unknown-model gate", () => {
     expect(ids).toEqual(["brand-new-model", "known-model"]);
   });
 });
+
+it("marks explicit embedding-only capabilities as non-chat without hiding mixed chat rows", () => {
+  const capabilityRows = [
+    { id: "mlx-community/all-MiniLM-L6-v2-4bit", capabilities: ["embedding"] },
+    { id: "mixed-model", capabilities: ["text", "embedding"] },
+    { id: "unknown-model", capabilities: ["tools"] },
+  ];
+  expect(
+    Object.fromEntries(
+      buildOpenAICompatibleLiveModels(capabilityRows, fallback).map((model) => [
+        model.id,
+        model.inference,
+      ]),
+    ),
+  ).toEqual({
+    "mlx-community/all-MiniLM-L6-v2-4bit": { chat: false },
+    "mixed-model": undefined,
+    "unknown-model": { chat: true, chatEvidence: "unlikely" },
+  });
+});

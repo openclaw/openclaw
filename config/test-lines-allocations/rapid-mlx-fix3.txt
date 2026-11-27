@@ -1,0 +1,3 @@
+# Regressions for explicit non-chat admission, served context ceilings, and
+# connection-only setup preserving authored rows across all three setup paths.
+55
