@@ -379,9 +379,12 @@ export function startAcpSpawnParentStreamRelay(params: {
     clearTimeout(relayLifetimeTimer);
     clearInterval(noOutputWatcherTimer);
     unsubscribe();
-    closingSignal?.removeEventListener("abort", dispose);
+    closingSignal?.removeEventListener("abort", onClose);
   };
-  closingSignal?.addEventListener("abort", dispose, { once: true });
+  const onClose = () => {
+    void dispose();
+  };
+  closingSignal?.addEventListener("abort", onClose, { once: true });
 
   return {
     dispose,

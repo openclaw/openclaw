@@ -420,14 +420,17 @@ export async function spawnAcpDirect(
     | Omit<Parameters<typeof startAcpSpawnParentStreamRelay>[0], "runId">
     | undefined;
   if (parentRelayContext) {
-    const { parentSessionKey, deliveryContext } = parentRelayContext;
-    const eventRouting = resolveEventSessionRoutingPolicy({ cfg, sessionKey: parentSessionKey });
+    const { parentSessionKey: relayParentSessionKey, deliveryContext } = parentRelayContext;
+    const eventRouting = resolveEventSessionRoutingPolicy({
+      cfg,
+      sessionKey: relayParentSessionKey,
+    });
     parentRelayParams = {
-      parentSessionKey,
+      parentSessionKey: relayParentSessionKey,
       requesterAgentId,
       expectedTarget: await captureSessionEventTarget(
         requesterAgentId,
-        resolveEventSessionKeyForPolicy(parentSessionKey, eventRouting),
+        resolveEventSessionKeyForPolicy(relayParentSessionKey, eventRouting),
       ),
       childSessionKey: sessionKey,
       agentId: targetAgentId,
