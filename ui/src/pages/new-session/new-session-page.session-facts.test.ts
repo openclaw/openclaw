@@ -158,7 +158,7 @@ async function mountSessionDraft(
   );
   const pet = () => page.querySelector<HTMLElement & LobsterPetProps>("openclaw-lobster-pet");
   await waitForSolid(() => expect(pet()).not.toBeNull());
-  const describe = async (next: GatewaySessionRow) => {
+  const describeRow = async (next: GatewaySessionRow) => {
     described = next;
     const observation = context.sessions.observeRow({ key: next.key, agentId: "main" }, () => {});
     try {
@@ -171,7 +171,7 @@ async function mountSessionDraft(
       observation.dispose();
     }
   };
-  return { context, page, recent, pin, describe, defaults, pet };
+  return { context, page, recent, pin, describeRow, defaults, pet };
 }
 
 it("retains the welcome agent selector across draft publications and removes it for catalog targets", async () => {
@@ -204,14 +204,14 @@ it("retains the welcome agent selector across draft publications and removes it 
 });
 
 it("keeps pin detail enrichment out of composer preparation while live recents update", async () => {
-  const { context, page, recent, pin, describe } = await mountSessionDraft();
+  const { context, page, recent, pin, describeRow } = await mountSessionDraft();
   const input = page.querySelector<HTMLTextAreaElement>("textarea")!;
   input.value = "Keep this unsent draft";
   input.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
   await page.updateComplete;
   const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
   // This is the production pin path: full-row read, captured reconciliation, and global publication.
-  await describe({ ...pin, rowMode: undefined, thinkingLevel: "high" });
+  await describeRow({ ...pin, rowMode: undefined, thinkingLevel: "high" });
   expect(
     context.sessions.state.result?.sessions.find((row) => row.key === pin.key)?.thinkingLevel,
   ).toBe("high");
@@ -232,11 +232,11 @@ it("keeps pin detail enrichment out of composer preparation while live recents u
 });
 
 it("keeps default models, group loading, and run presentation live", async () => {
-  const { context, page, recent, pin, describe, defaults, pet } = await mountSessionDraft();
+  const { context, page, recent, pin, describeRow, defaults, pet } = await mountSessionDraft();
   const currentDefaults = context.sessions.state.result!.defaults;
   currentDefaults.model = "changed-model";
   // Preserve the defaults object's identity while a new row receipt publishes the owner.
-  await describe({ ...pin, rowMode: undefined, thinkingLevel: "low" });
+  await describeRow({ ...pin, rowMode: undefined, thinkingLevel: "low" });
   await waitForSolid(() =>
     expect(page.querySelector("[data-chat-model-select]")?.textContent).toContain("Changed model"),
   );
