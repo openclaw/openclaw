@@ -568,3 +568,43 @@ it.each(["inventory", "fixed limit", "captured contents"] as const)(
     }
   },
 );
+
+it("captures the same inventory for any selected-path order", async () => {
+  const { root, capture } = await inventoryFixture();
+  const files = [
+    "a.txt",
+    "src/b.txt",
+    "src/deep/c.txt",
+    "src/deep/z/d.txt",
+    "pkg/node_modules/x/e.js",
+  ];
+  for (const file of files) {
+    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await fs.writeFile(path.join(root, file), file);
+  }
+  await fs.mkdir(path.join(root, "empty"));
+  const selected = [
+    ...files,
+    "empty",
+    "missing.txt",
+    "src",
+    "src/deep",
+    "src/deep/z",
+    "pkg",
+    "pkg/node_modules",
+  ];
+  // Siblings within a depth are scanned concurrently; no consumer may depend on their order.
+  let seed = 7;
+  const shuffled = () =>
+    selected
+      .map((entryPath) => ({ entryPath, key: (seed = (seed * 48_271) % 2_147_483_647) }))
+      .toSorted((left, right) => left.key - right.key)
+      .map(({ entryPath }) => entryPath);
+  const expected = await capture({ includePaths: new Set(selected.toSorted()) });
+  expect(expected.manifest.entries.map((entry) => entry.path)).toEqual(files.slice(0, 4));
+  for (let round = 0; round < 8; round++) {
+    expect((await capture({ includePaths: new Set(shuffled()) })).rawManifest).toBe(
+      expected.rawManifest,
+    );
+  }
+});
