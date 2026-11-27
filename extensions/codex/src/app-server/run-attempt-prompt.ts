@@ -351,11 +351,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   }
   // The binding owner decides native continuity. The connection may already have rotated
   // the admitted binding away, and thread startup may later replace it.
-  const { initialNativeThreadId } = connection;
   let nativeThreadAction: "started" | "resumed" | "forked" | undefined;
   const resolveContinuity = () =>
     resolveCodexPromptContinuity({
-      initialNativeThreadId,
+      initialNativeThreadId: connection.initialNativeThreadId,
       nativeThreadAction,
       currentNativeThreadId: mutable.startupBinding?.threadId,
       historyIncluded:
@@ -695,6 +694,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       return turnContextImageGroups;
     },
     nativeHistoryProvenancePrefix,
+    configuredContextBudget,
     turnState,
     refreshWorkspaceReferences: (include: boolean) => {
       turnState.codexTurnPromptText = decorateCodexTurnPromptText(turnState.promptBuild, include);

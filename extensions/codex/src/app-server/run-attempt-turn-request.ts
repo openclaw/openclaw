@@ -19,7 +19,6 @@ import {
 import { recordCodexTurnForkSettings } from "./client-fork-settings.js";
 import { prepareCodexWorkspaceReferences } from "./client-runtime.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
-import { joinPresentSections } from "./developer-instruction-sections.js";
 import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { getCodexInferenceThread } from "./inference-routing.js";
@@ -30,6 +29,7 @@ import type { CodexGetAccountResponse, CodexTurnStartResponse } from "./protocol
 import { prepareCodexProviderReviewContinuation } from "./provider-review-continuation.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
 import type { CodexAppServerScopedRequest } from "./request.js";
+import { renderCodexInferenceTurnInstructions } from "./run-attempt-context.js";
 import {
   emitCodexAppServerEvent,
   withCodexAppServerFastModeServiceTier,
@@ -37,9 +37,8 @@ import {
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
-import { buildCodexParentLocalInstructions, buildTurnStartParams } from "./turn-params.js";
+import { buildTurnStartParams } from "./turn-params.js";
 import type { CodexThreadRouteReservation } from "./turn-router.js";
 import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
@@ -290,20 +289,9 @@ export async function prepareCodexAttemptTurnRequest(
     if (inferenceRoute) {
       resourceState.releaseInferenceContext?.();
       const inferenceThread = resourceState.thread;
-      const inferenceInstructions = joinPresentSections(
-        usesSupervisionConnection
-          ? undefined
-          : (buildCodexParentLocalInstructions(runtimeParams, {
-              personaInstructions: workspaceBootstrapContext.personaInstructions,
-              skillsInstructions: context.skillsInstructions,
-              memoryInstructions: workspaceBootstrapContext.memoryInstructions,
-              sessionProjectGuidance: workspaceBootstrapContext.sessionProjectGuidance,
-            }) ?? undefined),
+      const inferenceInstructions = renderCodexInferenceTurnInstructions(
+        context,
         turnState.promptBuild.turnDeveloperInstructions,
-        buildCodexConversationTurnInstructions(
-          runtimeParams,
-          attemptTools.toolBridge.availableSpecs,
-        ),
       );
       const registration = await inferenceRoute.context.register({
         threadId: resourceState.thread.threadId,

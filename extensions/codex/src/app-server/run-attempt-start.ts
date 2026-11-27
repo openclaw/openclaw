@@ -1,18 +1,26 @@
+import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
 import {
   embeddedAgentLog,
+  estimateRenderedLlmBoundaryTokenPressure,
   hasBeforeToolCallPolicy,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
+import {
+  CodexContextAttachmentError,
+  resolveProjectionPromptBudgetTokens,
+} from "./context-engine-projection.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
+import { renderCodexInferenceTurnInstructions } from "./run-attempt-context.js";
 import {
   emitCodexAppServerEvent,
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { CodexThreadPolicyHandoffError } from "./thread-policy.js";
+import { buildTurnCollaborationMode } from "./turn-params.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
   const {
@@ -67,6 +75,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     resolveRuntimeOptionsForCurrentBinding,
     startupAuthProfileId,
   } = connection;
+  const { configuredContextBudget } = prompt;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
   try {
     void emitCodexAppServerEvent(params, {
@@ -139,6 +148,41 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       contextEngineProjection: promptState.contextEngineProjection,
       historyBootstrapItems: promptState.historyBootstrapItems,
       historyDeltaItems: promptState.historyDeltaItems,
+      assertFreshThreadInputFits:
+        configuredContextBudget === undefined
+          ? undefined
+          : async (request, hasInferenceRelay) => {
+              if (await applyNoContextEngineContinuityProjection("started")) {
+                await rebuildCodexTurnPromptTextFromCurrentProjection();
+              }
+              // Keep the normal generation reserve without charging speculative seed framing.
+              const promptBudget = resolveProjectionPromptBudgetTokens({
+                contextTokenBudget: configuredContextBudget,
+              });
+              const currentInputTokens =
+                estimateRenderedLlmBoundaryTokenPressure({
+                  prompt:
+                    (prompt.nativeHistoryProvenancePrefix ?? "") + turnState.codexTurnPromptText,
+                  systemPrompt: joinPresentSections(
+                    request.baseInstructions,
+                    request.developerInstructions,
+                    hasInferenceRelay
+                      ? renderCodexInferenceTurnInstructions(
+                          context,
+                          turnState.promptBuild.turnDeveloperInstructions,
+                        )
+                      : (buildTurnCollaborationMode(runtimeParams).settings
+                          .developer_instructions ?? undefined),
+                    JSON.stringify(request.dynamicTools),
+                  ),
+                }) +
+                (params.images?.length ?? 0) * IMAGE_BLOCK_TOKENS;
+              if (currentInputTokens > promptBudget) {
+                throw new CodexContextAttachmentError(
+                  "The current request exceeds the Codex context budget even without history. Shorten it or use a model with a larger context budget.",
+                );
+              }
+            },
       startupTimeoutMs,
       signal: runAbortController.signal,
       onStartupTimeout: () => runAbortController.abort("codex_startup_timeout"),

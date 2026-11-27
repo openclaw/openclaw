@@ -9,7 +9,13 @@ import type { CodexInferenceProviderRoutes } from "./inference-routing.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexConfigReadResponse } from "./protocol-control-plane.js";
-import type { CodexDynamicToolSpec, CodexServiceTier, JsonObject, JsonValue } from "./protocol.js";
+import type {
+  CodexDynamicToolSpec,
+  CodexServiceTier,
+  CodexThreadStartParams,
+  JsonObject,
+  JsonValue,
+} from "./protocol.js";
 import type {
   CodexBindingAuthority,
   CodexAppServerBindingStore,
@@ -107,6 +113,11 @@ export type CodexStartOrResumeThreadParams = Omit<
   historyBootstrapItems?: JsonValue[] | ((assertCurrent: () => void) => Promise<JsonValue[]>);
   /** Acknowledged selection suffix for reuse; fresh threads always receive the full bootstrap. */
   historyDeltaItems?: JsonValue[];
+  /** Admit current-turn input only after the lifecycle selects a fresh native thread. */
+  assertFreshThreadInputFits?: (
+    request: CodexThreadStartParams,
+    hasInferenceRelay: boolean,
+  ) => Promise<void>;
   signal?: AbortSignal;
   /**
    * Runs synchronously when `signal` ends a wait for a previous owner's exit

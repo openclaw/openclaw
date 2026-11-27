@@ -535,6 +535,7 @@ export async function startFreshCodexThread(
     assertCurrent();
     context.assertInferenceConfig(startParams.config, requestModelProvider);
   };
+  await params.assertFreshThreadInputFits?.(startParams, params.inferenceRoute !== undefined);
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
       assertCurrent();
