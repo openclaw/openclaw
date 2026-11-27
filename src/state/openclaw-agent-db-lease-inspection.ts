@@ -9,10 +9,8 @@ import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-c
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { isLiveStateRead } from "./artifact-preserving-state-reads.js";
 import { createAgentDatabaseLeaseStaleReasonReader } from "./openclaw-agent-db-lease-provenance.js";
-import {
-  OpenClawAgentDatabaseLeaseActiveError,
-  readAgentDatabaseLeases,
-} from "./openclaw-agent-db-lease.js";
+import { readAgentDatabaseLeases } from "./openclaw-agent-db-lease-rows.js";
+import { OpenClawAgentDatabaseLeaseActiveError } from "./openclaw-agent-db-lease.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import type {
   OpenClawStateDatabaseOptions,

@@ -33,14 +33,18 @@ it("keeps check navigation, refresh, and long content usable in a narrow native 
     },
     async ({ page, gateway, panel, content, button }) => {
       await panel.getByText("Checks in progress", { exact: true }).waitFor();
-      await button("Checks 2").focus();
+      // The section bar follows the reading position; the Checks tab carries the state.
+      const current = () =>
+        panel.locator('.lr-section-nav button[aria-current="location"]').allTextContents();
+      expect(await current()).toEqual(["Overview"]);
+      await button("Checks In progress").focus();
       await page.keyboard.press("Enter");
-      expect(
-        await panel.locator(".lr-checks").evaluate((node) => (node as HTMLDetailsElement).open),
-      ).toBe(true);
+      expect(await panel.locator(".lr-checks-summary").getAttribute("aria-expanded")).toBe("true");
       await panel.getByText("Integration tests", { exact: true }).waitFor();
+      await expect.poll(current).toEqual(["Checks"]);
       await button("Files 1").click();
       expect(await content.evaluate((node) => node.scrollTop)).toBeGreaterThan(100);
+      await expect.poll(current).toEqual(["Files1"]);
       const navBounds = await content.evaluate((node) => ({
         viewport: node.getBoundingClientRect().top,
         buttons: [...node.querySelectorAll(".lr-section-nav button")].map(
@@ -54,8 +58,10 @@ it("keeps check navigation, refresh, and long content usable in a narrow native 
       expect(await panel.locator(".lr-comments").evaluate((node) => node.matches(":focus"))).toBe(
         true,
       );
-      await panel.locator(".lr-url").fill(url + "#comment-1");
-      await panel.locator(".lr-url").press("Enter");
+      await expect.poll(current).toEqual(["Discussion1"]);
+      // A comment's own link lands it below the section bar, as an anchored link from chat does.
+      await button("Overview").click();
+      await panel.locator(".lr-comment-time").click();
       await expect
         .poll(async () =>
           content.evaluate((node) => {

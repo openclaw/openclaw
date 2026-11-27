@@ -219,6 +219,11 @@ parent turn that started it. The revocation applies to the caller's next request
 Cancelling a queued follow-up by its `runId` removes only that follow-up; the
 active run and other queued follow-ups in the same session continue.
 
+Once Stop records its kill claim, a session reset, rotation, or removal does not cancel that
+Stop or require a retry. Stop finishes the claimed original run and joins its
+captured execution. It does not stop a successor run or update the replacement
+session's status or abort marker. A new Stop selects its own current target.
+
 Every new registration records its selected owning agent as `childAgentId`,
 including agent-qualified child keys, and the original child session identity.
 If a visible spawn's creation receipt omits that identity, the spawn reports an

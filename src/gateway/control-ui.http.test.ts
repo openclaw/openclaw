@@ -456,9 +456,9 @@ it("serves a bounded inbound photo preview without replacing its original", asyn
     });
     const small = await read("variant=thumbnail&width=480");
     expect(await createImageProcessor().probe(small.body)).toMatchObject({
-      format: "webp",
-      width: 240,
-      height: 120,
+      format: "jpeg",
+      width: 480,
+      height: 240,
     });
     const head = await read("variant=thumbnail", "HEAD");
     expect(head.headers).toMatchObject({ "Content-Length": String(body.byteLength) });

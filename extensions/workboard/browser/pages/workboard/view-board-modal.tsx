@@ -37,6 +37,13 @@ const originals = new WeakMap<
   Pick<BoardDraft, "name" | "icon" | "color" | "sessions">
 >();
 
+function sessionColumnsKey(spec: WorkboardSessionsBoardSpec): string {
+  // The fallback radio treats an omitted flag and an explicit false alike.
+  return JSON.stringify(
+    spec.columns.map((column) => ({ ...column, fallback: column.fallback ?? false })),
+  );
+}
+
 export function createBoardDraft(board: WorkboardBoardSummary): BoardDraft {
   const fields = { name: board.name ?? board.id, icon: board.icon ?? "", color: board.color ?? "" };
   const draft: BoardDraft = {
@@ -108,6 +115,13 @@ export function BoardModal(props: {
       }
       const clearAppearance: string[] = [];
       const original = originals.get(initialDraft);
+      const openingColumnsKey = original?.sessions
+        ? sessionColumnsKey(normalizeWorkboardSessionsBoardSpec(original.sessions))
+        : undefined;
+      const columnsToSave =
+        sessions && sessionColumnsKey(sessions) !== openingColumnsKey
+          ? sessions.columns
+          : undefined;
       for (const field of ["name", "icon", "color"] as const) {
         const value = initialDraft[field].trim();
         if (value !== original?.[field]) {
@@ -128,17 +142,13 @@ export function BoardModal(props: {
       if (!isCurrent()) {
         return;
       }
-      if (
-        sessions &&
-        JSON.stringify(initialDraft.sessions?.columns) !==
-          JSON.stringify(original?.sessions?.columns)
-      ) {
+      if (columnsToSave) {
         if (!props.canWrite) {
           throw new Error(t("workboard.sessionsBoard.writeUnavailable"));
         }
         await client.request("workboard.sessionsBoard.update", {
           boardId: initialDraft.id,
-          patch: { columns: sessions.columns },
+          patch: { columns: columnsToSave },
         });
       }
       if (isCurrent()) {

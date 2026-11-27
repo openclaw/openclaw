@@ -3,6 +3,7 @@ package ai.openclaw.app.voice
 import ai.openclaw.app.asJsonStringOrNull
 import ai.openclaw.app.asObjectOrNull
 import ai.openclaw.app.gateway.ChatSendAck
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
@@ -3218,7 +3219,7 @@ internal fun requireAcceptedRealtimeOutputCancellation(
   return result
 }
 
-private fun GatewaySession.ErrorShape.isUnsupportedSessionLanguageParam(): Boolean =
+private fun ErrorShape.isUnsupportedSessionLanguageParam(): Boolean =
   code == "INVALID_REQUEST" &&
     message
       .lowercase(Locale.ROOT)

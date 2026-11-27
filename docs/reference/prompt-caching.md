@@ -62,10 +62,12 @@ and refuses its calls. A tool or plugin configuration change starts a new pin.
 With Tool Search on (`tools.toolSearch` enabled in `mode: "tools"` without
 `include` or `exclude` selections), every turn of a session builds the same list:
 
-- `message` is listed on every turn: user, cron, wake, subagent completion, and
+- `message` is listed on every turn of a session that has a supported source or a
+  configured messaging route: user, cron, wake, subagent completion, and
   child-session turns. A turn whose reply delivery or tool policy does not allow
   the message tool refuses the call with a visible message. The turn's own
-  delivery rules still decide whether a send is allowed.
+  delivery rules still decide whether a send is allowed. A session with neither,
+  such as `openclaw agent --local` on an install without channels, omits it.
 - A run's `toolsAllow` (scheduled runs, queued follow-ups, and cross-session
   events) and group `tools` / `toolsBySender` policy keep the session's tools
   listed and refuse each call they do not allow with a visible message, including

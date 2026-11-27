@@ -18,9 +18,9 @@ type RetainedRuntimeAuthority = {
 
 /**
  * Finds the places an earlier updater could have retained its runtime and returns a
- * maintenance pass over them. Doctor and release updates share it; callers present the lines.
+ * maintenance pass over them. Doctor's inspection and repair passes share it.
  */
-export async function prepareRetainedUpdateRuntimeMaintenance(
+async function prepareRetainedUpdateRuntimeMaintenance(
   env: NodeJS.ProcessEnv,
   options?: { inspectService?: boolean; packageRoots?: readonly string[] },
 ) {

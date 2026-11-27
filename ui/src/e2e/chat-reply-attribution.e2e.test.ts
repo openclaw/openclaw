@@ -1,5 +1,7 @@
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { subagentCompletionMessage } from "../../../src/shared/subagent-completion.js";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   chatThreadDistanceFromBottom,
@@ -177,6 +179,59 @@ suite.define(() => {
       );
     },
   );
+
+  it("only attributes the answer when a subagent finishes between the prompt and reply", async () => {
+    const messages = sequence([
+      message("earlier-prompt", "user", "Check the release notes.", self),
+      message("review-prompt", "user", "Can we share the release notes?", {
+        ...peer,
+        idempotencyKey: "reply-run:user",
+      }),
+      subagentCompletionMessage(
+        message("review-finished", "assistant", "", { runId: "earlier-run" }),
+        [{ runId: "review", sessionKey: "agent:main:subagent:review", label: "Release check" }],
+      ),
+      message(
+        "review-answer",
+        "assistant",
+        "Yes. I checked the changes, and the notes are ready to share.",
+        { runId: "reply-run" },
+        { ...openAiAuthor, phase: "final_answer", stopReason: "stop" },
+      ),
+    ]);
+    await suite.withPage(
+      { viewport: { width: 1100, height: 750 }, colorScheme: "dark", locale: "en-US" },
+      async ({ page }) => {
+        await preparePage(page, `${sessionKey}-completion`, messages, "dark", true);
+        const thread = page.locator(".chat-thread");
+        const completion = thread.getByText("Release check", { exact: true });
+        const answer = thread.locator('.chat-group.assistant:has([data-entry-id="review-answer"])');
+        const line = replyButton(answer, "Replying to Jordan Lee");
+        await completion.waitFor();
+        await line.waitFor();
+        const avatar = thread
+          .locator(".chat-group.assistant")
+          .filter({ hasText: "Release check" })
+          .locator(":scope > .chat-avatar, :scope > .chat-avatar-slot");
+        await expect
+          .poll(async () => {
+            const [label, face] = await Promise.all([
+              completion.boundingBox(),
+              avatar.boundingBox(),
+            ]);
+            return label && face
+              ? Math.abs(label.y + label.height / 2 - face.y - face.height / 2)
+              : Infinity;
+          })
+          .toBeLessThanOrEqual(1);
+        if (process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR) {
+          await thread.screenshot({ path: path.join(suite.artifactDir, "completion-reply.png") });
+        }
+        expect(await replyButton(thread, "Replying to Jordan Lee").count()).toBe(1);
+        expect((await completion.boundingBox())!.y).toBeLessThan((await line.boundingBox())!.y);
+      },
+    );
+  });
 
   it("keeps the reply line above completed work across an automatic resumption", async () => {
     const resumedSession = "agent:main:dashboard:reply-strip-resumed-work";

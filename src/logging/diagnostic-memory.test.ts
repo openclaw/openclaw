@@ -131,7 +131,7 @@ describe("diagnostic memory", () => {
     const readFile = vi
       .spyOn(fs, "readFile")
       .mockResolvedValue("Name:\topenclaw\nVmRSS:\t9000 kB\nRssAnon:\t1234 kB\nVmSwap:\t0 kB\n");
-    const sampleMemory = createDiagnosticMemorySampler(() => true);
+    const { sampleMemory } = createDiagnosticMemorySampler(() => true);
     sampleMemory(true);
     await flushDiagnosticEvents();
     expect(events[0]).toMatchObject({
@@ -212,7 +212,7 @@ describe("diagnostic memory", () => {
       const pending = Promise.withResolvers<string>();
       vi.spyOn(fs, "readFile").mockReturnValue(pending.promise);
       startDiagnosticStabilityRecorder();
-      createDiagnosticMemorySampler(() => true)(true);
+      createDiagnosticMemorySampler(() => true).sampleMemory(true);
       expect(events).toEqual([]);
       clock.mockReturnValue(1750);
       vi.setSystemTime(new Date("2026-04-22T11:00:00.000Z"));
@@ -238,7 +238,7 @@ describe("diagnostic memory", () => {
     vi.spyOn(process, "uptime").mockReturnValue(0.123);
     const readFile = vi.spyOn(fs, "readFile").mockResolvedValue("RssAnon:\t1234 kB\n");
     let current = true;
-    const sampleMemory = createDiagnosticMemorySampler(() => current);
+    const { sampleMemory } = createDiagnosticMemorySampler(() => current);
     vi.stubGlobal("process", Object.create(process, { platform: { value: "darwin" } }));
     sampleMemory(true);
     expect(readFile).not.toHaveBeenCalled();
@@ -403,6 +403,36 @@ describe("diagnostic memory", () => {
           ]
         : [],
     );
+  });
+
+  it("publishes retirement from the delegated leaf even when native availability describes a decoy", () => {
+    mockProcessPlatform("linux");
+    const native = vi.spyOn(process, "availableMemory").mockReturnValue(10);
+    const retire = vi.fn();
+    const pressure = channel("openclaw.memory.critical");
+    pressure.subscribe(retire);
+    try {
+      const options = {
+        isBunRuntime: false,
+        physicalMemoryBytes: 4000,
+        processMemoryLimitBytes: 1000,
+        heapSizeLimitBytes: 8000,
+        memoryUsage: memoryUsage({}),
+      };
+      const mapped = (usedBytes: number) => () => ({
+        limitBytes: 1000,
+        availableBytes: 1000 - usedBytes,
+      });
+      emitDiagnosticMemorySample(options, false, mapped(10));
+      expect(retire).not.toHaveBeenCalled();
+      native.mockReturnValue(990);
+      emitDiagnosticMemorySample(options, false, mapped(800));
+      emitDiagnosticMemorySample(options, false, mapped(950));
+      expect(retire.mock.calls.map(([critical]) => critical)).toEqual([false, true]);
+      expect(native).not.toHaveBeenCalled();
+    } finally {
+      pressure.unsubscribe(retire);
+    }
   });
 
   it.each([
