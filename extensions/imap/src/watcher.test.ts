@@ -665,6 +665,49 @@ describe("IMAP watcher protocol boundary", () => {
     });
   });
 
+  it("matches an allowlisted IDN sender whose header spells the punycode domain", async () => {
+    const { authenticate: realAuthenticate, dkimSign } =
+      await vi.importActual<typeof import("mailauth")>("mailauth");
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    // mailparser decodes the A-label domain to Unicode for the allowlist match, while
+    // mailauth's headerFrom keeps the punycode spelling the signature aligned with
+    const key = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+    const legit = "From: trusted@xn--exmple-cua.com\r\nSubject: Payroll\r\n\r\nMail";
+    vi.spyOn(Resolver.prototype, "resolveTxt").mockImplementation(async (domain) => {
+      if (domain === "_dmarc.xn--exmple-cua.com") {
+        return [["v=DMARC1; p=none"]];
+      }
+      if (domain === "test._domainkey.xn--exmple-cua.com") {
+        return [[`v=DKIM1; k=rsa; p=${key}`]];
+      }
+      return [];
+    });
+    const { server, context, authenticator, dispatch, waitForCursor } = await startWatcher({
+      account: {
+        watch: { mode: "auto", pollSeconds: 0.02 },
+        allowedSenders: ["trusted@ex\u00e4mple.com"],
+      },
+    });
+    authenticator.mockImplementation(realAuthenticate);
+    const signed = await dkimSign(legit, {
+      signatureData: [
+        {
+          signingDomain: "xn--exmple-cua.com",
+          selector: "test",
+          privateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+        },
+      ],
+    });
+    server.append(signed.signatures + legit);
+    await waitForCursor(2);
+    expect(dispatch.mock.calls.map(([params]) => params.sessionKey)).toEqual([
+      "hook:imap:inbox:17:2",
+    ]);
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "imap: account=inbox uid=2 domain=ex\u00e4mple.com strength=verified run=mail-run",
+    );
+  });
+
   it("records exhausted admission retries and continues to the next mail", async () => {
     const { server, state, context, dispatch, waitForCursor } = await startPollingWatcher();
     dispatch.mockRejectedValue(new Error("Gateway unavailable"));

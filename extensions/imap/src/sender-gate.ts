@@ -42,6 +42,21 @@ function matchesImapSender(sender: string, entries: readonly string[]): boolean 
   });
 }
 
+// A domain URL parsing treats as structure rather than host spelling is compared as the
+// raw lowercased text, the strict direction, instead of being normalized through URL.
+const UNNORMALIZED_DOMAIN = /[/\\%?#@:\s]/u;
+
+function mailboxDomainKey(domain: string): string {
+  if (UNNORMALIZED_DOMAIN.test(domain)) {
+    return domain.toLowerCase();
+  }
+  try {
+    return new URL(`https://${domain}`).hostname.toLowerCase();
+  } catch {
+    return domain.toLowerCase();
+  }
+}
+
 function authenticatesSenderMailbox(result: AuthenticateResult, sender: string): boolean {
   const [mailbox] = result.dkim.headerFrom;
   if (mailbox === undefined || result.dkim.headerFrom.length !== 1) {
@@ -49,11 +64,13 @@ function authenticatesSenderMailbox(result: AuthenticateResult, sender: string):
   }
   const mailboxAt = mailbox.lastIndexOf("@");
   const senderAt = sender.lastIndexOf("@");
+  // mailparser hands the allowlist a Unicode domain, mailauth keeps the header spelling,
+  // so both are compared as their punycode A-label form
   return (
     mailboxAt > 0 &&
     senderAt > 0 &&
     mailbox.slice(0, mailboxAt) === sender.slice(0, senderAt) &&
-    mailbox.slice(mailboxAt + 1).toLowerCase() === sender.slice(senderAt + 1).toLowerCase()
+    mailboxDomainKey(mailbox.slice(mailboxAt + 1)) === mailboxDomainKey(sender.slice(senderAt + 1))
   );
 }
 
