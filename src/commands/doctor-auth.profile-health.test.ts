@@ -411,8 +411,9 @@ describe("inspectAuthProfileHealth", () => {
     });
     openOpenClawAgentDatabase({ agentId: "main", env });
     closeOpenClawAgentDatabasesForTest();
-    const mainDir = path.join(tempDir, "agents", "main", "agent");
-    const sidecars = () => fs.readdirSync(mainDir).filter((name) => /-(wal|shm)$/u.test(name));
+    const legacyMainDir = path.join(tempDir, "agents", "main", "agent");
+    const sidecars = () =>
+      fs.readdirSync(legacyMainDir).filter((name) => /-(wal|shm)$/u.test(name));
     expect(sidecars()).toEqual([]);
     useLocalStore(createAuthProfileStoreFixture({}));
 
