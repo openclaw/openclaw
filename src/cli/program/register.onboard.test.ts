@@ -7,6 +7,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resolveCliNetworkProxyPolicy } from "../command-path-policy.js";
+import { isOfflineSetupExplanation } from "../run-main-options.js";
 import { withCliTty } from "../run-main.bare-root.test-support.js";
 import { registerCoreCliCommands } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
@@ -213,10 +214,16 @@ describe("setup routing", () => {
       reply: expect.stringContaining("openclaw config validate"),
     });
     expectNoCalls(config, setup, wizard, systemAgent);
-    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "setup", ...args])).toBe("bypass");
+    const argv = ["node", "openclaw", "setup"];
     expect(
-      resolveCliNetworkProxyPolicy(["node", "openclaw", "setup", "-m", "--explain-error"]),
-    ).toBe("default");
+      await isOfflineSetupExplanation({
+        primary: "setup",
+        argv: [...argv, "-m", "--explain-error"],
+      }),
+    ).toBe(false);
+    expect(
+      await isOfflineSetupExplanation({ primary: "setup", argv: [...argv, "--wizard", ...args] }),
+    ).toBe(true);
   });
 
   it.skipIf(process.platform === "win32").each(["default", "configured", "missing"])(

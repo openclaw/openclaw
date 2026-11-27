@@ -1,5 +1,4 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
-import { getCommandOptionsWithRootOptions } from "../../cli-root-options.mjs";
 import { hasFlag } from "./argv.js";
 import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog-types.js";
 
@@ -46,18 +45,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
         options?.reset === true || hasFlag(argv, "--reset") ? "defer" : "skip",
       loadPlugins: "never",
       ensureCliPath: false,
-      networkProxy: ({ argv }) => {
-        const offline = getCommandOptionsWithRootOptions(argv, {
-          commandPath: ["setup"],
-          booleanFlags: ["--json"],
-          valueFlags: ["--explain-error"],
-          mode: "command-path",
-        });
-        return hasCliOption(argv, "--terminal-path") ||
-          offline?.commandOptions.some((flag) => flag.split("=", 1)[0] === "--explain-error")
-          ? "bypass"
-          : "default";
-      },
+      networkProxy: ({ argv }) => (hasCliOption(argv, "--terminal-path") ? "bypass" : "default"),
     },
   },
   {
