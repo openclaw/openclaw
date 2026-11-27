@@ -78,3 +78,21 @@ agent workspace.
    says; reconcile what changed it with `knowledge-correct`. A rerun then adds
    nothing new.
 4. Count files read and items saved, already known and skipped.
+
+#### Saved progress
+
+When the prompt says progress is saved, keep the note page it names as the
+import's checkpoint, so an interrupted import continues instead of starting
+over:
+
+1. **List.** Before reading any file, `ls` the named files. On a new import,
+   save the page with `knowledge_save_page` (type `note`), replacing any earlier
+   body: one line per file, `- <path>: pending`, the path relative to the
+   workspace. To continue, `knowledge_lookup` the page and keep its list (start
+   a new one only when the page is missing).
+2. **Import.** Work through the `pending` files in order. After each file's
+   items are saved, change its line to
+   `- <path>: done (<saved> saved, <known> known, <skipped> skipped)` with
+   `knowledge_edit_body`. A pending file may have been half imported: the
+   duplicate check above keeps it from adding anything twice.
+3. **Done.** The import is done only when no line is `pending`.

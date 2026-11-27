@@ -25,7 +25,7 @@ async function loadTabCounts(ui: Page, vocabularyRequest: Promise<Vocabulary | n
     vocabularyRequest,
     s.scribesCountAgent === agent || s.tab === "scribes"
       ? undefined
-      : countScribesOn(s.context.host, agent).catch(() => null),
+      : countScribesOn(ui, agent).catch(() => null),
   ]);
   return { agent, vocabulary, scribesOn };
 }

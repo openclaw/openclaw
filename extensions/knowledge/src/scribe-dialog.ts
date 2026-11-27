@@ -452,11 +452,24 @@ function memoryFields(detection: ScribeDetection, agentName: string, changed: ()
       toggle("dreams"),
     ),
   );
+  let progress = false;
+  const save = choice(
+    "checkbox",
+    "scribe-memory-progress",
+    "Save progress",
+    "Keeps a checklist of the files in Knowledge, so an import that stops partway can continue where it left off.",
+    false,
+    (checked) => {
+      progress = checked;
+      changed();
+    },
+  );
   return {
-    nodes: [picks],
+    nodes: [picks, save],
     valid: () => sources.size > 0,
     options: () => ({
       sources: (["memory-md", "daily-notes", "dreams"] as const).filter((s) => sources.has(s)),
+      ...(progress && { progress }),
     }),
   };
 }

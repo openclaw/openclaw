@@ -29,6 +29,8 @@ export function fixture(world: {
   canAdmin?: boolean;
   /** plugins.inspect answer for the Granola plugin; absent reads as not installed. */
   granola?: { installed: boolean; enabled: boolean; authorized?: boolean };
+  /** Body of the Memory import checkpoint page in the viewed store; absent when there is none. */
+  checkpoint?: string;
 }) {
   // HTMLDialogElement is incomplete in jsdom.
   Object.assign(HTMLDialogElement.prototype, {
@@ -117,8 +119,18 @@ export function fixture(world: {
   const host = { request, connection, sessions: { create, open }, basePath };
   const load = vi.fn(async () => true);
   const scribesTab = document.createElement("button");
+  const feature = {
+    invoke: vi.fn(async (operation: string) =>
+      operation === "lookup"
+        ? world.checkpoint === undefined
+          ? { outcome: "missing", hits: [] }
+          : { outcome: "found", hits: [{ record: { id: "page-checkpoint" } }] }
+        : { record: { body: world.checkpoint } },
+    ),
+  };
   const ui = {
     s: { context: { host }, scribe: "", storesSnapshot: undefined, tab: "scribes" },
+    feature,
     live: () => true,
     viewedAgent: () => "main",
     displayName: (id: string) => (id === "main" ? "Main" : id),

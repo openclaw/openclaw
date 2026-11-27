@@ -3,6 +3,7 @@ import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   checkRunMessage,
+  continuePrompt,
   defaultOptions,
   rescheduledRunMessage,
   runPrompt,
@@ -175,6 +176,25 @@ export async function startScribe(
   if (job?.enabled) {
     await runScribeNow(host, job);
   }
+}
+
+/**
+ * Continue a Memory import with saved progress in its conversation, from its checkpoint;
+ * `attempt` identifies one Continue so a retried send is not delivered twice.
+ */
+export async function continueScribe(
+  host: ScribeHost,
+  snapshot: ScribeSnapshot,
+  agentId: string,
+  attempt: string,
+) {
+  const sessionKey = await conversation(host, snapshot, agentId);
+  await host.request("chat.send", {
+    sessionKey,
+    agentId,
+    message: continuePrompt(),
+    idempotencyKey: setupIdempotencyKey(snapshot.scribe.id, sessionKey, attempt),
+  });
 }
 
 /** The run message a repair or update keeps: the job's own, an unedited earlier one upgraded. */

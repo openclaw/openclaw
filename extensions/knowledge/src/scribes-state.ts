@@ -1,8 +1,11 @@
 /** Gateway reads that find each scribe's conversation and automation, and the state derived from them. */
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import type { FeatureClient } from "openclaw/plugin-sdk/feature-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { FullOutputContract } from "./contract.js";
 import {
   checkRunMessage,
+  MEMORY_CHECKPOINT,
   SCRIBE_SESSION_TARGET,
   SCRIBES,
   scribeDeclarationKey,
@@ -107,7 +110,12 @@ export type ScribeSnapshot = {
   result?: ScribeResult;
   /** How the automation's run message compares with the one Knowledge generates now. */
   runMessage?: RunMessageCheck;
+  /** A Memory import with saved progress: the files its checkpoint lists, and how many are done. */
+  progress?: ImportProgress;
 };
+
+/** The files a Memory import's checkpoint lists and how many of them are done. */
+export type ImportProgress = { files: number; done: number };
 
 /**
  * Whether a plugin a scribe needs can be used: not installed, turned off, installed but not
@@ -230,8 +238,9 @@ function deriveStatus(input: {
   result?: ScribeResult;
   /** The conversation received a message: the page's start prompt at least. */
   setupSent: boolean;
+  progress?: ImportProgress;
 }): ScribeStatus {
-  const { session, job, result, setupSent } = input;
+  const { session, job, result, setupSent, progress } = input;
   if (!session || session.archived) {
     return job ? "missing" : "available";
   }
@@ -251,13 +260,22 @@ function deriveStatus(input: {
     }
     return result?.state === "needs-attention" ? "attention" : "on";
   }
+  const ended = Boolean(session.status && ENDED_WITHOUT_RESULT.has(session.status));
+  // An import with saved progress is done only when its checkpoint has every file done, whatever
+  // its last turn said; one that stopped short needs attention, and can continue.
+  if (progress && (result || ended)) {
+    if (progress.files === 0 || progress.done < progress.files) {
+      return "attention";
+    }
+    return result?.state === "failed" ? "failing" : "done";
+  }
   if (!result) {
     // No message: the start never reached the conversation (its send failed), so it can be
     // started again there. A start turn that ended without a status line needs a new start.
     if (!setupSent) {
       return "available";
     }
-    return session.status && ENDED_WITHOUT_RESULT.has(session.status) ? "failing" : "starting";
+    return ended ? "failing" : "starting";
   }
   // A one-time run that needs attention is started again, like a failed one.
   return result.state === "done" ? "done" : result.state === "on" ? "available" : "failing";
@@ -400,8 +418,55 @@ async function latestRunResult(
   return result && { result, at };
 }
 
-/** Load every scribe's conversation, automation and last status line for one agent. */
-export async function loadScribes(host: ScribeReader, agentId: string): Promise<ScribeSnapshot[]> {
+// One checkpoint line: `- <path>: pending` or `- <path>: done (…)`.
+const CHECKPOINT_LINE = /^\s*[-*]\s+.+:\s*(pending|done)\b/i;
+
+// The files a checkpoint page body lists and how many are done.
+function checkpointProgress(body: string): ImportProgress {
+  let files = 0,
+    done = 0;
+  for (const line of body.split("\n")) {
+    const match = CHECKPOINT_LINE.exec(line);
+    if (match) {
+      files++;
+      done += match[1]!.toLowerCase() === "done" ? 1 : 0;
+    }
+  }
+  return { files, done };
+}
+
+/**
+ * The Memory import checkpoint in the viewed store: no files when the page is missing, undefined
+ * when it can't be read.
+ */
+async function readImportProgress(feature: FeatureClient<FullOutputContract>) {
+  try {
+    const found = await feature.invoke("lookup", { query: MEMORY_CHECKPOINT, kind: "page" });
+    const id = found.outcome === "found" ? found.hits[0]?.record.id : undefined;
+    if (!id) {
+      return found.outcome === "missing" ? { files: 0, done: 0 } : undefined;
+    }
+    // One window holds a checkpoint of about a thousand files; a longer one reads as unfinished.
+    const detail = await feature.invoke("record_detail", {
+      id,
+      metadataView: "none",
+      maxChars: 65536,
+    });
+    return checkpointProgress(detail.record?.body ?? "");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Load every scribe's conversation, automation and last status line for one agent. With
+ * `feature`, a Memory import with saved progress also reads its checkpoint.
+ */
+export async function loadScribes(
+  host: ScribeReader,
+  agentId: string,
+  feature?: FeatureClient<FullOutputContract>,
+): Promise<ScribeSnapshot[]> {
   const jobs = await findJobs(host, agentId);
   return Promise.all(
     SCRIBES.map(async (scribe) => {
@@ -426,12 +491,32 @@ export async function loadScribes(host: ScribeReader, agentId: string): Promise<
           current = run.result;
         }
       }
+      // The latest start or continue message says whether this import saves its progress. A CLI
+      // runtime records tool results as user messages without text; they are not sent messages.
+      const sent = messages.findLast(
+        (message) => isRecord(message) && message.role === "user" && messageText(message) !== "",
+      );
+      const tracked = scribe.id === "memory" && messageText(sent).includes(MEMORY_CHECKPOINT);
+      const progress = tracked && feature ? await readImportProgress(feature) : undefined;
       const snapshot: ScribeSnapshot = {
         scribe,
-        status: deriveStatus({ scribe, session, job, result: current, setupSent: sentIndex >= 0 }),
+        status: deriveStatus({
+          scribe,
+          session,
+          job,
+          result: current,
+          setupSent: sentIndex >= 0,
+          progress,
+        }),
         jobs: keyed,
       };
-      Object.assign(snapshot, session && { session }, job && { job }, result && { result });
+      Object.assign(
+        snapshot,
+        session && { session },
+        job && { job },
+        result && { result },
+        progress && { progress },
+      );
       if (job?.payload?.message !== undefined) {
         snapshot.runMessage = checkRunMessage(scribe.id, job.payload.message, job.schedule);
       }
