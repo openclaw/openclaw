@@ -15470,7 +15470,7 @@ promote_windows_release_assets
     );
     expect(androidWorkflow).toContain("environment: android-release");
     expect(androidWorkflow).toContain(
-      "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+      "actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc",
     );
     expect(androidWorkflow).toContain("repositories: apps-signing");
     expect(androidWorkflow).toContain("permission-contents: read");
