@@ -54,6 +54,7 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { observeSubagentRequesterDelivery } from "./subagent-requester-delivery.js";
 import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
+import { hasRequesterTurnYielded } from "./subagent-requester-turn-custody.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
@@ -326,11 +327,11 @@ export const startSubagentAnnounceCleanupFlow = (
   const requesterSettleGeneration = entry.requesterSettleWake?.rearmGeneration;
   const requesterOwnsCompletion = () => {
     assertCurrent();
-    return entry.requesterTurnYielded === true || hasRequesterCompletionCohort(entry);
+    return hasRequesterTurnYielded(entry) || hasRequesterCompletionCohort(entry);
   };
   // Existing cohort ownership blocks competing sends but does not settle this attempt's delivery.
   const requesterTookCompletion = (current: SubagentRunRecord) =>
-    current.requesterTurnYielded === true ||
+    hasRequesterTurnYielded(current) ||
     (current.completionTarget === "parent" &&
       current.requesterSettleWake?.requesterYieldBatch === true) ||
     current.requesterSettleWake?.rearmGeneration !== requesterSettleGeneration;
