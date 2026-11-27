@@ -106,13 +106,6 @@ it.skipIf(!isLiveTestEnabled() || !model || process.platform === "win32")(
           );
         observer = await connect();
 
-        const invoke = <Result>(actionId: string, payload: Record<string, unknown>) =>
-          observer!.request<{ ok: boolean; result: Result }>("plugins.sessionAction", {
-            pluginId: "knowledge",
-            actionId,
-            payload,
-            agentId: "main",
-          });
         function completedFiles() {
           const db = new DatabaseSync(progressDb, { readOnly: true });
           try {
@@ -156,7 +149,7 @@ it.skipIf(!isLiveTestEnabled() || !model || process.platform === "win32")(
         });
         const saved = await vi.waitFor(
           async () => {
-            const completed = await completedFiles();
+            const completed = completedFiles();
             const row = await findSession();
             expect(completed.length >= 2 || row?.status === "done").toBe(true);
             return completed;
@@ -182,7 +175,7 @@ it.skipIf(!isLiveTestEnabled() || !model || process.platform === "win32")(
         observer = await connect();
         await vi.waitFor(
           async () => {
-            expect(await completedFiles()).toEqual(expected);
+            expect(completedFiles()).toEqual(expected);
             expect(await findSession()).toMatchObject({
               key: session.key,
               status: "done",
@@ -191,11 +184,19 @@ it.skipIf(!isLiveTestEnabled() || !model || process.platform === "win32")(
           },
           { timeout: 180_000, interval: 750 },
         );
-        const lastSave = await invoke<{ hits: unknown[] }>("grep", {
-          query: "Ines Okafor security review",
-          mode: "all",
-          kind: "claim",
-        });
+        const lastSave = await observer.request<{ ok: boolean; result: { hits: unknown[] } }>(
+          "plugins.sessionAction",
+          {
+            pluginId: "knowledge",
+            actionId: "grep",
+            payload: {
+              query: "Ines Okafor security review",
+              mode: "all",
+              kind: "claim",
+            },
+            agentId: "main",
+          },
+        );
         expect(lastSave.ok).toBe(true);
         expect(lastSave.result.hits.length).toBeGreaterThan(0);
         expect(
