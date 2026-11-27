@@ -35,6 +35,7 @@ export function projectCanonicalSessionEntryShape(
       | "transcriptPath"
       | "conversationLink"
       | "mainRestartRecovery"
+      | "skillLibraryAuthoringPresentation"
       | "resumeAfterRestart"
       | "titleRefinement"
       | "owner"
@@ -100,6 +101,25 @@ export function projectCanonicalSessionEntryShape(
             ),
           ),
         ].toSorted()
+      : undefined,
+  );
+  const presentation = canonicalValue.skillLibraryAuthoringPresentation;
+  setOptionalField(
+    "skillLibraryAuthoringPresentation",
+    isRecord(presentation) &&
+      typeof presentation.sessionId === "string" &&
+      presentation.sessionId === canonicalValue.sessionId &&
+      (typeof presentation.lifecycleRevision === "string" ||
+        presentation.lifecycleRevision === null) &&
+      presentation.lifecycleRevision === (canonicalValue.lifecycleRevision ?? null) &&
+      (presentation.defaultTarget === "workspace" || presentation.defaultTarget === "personal") &&
+      typeof presentation.multipleProfiles === "boolean"
+      ? {
+          sessionId: presentation.sessionId,
+          lifecycleRevision: presentation.lifecycleRevision,
+          defaultTarget: presentation.defaultTarget,
+          multipleProfiles: presentation.multipleProfiles,
+        }
       : undefined,
   );
   const icon =

@@ -57,27 +57,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const { runInput, preparedRuntime, contextEngine, sessionPromptState, terminalRetryState } =
     input;
   const params = runInput.runParams;
-  const {
-    workspaceResolution,
-    workspaceDir,
-    bootstrapWorkspaceDir,
-    isCanonicalWorkspace,
-    agentDir,
-    resolvedSessionKey,
-    resolvedToolResultFormat,
-    startupStages,
-    emitStartupStageSummary,
-    lifecycleGeneration,
-  } = runInput;
-  const {
-    fastModeAutoOnSeconds,
-    fastModeAutoProgressState,
-    fastModeStartedAtMs,
-    maybeAnnounceFastModeAutoOff,
-    notifyExecutionPhase,
-    notifyRunProgress,
-    resolveAttemptFastModeParam,
-  } = runInput.progressController;
+  const { workspaceResolution, workspaceDir, bootstrapWorkspaceDir, isCanonicalWorkspace } =
+    runInput;
+  const { agentDir, resolvedSessionKey, resolvedToolResultFormat } = runInput;
+  const { startupStages, emitStartupStageSummary, lifecycleGeneration } = runInput;
+  const progress = runInput.progressController;
+  const { fastModeAutoOnSeconds, fastModeAutoProgressState, fastModeStartedAtMs } = progress;
+  const { maybeAnnounceFastModeAutoOff, notifyExecutionPhase, notifyRunProgress } = progress;
+  const { resolveAttemptFastModeParam } = progress;
   const {
     provider,
     modelId,
@@ -638,6 +625,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     skillLibraryAuthoring: resolveStableEmbeddedSkillAuthoring(
       params.sessionKey,
       params.skillLibraryAuthoring,
+      runInput.sessionAdmission?.sessionKey === resolvedSessionKey ? entry : undefined,
     ),
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,

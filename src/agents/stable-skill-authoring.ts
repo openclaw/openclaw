@@ -1,7 +1,16 @@
-import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import type {
+  SkillLibraryAuthoringCapability,
+  SkillLibraryAuthoringPresentation,
+} from "../skills/library/authoring.js";
 import { SkillLibraryError } from "../skills/skill-library-error.js";
 
 const MAX_REMEMBERED_SESSIONS = 512;
+
+type Session = Pick<
+  InternalSessionEntry,
+  "sessionId" | "lifecycleRevision" | "skillLibraryAuthoringPresentation"
+>;
 
 /**
  * Keeps the skill_library and skill_workshop definitions stable across a
@@ -18,34 +27,18 @@ const MAX_REMEMBERED_SESSIONS = 512;
  * before publishing it.
  */
 export function createStableSkillAuthoring() {
-  const shapes = new Map<
-    string,
-    Pick<SkillLibraryAuthoringCapability, "defaultTarget" | "multipleProfiles">
-  >();
+  const shapes = new Map<string, SkillLibraryAuthoringPresentation>();
   return (
     sessionKey: string | undefined,
     authoring: SkillLibraryAuthoringCapability | undefined,
+    session?: Session,
   ): SkillLibraryAuthoringCapability | undefined => {
-    const key = sessionKey?.trim();
-    if (!key) {
+    const id = sessionKey?.trim();
+    if (!id) {
       return authoring;
     }
-    if (authoring?.expired) {
-      const shape = shapes.get(key);
-      return shape
-        ? {
-            ...authoring,
-            ...shape,
-            assertWorkspaceCurrent: () => {
-              throw new SkillLibraryError(
-                "AUTHORITY_EXPIRED",
-                "Skill authoring authority expired.",
-              );
-            },
-          }
-        : authoring;
-    }
-    if (authoring) {
+    const key = JSON.stringify([id, session?.sessionId, session?.lifecycleRevision]);
+    if (authoring && !authoring.expired) {
       shapes.delete(key);
       shapes.set(key, {
         defaultTarget: authoring.defaultTarget,
@@ -56,9 +49,26 @@ export function createStableSkillAuthoring() {
       }
       return authoring;
     }
-    const shape = shapes.get(key);
+    // The session owns the last human presentation. Never revive a grant from it.
+    const stored = session?.skillLibraryAuthoringPresentation;
+    const shape =
+      stored &&
+      stored.sessionId === session.sessionId &&
+      stored.lifecycleRevision === (session.lifecycleRevision ?? null)
+        ? stored
+        : shapes.get(key);
     if (!shape) {
-      return undefined;
+      return authoring;
+    }
+    if (authoring?.expired) {
+      return {
+        ...authoring,
+        defaultTarget: shape.defaultTarget,
+        multipleProfiles: shape.multipleProfiles,
+        assertWorkspaceCurrent: () => {
+          throw new SkillLibraryError("AUTHORITY_EXPIRED", "Skill authoring authority expired.");
+        },
+      };
     }
     const expired = () =>
       new SkillLibraryError(

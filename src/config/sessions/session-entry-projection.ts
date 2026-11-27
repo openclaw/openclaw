@@ -26,6 +26,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   pendingWorktree: undefined,
   priorWorkspace: undefined,
   scheduledMemoryParent: undefined,
+  skillLibraryAuthoringPresentation: undefined,
   sessionDiffBaselineCapture: undefined,
   transcriptByteCompactionLatch: undefined,
 } satisfies Partial<InternalSessionEntry>;
@@ -48,6 +49,7 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "pendingWorktree",
   "priorWorkspace",
   "scheduledMemoryParent",
+  "skillLibraryAuthoringPresentation",
   "sessionDiffBaselineCapture",
   "transcriptByteCompactionLatch",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];

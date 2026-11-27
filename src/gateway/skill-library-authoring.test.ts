@@ -1,16 +1,25 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js";
+import { createStableSkillAuthoring } from "../agents/stable-skill-authoring.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createSkillLibraryTool } from "../agents/tools/skill-library-tool.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import { resolveReplySessionInitializationOptions } from "../auto-reply/reply/session-initialization-admission.js";
+import { initSessionState } from "../auto-reply/reply/session.js";
+import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
+import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { applySessionEntryWritePolicy } from "../config/sessions/session-entry-write-policy.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { decideTurnGrant } from "./operator-admission.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import {
@@ -112,6 +121,61 @@ async function admitted(
 }
 
 describe("human personal namespace authority", () => {
+  it("keeps the persisted skill library tool definition after cold recovery without authorizing calls", async () => {
+    const { alice, request } = await setup();
+    const skillLibraryAuthoring = await prepareTurn(request(alice.id));
+    if (!skillLibraryAuthoring) {
+      throw new Error("Expected a human authoring grant");
+    }
+    const stateDir = process.env.OPENCLAW_STATE_DIR!;
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const scope = { agentId: "main", sessionKey, storePath };
+    try {
+      const prepared = await initSessionState({
+        ...resolveReplySessionInitializationOptions({ skillLibraryAuthoring }),
+        cfg: { session: { store: storePath } },
+        commandAuthorized: true,
+        ctx: finalizeInboundContext({
+          Body: "Review my task",
+          From: "alice@example.test",
+          To: "agent:main",
+          ChatType: "direct",
+          Provider: "webchat",
+          Surface: "webchat",
+          SessionKey: sessionKey,
+        }),
+      });
+      const entry = await readSessionEntryInWorker(scope);
+      if (!entry || entry.sessionId !== prepared.sessionId) {
+        throw new Error("Expected the admitted session");
+      }
+      const visible = projectPublicSessionEntry(entry);
+      const saved = applySessionEntryWritePolicy(
+        "main",
+        sessionKey,
+        visible,
+        visible,
+        entry,
+        {},
+      ).entry;
+      expect(visible).not.toHaveProperty("skillLibraryAuthoringPresentation");
+      // Recovery starts with an empty in-process catalog and no human turn grant.
+      const resolve = createStableSkillAuthoring();
+      const recovered = resolve(sessionKey, undefined, saved);
+      expect(recovered).toMatchObject({ defaultTarget: "personal", expired: true });
+      expect(
+        resolve(sessionKey, undefined, { ...entry, lifecycleRevision: "reset" }),
+      ).toBeUndefined();
+      const tool = createSkillLibraryTool(recovered!);
+      expect(tool.description).toBe(createSkillLibraryTool(skillLibraryAuthoring).description);
+      await expect(tool.execute("recovered-list", { action: "list" })).rejects.toMatchObject({
+        code: "AUTHORITY_EXPIRED",
+      });
+    } finally {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+  });
+
   it("decides workspace authority once, from the turn grant", async () => {
     const { alice, request } = await setup();
     const owner = request(alice.id);
