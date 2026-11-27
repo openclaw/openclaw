@@ -7,6 +7,160 @@
       "jobName": "Kova mock provider performance",
       "reason": "Operator risk acceptance on 2026-11-25 for 2026.11.11 Kova mock-provider peak RSS and missing coverage, matching the signed v2026.11.10 baseline; artifact provenance, candidate identity and all other gates are not waived.",
       "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-31 (node)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-35 (bun)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-35 (node)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-38 (bun)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-38 (node)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-41 (node)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-9 (bun)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-9 (node)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-36 (bun)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-36 (node)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "checks-ui (2/3)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "normalCi",
+      "jobName": "openclaw/ci-gate",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "pluginPrereleaseIndependent",
+      "jobName": "checks-node-extensions-shard-4 (bun)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "pluginPrereleaseIndependent",
+      "jobName": "checks-node-extensions-shard-6 (bun)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "pluginPrereleaseIndependent",
+      "jobName": "plugin-prerelease-suite",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live test harnesses)",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Verify release checks",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "install_smoke_release_checks / installer_smoke",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "install_smoke_release_checks / installer_smoke_update",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Run package acceptance / Verify package acceptance",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "targetSha": "a257c0f4d6bcc313d116427963d884add5aad17f",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Verify release checks",
+      "reason": "Operator accepted these specifically observed job failures for the unchanged 2026.11.11 candidate on November 27, 2026."
     }
   ]
 }
