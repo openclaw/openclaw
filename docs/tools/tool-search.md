@@ -336,9 +336,10 @@ If names still do not fit, servers with the most tools become count lines such a
 If even count lines do not fit, the remaining servers are counted in one
 final line. A server is never omitted silently, and a closing line points to
 `tool_search` whenever names are omitted. Inputs then fill the space the
-listed names leave, row by row and shortest first, so the most listed tools
-can be called in one step; a listed row without its input sends the model to
-`tool_describe` first.
+listed names leave. Listed servers take turns, each giving its shortest
+remaining input, so no server misses out because of its size or name; without
+learned usage, no tool is known to matter more. A listed row without its input
+sends the model to `tool_describe` first.
 
 With the [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
 enabled and learned usage available, the same budget keeps descriptions for the
