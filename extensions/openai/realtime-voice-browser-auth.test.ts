@@ -133,6 +133,41 @@ describe("OpenAI realtime voice browser authentication", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
+  it.each([
+    [undefined, "nova", "alloy", "nova"],
+    ["nova", "marin", "marin", "nova"],
+    [" Cedar ", "nova", "cedar", undefined],
+    [undefined, undefined, "alloy", undefined],
+  ] as const)(
+    "reports GA browser voice substitution for request %s and configured %s",
+    async (voice, configuredVoice, effectiveVoice, substitutedVoice) => {
+      mockRealtimeClientSecretResponse();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const provider = buildOpenAIRealtimeVoiceProvider({ logger });
+      const session = await provider.createBrowserSession?.({
+        providerConfig: {
+          apiKey: "test-api-key-test",
+          model: "gpt-realtime-2.1",
+          voice: configuredVoice,
+        },
+        voice,
+      });
+      expect(session?.voice).toBe(effectiveVoice);
+      expect(
+        requireNestedRecord(requireFetchJsonBody(), ["session", "audio", "output"]).voice,
+      ).toBe(effectiveVoice);
+      if (substitutedVoice) {
+        expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+          expect.stringMatching(
+            new RegExp(`unsupported.*${substitutedVoice}.*using.*${effectiveVoice}`, "i"),
+          ),
+        );
+      } else {
+        expect(logger.warn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("returns browser-safe OpenClaw attribution headers for native WebRTC offers", async () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     mockRealtimeClientSecretResponse({ expiresAt: 1_765_000_000 });

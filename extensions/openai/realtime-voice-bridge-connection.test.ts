@@ -81,6 +81,41 @@ describe("OpenAI realtime voice bridge connection", () => {
     restoreTestEnvironment();
   });
 
+  it.each([
+    ["nova", "alloy", true],
+    [" Marin ", "marin", false],
+    [undefined, "alloy", false],
+  ] as const)(
+    "reports GA bridge voice substitution for configured %s",
+    async (voice, effectiveVoice, substituted) => {
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const bridge = buildOpenAIRealtimeVoiceProvider({ logger }).createBridge({
+        providerConfig: { apiKey: "test-api-key-test", model: "gpt-realtime-2.1", voice },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      });
+      const { connecting, socket } = beginBridgeConnection(bridge);
+      openSocket(socket);
+      emitSessionUpdated(socket);
+      await connecting;
+      try {
+        expect(bridge.isConnected()).toBe(true);
+        expect(requireNestedRecord(requireSession(socket), ["audio", "output"]).voice).toBe(
+          effectiveVoice,
+        );
+        if (substituted) {
+          expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+            expect.stringMatching(/unsupported.*nova.*using.*alloy/i),
+          );
+        } else {
+          expect(logger.warn).not.toHaveBeenCalled();
+        }
+      } finally {
+        await bridge.close();
+      }
+    },
+  );
+
   it("uses the configured realtime endpoint without minting a client secret", async () => {
     const baseUrl =
       "wss://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old";
