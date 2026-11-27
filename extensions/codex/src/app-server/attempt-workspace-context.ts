@@ -42,8 +42,8 @@ export type CodexWorkspaceBootstrapContext = {
   memoryToolRouted?: boolean;
   promptContext?: string;
   threadDeveloperInstructions?: string;
-  personaInstructions?: string;
   sharedPersonaInstructions?: string;
+  personalPersonaInstructions?: string;
   memoryInstructions?: string;
   sessionProjectGuidance?: string;
 };
@@ -170,9 +170,11 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         injectOpenClawContext && availableToolNames.has("session_project")
           ? await params.params.prepareSessionProjectGuidance?.()
           : undefined,
-      personaInstructions: injectOpenClawContext ? prepared.personaInstructions : undefined,
       sharedPersonaInstructions: injectOpenClawContext
         ? prepared.sharedPersonaInstructions
+        : undefined,
+      personalPersonaInstructions: injectOpenClawContext
+        ? prepared.personalPersonaInstructions
         : undefined,
       memoryInstructions: injectOpenClawContext
         ? renderCodexWorkspaceMemoryInstructions({
