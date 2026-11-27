@@ -137,6 +137,9 @@ export function createUpdateRunAdmissionReader(
     openStateSchemaReadAdmission,
   );
   let previous: { version: string; runs: UpdateRunRecord[] } | undefined;
+  // Service inspection and restoration run outside Doctor's maintenance scope; this
+  // reader then retains the unchanged-files revision itself.
+  const revisionOwner = {};
   return () => {
     // PostgreSQL ledger writes do not change the SQLite anchor's content fingerprint.
     if (isStatePostgres()) {
@@ -148,7 +151,7 @@ export function createUpdateRunAdmissionReader(
       previous = undefined;
       return warm.value;
     }
-    const version = readCurrentOpenClawStateDatabaseContentVersion(options);
+    const version = readCurrentOpenClawStateDatabaseContentVersion(options, revisionOwner);
     if (version !== undefined && previous?.version === version) {
       return previous.runs;
     }
@@ -156,7 +159,7 @@ export function createUpdateRunAdmissionReader(
     const runs = listUpdateRuns(input, options, openStateSchemaReadAdmission);
     if (
       version !== undefined &&
-      version === readCurrentOpenClawStateDatabaseContentVersion(options)
+      version === readCurrentOpenClawStateDatabaseContentVersion(options, revisionOwner)
     ) {
       previous = { version, runs };
     }

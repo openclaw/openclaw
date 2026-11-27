@@ -74,6 +74,23 @@ export function hasAdmittedMaintenanceLiveAuthorityReads(
   return false;
 }
 
+/** A nested scope runs inside its ancestors' lifetime, so their owned resources outlive it. */
+export function isOpenClawDatabaseMaintenanceScopeWithin(
+  scope: OpenClawDatabaseMaintenanceScope,
+  ancestor: OpenClawDatabaseMaintenanceScope,
+): boolean {
+  for (
+    let current: OpenClawDatabaseMaintenanceScope | undefined = scope;
+    current;
+    current = maintenanceResources.parents.get(current)
+  ) {
+    if (current === ancestor) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Raw source descriptor closes are safe only before maintenance admits native source reads. */
 export function maintenanceOwnerHasSourceCustody(
   scope: OpenClawDatabaseMaintenanceScope | undefined,

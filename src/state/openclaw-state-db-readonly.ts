@@ -752,10 +752,11 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
 
 export function readCurrentOpenClawStateDatabaseContentVersion(
   options: OpenClawStateDatabaseOptions = {},
+  revisionOwner?: object,
 ): string | undefined {
   const pathname = resolveOpenClawStateReadPath(options);
   const env = options.env ?? process.env;
-  return exitStateReadSnapshot(() => readAdmittedStateContentVersion(pathname, env));
+  return exitStateReadSnapshot(() => readAdmittedStateContentVersion(pathname, env, revisionOwner));
 }
 
 /** Current guards leave discovery snapshots after validating their inherited read admission. */

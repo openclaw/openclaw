@@ -13,6 +13,7 @@ import {
   getOpenClawDatabaseMaintenanceResourceScope,
   getOpenClawDatabaseMaintenanceScope,
   isStateDatabaseReadAdmissionInvalidatedError,
+  type OpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -34,7 +35,10 @@ import {
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import { withCurrentOpenClawStateReadScope } from "./openclaw-state-db-readonly.js";
 import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
-import { allowsMaintenanceLiveAuthorityReads } from "./openclaw-state-maintenance-context.js";
+import {
+  allowsMaintenanceLiveAuthorityReads,
+  isOpenClawDatabaseMaintenanceScopeWithin,
+} from "./openclaw-state-maintenance-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
 type CurrentWarmReadResult<T> = { available: false } | { available: true; value: T };
@@ -48,14 +52,19 @@ export function createOpenClawStateCurrentWarmReader<T>(
   let bound:
     | {
         path: string;
-        scope: ReturnType<typeof getOpenClawDatabaseMaintenanceScope>;
-        read(): CurrentWarmReadResult<T>;
+        scope: OpenClawDatabaseMaintenanceScope;
+        read(current: OpenClawDatabaseMaintenanceScope): CurrentWarmReadResult<T>;
       }
     | undefined;
   return () => {
     return withCurrentOpenClawStateReadScope(options, (pathname) => {
       const scope = getOpenClawDatabaseMaintenanceScope();
-      if (!scope?.ownsSchemaMaintenance || (bound && bound.scope !== scope)) {
+      // A nested maintenance owner (a Doctor step's own SQLite lock) runs within the
+      // bound scope's lifetime; any other scope uses fresh private reads.
+      if (
+        !scope?.ownsSchemaMaintenance ||
+        (bound && !isOpenClawDatabaseMaintenanceScopeWithin(scope, bound.scope))
+      ) {
         return { available: false };
       }
       // Captured SQLite migrations retain native exclusion across commits. An idle
@@ -113,11 +122,14 @@ export function createOpenClawStateCurrentWarmReader<T>(
         }
         let active = true;
         let unregister = () => {};
-        const assertCurrent = () => {
+        const assertCurrent = (current: OpenClawDatabaseMaintenanceScope) => {
           if (!active) {
             throw new Error("Current shared-state reader is closed");
           }
-          scope?.assertReadAdmission();
+          scope.assertReadAdmission();
+          if (current !== scope) {
+            current.assertReadAdmission();
+          }
           try {
             admission.assertCurrent();
           } catch (error) {
@@ -153,8 +165,8 @@ export function createOpenClawStateCurrentWarmReader<T>(
         const reader = {
           path: pathname,
           scope,
-          read(): CurrentWarmReadResult<T> {
-            if (!assertCurrent()) {
+          read(current: OpenClawDatabaseMaintenanceScope): CurrentWarmReadResult<T> {
+            if (!assertCurrent(current)) {
               return { available: false };
             }
             const result = runOpenClawStateCurrentReadConnection(
@@ -183,7 +195,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
         scope?.own(resource, "shared-resources", () => resource.close());
         bound = reader;
       }
-      return bound.read();
+      return bound.read(scope);
     });
   };
 }

@@ -7,10 +7,15 @@ import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
 
 const versions = new WeakMap<object, { fingerprint: string; version: string }>();
 
-/** Returned metadata also invalidates rows when a write races cached hash selection. */
+/**
+ * Returned metadata also invalidates rows when a write races cached hash selection.
+ * The maintenance scope retains the revision; outside one, a caller may supply the
+ * object whose lifetime retains it (Doctor's admission reader before and after custody).
+ */
 export function readAdmittedStateContentVersion(
   pathname: string,
   env: NodeJS.ProcessEnv,
+  revisionOwner?: object,
 ): string | undefined {
   const assertCurrent = () => {
     getOpenClawDatabaseMaintenanceScope()?.assertReadAdmission();
@@ -20,7 +25,7 @@ export function readAdmittedStateContentVersion(
   if (existingPathOrUndefined(pathname) === undefined) {
     return undefined;
   }
-  const scope = getOpenClawDatabaseMaintenanceScope();
+  const owner = getOpenClawDatabaseMaintenanceScope() ?? revisionOwner;
   const fingerprint = () => {
     const canonical = fs.realpathSync.native(pathname);
     return ["", "-wal", "-journal"]
@@ -32,13 +37,13 @@ export function readAdmittedStateContentVersion(
       .join("|");
   };
   const before = fingerprint();
-  const previous = scope && versions.get(scope);
+  const previous = owner && versions.get(owner);
   const version =
     previous?.fingerprint === before
       ? previous.version
       : readSqliteSourceContentVersionSync(pathname);
-  if (scope && version !== undefined && before === fingerprint()) {
-    versions.set(scope, { fingerprint: before, version });
+  if (owner && version !== undefined && before === fingerprint()) {
+    versions.set(owner, { fingerprint: before, version });
   }
   assertCurrent();
   return version && `${isExistingOpenClawStateSchema(pathname)}:${version}:${fingerprint()}`;
