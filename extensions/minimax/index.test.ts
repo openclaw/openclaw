@@ -30,8 +30,8 @@ const m31Model: Model<"anthropic-messages"> = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
-vi.mock("./oauth.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./oauth.runtime.js")>()),
+vi.mock("./oauth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./oauth.js")>()),
   loginMiniMaxPortalOAuth: vi.fn(async () => ({
     access: "minimax-oauth-access-token",
     refresh: "minimax-oauth-refresh-token",
@@ -520,7 +520,7 @@ describe("minimax provider hooks", () => {
       assertCurrent,
     } as never);
 
-    const { loginMiniMaxPortalOAuth } = await import("./oauth.runtime.js");
+    const { loginMiniMaxPortalOAuth } = await import("./oauth.js");
     expect(vi.mocked(loginMiniMaxPortalOAuth)).toHaveBeenCalledWith(
       expect.objectContaining({ assertCurrent }),
     );
@@ -568,9 +568,10 @@ describe("minimax provider hooks", () => {
         runtimeBaseUrl ? modelConfig(baseUrl) : undefined,
       );
       if (!allowed) {
-        await expect(result).rejects.toThrow(
-          "openclaw models auth login --provider minimax-portal",
-        );
+        await expect(result).rejects.toMatchObject({
+          name: "ProviderAuthFailure",
+          reason: "refresh_rejected",
+        });
         expect(fetchMock).not.toHaveBeenCalled();
         return;
       }

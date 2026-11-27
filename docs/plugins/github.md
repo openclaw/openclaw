@@ -43,29 +43,34 @@ native item previews nor the generic page-preview fallback fetches them.
 A PR or issue URL inside a login redirect query does not make the login link
 previewable.
 
-Each reader tab has its own Back and Forward history. Opening the same URL
-selects its existing tab. Links inside the reader navigate the current tab;
-the **+** button starts another tab. Up to ten tabs stay in memory. Closing the
-page discards the documents and history. The reader follows the session panel’s
+A link to an item that already has a tab selects that tab. Links to other
+supported items inside the reader open in their own tab, and **+** (or
+**Link reader** in the Chat side panel's **+** menu) starts an empty tab where
+you can enter a URL. Up to ten tabs stay in memory, and closing the page
+discards them. The reader follows the session panel’s
 responsive layout; on a phone it can sit below chat or expand with the panel.
 
 The reader shows the title and description first, while checks and discussion
 load independently. A quiet skeleton keeps the layout recognizable on a cold
 open. File diffs load when you select **Files** or scroll near that section.
 The reader includes discussion comments, published inline PR review comments
-with file and diff context, commit comments, and expandable file diffs. PR discussion
-and inline review comments load concurrently. The
+with file and diff context, commit comments, and expandable file diffs with line
+numbers. PR discussion and inline review comments load concurrently. The
 header separates the item state, author, change counts, and PR branches. **Overview**, **Checks**, **Files**, and **Discussion** shortcuts jump
-to the relevant section without leaving the reader.
+to the relevant section without leaving the reader, and the section bar marks
+the section you are reading. Content that arrives later, such as checks, does
+not move the description.
 
 Pull requests show check runs and commit statuses for the exact head commit.
-Expand the checks summary to inspect individual results and open their source
-logs. Failed checks expand by default. Pending, failed, passed, skipped, empty,
-and unavailable results remain distinct; a partial response never implies that
-all checks passed. These results describe CI, not approval or merge readiness.
-Use **Refresh** to fetch the current PR and its checks again. The previous
-document stays readable while refreshing, with previous results labeled until
-replaced. A changed head never inherits checks or diffs from the old head.
+The checks summary stays collapsed: it counts failed, in-progress, passed, and
+skipped or neutral runs and names the failed ones. Expand it, or select **Checks**, to
+inspect individual results grouped by state and open their source logs.
+Pending, failed, passed, skipped, empty, and unavailable results remain distinct;
+a partial response never implies that all checks passed, and reports how many
+runs were not shown when the total is known. These results describe CI, not approval or merge readiness.
+Use **Refresh** in the document header to fetch the current PR and its checks again. The previous
+document stays readable while the refresh icon spins, and reloading sections
+label their previous results until replaced. A changed head never inherits checks or diffs from the old head.
 Retryable section failures stay beside the affected content; access or identity
 failures clear the document.
 
@@ -106,10 +111,10 @@ on GitHub; this tool does not rerun jobs or download log archives.
 
 This tool works for permitted sandboxed agents without GitHub credentials or
 outbound network access inside the sandbox. The Gateway selects the invoking
-agent's managed identity, or uses the same service-token/anonymous fallback as
-the reader. The tool cannot select another agent or expose the credential.
-Current invocation, tool and identity authority remain required through delivery,
-including cached reads.
+agent's managed identity, or uses the same service-token, native identity, and
+anonymous fallback as the reader. The tool cannot select another agent or expose
+the credential. Current invocation, tool and identity authority remain required
+through delivery, including cached reads.
 
 `github_read` is included in the coding profile and default sandbox tool allowlist.
 Explicit tool allowlists and deny rules remain authoritative. If you maintain a
@@ -171,12 +176,15 @@ hovercard, and GitHub links open externally.
 
 - The reader is public-only and read-only. Use **Open on GitHub** for private
   repositories, posting comments, or merging pull requests.
-- Previews and reader documents use the selected agent’s managed GitHub identity,
-  or the configured Control UI GitHub token and Gateway environment fallback when
-  no managed identity is selected. Without credentials they use GitHub’s shared
-  anonymous IP quota. Authenticated documents remain public-only: the reader checks
-  repository visibility and identity before returning fresh or cached content.
-  Identity changes abort stale requests. Attachment images remain anonymous.
+- Previews and reader documents use the selected agent's OpenClaw-managed GitHub
+  account (its own or the shared agent account). If the agent has no managed
+  account, they use an explicit `gateway.controlUi.github.token` when set, or
+  the Gateway's native GitHub identity (`GH_TOKEN`/`GITHUB_TOKEN`, then its
+  GitHub CLI login). When no credential is available, they use GitHub's shared
+  anonymous IP quota of 60 requests per hour. Authenticated documents remain
+  public-only: the reader checks repository visibility and identity before
+  returning fresh or cached content. Identity changes abort stale requests.
+  Attachment images remain anonymous.
 - Each comment collection is limited to 20 entries; PR discussion and inline
   review comments have separate limits. Up to 30 changed files are shown.
 - PR checks use at most one page each of check runs and commit statuses and show
@@ -210,7 +218,7 @@ hovercard, and GitHub links open externally.
 - **Refresh** requests the current item again. Rate limits, deleted items, and
   unavailable services show their specific explanation in the reader and hovercards,
   including GitHub's retry delay when available. Cached preview details stay visible
-  with the failure notice. Use the reader's **Retry** action or **Open on GitHub**;
+  with the failure notice. Use the reader's **Retry** or **Refresh** action, or **Open on GitHub**;
   the server's API quota is separate from your signed-in browser session.
 
 ## Plugin author integration

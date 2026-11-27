@@ -111,7 +111,7 @@ it.each(["owner", "operator", "viewer", "guest", "unconfigured-role"])(
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ signedOut: true });
       expect(await verify()).toMatchObject({ ok: false });
-      expect(closeConnections).toHaveBeenCalledWith(["browser-rpc"]);
+      expect(closeConnections).toHaveBeenCalledWith(["browser-rpc"], "signed-out");
       // The browser stays an OpenClaw ID browser (managed on the Access page) after sign-out.
       expect(claw.authority.tokenBinding(identity.deviceId, identity.role)).toBe(peer);
       expect(await verifyDeviceToken({ ...other, token: otherToken, baseDir })).toMatchObject({

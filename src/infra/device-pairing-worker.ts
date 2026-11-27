@@ -34,7 +34,7 @@ export const DevicePairingAuthorityRefusedError = resolveGlobalSingleton(
   Symbol.for("openclaw.devicePairingAuthorityRefusedError"),
   () =>
     class extends Error {
-      constructor(message = "Device pairing authority changed") {
+      constructor(message = "Device pairing ended. Reconnect to retry.") {
         super(message);
       }
     },

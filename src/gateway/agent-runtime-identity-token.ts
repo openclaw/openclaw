@@ -150,6 +150,7 @@ const sessionSpawnContextSchema = z
     gitContributorProfileId: normalizedRequiredStringSchema.optional(),
     requesterSenderIsOwner: z.boolean().optional(),
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
+    createdIndependently: z.literal(true).optional(),
     inheritedPermissionMode: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
     resolvedModel: z
       .object({
@@ -184,6 +185,7 @@ const sessionSpawnContextSchema = z
     ...(context.requesterSenderIsOwner !== undefined
       ? { requesterSenderIsOwner: context.requesterSenderIsOwner }
       : {}),
+    ...(context.createdIndependently ? { createdIndependently: true } : {}),
     inheritedToolPolicy: context.inheritedToolPolicy,
     ...(context.inheritedPermissionMode
       ? { inheritedPermissionMode: context.inheritedPermissionMode }
@@ -523,7 +525,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
     approvalAuthority.operationalRunInstance.runId !== operationalRunId ||
     !validateAgentRunDelegatedAuthority(approvalAuthority)
   ) {
-    throw new Error("agent runtime approval authority is no longer active");
+    throw new Error("Agent runtime approval scope ended. Start a new turn to retry.");
   }
   const delegatedAuthority: AgentRuntimeDelegatedAuthority = params.workerTurnClaim
     ? { kind: "worker", ...approvalAuthority, turnClaim: params.workerTurnClaim }

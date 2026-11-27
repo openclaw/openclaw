@@ -39,15 +39,18 @@ const messagesIn = (items: readonly Parameters<typeof chatItemGroups>[0][]) =>
 
 describe("tool media and operation receipts", () => {
   it.each([
-    { label: "published", text: "Published example/app: https://github.com/example/app/pull/1" },
-    { label: "failed", text: "Publication failed. Reconnect GitHub." },
-  ])("preserves a delayed $label report even without a subsequent answer", ({ text }) => {
+    { status: "published", text: "Published example/app: https://github.com/example/app/pull/1" },
+    { status: "failed", text: "Publication failed. Reconnect GitHub." },
+    { status: "needs_confirmation", text: "Confirm which account to use." },
+  ])("keeps a delayed $status receipt out of the assistant's answer", ({ status, text }) => {
     for (const answered of [false, true]) {
       const report = makeMessage("late-report", 3, {
         role: "assistant",
         runId: "publish-run",
         provider: "openclaw",
         model: "gateway-publication",
+        responseId: "github-publication:late-request",
+        openclawGitHubPublicationStatus: status,
         stopReason: "stop",
         content: text,
       });
@@ -75,7 +78,10 @@ describe("tool media and operation receipts", () => {
               ? [item]
               : [],
         );
-        expect(messagesIn(visible)).toContainEqual(report);
+        expect(messagesIn(visible)).not.toContainEqual(report);
+        expect(chain.transcriptItems.filter((item) => item.kind === "notice")).toEqual(
+          status === "published" ? [] : [expect.objectContaining({ text })],
+        );
       }
     }
   });
@@ -436,7 +442,9 @@ describe("workspace publication handoff", () => {
       role: "assistant",
       timestamp: 3_000,
       stopReason: "stop",
+      provider: "openclaw",
       model: "gateway-publication",
+      responseId: "github-publication:workspace-request",
       content: [{ type: "text", text: report }],
     },
     {
@@ -453,7 +461,7 @@ describe("workspace publication handoff", () => {
     expect(chain.transcriptItems.map((item) => item.kind)).toEqual(["group", "agent-run-frame"]);
     const [frame] = framesOf(chain);
     expect(frame?.outcome.kind).toBe("completed");
-    expect(JSON.stringify(messagesIn([frame!]))).toContain(report);
+    expect(JSON.stringify(messagesIn([frame!]))).not.toContain(report);
     expect(JSON.stringify(messagesIn([frame!]))).toContain("The PR is green.");
   });
 
@@ -461,7 +469,7 @@ describe("workspace publication handoff", () => {
     const entries = messages.slice(0, 4);
     const frames = framesOf(projectHistory(entries, { messages: entries }));
     expect(frames.map((frame) => frame.outcome.kind)).toEqual(["completed"]);
-    expect(JSON.stringify(messagesIn(frames))).toContain(report);
+    expect(JSON.stringify(messagesIn(frames))).not.toContain(report);
   });
 });
 

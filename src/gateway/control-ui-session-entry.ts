@@ -89,12 +89,7 @@ export async function serveControlUiSessionEntry(
     for (;;) {
       let preparation: Promise<void> | undefined;
       try {
-        selected = await resolveControlUiSessionPath({
-          target,
-          projection,
-          client,
-          isCurrent: requestAuth.hasCurrentClientAuthority,
-        });
+        selected = await resolveControlUiSessionPath({ target, projection, client });
         break;
       } catch (error) {
         if (
@@ -114,16 +109,14 @@ export async function serveControlUiSessionEntry(
         }
       }
       await preparation;
-      await requestAuth.revalidate();
     }
   }
-  if (!selected || !projection || !requestAuth.hasCurrentClientAuthority()) {
+  if (!selected || !projection) {
     res.statusCode = 403;
     res.end(probe ? undefined : "Session unavailable. Reload the conversation or log in again.");
     return true;
   }
-  await requestAuth.revalidate();
-  const isCurrent = () => requestAuth.hasCurrentClientAuthority() && selected.isCurrent();
+  const isCurrent = selected.isCurrent;
   if (probe) {
     res.statusCode = isCurrent() ? 204 : 403;
     res.end();

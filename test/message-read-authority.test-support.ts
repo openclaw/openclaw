@@ -72,7 +72,11 @@ export function createMessageReadAuthority<T extends InternalChannelThreadingToo
       agentId: "main",
       sessionKey,
       operationalRunInstance,
-      receiptAuthority: () => validateAgentRunDelegatedAuthority(delegated),
+      receiptAuthority: () => {
+        if (!validateAgentRunDelegatedAuthority(delegated)) {
+          throw new Error("Message-read run authority is no longer active");
+        }
+      },
     });
   const revokeTurn = () => revokeMessageActionTurnCapability(capability);
   const releaseClaim = () => releaseAgentRunDelegatedAuthority(delegated);

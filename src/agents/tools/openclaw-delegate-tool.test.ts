@@ -6,6 +6,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
 import {
   clearRuntimeConfigSnapshot,
+  createRuntimeConfigReader,
   hashRuntimeConfigValue,
   setRuntimeConfigAppliedHash,
   setRuntimeConfigSnapshot,
@@ -21,6 +22,7 @@ import * as caches from "../../plugins/plugin-cache.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as runtimeScope from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { startOperatorMcpOAuthLink } from "../mcp-oauth-link.js";
 import * as modelScope from "../prepared-model-runtime-generation-scope.js";
@@ -191,7 +193,7 @@ it("reports sign-in as not done when the delegated setup did not commit the serv
 
 function expectUnscoped() {
   expect(modelScope.getPreparedModelRuntimePluginGeneration()).toBeUndefined();
-  expect(runtimeScope.getPluginRuntimeGenerationRegistry()).toBeUndefined();
+  expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
   expect(caches.getScopedPluginCache()).toBeUndefined();
 }
 
@@ -206,12 +208,10 @@ it("admits each delegated call outside its caller generation without dropping ca
   };
   caches.bindPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot, cache);
   const controller = new AbortController();
-  const approvalAuthorityCheck = vi.fn(() => true);
   const tool = delegate();
   const caller = {
     agentId: "main",
     sessionKey: runSessionKey,
-    approvalAuthorityCheck,
     approvalSignals: [controller.signal],
   };
   callGateway.mockImplementation(async () => {
@@ -227,7 +227,7 @@ it("admits each delegated call outside its caller generation without dropping ca
           for (const message of ["First helper call", "Second helper call"]) {
             await tool.execute("delegate", { message });
             expect(modelScope.getPreparedModelRuntimePluginGeneration()).toBe(generation);
-            expect(runtimeScope.getPluginRuntimeGenerationRegistry()).toBe(registry);
+            expect(getPluginRuntimeGenerationRegistry()).toBe(registry);
             expect(caches.getScopedPluginCache()).toBe(cache);
           }
         },
@@ -563,3 +563,25 @@ it.each(["hook", "trusted"] as const)(
     });
   },
 );
+
+it("retains admitted live policy across config replacement and rechecks revocation", async () => {
+  const config = { tools: { openclaw: { autoApproveChanges: true } } };
+  setRuntimeConfigSnapshot(config);
+  const readDelegationConfig = createRuntimeConfigReader(config);
+  const pinnedConfig = structuredClone(config);
+  setRuntimeConfigSnapshot({ tools: { openclaw: { autoApproveChanges: false } } });
+  try {
+    const tool = delegate({ config: pinnedConfig, readDelegationConfig });
+    callGateway.mockImplementation(async () => {
+      const caller = callerScope.getGatewayToolCallerIdentity();
+      expect(caller?.fullPermission).toBe(false);
+      expect(() => caller?.assertAutoApproveChangesCurrent?.()).toThrow("autoApproveChanges");
+      setRuntimeConfigSnapshot(config);
+      expect(() => caller?.assertAutoApproveChangesCurrent?.()).not.toThrow();
+      return { reply: "Approval required." };
+    });
+    await tool.execute("pinned-policy", { message: "Change logging." });
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
+});

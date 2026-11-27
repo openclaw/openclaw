@@ -24,7 +24,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 // and ~10 worker threads: ~12 s locally, ~30 s on a loaded CI Node shard, so
 // the default 120 s test timeout cannot hold them.
 
-it("reuses one original across repeated healthy Doctor repairs and captures a real change", async () => {
+it("reuses one original across repeated healthy Doctor repairs and keeps only the capture of a real change", async () => {
   const root = await fs.realpath(dirs.make("doctor-capture-repeat-"));
   const state = path.join(root, "state");
   const temporary = path.join(root, "tmp");
@@ -100,6 +100,8 @@ it("reuses one original across repeated healthy Doctor repairs and captures a re
   cfg.gateway.port = 2;
   await writeFixtureJson(config, cfg);
   await repair();
-  expect(await captures()).toHaveLength(2);
-  expect(await captures()).toEqual(expect.arrayContaining(before));
+  // The changed state gets a fresh original, which replaces the reused one.
+  const after = await captures();
+  expect(after).toHaveLength(1);
+  expect(after).not.toEqual(before);
 }, 300_000);

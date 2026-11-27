@@ -14,7 +14,11 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { runControlUiPluginAction, type ControlUiComposerDraft } from "./control-ui-actions.ts";
+import {
+  runControlUiPluginAction,
+  type BindComposerActionMenu,
+  type ControlUiComposerDraft,
+} from "./control-ui-actions.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import { PluginContribution } from "./control-ui-view.solid.tsx";
@@ -34,6 +38,7 @@ type ContributionsProps = {
   composer: ControlUiComposerDraft | undefined;
   /** The pane has a composer toolbar for icon actions; without one they render as text buttons. */
   composerToolbar: boolean;
+  bindActionMenu: BindComposerActionMenu | undefined;
 };
 export type ContributionsElement = SolidBridgeElement<ContributionsProps>;
 
@@ -351,7 +356,10 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                   </Errored>
                 )}
               </For>
-              <For each={actions()} keyed={(action) => action.entry.signal}>
+              <For
+                each={props.bindActionMenu ? [] : actions()}
+                keyed={(action) => action.entry.signal}
+              >
                 {(action) => (
                   <Show
                     when={props.kind === "composer-toolbar"}
@@ -387,6 +395,24 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                   </Show>
                 )}
               </For>
+              <Show when={props.bindActionMenu} keyed>
+                {(bind) => {
+                  const menuActions = createMemo(() =>
+                    actions().map((action) => ({
+                      key: action.entry.key,
+                      pluginId: action.entry.pluginId,
+                      pluginName: action.entry.pluginName ?? action.entry.pluginId,
+                      label: action.state?.label ?? action.entry.value.label,
+                      icon: actionIcon(action.entry.value.icon),
+                      disabled: action.state?.disabled ?? false,
+                      running: runningTask(action),
+                      run: () => runAction(action),
+                    })),
+                  );
+                  onSettled(() => bind(menuActions));
+                  return null;
+                }}
+              </Show>
             </>
           }
         >
@@ -466,6 +492,7 @@ defineSolidBridge<ContributionsProps>("openclaw-plugin-contributions", PluginCon
     presented: { default: true, type: Boolean },
     composer: { default: undefined, attribute: false },
     composerToolbar: { default: true, type: Boolean },
+    bindActionMenu: { default: undefined, attribute: false },
   },
 });
 

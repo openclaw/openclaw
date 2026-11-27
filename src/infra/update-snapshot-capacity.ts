@@ -3,7 +3,7 @@ import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity-schema.j
 
 export type { UpdateSnapshotCapacity } from "./update-snapshot-capacity-schema.js";
 
-export function formatUpdateSnapshotCapacity(capacity: UpdateSnapshotCapacity): string {
+function formatUpdateSnapshotCapacity(capacity: UpdateSnapshotCapacity): string {
   const formatBytes = (value: number) =>
     formatByteSize(value, {
       style: "iec",

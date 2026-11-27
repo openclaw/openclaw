@@ -338,9 +338,6 @@ async function settleUpdateCommandTerminalResult<T>(
   if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
     throw outcome.error;
   }
-  await run?.sourceArtifactLock?.release().catch((error: unknown) => {
-    defaultRuntime.error(`Warning: Artifact lock release failed: ${formatErrorMessage(error)}`);
-  });
   const activationTimeout =
     "error" in outcome
       ? collectNestedErrorCandidates(outcome.error).find(

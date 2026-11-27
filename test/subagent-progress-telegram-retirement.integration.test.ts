@@ -4,6 +4,7 @@ import { useSubagentControlFixture } from "../src/agents/subagents/registry/suba
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { loadTelegramDispatchHttpFixture } from "../extensions/telegram/test-api.js";
+import { abortControlledSubagents } from "../src/agents/subagents/cancel-descendants.js";
 import { adoptSubagentProgressDraft } from "../src/agents/subagents/registry/subagent-progress-draft.js";
 import {
   requesterKey,
@@ -12,7 +13,6 @@ import {
 import { stopSessionResetSubagents } from "../src/auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig } from "../src/config/config.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
-import { abortControlledSubagents } from "../src/gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../src/infra/agent-events.js";
 
 // Root-owned integration: the subagent registry retires the card Telegram retained.

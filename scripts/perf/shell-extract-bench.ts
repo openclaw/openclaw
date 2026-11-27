@@ -15,6 +15,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { CommandExplanation } from "../../src/infra/command-explainer/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -77,12 +78,7 @@ const observer = new PerformanceObserver((list) => {
 const inspector = new Session();
 try {
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else {
     observer.observe({ entryTypes: ["gc"] });
   }

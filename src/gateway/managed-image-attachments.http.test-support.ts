@@ -83,7 +83,6 @@ const {
   handleManagedOutgoingMediaHttpRequest: handleManagedOutgoingImageHttpRequest,
 } = await import("./managed-image-attachments.js");
 export { handleManagedOutgoingImageHttpRequest };
-export const { bindHttpResponseAuthority } = await import("./http-request-authority.js");
 
 export async function prepareManagedSessionStore(stateDir: string): Promise<void> {
   const store = await seedManagedSessionStore(stateDir);
@@ -150,7 +149,7 @@ export async function requestManagedImage(params: {
       res.end();
       return null;
     }
-    return bindHttpResponseAuthority({ ok: true, ...params.authResponse }, res, () => true);
+    return { ok: true, ...params.authResponse };
   });
   resolveSharedSecretHttpOperatorScopesMock.mockReturnValue(params.scopes ?? ["operator.read"]);
   resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockImplementation((_req, requestAuth) => {

@@ -153,6 +153,42 @@ async function expectMultilineTitle(title: Locator) {
 }
 
 suite.define(() => {
+  it("omits publication tasks from viewing and recent sessions on the People card", () =>
+    withPage({ colorScheme: "dark", reducedMotion: "reduce" }, async ({ page }) => {
+      const data = scenario("Update the release notes");
+      const conversations = data.methodResponses["sessions.list"];
+      const tasks = ["a", "b"].map((digit) =>
+        sessionRow(
+          `agent:main:dashboard:github-publication-${digit.repeat(32)}`,
+          "GitHub publication",
+          Date.now(),
+          {
+            classification: "github-publication",
+            parentSessionKey: selected,
+            owner: { actor: { type: "human", id: alice.id, identity: alice.identity } },
+          },
+        ),
+      );
+      await openPeople(page, {
+        ...data,
+        presenceUsers: [{ ...data.presenceUsers[0]!, watchedSessions: [watched, tasks[0]!.key] }],
+        methodResponses: {
+          "sessions.list": {
+            cases: [
+              { match: { excludeSystem: true }, response: conversations },
+              { response: chatSessionListResponse([...tasks, ...conversations.sessions]) },
+            ],
+          },
+        },
+      });
+      await onlinePerson(page, alice.id).hover();
+      const card = activityCard(page);
+      await link(card, "Release checklist").waitFor();
+      await link(card, "Update the release notes").waitFor();
+      await captureUiProof(suite, page, "people-card", "publication-tasks.png");
+      await expectCount(link(card, "GitHub publication"), 0);
+    }));
+
   it("keeps pending previews honest when moving between people", () =>
     withPage({ colorScheme: "light", reducedMotion: "reduce" }, async ({ page }) => {
       const data = scenario();

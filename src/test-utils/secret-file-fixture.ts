@@ -1,7 +1,7 @@
 // Creates secret-file fixtures for config and credential tests.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { withTempDir } from "./temp-dir.js";
 
 type SecretFiles = {
   passwordFile?: string;
@@ -14,8 +14,7 @@ export async function withTempSecretFiles<T>(
   secrets: { password?: string; token?: string },
   run: (files: SecretFiles) => Promise<T>,
 ): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
+  return withTempDir(prefix, async (dir) => {
     const files: SecretFiles = {};
     if (secrets.token !== undefined) {
       files.tokenFile = path.join(dir, "token.txt");
@@ -26,7 +25,5 @@ export async function withTempSecretFiles<T>(
       await fs.writeFile(files.passwordFile, secrets.password, "utf8");
     }
     return await run(files);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+  });
 }

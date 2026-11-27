@@ -16,6 +16,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { publishFileNoClobber, syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { shortenHomePath } from "../utils.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
 
 const MIGRATED_SUBSECTION_HEADING = "### Local notes (migrated from TOOLS.md)";
@@ -395,6 +396,18 @@ export async function collectToolsMdMigrationFindings(
     }
   }
   return findings;
+}
+
+/** Read-only: whether `maybeMigrateToolsMd` with repair would migrate a workspace's TOOLS.md. */
+export async function checkToolsMdMigrationPending(
+  cfg: OpenClawConfig,
+): Promise<DoctorMaintenancePending> {
+  for (const target of resolveToolsMdMigrationWorkspaceTargets(cfg)) {
+    if (await readToolsMd(target.workspaceDir)) {
+      return "work";
+    }
+  }
+  return "none";
 }
 
 export async function maybeMigrateToolsMd(params: {

@@ -133,7 +133,6 @@ async function runLabelAttempts(
   const maxLength = resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH);
   const assertCurrent = () => {
     params.assertCurrent?.();
-    params.operatorAuthority?.assertCurrent();
     params.abortSignal?.throwIfAborted();
   };
   const seen = new Set(

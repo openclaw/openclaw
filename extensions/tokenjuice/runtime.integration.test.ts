@@ -1,13 +1,29 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import {
   createAgentToolResultMiddlewareRunner,
   type AgentToolResultMiddlewareEvent,
 } from "openclaw/plugin-sdk/agent-harness";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { clearRuleCache, loadRules } from "tokenjuice";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createTokenjuiceAgentToolResultMiddleware } from "./tool-result-middleware.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const raw = [
+  "On branch feature/fixture",
+  "",
+  "Changes not staged for commit:",
+  "\tmodified:   src/alpha.ts",
+  "\tmodified:   src/beta.ts",
+  "",
+  "no changes added to commit",
+  "",
+  "",
+].join("\r\n");
 
 beforeAll(() => {
   vi.stubEnv("TOKENJUICE_STATS", "0");
@@ -18,8 +34,8 @@ afterAll(() => {
   vi.unstubAllEnvs();
 });
 
-it("bounds compiled rules across worktree churn without clearing every result", async () => {
-  const middleware = createTokenjuiceAgentToolResultMiddleware();
+it("bounds compiled rules across shell worktrees without evicting for unrelated results", async () => {
+  const middleware = createTokenjuiceAgentToolResultMiddleware({ warn: vi.fn() });
   const event = (worktree: number, context = 0): AgentToolResultMiddlewareEvent => ({
     toolCallId: `rule-cache-${worktree}`,
     toolName: "exec",
@@ -38,6 +54,10 @@ it("bounds compiled rules across worktree churn without clearing every result", 
   const first = await middleware(event(0), { runtime: "openclaw" });
   const options = { cwd: "/synthetic-tokenjuice/worktree-0" };
   const rules = await loadRules(options);
+  for (let worktree = 1; worktree <= 128; worktree++) {
+    await middleware({ ...event(worktree), toolName: "read" }, { runtime: "openclaw" });
+  }
+  expect(await loadRules(options)).toBe(rules);
   for (let turn = 0; turn < 256; turn++) {
     await middleware(event(turn % 2, turn), { runtime: "openclaw" });
   }
@@ -50,26 +70,68 @@ it("bounds compiled rules across worktree churn without clearing every result", 
   expect(reloaded).toEqual(rules);
 });
 
-it("runs the packaged reducer while preserving exact reads and Code Mode results", async () => {
+function packagedRunner() {
   const captured = capturePluginRegistration({
     id: "tokenjuice",
     contracts: manifest.contracts,
     register: plugin.register,
   });
-  const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+  return createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
     captured.agentToolResultMiddlewares[0]!.handler,
   ]);
-  const raw = [
-    "On branch feature/fixture",
-    "",
-    "Changes not staged for commit:",
-    "\tmodified:   src/alpha.ts",
-    "\tmodified:   src/beta.ts",
-    "",
-    "no changes added to commit",
-    "",
-    "",
-  ].join("\r\n");
+}
+
+it("preserves the original result when the packaged reducer hits a malformed project rule", async () => {
+  const workdir = tempDirs.make("tokenjuice-malformed-rule-");
+  const rules = path.join(workdir, ".tokenjuice", "rules");
+  await mkdir(rules, { recursive: true });
+  await writeFile(path.join(rules, "malformed.json"), '{"unclosed":');
+  const original = {
+    content: [{ type: "text" as const, text: raw }],
+    details: { status: "completed", exitCode: 0, aggregated: raw, cwd: workdir },
+  };
+  const actual = await packagedRunner().applyToolResultMiddleware({
+    toolCallId: "tokenjuice-malformed-rule",
+    toolName: "exec",
+    args: { command: "git status", workdir },
+    result: original,
+    isError: false,
+  });
+  expect(actual).toBe(original);
+});
+
+it.each([
+  {
+    label: "timeout guidance",
+    suffix: "Command timed out. Verify the resulting state before retrying.",
+    details: { status: "failed", exitCode: null, timedOut: true, exitReason: "overall-timeout" },
+  },
+  {
+    label: "spill link",
+    suffix: "[full output: /workspace/tokenjuice/full-output.txt]",
+    details: {
+      status: "completed",
+      exitCode: 0,
+      fullOutputPath: "/workspace/tokenjuice/full-output.txt",
+    },
+  },
+])("keeps the host's original $label out of the packaged reducer", async ({ details, suffix }) => {
+  const original = {
+    content: [{ type: "text" as const, text: raw + suffix }],
+    details: { ...details, aggregated: raw },
+  };
+  const actual = await packagedRunner().applyToolResultMiddleware({
+    toolCallId: "tokenjuice-host-guidance",
+    toolName: "exec",
+    args: { command: "git status", workdir: "/workspace/tokenjuice" },
+    result: original,
+    isError: details.status === "failed",
+  });
+  expect(actual).toBe(original);
+});
+
+it("runs the packaged reducer while preserving exact reads and Code Mode results", async () => {
+  const runner = packagedRunner();
   const event = (command: string): AgentToolResultMiddlewareEvent => ({
     toolCallId: "tokenjuice-package-smoke",
     toolName: "exec",
@@ -80,26 +142,22 @@ it("runs the packaged reducer while preserving exact reads and Code Mode results
         status: "completed",
         exitCode: 0,
         aggregated: raw,
-        fullOutputPath: "/workspace/tokenjuice/full-output.txt",
       },
     },
     isError: false,
   });
-  const compacted = await runner.applyToolResultMiddleware(event("git status"));
-  expect(compacted.content).toEqual([
-    {
-      type: "text",
-      text: "Changes not staged:\nM: src/alpha.ts\nM: src/beta.ts\n\n[tokenjuice compacted bash output]",
-    },
-  ]);
-  expect(compacted.details).toMatchObject({
-    status: "completed",
-    exitCode: 0,
-    aggregated:
-      "Changes not staged:\nM: src/alpha.ts\nM: src/beta.ts\n\n[tokenjuice compacted bash output]",
-    fullOutputPath: "/workspace/tokenjuice/full-output.txt",
-    tokenjuice: { compacted: true },
-  });
+  const expectedCompacted =
+    "Changes not staged:\nM: src/alpha.ts\nM: src/beta.ts\n\n[tokenjuice compacted bash output]";
+  for (const toolName of ["exec", "bash", "gateway_exec", "node_exec"]) {
+    const compacted = await runner.applyToolResultMiddleware({ ...event("git status"), toolName });
+    expect(compacted.content, toolName).toEqual([{ type: "text", text: expectedCompacted }]);
+    expect(compacted.details, toolName).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      aggregated: expectedCompacted,
+      tokenjuice: { compacted: true },
+    });
+  }
   const exactRead = event("cat README.md");
   expect(await runner.applyToolResultMiddleware(exactRead)).toEqual(exactRead.result);
 

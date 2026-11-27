@@ -11,6 +11,8 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const rssField = Buffer.from("\nVmRSS:");
 const swapField = Buffer.from("\nVmSwap:");
+const pssField = Buffer.from("\nPss:");
+const swapPssField = Buffer.from("\nSwapPss:");
 
 // Reuse the buffer API where available; Node 26.8+'s native one-shot reader is
 // faster and exposes only the final file size to V8. Leave Bun's reader intact.
@@ -163,6 +165,17 @@ function shareReads<T>(read: (pid: number) => Promise<T>): (pid: number) => Prom
 }
 
 async function readMemory(pid: number): Promise<HostExecMemoryUsage> {
+  try {
+    const rollup = await readKernelFile(`/proc/${pid}/smaps_rollup`);
+    if (rollup.includes(pssField)) {
+      return {
+        memoryBytes: readStatusNumber(rollup, pssField) * 1024,
+        swapBytes: readStatusNumber(rollup, swapPssField) * 1024,
+      };
+    }
+  } catch {
+    // Old kernels and non-dumpable processes keep the full resident charge.
+  }
   const status = await readKernelFile(`/proc/${pid}/status`);
   return {
     memoryBytes: readStatusNumber(status, rssField) * 1024,
@@ -254,8 +267,8 @@ function totalUsage(): HostExecMemoryUsage {
     total.swapBytes += snapshot.extra.swapBytes;
     for (const [pid, usage] of snapshot.pids) {
       const previous = pids.get(pid);
-      // Overlapping retained roots share a charge. Shared pages across distinct
-      // processes can still overcount; the sampled backend is conservative.
+      // Overlapping retained roots share a charge. Pages shared by distinct
+      // processes count once by PSS, or once per process on the RSS fallback.
       pids.set(pid, {
         memoryBytes: Math.max(previous?.memoryBytes ?? 0, usage.memoryBytes),
         swapBytes: Math.max(previous?.swapBytes ?? 0, usage.swapBytes),

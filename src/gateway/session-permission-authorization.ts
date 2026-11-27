@@ -44,7 +44,6 @@ export function readSessionPermissionAuthority(
   return {
     profileId,
     scopes,
-    assertCurrent: authority?.assertCurrent,
     sessionCap:
       scopes === undefined || scopes.includes(ADMIN_SCOPE)
         ? undefined
@@ -59,7 +58,7 @@ export function readSessionPermissionAuthority(
 }
 
 /** Only actual invitees acquire the extra ceiling; all other writers retain normal policy. */
-export function authorizeSessionPermissionModeChange(params: {
+function authorizeSessionPermissionModeChange(params: {
   existingEntry: SessionEntry | undefined;
   permissionMode: SessionEntry["permissionMode"];
   authority: PermissionAuthority;

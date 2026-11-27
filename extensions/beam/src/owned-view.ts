@@ -1,3 +1,4 @@
+import { getGatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type {
   SessionCatalogListProviderParams,
@@ -30,7 +31,7 @@ function parseRequest(
     operation === "list"
       ? ["agentId", "catalogId", "search", "hostIds", "limitPerHost", "cursors"]
       : operation === "read"
-        ? ["agentId", "catalogId", "hostId", "threadId", "limit", "cursor"]
+        ? ["agentId", "catalogId", "hostId", "threadId", "limit", "cursor", "includePreviewImage"]
         : ["agentId", "catalogId", "hostId", "threadId"];
   if (
     Object.keys(params).some((key) => !allowed.includes(key)) ||
@@ -44,6 +45,7 @@ function parseRequest(
       params.hostId !== "gateway" ||
       typeof params.threadId !== "string" ||
       !/^[a-f0-9]{32}$/.test(params.threadId) ||
+      (params.includePreviewImage !== undefined && params.includePreviewImage !== true) ||
       (params.cursor !== undefined &&
         (typeof params.cursor !== "string" || params.cursor.length > 256))
     ) {
@@ -65,6 +67,7 @@ function parseRequest(
       request: {
         hostId: "gateway",
         threadId: params.threadId,
+        ...(params.includePreviewImage === true ? { includePreviewImage: true as const } : {}),
         cursor: params.cursor,
         limit: limit(params.limit),
       } satisfies SessionCatalogReadProviderParams,
@@ -106,51 +109,36 @@ function parseRequest(
 export function createBeamOwnedViewHandler(
   store: BeamStore,
   operation: "list" | "read" | "resolve" | "continue",
+  resolveAuthority = getGatewayRequestAuthorityV1,
 ) {
   return async (
     options: Pick<
       GatewayRequestHandlerOptions,
-      | "params"
-      | "client"
-      | "respond"
-      | "signal"
-      | "hasCurrentClientAuthority"
-      | "sessionMutationAuthorization"
-      | "copySessionCatalogToGateway"
+      "params" | "respond" | "sessionMutationAuthorization" | "copySessionCatalogToGateway"
     >,
   ) => {
-    const {
-      params,
-      client,
-      respond,
-      signal,
-      hasCurrentClientAuthority,
-      sessionMutationAuthorization,
-    } = options;
-    const authority = client?.internal?.operatorAccessAuthority;
-    const profileId = client?.authenticatedUserProfile?.profileId;
-    const assertCurrent = () => {
-      if (
-        !sessionMutationAuthorization ||
-        !profileId ||
-        !client?.connect.scopes?.includes("operator.sessions.write") ||
-        authority?.requiredPolicyPlugin !== "visitor-access" ||
-        authority.gatewayAccessGrant?.pluginId !== "visitor-access" ||
-        signal?.aborted ||
-        hasCurrentClientAuthority?.() === false
-      ) {
-        throw new BeamOwnedViewForbiddenError("Beam requires an active verified Visitor publisher");
-      }
-      // The dispatcher composes current named-role, identity, and request lifetime here,
-      // including for sessionless plugin methods. The Visitor check retains the original grant.
-      try {
-        sessionMutationAuthorization.assertCurrent();
-        authority.assertCurrent();
-      } catch {
-        throw new BeamOwnedViewForbiddenError("Beam publisher authority expired");
-      }
+    const { params, respond, sessionMutationAuthorization } = options;
+    const authority = resolveAuthority();
+    const profileId = authority?.personProfileId;
+    const forbidden = {
+      code: "FORBIDDEN",
+      message:
+        "Beam is not available to this publisher; sign in with the current publishing Visitor account",
     };
+    if (
+      !authority ||
+      !profileId ||
+      !sessionMutationAuthorization ||
+      !authority.scopes.includes("operator.sessions.write") ||
+      authority.requiredGrantPluginId !== "visitor-access"
+    ) {
+      respond(false, undefined, forbidden);
+      return;
+    }
+    const requiredGrant = authority.requiredGrantPluginId;
+    const assertCurrent = () => authority.assertCurrent(requiredGrant);
     try {
+      await authority.revalidate(requiredGrant);
       assertCurrent();
       let parsed: ReturnType<typeof parseRequest>;
       try {
@@ -221,14 +209,11 @@ export function createBeamOwnedViewHandler(
       } else {
         result = await catalog.read(parsed.request);
       }
+      await authority.revalidate(requiredGrant);
       assertCurrent();
       respond(true, result);
     } catch (error) {
-      let failure = {
-        code: "FORBIDDEN",
-        message:
-          "Beam is not available to this publisher; sign in with the current publishing Visitor account",
-      };
+      let failure = forbidden;
       try {
         assertCurrent();
         if (!(error instanceof BeamOwnedViewForbiddenError)) {

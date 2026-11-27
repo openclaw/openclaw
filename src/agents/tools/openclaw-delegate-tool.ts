@@ -72,6 +72,7 @@ type DelegateToolOptions = Pick<
   | "currentThreadTs"
   | "agentThreadId"
   | "config"
+  | "readDelegationConfig"
   | "execSession"
   | "execOverrides"
   | "fsPolicy"
@@ -135,10 +136,11 @@ export function createOpenClawDelegateToolsForRun(
   const sessionKey = options.runSessionKey ?? options.agentSessionKey;
   const defaultSessionId = stableDelegationSessionId(sessionKey, options.sessionAgentId);
   const execPolicy = preparedExecDefaults ?? resolveExecDefaultsLegacy(execDefaultsParams(options));
-  const readConfig = options.config
-    ? createRuntimeConfigReader(options.config)
-    : () => selectLiveRuntimeConfig();
-  const capturedConfig = readConfig();
+  const readConfig =
+    options.readDelegationConfig ??
+    (options.config ? createRuntimeConfigReader(options.config) : () => selectLiveRuntimeConfig());
+  // Containment is compared with admission, not a newer live config.
+  const capturedConfig = options.config ?? readConfig();
   const assertAutoApproveChangesCurrent = () => {
     options.abortSignal?.throwIfAborted();
     options.assertInvocationCurrent?.();

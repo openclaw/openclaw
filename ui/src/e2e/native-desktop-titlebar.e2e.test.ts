@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
@@ -288,6 +292,55 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
   await namedButton(caption, "Minimize window").click({ trial: true });
 }
 
+// Linux and Windows publish the same caption width, so one platform covers both.
+// The dock opens at its 320px minimum so the title and actions share the narrowest header.
+async function keepsHomeActionsClearOfCaption(page: Page) {
+  await installWindowChrome(page, "linux");
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "openclaw.custodian.panel.v1",
+      JSON.stringify({ dock: "right", width: 320 }),
+    ),
+  );
+  // Home opens the side dock from a conversation, and stays disabled until the
+  // Gateway advertises chat history.
+  const sessionKey = "agent:main:work";
+  await installMockGateway(page, {
+    sessionKey,
+    sessions: [{ key: sessionKey, label: "Main", kind: "direct", updatedAt: Date.now() }],
+    featureMethods: [
+      "chat.metadata",
+      "chat.startup",
+      "chat.history",
+      "chat.send",
+      "sessions.companion.state",
+      "sessions.create",
+    ],
+    historyMessages: [{ role: "assistant", content: "Home panel caption regression." }],
+  });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+  await page.locator(".chat-pane__header").waitFor();
+  await page.locator(".sidebar-footer-bar__home").click();
+  const actions = page.locator(".assistant-panel--right .assistant-panel-actions button");
+  const caption = page.locator(".openclaw-window-controls");
+  await Promise.all([actions.first().waitFor(), caption.waitFor()]);
+  const captionBox = (await caption.boundingBox())!;
+  const titleRight = await page
+    .locator(".assistant-panel--right .assistant-panel-title > *")
+    .evaluateAll((items) => Math.max(...items.map((item) => item.getBoundingClientRect().right)));
+  expect(titleRight).toBeLessThanOrEqual((await actions.first().boundingBox())!.x);
+  for (const action of await actions.all()) {
+    const box = (await action.boundingBox())!;
+    const label = `${await action.getAttribute("aria-label")}`;
+    expect(
+      box.y >= captionBox.y + captionBox.height || box.x + box.width <= captionBox.x,
+      label,
+    ).toBe(true);
+    // A trial click fails when a caption button receives the pointer instead.
+    await action.click({ trial: true });
+  }
+}
+
 async function alignsNativeHeaders(
   page: Page,
   host: "web" | "macos" | "tauri-linux" | "tauri-macos",
@@ -467,6 +520,11 @@ suite.define(() => {
       ({ page }) => keepsWindowControlsClear(page, platform, width),
     ),
   );
+  it("keeps the right-docked Home actions clear of the window controls", () =>
+    suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
+      ({ page }) => keepsHomeActionsClearOfCaption(page),
+    ));
   it.each(["web", "macos", "tauri-linux", "tauri-macos"] as const)(
     "aligns the %s rail, panel header, and content history row",
     (host) =>

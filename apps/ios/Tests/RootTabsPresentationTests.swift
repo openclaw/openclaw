@@ -42,10 +42,10 @@ struct RootTabsPresentationTests {
     @Test func `session activity clamps current and future timestamps to just now`() {
         let now = Date(timeIntervalSince1970: 1_750_000_000)
 
-        #expect(CommandCenterTab.relativeTimeText(
+        #expect(SessionPresentation.relativeTimeText(
             forMilliseconds: now.timeIntervalSince1970 * 1000,
             relativeTo: now) == "just now")
-        #expect(CommandCenterTab.relativeTimeText(
+        #expect(SessionPresentation.relativeTimeText(
             forMilliseconds: now.addingTimeInterval(30).timeIntervalSince1970 * 1000,
             relativeTo: now) == "just now")
     }
@@ -710,16 +710,6 @@ struct RootTabsPresentationTests {
             activeAgentID: "main",
             groups: []).flatMap(\.nodes).map(\.session.key)
         #expect(keys.contains("agent:main:cron:daily") == showsAutomation)
-    }
-
-    @Test func `sidebar agent badges use canonical identity fallback`() {
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable(" 🦞 ")]) == "🦞")
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable("?")]) == "RA")
-        #expect(RootSidebar.agentBadge(name: "Research Agent", identity: nil) == "RA")
     }
 
     @Test func `session work subtitle mirrors the web repo and branch line`() {

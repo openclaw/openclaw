@@ -538,6 +538,12 @@ it.each(["profile", "secret-ref"] as const)(
       vi.stubEnv("OPENAI_API_KEY", "");
       vi.stubEnv("OPENAI_PLATFORM_KEY", "secret-ref-platform-key");
     }
+    const readAmbientKey = vi.fn(() => undefined);
+    const env = Object.defineProperty(
+      { OPENAI_PLATFORM_KEY: "secret-ref-platform-key" },
+      "OPENAI_API_KEY",
+      { get: readAmbientKey },
+    );
     const config = openAIConfig({
       apiKey: profile
         ? "configured-platform-key"
@@ -551,13 +557,14 @@ it.each(["profile", "secret-ref"] as const)(
       ...subscription,
       config,
       authProfileStore: store,
-      env: profile ? {} : process.env,
+      env,
     });
     expect(plan).toMatchObject({
       selectedAuthMode: profile ? "api_key" : "api-key",
       modelRoute: apiRoute,
     });
     if (profile) {
+      expect(readAmbientKey).toHaveBeenCalled();
       expect(plan).toMatchObject({
         forwardedAuthProfileId: id,
         forwardedAuthProfileCandidateIds: [id],
@@ -585,6 +592,7 @@ it.each(["profile", "secret-ref"] as const)(
         { kind: "direct", evidence: "provider-config", authorization: "declared" },
       ]);
     } else {
+      expect(readAmbientKey).not.toHaveBeenCalled();
       expect(attempts).toEqual([
         {
           kind: "direct",

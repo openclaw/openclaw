@@ -45,7 +45,6 @@ import {
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
-import { ADMIN_SCOPE } from "./method-scopes.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import {
   authorizeGatewaySessionCreation,
@@ -326,7 +325,7 @@ async function invokeGatewayToolWithSignal(
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     operatorRoleActor: params.operatorRoleActor,
     openclawIdPrincipal: params.openclawIdPrincipal ?? sourceClient?.internal?.openclawIdPrincipal,
-    scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
+    scopes: [...(params.operatorScopes ?? [])],
   });
   const sessionEntry = params.preparedSession
     ? params.preparedSession.entry
@@ -497,6 +496,8 @@ async function invokeGatewayToolWithSignal(
     sessionEntry,
     sessionWorkspace,
   );
+  const sessionModel = resolveSessionModelRef(params.cfg, sessionEntry, selectedAgentId);
+  const authProfileId = sessionEntry?.authProfileOverride;
   const { resolved, mcpUnavailable } = await resolveToolsWithInvocationMcp({
     toolName,
     knownCoreTool,
@@ -508,10 +509,7 @@ async function invokeGatewayToolWithSignal(
         sessionPermissionPolicy,
         preparedSessionWorkspaceDir: sessionWorkspace,
         agentId: selectedAgentId,
-        webSearchModelSelection: {
-          ...resolveSessionModelRef(params.cfg, sessionEntry, selectedAgentId),
-          authProfileId: sessionEntry?.authProfileOverride,
-        },
+        webSearchModelSelection: sessionModel && { ...sessionModel, authProfileId },
         messageProvider: params.messageChannel,
         accountId: params.accountId,
         agentTo: params.agentTo,

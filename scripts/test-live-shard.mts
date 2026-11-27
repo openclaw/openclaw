@@ -95,6 +95,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/gateway/gateway-cli-backend.live.test.ts", ["OPENCLAW_LIVE_CLI_BACKEND"]],
   ["src/gateway/gateway-codex-bind.live.test.ts", ["OPENCLAW_LIVE_CODEX_BIND"]],
   ["src/gateway/gateway-codex-harness.live.test.ts", ["OPENCLAW_LIVE_CODEX_HARNESS"]],
+  ["src/gateway/gateway-codex-subagent-shell.live.test.ts", ["OPENCLAW_LIVE_CODEX_SUBAGENT_SHELL"]],
   [
     "src/gateway/gateway-personal-native-child-abort.live.test.ts",
     ["OPENCLAW_LIVE_CODEX_HARNESS_PERSONAL_STOP"],

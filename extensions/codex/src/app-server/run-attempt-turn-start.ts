@@ -15,7 +15,7 @@ import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import {
   isCodexActiveCompactTurnError,
   clearCodexBindingAfterInvalidImagePayload,
-  shouldUseFreshCodexThreadAfterContextEngineOverflow,
+  shouldUseFreshCodexThreadAfterContextOverflow,
 } from "./run-attempt-state.js";
 import type {
   CodexStartedTurn,
@@ -86,7 +86,7 @@ export async function startCodexAttemptTurn(
       started === undefined &&
       !params.providerReviewAcknowledgment &&
       resourceState.thread.connectionScope !== "supervision" &&
-      shouldUseFreshCodexThreadAfterContextEngineOverflow({
+      shouldUseFreshCodexThreadAfterContextOverflow({
         error: turnStartError,
         contextEngineActive: Boolean(activeContextEngine),
         thread: resourceState.thread,
@@ -100,7 +100,7 @@ export async function startCodexAttemptTurn(
           params.expectedSessionRuntimeOwnership,
         );
         embeddedAgentLog.warn(
-          "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
+          "codex app-server context overflow on turn/start; retrying with fresh thread",
           { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
         );
         const clearedBinding = await clearCodexBindingForClient(
@@ -111,7 +111,7 @@ export async function startCodexAttemptTurn(
         );
         if (!clearedBinding) {
           embeddedAgentLog.warn(
-            "codex app-server preserved newer context-engine binding after resume overflow; skipping fresh retry",
+            "codex app-server preserved newer binding after overflow; skipping fresh retry",
             { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
           );
         } else {

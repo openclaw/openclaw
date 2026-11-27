@@ -32,10 +32,8 @@ function writable(store?: MemoryProviderHandle["store"], advertise = true) {
   return handle;
 }
 
-const settle = (handle: MemoryProviderHandle, readOnly = false) =>
-  settleMemoryProviderOpen({ provider: handle }, "notes", context, context, {}, undefined, {
-    readOnly,
-  });
+const settle = (handle: MemoryProviderHandle) =>
+  settleMemoryProviderOpen({ provider: handle }, "notes", context, context, {});
 
 it("passes store through a bound lease and checks the returned reference", async () => {
   const store = vi.fn(async (request: MemoryStoreRequest) => ({
@@ -55,13 +53,6 @@ it("passes store through a bound lease and checks the returned reference", async
   await expect(provider!.store!({ text: "   " })).rejects.toThrow("non-empty text");
   await expect(provider!.store!({ text: "x".repeat(64 * 1024 + 1) })).rejects.toThrow("exceeds");
   expect(store).toHaveBeenCalledTimes(2);
-});
-
-it("keeps status leases read-only", async () => {
-  const store = vi.fn();
-  const { provider } = await settle(writable(store), true);
-  await expect(provider!.store!({ text: "x" })).rejects.toThrow("read-only");
-  expect(store).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -89,15 +80,12 @@ it("serves a file-shaped runtime as a backend through the legacy adapter", async
     readFile: vi.fn(async () => ({ text: "legacy fact body", path: "memory/notes.md" })),
     status: () => ({ backend: "builtin" as const, files: 1, chunks: 1 }),
   } as unknown as RegisteredMemorySearchManager;
-  const prepareReload = vi.fn();
   const getMemorySearchManager = vi.fn(async () => ({ manager }));
   const runtime = {
     getMemorySearchManager,
     resolveMemoryBackendConfig: () => ({ backend: "builtin" as const }),
-    prepareReload,
   } as unknown as MemoryPluginRuntime;
   const backend = createLegacyBackendProviderRuntime("memory-core", runtime);
-  expect("prepareReload" in backend).toBe(true);
   const opened = await backend.open({ cfg: {}, agentId: "main", context, purpose: "status" });
   expect(getMemorySearchManager).toHaveBeenCalledWith({
     cfg: {},

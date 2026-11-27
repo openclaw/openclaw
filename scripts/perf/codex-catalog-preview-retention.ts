@@ -26,7 +26,7 @@ import type {
 } from "../../extensions/codex/src/session-catalog-index-state.js";
 import { CodexCatalogIndex } from "../../extensions/codex/src/session-catalog-index.js";
 import type { CodexSessionCatalogPage } from "../../extensions/codex/src/session-catalog-types.js";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -246,12 +246,7 @@ try {
   await collect();
   const heapBefore = process.memoryUsage().heapUsed;
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   observer?.observe({ entryTypes: ["gc"] });
   if (values["trace-markers"]) {

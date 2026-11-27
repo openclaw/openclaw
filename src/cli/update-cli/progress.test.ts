@@ -1,13 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
-import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { updateRunWarningMessages } from "../../infra/update-run-step.js";
-import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { CommandOptions } from "../../process/exec.js";
@@ -28,9 +26,6 @@ import {
 
 vi.mock("../../infra/update-run-ledger.js", () => ({ getUpdateRun: vi.fn() }));
 vi.mock("../../infra/update-run-reader.js", () => ({ getUpdateRunForProgressAsync: vi.fn() }));
-vi.mock("../../infra/update-failure-report-artifact.js", () => ({
-  writeUpdateRunReportArtifact: vi.fn(),
-}));
 
 const runId = "6631ecee-adbf-41e8-a0e3-1b88b28b0a59";
 const context = { runId, env: { OPENCLAW_STATE_DIR: "/isolated/update-progress" } };
@@ -42,7 +37,6 @@ const phaseLines = () =>
   log.mock.calls.flat().filter((line) => typeof line === "string" && line.startsWith("Phase:"));
 const expectPhases = (...phases: UpdateRunRecord["phase"][]) =>
   expect(phaseLines()).toEqual(phases.map((phase) => `Phase: ${phase}`));
-const reportPath = `/isolated/update-progress/${runId}.md`;
 const jsonOutput = () => vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 const silenceErrors = () => vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 const healthyRecovery = (version: string) =>
@@ -155,7 +149,6 @@ describe("update progress", () => {
     vi.mocked(getUpdateRunForProgressAsync)
       .mockReset()
       .mockImplementation(async () => structuredClone(run));
-    vi.mocked(writeUpdateRunReportArtifact).mockReset().mockResolvedValue(reportPath);
     vi.mocked(getUpdateRun).mockImplementation(() => run);
     tty.set(false);
   });
@@ -164,12 +157,6 @@ describe("update progress", () => {
     const controller = createUpdateProgress(...args);
     await vi.advanceTimersByTimeAsync(0);
     return controller;
-  }
-
-  async function printFailure(failed: UpdateRunResult["steps"][number]) {
-    log.mockClear();
-    await printResult({ ...result, runId: undefined, status: "error", steps: [failed] }, {});
-    return printed();
   }
 
   function appendPhases(phase: UpdateRunRecord["phase"], ...completed: UpdateRunRecord["phase"][]) {
@@ -185,97 +172,42 @@ describe("update progress", () => {
     vi.restoreAllMocks();
   });
 
-  it("prepares report artifacts before emitting without later history or filesystem work", async () => {
+  it("captures the result before emitting without reopening history", async () => {
     const json = jsonOutput();
     const emit = await prepareResult(result, { json: true, run: context });
     expect(json).not.toHaveBeenCalled();
     expect(log).not.toHaveBeenCalled();
     refuseHistory("released history must not be reopened");
-    vi.mocked(writeUpdateRunReportArtifact).mockRejectedValue(new Error("released report write"));
     emit();
-    expect(writeUpdateRunReportArtifact).toHaveBeenCalledOnce();
-    expect(json).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ status: "ok", reportPath }),
-    );
+    expect(json).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: "ok" }));
   });
 
-  it.each([
-    {
-      platform: "linux" as const,
-      path: "/report files/operator's $HOME `echo nope`;[1].md",
-      command:
-        "Read report (shell): cat -- '/report files/operator'\\''s $HOME `echo nope`;[1].md'",
-    },
-    {
-      platform: "win32" as const,
-      path: "C:\\report files\\operator's ‘notes’ $HOME `echo nope`;[1].md",
-      command:
-        "Read report (PowerShell): Get-Content -LiteralPath 'C:\\report files\\operator''s ‘‘notes’’ $HOME `echo nope`;[1].md'",
-    },
-  ])("prints a copyable $platform read command beside the saved path", async (fixture) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue(fixture.platform);
-    vi.mocked(writeUpdateRunReportArtifact).mockResolvedValue(fixture.path);
-    await printResult(result, { run: context });
-    expect(log).toHaveBeenCalledWith(`Report: ${fixture.path}`);
-    expect(log).toHaveBeenCalledWith(fixture.command);
+  it("replaces late warning snapshots without reopening history", async () => {
+    const writeJson = jsonOutput();
+    const captured: UpdateRunRecord = {
+      ...run,
+      status: "succeeded",
+      phase: "finished",
+      steps: [
+        { step: "warning:cleanup", status: "completed", detail: "old warning" },
+        { step: "warning:cleanup:2", status: "completed", detail: "old extra warning" },
+        { step: "warning:cleanup:neighbor", status: "completed", detail: "other warning" },
+      ],
+    };
+    const saved = structuredClone(captured);
+    const read = refuseHistory("Captured reporting must not reopen history.").mockClear();
+    const emit = await prepareResult(result, { json: true, run: context }, { record: captured });
+    for (const warnings of [undefined, ["current warning"], []]) {
+      writeJson.mockClear();
+      emit([stepFixture("cleanup", { exitCode: 0, warnings })]);
+      const expected = [...(warnings ?? ["old warning", "old extra warning"]), "other warning"];
+      const output = writeJson.mock.calls.at(-1)?.[0] as { run: UpdateRunRecord };
+      expect(output.run.status).toBe("succeeded");
+      expect(updateRunWarningMessages(output.run.steps).toSorted()).toEqual(expected.toSorted());
+    }
+    expect(read).not.toHaveBeenCalled();
+    expect(captured).toEqual(saved);
   });
-
-  it("omits path and read guidance when the report could not be saved", async () => {
-    silenceErrors();
-    vi.mocked(writeUpdateRunReportArtifact).mockRejectedValue(new Error("report unavailable"));
-    await printResult(result, { run: context });
-    expect(printed()).not.toContain("Report:");
-    expect(printed()).not.toContain("Read report");
-  });
-
-  it.each([true, false])(
-    "replaces late warning snapshots without reopening history (JSON: %s)",
-    async (json) => {
-      const writeJson = jsonOutput();
-      const captured: UpdateRunRecord = {
-        ...run,
-        status: "succeeded",
-        phase: "finished",
-        steps: [
-          { step: "warning:cleanup", status: "completed", detail: "old warning" },
-          { step: "warning:cleanup:2", status: "completed", detail: "old extra warning" },
-          { step: "warning:cleanup:neighbor", status: "completed", detail: "other warning" },
-        ],
-      };
-      const saved = structuredClone(captured);
-      const read = refuseHistory("Captured reporting must not reopen history.").mockClear();
-      const emit = await prepareResult(
-        result,
-        { json, run: context },
-        { record: captured, writeArtifacts: false },
-      );
-      for (const warnings of [undefined, ["current warning"], []]) {
-        log.mockClear();
-        writeJson.mockClear();
-        emit([stepFixture("cleanup", { exitCode: 0, warnings })]);
-        const expected = [...(warnings ?? ["old warning", "old extra warning"]), "other warning"];
-        if (json) {
-          const output = writeJson.mock.calls.at(-1)?.[0] as { run: UpdateRunRecord };
-          expect(output.run.status).toBe("succeeded");
-          expect(updateRunWarningMessages(output.run.steps).toSorted()).toEqual(
-            expected.toSorted(),
-          );
-        } else {
-          expect(printed()).toContain(`${expected.length} warning`);
-          for (const message of expected) {
-            expect(printed()).toContain(message);
-          }
-          if (warnings) {
-            expect(printed()).not.toContain("old warning");
-            expect(printed()).not.toContain("old extra warning");
-          }
-        }
-      }
-      expect(read).not.toHaveBeenCalled();
-      expect(writeUpdateRunReportArtifact).not.toHaveBeenCalled();
-      expect(captured).toEqual(saved);
-    },
-  );
 
   it.each([true, false])(
     "renders step progress with only bound ledger phases (bound: %s)",
@@ -375,7 +307,7 @@ describe("update progress", () => {
       const nextAction = "Update is not finished. Check progress: openclaw update status";
       await printResult(result, { run: context }, { nextAction });
       const lines = log.mock.calls.flat();
-      expect(lines.at(-1)).toBe(nextAction);
+      expect(lines.join("\n")).toContain("openclaw update status");
       expect(lines.join("\n").match(/openclaw update status/g)).toHaveLength(1);
       expect(phaseLines()).toEqual(
         present ? ["Phase: requested", "Phase: verifying"] : ["Phase: requested"],
@@ -387,24 +319,18 @@ describe("update progress", () => {
     },
   );
 
-  it("prints the failure and saved report when history cannot be read", async () => {
+  it("prints the failure summary when history cannot be read", async () => {
     silenceErrors();
     refuseHistory("history temporarily unavailable");
     await printResult({ ...result, status: "error", reason: "doctor-failed" }, { run: context });
     const text = printed();
-    expect(text).toContain("OpenClaw update failed: doctor-failed");
-    expect(text).toContain(`Report: ${reportPath}`);
+    expect(text).toContain("OpenClaw couldn't finish updating.");
+    expect(text).toContain("doctor-failed");
   });
 
-  it("settles the pending report before exit without reopening retained history", async () => {
+  it("emits pending recovery without reopening retained history", async () => {
     const output = jsonOutput();
     silenceErrors();
-    const entered = createDeferred();
-    const saved = createDeferred<string>();
-    vi.mocked(writeUpdateRunReportArtifact).mockImplementation(async () => {
-      entered.resolve();
-      return saved.promise;
-    });
     presentation = await observe(true, context);
     log.mockClear();
     refuseHistory("retained history must not be reopened").mockClear();
@@ -416,24 +342,9 @@ describe("update progress", () => {
       }),
       { json: true },
     );
-    let exited = false;
-    const completion = reporting.catch((error: unknown) => {
-      exited = true;
-      return error;
-    });
-    try {
-      await entered.promise;
-      await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS);
-      expect(getUpdateRun).not.toHaveBeenCalled();
-      expect(output).not.toHaveBeenCalled();
-      expect(log).not.toHaveBeenCalled();
-      expect(exited).toBe(false);
-    } finally {
-      saved.resolve(reportPath);
-    }
-    await expect(completion).resolves.toMatchObject({ code: 1 });
+    await expect(reporting).rejects.toMatchObject({ code: 1 });
     expect(output).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ status: "error", reason: "update-recovery-pending", reportPath }),
+      expect.objectContaining({ status: "error", reason: "update-recovery-pending" }),
     );
     expect(getUpdateRun).not.toHaveBeenCalled();
   });
@@ -471,9 +382,6 @@ describe("update progress", () => {
     const progress = printed();
     expect(progress.match(/Unable to load plugin/gu)).toHaveLength(1);
     expect(progress).not.toContain("The CLI command failed");
-    const report = await printFailure({ ...failed, cwd: "/fixture" });
-    expect(report.match(/Unable to load plugin/gu)).toHaveLength(1);
-    expect(report).not.toContain("Help: openclaw --help");
     for (const stdoutTail of [
       "Additional diagnostic",
       JSON.stringify({ ...envelope, details: "Additional diagnostic" }),
@@ -482,7 +390,6 @@ describe("update progress", () => {
       const detailed = { ...failed, stdoutTail, cwd: "/fixture" };
       presentation.progress.onStepComplete?.(detailed);
       expect(printed()).toContain("Additional diagnostic");
-      expect(await printFailure(detailed)).toContain("Additional diagnostic");
     }
     log.mockClear();
     presentation.progress.onStepComplete?.({
@@ -513,7 +420,6 @@ describe("update progress", () => {
     );
     expect(report).toBeGreaterThan(finalPhase);
     expectPhases("requested", "restarting", "verifying", "finished");
-    expect(lines.join("\n")).toContain("service running; version verified");
   });
 
   it("keeps JSON silent until one public result without mutating private history", async () => {
@@ -533,7 +439,6 @@ describe("update progress", () => {
     expect(writeJson).toHaveBeenCalledExactlyOnceWith({
       ...result,
       run: { ...run, origin: {} },
-      reportPath,
     });
     expect(JSON.stringify(writeJson.mock.calls)).not.toContain("private recovery detail");
     expect(run).toEqual(retained);
@@ -561,15 +466,15 @@ describe("update progress", () => {
           : {}),
       };
 
-      await printResult(latest, { run: context });
-      const output = printed();
-      expect(output).toContain(
-        rolledBack
-          ? "OpenClaw update rolled back to 2026.9.4: doctor-failed"
-          : "OpenClaw update failed: doctor-failed",
+      const writeJson = jsonOutput();
+      await printResult(latest, { json: true, run: context });
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "doctor-failed",
+          verification: latest.verification,
+          run: expect.objectContaining({ status: "rolled-back", reason: run.reason }),
+        }),
       );
-      const identity = rolledBack ? "version verified" : "version mismatch";
-      expect(output).toContain(identity);
       expect(run).toEqual(saved);
     },
   );
@@ -623,22 +528,15 @@ describe("update progress", () => {
               ],
       };
 
-      await printResult(latest, { run: context });
-
-      const output = printed();
-      expect(output).toContain("gateway booted");
-      expect(output).toContain("Retained lifecycle guidance");
-      expect(output).not.toContain("2026.8.99");
-      if (serviceRunning === undefined) {
-        expect(output).not.toMatch(/service running|service stopped|verified serving/u);
-      } else {
-        expect(output).toContain(serviceRunning ? "service running" : "service stopped");
-        expect(output).toContain(
-          serviceRunning
-            ? "verified serving 2026.9.5; restart remains unsafe (state-migration-started)"
-            : "readiness unverified (service-not-running)",
-        );
-      }
+      const writeJson = jsonOutput();
+      await printResult(latest, { json: true, run: context });
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          verification: latest.verification,
+          ...(latest.recovery ? { recovery: latest.recovery } : {}),
+          run: expect.objectContaining({ verification: saved.verification }),
+        }),
+      );
       expect(run).toEqual(saved);
     },
   );
@@ -673,11 +571,10 @@ describe("update progress", () => {
 
     const output = printed();
     expect(output).toContain("OpenClaw updated to 2026.9.5");
-    expect(output).toContain("Recorded recovery: verified serving 2026.9.5.");
     expect(output).not.toContain("stale-readiness-failure");
     expect(output).not.toContain("state-migration-started");
     await printResult(stale, { json: true, run: context }, { record: captured });
-    expect(writeJson).toHaveBeenCalledExactlyOnceWith({ ...stale, run: saved, reportPath });
+    expect(writeJson).toHaveBeenCalledExactlyOnceWith({ ...stale, run: saved });
     expect(read).not.toHaveBeenCalled();
     expect(captured).toEqual(saved);
   });

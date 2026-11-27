@@ -59,8 +59,6 @@ export function createGatewayTestState() {
     hooksConfig: initial<HooksConfig | undefined>(undefined),
     legacyIssues: new Array<{ path: string; message: string }>(),
     legacyParsed: initial<Record<string, unknown>>({}),
-    migrationConfig: initial<Record<string, unknown> | null>(null),
-    migrationChanges: new Array<string>(),
   };
 }
 

@@ -3,7 +3,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { generateSecureHex } from "../infra/secure-random.js";
-import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
+import { classifyAgentToolSource, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -17,6 +17,7 @@ import {
 } from "./before-tool-call-metadata.js";
 import { disposeCodeModeResults } from "./code-mode-results.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
+import { filterParticipationTools } from "./participation-ceiling.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
@@ -134,6 +135,7 @@ function sameCatalogDescriptor(a: ToolSearchCatalogEntry, b: ToolSearchCatalogEn
       a.description === b.description &&
       (a.directVisible === true) === (b.directVisible === true) &&
       (a.requiresExactId === true) === (b.requiresExactId === true) &&
+      (a.onDemand === true) === (b.onDemand === true) &&
       (a.mcp === b.mcp || stableStringify(a.mcp) === stableStringify(b.mcp)) &&
       sameCatalogSchema(a.source, a.parameters, b.parameters) &&
       sameCatalogSchema(a.source, a.outputSchema, b.outputSchema))
@@ -210,12 +212,22 @@ function toCatalogEntry(
     ...(source === "openclaw" && (tool as AnyAgentTool).outputSchema
       ? { outputSchema: (tool as AnyAgentTool).outputSchema }
       : {}),
+    ...(source === "openclaw" && isOnDemandCatalogTool(tool) ? { onDemand: true as const } : {}),
     tool: catalogTool,
   };
 }
 
 function shouldCatalogTool(tool: AnyAgentTool): boolean {
   return !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) && tool.catalogMode !== "direct-only";
+}
+
+/** Deferred until called by name; only a direct call preserves its result and handoff contract. */
+export function isOnDemandCatalogTool(tool: CatalogTool): boolean {
+  return (
+    "catalogMode" in tool &&
+    tool.catalogMode === "on-demand" &&
+    classifyAgentToolSource(tool).source === "openclaw"
+  );
 }
 
 /**
@@ -248,8 +260,9 @@ export function registerHeadlessToolSearchCatalog(params: {
     : config?.tools?.gatewayPolicy
       ? { config }
       : undefined;
+  // A headless catalog has no top-level call, so on-demand tools stay out like direct-only ones.
   const entries = applyGatewayToolPolicy([...tools], config)
-    .filter(shouldCatalogTool)
+    .filter((tool) => shouldCatalogTool(tool) && !isOnDemandCatalogTool(tool))
     .map((tool) => {
       const scopedTool = hookContext
         ? rewrapToolWithBeforeToolCallHook(tool, {
@@ -455,6 +468,13 @@ export function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSes
   if (!catalog) {
     throw new ToolInputError("Tool Search catalog is unavailable for this run.");
   }
+  const participationCeiling = ctx.pluginExecutionAuthority?.participationCeiling;
+  if (participationCeiling) {
+    // Catalog refs are run-owned. Narrow exact-id dispatch as well as discovery.
+    catalog.entries = filterParticipationTools(catalog.entries, participationCeiling, (entry) =>
+      getPluginToolMeta(entry.tool),
+    );
+  }
   return catalog;
 }
 
@@ -534,6 +554,11 @@ export function compactToolSearchCatalogEntry(
     input: entry.source === "client" ? "unknown" : compactToolInputHint(entry.parameters),
     ...(instructionsHint ? { instructionsHint } : {}),
     ...(output ? { output } : {}),
+    ...(entry.onDemand
+      ? {
+          call: "loads as a top-level tool once looked up; call it by name, not through dispatch_action or exec",
+        }
+      : {}),
   };
 }
 
@@ -579,6 +604,11 @@ export function applyToolCatalogCompaction(
   const directTools: AnyAgentTool[] = [];
   const catalog: ToolSearchCatalogEntry[] = [];
   const selected = createToolSearchSelectionMatcher(params.selection);
+  // An on-demand tool stays direct unless this runner can load it on its first direct call.
+  const keepOnDemandDirect = (tool: AnyAgentTool) =>
+    isOnDemandCatalogTool(tool) &&
+    (catalogRef.loadsOnDemandTools !== true ||
+      catalogRef.promotedToolNames?.has(tool.name) === true);
   for (const tool of tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(
@@ -593,6 +623,7 @@ export function applyToolCatalogCompaction(
     }
     if (
       shouldCatalogTool(tool) &&
+      !keepOnDemandDirect(tool) &&
       (params.shouldCatalogTool?.(tool) ?? true) &&
       selected({ ...classifyAgentToolSource(tool), name: tool.name })
     ) {
@@ -614,7 +645,9 @@ export function applyToolCatalogCompaction(
     directTools,
   });
   catalogRef.directOnlyToolNames = new Set(
-    visible.filter((tool) => tool.catalogMode === "direct-only").map((tool) => tool.name),
+    visible
+      .filter((tool) => tool.catalogMode === "direct-only" || keepOnDemandDirect(tool))
+      .map((tool) => tool.name),
   );
   catalogRef.baselineDirectOnlyToolNames = catalogRef.directOnlyToolNames;
   return {

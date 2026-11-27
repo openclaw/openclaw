@@ -21,6 +21,7 @@ import {
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
 } from "../../infra/gateway-shutdown-budget.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
+import { readLinuxProcessStat } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils/sleep.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
 import { allListenersOwnedByRuntimePid } from "../daemon-cli/restart-port-ownership.js";
@@ -188,6 +189,35 @@ export async function withGatewayMaintenanceDrain<T>(
     assertResidentCurrent();
     return usage.status === "busy" && allListenersOwnedByRuntimePid(usage.listeners, pid);
   };
+  // The resident launcher (release installs, and runtime recovery of a Gateway
+  // whose Node fails admission) stays the service's main process; its direct
+  // child serves the port and stops with the service.
+  const isServiceResident = async (pid: number | undefined) => {
+    const runtimePid = params.state.runtime?.pid;
+    if (pid === undefined || runtimePid === undefined) {
+      return false;
+    }
+    if (pid === runtimePid) {
+      return true;
+    }
+    if (!connection) {
+      return false;
+    }
+    const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
+    assertResidentCurrent();
+    if (usage.status !== "busy") {
+      return false;
+    }
+    if (usage.listeners.every((listener) => listener.pid === undefined)) {
+      // No listener names its process (no lsof or ss, or ss cannot see the owner).
+      // The Gateway that answered reported its own PID; its kernel parent ties it
+      // to the service.
+      return readLinuxProcessStat(pid)?.parentPid === runtimePid;
+    }
+    return usage.listeners.every(
+      (listener) => listener.pid === pid && listener.ppid === runtimePid,
+    );
+  };
   const call = async <R>(
     method: string,
     args?: unknown,
@@ -249,7 +279,7 @@ export async function withGatewayMaintenanceDrain<T>(
       "status",
       { includeChannelSummary: false },
     );
-    if (typeof resident.pid === "number" && resident.pid === params.state.runtime?.pid) {
+    if (await isServiceResident(resident.pid)) {
       residentBudget = resident.shutdownBudget;
       verifiedResident = true;
     }
@@ -301,7 +331,7 @@ export async function withGatewayMaintenanceDrain<T>(
     if (explicitDrain) {
       const identity = await call<{ pid: number; processInstanceId: string }>("system.info", {});
       if (
-        identity.pid !== params.state.runtime?.pid ||
+        !(await isServiceResident(identity.pid)) ||
         typeof identity.processInstanceId !== "string" ||
         !identity.processInstanceId.trim()
       ) {
@@ -319,7 +349,7 @@ export async function withGatewayMaintenanceDrain<T>(
       try {
         if (!verifiedResident) {
           const identity = await call<{ pid: number }>("system.info", {});
-          if (identity.pid !== params.state.runtime?.pid) {
+          if (!(await isServiceResident(identity.pid))) {
             residentChanged = true;
             assertResidentCurrent();
           }

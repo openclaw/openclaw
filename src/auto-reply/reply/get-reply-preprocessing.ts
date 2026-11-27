@@ -14,11 +14,12 @@ import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
-import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
+import { hasInboundAudio, hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
@@ -41,27 +42,47 @@ export async function applyMediaUnderstandingIfNeeded(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  activeModel: ActiveMediaModel;
+  activeModel?: ActiveMediaModel;
   processingMode?: "audio-only" | "files-only" | "audio-and-files";
   selfServeLocalPaths?: boolean;
+  restrictToConfiguredAudio?: boolean;
+  recordAudioApiKeyFailures?: UserTurnTranscriptRecorder["recordAudioApiKeyFailures"];
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
   if (!hasInboundMediaForUnderstanding(params.ctx)) {
     return undefined;
   }
   try {
     const { applyMediaUnderstanding } = await mediaUnderstandingApplyRuntimeLoader.load();
-    return await applyMediaUnderstanding(params);
+    const audio = params.cfg.tools?.media?.audio;
+    const processingMode = params.restrictToConfiguredAudio
+      ? hasInboundAudio(params.ctx) && audio && audio.enabled !== false
+        ? "audio-and-files"
+        : "files-only"
+      : params.processingMode;
+    const result = await applyMediaUnderstanding({ ...params, processingMode });
+    if (params.recordAudioApiKeyFailures) {
+      const audioDecision = params.ctx.MediaUnderstandingDecisions?.findLast(
+        (decision) => decision.capability === "audio",
+      );
+      const failures = (params.ctx.media ?? []).flatMap((fact, index) => {
+        const disposition = audioDecision?.attachmentDispositions?.[index];
+        const reference = fact.url ?? fact.path;
+        return fact.source !== "quote" &&
+          reference &&
+          disposition?.kind === "failed" &&
+          disposition.apiKeyRequired
+          ? [{ reference, provider: disposition.apiKeyRequired }]
+          : [];
+      });
+      await params.recordAudioApiKeyFailures(failures);
+    }
+    return result;
   } catch (err) {
     logVerbose(
       `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
     return undefined;
   }
-}
-
-export function hasExplicitAudioUnderstandingConfig(cfg: OpenClawConfig): boolean {
-  const audio = cfg.tools?.media?.audio;
-  return audio !== undefined && audio.enabled !== false;
 }
 
 export async function applyLinkUnderstandingIfNeeded(params: {

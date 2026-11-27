@@ -63,6 +63,7 @@ export function prepareToolSearchCatalogDescriptors(entries: readonly ToolSearch
         descriptor.description,
         descriptor.directVisible === true,
         descriptor.requiresExactId === true,
+        descriptor.onDemand === true,
         descriptor.mcp ? stableStringify(descriptor.mcp) : undefined,
       ] as const,
       parameters: schemaJson(parameters),

@@ -88,7 +88,12 @@ for (const source of ["receipt", "watchdog"] as const) {
     0,
     `${source} retained internal run input`,
   );
-  assert.equal(completed[0]!.retainedAssertion(), false, "Retained authority must remain closed");
+  const retained = completed[0]!.retainedAssertion;
+  if (source === "receipt") {
+    assert.throws(() => retained(), /The agent run ended/, "Retained authority must remain closed");
+  } else {
+    assert.equal(retained(), false, "Retained authority must remain closed");
+  }
 }
 process.stdout.write(
   JSON.stringify({ attemptsReleased: true, internalInputsReleased: true, closed: true }),

@@ -2,8 +2,10 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/subagents/requester-cron-authority.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
@@ -42,12 +44,36 @@ export async function authorizeAgentTurnSession({
   principal,
   agentId,
   sessionKey,
+  entry,
 }: {
   cfg: OpenClawConfig;
   principal: AgentTurnPrincipal | null;
   agentId: string;
   sessionKey: string;
+  entry?: SessionEntry;
 }) {
+  if (
+    entry?.delegatedOperatorSource ||
+    principal?.internal?.operatorRunAuthority?.participationCeiling
+  ) {
+    const scope = getPluginRuntimeGatewayRequestScope();
+    const context = scope?.resolveGatewayContext?.() ?? scope?.context;
+    if (!context) {
+      throw new Error("Participant source Gateway is unavailable.");
+    }
+    const access = await resolveSessionMutationAuthorizationAsync({
+      context,
+      client: principal,
+      method: "agent",
+      requestParams: { sessionKey, agentId },
+    });
+    try {
+      access.authorization?.assertCurrent();
+      return access.error ?? undefined;
+    } finally {
+      access.authorization?.release?.();
+    }
+  }
   return (
     authorizeGatewaySessionCreation({ cfg, client: principal, agentId }) ??
     (await authorizeResolvedSessionMutationAsync({ cfg, client: principal, sessionKey, agentId }))
@@ -57,6 +83,8 @@ export async function authorizeAgentTurnSession({
 /** Transfer live session sharing into the retained caller, releasing any failed handoff. */
 export async function retainAgentTurnOperatorRun({
   assertInputCurrent,
+  cfg,
+  sessionEntry,
   resolvedSessionKey,
   activeSessionAgentId,
   getAdmittedSessionId,
@@ -68,6 +96,8 @@ export async function retainAgentTurnOperatorRun({
   Pick<
     PrepareAgentRunDispatchParams,
     | "context"
+    | "cfg"
+    | "sessionEntry"
     | "resolvedSessionKey"
     | "activeSessionAgentId"
     | "getAdmittedSessionId"
@@ -132,10 +162,22 @@ export async function retainAgentTurnOperatorRun({
           agentId: activeSessionAgentId,
         })?.delivery.returnedResult);
     try {
-      retained = await retainGatewayOperatorRun({ ...operator, invocationAuthority });
-      if (returnedResult) {
-        retained.authority?.reauthorize?.();
-      }
+      retained = await retainGatewayOperatorRun({
+        ...operator,
+        agentId: activeSessionAgentId,
+        invocationAuthority,
+        abortSession:
+          operator.abortSession ??
+          (resolvedSessionKey
+            ? {
+                cfg,
+                storePath: lifecycleStorePath,
+                entry: sessionEntry,
+                canonicalKey: resolvedSessionKey,
+                agentId: activeSessionAgentId,
+              }
+            : undefined),
+      });
     } catch (error) {
       if (
         returnedResult &&
@@ -269,6 +311,7 @@ export async function registerAgentTurnSourceAdmission({
     principal,
     sessionKey: loaded.canonicalKey,
     agentId: sourceAgentId,
+    entry: loaded.entry,
   });
   if (authorizationError) {
     source.io.emitAcceptance([false, undefined, authorizationError]);

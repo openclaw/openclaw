@@ -168,6 +168,13 @@ export const SessionGitHubActionParamsSchema = Type.Union([
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
   }),
+  closedObject({
+    action: Type.Literal("create_issue"),
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    title: GitHubPublicationTitleSchema,
+    body: Type.Optional(GitHubPublicationBodySchema),
+  }),
 ]);
 export const SessionGitHubBaseRefreshResultSchema = closedObject({
   status: stringLiteralUnion(["current", "refreshed", "conflicts"]),

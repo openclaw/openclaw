@@ -392,15 +392,16 @@ export function describeGithubCopilotProviderAuthContract(
     });
 
     it.each([
-      ["access_denied", "cancel"],
-      ["expired_token", "expired"],
-    ] as const)("returns no profiles and notes %s", async (error, note) => {
-      const { result, ctx } = await runDeviceFlow({ error });
-      expect(result).toEqual({ profiles: [] });
-      const noteCalls = (ctx.prompter.note as ReturnType<typeof vi.fn>).mock.calls;
-      expect(
-        noteCalls.some(([msg]) => typeof msg === "string" && msg.toLowerCase().includes(note)),
-      ).toBe(true);
-    });
+      ["access_denied", "device_code_denied"],
+      ["expired_token", "device_code_expired"],
+    ] as const)(
+      "rejects %s with a typed failure instead of empty profiles",
+      async (error, reason) => {
+        await expect(runDeviceFlow({ error })).rejects.toMatchObject({
+          name: "ProviderAuthFailure",
+          reason,
+        });
+      },
+    );
   });
 }
