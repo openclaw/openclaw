@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { listSqliteSidecars } from "../test-utils/store-snapshot.test-support.js";
 import { applyAllowAlwaysDecision } from "./exec-approvals-allow-always.js";
 import {
   countObsoleteGeneratedExecApprovals,
@@ -111,6 +112,33 @@ it("reads before writing: a store without obsolete grants is not opened for writ
         holder.exec("ROLLBACK");
         holder.close();
       }
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      execApprovalsStoreTesting.reset();
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+it("goes straight to the write transaction for a store no connection holds, leaving no sidecars", async () => {
+  await withTestDir({ prefix: "openclaw-exec-approval-unheld-" }, async (home) => {
+    const stateDir = path.join(home, ".openclaw");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    closeOpenClawStateDatabaseForTest();
+    execApprovalsStoreTesting.reset();
+    try {
+      saveExecApprovals(mainFile([generated("/usr/bin/git", current)]));
+      closeOpenClawStateDatabaseForTest();
+      expect(listSqliteSidecars(stateDir)).toEqual([]);
+
+      // A read-only look would create the WAL sidecars and could not remove them.
+      expect(repairObsoleteGeneratedExecApprovals()).toBe(0);
+      closeOpenClawStateDatabaseForTest();
+
+      expect(listSqliteSidecars(stateDir)).toEqual([]);
+      expect(loadExecApprovalsReadOnly().agents?.main?.allowlist).toEqual([
+        expect.objectContaining(generated("/usr/bin/git", current)),
+      ]);
     } finally {
       closeOpenClawStateDatabaseForTest();
       execApprovalsStoreTesting.reset();

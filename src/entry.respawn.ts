@@ -1,19 +1,16 @@
 import path from "node:path";
 import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { isStandaloneRuntimeExecutable, resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
+import { resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import {
   isTerminalInteractiveRespawnArgv,
-  shouldSkipRespawnForArgv,
   shouldSkipStartupEnvironmentRespawnForArgv,
 } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue } from "./infra/env.js";
 import { runRespawnChildWithSignalBridge } from "./process/respawn-child-runner.js";
 
-const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
-const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
 const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
 const WINDOWS_STACK_SIZE_FLAG = "--stack-size=8192";
 
@@ -111,29 +108,6 @@ export function buildCliRespawnPlan(
       childEnv.NODE_EXTRA_CA_CERTS = autoNodeExtraCaCerts;
       childEnv[OPENCLAW_NODE_EXTRA_CA_CERTS_READY] = "1";
       needsRespawn = true;
-    }
-
-    if (
-      !shouldSkipRespawnForArgv(argv, platform) &&
-      !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY])
-    ) {
-      const nodeOptions = env.NODE_OPTIONS ?? "";
-      if (
-        !nodeOptions.includes(EXPERIMENTAL_WARNING_FLAG) &&
-        !nodeOptions.includes("--no-warnings") &&
-        !execArgv.some((arg) => arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings")
-      ) {
-        childEnv[OPENCLAW_NODE_OPTIONS_READY] = "1";
-        if (isStandaloneRuntimeExecutable(execPath)) {
-          // Compiled Bun treats runtime flags as CLI arguments, but honors NODE_OPTIONS.
-          childEnv.NODE_OPTIONS = [childEnv.NODE_OPTIONS, EXPERIMENTAL_WARNING_FLAG]
-            .filter(Boolean)
-            .join(" ");
-        } else {
-          childExecArgv.unshift(EXPERIMENTAL_WARNING_FLAG);
-        }
-        needsRespawn = true;
-      }
     }
   }
 

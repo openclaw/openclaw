@@ -1,3 +1,4 @@
+import { abortControlledSubagents } from "../../agents/subagents/cancel-descendants.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -14,7 +15,6 @@ import {
 } from "../../sessions/session-controller.stop.js";
 import { notifySessionRunStopped } from "../../sessions/session-run-stopped.js";
 import { abortChatRunById, createChatAbortSignalReason, type ChatAbortOps } from "../chat-abort.js";
-import { abortControlledSubagents } from "./chat-abort-descendants.js";
 
 type ExactClientRunStopResult = {
   aborted: boolean;
