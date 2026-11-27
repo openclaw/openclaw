@@ -4,13 +4,13 @@ import { page, userEvent } from "vitest/browser";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ComposerCorrectionControls } from "./composer-correction-controls.tsx";
-import { ComposerCorrectionRecovery } from "./composer-correction-recovery.tsx";
 import {
   ComposerCorrectionReview,
   type ComposerCorrectionReviewProps,
 } from "./composer-correction-review.tsx";
 import "../../../styles/base.css";
 import "../../../styles/components.css";
+import "../../../styles/layout.css";
 
 const initialViewport = { width: window.innerWidth, height: window.innerHeight };
 const initialFontSize = document.documentElement.style.fontSize;
@@ -142,6 +142,7 @@ it.each([true, false])(
 );
 
 it("keeps recognized text recoverable by keyboard when the optional review fails", async () => {
+  const { ComposerCorrectionRecovery } = await import("../composer-dictation-capture.ts");
   await page.viewport(390, 900);
   document.documentElement.dataset.themeMode = "dark";
   const props = reviewProps();

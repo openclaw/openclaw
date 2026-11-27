@@ -453,7 +453,7 @@ export class ComposerDictationOwner extends EventTarget {
         ? await this.options.prepareSession()
         : this.options.sessionKey;
       const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
-        await import("./composer-dictation-session.ts");
+        await import("./composer-dictation-capture.ts");
       if (
         this.captureStart !== captureStart ||
         this.disposed ||

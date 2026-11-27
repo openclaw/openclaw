@@ -1,12 +1,14 @@
-import { lazy, Show } from "solid-js";
+import { lazy, Loading, Show } from "solid-js";
 import type { createComposerCorrectionBindings } from "./chat-composer-correction-bindings.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ComposerCorrectionControls } from "./composer-correction-controls.tsx";
-import { ComposerCorrectionRecovery } from "./composer-correction-recovery.tsx";
 
 // Policy controls stay available without loading the recording review surface.
 const ComposerCorrectionReview = lazy(() => import("./composer-correction-review.tsx"), {
   export: "ComposerCorrectionReview",
+});
+const ComposerCorrectionRecovery = lazy(() => import("../composer-dictation-capture.ts"), {
+  export: "ComposerCorrectionRecovery",
 });
 
 export function ChatComposerCorrections(props: {
@@ -22,12 +24,14 @@ export function ChatComposerCorrections(props: {
         {(review) => (
           <ChatLazyBoundary
             recovery={
-              <ComposerCorrectionRecovery
-                original={review().original}
-                canKeepOriginal={review().canKeepOriginal}
-                onKeepOriginal={() => props.context.resolveCorrection("original")}
-                onCancel={() => props.context.resolveCorrection("cancel")}
-              />
+              <Loading>
+                <ComposerCorrectionRecovery
+                  original={review().original}
+                  canKeepOriginal={review().canKeepOriginal}
+                  onKeepOriginal={() => props.context.resolveCorrection("original")}
+                  onCancel={() => props.context.resolveCorrection("cancel")}
+                />
+              </Loading>
             }
           >
             <ComposerCorrectionReview

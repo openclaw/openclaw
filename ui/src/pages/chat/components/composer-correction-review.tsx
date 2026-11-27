@@ -1,9 +1,15 @@
 import { createUniqueId } from "solid-js";
-import { registerChatCorrectionsEnglish } from "../../../i18n/locales/en-chat-corrections.ts";
+import { registerChatCorrectionReviewEnglish } from "../../../i18n/locales/en-chat-correction-review.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import "../../../styles/composer-correction-review.css";
 
-registerEnglishCatalog(registerChatCorrectionsEnglish);
+registerEnglishCatalog(registerChatCorrectionReviewEnglish);
+
+const transcriptStyle = {
+  "max-height": "min(30dvh, 14rem)",
+  overflow: "auto",
+  "white-space": "pre-wrap",
+} as const;
+const actionStyle = { "max-width": "100%", "white-space": "normal" } as const;
 
 export type ComposerCorrectionReviewProps = {
   original: string;
@@ -17,62 +23,72 @@ export type ComposerCorrectionReviewProps = {
 export function ComposerCorrectionReview(props: ComposerCorrectionReviewProps) {
   const titleId = `composer-correction-title-${createUniqueId()}`;
   return (
-    <section class="composer-correction-review" aria-labelledby={titleId}>
-      <h3 class="composer-correction-review__title" id={titleId}>
+    <section
+      class="card stack composer-correction-review"
+      aria-labelledby={titleId}
+      style={{
+        "min-height": 0,
+        "max-height": "min(60dvh, 42rem)",
+        "flex-shrink": 1,
+        overflow: "auto",
+        "overscroll-behavior": "contain",
+        "overflow-wrap": "anywhere",
+      }}
+    >
+      <h3 class="card-title" id={titleId}>
         {t("chat.corrections.reviewTitle")}
       </h3>
       {/* Announce the review state, not the whole dictated text. */}
-      <p
-        class="composer-correction-review__status"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
+      <p class="card-sub" role="status" aria-live="polite" aria-atomic="true">
         {t("chat.corrections.originalReady")}
       </p>
-      <p class="composer-correction-review__reason">
-        {t(`chat.corrections.reasons.${props.reason}`)}
-      </p>
-      <div class="composer-correction-review__versions">
-        <div class="composer-correction-review__version">
-          <span class="composer-correction-review__label">{t("chat.corrections.original")}</span>
+      <p class="card-sub">{t(`chat.corrections.reasons.${props.reason}`)}</p>
+      <div
+        class="grid"
+        style={{ "grid-template-columns": "repeat(auto-fit, minmax(min(100%, 18rem), 1fr))" }}
+      >
+        <div class="field">
+          <span>{t("chat.corrections.original")}</span>
           <div
-            class="composer-correction-review__text"
+            class="input"
             role="region"
             aria-label={t("chat.corrections.original")}
             tabindex={0}
             dir="auto"
+            style={transcriptStyle}
           >
             {props.original}
           </div>
         </div>
-        <div class="composer-correction-review__version">
-          <span class="composer-correction-review__label">{t("chat.corrections.candidate")}</span>
+        <div class="field">
+          <span>{t("chat.corrections.candidate")}</span>
           <div
-            class="composer-correction-review__text"
+            class="input"
             role="region"
             aria-label={t("chat.corrections.candidate")}
             tabindex={0}
             dir="auto"
+            style={transcriptStyle}
           >
             {t("chat.corrections.noCandidate")}
           </div>
         </div>
       </div>
-      <p class="composer-correction-review__boundary">{t("chat.corrections.boundary")}</p>
-      <div class="composer-correction-review__actions">
-        <button type="button" class="btn" onClick={() => props.onCancel()}>
+      <p class="card-sub">{t("chat.corrections.boundary")}</p>
+      <div class="filters" style={{ "justify-content": "flex-end" }}>
+        <button type="button" class="btn" style={actionStyle} onClick={() => props.onCancel()}>
           {t("chat.corrections.cancel")}
         </button>
         <button
           type="button"
           class="btn"
+          style={actionStyle}
           disabled={!props.canKeepOriginal}
           onClick={() => props.onKeepOriginal()}
         >
           {t("chat.corrections.keepOriginal")}
         </button>
-        <button type="button" class="btn primary" disabled>
+        <button type="button" class="btn primary" style={actionStyle} disabled>
           {t("chat.corrections.accept")}
         </button>
       </div>

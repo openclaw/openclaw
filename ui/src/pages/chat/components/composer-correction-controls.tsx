@@ -1,7 +1,6 @@
 import { createUniqueId } from "solid-js";
 import { registerChatCorrectionsEnglish } from "../../../i18n/locales/en-chat-corrections.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import "../../../styles/composer-correction-controls.css";
 
 registerEnglishCatalog(registerChatCorrectionsEnglish);
 
@@ -14,11 +13,12 @@ export function ComposerCorrectionControls(props: {
 }) {
   const hintId = `composer-correction-literal-${createUniqueId()}`;
   return (
-    <div class="composer-correction-controls">
-      <label class="composer-correction-controls__policy">
+    <div class="filters composer-correction-controls">
+      <label class="filters" style={{ "min-width": 0 }}>
         <span>{t("chat.corrections.policy")}</span>
         <select
           value={props.policy}
+          style={{ "min-width": 0, "max-width": "100%" }}
           disabled={props.disabled}
           onChange={(event) =>
             props.onPolicyChange(event.currentTarget.value === "explicit" ? "explicit" : "off")
@@ -28,7 +28,7 @@ export function ComposerCorrectionControls(props: {
           <option value="explicit">{t("chat.corrections.explicit")}</option>
         </select>
       </label>
-      <label class="composer-correction-controls__literal">
+      <label class="field checkbox">
         <input
           type="checkbox"
           checked={props.literal}

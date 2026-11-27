@@ -20,6 +20,7 @@ import { registerChatCiEnglish } from "../../ui/src/i18n/locales/en-chat-ci.ts";
 import { registerChatCommandResultsEnglish } from "../../ui/src/i18n/locales/en-chat-command-results.ts";
 import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-chat-composer-menu.ts";
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
+import { registerChatCorrectionReviewEnglish } from "../../ui/src/i18n/locales/en-chat-correction-review.ts";
 import { registerChatCorrectionsEnglish } from "../../ui/src/i18n/locales/en-chat-corrections.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatDictationEnglish } from "../../ui/src/i18n/locales/en-chat-dictation.ts";
@@ -159,6 +160,7 @@ const sourceFiles = [
   "en-chat-voice-api-key.ts",
   "en-chat-dictation.ts",
   "en-chat-corrections.ts",
+  "en-chat-correction-review.ts",
   "en-chat-ci.ts",
   "en-chat-command-results.ts",
   "en-chat-commands.ts",
@@ -707,6 +709,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerChatVoiceApiKeyEnglish.catalog,
     registerChatDictationEnglish.catalog,
     registerChatCorrectionsEnglish.catalog,
+    registerChatCorrectionReviewEnglish.catalog,
     { chat: { pullRequests: { ...ciPullRequests, automationNoChecks, automationRetry } } },
     registerChatCommandResultsEnglish.catalog,
     {
