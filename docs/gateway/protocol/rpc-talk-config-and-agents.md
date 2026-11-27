@@ -29,7 +29,7 @@ RPC method families for Talk and TTS, secrets, config, update, and wizard flows,
 - `talk.client.say` submits `{ sessionKey, voiceSessionId, text }` for playback through a ready Gateway-controlled call owned by the requesting connection. It requires `operator.talk` and nonblank text of at most 1,024 UTF-8 bytes. `{ accepted: true }` confirms provider submission, not audible playback. It neither starts an agent task nor queues speech for a later connection.
 - `talk.client.steer` sends session-scoped active-run voice control for client-owned realtime transports. The gateway resolves owned active work from `sessionKey`, without a voice call ID, and returns a structured accepted/rejected result instead of silently dropping steering. Provider-attached Gateway controls are call-scoped instead.
 - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
-- `talk.speak` synthesizes speech through the active Talk speech provider.
+- `talk.speak` synthesizes speech through the active Talk speech provider. Text above `tts.maxTextLength` is cut to that length, ending in `...`, before synthesis.
 - `tts.status` returns TTS enabled state, active provider, fallback providers, and provider config state.
 - `tts.providers` returns the visible TTS provider inventory.
 - `tts.enable` and `tts.disable` toggle TTS prefs state.
