@@ -50,6 +50,8 @@ const enMcp = {
       "No tools from this server in this session. It may need sign-in, be failing, or have none.",
     tools: "Tools",
     fieldCommand: "Command",
+    commandRequired:
+      "This MCP server needs a command to start. Keep this command or enter another.",
     fieldArgs: "Arguments",
     fieldArgsHint: "One per line.",
     fieldCwd: "Working directory",
