@@ -2437,7 +2437,7 @@ rebuilt. Nothing rebuilds it automatically, on any platform. Run the printed lin
 checkout. With the default state directory it reads:
 
 ```sh
-early_release_link= && git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && early_release_link=$(readlink "$HOME/.openclaw/git-install/lib/node_modules/openclaw" || true) && rm -f "$HOME/.openclaw/git-install/lib/node_modules/openclaw" && openclaw gateway install --force || { [ -z "$early_release_link" ] || [ -L "$HOME/.openclaw/git-install/lib/node_modules/openclaw" ] || ln -s "$early_release_link" "$HOME/.openclaw/git-install/lib/node_modules/openclaw"; openclaw gateway start; false; }
+oc_link= && git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && oc_link=$(readlink "$HOME/.openclaw/git-install/lib/node_modules/openclaw" || true) && rm -f "$HOME/.openclaw/git-install/lib/node_modules/openclaw" && openclaw gateway install --force || { [ -z "$oc_link" ] || [ -L "$HOME/.openclaw/git-install/lib/node_modules/openclaw" ] || ln -s "$oc_link" "$HOME/.openclaw/git-install/lib/node_modules/openclaw"; openclaw gateway start; false; }
 ```
 
 The printed line names your state directory relative to `$HOME`. For a state directory outside

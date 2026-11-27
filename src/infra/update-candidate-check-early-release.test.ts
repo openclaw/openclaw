@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { refuseEarlyGitReleaseSchemaChange as refuse } from "./update-candidate-check-early-release.js";
@@ -14,7 +15,7 @@ afterEach(() => cleanupTempDirs(roots));
 
 const rebuild = (link: string) => {
   const quoted = `"${link}/git-install/lib/node_modules/openclaw"`;
-  return `early_release_link= && git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && early_release_link=$(readlink ${quoted} || true) && rm -f ${quoted} && openclaw gateway install --force || { [ -z "$early_release_link" ] || [ -L ${quoted} ] || ln -s "$early_release_link" ${quoted}; openclaw gateway start; false; }`;
+  return `oc_link= && git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && oc_link=$(readlink ${quoted} || true) && rm -f ${quoted} && openclaw gateway install --force || { [ -z "$oc_link" ] || [ -L ${quoted} ] || ln -s "$oc_link" ${quoted}; openclaw gateway start; false; }`;
 };
 
 function sqlite(file: string, version: number, setup = "") {
@@ -188,6 +189,18 @@ it.runIf(process.platform !== "win32")(
     expect(fs.lstatSync(link, { throwIfNoEntry: false })).toBeUndefined();
   },
 );
+
+it("survives the early updater's redaction of its check output unchanged", () => {
+  const { root, stateDir, env } = install({});
+  // The early updater prints this stderr through the same redaction (unchanged since then), with
+  // its state directory and home; a state directory outside home is spelled from the variable.
+  for (const home of [path.dirname(stateDir), "/nonexistent-home"]) {
+    const refusal = refuse(root, { ...env, HOME: home }, "linux")!;
+    expect(
+      redactSupportString(refusal, { env: { HOME: home }, stateDir }, { maxLength: 8192 }),
+    ).toBe(refusal);
+  }
+});
 
 it("refuses when one agent store is older, registered or not", () => {
   for (const registered of [true, false]) {

@@ -22,11 +22,14 @@ import { collectRegisteredPaths } from "./update-candidate-state.shared.js";
  * release this link names, and `openclaw gateway install` binds the service to that launcher
  * while the link exists, so the rebuild removes it before reinstalling the service. */
 const EARLY_RELEASE_LINK = ["git-install", "lib", "node_modules", "openclaw"];
+const STATE_DIR_WORD = "${OPENCLAW_STATE_DIR}";
 
 /** The link as a double-quoted shell word, plus a guard for the start of the line. The early
  * updater replaces the state and home directories in this check's output with placeholders, so
  * the path is spelled from `$HOME`, or for a state directory outside it from `$OPENCLAW_STATE_DIR`,
- * which the line then requires before it changes anything. */
+ * which the line then requires before it changes anything. That output also redacts `$` followed
+ * by 16 or more name characters as a Matrix event ID, so longer names are written `${NAME}` and
+ * the line's own variable is short. */
 function shellEarlyReleaseLink(
   stateDir: string,
   env: NodeJS.ProcessEnv,
@@ -42,7 +45,7 @@ function shellEarlyReleaseLink(
     return { link: `"$HOME/${spelled}/${tail}"` };
   }
   return {
-    link: `"$OPENCLAW_STATE_DIR/${tail}"`,
+    link: `"${STATE_DIR_WORD}/${tail}"`,
     guard: ': "${OPENCLAW_STATE_DIR:?set it to the OpenClaw state directory}"',
   };
 }
@@ -67,7 +70,7 @@ function formatRebuild(platform: NodeJS.Platform, stateDir: string, env: NodeJS.
   }
   const { link, guard } = shellEarlyReleaseLink(stateDir, env);
   // The previous service may start through this link, so a failure after its removal restores it.
-  const saved = "early_release_link";
+  const saved = "oc_link";
   const steps = [
     ...(guard ? [guard] : []),
     `${saved}=`,
