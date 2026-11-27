@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import CoreTransferable
 import Foundation
 import Observation
@@ -17,29 +18,6 @@ import UIKit
 /// Sendable. This wrapper is only used for one detached JPEG encoding pass.
 private struct OpenClawSendableCameraImage: @unchecked Sendable {
     let value: UIImage
-}
-
-private struct OpenClawVideoTransfer: Sendable, Transferable {
-    let url: URL
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .movie) { video in
-            SentTransferredFile(video.url)
-        } importing: { received in
-            let fileExtension = received.file.pathExtension
-            let destination = FileManager.default.temporaryDirectory
-                .appendingPathComponent("openclaw-picker-video-\(UUID().uuidString)")
-                .appendingPathExtension(fileExtension.isEmpty ? "mov" : fileExtension)
-            try FileManager.default.copyItem(at: received.file, to: destination)
-            return OpenClawVideoTransfer(url: destination)
-        }
-    }
-}
-
-private struct OpenClawPickerTransferUnavailable: LocalizedError {
-    var errorDescription: String? {
-        String(localized: "Could not load this attachment. Try selecting it again.")
-    }
 }
 #endif
 #endif
@@ -139,9 +117,17 @@ struct OpenClawChatComposer: View {
     @State var isFocused = false
     @Environment(\.isEnabled) var interactionEnabled
     @State var showsPermissionsSheet = false
+    @State var showsAddSheet = false
+    /// What runs once the "+" sheet is gone: a picker, or the keyboard after a skill went into the draft.
+    @State var addSheetFollowUp: ChatComposerAddFollowUp?
+    /// The draft had the keyboard when the "+" sheet opened; it gets it back once the sheet, or the picker
+    /// it opened, closes.
+    @State var addSheetReturnsFocus = false
+    @State var pickedAttachmentFocusIDs: Set<UUID> = []
     /// Text or an attachment tile keeps the composer open when the keyboard goes down; only an empty
     /// composer closes to one row.
     @State var hasComposerContent = false
+    @Environment(\.openClawChatComposerPanels) var composerPanels
     #else
     @FocusState private var isFocused: Bool
     #endif
@@ -222,6 +208,23 @@ struct OpenClawChatComposer: View {
         // Presented from here, not from the shield: the shield leaves the hierarchy while capabilities reload.
         .chatComposerPermissionsSheet(isPresented: self.$showsPermissionsSheet, viewModel: self.viewModel)
             .modifier(ChatNewDraftFocus(composer: self))
+            .sheet(isPresented: self.$showsAddSheet, onDismiss: self.addSheetDidDismiss) {
+                ChatComposerAddSheet(
+                    viewModel: self.viewModel,
+                    isAttachmentInputEnabled: self.isAttachmentInputEnabled,
+                    onAttachPhotos: { assets in
+                        guard self.isAttachmentInputEnabled, !assets.isEmpty else { return }
+                        self.viewModel.addRecentPhotos(
+                            assets,
+                            owner: OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel))
+                    },
+                    onClose: self.closeAddSheet)
+            }
+            // A picker counts as gone once it starts to leave, so the keyboard is asked for then, not after its tile
+            // is ready.
+            .modifier(ChatPickerAttachmentFocus(
+                composer: self,
+                pickerPresented: self.showsPhotoPicker || self.showsFileImporter || self.showsCameraPicker))
         #endif
         .onChange(of: self.presentationOwner) { _, _ in
             self.invalidateModelSignIn()
@@ -325,7 +328,9 @@ struct OpenClawChatComposer: View {
             }
             .onChange(of: self.isAttachmentInputEnabled) { _, isEnabled in
                 if !isEnabled {
-                    self.dismissAttachmentCapture()
+                    // The "+" sheet turns its own attachment rows off. Closing it here let a reconnect after
+                    // the app came back close the sheet by itself.
+                    self.dismissAttachmentCapture(keepingAddSheet: true)
                 }
             }
             .onAppear {
@@ -338,7 +343,7 @@ struct OpenClawChatComposer: View {
                 onCompletion: { result in
                     let owner = self.fileImporterOwner
                     self.fileImporterOwner = nil
-                    self.handleFileImport(result, owner: owner)
+                    self.stagePickerSelection { self.handleFileImport(result, owner: owner) }
                 })
             .photosPicker(
                 isPresented: self.photoPickerPresentation,
@@ -349,17 +354,20 @@ struct OpenClawChatComposer: View {
                 guard !items.isEmpty else { return }
                 let owner = self.photoPickerOwner
                 self.photoPickerOwner = nil
-                self.stagePhotosPickerItems(items, owner: owner)
+                self.stagePickerSelection { self.stagePhotosPickerItems(items, owner: owner) }
             }
             #if canImport(UIKit)
             .fullScreenCover(
                 isPresented: self.cameraPickerPresentation,
-                onDismiss: { self.cameraCaptureOwner = nil },
+                onDismiss: {
+                    self.cameraCaptureOwner = nil
+                    self.returnFocusAfterAddSheet()
+                },
                 content: {
                     let owner = self.cameraCaptureOwner
                     OpenClawChatCameraPicker { image in
                         guard let owner else { return }
-                        self.addCameraImage(image, owner: owner)
+                        self.stagePickerSelection { self.addCameraImage(image, owner: owner) }
                     }
                     .ignoresSafeArea()
                 })
@@ -417,7 +425,7 @@ struct OpenClawChatComposer: View {
                     self.composerToolbar
                 }
 
-                if self.style == .standard, !self.viewModel.attachments.isEmpty {
+                if self.showsAttachmentsStrip {
                     self.attachmentsStrip
                 }
 
@@ -481,6 +489,7 @@ struct OpenClawChatComposer: View {
                     self.photoPickerOwner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
                 }
                 self.showsPhotoPicker = isPresented
+                if !isPresented { self.returnFocusAfterAddSheet() }
             })
     }
 
@@ -492,6 +501,7 @@ struct OpenClawChatComposer: View {
                     self.fileImporterOwner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
                 }
                 self.showsFileImporter = isPresented
+                if !isPresented { self.returnFocusAfterAddSheet() }
             })
     }
 
@@ -505,11 +515,6 @@ struct OpenClawChatComposer: View {
                 }
                 #endif
                 self.showsCameraPicker = isPresented
-                #if canImport(UIKit)
-                if !isPresented {
-                    self.cameraCaptureOwner = nil
-                }
-                #endif
             })
     }
     #endif
@@ -635,7 +640,13 @@ struct OpenClawChatComposer: View {
     private var attachmentsStrip: some View {
         OpenClawChatAttachmentsStrip(
             attachments: self.viewModel.attachments,
+            preparing: self.viewModel.preparingAttachments,
             onRemove: { self.viewModel.removeAttachment($0) })
+    }
+
+    private var showsAttachmentsStrip: Bool {
+        self.style == .standard
+            && (!self.viewModel.attachments.isEmpty || !self.viewModel.preparingAttachments.isEmpty)
     }
 
     private var editor: some View {
@@ -711,29 +722,32 @@ struct OpenClawChatComposer: View {
 
     private var cleanComposerCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if self.style == .standard, !self.viewModel.attachments.isEmpty {
-                self.attachmentsStrip
-                    #if os(iOS)
-                        .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-                        .padding(.top, CleanChatComposerMetrics.footerBlockInset)
-                    #endif
-            }
-
+            #if os(iOS)
+            // As in the Control UI, notices come first and the attachments sit straight on the draft.
             self.composerContextRows
-                #if os(iOS)
-                    .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+            #endif
+
+            VStack(alignment: .leading, spacing: OpenClawChatAttachmentsStrip.spacingToDraft) {
+                if self.showsAttachmentsStrip {
+                    self.attachmentsStrip
+                }
+
+                #if !os(iOS)
+                self.composerContextRows
                 #endif
 
-            if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
-                OpenClawVoiceNoteRecordingRow(
-                    recorder: voiceNoteControl.recorder,
-                    embedded: true)
-                    #if os(iOS)
-                        .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-                        .padding(.vertical, CleanChatComposerMetrics.footerBlockInset)
-                    #endif
-            } else {
-                self.editor
+                if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
+                    OpenClawVoiceNoteRecordingRow(
+                        recorder: voiceNoteControl.recorder,
+                        embedded: true)
+                        #if os(iOS)
+                            .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                            .padding(.vertical, CleanChatComposerMetrics.footerBlockInset)
+                        #endif
+                } else {
+                    self.editor
+                }
             }
         }
         #if !os(iOS)
@@ -1313,6 +1327,41 @@ extension OpenClawChatComposer {
         chrome == .clean ? self.padding(style: style, chrome: chrome) : 0
     }
 
+    #if os(iOS)
+    /// The "+" sheet opens with the keyboard down, and over any open panel.
+    func openAddSheet() {
+        self.addSheetReturnsFocus = self.isFocused
+        self.addSheetFollowUp = nil
+        self.composerPanels?.dismiss()
+        // The draft's text view treats a false focus request as no request; end editing instead.
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        self.pickedAttachmentFocusIDs.removeAll()
+        self.showsAddSheet = true
+    }
+    #endif
+
+    #if !os(macOS)
+    /// Each native picker creates its tiles synchronously before loading the selected files.
+    private func stagePickerSelection(_ stage: () -> Void) {
+        #if os(iOS)
+        let first = self.viewModel.preparingAttachments.count
+        #endif
+        stage()
+        #if os(iOS)
+        guard self.composerChrome == .clean, !self.isFocused, !self.addSheetReturnsFocus else { return }
+        self.pickedAttachmentFocusIDs = Set(self.viewModel.preparingAttachments.dropFirst(first).map(\.id))
+        #endif
+    }
+
+    func returnFocusAfterAddSheet() {
+        #if os(iOS)
+        guard self.addSheetReturnsFocus else { return }
+        self.addSheetReturnsFocus = false
+        self.focusDraft()
+        #endif
+    }
+    #endif
+
     private var textMinHeight: CGFloat {
         #if os(macOS)
         if self.usesDesktopModelMenu {
@@ -1524,30 +1573,47 @@ extension OpenClawChatComposer {
         let fileName = "\(OpenClawChatGeneratedAttachmentName.picked(.camera)).jpg"
         let viewModel = owner.viewModel
         let session = owner.session
+        // The photo is already in hand, so its tile shows it dimmed under the spinner while it encodes.
+        let preparation = viewModel.beginAttachmentPreparation(
+            fileName: fileName,
+            mimeType: "image/jpeg",
+            preview: image)
         // Pin routing before JPEG encoding suspends so an external agent or
         // session update cannot adopt this camera result under a new owner.
-        viewModel.beginAttachmentStaging()
-        self.cameraEncodingTask = Task { @MainActor in
-            defer { viewModel.endAttachmentStaging() }
+        self.cameraEncodingTask = viewModel.runAttachmentPreparation([preparation]) { @MainActor in
             let data = await Task.detached(priority: .userInitiated) {
                 sendableImage.value.jpegData(compressionQuality: 0.92)
             }.value
             guard !Task.isCancelled,
                   self.viewModel === viewModel,
                   viewModel.isCurrentSession(session),
-                  self.isAttachmentInputEnabled,
-                  let data
+                  self.isAttachmentInputEnabled
             else { return }
+            guard let data else {
+                viewModel.reportAttachmentFailure(
+                    OpenClawChatViewModel.couldNotAttachMessage(fileName, preparation: preparation),
+                    preparation: preparation)
+                return
+            }
             await viewModel.addImageAttachment(
                 data: data,
                 fileName: fileName,
                 mimeType: "image/jpeg",
-                for: session)
+                for: session,
+                preparation: preparation)
         }
     }
     #endif
 
-    private func dismissAttachmentCapture() {
+    private func dismissAttachmentCapture(keepingAddSheet: Bool = false) {
+        #if os(iOS)
+        if !keepingAddSheet {
+            self.showsAddSheet = false
+            self.addSheetReturnsFocus = false
+        }
+        self.addSheetFollowUp = nil
+        self.pickedAttachmentFocusIDs.removeAll()
+        #endif
         self.showsPhotoPicker = false
         self.showsFileImporter = false
         self.showsCameraPicker = false
@@ -1578,61 +1644,31 @@ extension OpenClawChatComposer {
             self.pickerItems = []
             return
         }
-        owner.viewModel.beginAttachmentStaging()
-        Task { @MainActor in
-            defer { owner.viewModel.endAttachmentStaging() }
-            await self.loadPhotosPickerItems(items, owner: owner)
-        }
-    }
-
-    private func loadPhotosPickerItems(
-        _ items: [PhotosPickerItem],
-        owner: OpenClawChatAttachmentCaptureOwner) async
-    {
-        guard self.isAttachmentInputEnabled else {
-            self.pickerItems = []
-            return
-        }
-        for item in items {
-            do {
-                guard self.viewModel === owner.viewModel,
-                      owner.viewModel.isCurrentSession(owner.session)
-                else { break }
-                let type = item.supportedContentTypes.first(where: {
-                    $0.conforms(to: .movie) || $0.conforms(to: .image)
-                }) ?? item.supportedContentTypes.first ?? .image
-                if type.conforms(to: .movie) {
-                    guard let transfer = try await item.loadTransferable(type: OpenClawVideoTransfer.self)
-                    else { throw OpenClawPickerTransferUnavailable() }
-                    defer { try? FileManager.default.removeItem(at: transfer.url) }
-                    let metadata = OpenClawChatPickerAttachmentMetadata.resolve(
-                        contentType: type,
-                        transferredFileURL: transfer.url)
-                    let name = "video-\(UUID().uuidString.prefix(8)).\(metadata.fileExtension)"
-                    await owner.viewModel.addVideoAttachment(
-                        url: transfer.url,
-                        fileName: name,
-                        mimeType: metadata.mimeType,
-                        expectedSession: owner.session)
-                } else {
-                    guard let data = try await item.loadTransferable(type: Data.self)
-                    else { throw OpenClawPickerTransferUnavailable() }
-                    let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: type)
-                    let name = "photo-\(UUID().uuidString.prefix(8)).\(metadata.fileExtension)"
-                    await owner.viewModel.addImageAttachment(
-                        data: data,
-                        fileName: name,
-                        mimeType: metadata.mimeType,
-                        for: owner.session)
-                }
-            } catch {
-                guard self.viewModel === owner.viewModel,
-                      owner.viewModel.isCurrentSession(owner.session)
-                else { break }
-                owner.viewModel.errorText = error.localizedDescription
+        let viewModel = owner.viewModel
+        // Every pick gets its tile now, before the Photos library hands over any data.
+        let picks = items.map { item in
+            let type = item.supportedContentTypes.first(where: {
+                $0.conforms(to: .movie) || $0.conforms(to: .image)
+            }) ?? item.supportedContentTypes.first ?? .image
+            let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: type)
+            let baseName = OpenClawChatGeneratedAttachmentName.picked(type.conforms(to: .movie) ? .video : .photo)
+            let preparation = viewModel.beginAttachmentPreparation(
+                fileName: "\(baseName).\(metadata.fileExtension)",
+                mimeType: metadata.mimeType)
+            let pick = OpenClawPhotosPick(item: item, type: type, baseName: baseName, preparation: preparation)
+            viewModel.setAttachmentPreparationReload(preparation) {
+                await pick.load(owner: owner)
             }
+            return pick
         }
-        self.pickerItems = []
+        viewModel.runAttachmentPreparation(picks.map(\.preparation)) { @MainActor in
+            for pick in picks {
+                guard self.viewModel === viewModel, viewModel.isCurrentSession(owner.session) else { break }
+                guard !viewModel.isAttachmentPreparationRemoved(pick.preparation) else { continue }
+                await pick.load(owner: owner)
+            }
+            self.pickerItems = []
+        }
     }
     #endif
 

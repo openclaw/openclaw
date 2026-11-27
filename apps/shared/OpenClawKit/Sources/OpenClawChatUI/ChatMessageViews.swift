@@ -1142,6 +1142,7 @@ private struct AttachmentRow: View {
                 artifactId: id,
                 label: self.attachmentLabel,
                 fileName: self.att.fileName ?? self.attachmentLabel,
+                mimeType: self.att.mimeType ?? "",
                 resolverReady: self.gateway?.isResolverReady() == true,
                 load: { try await self.loadMedia($0, .file, nil) })
         } else {
@@ -1160,6 +1161,7 @@ private struct AttachmentRow: View {
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     fileName: self.att.fileName ?? self.attachmentLabel,
+                    mimeType: self.att.mimeType ?? "",
                     resolverReady: resolverReady,
                     load: { try await self.loadMedia($0, .file, nil) })
             case .image:
@@ -1213,9 +1215,9 @@ private struct AttachmentRow: View {
 
     private var fallbackRow: some View {
         HStack(spacing: 8) {
-            Image(systemName: OpenClawChatPickerAttachmentMetadata.fileIcon(
+            OpenClawChatPickerAttachmentMetadata.glyph(
                 mimeType: self.att.mimeType ?? "",
-                fileName: self.att.fileName ?? ""))
+                fileName: self.att.fileName ?? "")
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.isAudio && self.att.durationSeconds != nil && self.att.url == nil

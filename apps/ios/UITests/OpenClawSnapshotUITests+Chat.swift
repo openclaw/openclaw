@@ -239,6 +239,78 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "composer-long-no-options")
     }
 
+    func testAddingRecentPhotosFocusesDraft() throws {
+        self.launchApp(for: Self.chatScreenshotTarget, appearance: "light", additionalArguments: [
+            "--openclaw-empty-chat-fixture",
+        ])
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(self.chatMessageInput(in: app).waitForExistence(timeout: 8))
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertFalse(keyboard.exists)
+        app.buttons["chat-attachment-picker"].tap()
+        let access = app.buttons["chat-composer-add-photos-access"]
+        if access.exists {
+            access.tap()
+            let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Full Access"]
+            XCTAssertTrue(allow.waitForExistence(timeout: 5))
+            allow.tap()
+        }
+        for index in 0..<2 {
+            let photo = app.buttons.matching(identifier: "chat-composer-add-photo-\(index)").firstMatch
+            XCTAssertTrue(photo.waitForExistence(timeout: 5), "Requires two simulator photos")
+            photo.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.2)).tap()
+        }
+        let add = app.buttons["chat-composer-add-marked"]
+        XCTAssertTrue(add.isHittable)
+        add.tap()
+        XCTAssertTrue(add.waitForNonExistence(timeout: 5))
+        let tiles = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "photo-"))
+        let second = tiles.element(boundBy: 1)
+        XCTAssertTrue(second.waitForExistence(timeout: 8))
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        // On a fresh simulator iOS can show its one-time QuickPath introduction in the keyboard.
+        let introduction = keyboard.buttons["Continue"]
+        if introduction.exists { introduction.tap() }
+        XCTAssertTrue(keyboard.keys.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertLessThan(second.frame.maxY, keyboard.frame.minY)
+        self.attachScreenshot(named: "02-add-fotos-teclado")
+    }
+
+    func testChatComposerAddSheetReachesSkillsAndConnectorTools() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat", initialDestination: "chat", name: "chat-composer-add-pages"))
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(self.chatMessageInput(in: app).waitForExistence(timeout: 8))
+        self.verifyComposerAddSheet(in: app)
+    }
+
+    func testChatComposerAddSheetPutsASkillInFrontOfTheDraft() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat", initialDestination: "chat", name: "chat-composer-add-skill"))
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Check the release")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+
+        app.buttons["chat-attachment-picker"].tap()
+        let addSheet = app.descendants(matching: .any)["chat-composer-add-sheet"]
+        XCTAssertTrue(addSheet.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitForNonExistence(timeout: 3),
+            "The sheet opens with the keyboard down")
+        app.buttons["chat-composer-add-skills"].tap()
+        let skill = app.buttons["chat-composer-skill-release"]
+        XCTAssertTrue(skill.waitForExistence(timeout: 3))
+        skill.tap()
+
+        XCTAssertTrue(addSheet.waitForNonExistence(timeout: 3))
+        self.waitForValue("/release Check the release", of: input)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3), "The draft gets the keyboard back")
+        self.attachScreenshot(named: "chat-composer-add-skill-inserted")
+    }
+
     func testChatComposerReturnInsertsNewlineWithoutSending() throws {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat",
