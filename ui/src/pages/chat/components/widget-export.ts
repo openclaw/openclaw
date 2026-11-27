@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { beginClipboardCopy } from "../../../lib/clipboard.ts";
+import { downloadHref } from "../../../lib/download.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 
 const WIDGET_SNAPSHOT_REQUEST_TYPE = "openclaw:widget-snapshot-request";
@@ -61,13 +62,6 @@ function requestWidgetSnapshot(frame: HTMLIFrameElement): Promise<string> {
       fail(error instanceof Error ? error : new Error(String(error)));
     }
   });
-}
-
-function downloadHref(href: string, filename: string): void {
-  const link = document.createElement("a");
-  link.href = href;
-  link.download = filename;
-  link.click();
 }
 
 export async function exportWidget(

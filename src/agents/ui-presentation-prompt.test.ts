@@ -10,7 +10,7 @@ describe("UI presentation prompt", () => {
       expect(prompt).toContain("`environmentId` if attached");
       expect(prompt).toContain("loopback-only is Gateway-local");
       expect(prompt).toContain("non-loopback != remote-access proof");
-      expect(prompt).toContain("worker/Gateway fetch or panel dispatch != delivery proof");
+      expect(prompt).toContain("worker/Gateway fetch or panel dispatch is not delivery proof");
       expect(prompt).toContain("requesting viewer");
       expect(prompt).toContain("blocked/unverified");
       if (screenToolName) {

@@ -50,7 +50,7 @@ function parseLegacyReplayKey(key: string): { messageId: string; roomId: string 
 }
 
 /** Convert the shipped replay guard's live window into durable completion tombstones. */
-export async function migrateNextcloudTalkLegacyReplayState(params: {
+async function migrateNextcloudTalkLegacyReplayState(params: {
   queue: ChannelIngressQueue<NextcloudTalkIngressPayload>;
   store: NextcloudTalkLegacyReplayStore;
 }): Promise<void> {

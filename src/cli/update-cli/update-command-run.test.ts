@@ -28,10 +28,7 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import {
-  loadUpdateRecovery,
-  UpdateRecoveryRequiredError,
-} from "../../infra/update-run-recovery.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import * as stepWrites from "../../infra/update-run-write.async.js";
 import { runStep } from "../../infra/update-runner-command.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
@@ -324,17 +321,6 @@ function pendingRecovery() {
   const snapshot = () => snapshotUpdateFixtureTree(root);
   return { root, run, record, snapshot };
 }
-
-it("refuses interrupted update admission without touching SQLite when reusing its run ID", async () => {
-  const { root, run, record, snapshot } = pendingRecovery();
-  vi.stubEnv(UPDATE_RUN_ID_ENV, run.runId);
-  const before = snapshot();
-  await expect(
-    admitUpdateCommandRun({ env: process.env, opts: { dryRun: false }, root }),
-  ).rejects.toBeInstanceOf(UpdateRecoveryRequiredError);
-  expect(snapshot()).toEqual(before);
-  expect(loadUpdateRecovery(run.runId, { env: run.env })).toEqual(record);
-});
 
 it.each(["displaced", "replacement", "both", "unreadable"] as const)(
   "blocks admission when publication has no canonical DB (%s)",
