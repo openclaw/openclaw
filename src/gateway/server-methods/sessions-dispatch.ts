@@ -41,10 +41,7 @@ import {
   isForceAbandonedWorkerPlacement,
   type WorkerSessionPlacementRecord,
 } from "../worker-environments/placement-record.js";
-import {
-  resolveWorkerPlacementCapabilities,
-  resolveWorkerPlacementSessionRuntimeAsync,
-} from "../worker-environments/placement-session-runtime.js";
+import { prepareWorkerPlacementDispatchRuntime } from "../worker-environments/placement-session-runtime.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
 import type { WorkerPlacementDispatchRequest } from "../worker-environments/service-contract.js";
 import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
@@ -271,28 +268,18 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         respondInvalidWorkerSession(respond, "cannot dispatch an archived session");
         return;
       }
-      const sessionRuntime = await resolveWorkerPlacementSessionRuntimeAsync({
+      const preparedRuntime = await prepareWorkerPlacementDispatchRuntime({
         cfg,
         entry,
         agentId,
         sessionKey,
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
       });
-      const { executionMode, devicePlacement } = resolveWorkerPlacementCapabilities(sessionRuntime);
-      if (entry.deviceFolder && executionMode !== "worker-turn") {
-        respondInvalidWorkerSession(
-          respond,
-          "Existing device folders currently require the OpenClaw harness; choose an OpenClaw model instead of remote execution.",
-        );
+      if (!preparedRuntime.ok) {
+        respondInvalidWorkerSession(respond, preparedRuntime.error);
         return;
       }
-      if (!executionMode) {
-        respondInvalidWorkerSession(
-          respond,
-          `runtime ${sessionRuntime} lacks cloud placement support`,
-        );
-        return;
-      }
+      const { runtime: sessionRuntime, executionMode, devicePlacement } = preparedRuntime;
       const validateExecutionMode = async (target: { profileId: string; deviceId?: string }) => {
         if (target.deviceId !== undefined) {
           const eligibility = await resolveDevicePlacementEligibility({

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -204,6 +205,51 @@ describe("sessions.dispatch", () => {
       }),
     );
   });
+
+  it.each([true, false])(
+    "checks Code Mode before allocation when model tools support is %s",
+    async (supportsTools) => {
+      useWorktreeSession();
+      const dispatch = vi.fn().mockResolvedValue(activePlacementRecord());
+      const respond = await invoke(
+        dispatchContext(dispatch, {
+          getRuntimeConfig: () => ({
+            cloudWorkers: { profiles: { test: { provider: "fake" } } },
+            plugins: { deny: ["code-mode-quickjs"] },
+            tools: { codeMode: { enabled: "auto", executor: "quickjs" } },
+            models: {
+              mode: "replace",
+              providers: {
+                anthropic: {
+                  baseUrl: "https://example.invalid",
+                  api: "anthropic-messages",
+                  models: [
+                    modelDefinition("claude-test", {
+                      compat: { codeMode: "preferred", supportsTools },
+                    }),
+                  ],
+                },
+              },
+            },
+          }),
+        }),
+      );
+      if (supportsTools) {
+        expectDispatchError(
+          respond,
+          expect.stringContaining('Code Mode executor "quickjs" is unavailable or disabled'),
+        );
+        expect(dispatch).not.toHaveBeenCalled();
+      } else {
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ ok: true }),
+          undefined,
+        );
+      }
+    },
+  );
 
   it("rejects a per-project mapping to an unknown profile as invalid", async () => {
     useWorktreeSession({}, "/repo/worktree");

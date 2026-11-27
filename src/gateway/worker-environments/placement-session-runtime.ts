@@ -19,6 +19,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
@@ -35,6 +36,7 @@ import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store
 import type { GatewaySessionStoreTargetWithStore } from "../session-utils-store.types.js";
 import { resolveWorkerPlacementCapabilities } from "./placement-capabilities.js";
 import type { WorkerPlacementExecutionMode } from "./placement-record.js";
+import { assertWorkerCodeModeExecutorSupported } from "./worker-code-mode-authority.js";
 
 export { resolveWorkerPlacementCapabilities } from "./placement-capabilities.js";
 
@@ -64,7 +66,7 @@ export function resolveWorkerPlacementSessionRuntime(params: {
   });
 }
 
-export async function resolveWorkerPlacementSessionRuntimeAsync(
+export async function resolveWorkerPlacementSessionSelectionAsync(
   params: Omit<
     Parameters<typeof resolveWorkerPlacementSessionRuntime>[0],
     "preparedRuntimeOwnership" | "readSourceEntry"
@@ -72,7 +74,11 @@ export async function resolveWorkerPlacementSessionRuntimeAsync(
     assertCurrent?: () => void;
     readSourceEntry?: (key: string) => Promise<SessionEntry | undefined>;
   },
-): Promise<string> {
+): Promise<{
+  runtime: string;
+  modelRef: { provider: string; model: string };
+  metadataSnapshot: PluginMetadataSnapshot;
+}> {
   const preparedEnvironment = captureRuntimeStateEnvironment();
   const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
   const [metadataSnapshot, activateDiscovery] = await Promise.all([
@@ -123,7 +129,7 @@ export async function resolveWorkerPlacementSessionRuntimeAsync(
       if (!selected) {
         throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
       }
-      return resolveWorkerPlacementModelRuntime({
+      const runtime = resolveWorkerPlacementModelRuntime({
         ...params,
         provider: selected.provider,
         model: selected.model,
@@ -131,6 +137,7 @@ export async function resolveWorkerPlacementSessionRuntimeAsync(
         preparedEnvironment,
         metadataSnapshot,
       });
+      return { runtime, modelRef: selected, metadataSnapshot };
     },
     {
       config: params.cfg,
@@ -138,6 +145,44 @@ export async function resolveWorkerPlacementSessionRuntimeAsync(
       ...(workspaceDir ? { workspaceDir } : {}),
     },
   );
+}
+
+export async function resolveWorkerPlacementSessionRuntimeAsync(
+  params: Parameters<typeof resolveWorkerPlacementSessionSelectionAsync>[0],
+): Promise<string> {
+  return (await resolveWorkerPlacementSessionSelectionAsync(params)).runtime;
+}
+
+/** Admit a dispatch's runtime and known tool policy before allocating the destination. */
+export async function prepareWorkerPlacementDispatchRuntime(
+  params: Parameters<typeof resolveWorkerPlacementSessionSelectionAsync>[0],
+) {
+  const { runtime, modelRef, metadataSnapshot } =
+    await resolveWorkerPlacementSessionSelectionAsync(params);
+  const { executionMode, devicePlacement } = resolveWorkerPlacementCapabilities(runtime);
+  if (params.entry.deviceFolder && executionMode !== "worker-turn") {
+    return {
+      ok: false as const,
+      error:
+        "Existing device folders currently require the OpenClaw harness; choose an OpenClaw model instead of remote execution.",
+    };
+  }
+  if (!executionMode) {
+    return { ok: false as const, error: `runtime ${runtime} lacks cloud placement support` };
+  }
+  if (executionMode === "worker-turn") {
+    try {
+      assertWorkerCodeModeExecutorSupported({
+        config: params.cfg,
+        agentId: params.agentId,
+        modelRef,
+        metadataSnapshot,
+      });
+    } catch (error) {
+      return { ok: false as const, error: formatErrorMessage(error) };
+    }
+  }
+  return { ok: true as const, runtime, executionMode, devicePlacement };
 }
 
 /** Preserve qualified parent precedence and sentinel physical ownership during async selection. */

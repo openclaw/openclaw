@@ -534,6 +534,8 @@ export const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(a
     prepareWorkerPlacementSessionRuntime: runtimePreparation.prepareWorkerPlacementSessionRuntime,
     resolveWorkerPlacementSessionRuntimeAsync:
       placementSessionRuntime.resolveWorkerPlacementSessionRuntimeAsync,
+    resolveWorkerPlacementSessionSelectionAsync:
+      placementSessionRuntime.resolveWorkerPlacementSessionSelectionAsync,
     resolveCanonicalSessionEntryFromStoreKeys:
       sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
     resolveGatewaySessionStoreTargetInWorker: sessionUtils.resolveGatewaySessionStoreTargetInWorker,

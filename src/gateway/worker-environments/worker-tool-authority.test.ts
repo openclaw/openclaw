@@ -21,6 +21,7 @@ import { registerDiagnosticTracePropagationBridge } from "../../infra/diagnostic
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.js";
 import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
+import { prepareWorkerToolPresentation } from "./worker-code-mode-authority.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 
 const gatewayMocks = vi.hoisted(() => ({ callGatewayTool: vi.fn() }));
@@ -56,9 +57,16 @@ function resolvedAuthority(
   computerAvailable = false,
   assertCurrent = () => {},
 ) {
+  const input = turn(overrides);
   return resolveWorkerToolAuthority({
     modelRef,
-    turn: turn(overrides),
+    turn: input,
+    presentation: prepareWorkerToolPresentation({
+      ...placement,
+      modelRef,
+      config: input.config,
+      turn: input,
+    }),
     computerAvailable,
     placement,
     assertCurrent,
@@ -444,5 +452,24 @@ describe("resolveWorkerToolAuthority", () => {
         },
       }),
     ).toEqual([]);
+  });
+
+  it("validates non-core Code Mode executor policy before worker dispatch", async () => {
+    const allowed = await resolvedAuthority({
+      config: {
+        tools: { codeMode: { enabled: true, executor: "quickjs" } },
+        plugins: { allow: ["openai"] },
+      },
+    });
+    expect(allowed.presentation.codeMode).toMatchObject({ enabled: true, executor: "quickjs" });
+
+    expect(() =>
+      resolvedAuthority({
+        config: {
+          tools: { codeMode: { enabled: true, executor: "quickjs" } },
+          plugins: { deny: ["code-mode-quickjs"] },
+        },
+      }),
+    ).toThrow('Code Mode executor "quickjs" is unavailable or disabled');
   });
 });

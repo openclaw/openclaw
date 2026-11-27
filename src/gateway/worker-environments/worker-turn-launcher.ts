@@ -28,6 +28,7 @@ import {
   WorkerRunnerUnavailableError,
   WorkerTunnelOwnerDisconnectedError,
 } from "./tunnel-contract.js";
+import { assertWorkerTurnCodeModeExecutorSupported } from "./worker-code-mode-authority.js";
 import {
   assertWorkerPlacementCompactionAllowed,
   admitWorkerTurn,
@@ -237,6 +238,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               routablePlacement.state === "reclaimed" ||
               (routablePlacement.state === "failed" && routablePlacement.activeOwnerEpoch !== null)
             ) {
+              if (routablePlacement.executionMode === "worker-turn") {
+                assertWorkerTurnCodeModeExecutorSupported(turn, identity.agentId);
+              }
               reportProvisioning();
               preparedResultPending = undefined;
               routablePlacement = await options.redispatchPlacement(routablePlacement, {

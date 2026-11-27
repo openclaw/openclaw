@@ -1,3 +1,4 @@
+import type { AgentToolSurfacePresentation } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -7,17 +8,11 @@ import {
 } from "../../agents/exec-defaults.js";
 import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
 import { resolveExecToolConfig, resolveModelExecCeilings } from "../../agents/lazy-exec-tool.js";
-import { supportsModelTools } from "../../agents/model-tool-support.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import { projectEffectiveExecPolicy } from "../../agents/session-permission-exec-mode.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import {
-  prepareAgentToolSurfacePresentation,
-  type AgentToolSurfacePlanParams,
-} from "../../agents/tool-surface-plan.js";
-import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { loadExecApprovalsReadOnlyAsync } from "../../infra/exec-approvals-store.js";
 import { normalizePathPrepend } from "../../infra/path-prepend.js";
 import { logWarn } from "../../logger.js";
@@ -27,7 +22,7 @@ import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 export async function resolveWorkerToolAuthority(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
-  model?: AgentToolSurfacePlanParams["model"];
+  presentation: AgentToolSurfacePresentation;
   placement: Pick<WorkerSessionPlacementIdentity, "agentId" | "sessionKey">;
   assertCurrent(this: void): void;
   computerAvailable?: boolean;
@@ -134,28 +129,20 @@ export async function resolveWorkerToolAuthority(params: {
           "Worker exec/process withheld: captured exec policy requires another execution host. Run this turn locally.",
         );
       }
-      const presentation = prepareAgentToolSurfacePresentation({
-        ...turn,
-        agentId: params.placement.agentId,
-        sessionKey: turn.sandboxSessionKey ?? params.placement.sessionKey,
-        model: params.model,
-        modelProvider: params.modelRef.provider,
-        modelId: params.modelRef.model,
-        toolsEnabled: supportsModelTools(params.model ?? {}),
-        forceDirectMessageTool: messageToolOwnsVisibleReply(turn),
-        isRawModelRun: turn.modelRun === true || turn.promptMode === "none",
-      });
       const installedSkills = prepareInstalledSkillCatalog({
         snapshot: turn.skillsSnapshot,
         workspaceDir: turn.bootstrapWorkspaceDir ?? turn.workspaceDir,
         assertCurrent: params.assertCurrent,
         instructionDelivery: "forwarded",
       });
-      presentation.skills = installedSkills.map(({ name, description, location }) => ({
-        name,
-        description,
-        location,
-      }));
+      const presentation = {
+        ...params.presentation,
+        skills: installedSkills.map(({ name, description, location }) => ({
+          name,
+          description,
+          location,
+        })),
+      };
       return {
         capabilityProfile,
         policy: Object.keys(execDefaults).length ? { ...corePolicy, execDefaults } : corePolicy,

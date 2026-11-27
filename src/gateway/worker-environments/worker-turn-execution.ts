@@ -27,6 +27,7 @@ import {
   assertWorkerTurnInputAdmitted,
   getWorkerTurnToolSurface,
 } from "./placement-turn-claim-events.js";
+import { prepareWorkerToolPresentation } from "./worker-code-mode-authority.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import { prepareWorkerExecApproval } from "./worker-exec-approval.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
@@ -34,7 +35,7 @@ import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js
 import { bindWorkerGitHubTurn } from "./worker-github-binding.js";
 import { createWorkerReplyMedia } from "./worker-reply-media.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
-import { releaseClaimIfOwned, waitForTurnOperation } from "./worker-turn-admission.js";
+import { acquireWorkerTurnTransport, releaseClaimIfOwned } from "./worker-turn-admission.js";
 import {
   WorkerTurnExecutionError,
   type WorkerTurnEnvironmentService,
@@ -199,20 +200,16 @@ export async function executeWorkerTurn(
     });
 
     assertContextCurrent();
-    const credential = await waitForTurnOperation({
-      start: () => params.environments.acquireTurnCredential(params.turnClaim),
-      ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
-      timeoutMs: turn.timeoutMs,
+    const admittedPresentation = prepareWorkerToolPresentation({
+      turn,
+      config: turn.config,
+      agentId: placement.agentId,
+      sessionKey: placement.sessionKey,
+      modelRef,
+      model,
+      metadataSnapshot: preparedRuntime.snapshot.metadataSnapshot,
     });
-    const tunnel = await waitForTurnOperation({
-      start: () =>
-        params.environments.startTunnel({
-          environmentId: placement.environmentId,
-          ownerEpoch: placement.activeOwnerEpoch,
-        }),
-      ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
-      timeoutMs: turn.timeoutMs,
-    });
+    const { credential, tunnel } = await acquireWorkerTurnTransport({ ...params, turn });
     if (!tunnel.launchTurn) {
       throw new Error("Worker tunnel does not support worker turns");
     }
@@ -244,7 +241,7 @@ export async function executeWorkerTurn(
       installedSkills,
     } = await resolveWorkerToolAuthority({
       modelRef,
-      model,
+      presentation: admittedPresentation,
       placement,
       turn,
       // Retained skill tools run in RPC callbacks outside this turn's async context.

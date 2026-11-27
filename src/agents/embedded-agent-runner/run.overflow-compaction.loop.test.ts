@@ -18,6 +18,7 @@ import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-
 import type { ExecSessionDefaults } from "../exec-defaults.js";
 import { createAgentHarnessHostCapabilities } from "../harness/host-capability.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
+import { createToolSurfacePresentationForTest } from "../tool-surface-plan.test-support.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -316,6 +317,7 @@ describe("embedded run retry dispatch", () => {
 
       const authority = await resolveWorkerToolAuthority({
         modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+        presentation: createToolSurfacePresentationForTest(),
         turn: {
           ...result.preparedAttempt,
           model: result.preparedAttempt.model.id,

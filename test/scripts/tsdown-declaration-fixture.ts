@@ -230,6 +230,13 @@ export function createFixture(
       "junction",
     );
   }
+  fs.symlinkSync(
+    fs.realpathSync(
+      path.join(sourceRoot, "extensions/code-mode-quickjs/node_modules/quickjs-wasi"),
+    ),
+    path.join(root, "node_modules/quickjs-wasi"),
+    "junction",
+  );
   materializeDeclarationPackages(root, groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS);
   const write = createDeclarationFixtureWriter(root);
   write(
@@ -258,6 +265,8 @@ export function createFixture(
   // The full config resolves these runtime inputs before selecting declaration groups.
   for (const source of [
     "src/worker/worker-deploy-browser-runtime.ts",
+    "src/plugins/worker-deploy-code-mode-executors.ts",
+    "extensions/code-mode-quickjs/src/executor.ts",
     "src/agents/utils/syntax-highlight.ts",
     "src/plugin-sdk/facade-runtime.ts",
     "extensions/browser/src/browser/playwright-core.runtime.ts",

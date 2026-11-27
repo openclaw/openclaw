@@ -273,6 +273,11 @@ const workerBuildTargets = [
   ],
   ["code-mode-node", "worker/code-mode-node.worker", "src/agents/code-mode-node.worker.ts"],
   [
+    "code-mode-quickjs",
+    "worker/code-mode-quickjs.worker",
+    "extensions/code-mode-quickjs/src/code-mode.worker.ts",
+  ],
+  [
     "file-tool-planning",
     "worker/file-tool-planning.worker",
     "src/worker/worker-deploy-file-tool-planning.ts",
