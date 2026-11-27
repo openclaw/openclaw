@@ -157,6 +157,9 @@ export async function projectUsageCostQuartersInWorker(params: {
       }
       fresh = isUsageCostRollupFresh({ checkpoint, file });
     }
+    if (operation.kind === "overview" && !envelope.includesTimedUsage) {
+      fresh = false;
+    }
     if (entry.missingMonths > 0) {
       return { state: "pending" };
     }

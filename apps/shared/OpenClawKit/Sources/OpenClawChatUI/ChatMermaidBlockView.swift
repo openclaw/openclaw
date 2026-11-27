@@ -10,6 +10,7 @@ import UIKit
 @MainActor
 struct ChatMermaidBlockView: View {
     let source: String
+    var bodyScale: CGFloat = 1
 
     @Environment(\.self) private var environment
     @Environment(\.displayScale) private var displayScale
@@ -130,7 +131,9 @@ struct ChatMermaidBlockView: View {
     }
 
     private var sourceView: some View {
-        ChatCodeBlockView(block: ChatCodeBlock(language: nil, code: self.source, isComplete: true))
+        ChatCodeBlockView(
+            block: ChatCodeBlock(language: nil, code: self.source, isComplete: true),
+            bodyScale: self.bodyScale)
     }
 
     private var rendered: ChatMermaidRenderedImage? {

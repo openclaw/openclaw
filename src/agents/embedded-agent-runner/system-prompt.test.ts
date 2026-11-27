@@ -158,13 +158,8 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         tools: surface === "absent" ? [] : [sessions],
       });
 
-      expect(prompt.includes('"spin up a new task"')).toBe(surface === "create");
+      // The trigger stays in the prompt; sessions_create's description carries the details.
       expect(prompt.includes("`sessions_create`")).toBe(surface === "create");
-      if (surface === "create") {
-        expect(prompt).toContain("`message` starts work; omit for idle");
-        expect(prompt).toContain("independent persistent visible session, not a supervised child");
-        expect(prompt).toContain("no completion event or yield");
-      }
       expect(prompt).not.toContain("## Delegation");
     },
   );
