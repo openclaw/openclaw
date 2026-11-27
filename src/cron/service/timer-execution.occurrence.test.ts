@@ -119,7 +119,9 @@ describe("scheduled occurrence admission", () => {
       message: "Workspace degraded",
       state: { status: "degraded" },
     }));
-    state.deps.deliverCheckPost = vi.fn(async () => ({ delivered: true }));
+    state.deps.deliverCheckPost = vi.fn<NonNullable<typeof state.deps.deliverCheckPost>>(
+      async ({ message }) => ({ delivered: true, summary: message }),
+    );
     const payload =
       action === "wake"
         ? ({ kind: "agentTurn", message: "Summarize the status" } as const)

@@ -27,6 +27,13 @@ function isCronFormSessionTarget(value: string): value is CronFormState["session
   );
 }
 
+export function supportsCronAnnounce(form: CronFormState): boolean {
+  return (
+    form.payloadKind === "agentTurn" ||
+    (form.sessionTarget !== "main" && (form.payloadKind === "none" || form.payloadLocked))
+  );
+}
+
 export function normalizeCronFormState(
   form: CronFormState,
   changed: Partial<CronFormState> = {},
@@ -44,12 +51,7 @@ export function normalizeCronFormState(
         ? { ...normalized, payloadKind: "agentTurn" }
         : { ...normalized, sessionTarget: "main" };
   }
-  if (
-    normalized.deliveryMode !== "announce" ||
-    normalized.payloadKind === "agentTurn" ||
-    normalized.payloadKind === "none" ||
-    (normalized.sessionTarget !== "main" && normalized.payloadLocked)
-  ) {
+  if (normalized.deliveryMode !== "announce" || supportsCronAnnounce(normalized)) {
     return normalized;
   }
   return {

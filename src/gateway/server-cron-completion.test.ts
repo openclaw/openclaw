@@ -63,7 +63,7 @@ import * as assistantContent from "./server-methods/chat-assistant-content.js";
 
 async function createCompletionFixture(
   state: OpenClawTestState,
-  kind: "script" | "command",
+  kind: "check" | "command",
   hookText?: string,
 ) {
   const storePath = path.join(state.sessionsDir(), "sessions.json");
@@ -75,8 +75,7 @@ async function createCompletionFixture(
   };
   const generation = { sessionId: source.sessionId, lifecycleRevision: "creator-generation" };
   const executionSessionKey = `agent:main:cron:${kind}-job`;
-  // Keep the v2026.9.9 persisted shape independent of current job defaults.
-  const releasedJob = {
+  const jobFields = {
     id: `${kind}-job`,
     agentId: "main",
     name: "test",
@@ -85,15 +84,14 @@ async function createCompletionFixture(
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
-    payload:
-      kind === "script"
-        ? { kind: "script", script: "return { notify: 'Script finished' };" }
-        : { kind: "command", argv: ["printf", "Command finished"] },
     delivery: { mode: "announce", channel: "telegram", to: "123" },
     state: {},
-  } satisfies Omit<CronStoredJob, "updatedAtMs">;
+  } satisfies Omit<CronStoredJob, "payload" | "updatedAtMs">;
   const job: CronStoredJob = {
-    ...releasedJob,
+    ...jobFields,
+    ...(kind === "check"
+      ? { payload: { kind: "none" }, check: { script: "return { post: 'Script finished' };" } }
+      : { payload: { kind: "command", argv: ["printf", "Command finished"] } }),
     updatedAtMs: 1,
     sessionKey: executionSessionKey,
     state: { runningAtMs: 1000 },
@@ -172,7 +170,7 @@ async function createCompletionFixture(
     initializeGlobalHookRunner(pluginRegistry);
   }
   const logger = getChildLogger({ module: "cron-completion-test" });
-  const text = kind === "script" ? "Script finished" : "Command finished";
+  const text = kind === "check" ? "Script finished" : "Command finished";
   const messages = async (scope = source) => {
     const entry = loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
     if (!entry) {
@@ -242,7 +240,11 @@ async function createCompletionFixture(
       }).entries[0];
     },
     async loadReleasedRows() {
-      const jobJson = JSON.stringify(releasedJob);
+      // Preserve the v2026.9.9 input to Doctor independently of the current job shape.
+      const jobJson = JSON.stringify({
+        ...jobFields,
+        payload: { kind: "script", script: "return { notify: 'Script finished' };" },
+      });
       runOpenClawStateWriteTransaction(({ db }) => {
         db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?").run(
           jobJson,
@@ -261,7 +263,18 @@ async function createCompletionFixture(
           ) VALUES ((SELECT coalesce(max(cursor_id), 0) + 1 FROM cron_run_receipts), ?, ?, ?, ?, 'main', 'released-request', 'ok', 123, NULL, 10, 20, NULL)`,
         ).run("released-receipt", receipt.storeKey, job.id, receipt.configRevision);
       });
+      const { maybeRepairLegacyCronStore } = await import("../commands/doctor/cron/index.js");
+      await maybeRepairLegacyCronStore({
+        cfg,
+        options: { repair: true },
+        prompter: { confirm: async () => true },
+      });
       const loaded = (await loadCronStore(cronStorePath)).jobs[0]!;
+      expect(loaded).toMatchObject({
+        enabled: true,
+        payload: { kind: "none" },
+        check: { script: "return { post: 'Script finished' };" },
+      });
       expect(loaded).not.toHaveProperty("sourceConversation");
       const database = openOpenClawStateDatabase().db;
       expect(readActiveCronRunReceiptsInDatabase(database, receipt.storeKey, [job.id])).toEqual([
@@ -288,7 +301,6 @@ async function createCompletionFixture(
         finished_at_ms: 20,
         delivery_attempt_state: "unknown",
       });
-      expect(before.jobJson).toBe(jobJson);
       return { job: loaded, assertPreserved: () => expect(snapshot()).toEqual(before) };
     },
     async removeOccurrence() {
@@ -318,7 +330,7 @@ function deliveryDiagnostics(message: string, contains = false, substring = fals
 }
 
 async function withCompletionFixture(
-  kind: "script" | "command",
+  kind: "check" | "command",
   run: (fixture: Awaited<ReturnType<typeof createCompletionFixture>>) => Promise<void>,
   hookText?: string,
 ) {
@@ -399,13 +411,13 @@ describe("completion announcement", () => {
   });
 
   it.each([
-    { kind: "script", failure: "none" },
-    { kind: "script", failure: "rejected" },
-    { kind: "script", failure: "uncertain" },
+    { kind: "check", failure: "none" },
+    { kind: "check", failure: "rejected" },
+    { kind: "check", failure: "uncertain" },
   ] as const)(
     "adds the $kind result only after confirmed notification (failure=$failure)",
     async ({ kind: payloadKind, failure }) => {
-      await withCompletionFixture("script", async (fixture) => {
+      await withCompletionFixture(payloadKind, async (fixture) => {
         fixture.sendText.mockImplementation(async () => {
           expect(await fixture.messages(fixture.destination)).toEqual([]);
           if (failure === "uncertain") {
@@ -472,7 +484,7 @@ describe("completion announcement", () => {
   it.each(["binding failure", "cross-agent destination"] as const)(
     "delivers without conversation writes after %s",
     async (reason) => {
-      await withCompletionFixture("script", async (fixture) => {
+      await withCompletionFixture("check", async (fixture) => {
         let otherDestination: typeof fixture.destination | undefined;
         if (reason === "binding failure") {
           vi.spyOn(outboundSession, "bindOutboundSessionEntry").mockRejectedValueOnce(
@@ -536,7 +548,7 @@ describe("completion announcement", () => {
   it.each(["deleted", "reset"] as const)(
     "delivers to the explicit destination when the captured source was %s",
     async (change) => {
-      await withCompletionFixture("script", async (fixture) => {
+      await withCompletionFixture("check", async (fixture) => {
         const target = {
           canonicalKey: fixture.source.sessionKey,
           storeKeys: [fixture.source.sessionKey],
@@ -567,7 +579,7 @@ describe("completion announcement", () => {
   );
 
   it("refuses destination output without an occurrence identity", async () => {
-    await withCompletionFixture("script", async (fixture) => {
+    await withCompletionFixture("check", async (fixture) => {
       await expect(fixture.finalize({ runStartedAtMs: undefined })).resolves.toMatchObject({
         deliveryAttempted: true,
         delivered: false,
@@ -579,7 +591,7 @@ describe("completion announcement", () => {
   });
 
   it("loads and delivers v2026.9.9-shaped jobs without rewriting retained receipts or schema", async () => {
-    await withCompletionFixture("script", async (fixture) => {
+    await withCompletionFixture("check", async (fixture) => {
       const released = await fixture.loadReleasedRows();
 
       await expect(fixture.finalize({ job: released.job })).resolves.toMatchObject(confirmed);
@@ -590,7 +602,7 @@ describe("completion announcement", () => {
   });
 
   it("completes in the source without inheriting the shared main external route", async () => {
-    await withCompletionFixture("script", async (fixture) => {
+    await withCompletionFixture("check", async (fixture) => {
       fixture.job.delivery = { mode: "announce", channel: "last" };
 
       await expect(fixture.finalize()).resolves.toMatchObject({
@@ -606,13 +618,13 @@ describe("completion announcement", () => {
   it.each(["NO_REPLY", "Scheduled report\nNO_REPLY"])(
     "delivers prepared script text literally without a second control parser: %s",
     async (text) => {
-      await withCompletionFixture("script", async (fixture) => {
+      await withCompletionFixture("check", async (fixture) => {
         await expect(fixture.finalize({ text })).resolves.toMatchObject({
           delivered: true,
           deliveryAttempted: true,
           deliveryError: undefined,
         });
-        const deliveredText = `${text}\n[Inspect run](https://automation.example.test/automations?job=script-job&run=cron%3Ascript-job%3A1000)`;
+        const deliveredText = `${text}\n[Inspect run](https://automation.example.test/automations?job=check-job&run=cron%3Acheck-job%3A1000)`;
         expect(fixture.sendText).toHaveBeenCalledWith(
           expect.objectContaining({ text: deliveredText }),
         );
@@ -624,7 +636,7 @@ describe("completion announcement", () => {
   it.each(["none", "webhook"] as const)(
     "does not write a conversation result for %s delivery",
     async (mode) => {
-      await withCompletionFixture("script", async (fixture) => {
+      await withCompletionFixture("check", async (fixture) => {
         fixture.job.delivery =
           mode === "webhook" ? { mode, to: "https://receiver.example.test/cron" } : { mode };
         await expect(fixture.finalize()).resolves.toMatchObject({
@@ -638,7 +650,7 @@ describe("completion announcement", () => {
   );
 
   it("routes a route-less job to its session-key owner's default destination", async () => {
-    await withCompletionFixture("script", async (fixture) => {
+    await withCompletionFixture("check", async (fixture) => {
       // The job names its agent only through its session key; the resolver's
       // fallback agent must not select the defaults.
       fixture.job.agentId = undefined;
@@ -660,7 +672,7 @@ describe("completion announcement", () => {
   });
 
   it("does not commit or notify an aborted occurrence", async () => {
-    await withCompletionFixture("script", async (fixture) => {
+    await withCompletionFixture("check", async (fixture) => {
       const controller = new AbortController();
       controller.abort(new Error("occurrence aborted"));
 
@@ -677,7 +689,7 @@ describe("completion announcement", () => {
   it.each(["deleted", "cancelled"] as const)(
     "keeps confirmed delivery when transcript preparation loses occurrence authority (%s)",
     async (outcome) => {
-      await withCompletionFixture("script", async (fixture) => {
+      await withCompletionFixture("check", async (fixture) => {
         const entered = createDeferred();
         const resume = createDeferred();
         const prepare = assistantContent.buildAssistantReplyContent;

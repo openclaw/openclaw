@@ -29,8 +29,6 @@ const {
   abortAndDrainEmbeddedAgentRunMock,
   getProcessSupervisorMock,
   createCronScriptRuntimeMock,
-  cronTriggerEvaluatorMock,
-  cronScriptExecutorMock,
   isAgentDeletionBlockedMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
@@ -72,9 +70,8 @@ const {
     cancelScope: vi.fn(),
     acquireScopeCleanup: vi.fn(() => vi.fn(async () => {})),
   })),
-  createCronScriptRuntimeMock: vi.fn(),
-  cronTriggerEvaluatorMock: vi.fn(),
-  cronScriptExecutorMock: vi.fn(),
+  createCronScriptRuntimeMock:
+    vi.fn<typeof import("../cron/trigger-script.js").createCronScriptRuntime>(),
   isAgentDeletionBlockedMock: vi.fn((_agentId: string) => false),
 }));
 
@@ -285,12 +282,9 @@ export function resetGatewayCronMocks() {
     cancelScope: vi.fn(),
     acquireScopeCleanup: vi.fn(() => vi.fn(async () => {})),
   });
-  cronTriggerEvaluatorMock.mockReset().mockResolvedValue({ kind: "evaluated", fire: false });
   isAgentDeletionBlockedMock.mockReset().mockReturnValue(false);
-  cronScriptExecutorMock.mockReset().mockResolvedValue({ kind: "completed", stateChanged: false });
   createCronScriptRuntimeMock.mockReset().mockReturnValue({
-    evaluateTrigger: cronTriggerEvaluatorMock,
-    executePayload: cronScriptExecutorMock,
+    evaluateCheck: async () => ({ kind: "evaluated", action: "quiet" }),
   });
   getGlobalHookRunnerMock.mockReturnValue({
     hasHooks: (hookName: string) => hookName === "cron_changed",

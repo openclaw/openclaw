@@ -4,6 +4,7 @@ import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { supportsCronAnnounce } from "../../lib/cron/form.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
@@ -34,9 +35,7 @@ type EditorProps = CronProps & {
 function payloadFacts(props: CronProps) {
   const payloadLocked = () => props.form.payloadLocked;
   const isAgentTurn = () => !payloadLocked() && props.form.payloadKind === "agentTurn";
-  const supportsAnnounce = () =>
-    props.form.payloadKind === "agentTurn" ||
-    (props.form.sessionTarget !== "main" && payloadLocked());
+  const supportsAnnounce = () => supportsCronAnnounce(props.form);
   const selectedDeliveryMode = () =>
     props.form.deliveryMode === "announce" && !supportsAnnounce()
       ? "none"

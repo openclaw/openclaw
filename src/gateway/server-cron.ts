@@ -423,10 +423,11 @@ export function buildGatewayCronService(params: {
     },
     deliverCheckPost: async ({ job, message, abortSignal, deliveryAttemptFence }) => {
       const prepared = prepareAgentRunTerminalReply({ rawText: message });
-      return await finalizeCronCompletionAnnouncement({
+      const summary = prepared.text.trim() ? prepared.text : undefined;
+      const completion = await finalizeCronCompletionAnnouncement({
         deliveryAttemptFence,
         job,
-        text: prepared.text,
+        text: summary,
         suppressionReason: prepared.terminalReply.disposition === "silent" ? "silent" : undefined,
         runStartedAtMs: job.state.runningAtMs,
         abortSignal,
@@ -435,6 +436,7 @@ export function buildGatewayCronService(params: {
         logger: cronLogger,
         label: "check",
       });
+      return { ...completion, summary };
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {
       if (!execution?.sessionId) {

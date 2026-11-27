@@ -120,7 +120,7 @@ async function createCommandWebhook(
     enqueueSystemEvent,
     runCommandJob: options.runCommandJob ?? runCronCommandJob,
     evaluateCronCheck: options.evaluateCronCheck,
-    deliverCheckPost: async () => ({}),
+    deliverCheckPost: async ({ message }) => ({ summary: message }),
     sendCronWebhook: (params) =>
       sendGatewayCronWebhook({ ...params, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } }),
   });

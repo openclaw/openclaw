@@ -154,7 +154,7 @@ describe("cron self-removal", () => {
           }
         },
         runIsolatedAgentJob: runJob,
-        deliverCheckPost: async () => ({}),
+        deliverCheckPost: async ({ message }) => ({ summary: message }),
         evaluateCronCheck: async (params) => {
           await runJob(params);
           return { kind: "evaluated", action: "post", message: "final reply after self-cleanup" };

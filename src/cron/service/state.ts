@@ -293,7 +293,7 @@ export type CronServiceDeps = {
     job: CronStoredJob;
     message: string;
     abortSignal?: AbortSignal;
-  }) => Promise<CronRunDeliveryResult>;
+  }) => Promise<CronRunDeliveryResult & { summary: string | undefined }>;
   /** Deliver a primary cron webhook before the run outcome is finalized. */
   sendCronWebhook?: (params: {
     job: CronJob;

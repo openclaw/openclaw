@@ -391,17 +391,15 @@ export async function executeJobCore(
         }
         await options?.assertRunCurrent?.();
         assertCurrent();
-        const message = evaluation.message!;
         const delivery = await state.deps.deliverCheckPost({
           job,
-          message,
+          message: evaluation.message!,
           abortSignal,
           deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
         });
         assertCurrent();
         return {
           status: "ok",
-          summary: message,
           ...delivery,
           triggerEval,
           nextCheck: evaluation.nextCheck,
