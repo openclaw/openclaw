@@ -133,7 +133,7 @@ describe("McpServerEditor", () => {
     expect(command.value).toBe("npx");
     const alert = container.querySelector('[role="alert"]');
     expect(alert?.textContent).toBe(
-      "This MCP server needs a command to start. Keep this command or enter another.",
+      "This MCP server needs a command to start. The previous command was kept.",
     );
     expect(command.getAttribute("aria-describedby")).toBe(alert?.id);
     change(command, "uvx");
