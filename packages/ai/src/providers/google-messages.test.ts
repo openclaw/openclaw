@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProviderContext } from "../provider-types.js";
 import type { AssistantMessage, RuntimeContextMessage } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
-import { projectGoogleMessages } from "./google-messages.js";
+import { convertGoogleTools, projectGoogleMessages } from "./google-messages.js";
 
 const model = {
   id: "gemini-2.5-flash",
@@ -103,5 +103,22 @@ describe.each(["managed", "signed-parts"] as const)("Google runtime context (%s)
     expect(convert([{ role: "user", content: temporalContext, timestamp: 1 }])).toEqual([
       userParts(temporalContext),
     ]);
+  });
+});
+
+describe("convertGoogleTools", () => {
+  const t = (name: string) => ({ name, description: name, parameters: { type: "object" } });
+  const names = (list?: Array<{ name?: string }>) => list?.map((e) => e.name);
+
+  it("sorts alphabetically by default and preserves order with preserveOrder", () => {
+    const base = ["exec", "read", "write"].map(t);
+    const promoted = [...base, t("github_publish"), t("alpha")];
+    const sorted = convertGoogleTools(promoted)?.[0]?.functionDeclarations;
+    expect(names(sorted)).toEqual(["alpha", "exec", "github_publish", "read", "write"]);
+    const before = convertGoogleTools(base, { preserveOrder: true })?.[0]?.functionDeclarations;
+    const after = convertGoogleTools(promoted, { preserveOrder: true })?.[0]?.functionDeclarations;
+    expect(names(after)).toEqual(["exec", "read", "write", "github_publish", "alpha"]);
+    expect(before).toBeDefined();
+    expect(after?.slice(0, before?.length)).toEqual(before);
   });
 });
