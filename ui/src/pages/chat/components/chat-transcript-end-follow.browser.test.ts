@@ -160,6 +160,27 @@ function observeNativeScroll(
   });
 }
 
+it("does not scroll past the measured start while a touch holds a row shrink", async () => {
+  const { host, thread, row } = await mountEndFollowFixture(420);
+  host.followEnabled = false;
+  await expect.poll(() => thread.scrollTop).toBe(420);
+  await settleFrames();
+  const touch = new Touch({ identifier: 1, target: thread });
+  thread.dispatchEvent(new TouchEvent("touchstart", { touches: [touch], changedTouches: [touch] }));
+  const before = row.getBoundingClientRect().top;
+  host.earlierRowHeight = 320;
+  host.requestRender();
+  await host.settleUpdates();
+  await settleFrames();
+  expect(row.getBoundingClientRect().top).toBe(before);
+  // The 80px shrink leaves 340px of real history, even within one virtual row window.
+  thread.scrollTop = 95;
+  await settleFrames();
+  thread.scrollTop = 60;
+  await settleFrames();
+  expect(row.getBoundingClientRect().top).toBeCloseTo(before + 340, 0);
+});
+
 it("releases a completed Latest target when the reader takes over without moving", async () => {
   const { host, thread, extent } = await mountFollowingFixture();
   host.transcript.scrollToEnd({ behavior: "auto" });
