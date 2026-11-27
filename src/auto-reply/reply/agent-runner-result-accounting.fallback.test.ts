@@ -232,3 +232,90 @@ it.each([false, true])(
     expect(fixture.read()?.fallbackNotice).toBeUndefined();
   },
 );
+
+it("does not emit fallback or cleared notices across a before_model_resolve routed turn and the next primary turn", async () => {
+  const primary = { provider: "google", model: "gemini-4-hydrogen" };
+  const hookRouted = { provider: "venice", model: "grok-4-7" };
+  const fixture = await createFixture(primary);
+  const { context } = fixture;
+  const entry = context.activeSessionEntry!;
+
+  // Turn 1: before_model_resolve deliberately routes this turn to venice/grok-4-7.
+  context.execution.resolved = hookRouted;
+  context.execution.fallback.attempts = [];
+  context.execution.result.meta.agentMeta = {
+    sessionId: entry.sessionId,
+    contextTokens: 1_000,
+    ...hookRouted,
+    hookModelSelection: hookRouted,
+  };
+  const turn1 = await fixture.withCompletion((completion) =>
+    accountAgentTurn({ ...context, completion }),
+  );
+  expect(turn1.fallbackTransition).toMatchObject({
+    fallbackActive: false,
+    fallbackTransitioned: false,
+    fallbackCleared: false,
+    selectedModelRef: "venice/grok-4-7",
+    activeModelRef: "venice/grok-4-7",
+  });
+  expect(fixture.read()?.fallbackNotice).toBeUndefined();
+  expect(fixture.read()).toMatchObject({
+    modelProvider: primary.provider,
+    model: primary.model,
+  });
+
+  // Turn 2: normal turn returns to the configured primary model with no hook override.
+  context.execution.resolved = primary;
+  context.execution.fallback.attempts = [];
+  context.execution.result.meta.agentMeta = {
+    sessionId: entry.sessionId,
+    contextTokens: 1_000,
+    ...primary,
+  };
+  const turn2 = await fixture.withCompletion((completion) =>
+    accountAgentTurn({ ...context, completion }),
+  );
+  expect(turn2.fallbackTransition).toMatchObject({
+    fallbackActive: false,
+    fallbackTransitioned: false,
+    fallbackCleared: false,
+    selectedModelRef: "google/gemini-4-hydrogen",
+    activeModelRef: "google/gemini-4-hydrogen",
+  });
+  expect(fixture.read()?.fallbackNotice).toBeUndefined();
+});
+
+it("still reports a real fallback when a before_model_resolve routed model fails over to another candidate", async () => {
+  const primary = { provider: "google", model: "gemini-4-hydrogen" };
+  const hookRouted = { provider: "venice", model: "grok-4-7" };
+  const backup = { provider: "openai", model: "gpt-5" };
+  const fixture = await createFixture(primary);
+  const { context } = fixture;
+  const entry = context.activeSessionEntry!;
+
+  context.execution.resolved = backup;
+  context.execution.fallback.attempts = [
+    {
+      provider: hookRouted.provider,
+      model: hookRouted.model,
+      reason: "timeout",
+      error: "timed out",
+    },
+  ];
+  context.execution.result.meta.agentMeta = {
+    sessionId: entry.sessionId,
+    contextTokens: 1_000,
+    ...backup,
+    hookModelSelection: hookRouted,
+  };
+  const accounting = await fixture.withCompletion((completion) =>
+    accountAgentTurn({ ...context, completion }),
+  );
+  expect(accounting.fallbackTransition).toMatchObject({
+    fallbackActive: true,
+    fallbackTransitioned: true,
+    selectedModelRef: "venice/grok-4-7",
+    activeModelRef: "openai/gpt-5",
+  });
+});

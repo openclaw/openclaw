@@ -80,6 +80,7 @@ export function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(pa
   requestedProvider: string;
   requestedModel: string;
   fallbackAttempts: FallbackAttempt[];
+  hookSelection?: { provider: string; modelId: string };
   providerPolicyRetry?: {
     category: "cyber";
     provider: string;
@@ -115,18 +116,30 @@ export function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(pa
   }
   const terminalReceipt = params.result.meta.agentMeta?.terminalReceipt;
   const requested = { provider: params.requestedProvider, model: params.requestedModel };
-  const agentMeta = terminalReceipt
+  const hookModelSelection =
+    params.hookSelection &&
+    (params.hookSelection.provider !== params.requestedProvider ||
+      params.hookSelection.modelId !== params.requestedModel)
+      ? { provider: params.hookSelection.provider, model: params.hookSelection.modelId }
+      : undefined;
+  const baseAgentMeta = params.result.meta.agentMeta;
+  const agentMeta = baseAgentMeta
     ? {
-        ...params.result.meta.agentMeta,
-        terminalReceipt: {
-          ...terminalReceipt,
-          requested,
-          rerouted:
-            terminalReceipt.rerouted ||
-            isProviderModelRerouted(requested, terminalReceipt.effective, params.config),
-        },
+        ...baseAgentMeta,
+        ...(hookModelSelection ? { hookModelSelection } : {}),
+        ...(terminalReceipt
+          ? {
+              terminalReceipt: {
+                ...terminalReceipt,
+                requested,
+                rerouted:
+                  terminalReceipt.rerouted ||
+                  isProviderModelRerouted(requested, terminalReceipt.effective, params.config),
+              },
+            }
+          : {}),
       }
-    : params.result.meta.agentMeta;
+    : baseAgentMeta;
   return {
     ...params.result,
     meta: {
