@@ -32,6 +32,7 @@ import {
   expectEnqueuedRunPayload,
   installCronSystemEventConsumer,
   makeCronJob,
+  runCronJobAndWaitForFailureAlert,
   runCronJobAndWaitForFinished,
   waitForCronEvent,
 } from "./server-cron.events.test-support.js";
@@ -874,39 +875,14 @@ describe("gateway server cron", () => {
     expect(JSON.stringify(directCall.body)).not.toContain("ABCD-1234");
   }, 45_000);
 
-  test("persists settled failure-alert outcomes for cron get and list", async () => {
+  test("persists settled failure-alert outcomes for cron get and list", async ({ signal }) => {
     // Delivery persistence is independent of cold fallback-session creation and runtime preparation.
     testState.sessionStorePath = path.join(caseDir, "sessions.json");
     await writeSessionStore({
       entries: { main: { sessionId: "cron-failure-alert-session", updatedAt: Date.now() } },
     });
-    const { request, add, run } = await startCronClient();
+    const { request, add, ws } = await startCronClient();
     await prepareGatewayReplyRuntimeForTest({ force: true });
-
-    const expectOutcome = async (jobId: string, expected: Record<string, unknown>) => {
-      await vi.waitFor(async () => {
-        const getResult = await request("cron.get", { id: jobId });
-        expect(getResult.payload).toMatchObject(expected);
-        for (const compact of [false, true]) {
-          const listResult = await request("cron.list", {
-            compact,
-            includeDeliveryPreviews: false,
-          });
-          const listed = rows(listResult, "jobs").find((job) => job.id === jobId);
-          expect(listed).toMatchObject(expected);
-        }
-      });
-    };
-    const runFailureAlert = async (name: string, failureAlert: Record<string, unknown>) => {
-      cronIsolatedRun.mockResolvedValueOnce({ status: "error", error: "job failed" });
-      const jobId = await add(name, {
-        sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        failureAlert: { after: 1, ...failureAlert },
-      });
-      await run(jobId);
-      return jobId;
-    };
 
     for (const outcome of ["delivered", "failed", "unreached"] as const) {
       const error = outcome === "failed" ? "alert transport rejected" : "adapter_returned_no_send";
@@ -918,20 +894,37 @@ describe("gateway server cron", () => {
           return { status: "suppressed", reason: "adapter_returned_no_send" };
         });
       }
-      const jobId = await runFailureAlert(
-        `${outcome} failure alert`,
-        outcome === "unreached"
-          ? { mode: "announce", channel: "telegram", to: "123" }
-          : { mode: "webhook", to: `https://example.invalid/${outcome}-failure-alert` },
-      );
-      await expectOutcome(jobId, {
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", error: "job failed" });
+      const jobId = await add(`${outcome} failure alert`, {
+        sessionTarget: "isolated",
+        delivery: { mode: "none" },
+        failureAlert:
+          outcome === "unreached"
+            ? { after: 1, mode: "announce", channel: "telegram", to: "123" }
+            : { after: 1, mode: "webhook", to: `https://example.invalid/${outcome}-failure-alert` },
+      });
+      await runCronJobAndWaitForFailureAlert(ws, jobId, {
+        fallback: outcome !== "delivered",
+        signal,
+      });
+      const expected = {
         lastFailureNotificationDelivered: outcome === "delivered",
         lastFailureNotificationDeliveryStatus:
           outcome === "delivered" ? "delivered" : "not-delivered",
         ...(outcome === "delivered"
           ? {}
           : { lastFailureNotificationDeliveryError: expect.stringContaining(error) }),
-      });
+      };
+      const getResult = await request("cron.get", { id: jobId });
+      expect(getResult.payload).toMatchObject(expected);
+      for (const compact of [false, true]) {
+        const listResult = await request("cron.list", {
+          compact,
+          includeDeliveryPreviews: false,
+        });
+        const listed = rows(listResult, "jobs").find((job) => job.id === jobId);
+        expect(listed).toMatchObject(expected);
+      }
     }
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   }, 45_000);

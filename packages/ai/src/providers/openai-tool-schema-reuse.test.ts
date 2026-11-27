@@ -156,17 +156,16 @@ it("shares published Responses schemas with observers and isolates writable payl
 
 it("reuses published provider variants without changing current strict or compatibility options", () => {
   using stringify = vi.spyOn(normalization, "stableStringify");
+  // A tool closed as written gets a strict variant; both variants are reused, never rebuilt.
   const source = actionSchema();
-  Reflect.deleteProperty(source, "additionalProperties");
   const projection = publishRuntimeToolInputSchema(source);
   assert(isRecord(projection.schema));
   const tool = choose(projection.schema);
   const tools = [tool];
   const loose = payloadSchema(tools);
   const strict = payloadSchema(tools, true);
-  expect(loose).not.toHaveProperty("additionalProperties");
+  expect(wireTool(tools, true).strict).toBe(true);
   expect(strict).toHaveProperty("additionalProperties", false);
-  expect(strict).not.toBe(loose);
   expect(payloadSchema(tools)).toBe(loose);
   expect(payloadSchema(tools, true)).toBe(strict);
   const stripped = normalizePrepared(tools, stripEnumCompat);

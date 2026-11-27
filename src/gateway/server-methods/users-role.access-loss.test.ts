@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { roleChangeLosesAccess } from "./users-role.js";
+import { roleChangeLosesAccess } from "../operator-role-policy.js";
 
 const role = (
   sessions: GatewayOperatorRoleDefinition["sessions"],

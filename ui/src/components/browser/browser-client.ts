@@ -129,7 +129,7 @@ type BrowserRequestEnvelope = {
 /**
  * Marks a request as the person deliberately using the page (click, key, text, scroll,
  * history, navigation). The Gateway shows the agent recent use and keeps a takeover alive
- * from these only; automatic panel requests (viewport fit, page metrics) stay unmarked.
+ * from these only. Automatic panel requests may explicitly mark themselves as passive.
  */
 const OPERATOR_INPUT = { operatorInput: true };
 
@@ -212,12 +212,12 @@ function browserRequest<T>(
 function browserAction(
   client: BrowserRequestClient,
   body: Record<string, unknown>,
-  operatorInput = false,
+  operatorInput?: boolean,
 ) {
   return browserRequest(client, {
     method: "POST",
     path: "/act",
-    ...(operatorInput ? { query: OPERATOR_INPUT } : {}),
+    ...(operatorInput === undefined ? {} : { query: { operatorInput } }),
     body,
   });
 }
@@ -278,8 +278,11 @@ export async function requestBrowserOperatorControl(
   return { available: result.available, controlled: result.controlled, byYou: result.byYou };
 }
 
-export async function startBrowser(client: BrowserRequestClient): Promise<void> {
-  await browserRequest(client, { method: "POST", path: "/start", body: {} });
+export async function startBrowser(
+  client: BrowserRequestClient,
+  path: "/start" | "/prewarm" = "/start",
+): Promise<void> {
+  await browserRequest(client, { method: "POST", path, body: {} });
 }
 
 export async function openBrowserTab(
@@ -389,6 +392,7 @@ export async function captureBrowserScreenshot(client: BrowserRequestClient, tar
     await browserRequest(client, {
       method: "POST",
       path: "/screenshot",
+      query: { operatorInput: false },
       body: { targetId, type: "png" },
     }),
   );
@@ -491,18 +495,22 @@ export async function resizeBrowserViewport(
   client: BrowserRequestClient,
   params: { targetId: string; width: number; height: number },
 ) {
-  await browserAction(client, {
-    kind: "resize",
-    targetId: params.targetId,
-    width: Math.round(params.width),
-    height: Math.round(params.height),
-  });
+  await browserAction(
+    client,
+    {
+      kind: "resize",
+      targetId: params.targetId,
+      width: Math.round(params.width),
+      height: Math.round(params.height),
+    },
+    false,
+  );
 }
 
 async function evaluateInBrowser<T>(
   client: BrowserRequestClient,
   params: { targetId: string; fn: string },
-  operatorInput = false,
+  operatorInput?: boolean,
 ): Promise<T | null> {
   const result = asRecord(
     await browserAction(
@@ -593,10 +601,14 @@ export async function goBrowserHistory(
 
 export async function readBrowserPageMetrics(client: BrowserRequestClient, targetId: string) {
   const result = asRecord(
-    await evaluateInBrowser(client, {
-      targetId,
-      fn: "() => ({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, title: document.title, url: location.href })",
-    }),
+    await evaluateInBrowser(
+      client,
+      {
+        targetId,
+        fn: "() => ({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, title: document.title, url: location.href })",
+      },
+      false,
+    ),
   );
   const cssWidth = asFiniteNumber(result?.cssWidth);
   const cssHeight = asFiniteNumber(result?.cssHeight);
