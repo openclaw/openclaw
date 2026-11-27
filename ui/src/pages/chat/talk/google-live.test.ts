@@ -369,14 +369,10 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(onStatus).not.toHaveBeenCalled();
   });
 
-  it("does not revive Talk status after stop while a tool consult settles", async () => {
+  it("does not revive Talk status or abort an accepted consult after stop", async () => {
     const onStatus = vi.fn();
     const runId = "run-1";
     const { listeners, client } = consultClient((method, params) => {
-      if (method === "chat.abort") {
-        expect(params).toEqual(abortTarget(runId));
-        return { ok: true, aborted: true };
-      }
       expect(method).toBe("talk.client.toolCall");
       expect(params.callId).toBe("call-1");
       expect(params.name).toBe(REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME);
@@ -390,11 +386,11 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     await waitForFast(() => expect(listeners.size).toBe(1));
 
     transport.stop();
+    await waitForFast(() => expect(listeners.size).toBe(0));
     finishConsult(listeners, runId);
+    await flushMicrotasks();
 
-    await waitForFast(() => {
-      expect(client["request"]).toHaveBeenCalledWith("chat.abort", abortTarget(runId));
-    });
+    expect(client["request"]).not.toHaveBeenCalledWith("chat.abort", expect.anything());
     expect(onStatus).not.toHaveBeenCalledWith("listening");
   });
 

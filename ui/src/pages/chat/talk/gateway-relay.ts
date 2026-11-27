@@ -161,7 +161,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
   }
 
-  stop({ disposition = "abort" }: RealtimeVoiceCloseOptions = {}): Promise<void> {
+  stop({ disposition = "detach" }: RealtimeVoiceCloseOptions = {}): Promise<void> {
     const wasClosed = this.closed;
     this.stopLocal();
     if (!wasClosed) {

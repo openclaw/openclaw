@@ -1,4 +1,5 @@
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/describe-view-tool.js";
+import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider-types.js";
 import { formatUiError } from "../../../lib/format-error.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -33,12 +34,17 @@ type GoogleLiveToolOwnerOptions = {
 export class GoogleLiveToolOwner {
   private readonly pendingCalls = new Map<string, GoogleLivePendingToolCall>();
   private readonly seenCallIds = new Set<string>();
+  private readonly detachController = new AbortController();
 
   constructor(private readonly options: GoogleLiveToolOwnerOptions) {}
 
-  release(): void {
-    for (const call of this.pendingCalls.values()) {
-      call.controller?.abort();
+  release(disposition: RealtimeVoiceCloseOptions["disposition"] = "detach"): void {
+    if (disposition === "abort") {
+      for (const call of this.pendingCalls.values()) {
+        call.controller?.abort();
+      }
+    } else {
+      this.detachController.abort();
     }
     this.pendingCalls.clear();
     this.seenCallIds.clear();
@@ -140,7 +146,11 @@ export class GoogleLiveToolOwner {
       if (call.name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
         await submitRealtimeTalkAgentControl(params);
       } else {
-        await submitRealtimeTalkConsult({ ...params, submitAbortResult: false });
+        await submitRealtimeTalkConsult({
+          ...params,
+          detachSignal: this.detachController.signal,
+          submitAbortResult: false,
+        });
       }
     } finally {
       if (call.cancelled) {
