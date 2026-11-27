@@ -1,2 +1,0 @@
-# Exact net regression-test lines for #206707: one real-database guard per agent database maintenance condition, a SQLite optimize oracle for the read-only planner check, and archive and cold-navigation consumer cases.
-89
