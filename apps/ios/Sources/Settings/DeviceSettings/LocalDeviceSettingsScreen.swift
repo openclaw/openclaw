@@ -32,6 +32,7 @@ struct LocalDeviceSettingsScreen: View {
             self.appearanceSection(snapshot)
             self.deviceSection(snapshot)
             self.voiceSection(snapshot)
+            self.statusChimesSection(snapshot.voice)
             self.permissionsSection(snapshot)
             if let errorText {
                 Text(errorText)
@@ -117,6 +118,26 @@ struct LocalDeviceSettingsScreen: View {
                 .font(OpenClawType.footnote)
         }
         .disabled(!snapshot.voice.supported)
+    }
+
+    private func statusChimesSection(_ voice: DeviceSettingsSnapshot.Voice) -> some View {
+        let canReply = voice.talkReplyChimeAvailable == true
+        return Section {
+            self.toggle("Listening", key: .talkStartChimeEnabled, value: voice.talkStartChimeEnabled)
+            self.toggle("Call end", key: .talkEndChimeEnabled, value: voice.talkEndChimeEnabled)
+            self.toggle(
+                "Ready for reply",
+                key: .talkReplyChimeEnabled,
+                value: canReply && voice.talkReplyChimeEnabled == true)
+                .disabled(!canReply)
+        } header: {
+            Text("Status chimes").font(OpenClawType.captionSemiBold)
+        } footer: {
+            if !canReply {
+                Text("Live is always listening").font(OpenClawType.footnote)
+            }
+        }
+        .disabled(!voice.supported)
     }
 
     private func permissionsSection(_ snapshot: DeviceSettingsSnapshot) -> some View {

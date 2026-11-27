@@ -189,6 +189,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private var peerConnection: RTCPeerConnection?
     private var localAudioTrack: RTCAudioTrack?
     private var isMicrophoneMuted = false
+    private var isChimeInputGated = false
     private var dataChannel: RTCDataChannel?
     private var liveCaptionBuffer = TalkRealtimeLiveCaptionBuffer()
     private var transcriptOrder = TalkRealtimeTranscriptOrder()
@@ -323,7 +324,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
         let audioSource = factory.audioSource(with: constraints)
         let audioTrack = factory.audioTrack(with: audioSource, trackId: Self.audioTrackID)
-        audioTrack.isEnabled = !self.isMicrophoneMuted
+        audioTrack.isEnabled = !self.isMicrophoneMuted && !self.isChimeInputGated
         self.localAudioTrack = audioTrack
         peer.add(audioTrack, streamIds: [Self.mediaStreamID])
 
@@ -379,7 +380,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
     func setMicrophoneMuted(_ muted: Bool) {
         self.isMicrophoneMuted = muted
         // Disable only the outgoing track. The peer, received audio, and tool calls remain live.
-        self.localAudioTrack?.isEnabled = !muted
+        self.localAudioTrack?.isEnabled = !muted && !self.isChimeInputGated
+    }
+
+    func setChimeInputGated(_ gated: Bool) {
+        self.isChimeInputGated = gated
+        self.setMicrophoneMuted(self.isMicrophoneMuted)
     }
 
     func applyAudioRoutePreferenceChanged() throws {

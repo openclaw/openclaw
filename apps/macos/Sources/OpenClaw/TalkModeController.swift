@@ -31,8 +31,30 @@ final class TalkModeController {
         self.publishTalk = publishTalk
     }
 
+    @ObservationIgnored private let chimePlayer = TalkChimePlayer()
+
+    func playChime(_ cue: TalkChimeLifecycle.Cue) async {
+        await self.chimePlayer.play(cue)
+    }
+
+    func stopChime() {
+        self.chimePlayer.stop()
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.controller")
     private static let transcriptLimit = 20
+
+    private var activeRouteIsRealtime: Bool?
+
+    var talkReplyChimeAvailable: Bool {
+        !(self.activeRouteIsRealtime ?? self.state()?.talkRealtimeRelayEnabled ?? false)
+    }
+
+    func updateActiveRoute(isRealtime: Bool?) {
+        guard self.activeRouteIsRealtime != isRealtime else { return }
+        self.activeRouteIsRealtime = isRealtime
+        NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil)
+    }
 
     private(set) var phase: TalkModePhase = .idle
     private(set) var isPaused: Bool = false
@@ -110,8 +132,8 @@ final class TalkModeController {
         }
         self.owners.overlay.updatePhase(phase)
 
-        if phase != previousPhase {
-            self.playPhaseSound(phase, previousPhase: previousPhase)
+        if let soundName = Self.phaseSoundName(from: previousPhase, to: phase) {
+            self.playPhaseSound(named: soundName)
         }
         self.publishPhase()
     }
@@ -123,22 +145,16 @@ final class TalkModeController {
         Task { [publishTalk] in await publishTalk(enabled, effectivePhase) }
     }
 
-    private func playPhaseSound(_ phase: TalkModePhase, previousPhase: TalkModePhase) {
+    /// Only the thinking phase has a built-in sound. Listening and reply readiness are marked by
+    /// the Talk status chimes, and speech announces itself.
+    static func phaseSoundName(from previous: TalkModePhase, to phase: TalkModePhase) -> String? {
+        phase == .thinking && previous != .thinking ? "Tink" : nil
+    }
+
+    private func playPhaseSound(named soundName: String) {
         guard let state = self.state() else { return }
         guard !state.isPreview, state.talkPhaseSoundsEnabled else { return }
-        let soundName: String? = switch phase {
-        case .thinking:
-            "Tink"
-        case .speaking:
-            "Pop"
-        case .listening:
-            previousPhase == .speaking ? "Bottle" : "Submarine"
-        case .idle:
-            nil
-        }
-        if let soundName {
-            NSSound(named: NSSound.Name(soundName))?.play()
-        }
+        NSSound(named: NSSound.Name(soundName))?.play()
     }
 
     func updateLevel(_ level: Double) {

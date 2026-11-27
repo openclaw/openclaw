@@ -335,6 +335,147 @@ struct TalkModeManagerTests {
         #expect(manager._test_runtimeRoute() == .realtimeRelay)
     }
 
+    @Test(.testWaitLimit)
+    func `native fallback from a realtime route offers the reply chime and cues call end`() async {
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            mode: "realtime",
+            transport: "gateway-relay")
+        let chimes = AsyncStream<TalkChimeLifecycle.Cue>.makeStream()
+        defer { chimes.continuation.finish() }
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            chimePlaybackOverride: { chimes.continuation.yield($0) })
+        manager._test_applyLoadedTalkConfig(parsed)
+        #expect(manager._test_runtimeRoute() == .realtimeRelay)
+        #expect(!manager.talkReplyChimeAvailable)
+
+        manager.updateGatewayConnected(true)
+        manager.gatewayTalkConfigLoaded = true
+        manager.isEnabled = true
+        await manager.start()
+        // No gateway is attached, so the configured realtime relay cannot start and native speech
+        // owns the call. The configured route still says realtime.
+        #expect(manager.isListening)
+        #expect(manager._test_runtimeRoute() == .realtimeRelay)
+        #expect(manager.talkReplyChimeAvailable)
+        manager.stop()
+        #expect(!manager.talkReplyChimeAvailable)
+        var cues = chimes.stream.makeAsyncIterator()
+        #expect(await cues.next() == .wake)
+        #expect(await cues.next() == .bye)
+    }
+
+    @Test(.testWaitLimit)
+    func `push to talk taking over during the end cue keeps its audio session`() async throws {
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            mode: "realtime",
+            transport: "gateway-relay")
+        let endCueGate = AsyncStream<Void>.makeStream()
+        let endCueStarted = AsyncStream<Void>.makeStream()
+        var deactivations = 0
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            audioSessionDeactivationAction: { deactivations += 1 },
+            chimePlaybackOverride: { cue in
+                guard cue == .bye else { return }
+                endCueStarted.continuation.yield()
+                for await _ in endCueGate.stream {
+                    break
+                }
+            })
+        manager._test_applyLoadedTalkConfig(parsed)
+        manager.updateGatewayConnected(true)
+        manager.gatewayTalkConfigLoaded = true
+        manager.isEnabled = true
+        await manager.start()
+        #expect(manager.isListening)
+
+        manager.stop()
+        var started = endCueStarted.stream.makeAsyncIterator()
+        _ = await started.next()
+        let baseline = deactivations
+
+        let capture = try await manager.beginPushToTalk(transcriptionOnly: true)
+        endCueGate.continuation.yield()
+        endCueGate.continuation.finish()
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        // The old end cue's cleanup must not deactivate the session the new capture owns.
+        #expect(deactivations == baseline)
+        #expect(manager._test_audioSessionIsActive())
+        _ = manager.cancelPushToTalk(captureId: capture.captureId)
+    }
+
+    @Test(.testWaitLimit)
+    func `native call cues readiness, a completed reply and a clean end in order and recovers the microphone`() async {
+        var trace: [String] = []
+        var timed: [[String: Any]] = []
+        let origin = ProcessInfo.processInfo.systemUptime
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            chimePlaybackOverride: { cue in
+                trace.append("cue \(cue)")
+                timed.append(["cue": "\(cue)", "hostSeconds": ProcessInfo.processInfo.systemUptime - origin])
+            })
+        manager.updateGatewayConnected(true)
+        manager.gatewayTalkConfigLoaded = true
+        manager.isEnabled = true
+
+        await manager.start()
+        trace.append("listening=\(manager.isListening)")
+        // The assistant's reply played to its end: native recognition resumes for the next turn.
+        manager.isListening = false
+        await manager.start(afterNativeReply: true)
+        trace.append("listening=\(manager.isListening) (microphone recovered after reply)")
+        manager.stop()
+        for _ in 0..<200 where trace.last != "cue bye" {
+            await Task.yield()
+        }
+
+        print("TALK_CUE_TRACE " + trace.joined(separator: " | "))
+        if let dir = ProcessInfo.processInfo.environment["TALK_CHIME_PROOF_DIR"],
+           let data = try? JSONSerialization.data(
+               withJSONObject: ["trace": trace, "events": timed],
+               options: [.prettyPrinted, .sortedKeys])
+        {
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent("ios-cue-events.json"))
+        }
+        #expect(trace == [
+            "cue wake",
+            "listening=true",
+            "cue follow",
+            "listening=true (microphone recovered after reply)",
+            "cue bye",
+        ])
+    }
+
+    @Test(.testWaitLimit)
+    func `native chimes wait for capture`() async {
+        var events: [String] = []
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            chimePlaybackOverride: { events.append($0.rawValue) })
+        manager._test_waitForNativeCapture = {
+            try await Task.sleep(for: .milliseconds(30))
+            events.append("capture ready")
+        }
+        manager.updateGatewayConnected(true)
+        manager.gatewayTalkConfigLoaded = true
+        manager.isEnabled = true
+        defer { manager.stop() }
+
+        await manager.start()
+        manager.isListening = false
+        await manager.start(afterNativeReply: true)
+
+        #expect(events == ["capture ready", "wake", "capture ready", "follow"])
+    }
+
     @Test func `preserves the released realtime model override`() {
         let parsed = Self.parseRealtime(
             provider: "openai",
@@ -921,16 +1062,26 @@ struct TalkModeManagerTests {
         #expect(request.timeoutMs == 30000)
     }
 
-    @Test func `native Talk speaks a correlated reply without overriding the run deadline`() async throws {
+    @Test(.testWaitLimit)
+    func `native Talk speaks a correlated reply without overriding the run deadline`() async throws {
         let audio = Data([4, 5, 6])
         let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
             data: audio,
             provider: "xiaomi",
             outputFormat: "mp3"))
         let player = RecordingBufferedAudioPlayer()
+        let chimes = AsyncStream<TalkChimeLifecycle.Cue>.makeStream()
+        defer { chimes.continuation.finish() }
         let manager = TalkModeManager(
             allowSimulatorCapture: true,
-            gatewaySpeechSynthesizer: synthesizer)
+            gatewaySpeechSynthesizer: synthesizer,
+            chimePlaybackOverride: { cue in
+                if cue == .follow {
+                    #expect(player.finishedPlayback)
+                    #expect(player.payloads == [audio])
+                }
+                chimes.continuation.yield(cue)
+            })
         manager.bufferedPlayer = player
         let gateway = GatewayNodeSession()
         let fixture = TalkTurnGateway()
@@ -955,6 +1106,9 @@ struct TalkModeManagerTests {
             #expect(runTimeoutMs == nil)
             #expect(synthesizer.requests.map(\.text) == ["Spoken reply"])
             #expect(player.payloads == [audio])
+            var cues = chimes.stream.makeAsyncIterator()
+            #expect(await cues.next() == .wake)
+            #expect(await cues.next() == .follow)
         } catch {
             manager.stop()
             await gateway.disconnect()

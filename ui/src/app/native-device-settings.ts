@@ -139,6 +139,10 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
     wakeEnabled: z.boolean(), // AppState.swabbleEnabled
     wakeTriggersTalkMode: z.boolean().optional(),
     pushToTalkEnabled: z.boolean().optional(),
+    talkStartChimeEnabled: z.boolean().optional(),
+    talkEndChimeEnabled: z.boolean().optional(),
+    talkReplyChimeEnabled: z.boolean().optional(),
+    talkReplyChimeAvailable: z.boolean().optional(),
     talkPhaseSoundsEnabled: z.boolean().optional(),
     talkShiftToStopEnabled: z.boolean().optional(),
     realtimeRelayEnabled: z.boolean().optional(),
@@ -202,6 +206,9 @@ export type SettingKey =
   | "voice.wakeEnabled"
   | "voice.wakeTriggersTalkMode"
   | "voice.pushToTalkEnabled"
+  | "voice.talkStartChimeEnabled"
+  | "voice.talkEndChimeEnabled"
+  | "voice.talkReplyChimeEnabled"
   | "voice.talkPhaseSoundsEnabled"
   | "voice.talkShiftToStopEnabled"
   | "voice.realtimeRelayEnabled"

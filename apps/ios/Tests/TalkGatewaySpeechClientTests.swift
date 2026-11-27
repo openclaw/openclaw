@@ -49,10 +49,24 @@ private final class SuspendedGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesi
 @MainActor
 final class RecordingBufferedAudioPlayer: TalkBufferedAudioPlaying {
     private(set) var payloads: [Data] = []
+    private(set) var finishedPlayback = false
 
     func play(data: Data) async -> StreamingPlaybackResult {
         self.payloads.append(data)
+        await Task.yield()
+        self.finishedPlayback = true
         return StreamingPlaybackResult(finished: true, interruptedAt: nil)
+    }
+
+    func stop() -> Double? {
+        nil
+    }
+}
+
+@MainActor
+private final class InterruptedBufferedAudioPlayer: TalkBufferedAudioPlaying {
+    func play(data _: Data) async -> StreamingPlaybackResult {
+        StreamingPlaybackResult(finished: false, interruptedAt: 0)
     }
 
     func stop() -> Double? {
@@ -168,6 +182,31 @@ struct TalkGatewaySpeechClientTests {
         #expect(microsoftRawPCM.playbackMode == .unsupportedRaw(codec: "raw-24khz-16bit-mono-pcm"))
         #expect(rawULaw.playbackMode == .unsupportedRaw(codec: "ulaw_8000"))
         #expect(microsoftRIFF.playbackMode == .buffered)
+    }
+
+    @Test(arguments: [true, false])
+    func `a whole-reply single line reply requests the reply cue only when playback completed`(
+        playbackCompletes: Bool) async
+    {
+        let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
+            data: Data([1, 2, 3]), provider: "xiaomi", outputFormat: "mp3"))
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            gatewaySpeechSynthesizer: synthesizer)
+        manager.bufferedPlayer = playbackCompletes
+            ? RecordingBufferedAudioPlayer()
+            : InterruptedBufferedAudioPlayer()
+        manager._test_applyLoadedTalkConfig(Self.parseSpeechProvider("xiaomi"))
+        let speechGeneration = manager._test_beginIncrementalSpeechOwnership()
+
+        // A reply that starts with "{" and has no newline yields no incremental segment, so it is
+        // spoken whole through playAssistant.
+        let completed = await manager._test_handleIncrementalAssistantFinal(
+            text: "{\"ok\":true}",
+            speechGeneration: speechGeneration)
+
+        #expect(synthesizer.requests.count == 1)
+        #expect(completed == playbackCompletes)
     }
 
     @Test func `gateway speech provider stays native and uses talk speak`() async {

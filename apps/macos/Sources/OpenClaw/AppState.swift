@@ -243,6 +243,18 @@ final class AppState {
         didSet { self.persistTalkRealtimeRelayPreference(previousValue: oldValue) }
     }
 
+    var talkStartChimeEnabled: Bool {
+        didSet { self.persistPreference(self.talkStartChimeEnabled, key: TalkChimePlayer.startPreferenceKey) }
+    }
+
+    var talkEndChimeEnabled: Bool {
+        didSet { self.persistPreference(self.talkEndChimeEnabled, key: TalkChimePlayer.endPreferenceKey) }
+    }
+
+    var talkReplyChimeEnabled: Bool {
+        didSet { self.persistPreference(self.talkReplyChimeEnabled, key: TalkChimePlayer.replyPreferenceKey) }
+    }
+
     var talkPhaseSoundsEnabled: Bool {
         didSet {
             self.persistPreference(self.talkPhaseSoundsEnabled, key: talkPhaseSoundsEnabledKey)
@@ -506,6 +518,18 @@ final class AppState {
         self.voiceWakeTriggersTalkMode = AppDefaults.standard
             .object(forKey: voiceWakeTriggersTalkModeKey) as? Bool ?? false
         self.talkEnabled = AppDefaults.standard.bool(forKey: talkEnabledKey)
+        self.talkStartChimeEnabled = TalkChimePlayer.isEnabled(
+            TalkChimePlayer.startPreferenceKey,
+            in: AppDefaults.standard,
+            inheritingOptOutFrom: talkPhaseSoundsEnabledKey)
+        self.talkEndChimeEnabled = TalkChimePlayer.isEnabled(
+            TalkChimePlayer.endPreferenceKey,
+            in: AppDefaults.standard,
+            inheritingOptOutFrom: talkPhaseSoundsEnabledKey)
+        self.talkReplyChimeEnabled = TalkChimePlayer.isEnabled(
+            TalkChimePlayer.replyPreferenceKey,
+            in: AppDefaults.standard,
+            inheritingOptOutFrom: talkPhaseSoundsEnabledKey)
         self.talkPhaseSoundsEnabled = Self.loadEnabledPreference(key: talkPhaseSoundsEnabledKey)
         self.talkShiftToStopEnabled = Self.loadEnabledPreference(key: talkShiftToStopEnabledKey)
         self.heartbeatsEnabled = Self.loadEnabledPreference(key: heartbeatsEnabledKey)

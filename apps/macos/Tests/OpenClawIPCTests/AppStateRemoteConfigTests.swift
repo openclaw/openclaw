@@ -53,6 +53,44 @@ private actor GatewayConfigReadGate {
 @MainActor
 struct AppStateRemoteConfigTests {
     @Test
+    func `settings stored by the previous stable release carry an explicit Phase sounds opt-out to the chimes`() async {
+        // The previous stable release stored no chime keys. A user who explicitly turned Phase sounds
+        // off inherits off for all three chimes; reading writes nothing.
+        await TestIsolation.withIsolatedState(defaults: [
+            talkPhaseSoundsEnabledKey: false,
+            TalkChimePlayer.startPreferenceKey: nil,
+            TalkChimePlayer.endPreferenceKey: nil,
+            TalkChimePlayer.replyPreferenceKey: nil,
+        ]) {
+            let state = AppState(preview: true)
+            #expect(!state.talkPhaseSoundsEnabled)
+            #expect(!state.talkStartChimeEnabled)
+            #expect(!state.talkEndChimeEnabled)
+            #expect(!state.talkReplyChimeEnabled)
+            #expect(AppDefaults.standard.object(forKey: talkPhaseSoundsEnabledKey) as? Bool == false)
+            #expect(AppDefaults.standard.object(forKey: TalkChimePlayer.startPreferenceKey) == nil)
+            #expect(AppDefaults.standard.object(forKey: TalkChimePlayer.endPreferenceKey) == nil)
+            #expect(AppDefaults.standard.object(forKey: TalkChimePlayer.replyPreferenceKey) == nil)
+        }
+    }
+
+    @Test
+    func `settings stored by the previous stable release with Phase sounds unset keep the chimes on`() async {
+        await TestIsolation.withIsolatedState(defaults: [
+            talkPhaseSoundsEnabledKey: nil,
+            TalkChimePlayer.startPreferenceKey: nil,
+            TalkChimePlayer.endPreferenceKey: nil,
+            TalkChimePlayer.replyPreferenceKey: nil,
+        ]) {
+            let state = AppState(preview: true)
+            #expect(state.talkPhaseSoundsEnabled)
+            #expect(state.talkStartChimeEnabled)
+            #expect(state.talkEndChimeEnabled)
+            #expect(state.talkReplyChimeEnabled)
+        }
+    }
+
+    @Test
     func `July discovery preference remains readable`() async {
         await TestIsolation.withIsolatedState(defaults: ["gateway.preferredStableID": "gateway-july"]) {
             #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-july")
