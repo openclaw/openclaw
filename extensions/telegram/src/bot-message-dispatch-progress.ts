@@ -151,7 +151,10 @@ export function createProgressState(
   };
 }
 
-export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
+export async function settleFailedFinalDelivery(
+  turn: Turn,
+  resumesAfterRestart: boolean,
+): Promise<void> {
   if (
     turn.isSuperseded() ||
     turn.previewLifecycle.finalSucceeded ||
@@ -161,9 +164,11 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
   ) {
     return;
   }
-  const text = hasTelegramNetworkErrorCode(turn.finalDeliveryError)
-    ? "I couldn't deliver my reply because of a network problem. Please ask again."
-    : "I couldn't deliver my reply. Please ask again.";
+  const text = resumesAfterRestart
+    ? "Restarting. I'll finish this reply when I'm back."
+    : hasTelegramNetworkErrorCode(turn.finalDeliveryError)
+      ? "I couldn't deliver my reply because of a network problem. Please ask again."
+      : "I couldn't deliver my reply. Please ask again.";
   const stream = turn.answerLane.stream;
   const messageId = stream?.messageId();
   if (
@@ -175,7 +180,7 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
   ) {
     await deliverFallback(
       turn,
-      [{ text, isError: true }],
+      resumesAfterRestart ? { text, isStatusNotice: true } : { text, isError: true },
       turn.telegramCfg.silentErrorReplies === true,
     );
     return;
