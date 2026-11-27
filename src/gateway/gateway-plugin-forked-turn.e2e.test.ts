@@ -44,7 +44,7 @@ import type { GatewayClient } from "./client.js";
 import {
   FORK_OTHER_SOURCE,
   FORK_PROOF_SOURCE,
-} from "./gateway-plugin-forked-turn.test-plugin-source.js";
+} from "./gateway-plugin-forked-turn.plugin-source.test-support.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
