@@ -21,6 +21,19 @@ export const THEME_LOCAL_ID_PATTERN = new RegExp(
   `^[a-z0-9][a-z0-9_-]{0,${THEME_LOCAL_ID_MAX_LENGTH - 1}}$`,
 );
 
+// Boot needs the branding overrides before it needs the catalog's display copy.
+export function builtinThemeBrandingOverrides(id: string) {
+  if (id === "phosphor" || id === "crt") {
+    return {
+      mascot: "none",
+      brandIcon: "mark",
+      workingIndicator: "dots",
+      lobsterdex: false,
+    } as const;
+  }
+  return undefined;
+}
+
 export function isBuiltinThemeId(value: unknown): value is BuiltinThemeId {
   return BUILTIN_THEME_IDS.some((id) => id === value);
 }

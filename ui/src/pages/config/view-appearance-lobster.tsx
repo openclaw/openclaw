@@ -1,8 +1,6 @@
 import { createMemo, Show } from "solid-js";
-import {
-  BUILTIN_THEMES,
-  resolveThemeBranding,
-} from "../../../../packages/gateway-protocol/src/theme.ts";
+import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/builtin-theme-catalog.ts";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { Icon } from "../../components/solid/icon.tsx";

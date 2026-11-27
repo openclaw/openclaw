@@ -93,6 +93,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "packages/gateway-protocol/src/builtin-theme-catalog.ts":
+      // Appearance displays the catalog; boot only needs the selected theme's branding.
+      return "builtin-theme-catalog";
     case "ui/src/components/solid/registry-category-icon.tsx":
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":
