@@ -131,44 +131,33 @@ it.each(selectionCases)(
   },
 );
 
-it("reports a custom unit skipped because it runs as another account", async () => {
-  const observed: SystemdServiceAccountMismatch = {
-    unitName: "company-gateway.service",
-    unitPath: systemPath("company-gateway"),
-    serviceUser: "openclaw",
-    programArguments: ["/usr/bin/node", "/usr/lib/node_modules/openclaw/dist/index.js", "gateway"],
-    workingDirectory: "",
-    selectors: { HOME: "/var/lib/openclaw" },
-    selectorsIncomplete: false,
-  };
-  readCommand.refusal = new SystemdServiceAccountRefusalError(observed);
-  marker("company-gateway");
-  const reported: SystemdServiceAccountMismatch[] = [];
-
-  // Selection is unchanged for every caller; only the observation is reported.
-  await expect(
+const skippedUnit: SystemdServiceAccountMismatch = {
+  unitName: "company-gateway.service",
+  unitPath: systemPath("company-gateway"),
+  serviceUser: "openclaw",
+  programArguments: ["/usr/bin/node", "/usr/lib/node_modules/openclaw/dist/index.js", "gateway"],
+  workingDirectory: "",
+  selectors: { HOME: "/var/lib/openclaw" },
+  selectorsIncomplete: false,
+};
+it.each([
+  [new SystemdServiceAccountRefusalError(skippedUnit), [skippedUnit]],
+  [new ServiceOwnershipRefusalError("systemd-account-refused"), []],
+])(
+  "still skips a custom unit run by another account and reports what it saw",
+  async (refusal, expected) => {
+    readCommand.refusal = refusal;
+    marker("company-gateway");
+    const reported: SystemdServiceAccountMismatch[] = [];
     // Custom names are considered only for the default installation of this account.
-    findInstalledSystemdGatewayScope(
-      { HOME: os.userInfo().homedir },
-      { onAccountMismatch: (mismatch) => reported.push(mismatch) },
-    ),
-  ).resolves.toBeNull();
-  expect(reported).toEqual([observed]);
-});
+    const env = { HOME: os.userInfo().homedir };
 
-it("does not report an account refusal that carries no observation", async () => {
-  readCommand.refusal = new ServiceOwnershipRefusalError("systemd-account-refused");
-  marker("company-gateway");
-  const reported: SystemdServiceAccountMismatch[] = [];
-
-  await expect(
-    findInstalledSystemdGatewayScope(
-      { HOME: os.userInfo().homedir },
-      { onAccountMismatch: (mismatch) => reported.push(mismatch) },
-    ),
-  ).resolves.toBeNull();
-  expect(reported).toEqual([]);
-});
+    await expect(
+      findInstalledSystemdGatewayScope(env, { onAccountMismatch: (seen) => reported.push(seen) }),
+    ).resolves.toBeNull();
+    expect(reported).toEqual(expected);
+  },
+);
 
 it("accepts legacy command-failure install probes", () => {
   expect(
