@@ -9,6 +9,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../agents/subagents/registry/subagent-lifecycle-events.js";
 import {
   getCurrentSubagentRunOwner,
   subagentRuns,
@@ -60,6 +61,7 @@ it.for(["settled", "rejected", "session replaced"] as const)(
     };
     const respond = vi.fn();
     let stopping: Promise<void> | undefined;
+    let replacementBeforeSettlement: Awaited<ReturnType<typeof readSession>>["entry"];
     try {
       activateSwarmRun({
         groupId: expectDefined(entry.groupId, "queued collector group"),
@@ -101,6 +103,9 @@ it.for(["settled", "rejected", "session replaced"] as const)(
             ...replacement,
           },
         );
+        replacementBeforeSettlement = structuredClone(
+          expectDefined((await readSession()).entry, "replacement session"),
+        );
       }
       releaseCleanup.resolve();
       await withinTest(stopping, signal);
@@ -114,8 +119,9 @@ it.for(["settled", "rejected", "session replaced"] as const)(
       expect(stopped.execution.startedAt).toBeUndefined();
       expect(start).not.toHaveBeenCalled();
       expect(respond).toHaveBeenCalledOnce();
+      // An admitted Stop finishes after replacement; cleanup rejection still fails.
+      expect(respond.mock.calls[0]?.[0]).toBe(transition !== "rejected");
       if (transition === "settled") {
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
         expect(stored).toMatchObject({
           status: "killed",
           lastRunId: entry.runId,
@@ -129,18 +135,21 @@ it.for(["settled", "rejected", "session replaced"] as const)(
           lastRunId: entry.runId,
         });
       } else {
-        expect(respond.mock.calls[0]?.[0]).toBe(false);
         expectUnpublished();
-        expect(stored.lastRunId).toBe(
-          transition === "session replaced" ? "replacement-terminal" : undefined,
-        );
         if (transition === "rejected") {
+          expect(stored.lastRunId).toBeUndefined();
           expect(respond.mock.calls[0]?.[2]).toMatchObject({
             message: expect.stringContaining(failure.message),
           });
           await expect(closeSwarmScheduler()).rejects.toMatchObject({ errors: [failure] });
         } else {
-          expect(stored).toMatchObject(replacement);
+          expect(stored).toEqual(
+            expectDefined(replacementBeforeSettlement, "replacement before Stop settlement"),
+          );
+          expect(stopped).toMatchObject({
+            endedReason: SUBAGENT_ENDED_REASON_KILLED,
+            execution: { status: "terminal" },
+          });
         }
       }
       expect([stored.startedAt, stored.runtimeMs]).toEqual([undefined, undefined]);
