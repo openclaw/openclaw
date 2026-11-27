@@ -13,6 +13,8 @@ import {
   runWriteConfigHealth,
 } from "./doctor-health-contribution-runners.config.js";
 import {
+  checkGatewayServicesRepairPending,
+  repairsGatewayDaemon,
   runBrowserHealth,
   runBundleLspEnvHealth,
   runDevicePairingHealth,
@@ -37,8 +39,12 @@ import {
   renderStructuredHealthFindings,
   createDoctorHealthContribution,
 } from "./doctor-health-contribution.js";
+import {
+  checkSystemdLingerRepairPending,
+  detectSystemdLingerFindings,
+  runSystemdLingerHealth,
+} from "./doctor-systemd-linger.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
-import type { HealthCheck } from "./health-checks.js";
 
 type PluginVersionRestartReadiness =
   import("../plugins/plugin-version-drift.js").PluginVersionRestartReadiness;
@@ -90,8 +96,6 @@ async function runHeartbeatRetirementHealth(ctx: DoctorHealthFlowContext): Promi
 }
 
 export function resolveFinalDoctorHealthContributions(params: {
-  runSystemdLingerHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
-  detectSystemdLingerFindings: HealthCheck["detect"];
   runShellCompletionHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
   runGatewayHealthChecks: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution[] {
@@ -101,6 +105,7 @@ export function resolveFinalDoctorHealthContributions(params: {
         "core/doctor/gateway-services/extra",
         "core/doctor/gateway-services/platform-notes",
       ],
+      pending: checkGatewayServicesRepairPending,
       run: runGatewayServicesHealth,
     }),
     createDoctorHealthContribution("doctor:host-desktop", "Host desktop", {
@@ -112,6 +117,11 @@ export function resolveFinalDoctorHealthContributions(params: {
             await import("../commands/doctor-host-desktop.js");
           return collectHostDesktopHealthFindings(ctx.cfg);
         },
+      },
+      async pending(ctx) {
+        const { checkHostDesktopRepairPending } =
+          await import("../commands/doctor-host-desktop.js");
+        return checkHostDesktopRepairPending(ctx.cfg, ctx.prompter);
       },
       run: runHostDesktopHealth,
     }),
@@ -195,36 +205,50 @@ export function resolveFinalDoctorHealthContributions(params: {
             },
           },
         ],
+        async pending(ctx) {
+          const { listChannelPluginStartupMaintenance } =
+            await import("../channels/plugins/lifecycle-startup.js");
+          return ctx.prompter.shouldRepair && listChannelPluginStartupMaintenance().length > 0
+            ? "work"
+            : "none";
+        },
         run: runStartupChannelMaintenanceHealth,
       },
     ),
     createDoctorHealthContribution("doctor:security", "Security", {
+      pending: "diagnostic-only",
       updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/security"],
       run: runSecurityHealth,
     }),
     createDoctorHealthContribution("doctor:web-fetch-proxy", "Web fetch proxy", {
+      pending: "diagnostic-only",
       updateWork: { kind: "inspection", scope: "run" },
       run: runWebFetchProxyHealth,
     }),
     createDoctorHealthContribution("doctor:bundle-lsp-env", "Bundle LSP environment", {
+      pending: "diagnostic-only",
       updateWork: { kind: "inspection", scope: "agent" },
       run: runBundleLspEnvHealth,
     }),
     createDoctorHealthContribution("doctor:github-projects", "GitHub projects", {
+      pending: "diagnostic-only",
       updateWork: { kind: "standalone" },
       run: runGitHubProjectHealth,
     }),
     createDoctorHealthContribution("doctor:browser", "Browser", {
+      pending: "diagnostic-only",
       healthCheckIds: ["core/doctor/browser"],
       run: runBrowserHealth,
     }),
     createDoctorHealthContribution("doctor:oauth-tls", "OAuth TLS", {
+      pending: "diagnostic-only",
       updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/oauth-tls"],
       run: runOpenAIOAuthTlsHealth,
     }),
     createDoctorHealthContribution("doctor:hooks-model", "Hooks model", {
+      pending: "diagnostic-only",
       updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/hooks-model"],
       async run(ctx) {
@@ -245,6 +269,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
     }),
     createDoctorHealthContribution("doctor:legacy-output-cap", "Saved model output caps", {
+      pending: "diagnostic-only",
       updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/legacy-output-cap"],
       run: (ctx) =>
@@ -262,6 +287,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       ] as const
     ).map(([name, label, scope]) =>
       createDoctorHealthContribution(`doctor:${name}`, label, {
+        pending: "diagnostic-only",
         updateWork: { kind: "inspection", scope },
         healthCheckIds: [`core/doctor/${name}`],
         run: (ctx) => runCoreHealthFindingNote(ctx, `core/doctor/${name}`),
@@ -271,6 +297,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       "doctor:skill-workshop-tool-policy",
       "Skill Workshop tool policy",
       {
+        pending: "diagnostic-only",
         updateWork: { kind: "inspection", scope: "agent" },
         run: (ctx) => runBundledHealthFindingNote(ctx, "skill-workshop/tool-policy"),
       },
@@ -279,11 +306,13 @@ export function resolveFinalDoctorHealthContributions(params: {
       healthChecks: {
         description: "Disabled systemd user lingering is reported as a finding.",
         defaultEnabled: false,
-        detect: params.detectSystemdLingerFindings,
+        detect: detectSystemdLingerFindings,
       },
-      run: params.runSystemdLingerHealth,
+      pending: checkSystemdLingerRepairPending,
+      run: runSystemdLingerHealth,
     }),
     createDoctorHealthContribution("doctor:workspace-status", "Workspace status", {
+      pending: "diagnostic-only",
       updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Workspace plugin/status diagnostics are exposed as findings.",
@@ -321,6 +350,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
     }),
     createDoctorHealthContribution("doctor:workspace-alias", "Workspace alias", {
+      pending: "diagnostic-only",
       healthChecks: {
         description:
           "Persisted workspace aliases must resolve to the resolved target that owns their stored state.",
@@ -354,6 +384,11 @@ export function resolveFinalDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:model-allowlist-wildcards", "Model allowlist", {
       updateWork: { kind: "standalone" },
+      async pending(ctx) {
+        const { checkModelAllowlistWildcardsPending } =
+          await import("../commands/doctor/shared/legacy-runtime-model-policy.js");
+        return checkModelAllowlistWildcardsPending({ cfg: ctx.cfg, prompter: ctx.prompter });
+      },
       async run(ctx) {
         const { maybeOfferModelAllowlistWildcards } =
           await import("../commands/doctor/shared/legacy-runtime-model-policy.js");
@@ -371,6 +406,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
     }),
     createDoctorHealthContribution("doctor:bootstrap-size", "Bootstrap size", {
+      pending: "diagnostic-only",
       updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/bootstrap-size"],
       async run(ctx) {
@@ -379,6 +415,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
     }),
     createDoctorHealthContribution("doctor:memory-provenance", "Memory provenance", {
+      pending: "diagnostic-only",
       healthChecks: {
         description:
           "Root MEMORY.md and USER.md with untrusted provenance are excluded from automatic context.",
@@ -440,6 +477,11 @@ export function resolveFinalDoctorHealthContributions(params: {
           return collectToolsMdMigrationFindings(ctx.cfg);
         },
       },
+      async pending(ctx) {
+        const { checkToolsMdMigrationPending } =
+          await import("../commands/doctor-tools-md-migration.js");
+        return ctx.prompter.shouldRepair ? checkToolsMdMigrationPending(ctx.cfg) : "none";
+      },
       async run(ctx) {
         const { maybeMigrateToolsMd } = await import("../commands/doctor-tools-md-migration.js");
         await maybeMigrateToolsMd({
@@ -475,13 +517,20 @@ export function resolveFinalDoctorHealthContributions(params: {
     ),
     createDoctorHealthContribution("doctor:shell-completion", "Shell completion", {
       healthCheckIds: ["core/doctor/shell-completion"],
+      async pending(ctx) {
+        const { checkShellCompletionRepairPending } =
+          await import("../commands/doctor-completion.js");
+        return checkShellCompletionRepairPending({ nonInteractive: ctx.options.nonInteractive });
+      },
       run: params.runShellCompletionHealth,
     }),
     createDoctorHealthContribution("doctor:gateway-health", "Gateway health", {
+      pending: "diagnostic-only",
       healthCheckIds: ["core/doctor/gateway-health"],
       run: params.runGatewayHealthChecks,
     }),
     createDoctorHealthContribution("doctor:whatsapp-responsiveness", "WhatsApp responsiveness", {
+      pending: "diagnostic-only",
       updateWork: { kind: "inspection", scope: "run" },
       healthChecks: {
         description: "Gateway pressure and local TUI observations when WhatsApp is enabled.",
@@ -529,6 +578,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: runMemorySearchHealthContribution,
     }),
     createDoctorHealthContribution("doctor:device-pairing", "Device pairing", {
+      pending: "diagnostic-only",
       healthChecks: {
         description: "Device pairing requests and stale device-auth records are findings.",
         defaultEnabled: false,
@@ -546,6 +596,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:gateway-daemon", "Gateway daemon", {
       healthCheckIds: ["core/doctor/gateway-daemon"],
+      pending: (ctx) => (repairsGatewayDaemon(ctx) ? "work" : "none"),
       run: runGatewayDaemonHealth,
     }),
     createDoctorHealthContribution("doctor:write-config", "Write config", {
@@ -560,6 +611,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
     }),
     createDoctorHealthContribution("doctor:workspace-suggestions", "Workspace suggestions", {
+      pending: "diagnostic-only",
       updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/workspace-suggestions"],
       async run(ctx) {

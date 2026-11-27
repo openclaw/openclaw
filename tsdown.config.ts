@@ -32,6 +32,7 @@ import { exactIdFilter } from "./scripts/lib/rolldown-id-filter.mts";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { createRootRuntimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
+  brokerNativeResourceBuildEntries,
   getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
@@ -1044,9 +1045,13 @@ const configs: UserConfig[] = [
       ),
     ),
   ).map((entry) => {
+    const firstEntry = Object.keys(entry)[0]!;
     const bundleFsSafe = Object.keys(entry).some((name) =>
       [
+        "config/sessions/disk-budget.worker",
+        "infra/fs-safe-copy.worker",
         "infra/sqlite-readonly-location.worker",
+        "plugins/plugin-generation-preparation.worker",
         "state/openclaw-state-read.worker",
         // Hosts the state reader and must load fs-safe the same way.
         "infra/shared-worker-host.worker",
@@ -1058,7 +1063,10 @@ const configs: UserConfig[] = [
       {
         name: TSDOWN_UNIFIED_CONFIG_GROUP,
         entry,
-        minify: { codegen: true, compress: true, mangle: { keepNames: true } },
+        // Attached modules retain ordinary runtime codegen and module ownership labels.
+        ...(Object.hasOwn(brokerNativeResourceBuildEntries, firstEntry)
+          ? {}
+          : { minify: { codegen: true, compress: true, mangle: { keepNames: true } } }),
         deps: {
           ...unifiedDeps,
           neverBundle: bundleFsSafe
@@ -1073,7 +1081,7 @@ const configs: UserConfig[] = [
                   (packageName) => id === packageName || id.startsWith(`${packageName}/`),
                 ))),
         },
-        outputOptions: getStandaloneRuntimeProcessOutputOptions(Object.keys(entry)[0]!),
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(firstEntry),
         plugins: [
           createStateSchemaInlinePlugin(),
           ...(bundleFsSafe ? [createPackageRuntimeUrlBuildPlugin("@openclaw/fs-safe")] : []),

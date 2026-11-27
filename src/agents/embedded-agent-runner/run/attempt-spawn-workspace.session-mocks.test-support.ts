@@ -11,13 +11,7 @@ vi.mock("../../system-prompt-params.js", () => ({
 // mock-isolation: Session fixtures keep compaction policy deterministic without loading runtime settings.
 vi.mock("../../agent-settings.js", () => ({
   applyAgentAutoCompactionGuard: () => {},
-  applyAgentCompactionSettingsFromConfig: () => ({
-    didOverride: false,
-    compaction: {
-      reserveTokens: 0,
-      keepRecentTokens: 40_000,
-    },
-  }),
+  applyAgentCompactionSettingsFromConfig: () => {},
   isSilentOverflowProneModel: () => false,
   resolveEffectiveCompactionMode: () => "default",
 }));

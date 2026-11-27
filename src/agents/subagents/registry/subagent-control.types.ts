@@ -28,7 +28,7 @@ export type ResolvedSubagentController = {
   controlScope: "children" | "none";
 };
 
-export type SubagentCancellationControl = {
+type SubagentCancellationControl = {
   assertCurrent: () => void;
   prepareRead?: () => Promise<void> | undefined;
 };

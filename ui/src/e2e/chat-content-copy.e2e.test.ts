@@ -8,6 +8,7 @@ import {
   polledAttribute,
   polledClipboard,
   polledCount,
+  polledFocus,
 } from "./chat-presentation.test-support.ts";
 import {
   createControlUiE2eContextOptions,
@@ -60,6 +61,48 @@ async function withClipboard(run: (page: Page) => Promise<void>) {
 }
 
 suite.define(() => {
+  it("keeps an expanded table on append and retires it when the same chat resets", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const sessionKey = "agent:main:main";
+      const original = message("assistant", "original-table", 1, [
+        { type: "text", text: tableMarkdown },
+      ]);
+      const gateway = await installMockGateway(page, { sessionKey, historyMessages: [original] });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      await exactButton(page, "Expand table").click();
+      const dialog = page.getByRole("dialog", { name: "Expanded table" });
+      const close = exactButton(dialog, "Close expanded table");
+      await polledFocus(close).toBe(true);
+
+      const note = message("user", "table-note", 2, [{ type: "text", text: "One more note." }]);
+      await gateway.setHistoryMessages([original, note]);
+      await gateway.emitGatewayEvent("session.message", {
+        sessionKey,
+        messageId: note["__openclaw"].id,
+        messageSeq: note["__openclaw"].seq,
+        message: note,
+      });
+      await page.getByText("One more note.", { exact: true }).waitFor({ state: "attached" });
+      await polledFocus(close).toBe(true);
+
+      const replacement = message("assistant", "replacement-table", 1, [
+        { type: "text", text: "| Name |\n| --- |\n| Replacement |" },
+      ]);
+      await gateway.setHistoryMessages([replacement]);
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "reset" });
+      const row = page.locator('.chat-bubble[data-entry-id="replacement-table"]');
+      await row.waitFor({ state: "attached" });
+      await polledCount(dialog).toBe(0);
+
+      const expand = exactButton(row, "Expand table");
+      await expand.click();
+      await dialog.getByRole("cell", { name: "Replacement" }).waitFor();
+      await page.keyboard.press("Escape");
+      await polledFocus(expand).toBe(true);
+    });
+  });
+
   it.each(["unavailable", "rejecting"])(
     "copies expanded-table TSV when clipboard.writeText is %s",
     async (clipboardMode) => {

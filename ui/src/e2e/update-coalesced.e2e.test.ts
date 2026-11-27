@@ -23,7 +23,7 @@ const updateCard = (page: Page) =>
 const updateDialog = (page: Page) => page.locator("openclaw-modal-dialog");
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const text = (root: Page | Locator, value: string) => root.getByText(value, { exact: true });
-const failureText = "⚠️ OpenClaw update failed: global-install-failed.";
+const failureText = "⚠️ OpenClaw couldn't finish updating.";
 const restartingText = "⬆️ OpenClaw update in progress: restarting.";
 const runResponses = (
   run: ReturnType<typeof createUpdateRunFixture> | null,
@@ -132,7 +132,7 @@ suite.define(() => {
       await startUpdate(page);
       const dialog = updateDialog(page);
       await text(dialog, failureText).first().waitFor();
-      expect(await dialog.textContent()).toContain("openclaw triage");
+      expect(await dialog.textContent()).toContain("openclaw update status");
       expect(await dialog.textContent()).toContain("Package install did not verify on disk.");
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);

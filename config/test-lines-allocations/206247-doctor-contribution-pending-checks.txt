@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #206247 beyond the allowance: every new Doctor pending check needs a case with real work, plus the store test that enforces the 36 diagnostic-only declarations.
+303

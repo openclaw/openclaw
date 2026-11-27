@@ -631,7 +631,7 @@ export function* createPluginGenerationArtifactSteps(
       capturedDirectories,
     ];
     const clearCaptures = () => captures.forEach((capture) => capture.clear());
-    const sourceLookup = createPluginGenerationSourceLookup({
+    const { recoveryInput, ...sourceLookup } = createPluginGenerationSourceLookup({
       rootDir,
       sourceRoot,
       capturedRoot: root,
@@ -641,6 +641,11 @@ export function* createPluginGenerationArtifactSteps(
       hardlinkedSources,
       assertModuleAvailable,
       captureNativeRecovery: () => nativeAdmission.captureRecovery(initialReceipt, sourceAliases),
+    });
+    const custodyFacts = <T>(capture: () => T) => ({
+      ...sourceFacts.captureCustody(capture),
+      packageManifests: metadataCapture.snapshot(directory),
+      modules: new Map(inspectedModules),
     });
     return {
       sourceRoot,
@@ -670,11 +675,10 @@ export function* createPluginGenerationArtifactSteps(
           }
         : {}),
       ...sourceLookup,
-      retainSourceCustody: markPluginSourceCaptureOperation(() => ({
-        ...sourceFacts.captureCustody(sourceLookup.captureRecoverySource),
-        packageManifests: metadataCapture.snapshot(directory),
-        modules: new Map(inspectedModules),
-      })),
+      retainSourceCustody: markPluginSourceCaptureOperation(() =>
+        custodyFacts(sourceLookup.captureRecoverySource),
+      ),
+      describeSourceCustody: () => custodyFacts(recoveryInput),
       ...createPluginGenerationModuleLookup({
         capturedPaths,
         capturedDirectories,

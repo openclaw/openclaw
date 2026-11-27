@@ -1,9 +1,11 @@
+import type { DoctorMaintenancePending } from "../commands/doctor-maintenance-pending.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   noteDoctorRepairResult,
   resolveDoctorWorkspaceDir,
 } from "./doctor-health-contribution-utils.js";
 import {
+  checkDoctorHealthRepairsPending,
   recordDoctorHealthWarnings,
   renderStructuredHealthFindings,
 } from "./doctor-health-contribution.js";
@@ -66,6 +68,31 @@ export async function runStructuredHealthRepairs(
   reportDoctorRepairResult(ctx, result, [...availabilityFindings, ...result.remainingFindings]);
 }
 
+async function resolveCoreContributionChecks(checkIds: readonly string[]) {
+  const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
+  const selectedIds = new Set(checkIds);
+  return CORE_HEALTH_CHECKS.filter((check) => selectedIds.has(check.id));
+}
+
+function createCoreContributionContext(ctx: DoctorHealthFlowContext) {
+  return createDoctorHealthCheckContext(ctx, {
+    mode: "fix" as const,
+    cwd: resolveDoctorWorkspaceDir(ctx.cfg, ctx.env),
+    dryRun: !ctx.prompter.shouldRepair,
+  });
+}
+
+/** Read-only: whether `runCoreContributionHealth` would repair any of these checks. */
+export async function checkCoreContributionRepairsPending(
+  ctx: DoctorHealthFlowContext,
+  checkIds: readonly string[],
+): Promise<DoctorMaintenancePending> {
+  return checkDoctorHealthRepairsPending(
+    createCoreContributionContext(ctx),
+    await resolveCoreContributionChecks(checkIds),
+  );
+}
+
 export async function runCoreContributionHealth(
   ctx: DoctorHealthFlowContext,
   checkIds: readonly string[],
@@ -73,24 +100,17 @@ export async function runCoreContributionHealth(
   if (checkIds.length === 0) {
     return;
   }
-  const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-
-  const selectedIds = new Set(checkIds);
-  const checks = CORE_HEALTH_CHECKS.filter((check) => selectedIds.has(check.id));
+  const checks = await resolveCoreContributionChecks(checkIds);
   if (checks.length === 0) {
     return;
   }
-  const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
   const dryRun = !ctx.prompter.shouldRepair;
-  const result = await runDoctorHealthRepairs(
-    createDoctorHealthCheckContext(ctx, {
-      mode: "fix" as const,
-      cwd: workspaceDir,
-      dryRun,
-    }),
-    { checks, dryRun, progress: ctx.options.json !== true },
-  );
+  const result = await runDoctorHealthRepairs(createCoreContributionContext(ctx), {
+    checks,
+    dryRun,
+    progress: ctx.options.json !== true,
+  });
   reportDoctorRepairResult(ctx, result, dryRun ? result.findings : result.remainingFindings);
 }
 

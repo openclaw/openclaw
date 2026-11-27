@@ -176,25 +176,6 @@ export function resolveMemorySlotStartupPluginId(params: {
   return normalizePluginId(configuredSlot);
 }
 
-export function resolveContextEngineSlotStartupPluginId(params: {
-  records: readonly { id: string; contextEngineIds?: readonly string[] }[];
-  activationSourceConfig: OpenClawConfig;
-  activationSourcePlugins: NormalizedPluginsConfig;
-  normalizePluginId: (pluginId: string) => string;
-}): string | undefined {
-  const { activationSourcePlugins, normalizePluginId } = params;
-  const configuredSlot = activationSourcePlugins.slots.contextEngine;
-  if (!configuredSlot) {
-    return undefined;
-  }
-  return resolveSelectedContextEnginePluginIdFromConfig(
-    activationSourcePlugins,
-    configuredSlot,
-    params.records,
-    normalizePluginId,
-  );
-}
-
 export function shouldConsiderForGatewayStartup(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
@@ -293,15 +274,12 @@ export function addConfiguredSlotPluginIds(
   if (memorySlot) {
     target.add(memorySlot);
   }
-  const contextEngineSlot = resolveContextEngineSlotStartupPluginId({
-    records: params.index.plugins.map((plugin) => ({
-      id: plugin.pluginId,
-      contextEngineIds: plugin.contextEngineIds,
-    })),
-    activationSourceConfig: params.activationSourceConfig,
-    activationSourcePlugins: params.activationSourcePlugins,
-    normalizePluginId: params.lookup.normalizePluginId,
-  });
+  const contextEngineSlot = resolveSelectedContextEnginePluginIdFromConfig(
+    params.activationSourcePlugins,
+    params.activationSourcePlugins.slots.contextEngine,
+    params.index.plugins,
+    params.lookup.normalizePluginId,
+  );
   if (contextEngineSlot) {
     target.add(contextEngineSlot);
   }

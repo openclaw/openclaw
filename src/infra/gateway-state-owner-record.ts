@@ -7,7 +7,11 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
 import { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
-import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import {
+  getFileLockProcessStartTime,
+  getProcessStartTime,
+  isPidAlive,
+} from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
@@ -28,6 +32,7 @@ import {
 } from "./gateway-state-owner-directory.js";
 import {
   GatewayStateOwnerContentionError,
+  isTransientStateSchemaOwner,
   StateDatabaseAccessError,
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
@@ -138,7 +143,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     return;
   }
   const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}, started ${owner.createdAt}; retry when it finishes. For update progress, run \`openclaw update status --json\`. ${describeGatewayLockHolder(owner, ownerPath, namespace === "same" ? "live" : "unknown")}`;
-  if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
+  if (isTransientStateSchemaOwner(owner)) {
     throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }
   throw new StateDatabaseOfflineMaintenanceError(databasePath, maintenancePending);
@@ -157,6 +162,7 @@ export function defaultPayload(databasePath: string): LockPayload {
     configPath: path.join(stateDir, "openclaw.json"),
     role: "sqlite-maintenance",
     processNamespace: readGatewayLockProcessNamespace(),
+    pidNsInitStartTicks: getProcessStartTime(1) ?? undefined,
     machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     ...(parentPid === undefined ? {} : { parentPid }),
     ...(parentStartTime === null ? {} : { parentStartTime }),
@@ -315,7 +321,9 @@ export function acquireGatewayStateOwnerFile(
           databasePath,
           error,
           holderDetail,
-          holder ? { pid: holder.pid, role: holder.role } : undefined,
+          holder
+            ? { pid: holder.pid, role: holder.role, stateOwnerKind: holder.stateOwnerKind }
+            : undefined,
         );
       }
       throw error;

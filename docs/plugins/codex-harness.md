@@ -731,15 +731,24 @@ and connection. Native-parent thread rotation can preserve those assignments;
 resetting the requester or changing the connection does not adopt them. Missing
 assignment metadata is not reconstructed from retired Tasks history.
 
-For Codex V1 follow-ups, OpenClaw retains a successful submission receipt with
-the parent binding until it records the matching native turn as an assignment.
-This allows recovery when the parent yields or the Gateway restarts before observing
-the child turn. A receipt alone does not keep an idle native connection alive.
-Observation follows the existing warm-thread lifetime; an unmatched receipt
-remains available for later recovery. Resetting the parent or replacing its native connection
-invalidates these receipts. Before downgrading OpenClaw, let pending native work
-settle: older versions can read the binding but may discard its recovery receipts
-when updating it.
+In Codex V1, `resume_agent` can find a worker even when `send_input` reports
+“Cannot verify this worker belongs to the current parent.” Changing the
+app-server address or credentials can give the same chat a new native parent
+thread. Check the parent's history and confirm what the worker finished,
+including any file changes or remote writes. If the outcome is unclear, don't
+resend the task. If the earlier work is settled and a different worker is
+acceptable, use `spawn_agent` with `fork_context: false` for the next task.
+Pass only the confirmed results it needs.
+
+For Codex V1 follow-ups, the parent binding keeps a successful submission receipt until OpenClaw
+records the matching turn as an assignment. This allows recovery after a yield or restart.
+When a warm thread closes, observation stops but unmatched receipts remain available.
+A receipt alone won't keep an idle connection open. Resetting the parent or replacing its native connection invalidates these receipts.
+
+If the [Gateway logs](/cli/logs) show `Native assignment durability could not be updated`,
+check the parent's history and any actions it took before repeating work. A delivered result
+still marked pending can reach the parent again after restart, even if the drain reported ready.
+Before downgrading, let pending work finish. Older versions can read the binding but may discard receipts when updating it.
 
 Closing a native child applies to the assignment selected when the close starts.
 OpenClaw waits for Codex to confirm that the child's runtime is absent before

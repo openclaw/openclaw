@@ -1,7 +1,7 @@
 import { mkdirSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { isIrohBuildCurrent } from "../../scripts/build-iroh.mjs";
+import { isIrohBuildCurrent } from "../../src/infra/iroh-native-build.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

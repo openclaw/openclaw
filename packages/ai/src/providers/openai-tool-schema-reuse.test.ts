@@ -2,12 +2,15 @@ import * as normalization from "@openclaw/normalization-core";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
+import { markModelPayloadObserver } from "../transports/model-request-body.js";
+import { buildOpenAIResponsesParams } from "../transports/openai-responses-params-internal.js";
 import type { Tool } from "../types.js";
 import type { ToolSchemaModelCompat } from "./agent-tools-parameter-schema.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 import { prepareOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
 import { normalizeOpenAIStrictToolParameters as normalize } from "./openai-tool-schema.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 import {
   getPublishedRuntimeToolInputSchema as publication,
   projectRuntimeToolInputSchema,
@@ -119,6 +122,36 @@ it("publishes detached immutable schemas while source edits require a new public
   assert(isRecord(refreshed.schema));
   expect(publication(refreshed.schema)?.fingerprint).not.toBe(published.fingerprint);
   expect(actions(payloadSchema([choose(refreshed.schema)]))).toEqual(["read", "write"]);
+});
+
+it("shares published Responses schemas with observers and isolates writable payload hooks", () => {
+  const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna");
+  const { schema } = publishRuntimeToolInputSchema(actionSchema());
+  assert(isRecord(schema));
+  const context = { messages: [], tools: [choose(schema)] };
+  const build = (onPayload?: () => void) =>
+    expectDefined(buildOpenAIResponsesParams(model, context, { onPayload }).tools, "wire tools");
+  const plain = build();
+  let writable = false;
+  const hook = markModelPayloadObserver(
+    () => {},
+    undefined,
+    () => !writable,
+  );
+  const observed = build(hook);
+  expect(JSON.stringify(observed)).toBe(JSON.stringify(plain));
+  expect(observed[0]).not.toBe(plain[0]);
+  expect(observed[0]).toHaveProperty("type", "function");
+  assert(observed[0]?.type === "function" && plain[0]?.type === "function");
+  expect(observed[0].parameters).toBe(plain[0].parameters);
+
+  writable = true;
+  const edited = build(hook);
+  expect(JSON.stringify(edited)).toBe(JSON.stringify(plain));
+  assert(edited[0]?.type === "function" && edited[0].parameters && plain[0].parameters);
+  actions(edited[0].parameters).push("write");
+  expect(actions(plain[0].parameters)).toEqual(["read"]);
+  expect(JSON.stringify(build())).toBe(JSON.stringify(plain));
 });
 
 it("reuses published provider variants without changing current strict or compatibility options", () => {

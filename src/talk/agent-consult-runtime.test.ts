@@ -15,7 +15,10 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import {
+  consultRealtimeVoiceAgent,
+  consultRealtimeVoiceAgentInSessionRuntime,
+} from "./agent-consult-runtime.js";
 import {
   createOrResumeClientVoiceSession,
   registerClientVoiceConsultRun,
@@ -89,8 +92,12 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
 type ConsultParams = Parameters<typeof consultRealtimeVoiceAgent>[0];
 type TestRuntime = ReturnType<typeof createAgentRuntime>["runtime"];
 
-function runConsult(runtime: TestRuntime, params: Partial<ConsultParams> = {}) {
-  return consultRealtimeVoiceAgent({
+function runConsult(
+  runtime: TestRuntime,
+  params: Partial<ConsultParams> = {},
+  sessionRuntime = false,
+) {
+  return (sessionRuntime ? consultRealtimeVoiceAgentInSessionRuntime : consultRealtimeVoiceAgent)({
     agentRuntime: runtime as never,
     cfg: {},
     logger: { warn: vi.fn() },
@@ -561,6 +568,61 @@ describe("realtime voice agent consult runtime", () => {
       toolOverrides: { webSearch: false },
       traceAuthorized: false,
     });
+  });
+
+  it("keeps the high voice default for plugin bridges even when the parent chat sets thinking", async () => {
+    // Bridges run the embedded owner, which does not read session thinking.
+    const bridge = createAgentRuntime();
+    const sessionKey = "agent:main:bridge-thinking";
+    bridge.sessionStore[sessionKey] = {
+      sessionId: "bridge-thinking",
+      updatedAt: 1,
+      thinkingLevel: "low",
+    };
+    await runConsult(bridge.runtime, { agentId: "main", sessionKey });
+    expect(requireEmbeddedAgentCall(bridge.runEmbeddedAgent).thinkLevel).toBe("high");
+  });
+
+  it("leaves the lock to the session runtime while preserving the high voice default", async () => {
+    const sessionKey = "agent:main:session-runtime";
+    const bridge = createAgentRuntime();
+    bridge.sessionStore[sessionKey] = { ...lockedEntry, sessionId: "locked-bridge" };
+    // Bridges without the session runtime still refuse to cross a locked native transcript.
+    // An old untyped caller cannot opt the public helper out of its model lock.
+    const legacyOptions = { dispatchesInSessionRuntime: true, agentId: "main", sessionKey };
+    await expect(runConsult(bridge.runtime, legacyOptions)).rejects.toThrow(/locked/i);
+    expect(bridge.runEmbeddedAgent).not.toHaveBeenCalled();
+
+    const session = createAgentRuntime();
+    session.sessionStore[sessionKey] = { ...lockedEntry, sessionId: "locked-session" };
+    await expect(
+      runConsult(
+        session.runtime,
+        {
+          agentId: "main",
+          sessionKey,
+        },
+        true,
+      ),
+    ).resolves.toEqual({ text: "Speak this." });
+    // Voice retains its high default; the command owner normalizes runtime support.
+    expect(requireEmbeddedAgentCall(session.runEmbeddedAgent).thinkLevel).toBe("high");
+
+    const plain = createAgentRuntime();
+    await runConsult(plain.runtime, { agentId: "main", sessionKey: "agent:main:bridge" });
+    expect(requireEmbeddedAgentCall(plain.runEmbeddedAgent).thinkLevel).toBe("high");
+
+    await expect(
+      runConsult(
+        createAgentRuntime().runtime,
+        {
+          agentId: "main",
+          sessionKey: "agent:main:override",
+          provider: "openai",
+        },
+        true,
+      ),
+    ).rejects.toThrow("Session-runtime consults use the session's own model selection");
   });
 
   it.each([
