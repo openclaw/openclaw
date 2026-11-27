@@ -41,7 +41,7 @@ export async function listSkillLibrary(
   params: SkillsLibraryListParams = {},
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<SkillsLibraryListResult> {
-  return (await captureSkillLibraryAccess(authority, options).read("list", params)).value;
+  return (await captureSkillLibraryAccess(authority, options).read("list", { ...params })).value;
 }
 
 export async function readSkillLibrary(

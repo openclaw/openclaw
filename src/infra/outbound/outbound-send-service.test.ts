@@ -160,6 +160,19 @@ it("forces durable core delivery and accepts the route before publishing its rec
   expect(onDeliveryResult).toHaveBeenCalledWith(evidence);
 });
 
+it("marks message-action controls once before core queue persistence", async () => {
+  const buttons = (value: string): ReplyPayload["presentation"] => ({
+    blocks: [{ type: "buttons", buttons: [{ label: "A", action: { type: "callback", value } }] }],
+  });
+  await send(
+    { input: { requireQueuePersistence: true } },
+    { message: "", payload: { text: "", presentation: buttons("::pick:a") } },
+  );
+  expectCall(mocks.send, {
+    payloads: [expect.objectContaining({ presentation: buttons("::::pick:a") })],
+  });
+});
+
 it.each([
   ["core", "source-account"],
   ["core", undefined],

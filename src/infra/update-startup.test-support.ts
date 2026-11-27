@@ -1,24 +1,20 @@
 import { vi } from "vitest";
-import type * as Handoff from "./update-managed-service-handoff.js";
+import type { prepareUpdate } from "../update/run.js";
 
 const {
-  cancelManagedServiceUpdateHandoffMock,
   checkTelemetryUpdateMock,
   detectRespawnSupervisorMock,
   getRuntimeConfigMock,
+  prepareUpdateMock,
   runUpdateFailureTriageMock,
   refreshRemoteModelCatalogMock,
   scheduleGatewayRestartMock,
-  startManagedServiceUpdateHandoffMock,
-  transferManagedServiceUpdateHandoffMock,
   versionMock,
 } = vi.hoisted(() => ({
-  cancelManagedServiceUpdateHandoffMock: vi.fn<typeof Handoff.cancelManagedServiceUpdateHandoff>(
-    async () => "restored-in-process",
-  ),
   checkTelemetryUpdateMock: vi.fn<typeof import("./telemetry.js").checkTelemetryUpdate>(),
   detectRespawnSupervisorMock: vi.fn(),
   getRuntimeConfigMock: vi.fn(() => ({})),
+  prepareUpdateMock: vi.fn<typeof prepareUpdate>(),
   runUpdateFailureTriageMock: vi.fn<typeof import("./update-triage.js").runUpdateFailureTriage>(),
   refreshRemoteModelCatalogMock: vi.fn<
     typeof import("../model-catalog/remote-refresh.js").refreshRemoteModelCatalog
@@ -29,10 +25,6 @@ const {
     generatedAt: 1_753_500_000_000,
   })),
   scheduleGatewayRestartMock: vi.fn(() => ({ scheduled: true })),
-  startManagedServiceUpdateHandoffMock: vi.fn<typeof Handoff.startManagedServiceUpdateHandoff>(),
-  transferManagedServiceUpdateHandoffMock: vi.fn<
-    typeof Handoff.transferManagedServiceUpdateHandoff
-  >(async () => true),
   versionMock: { value: "1.0.0" },
 }));
 
@@ -82,24 +74,18 @@ vi.mock("../version.js", () => ({
 // mock-isolation: Startup fixtures must not execute updater commands.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: vi.fn() }));
 
-vi.mock("./update-managed-service-handoff.js", async () => ({
-  ...(await vi.importActual<typeof import("./update-managed-service-handoff.js")>(
-    "./update-managed-service-handoff.js",
-  )),
-  cancelManagedServiceUpdateHandoff: cancelManagedServiceUpdateHandoffMock,
-  startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
-  transferManagedServiceUpdateHandoff: transferManagedServiceUpdateHandoffMock,
+vi.mock("../update/run.js", async (original) => ({
+  ...(await original<typeof import("../update/run.js")>()),
+  prepareUpdate: prepareUpdateMock,
 }));
 
 export {
-  cancelManagedServiceUpdateHandoffMock,
   checkTelemetryUpdateMock,
   detectRespawnSupervisorMock,
   getRuntimeConfigMock,
+  prepareUpdateMock,
   runUpdateFailureTriageMock,
   refreshRemoteModelCatalogMock,
   scheduleGatewayRestartMock,
-  startManagedServiceUpdateHandoffMock,
-  transferManagedServiceUpdateHandoffMock,
   versionMock,
 };

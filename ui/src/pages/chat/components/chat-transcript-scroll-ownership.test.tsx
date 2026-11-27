@@ -445,6 +445,65 @@ it("grows the native range before compensating fractional row growth above a rea
   expectReader(policy, true);
 });
 
+it("keeps native reader movement before a queued message-anchor restoration", async () => {
+  const flushFrames = stubAnimationFrames();
+  transcriptDomState.measuredRowHeight = 3000;
+  const paneId = "reader-before-anchor-restoration";
+  const transcript = makeTranscript(() => paneId, { canFollowEnd: () => false });
+  const refs = transcript.renderSession(
+    `agent:main:${paneId}`,
+    (session) => session.messageElements,
+  );
+  const rows: TestContentRow[] = [
+    {
+      kind: "content",
+      key: "long-row",
+      content: (
+        <div
+          ref={refs.forKey("reader-message")}
+          class="chat-bubble"
+          data-message-id="reader-message"
+        >
+          Retained message
+        </div>
+      ),
+    },
+  ];
+  const { container, session, renderRows } = await mountTestTranscript(paneId, rows, transcript);
+  session.layout.ready = true;
+  viewport(container, 600, 3000);
+  const bubble = expectDefined(container.querySelector(".chat-bubble"), "retained message");
+  Object.defineProperty(bubble, "getBoundingClientRect", {
+    value: () => new DOMRect(0, 1000 - container.scrollTop, 800, 100),
+  });
+  const messageRows = new Map([["reader-message", "long-row"]]);
+  session.syncMessageRows(messageRows, messageRows);
+  transcript.scrollToOffset(824);
+  renderRows(rows);
+  flushFrames();
+  await Promise.resolve();
+  await Promise.resolve();
+  container.dispatchEvent(new WheelEvent("wheel", { deltaY: -24 }));
+  nativeScroll(container, 800);
+  expect(transcript.isPositionSettled).toBe(true);
+  expect(container.scrollTop).toBe(800);
+  expect(bubble.getBoundingClientRect().top).toBe(200);
+  session.preserveReaderPosition();
+  renderRows(rows);
+
+  // The browser moves first; its scroll event can follow the queued geometry commit.
+  container.scrollTop = 776;
+  expect(bubble.getBoundingClientRect().top).toBe(224);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(container.scrollTop).toBe(776);
+  expect(bubble.getBoundingClientRect().top).toBe(224);
+  container.dispatchEvent(new Event("scroll"));
+  await Promise.resolve();
+  expect(container.scrollTop).toBe(776);
+});
+
 it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {
   const flushFrames = stubAnimationFrames();
   transcriptDomState.measuredRowHeight = 120;

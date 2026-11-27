@@ -32,8 +32,11 @@ import { projectToolResultMessage } from "./tool-result-projection-message.js";
 import {
   estimateToolResultTextChars,
   getToolResultHistoryTextBudget,
+  MIN_KEEP_CHARS,
+  resolveEffectiveMinKeepChars,
   getToolResultTextBudget,
   isToolResultTextBlock,
+  keepToolResultTextPrefix,
   prepareToolResultTextChars,
   sliceToolResultTextTailToBudget,
   sliceToolResultTextToBudget,
@@ -289,7 +292,6 @@ export function pruneExpiredCacheTtlToolResults(params: {
   return next ?? unchanged;
 }
 
-const MIN_KEEP_CHARS = 2_000;
 const RECOVERY_MIN_KEEP_CHARS = 0;
 const TOOL_RESULT_WARNING_DEDUPE_LIMIT = 1_024;
 export const toolResultWarningDedupe = {
@@ -307,17 +309,6 @@ const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
   `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; narrow args]`;
 const AGGREGATE_ELISION_MARKER =
   "[tool result elided: aggregate tool-result budget exceeded; rerun the command if the output is needed]";
-
-function resolveEffectiveMinKeepChars(
-  maxChars: number,
-  options: ToolResultTruncationOptions,
-  suffixFactory: (truncatedChars: number) => string,
-): number {
-  const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
-  const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
-  const suffixFloor = estimateToolResultTextChars(suffixFactory(1), budgetOptions);
-  return Math.max(0, Math.min(minKeepChars, maxChars - suffixFloor));
-}
 
 function appendBoundedTruncationSuffix(params: {
   keptText: string;
@@ -516,20 +507,22 @@ export function truncateToolResultMessage(
   const remainingBudget = Math.max(0, maxChars - preservedChars);
   const reducibleChars = totalTextChars - preservedChars;
   const reducibleNoticeChars = preserveSmallBlocks ? largeBlockNoticeChars : totalNoticeChars;
-  const noticeScale =
-    reducibleNoticeChars > 0 ? Math.min(1, remainingBudget / reducibleNoticeChars) : 0;
-  const distributableBudget = Math.max(0, remainingBudget - reducibleNoticeChars);
-
+  if (reducibleNoticeChars > remainingBudget) {
+    return {
+      ...msg,
+      content: keepToolResultTextPrefix(blocks, maxChars, suffixFactory, budgetOptions),
+    } as AgentMessage; // SAFETY: Existing block shapes are retained; the only new block is text.
+  }
+  const distributableBudget = remainingBudget - reducibleNoticeChars;
   const newContent = blocks.map(({ block, textChars, small, noticeChars }) => {
     if (!isToolResultTextBlock(block)) {
       return block;
     }
     const preserveBlock = preserveSmallBlocks && small;
     const blockShare = reducibleChars > 0 ? textChars / reducibleChars : 0;
-    const noticeBudget = noticeChars * noticeScale;
     const blockBudget = preserveBlock
       ? textChars
-      : Math.floor(noticeBudget + distributableBudget * blockShare);
+      : Math.floor(noticeChars + distributableBudget * blockShare);
     const blockMinKeepChars = preserveBlock ? textChars : Math.floor(minKeepChars * blockShare);
     const truncatedText = truncateToolResultText(block.text, blockBudget, {
       suffix: suffixFactory,

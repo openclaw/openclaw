@@ -8,6 +8,7 @@ import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { prepareCronRunAdmission } from "../cron/run-admission.js";
 import { TEST_SCHEDULED_EXECUTION } from "../cron/scheduled-occurrence.test-support.js";
+import { createCronCompletionDeliveryFence } from "../cron/service/delivery-attempt-fence.js";
 import { markServiceCronJobActive } from "../cron/service/run-receipts.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import {
@@ -240,18 +241,16 @@ async function prepareCronRun(mintGrant = true, expiresAtMs: number | null = nul
   const job = seedCronJobRow();
   const revision = resolveCronJobConfigRevision(job);
   const receipt = claimCronRunReceiptForTest(CRON_STORE_KEY, job, Date.now());
-  const marker = markServiceCronJobActive(
-    createCronServiceState({
-      scheduler: createTestGatewayScheduler(),
-      storePath: CRON_STORE_KEY,
-      cronEnabled: true,
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      enqueueSystemEvent: vi.fn(),
-      runIsolatedAgentJob: vi.fn(),
-    }),
-    job,
-    receipt,
-  );
+  const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
+    storePath: CRON_STORE_KEY,
+    cronEnabled: true,
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    enqueueSystemEvent: vi.fn(),
+    runIsolatedAgentJob: vi.fn(),
+  });
+  const marker = markServiceCronJobActive(job, receipt);
+  controller = new AbortController();
   runOwner = prepareCronRunAdmission({
     scheduledExecution: TEST_SCHEDULED_EXECUTION,
     cfg: {},
@@ -259,9 +258,14 @@ async function prepareCronRun(mintGrant = true, expiresAtMs: number | null = nul
     runId: "cron-run-1",
     jobId: job.id,
     sessionKey: "agent:main:cron:job-1",
-    deliveryAttemptFence: null,
+    deliveryAttemptFence: createCronCompletionDeliveryFence({
+      state,
+      job,
+      handle: receipt,
+      activeJobMarker: marker,
+      signal: controller.signal,
+    }),
   });
-  controller = new AbortController();
   bindCronJobAdmittedRun(
     marker,
     await runOwner.preparedRunAdmission.admit("embedded"),

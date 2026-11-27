@@ -109,9 +109,11 @@ export default { test: {
 });
 
 it.each([
-  ["recovery", 0],
-  ["fallback failure", 43],
-] as const)("installs FRV WebKit through frozen Q: %s", (_scenario, fallbackExit) => {
+  ["hosted recovery", "apt-mirrors.txt", 0],
+  ["hosted fallback failure", "apt-mirrors.txt", 43],
+  ["provider recovery", "blacksmith-ubuntu-mirrors.txt", 0],
+  ["provider fallback failure", "blacksmith-ubuntu-mirrors.txt", 43],
+] as const)("installs FRV WebKit through frozen Q: %s", (_scenario, mirrorFile, fallbackExit) => {
   const root = tempDirs.make("openclaw-frv-webkit-");
   const local = (file: string) => path.join(root, file);
   const steps = workflow.readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml").jobs.test
@@ -153,11 +155,18 @@ it.each([
   mkdirSync(local("apt/apt.conf.d"), { recursive: true });
   mkdirSync(local("ui"));
   const mirrors = "https://slow.invalid/ubuntu\thigh\nhttps://fallback.invalid/ubuntu\tlow\n";
-  writeFileSync(local("apt/apt-mirrors.txt"), mirrors);
+  const inactiveMirrors = "https://inactive.invalid/ubuntu\nhttps://unused.invalid/ubuntu\n";
+  const inactiveFile = mirrorFile === "apt-mirrors.txt" ? "unused.txt" : "apt-mirrors.txt";
+  writeFileSync(local(`apt/${mirrorFile}`), mirrors);
+  writeFileSync(local(`apt/${inactiveFile}`), inactiveMirrors);
   writeFileSync(local("events"), "");
   for (const [command, body] of [
     ["id", "echo 1000"],
     ["sudo", '[ "$1" = -n ]; shift; export ROOT_PHASE=1; exec "$@"'],
+    [
+      "apt-get",
+      'printf "%s\\n" "mirror+file:$CASE_ROOT/apt/$MIRROR_FILE/" "https://packages.invalid/" "mirror+file:$CASE_ROOT/apt/$MIRROR_FILE/"',
+    ],
     [
       "timeout",
       '[ "$ROOT_PHASE" = 1 ]; [ "$1" = --kill-after=10s ]; shift; export DEADLINE="$1"; shift; exec "$@"',
@@ -173,7 +182,7 @@ it.each([
     "#!/bin/bash",
     "set -euo pipefail",
     'config="$CASE_ROOT/apt/apt.conf.d/99openclaw-webkit-download-only"',
-    'first=$(head -n1 "$CASE_ROOT/apt/apt-mirrors.txt" | cut -f1)',
+    'first=$(head -n1 "$CASE_ROOT/apt/$MIRROR_FILE" | cut -f1)',
     'case "$*" in',
     '  "install-deps webkit")',
     '    if [[ -f "$config" ]]; then',
@@ -202,6 +211,7 @@ it.each([
         ...process.env,
         PATH: local("bin") + path.delimiter + process.env.PATH,
         CASE_ROOT: root,
+        MIRROR_FILE: mirrorFile,
         FALLBACK_EXIT: String(fallbackExit),
       },
     },
@@ -212,6 +222,7 @@ it.each([
       "download 300s https://fallback.invalid/ubuntu\n" +
       (fallbackExit === 0 ? "install https://fallback.invalid/ubuntu\nbrowser\n" : ""),
   );
-  expect(readFileSync(local("apt/apt-mirrors.txt"), "utf8")).toBe(mirrors);
+  expect(readFileSync(local(`apt/${mirrorFile}`), "utf8")).toBe(mirrors);
+  expect(readFileSync(local(`apt/${inactiveFile}`), "utf8")).toBe(inactiveMirrors);
   expect(existsSync(local("apt/apt.conf.d/99openclaw-webkit-download-only"))).toBe(false);
 });

@@ -80,7 +80,8 @@ describe("Plugin link reader panel", () => {
     const loadedFiles = panel.querySelector(".lr-files");
     expect(scrollPorts.has(panel.querySelector(".lr-content")!)).toBe(true);
     expect(scrollPorts.has(panel.querySelector(".lr-diff")!)).toBe(true);
-    expect(deferredFiles?.isConnected).toBe(false);
+    // The section keeps its place and heading; only its body was waiting.
+    expect(loadedFiles).toBe(deferredFiles);
     filesButton.click();
     expect(document.activeElement).toBe(loadedFiles);
     checks.resolve({
@@ -145,7 +146,7 @@ describe("Plugin link reader panel", () => {
       button(panel, "Refresh item").click();
       await waitForFast(() => expect(panel.textContent).toContain("Couldn’t refresh"));
       expect(panel.textContent).toContain(
-        section === "checks" ? "Build passed" : section === "files" ? "kept.ts" : "Comment text",
+        section === "checks" ? "Checks passed" : section === "files" ? "kept.ts" : "Comment text",
       );
       request.mockResolvedValueOnce(previous);
       const name =
@@ -213,7 +214,7 @@ describe("Plugin link reader panel", () => {
     const time = panel.querySelector(".lr-content:not([hidden]) time");
     const expected = timestamp ?? document.createdAt;
     expect(time?.getAttribute("datetime")).toBe(expected);
-    expect(time?.textContent?.trim()).toBe(new Date(expected).toLocaleString());
+    expect(time?.getAttribute("title")).toBe(new Date(expected).toLocaleString());
     expect(panel.querySelector(".lr-state")?.textContent?.trim()).toBe(label);
   });
 

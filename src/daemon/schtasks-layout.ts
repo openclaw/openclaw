@@ -614,7 +614,12 @@ export function buildTaskScript({
   }
   let commandArguments = programArguments;
   if (environment?.OPENCLAW_SERVICE_KIND === "gateway") {
-    commandArguments = [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG];
+    // Converted installations already run the resident launcher; do not nest the legacy supervisor.
+    if (
+      !programArguments.some((argument) => /(?:^|[\\/])openclaw-launcher\.mjs$/iu.test(argument))
+    ) {
+      commandArguments = [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG];
+    }
     // Legacy VBS launchers supply their own outer owner; direct tasks own CMD.
     lines.push(DIRECT_TASK_LAUNCHER_MARKER);
   }

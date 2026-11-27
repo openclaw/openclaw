@@ -69,6 +69,64 @@ async function expandGroups(page: Page, reply: string) {
 }
 
 suite.define(() => {
+  it("keeps resumed tool activity below the opening request before history catches up", async () => {
+    await suite.withPage(
+      { viewport: { width: 1200, height: 820 }, locale: "en-US" },
+      async ({ page }) => {
+        const sessionKey = "agent:main:main";
+        const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
+        await page.goto(suite.server.baseUrl + "chat");
+        const prompt = "Inspect the project layout.";
+        await page.locator(".agent-chat__input textarea").fill(prompt);
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        const request = await gateway.waitForRequest("chat.send");
+        const runId = String(asOptionalRecord(request.params)?.idempotencyKey);
+        const message = {
+          role: "user",
+          content: prompt,
+          timestamp: Date.now(),
+          __openclaw: { id: "opening", seq: 1, idempotencyKey: runId + ":user" },
+        };
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey,
+          messageId: "opening",
+          messageSeq: 1,
+          message,
+        });
+        const user = page.locator(".chat-group.user", { hasText: prompt });
+        await user.waitFor();
+        // The same conversation continues under a new run ID before its history arrives.
+        await gateway.emitGatewayEvent("session.tool", {
+          sessionKey,
+          runId: "resumed",
+          seq: 2,
+          ts: message.timestamp + 100,
+          stream: "tool",
+          data: { phase: "result", toolCallId: "layout", name: "exec", result: "" },
+        });
+        const row = page.locator(".chat-tool-msg-summary", { hasText: "Ran a script" });
+        await row.waitFor();
+        // History can replace a row between two Playwright reads. Compare the first frame
+        // with both rows painted; a reversed order must fail rather than be retried.
+        const order = await page.waitForFunction((openingText) => {
+          const rect = (selector: string, text: string) =>
+            Array.from(document.querySelectorAll(selector))
+              .find((element) => element.textContent?.includes(text))
+              ?.getClientRects()[0];
+          const opening = rect(".chat-group.user", openingText);
+          const tool = rect(".chat-tool-msg-summary", "Ran a script");
+          if (opening?.height && tool?.height) {
+            return opening.top < tool.top ? "opening-first" : "tool-first";
+          }
+          return false;
+        }, prompt);
+        if (captureUiProof) {
+          await capture(page, createControlUiE2eArtifactDir("resumed-tool-order"), "transcript");
+        }
+        expect(await order.jsonValue()).toBe("opening-first");
+      },
+    );
+  });
   it("does not call a complete image-only result unavailable", async () => {
     const imageResult = {
       ...result,
@@ -109,6 +167,14 @@ suite.define(() => {
         await gateway.waitForRequest("chat.message.get");
         const panel = page.locator("openclaw-chat-tool-output");
         await panel.locator('.chat-tool-output[aria-busy="false"]').waitFor();
+        if (captureUiProof) {
+          await capture(page, suite.artifactDir, "tool-output-header");
+        }
+        const pane = await page.locator(".side-panel__header:visible").boundingBox();
+        expect(await panel.locator(".sidebar-header").boundingBox()).toMatchObject({
+          x: expect.closeTo(pane!.x, 0),
+          width: expect.closeTo(pane!.width, 0),
+        });
         expect(
           await panel
             .getByText("Full output unavailable. Only the captured output is shown.", {

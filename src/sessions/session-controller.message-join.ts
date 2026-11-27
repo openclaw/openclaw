@@ -47,7 +47,9 @@ export async function prepareReplyMessageContinuation(params: {
   const assertOwner = () => {
     params.assertCurrent();
     if (!fingerprint || owner.toolAuthorityFingerprint !== fingerprint) {
-      throw new MessageInjectionTargetUnavailableError("Reply steering authority changed");
+      throw new MessageInjectionTargetUnavailableError(
+        "The reply target changed. Start a new turn to retry.",
+      );
     }
   };
   assertOwner();
@@ -262,7 +264,7 @@ async function prepareLegacyReplySteeringAuthority(
       (operation.toolAuthorityRoute !== activeRoute ||
         operation.toolAuthorityFingerprint !== activeFingerprint)
     ) {
-      throw new Error("Reply steering authority changed during preparation");
+      throw new Error("The reply target changed during preparation. Start a new turn to retry.");
     }
     const authorityMismatch = operation !== undefined && activeFingerprint !== incomingFingerprint;
     const routeOnlyMismatch =
@@ -308,7 +310,7 @@ async function prepareLegacyReplySteeringAuthority(
         operation.toolAuthorityRoute !== activeRoute ||
         operation.toolAuthorityFingerprint !== activeFingerprint
       ) {
-        throw new Error("Reply steering authority changed during preparation");
+        throw new Error("The reply target changed during preparation. Start a new turn to retry.");
       }
       if (projected === activeFingerprint) {
         return {
@@ -320,11 +322,7 @@ async function prepareLegacyReplySteeringAuthority(
                   "Reply steering target is no longer running",
                 );
               }
-              const current = operation.projectToolAuthorityFingerprint(caller);
-              if (!current) {
-                throw new Error("Reply steering authority is no longer current");
-              }
-              return current;
+              return activeFingerprint;
             },
             release() {},
           },

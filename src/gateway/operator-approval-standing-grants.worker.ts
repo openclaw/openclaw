@@ -8,6 +8,7 @@ import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import { resolveCronJobGrantDefinitionRevision } from "../cron/store/job-config-codec.js";
+import { importLegacyCronMemberSources } from "../cron/store/member-source-role-import.js";
 import {
   loadedCronStoreFromRows,
   resolveCronJobGrantDefinitionGenerationFloor,
@@ -33,6 +34,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
+import type { LegacyOpenClawIdMemberRoleImport } from "./openclaw-id/member-source-role-import.js";
 import type {
   CronStandingGrantMintSpec,
   CronStandingGrantLookupInput,
@@ -138,6 +140,32 @@ export function migrateCronInferenceStandingGrantReferences(
   ) {
     throw new Error("Cron inference migration must preserve the entire approved job definition.");
   }
+  migrateCronStandingGrantReferences(db, previous, next, generation);
+}
+
+/** A live import may change only the already captured member's explicit role representation. */
+export function migrateCronMemberSourceRoleStandingGrantReferences(
+  db: EngineConnection,
+  previous: CronStoredJob,
+  next: CronStoredJob,
+  generation: number,
+  input: LegacyOpenClawIdMemberRoleImport,
+): void {
+  if (
+    previous === next ||
+    !isDeepStrictEqual(next, importLegacyCronMemberSources(previous, input))
+  ) {
+    throw new Error("Cron member role import must preserve the entire approved job definition.");
+  }
+  migrateCronStandingGrantReferences(db, previous, next, generation);
+}
+
+function migrateCronStandingGrantReferences(
+  db: EngineConnection,
+  previous: CronStoredJob,
+  next: CronStoredJob,
+  generation: number,
+): void {
   if (!tableExists(db, STANDING_GRANT_TABLE) || !tableExists(db, STANDING_GRANT_GENERATION_TABLE)) {
     return;
   }

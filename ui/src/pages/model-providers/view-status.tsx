@@ -71,20 +71,6 @@ export function isProviderUsable(card: ModelProviderCard): boolean {
   );
 }
 
-/** Setup owns the page until a usable model exists; its call to action is the only one. */
-export function needsModelSetup(props: {
-  connected: boolean;
-  loading: boolean;
-  catalogDiscovering?: boolean;
-  configuredModels: readonly { available?: boolean }[];
-}): boolean {
-  return (
-    (props.connected || !props.loading) &&
-    !props.catalogDiscovering &&
-    !props.configuredModels.some((model) => model.available !== false)
-  );
-}
-
 export function needsAuthAttention(card: ModelProviderCard): boolean {
   if (card.auth?.kind === "missing") {
     return true;
@@ -114,6 +100,15 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
   return card.catalogStatus === "ready" && !needsAuthAttention(card);
 }
 
+/** Codex samples one login; it doesn't report a pool shared by the other credentials. */
+export function hasSeparateAccountLimits(card: ModelProviderCard): boolean {
+  return (
+    card.id === "openai" &&
+    card.profiles.some((profile) => profile.type !== "api_key") &&
+    (card.profiles.length > 1 || Boolean(card.apiKey) || card.configApiKeys.length > 0)
+  );
+}
+
 export function probeStatus(result: ModelsProbeResult): {
   kind: "ok" | "warn" | "danger";
   label: string;
@@ -137,14 +132,15 @@ export function renderProviderStatus(card: ModelProviderCard, result?: ModelsPro
     return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
   }
   // A successful catalog lists models; it does not prove inference access.
-  const checked = result && probeStatus(result);
+  // No inference was attempted without a model; keep the known setup status.
+  const checked = result && result.status !== "no_model" && probeStatus(result);
   if (checked && checked.kind !== "ok") {
     return <SettingsStatus {...checked} />;
   }
   if (!isProviderUsable(card)) {
     return renderAuthStatus(card.auth);
   }
-  const attention = providerUsageAttention(card.usage);
+  const attention = hasSeparateAccountLimits(card) ? undefined : providerUsageAttention(card.usage);
   if (attention) {
     return <SettingsStatus kind={attention.kind} label={attention.label} />;
   }

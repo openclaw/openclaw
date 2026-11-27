@@ -31,6 +31,7 @@ import {
   retainEmbeddedSessionPromptState,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
+import { getToolResultTextBudget } from "./tool-result-text-budget.js";
 import {
   toolResultWarningDedupe,
   truncateToolResultMessage,
@@ -336,6 +337,29 @@ describe("truncateOversizedToolResultsInMessages", () => {
     const { messages: result, truncatedCount } = truncate(messages, 200_000);
     expect(truncatedCount).toBe(0);
     expect(result).toEqual(messages);
+  });
+
+  it("keeps whole leading records and a single recovery notice when a page has many blocks", () => {
+    const rows = Array.from({ length: 1_000 }, (_, index) => ({
+      type: "text" as const,
+      text: `record-${index} | ${"payload ".repeat(14)}`,
+    }));
+    const message = { ...toolResult("unused"), content: rows };
+    const projected = truncate([message], 32_768);
+    expect(projected.truncatedCount).toBe(1);
+    const result = projected.messages[0];
+    if (result?.role !== "toolResult") {
+      throw new Error("Expected a projected tool result");
+    }
+    const content = result.content;
+    expect(content.length).toBeGreaterThan(1);
+    expect(content.slice(0, -1)).toEqual(rows.slice(0, content.length - 1));
+    expect(content.at(-1)).toMatchObject({
+      type: "text",
+      text: expect.stringMatching(/truncated; rerun with narrower args/u),
+    });
+    expect(getToolResultTextBudget(result)).toBeLessThanOrEqual(16_000);
+    expect(message.content).toHaveLength(1_000);
   });
 
   it("applies the aggregate cap to CJK-weighted prompt history", () => {

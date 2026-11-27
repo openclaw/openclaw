@@ -128,12 +128,14 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
     for (const row of iterateSqliteQuerySync(
       db,
       userInputs
-        .innerJoin("transcript_event_identities as identity", (join) =>
-          join
-            .onRef("identity.session_id", "=", "active.session_id")
-            .onRef("identity.seq", "=", "active.event_seq"),
+        // The unique input key must bound payload access before visibility is decoded.
+        .where("active.event_seq", "=", (eb) =>
+          eb
+            .selectFrom("transcript_event_identities")
+            .select("seq")
+            .where("session_id", "=", projection.resolved.sessionId)
+            .where("message_idempotency_key", "=", params.idempotencyKey),
         )
-        .where("identity.message_idempotency_key", "=", params.idempotencyKey)
         .where(steerTargetRunId, "is", null),
     )) {
       assertTranscriptNavigationValid(row.navigation_valid);

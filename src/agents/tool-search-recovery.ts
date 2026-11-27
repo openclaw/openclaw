@@ -132,6 +132,7 @@ export function formatCatalogInputError(
   entry: ToolSearchCatalogEntry,
   errors: JsonSchemaValidationError[],
   value: unknown,
+  recoverySurface?: ToolLookupErrorOptions["recoverySurface"],
 ): string {
   const executionSchema = resolveAgentToolExecutionSchema(entry.tool, entry.parameters);
   const schema = isRecord(executionSchema) ? executionSchema : undefined;
@@ -176,7 +177,11 @@ export function formatCatalogInputError(
   const hint = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
   const input = compactToolInputHint(schema);
   const signature = input === "unknown" ? "" : ` Expected input: ${input}.`;
-  return `Invalid arguments for tool "${entry.id}": ${details.join("; ")}.${hint}${signature}`;
+  const recovery =
+    recoverySurface === "catalog"
+      ? `Find ${JSON.stringify(entry.id)} with catalog.search, then call the tool handle's describe() for its input schema.`
+      : `Use tool_describe with id ${JSON.stringify(entry.id)} for its input schema.`;
+  return `Invalid arguments for tool "${entry.id}": ${details.join("; ")}.${hint}${signature} ${recovery}`;
 }
 
 export function formatCatalogOutputError(

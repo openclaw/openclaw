@@ -158,7 +158,6 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
         sessionEffectsHostCurrent: (entry) => controller.sessionEffectsHostCurrent(entry),
         shouldSuppressSessionEffects: (entry, effects) =>
           controller.shouldSuppressSessionEffects(entry, effects),
-        discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
         shouldEmitEndedHookForRun: () => false,
         emitSubagentEndedHookForRun: vi.fn(async () => {}),
         callGateway: vi.fn(),

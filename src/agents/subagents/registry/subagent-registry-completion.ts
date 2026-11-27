@@ -16,6 +16,7 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
@@ -42,7 +43,7 @@ export function resolveSubagentKillTargetState(
   const endedAt = entry.execution.endedAt;
   const outcome = entry.execution.outcome;
   const completion = entry.completion;
-  if (typeof endedAt !== "number" || entry.pauseReason === "sessions_yield") {
+  if (typeof endedAt !== "number" || isSubagentPausedByYield(entry)) {
     return undefined;
   }
   if (

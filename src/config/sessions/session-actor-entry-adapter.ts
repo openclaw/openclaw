@@ -93,7 +93,6 @@ async function patchSessionActorEntry(
       prepareIf: options.prepareIf,
       guards: {
         shouldCommitIf: options.workerGuard?.shouldCommitIf,
-        cliHistory: options.workerGuard?.cliHistory,
         conversation: options.workerGuard?.conversation,
         sources: source.checks.map(({ predicate }) => predicate),
       },

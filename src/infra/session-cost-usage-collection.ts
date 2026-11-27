@@ -32,7 +32,9 @@ export type UsageCostCollectionAccess = {
   listSqliteInstances: (
     agentId: string,
     storePath: string,
-  ) => Promise<Array<{ agentId: string; sessionId: string; updatedAtMs: number }>>;
+  ) => Promise<
+    Array<{ agentId: string; sessionId: string; updatedAtMs: number; generation?: string | null }>
+  >;
   readSqliteStats: (
     markers: readonly SqliteSessionFileMarker[],
   ) => Promise<
@@ -165,7 +167,7 @@ async function readUsageCostSqliteFiles(
 
 type UsageCostSqliteEntry = Pick<
   UsageCostSqliteFile,
-  "kind" | "sourcePath" | "sessionId" | "mtimeMs"
+  "kind" | "sourcePath" | "sessionId" | "mtimeMs" | "generation"
 >;
 
 /** Cache identity is independent of whether this refresh needs the transcript's bytes. */
@@ -214,6 +216,7 @@ export async function listUsageCountedTranscriptSources(
       sourcePath,
       sessionId: marker.sessionId,
       mtimeMs: instances[index]!.updatedAtMs,
+      generation: instances[index]!.generation,
     };
   });
   const sqliteSessionIds = new Set(sqliteBacked.map((file) => file.sessionId).filter(Boolean));

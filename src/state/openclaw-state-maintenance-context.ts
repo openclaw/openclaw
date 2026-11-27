@@ -28,6 +28,8 @@ export type OpenClawDatabaseMaintenanceScope = {
   assertOwnerCurrent(this: void, access?: "read"): void;
   assertDatabaseAccess(this: void, databasePath: string): void;
   assertCleanupDatabaseAccess(this: void, databasePath: string): void;
+  /** Resource lifetime only; authority is checked when work starts and at commit. */
+  assertAdmissionLifecycle(this: void): void;
   assertAdmission(this: void): void;
   assertReadAdmission(this: void): void;
   addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
@@ -52,12 +54,20 @@ export function allowsMaintenanceLiveAuthorityReads(
   pathname: string,
 ): boolean {
   const canonicalPath = resolveIdentityPathViaExistingAncestorSync(pathname);
+  return hasAdmittedMaintenanceLiveAuthorityReads(scope, canonicalPath);
+}
+
+/** Ordinary readers consume the post-backup owner's prepared path, without probing custody. */
+export function hasAdmittedMaintenanceLiveAuthorityReads(
+  scope: OpenClawDatabaseMaintenanceScope,
+  pathname: string,
+): boolean {
   for (
     let current: OpenClawDatabaseMaintenanceScope | undefined = scope;
     current;
     current = maintenanceResources.parents.get(current)
   ) {
-    if (liveAuthorityReads.get(current)?.has(canonicalPath)) {
+    if (liveAuthorityReads.get(current)?.has(pathname)) {
       return true;
     }
   }
@@ -151,6 +161,7 @@ export function admitOpenClawMaintenanceLiveAuthorityReads(pathname: string): vo
     liveAuthorityReads.set(scope, admitted);
   }
   admitted.add(resolveIdentityPathViaExistingAncestorSync(pathname));
+  admitted.add(pathname);
 }
 
 /** Delayed work acquires its own resources instead of inheriting the completed scope. */

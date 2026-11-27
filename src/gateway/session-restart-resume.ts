@@ -1,21 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
+import { isVisibleSpawnedSession } from "../agents/subagents/spawn/subagent-capabilities.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "../auto-reply/reply/session-event-handoff.js";
-import {
-  applySessionEntryReplacements,
-  patchSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
-import { createRestartResumeMarker } from "../config/sessions/session-restart-resume-scope.js";
+import { acknowledgeRestartResumeMarker } from "../config/sessions/session-restart-recovery.js";
+import {
+  createLiveRestartResumeMarker,
+  selectPendingRestartShellCalls,
+} from "../config/sessions/session-restart-resume-scope.js";
 import {
   derivePersistedSessionLifecyclePatch,
   restartResumeSkipReason,
 } from "../config/sessions/session-run-lifecycle-projection.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -50,15 +51,16 @@ import {
 import {
   acceptRestartResumeReceipt,
   recordRestartResumeFailure,
-  recordRestartYieldFailure,
+  recordUnreachableYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
-import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
+import { buildGatewayRestartResumeText } from "./session-restart-resume-prompt.js";
 import {
   selectLiveRestartResumeSessions,
   type SessionIdentity,
 } from "./session-restart-resume-selection.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { pauseInterruptedShellTurn } from "./session-restart-shell.js";
+import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 
 /** Snapshot only live owners after admission closes, before shutdown aborts them. */
 export async function persistRunningSessionsForRestart(params: {
@@ -81,9 +83,9 @@ async function persistRunningSessions(
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Promise<void> {
   const assertCurrent = () => params.signal?.throwIfAborted();
-  // Enumeration is synchronous; persistence checks custody again at the write boundary.
+  // Snapshot live owners before ancestry reads; persistence checks custody again before writing.
   assertCurrent();
-  const sessions = selectLiveRestartResumeSessions(params.cfg, summary);
+  const sessions = await selectLiveRestartResumeSessions(params.cfg, summary);
   const selectors = new Map<string, { first: SessionIdentity; batch: SessionIdentity[] }>();
   for (const session of sessions.values()) {
     const key = JSON.stringify([session.agentId, session.storePath]);
@@ -117,7 +119,9 @@ async function persistRunningSessions(
             if (!session) {
               continue;
             }
-            const ownerSkip = restartResumeSkipReason(sessionKey, entry);
+            const directChat =
+              session.directChat === true && isVisibleSpawnedSession(sessionKey, { entry });
+            const ownerSkip = restartResumeSkipReason(sessionKey, entry, directChat);
             const skip =
               (ownerSkip === "subagent" && session.parked ? undefined : ownerSkip) ??
               (session.sessionId && session.sessionId !== entry.sessionId
@@ -146,9 +150,10 @@ async function persistRunningSessions(
               sessionKey,
               entry: {
                 ...entry,
-                resumeAfterRestart: createRestartResumeMarker({
-                  operatorSource:
-                    session.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
+                resumeAfterRestart: createLiveRestartResumeMarker(entry, {
+                  sourceRunId: session.sourceRunId,
+                  ...(directChat ? { directChat: true } : {}),
+                  operatorSource: session.operatorSource,
                 }),
               },
             });
@@ -346,10 +351,11 @@ async function resumeRestartStore(
   deferred: Map<string, () => Promise<void>>,
 ): Promise<boolean> {
   let completed = true;
-  const { assertCurrent: assertRecoveryCurrent, resume } = await prepareRestartCompletionCustody(
-    { context, signal, log },
-    { target, entries },
-  );
+  const {
+    assertCurrent: assertRecoveryCurrent,
+    ownsInput,
+    resume,
+  } = await prepareRestartCompletionCustody({ context, signal, log }, { target, entries });
   const summary = createRestartResumeSummary("startup");
   const queuedKeys = new Set(orphaned.map(({ sessionKey }) => sessionKey));
   const ended = new Set(outOfScope);
@@ -393,7 +399,11 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
+            const skip = restartResumeSkipReason(sessionKey, selected);
             let parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            if (parked === "unreachable" && !skip) {
+              parked = "resume";
+            }
             if (
               parked &&
               (await hasInterruptedCommittedRequesterSettleInput(
@@ -403,7 +413,6 @@ async function resumeRestartStore(
             ) {
               parked = undefined;
             }
-            const skip = restartResumeSkipReason(sessionKey, selected);
             const sameRun = selected.lifecycleRunId === snapshotEntry.lifecycleRunId;
             const resolved = resolveStartupRestartMarker(selected, sameRun, {
               parked,
@@ -462,6 +471,7 @@ async function resumeRestartStore(
           continue;
         }
         const { entry, marker, parked, skip } = resumed;
+        const pendingShell = selectPendingRestartShellCalls(entry, marker);
         let admissionStage = "principal";
         if (skip && !(parked && skip === "subagent")) {
           summary.record(agentId, sessionKey, skip);
@@ -471,7 +481,7 @@ async function resumeRestartStore(
           continue;
         }
         if (parked === "unreachable") {
-          await recordRestartYieldFailure({ sessionKey, agentId, entry, signal });
+          await recordUnreachableYieldFailure({ sessionKey, agentId, entry, signal });
           summary.record(agentId, sessionKey, "yield-source-unavailable");
         } else if (parked === "waiting") {
           // The registry retains the wait; a new requester message owns fresh admission.
@@ -488,7 +498,7 @@ async function resumeRestartStore(
               sessionKey,
               sessionId: entry.sessionId,
               preserveRecordedSource: true,
-              operatorSource: marker.operatorSource,
+              operatorSource: marker.operatorSource ?? pendingShell?.notice?.operatorSource,
               assertCurrent: () => signal.throwIfAborted(),
             });
             admissionStage = "target";
@@ -520,24 +530,43 @@ async function resumeRestartStore(
                 context,
                 signal,
                 runId: randomUUID(),
-                assertCurrent: composeSessionSourceAssertion(
-                  [authority?.authority.assertCurrent],
-                  (assertSources) => {
-                    assertRecoveryCurrent();
-                    assertSources();
-                  },
-                ),
+                assertCurrent: assertRecoveryCurrent,
                 runSetupScript: authority?.authority.scopes.includes(ADMIN_SCOPE) === true,
               });
+            }
+            if (pendingShell) {
+              admissionStage = "shell-recovery";
+              if (
+                await pauseInterruptedShellTurn({
+                  target: { ...target, agentId, sessionKey },
+                  entry,
+                  marker,
+                  assertCurrent: () => {
+                    assertRecoveryCurrent();
+                    authority?.authority.signal?.throwIfAborted();
+                    if (
+                      authority &&
+                      "assertCurrent" in authority &&
+                      typeof authority.assertCurrent === "function"
+                    ) {
+                      authority.assertCurrent();
+                    }
+                  },
+                })
+              ) {
+                summary.record(agentId, sessionKey, "shell-outcome-unknown");
+                continue;
+              }
             }
             admissionStage = "session-event";
             const receipt = withPluginRuntimeGatewayContextResolver(
               context.resolveGatewayContext,
               () =>
-                enqueueSessionEventForHost(GATEWAY_RESTART_RESUME_TEXT, {
+                enqueueSessionEventForHost(buildGatewayRestartResumeText(marker.sourceRunId), {
                   agentId,
                   sessionKey,
                   source: "restart",
+                  sourceRunId: marker.sourceRunId,
                   expectedTarget: captured,
                   abortSignal: signal,
                 }),
@@ -548,6 +577,22 @@ async function resumeRestartStore(
             summary.record(agentId, sessionKey, "resumed");
           } catch (error) {
             signal.throwIfAborted();
+            if (admissionStage === "shell-recovery") {
+              // Preserve the marker when recording the host notice failed. New queued user
+              // input drains independently below; the interrupted turn is never dispatched.
+              throw error;
+            }
+            // A failed admission still owns its diagnostic. Only the local transcript
+            // may report the shell uncertainty when requester or workspace validation failed.
+            if (pendingShell) {
+              await pauseInterruptedShellTurn({
+                target: { ...target, agentId, sessionKey },
+                entry,
+                marker,
+                assertCurrent: assertRecoveryCurrent,
+                transcriptOnly: true,
+              });
+            }
             summary.record(agentId, sessionKey, "admission-failed");
             await recordRestartResumeFailure({
               target: { ...target, agentId, sessionKey },
@@ -559,19 +604,11 @@ async function resumeRestartStore(
               log,
             });
           }
-          await patchSessionEntryCore(
+          await acknowledgeRestartResumeMarker(
             { ...target, agentId, sessionKey },
-            (current) =>
-              current.sessionId === entry.sessionId &&
-              current.lifecycleRevision === entry.lifecycleRevision
-                ? { resumeAfterRestart: undefined }
-                : null,
-            {
-              requireWriteSuccess: true,
-              skipMaintenance: true,
-              // Shutdown marks before cancelling recovery; its new marker wins.
-              assertCommitAllowed: assertRecoveryCurrent,
-            },
+            entry,
+            marker,
+            assertRecoveryCurrent,
           );
         }
       } catch (error) {
@@ -593,7 +630,12 @@ async function resumeRestartStore(
         const remaining = await continueSessionQueuedInputs(
           context,
           { ...target, ...session, agentId },
-          { signal, assertCurrent: () => signal.throwIfAborted(), endCause },
+          {
+            signal,
+            assertCurrent: () => signal.throwIfAborted(),
+            endCause,
+            ownsInput: (row) => ownsInput(row, agentId),
+          },
         );
         if (remaining) {
           completed = false;

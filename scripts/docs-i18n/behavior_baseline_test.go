@@ -130,16 +130,6 @@ func runBehaviorFixture(t *testing.T, dir string, fixture behaviorFixture) {
 	switch fixture.Mode {
 	case "doc_body_chunked":
 		got, err = translateDocBodyChunked(context.Background(), translator, fixture.RelPath, source, "en", "zh-CN")
-	case "frontmatter_scalar":
-		got = translateSnippet(
-			context.Background(),
-			translator,
-			&TranslationMemory{entries: map[string]TMEntry{}},
-			fixture.RelPath+":frontmatter:title",
-			source,
-			"en",
-			"zh-CN",
-		)
 	default:
 		t.Fatalf("unsupported fixture mode %q", fixture.Mode)
 	}

@@ -98,7 +98,7 @@ actor DashboardWindowOwnershipPresentationGate {
 private struct DashboardWindowOwnershipEndpointFailure: Error {}
 
 @MainActor
-private final class DashboardWindowOwnershipTrackingWindow: NSWindow {
+private final class DashboardWindowOwnershipTrackingWindow: DashboardWindow {
     var simulatesKeyWindow = false
     private(set) var foregroundRequestCount = 0
 
@@ -123,6 +123,34 @@ struct DashboardWindowOwnershipTests {
         isPrimary: true,
         canPromote: false,
         health: .ok)
+
+    @Test func `generic failure shows progress for the pending reload and resets on timeout`() async throws {
+        let gate = DashboardWindowOwnershipPresentationGate()
+        let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in
+            await gate.waitForRelease()
+            throw URLError(.timedOut)
+        })
+        defer { manager.close() }
+        manager.showFailure(URLError(.timedOut))
+        let controller = try #require(manager._testController())
+        let reload = "document.querySelector('button.primary')"
+        try await TestWait.state("failure page has a reload button") {
+            try await controller.webView.evaluateJavaScript("!!\(reload)") as? Bool == true
+        }
+
+        let retry = try #require(manager.switchTarget(.primary, in: controller, forceReload: true))
+        defer { Task { await gate.release() } }
+        await gate.waitUntilRequested()
+        #expect(try await controller.webView.evaluateJavaScript(
+            "\(reload).getAttribute('aria-busy')") as? String == "true")
+        #expect(manager.switchTarget(.primary, in: controller, forceReload: true) == nil)
+        await gate.release()
+        await retry.value
+
+        #expect(controller.isShowingFailurePage)
+        #expect(try await controller.webView.evaluateJavaScript(
+            "\(reload).getAttribute('aria-disabled')") as? String == "false")
+    }
 
     @Test func `disconnect and auth recovery preserve one native window`() async throws {
         let server = try await DashboardHTTPFixture.start()
@@ -421,8 +449,7 @@ struct DashboardWindowOwnershipTests {
         let gate = DashboardWindowOwnershipPresentationGate()
         let manager = DashboardManager._testMake(
             primaryEndpointProvider: { _ in
-                await gate.waitForRelease()
-                let request = await gate.numberOfRequests()
+                let request = await gate.waitForRelease()
                 let url = request == 1 ? staleEndpointURL : currentEndpointURL
                 let token = request == 1 ? "stale" : "current"
                 return GatewayConnection.EndpointSnapshot(
@@ -442,11 +469,17 @@ struct DashboardWindowOwnershipTests {
             token: "current",
             password: nil,
             routeRevision: 2))
+        let hidden = try #require(manager._testController())
+        #expect(hidden !== controller)
+        #expect(hidden.window === originalWindow)
+        #expect(!originalWindow.isVisible)
+        #expect(hidden.auth.gatewayUrl == currentEndpointURL.absoluteString)
         await gate.release()
         try await presentation.value
 
         let replacement = try #require(manager._testController())
-        #expect(await gate.numberOfRequests() == 2)
+        #expect(replacement.isWindowOpen)
+        #expect(replacement.auth.gatewayUrl == currentEndpointURL.absoluteString)
         #expect(replacement.window === originalWindow)
         #expect(replacement.currentURL.absoluteString ==
             currentServer.url("/").absoluteString)

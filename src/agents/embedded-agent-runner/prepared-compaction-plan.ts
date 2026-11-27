@@ -49,12 +49,14 @@ import {
   collectToolFailuresFromFacts,
   formatToolFailuresSection,
 } from "../agent-hooks/compaction-safeguard-tool-failures.js";
-import { sanitizeCompactionMessages } from "../compaction-planning.js";
+import {
+  isUnsummarizedCompactionMessage,
+  sanitizeCompactionMessages,
+} from "../compaction-planning.js";
 import {
   collectRealConversationMessageFact,
   createRealConversationFactClassifier,
 } from "../compaction-real-conversation.js";
-import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
 import { projectAgentToolDefinition } from "../prepared-tool-definition.js";
 import {
   createCompactionReplacementProjector,
@@ -98,7 +100,7 @@ export function collectPreparedCompactionEntryFact(
   ): PreparedCompactionMessageFact => ({
     source,
     role: value.role,
-    runtime: isOpenClawRuntimeContextCustomMessage(value),
+    unsummarized: isUnsummarizedCompactionMessage(value),
     real: collectRealConversationMessageFact(value),
     context: collectCompactionContextMessageIdentity(value),
     floor: collectCompactionFloorMessageFact(value),
@@ -266,8 +268,8 @@ export function prepareCompactionPlan(
   const floor = prepareCompactionFloorFromFacts(
     [...rawHistory, ...rawPrefix].map((message) => message.floor),
   );
-  const withoutRuntime = (messages: PreparedCompactionMessageFact[]) =>
-    messages.filter((message) => !message.runtime);
+  const summarized = (messages: PreparedCompactionMessageFact[]) =>
+    messages.filter((message) => !message.unsummarized);
   const real = (messages: readonly PreparedCompactionMessageFact[]) => {
     const classify = createRealConversationFactClassifier();
     return messages.some((message) => classify(message.real));
@@ -277,12 +279,12 @@ export function prepareCompactionPlan(
       const summary = entry.contextSummaries[projection];
       return summary ? [summary] : [];
     });
-  let history = withoutRuntime(rawHistory);
-  let prefix = withoutRuntime(rawPrefix);
+  let history = summarized(rawHistory);
+  let prefix = summarized(rawPrefix);
   let hasRealConversation = real([...history, ...prefix]);
   let usedPreparationRange = false;
   if (!hasRealConversation) {
-    const range = withoutRuntime(
+    const range = summarized(
       context(
         entries.filter(
           (entry, index) =>
@@ -297,7 +299,7 @@ export function prepareCompactionPlan(
       usedPreparationRange = true;
     }
   }
-  hasRealConversation ||= real(withoutRuntime(context(entries)));
+  hasRealConversation ||= real(summarized(context(entries)));
   const previousSummary = normalizeLegacySplitTurnSummary(preparation.previousSummary?.trim());
   const oracle = [...history, ...prefix];
   const readMessage = (fact: PreparedCompactionMessageFact) => {

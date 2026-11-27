@@ -27,6 +27,7 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import * as catalogLifetime from "./prepared-model-runtime.plugin-lifetime.js";
+import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 
 const fixture = usePreparedModelRuntimeHarness();
 const { mocks } = fixture;
@@ -718,9 +719,28 @@ describe("prepared model runtime scoped refresh", () => {
     const owner = await prepareCatalogOwner(config, catalog);
     containsEntries((await owner.loadFullModelCatalog!()).entries, learned);
     serveCatalog(makeCatalog());
-    await hotReload(config);
-    const reloaded = published(config);
-    expect(reloaded.readFullModelCatalog!()?.entries ?? []).not.toContainEqual(learned);
+    const discoveryCalls = catalogWorker.mock.calls.length;
+    const observations: { privateRowPresent: boolean; discoveryCalls: number }[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase !== "published") {
+        return;
+      }
+      const entries = published(config).readFullModelCatalog!()?.entries ?? [];
+      observations.push({
+        privateRowPresent: entries.some(
+          (row) => row.provider === learned.provider && row.id === learned.id,
+        ),
+        discoveryCalls: catalogWorker.mock.calls.length,
+      });
+    });
+    try {
+      await hotReload(config);
+      expect(observations).toEqual([{ privateRowPresent: false, discoveryCalls }]);
+      const reloaded = published(config);
+      expect(reloaded.readFullModelCatalog!()?.entries ?? []).not.toContainEqual(learned);
+    } finally {
+      unregister();
+    }
   });
 
   it("retains warmed catalog callbacks across scoped exec reloads", async () => {
@@ -980,5 +1000,31 @@ describe("prepared model runtime scoped refresh", () => {
         }),
       ).toMatchObject({ agentId: "pro", config: nextConfig });
     }
+  });
+
+  it("retains discovery across a hot reload with rotated identified OAuth", async () => {
+    const provider = "demo";
+    const id = `${provider}:u@e.test`;
+    const setOAuth = (tag: string, expires: number) => {
+      const tok = { type: "oauth" as const, access: tag, refresh: tag, expires };
+      mocks.preparedAuthStore = {
+        version: 1,
+        profiles: { [id]: { ...tok, provider, email: "u@e.test" } },
+      };
+      mocks.authStorage.getAll.mockReturnValue({ [provider]: tok });
+      return { store: mocks.preparedAuthStore, creds: { [provider]: tok } };
+    };
+    const worker = setOAuth("worker", 5_000);
+    setOAuth("startup", 1_000);
+    const catalog = makeCatalog([entry(provider, "learned", "Learned")], {
+      providerOutcomes: [outcome(provider, "ready", id)],
+    });
+    attachAuth(catalog, provider, worker.store, worker.creds);
+    await prepareCatalogOwner(proConfig, catalog);
+    const afterInitial = catalogWorker.mock.calls.length;
+    setOAuth("reloaded", 9_000);
+    await hotReload(proConfig);
+    await published(proConfig).loadFullModelCatalog!({ changedOnly: true });
+    expect(catalogWorker).toHaveBeenCalledTimes(afterInitial);
   });
 });

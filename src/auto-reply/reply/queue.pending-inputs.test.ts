@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -15,18 +14,15 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as pendingInputs from "../../config/sessions/session-accessor.pending-inputs.js";
-import { listLiveSessionPendingInputs } from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
-import { prepareSqliteScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { readSessionQueuedInputPage } from "../../config/sessions/session-pending-input-history.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import { captureGatewayRootWorkReleaseObserver } from "../../process/gateway-work-admission.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import {
   createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import {
@@ -397,138 +393,6 @@ describe("followup queue durable input consumption", () => {
         }
         await receipt.settled?.();
       }
-    }
-  });
-
-  it("relinquishes queued custody during an authority outage and the existing drain runs it once", async ({
-    signal,
-  }) => {
-    const runId = "queued-authority-outage";
-    const text = "Keep this accepted follow-up through the policy outage.";
-    const recorder = createUserTurnTranscriptRecorder({
-      input: { text, idempotencyKey: `${runId}:user` },
-      target: { ...scope(), sessionEntry: undefined, config },
-      updateMode: "none",
-    });
-    recorders.push(recorder);
-    let unavailable = false;
-    const outage = new GatewayOperatorAccessUnavailableError();
-    const queued = createQueueTestRun(
-      {
-        prompt: text,
-        messageId: runId,
-        userTurnTranscriptRecorder: recorder,
-        turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: async () => {} },
-        operatorAuthority: createAdmittedRunOperatorAuthority({
-          profileId: "queued-requester",
-          scopes: ["operator.write"],
-          assertCurrent: () => {
-            if (unavailable) {
-              throw outage;
-            }
-          },
-        }),
-      },
-      { agentId: "main", sessionKey, sessionId, config, workspaceDir: fixture.sessionsDir() },
-    );
-    const stage = pendingInputs.stageSessionPendingInput;
-    using staging = vi.spyOn(pendingInputs, "stageSessionPendingInput");
-    staging.mockImplementationOnce(async (inputScope, options) => {
-      let committedReceipt: pendingInputs.SessionPendingInputReceipt | undefined;
-      const observeSettlement = (receipt: pendingInputs.SessionPendingInputReceipt) => {
-        const waitForSettlement = receipt.settled;
-        assert(waitForSettlement, "Expected the real pending-input receipt settlement");
-        const settlement = vi.spyOn(receipt, "settled");
-        settlement.mockImplementation(async () => {
-          await waitForSettlement();
-          if (
-            !unavailable ||
-            observedOutage ||
-            listLiveSessionPendingInputs(databasePath, resolved.sessionKey, sessionId).some(
-              (input) => input.inputId === receipt.inputId,
-            )
-          ) {
-            return;
-          }
-          observedOutage = true;
-          firstAttempt.resolve();
-        });
-        restoreSettlements.push(() => settlement.mockRestore());
-      };
-      const receipt = await stage(inputScope, {
-        ...options,
-        onCommitted: (committed) => {
-          committedReceipt = committed;
-          observeSettlement(committed);
-          options.onCommitted?.(committed);
-        },
-      });
-      assert(receipt, "Expected the staged pending-input receipt");
-      if (receipt !== committedReceipt) {
-        observeSettlement(receipt);
-      }
-      unavailable = true;
-      return receipt;
-    });
-    const resolved = await prepareSqliteScope(scope());
-    assert(resolved.path, "Expected the durable queue database");
-    const databasePath = resolved.path;
-    vi.mocked(runMemoryFlushIfNeeded).mockImplementation(async (params) => ({
-      sessionEntry: params.sessionEntry,
-      outcome: "skipped",
-    }));
-    vi.mocked(runSessionCompactionIfNeeded).mockImplementation(
-      async (params) => params.sessionEntry,
-    );
-    vi.mocked(executeAgentTurn).mockImplementation(async (params) => {
-      await persistQueuedRun(params.followupRun);
-      return { runId, outcome: { kind: "rejected", payload: { text: "done" } } };
-    });
-    const typing = createTypingController({});
-    const sessionEntry = { sessionId, updatedAt: 1 };
-    const runner = createFollowupRunner({
-      typing,
-      typingMode: "never",
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath: fixture.storePath(),
-      defaultModel: "gpt-test",
-    });
-    const firstAttempt = createDeferred();
-    let observedOutage = false;
-    const restoreSettlements: Array<() => void> = [];
-    enqueue(queued);
-    try {
-      scheduleFollowupDrain(sessionKey, runner);
-      await withinTest(firstAttempt.promise, signal);
-      expect(executeAgentTurn).not.toHaveBeenCalled();
-      expect(await pending()).toMatchObject({
-        total: 1,
-        items: [{ state: "queued", message: { content: text } }],
-      });
-      expect(listLiveSessionPendingInputs(databasePath, resolved.sessionKey, sessionId)).toEqual(
-        [],
-      );
-      expect((await readSessionQueuedInputPage(scope())).rows).toMatchObject([
-        { state: "queued", end_cause: null },
-      ]);
-      unavailable = false;
-      await withinTest(queued.controllerInput!.settlement.promise, signal);
-      await queued.controllerInput!.claim?.settlement.promise;
-      expect(executeAgentTurn).toHaveBeenCalledOnce();
-      const messages = await loadMessages();
-      expect(messages).toMatchObject([
-        { message: { content: text, idempotencyKey: `${runId}:user` } },
-      ]);
-      expect(messages).toHaveLength(1);
-      expect((await pending()).items).toEqual([]);
-    } finally {
-      unavailable = false;
-      for (const restore of restoreSettlements) {
-        restore();
-      }
-      typing.cleanup();
     }
   });
 

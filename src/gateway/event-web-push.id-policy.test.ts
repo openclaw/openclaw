@@ -4,12 +4,14 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createEventWebPushDelivery } from "./event-web-push.js";
 import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -17,7 +19,7 @@ import {
 const mocks = vi.hoisted(() => ({ subscriptions: vi.fn(), paired: vi.fn(), send: vi.fn() }));
 let authorityCompleted = createDeferred();
 
-// Membership, profiles, role policy and session visibility use their real owners.
+// Membership, canonical profile roles and session visibility use their real owners.
 // mock-isolation: Select synthetic paired subscriptions and capture provider delivery.
 vi.mock("../infra/push-web.js", () => ({
   withBoundWebPushSubscriptions: (async (_stateDir, prepare) => {
@@ -71,12 +73,14 @@ beforeEach(() => {
 afterEach(() => {
   setDeviceTokenBindingOwner(undefined);
   setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
 });
 
-describe("Web Push ID membership policy", () => {
+describe("Web Push ID canonical profile policy", () => {
   it.each([
     "none",
     "view",
+    "default view",
     "unknown role",
     "removed",
     "off",
@@ -84,16 +88,41 @@ describe("Web Push ID membership policy", () => {
     "definitions only",
     "owner",
   ] as const)(
-    "uses current ID membership instead of the linked profile for completion delivery: %s",
+    "uses canonical profile roles and current ID membership for completion delivery: %s",
     async (membership) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const creator = ensureProfileForEmail("push-creator@example.test");
         const recipient = ensureProfileForEmail("push-recipient@example.test");
-        setUserProfileRole(recipient.id, membership === "owner" ? "restricted" : "admin");
+        linkOpenClawIdUserProfile(
+          { profileId: recipient.id, accountId: "account", email: null },
+          {},
+        );
+        setOpenClawIdMemberAccountLookup(
+          (accountId) =>
+            accountId === "account" &&
+            membership !== "removed" &&
+            membership !== "off" &&
+            membership !== "owner",
+        );
+        setUserProfileRole(
+          recipient.id,
+          membership === "owner"
+            ? "restricted"
+            : membership === "removed" || membership === "off"
+              ? "admin"
+              : membership === "unknown role"
+                ? "missing"
+                : membership === "definitions only" || membership === "default view"
+                  ? null
+                  : "member",
+        );
         const cfg: OpenClawConfig = {
           gateway: {
+            openclawId: { enabled: membership !== "off" },
             roles: {
-              ...(membership === "definitions only" ? {} : { default: "restricted" }),
+              ...(membership === "definitions only"
+                ? {}
+                : { default: membership === "default view" ? "member" : "restricted" }),
               definitions: {
                 admin: { scopes: ["operator.admin"], sessions: { others: "write" }, agents: "*" },
                 restricted: {
@@ -105,7 +134,11 @@ describe("Web Push ID membership policy", () => {
                   scopes: membership === "scope removed" ? [] : ["operator.read"],
                   sessions: {
                     others:
-                      membership === "view" || membership === "scope removed" ? "view" : "none",
+                      membership === "view" ||
+                      membership === "default view" ||
+                      membership === "scope removed"
+                        ? "view"
+                        : "none",
                   },
                   agents: "*",
                 },
@@ -144,7 +177,7 @@ describe("Web Push ID membership policy", () => {
                 kind: "member",
                 peerKey,
                 accountId: "account",
-                role: membership === "unknown role" ? "missing" : "member",
+                role: "admin",
               };
         setOpenClawIdTunnelPrincipalLookup(
           membership === "off"
@@ -157,16 +190,21 @@ describe("Web Push ID membership policy", () => {
           { agentId: "main", sessionKeys: [sessionKey] },
         );
         await authorityCompleted.promise;
-        expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            subscriptions:
-              membership === "owner"
-                ? [idBrowser]
-                : membership === "view"
-                  ? [idBrowser, localBrowser]
-                  : [localBrowser],
-          }),
-        );
+        const subscriptions =
+          membership === "owner"
+            ? [idBrowser]
+            : membership === "view" || membership === "default view"
+              ? [idBrowser, localBrowser]
+              : membership === "removed" || membership === "off"
+                ? [localBrowser]
+                : [];
+        if (subscriptions.length === 0) {
+          expect(mocks.send).not.toHaveBeenCalled();
+        } else {
+          expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ subscriptions }),
+          );
+        }
       });
     },
   );

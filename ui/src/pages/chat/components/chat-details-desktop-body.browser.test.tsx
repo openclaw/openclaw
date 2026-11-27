@@ -1,5 +1,6 @@
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { cdp } from "vitest/browser";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
@@ -60,6 +61,29 @@ async function nextFrame() {
   });
   flush();
 }
+
+it("scrolls Details vertically without panning sideways when content overflows", async () => {
+  const { body } = mount();
+  body.style.width = "300px";
+  body.style.height = "100px";
+  const oversized = document.createElement("div");
+  oversized.style.width = "400px";
+  oversized.style.height = "200px";
+  body.firstElementChild!.append(oversized);
+  expect(body.scrollWidth).toBeGreaterThan(body.clientWidth);
+  expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
+
+  const { left, top } = body.getBoundingClientRect();
+  await cdp().send("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    x: left + 40,
+    y: top + 40,
+    deltaX: 64,
+    deltaY: 64,
+  });
+  await expect.poll(() => body.scrollTop).toBeGreaterThan(0);
+  expect(body.scrollLeft).toBe(0);
+});
 
 it("keeps the compact floor when first facts and Environment arrive together", async () => {
   await loadChatDetailsDesktopComposition();

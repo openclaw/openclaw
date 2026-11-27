@@ -3,7 +3,12 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
@@ -389,12 +394,55 @@ describe("dynamic tool execution helpers", () => {
       transcriptDetails: { mcpAppPreview, privateModelPayload: "host only" },
     };
     const protocolResponse = toCodexDynamicToolProtocolResponse(response);
-    const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
+    const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse, "exec");
     expect(protocolResponse).toEqual(textResponse("Background task started."));
     expect(progressResponse).toEqual({
       ...textResponse("Background task started."),
       details: { mcpAppPreview, async: true, status: "started" },
     });
+  });
+
+  it("exposes only authenticated scheduler plan and result fields on live progress", () => {
+    const plan = {
+      type: "automation_creation_plan",
+      planId: "a",
+      slots: [{ slotId: "b", name: "Invoice" }],
+    };
+    const saved = {
+      type: "automation_creation_result",
+      planId: "a",
+      slotId: "b",
+      status: "created",
+      jobId: "invoice",
+    };
+    const definition = {
+      id: "invoice",
+      name: "Invoice",
+      enabled: false,
+      configRevision: "rev",
+      schedule: { kind: "every", everyMs: 60000 },
+    };
+    for (const event of [plan, saved]) {
+      const details =
+        event === plan
+          ? { ...plan, privateField: "host only" }
+          : {
+              automationCreation: saved,
+              created: true,
+              job: { ...definition, privateField: "host only" },
+            };
+      const response = { ...textResponse("result"), transcriptDetails: details };
+      const protocol = toCodexDynamicToolProtocolResponse(response);
+      expect(toCodexDynamicToolProgressResponse(response, protocol, "automations")).toEqual({
+        ...protocol,
+        details: { automationCreation: event === plan ? event : { ...event, definition } },
+      });
+      expect(toCodexDynamicToolProgressResponse(response, protocol, "exec")).toEqual(protocol);
+      const rejected = { ...protocol, success: false };
+      expect(toCodexDynamicToolProgressResponse(response, rejected, "automations")).toEqual(
+        rejected,
+      );
+    }
   });
 
   it("preserves foreground node execution with timeoutSeconds=900", async () => {
@@ -429,6 +477,43 @@ describe("dynamic tool execution helpers", () => {
     expect(getExecutionTimeoutMs).toHaveBeenCalledExactlyOnceWith(call.arguments);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each([
+    { declared: false, args: { instruction: "ship" } },
+    { declared: true, args: { instruction: "ship", timeoutMs: 600_000 } },
+  ])(
+    "passes a closed schema only the timeout arguments it declares (declared: $declared)",
+    async ({ declared, args }) => {
+      const beforeToolCall = vi.fn(async (_event: unknown) => ({}));
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+      );
+      onTestFinished(resetGlobalHookRunner);
+      const execute = vi.fn(async (_id: string, _args: unknown) => textToolResult("completed"));
+      const parameters = {
+        type: "object",
+        properties: {
+          instruction: { type: "string" },
+          ...(declared ? { timeoutMs: { type: "number" } } : {}),
+        },
+        additionalProperties: false,
+      };
+      const call = toolCall("strict_tool", {
+        instruction: "ship",
+        timeoutMs: 600_000,
+        timeoutSeconds: 600,
+      });
+      const toolBridge = createBridge([createTool("strict_tool", { parameters, execute })]);
+      const timeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: undefined, toolBridge });
+
+      const response = await executeTool({ call, toolBridge, timeoutMs });
+
+      expect(timeoutMs).toBe(600_000);
+      expect(toCodexDynamicToolProtocolResponse(response)).toEqual(textResponse("completed"));
+      expect(beforeToolCall.mock.calls[0]?.[0]).toHaveProperty("params", args);
+      expect(execute.mock.calls[0]?.[1]).toEqual(args);
+    },
+  );
 
   it("retains the concrete tool owner when timeout wins before a snapshot", async () => {
     const ownerKey = '["memory-lancedb","memory_store"]';

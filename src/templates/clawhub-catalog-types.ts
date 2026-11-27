@@ -17,7 +17,12 @@ export type ClawHubTemplateCatalogEntry = {
 };
 export type ClawHubTemplateCatalogOverview = {
   featured: ClawHubTemplateCatalogEntry[];
-  sections: Array<{ category: string; entries: ClawHubTemplateCatalogEntry[] }>;
+  sections: Array<{
+    category: string;
+    entries: ClawHubTemplateCatalogEntry[];
+    /** Present (even if empty) only when the registry supplied the whole category. */
+    additionalEntries?: ClawHubTemplateCatalogEntry[];
+  }>;
 };
 export type ClawHubTemplateCatalogDetail = ClawHubTemplateCatalogEntry & {
   version: string;

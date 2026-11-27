@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { parseGitPluginSpec } from "../plugins/git-install.js";
+import { parseGitPluginSpec } from "../plugins/git-source-spec.js";
 import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
 import * as fixture from "./plugins-cli-test-helpers.js";
 

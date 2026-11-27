@@ -31,6 +31,14 @@ async function handleChatSendWithOptions(
   );
 }
 
+/** Only sessions.steerActive supplies this source-authenticated operation. */
+export async function handleActiveSteerChat(
+  options: GatewayRequestHandlerOptions,
+  activeSteer: NonNullable<ChatSendInternalOptions["activeSteer"]>,
+): Promise<void> {
+  await handleChatSendWithOptions(options, undefined, undefined, { activeSteer });
+}
+
 export async function handleChatSend(
   options: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
@@ -100,7 +108,6 @@ export async function handleTrustedInternalChatSend(
                 admitted.managementEntitlement,
                 admitted.isCurrent,
                 undefined,
-                admitted.requesterOwner,
                 admitted.callerScopedCreation,
               )
             : undefined;

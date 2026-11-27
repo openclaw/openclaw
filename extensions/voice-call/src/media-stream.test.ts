@@ -22,7 +22,7 @@ import {
   waitForAbort,
   withConnection,
 } from "./media-stream.test-support.js";
-import { connectWs, waitForClose, withTimeout } from "./websocket-test-support.js";
+import { connectWs, waitForClose } from "./websocket-test-support.js";
 
 function seedStreamSession(
   handler: MediaStreamHandler,
@@ -198,7 +198,7 @@ describe("MediaStreamHandler security hardening", () => {
       await handler.queueTts("MZ-talk", async () => {
         handler.sendAudio("MZ-talk", Buffer.alloc(160, 0xff));
       });
-      await withTimeout(outboundAudio);
+      await outboundAudio;
 
       const outboundMark = nextWsMessage(ws);
       const activePlayback = handler.queueTts("MZ-talk", async (signal) => {
@@ -207,7 +207,7 @@ describe("MediaStreamHandler security hardening", () => {
           waitForAbort(signal),
         ]);
       });
-      expect(await withTimeout(outboundMark)).toMatchObject({
+      expect(await outboundMark).toMatchObject({
         event: "mark",
         mark: { name: "tts-cleared" },
       });
@@ -379,11 +379,9 @@ describe("MediaStreamHandler security hardening", () => {
     await withServer(handler, async (url) => {
       const connectFrom = async (ip: string) => {
         const ws = new WebSocket(url, { headers: { "x-forwarded-for": ip } });
-        await withTimeout(
-          new Promise((resolve) => {
-            ws.once("open", resolve);
-          }),
-        );
+        await new Promise((resolve) => {
+          ws.once("open", resolve);
+        });
         return ws;
       };
       const first = await connectFrom("198.51.100.10");
@@ -469,31 +467,29 @@ describe("MediaStreamHandler security hardening", () => {
     });
     await withServer(handler, async (url) => {
       const serverUrl = new URL(url);
-      await withTimeout(
-        new Promise<void>((resolve, reject) => {
-          const socket = net.createConnection(
-            { host: serverUrl.hostname, port: Number(serverUrl.port) },
-            () => {
-              socket.write(
-                [
-                  "GET /voice/stream HTTP/1.1",
-                  `Host: ${serverUrl.host}`,
-                  "Upgrade: websocket",
-                  "Connection: Upgrade",
-                  "Sec-WebSocket-Version: 13",
-                  "",
-                  "",
-                ].join("\r\n"),
-              );
-            },
-          );
-          socket.once("error", reject);
-          socket.once("data", () => {
-            socket.end();
-          });
-          socket.once("close", () => resolve());
-        }),
-      );
+      await new Promise<void>((resolve, reject) => {
+        const socket = net.createConnection(
+          { host: serverUrl.hostname, port: Number(serverUrl.port) },
+          () => {
+            socket.write(
+              [
+                "GET /voice/stream HTTP/1.1",
+                `Host: ${serverUrl.host}`,
+                "Upgrade: websocket",
+                "Connection: Upgrade",
+                "Sec-WebSocket-Version: 13",
+                "",
+                "",
+              ].join("\r\n"),
+            );
+          },
+        );
+        socket.once("error", reject);
+        socket.once("data", () => {
+          socket.end();
+        });
+        socket.once("close", () => resolve());
+      });
 
       const ws = await connectWs(url);
       expect(ws.readyState).toBe(WebSocket.OPEN);
@@ -562,16 +558,16 @@ describe("MediaStreamHandler security hardening", () => {
       try {
         sendStart(ws, "MZ-early-media", "CA-early-media");
 
-        await withTimeout(sttConnectStarted.promise);
+        await sttConnectStarted.promise;
         sendMedia(ws, Buffer.from("early").toString("base64"), "MZ-early-media");
-        await withTimeout(audioReceived.promise);
+        await audioReceived.promise;
 
         expect(Buffer.concat(receivedAudio).toString()).toBe("early");
         expect(onConnect).toHaveBeenCalledOnce();
         expect(onTranscriptionReady).not.toHaveBeenCalled();
 
         sttReady.resolve();
-        await withTimeout(transcriptionReady.promise);
+        await transcriptionReady.promise;
         expect(onConnect).toHaveBeenCalledOnce();
         expect(onTranscriptionReady).toHaveBeenCalledOnce();
       } finally {
@@ -611,9 +607,9 @@ describe("MediaStreamHandler security hardening", () => {
     await withConnection(handler, async (ws) => {
       sendStart(ws, "MZ-stt-fail", "CA-stt-fail");
 
-      await withTimeout(sttConnectStarted.promise);
+      await sttConnectStarted.promise;
       const closed = await waitForClose(ws);
-      await withTimeout(onDisconnectReady.promise);
+      await onDisconnectReady.promise;
 
       expect(closed).toEqual({ code: 1011, reason: "STT connection failed" });
       expect(onConnect).toHaveBeenCalledExactlyOnceWith("CA-stt-fail", "MZ-stt-fail");
@@ -779,7 +775,7 @@ describe("MediaStreamHandler TTS queue", () => {
         .then(() => {
           completed = true;
         });
-      expect(await withTimeout(outboundMark)).toMatchObject({
+      expect(await outboundMark).toMatchObject({
         event: "mark",
         mark: { name: "tts-complete" },
       });
@@ -789,11 +785,11 @@ describe("MediaStreamHandler TTS queue", () => {
       echoMark(ws, "MZ-mark", "different-mark");
       const pong = once(ws, "pong");
       ws.ping();
-      await withTimeout(pong);
+      await pong;
       expect(completed).toBe(false);
 
       echoMark(ws, "MZ-mark", "tts-complete");
-      await withTimeout(playback);
+      await playback;
       expect(completed).toBe(true);
       await closeWs(ws);
     });
@@ -814,7 +810,7 @@ describe("MediaStreamHandler TTS queue", () => {
     expect(started).toEqual(["active"]);
     handler.clearTtsQueue("stream-1");
     await active;
-    await withTimeout(queued);
+    await queued;
     expect(queuedRan).toBe(false);
   });
 

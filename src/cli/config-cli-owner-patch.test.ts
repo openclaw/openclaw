@@ -11,7 +11,7 @@ let lastCommitted: unknown;
 // Commits one change through a synthetic owner and returns the config.patch request it sent.
 async function commitThroughOwner(
   change: { previous: OpenClawConfig; next: OpenClawConfig },
-  hash?: string,
+  owner: { hash?: string; config?: unknown } = {},
   patchResponse: Record<string, unknown> = {},
 ) {
   const env = { OPENCLAW_CONFIG_PATH: path.resolve("synthetic-owner", "openclaw.json") };
@@ -21,7 +21,9 @@ async function commitThroughOwner(
       sent.push(params);
     }
     // SAFETY: both synthetic responses match the fields the binder reads.
-    return (method === "config.get" ? { path: resolveConfigPath(env), hash } : patchResponse) as R;
+    return (
+      method === "config.get" ? { path: resolveConfigPath(env), ...owner } : patchResponse
+    ) as R;
   };
   const commit = await withDatabaseEngineSelection(
     { effectiveEngines: resolveDatabaseFamilyEngines({}) },
@@ -36,7 +38,7 @@ describe("bindConfigOwner", () => {
     const warning = "Billing route changed for agents.defaults.subagents.model (agent main).";
     await commitThroughOwner(
       { previous: {}, next: { gateway: { reload: { mode: "off" } } } },
-      "base-hash",
+      { hash: "base-hash" },
       { restart: { scheduled: true }, billingRouteWarnings: [warning] },
     );
     expect(lastCommitted).toEqual({
@@ -56,7 +58,13 @@ describe("bindConfigOwner", () => {
       agents: { entries: {} },
       tools: { toolSearch: false },
     };
-    const request = await commitThroughOwner({ previous, next }, "base-hash");
+    // The Gateway's runtime view adds default arrays inside and outside the removed subtree.
+    const config = {
+      ...previous,
+      agents: { entries: { main: { skills: ["notes"], tools: { allow: ["read"] } } } },
+      models: { providers: { ollama: { models: [] } } },
+    };
+    const request = await commitThroughOwner({ previous, next }, { hash: "base-hash", config });
     // v2026.10.7 Gateways accept routed writes but close config.patch over these fields.
     const stableConfigPatchFields = new Set([
       "raw",
@@ -77,6 +85,7 @@ describe("bindConfigOwner", () => {
     expect(request.replacePaths).toEqual([
       "gateway.nodes.commands.allow",
       "agents.entries.main.skills",
+      "agents.entries.main.tools.allow",
       "tools.toolSearch.include",
     ]);
   });

@@ -11,6 +11,7 @@ import { loadavg } from "node:os";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -46,7 +47,13 @@ function createOwner(index: number): Owner {
     requesterAgentId: "main",
     targetSessionKey: "agent:main:child",
     targetAgentId: "main",
-    custody: { signal: new AbortController().signal, assertCurrent: noop, release: noop, run },
+    custody: {
+      signal: new AbortController().signal,
+      assertCurrent: noop,
+      release: noop,
+      run,
+      runWithRequester: run,
+    },
   });
 }
 
@@ -97,12 +104,7 @@ const held: Array<() => unknown> = [];
 const payloads: Array<WeakRef<number[]>> = [];
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 1024,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 1024);
 }
 const cpuBefore = process.cpuUsage();
 const started = performance.now();

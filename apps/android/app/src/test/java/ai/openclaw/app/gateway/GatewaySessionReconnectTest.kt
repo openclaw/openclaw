@@ -625,7 +625,7 @@ class GatewaySessionReconnectTest {
           onEvent = { event, _ -> received += event },
           onInvoke = {
             received += "invoke"
-            GatewaySession.InvokeResult.ok("{}")
+            InvokeResult.ok("{}")
           },
         )
 
@@ -752,7 +752,7 @@ class GatewaySessionReconnectTest {
       val created = CompletableDeferred<Pair<WebSocket, WebSocketListener>>()
       val replacementCreated = CompletableDeferred<Pair<WebSocket, WebSocketListener>>()
       val reconnected = CompletableDeferred<Unit>()
-      val failure = CompletableDeferred<GatewaySession.ErrorShape>()
+      val failure = CompletableDeferred<ErrorShape>()
       val attempts = AtomicInteger()
       val sends = AtomicInteger()
       val cancellations = AtomicInteger()
@@ -854,7 +854,7 @@ class GatewaySessionReconnectTest {
     runBlocking {
       for (disconnectBeforeDeadline in listOf(false, true)) {
         val created = CompletableDeferred<Pair<WebSocket, WebSocketListener>>()
-        val failure = CompletableDeferred<GatewaySession.ErrorShape>()
+        val failure = CompletableDeferred<ErrorShape>()
         val attempts = AtomicInteger()
         val harness =
           createReconnectHarness(
@@ -912,7 +912,7 @@ class GatewaySessionReconnectTest {
       val server = MockWebServer()
       server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
       server.start()
-      val failure = CompletableDeferred<GatewaySession.ErrorShape>()
+      val failure = CompletableDeferred<ErrorShape>()
       val harness =
         createReconnectHarness(connectTimeoutMs = 2_000) { error, _ -> failure.complete(error) }
       try {
@@ -1117,7 +1117,7 @@ class GatewaySessionReconnectTest {
         val cancelStarted = CompletableDeferred<Unit>()
         val allowCancel = CountDownLatch(1)
         val requestSeen = CompletableDeferred<Unit>()
-        val errors = ConcurrentLinkedQueue<GatewaySession.ErrorShape>()
+        val errors = ConcurrentLinkedQueue<ErrorShape>()
         val server =
           startGatewayServer(json = Json) { webSocket, id, method ->
             if (method == "connect") {
@@ -1712,7 +1712,7 @@ class GatewaySessionReconnectTest {
   fun retiredAuthenticationFailureCannotPauseReplacementConnection() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
-      val originalFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val originalFailure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val replacementConnected = CompletableDeferred<Unit>()
       var currentSession: GatewaySession? = null
       val firstServer =
@@ -1756,7 +1756,7 @@ class GatewaySessionReconnectTest {
   fun passwordMissingFromStoredDeviceTokenPausesAndExplicitReconnectSucceeds() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
-      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val connectFailure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val secondAttempt = CompletableDeferred<Unit>()
       val reconnected = CompletableDeferred<Unit>()
       val connectAttempts = AtomicInteger()
@@ -1888,7 +1888,7 @@ class GatewaySessionReconnectTest {
           },
           onInvoke = {
             retiredInvokeCount.incrementAndGet()
-            GatewaySession.InvokeResult.ok("{}")
+            InvokeResult.ok("{}")
           },
         )
 
@@ -2082,7 +2082,7 @@ class GatewaySessionReconnectTest {
     runTest {
       val params = """{"message":"Keep this voice turn","idempotencyKey":"original-send"}"""
       val startup =
-        GatewaySession.ErrorShape(
+        ErrorShape(
           "UNAVAILABLE",
           "Synthetic preparation",
           GatewayErrorDetails(null, false, null, reason = "startup-sidecars", method = "chat.send"),
@@ -2126,7 +2126,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun startupAdmissionRetryRequiresTheClosedWireContract() {
     val details = GatewayErrorDetails(null, false, null, reason = "startup-sidecars", method = "chat.send", retryable = true)
-    val startup = GatewaySession.ErrorShape("UNAVAILABLE", "Any display text", details, retryable = true)
+    val startup = ErrorShape("UNAVAILABLE", "Any display text", details, retryable = true)
     assertEquals(500L, startup.startupRetryDelayMs("chat.send"))
     assertEquals(100L, startup.copy(details = details.copy(retryAfterMs = -1)).startupRetryDelayMs("chat.send"))
     assertEquals(2_000L, startup.copy(details = details.copy(retryAfterMs = Int.MAX_VALUE)).startupRetryDelayMs("chat.send"))
@@ -2308,7 +2308,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun bootstrapNodePairingRequiredKeepsReconnectActive() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
@@ -2335,7 +2335,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun bootstrapNodePairingRequiredWithoutRetryHintPausesReconnect() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
@@ -2361,7 +2361,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun nonBootstrapPairingRequiredStillPausesReconnect() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
@@ -2400,7 +2400,7 @@ class GatewaySessionReconnectTest {
 
     for ((code, pendingDeviceTokenRetry, expected) in cases) {
       val error =
-        GatewaySession.ErrorShape(
+        ErrorShape(
           code = "INVALID_REQUEST",
           message = "authentication failed",
           details =
@@ -2437,7 +2437,7 @@ class GatewaySessionReconnectTest {
 
     for ((nextStep, pendingDeviceTokenRetry, expected) in cases) {
       val error =
-        GatewaySession.ErrorShape(
+        ErrorShape(
           code = "INVALID_REQUEST",
           message = "authentication failed",
           details =
@@ -2463,7 +2463,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun authRateLimitPausesDespiteRetryAdvice() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "INVALID_REQUEST",
         message = "authentication rate limited",
         details =
@@ -2488,7 +2488,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun protocolMismatchPausesReconnect() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "INVALID_REQUEST",
         message = "protocol mismatch",
         details =
@@ -2517,7 +2517,7 @@ class GatewaySessionReconnectTest {
   @Test
   fun bootstrapRoleUpgradeStillPausesReconnect() {
     val error =
-      GatewaySession.ErrorShape(
+      ErrorShape(
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
@@ -2544,7 +2544,7 @@ class GatewaySessionReconnectTest {
   fun pairingRequiredFailureNotifiesPauseReconnectProblem() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
-      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val connectFailure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           if (method == "connect") {
@@ -2577,7 +2577,7 @@ class GatewaySessionReconnectTest {
   fun pairingRequiredFailureDropsUnsafeRequestId() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
-      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val connectFailure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           if (method == "connect") {
@@ -2610,7 +2610,7 @@ class GatewaySessionReconnectTest {
   fun protocolMismatchFailurePreservesProtocolDetailsAndPausesReconnect() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
-      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val connectFailure = CompletableDeferred<Pair<ErrorShape, Boolean>>()
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           if (method == "connect") {
@@ -2686,13 +2686,13 @@ class GatewaySessionReconnectTest {
     onDisconnected: (String) -> Unit = {},
     deviceAuthStore: DeviceAuthTokenStore = ReconnectDeviceAuthStore(),
     onEvent: (String, String?) -> Unit = { _, _ -> },
-    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult = {
-      GatewaySession.InvokeResult.ok("""{"handled":true}""")
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> InvokeResult = {
+      InvokeResult.ok("""{"handled":true}""")
     },
     connectTimeoutMs: Long = 20_000,
     webSocketFactory: ((OkHttpClient, Request, WebSocketListener) -> WebSocket)? = null,
     lifecycleDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    onConnectFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
+    onConnectFailure: (ErrorShape, Boolean) -> Unit = { _, _ -> },
   ): ReconnectHarness {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()

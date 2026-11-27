@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,11 +36,10 @@ async function prepareOperation(run: FollowupRun) {
 }
 
 function steeringRequester() {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId: "steering-requester",
     scopes: ["operator.read", "operator.write"],
     source: {},
-    assertCurrent() {},
   });
 }
 
@@ -59,54 +58,6 @@ function preparedDelivery(
     },
   };
 }
-
-it.each([false, true])(
-  "keeps refused pre-handoff steering unless its source records cancellation (cancelled=%s)",
-  async (cancelled) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const key = "agent:main:refused-steering-custody";
-      const run = createQueueTestRun({ prompt: "retain this input", messageId: "refused-steer" });
-      Object.assign(run.run, { agentId: "main", sessionKey: key });
-      const { operation } = await prepareOperation(run);
-      const cancellation = new AbortController();
-      const failure = new Error("internal SDK assertion failure");
-      run.abortSignal = cancellation.signal;
-      run.operatorAuthority = {
-        profileId: "steering-requester",
-        scopes: ["operator.write"],
-        signal: new AbortController().signal,
-        assertCurrent() {
-          if (run.controllerInput?.phase === "injecting") {
-            if (cancelled) {
-              cancellation.abort(new Error("session lifecycle cancelled the source"));
-            }
-            throw failure;
-          }
-        },
-      };
-      const followup = vi.fn(async () => {});
-      try {
-        await expect(
-          runActiveReplySteer(createSteerParams(key, run, operation, { runFollowup: followup })),
-        ).rejects.toBe(failure);
-        const input = run.controllerInput!;
-        expect(run.operatorAuthority.signal?.aborted).toBe(false);
-        if (!cancelled) {
-          expect(input.retirementRequested).toBeUndefined();
-          expect(input.phase).toBe("waiting");
-        }
-        operation.complete();
-        await input.settlement.promise;
-        await input.claim?.settlement.promise;
-        expect(followup).toHaveBeenCalledTimes(cancelled ? 0 : 1);
-        expect(input.phase).toBe("consumed");
-      } finally {
-        clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
-        operation.complete();
-      }
-    });
-  },
-);
 
 it("consumes human steering once after the same logical owner recovers its detached backend", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

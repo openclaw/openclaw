@@ -347,6 +347,7 @@ export function preparePluginNativeAdmissions(
   if (state.preparedIndexes.has(index)) {
     return;
   }
+  const immutable = isDeeplyFrozenPlainData(index);
   for (const record of index.plugins) {
     const root = path.resolve(record.rootDir);
     if (state.owners.has(root)) {
@@ -389,14 +390,15 @@ export function preparePluginNativeAdmissions(
     for (const [key, receipt] of Object.entries(record.sourceAdmissions ?? {})) {
       state.receipts.set(key, receipt);
       for (const [id, namespace] of Object.entries(receipt.nativeNamespaces)) {
-        state.namespaces.set(id, structuredClone(namespace));
+        // Retain published membership until a native admission needs writable identities.
+        state.namespaces.set(id, immutable ? { ...namespace } : structuredClone(namespace));
       }
       for (const [source, fact] of Object.entries(receipt.nativeArtifacts)) {
         state.files.set(source, { ...fact });
       }
     }
   }
-  if (isDeeplyFrozenPlainData(index)) {
+  if (immutable) {
     state.preparedIndexes.add(index);
   }
 }

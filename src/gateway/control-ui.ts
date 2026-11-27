@@ -113,7 +113,6 @@ export async function handleControlUiAvatarRequest(
   if (!requestAuth) {
     return true;
   }
-  requestAuth.assertCurrent();
 
   try {
     const identity = await resolveAssistantIdentityAvatar({ cfg: opts.config, agentId });
@@ -124,7 +123,6 @@ export async function handleControlUiAvatarRequest(
         url.searchParams.get("meta") !== "1" &&
         (req.method !== "HEAD" || url.searchParams.has("v")),
     });
-    requestAuth.assertCurrent();
     const resolved = projection.resolution;
     if (url.searchParams.get("meta") === "1") {
       const avatarUrl =
@@ -141,7 +139,6 @@ export async function handleControlUiAvatarRequest(
       const image = await (
         await loadAvatarThumbnail()
       ).readGatewayAvatarThumbnail(projection.image);
-      requestAuth.assertCurrent();
       // Browser HTTP caches must not reuse authenticated bytes after a credential switch.
       res.setHeader("vary", "Authorization, Cookie");
       sendHttpImageResponse({
@@ -177,7 +174,6 @@ export async function handleControlUiAvatarRequest(
     return true;
   } catch {
     if (!res.writableEnded && !res.destroyed) {
-      requestAuth.assertCurrent();
       respondControlUiNotFound(res);
     }
     return true;
@@ -264,7 +260,6 @@ export async function handleControlUiHttpRequest(
       terminalEnabled,
     );
     if (bootstrap) {
-      bootstrap.requestAuth.assertCurrent();
       sendControlUiJson(res, 200, bootstrap.config);
     }
     return true;
@@ -435,9 +430,7 @@ export async function handleControlUiHttpRequest(
         opts?.getRuntimeConfig?.() ?? opts?.config,
         publicAssetBuildId,
         opts?.sessionEntryPath,
-        () =>
-          bootstrap?.requestAuth.hasCurrentClientAuthority() !== false &&
-          opts?.isSessionEntryCurrent?.() !== false,
+        () => opts?.isSessionEntryCurrent?.() !== false,
         opts?.auth?.mode === "trusted-proxy",
         bootstrap?.config,
       );

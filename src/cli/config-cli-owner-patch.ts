@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import type { ReadConfigFileSnapshotWithPluginMetadataResult } from "../config/io.types.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
@@ -13,27 +14,76 @@ import type { OwnerRequest } from "./local-state-owner.js";
 
 // Matches the config.patch request schema.
 const MAX_REPLACE_PATHS = 256;
+const CONFIG_APPLY_CONFIRM_TIMEOUT_MS = 2_000;
+const CONFIG_APPLY_CONFIRM_INTERVAL_MS = 250;
+
+async function confirmSavedConfig(requestOwner: OwnerRequest, error: unknown): Promise<boolean> {
+  const { isGatewayClientRequestError } = await import("../gateway/call.js");
+  const reply = error instanceof Error ? error.cause : undefined;
+  // The existing failed-apply reply identifies this case. Other saved-write
+  // replies can carry a required restart or an intentionally deferred apply.
+  if (
+    !isGatewayClientRequestError(reply) ||
+    reply.gatewayCode !== "UNAVAILABLE" ||
+    !reply.message.startsWith(
+      "config.patch persisted but was not applied to the active Gateway (failed);",
+    ) ||
+    !isPlainObject(reply.details) ||
+    !isPlainObject(reply.details.persistedConfig)
+  ) {
+    return false;
+  }
+  const { hash } = reply.details.persistedConfig;
+  if (typeof hash !== "string" || !hash) {
+    return false;
+  }
+  const signal = AbortSignal.timeout(CONFIG_APPLY_CONFIRM_TIMEOUT_MS);
+  try {
+    while (!signal.aborted) {
+      const revision = await requestOwner<{
+        hash?: unknown;
+        configRevisionHash?: unknown;
+        appliedConfigHash?: unknown;
+      }>("config.get", {}, { signal });
+      if (
+        !signal.aborted &&
+        revision.hash === hash &&
+        typeof revision.configRevisionHash === "string" &&
+        revision.configRevisionHash &&
+        revision.configRevisionHash === revision.appliedConfigHash
+      ) {
+        return true;
+      }
+      await delay(CONFIG_APPLY_CONFIRM_INTERVAL_MS, undefined, { signal });
+    }
+  } catch {
+    // Keep the original write error when confirmation fails or times out.
+  }
+  return false;
+}
 
 // Arrays the patch replaces, or removes with a deleted or replaced subtree, are explicit intent.
-function collectReplacePaths(patch: unknown, base: unknown, parentPath?: string): string[] {
+// The bases are the authored config and, when routed, the Gateway's runtime view: its array
+// guard also counts arrays that exist there only as defaults (a provider's `models: []`).
+function collectReplacePaths(patch: unknown, bases: unknown[], parentPath?: string): string[] {
   if (!isPlainObject(patch)) {
     return [];
   }
   return Object.entries(patch).flatMap(([key, value]) => {
     const path = formatConfigPatchPath(parentPath, key);
-    const baseValue = isPlainObject(base) ? base[key] : undefined;
+    const baseValues = bases.map((base) => (isPlainObject(base) ? base[key] : undefined));
     if (isPlainObject(value)) {
-      return collectReplacePaths(value, baseValue, path);
+      return collectReplacePaths(value, baseValues, path);
     }
     // Any non-object value (null, scalar or array) also removes the base arrays below it.
-    const removed = collectBaseArrayPaths(baseValue, path);
-    return Array.isArray(value) && !removed.includes(path) ? [path].concat(removed) : removed;
+    const removed = baseValues.flatMap((baseValue) => collectBaseArrayPaths(baseValue, path));
+    return Array.from(new Set(Array.isArray(value) ? [path].concat(removed) : removed));
   });
 }
 
-function createOwnerMergePatch(previous: OpenClawConfig, next: OpenClawConfig) {
+function createOwnerMergePatch(previous: OpenClawConfig, next: OpenClawConfig, gateway?: unknown) {
   const patch = createMergePatch(previous, next);
-  const replacePaths = collectReplacePaths(patch, previous);
+  const replacePaths = collectReplacePaths(patch, [previous, gateway]);
   const apply = (base: OpenClawConfig): OpenClawConfig => {
     const merged = applyMergePatch(base, patch, {
       mergeObjectArraysById: true,
@@ -101,9 +151,13 @@ export async function prepareConfigOwnerChange(
  */
 function buildConfigOwnerPatch(
   change: { previous: OpenClawConfig; next: OpenClawConfig },
-  baseHash: unknown,
+  owner: { hash?: unknown; config?: unknown },
 ) {
-  const { patch, replacePaths, apply } = createOwnerMergePatch(change.previous, change.next);
+  const { patch, replacePaths, apply } = createOwnerMergePatch(
+    change.previous,
+    change.next,
+    owner.config,
+  );
   if (
     replacePaths.length > MAX_REPLACE_PATHS ||
     !isDeepStrictEqual(apply(change.previous), change.next)
@@ -116,7 +170,7 @@ function buildConfigOwnerPatch(
   // such as `response`, and an updated CLI routes to whichever Gateway is still running.
   return {
     raw: JSON.stringify(patch),
-    ...(typeof baseHash === "string" ? { baseHash } : {}),
+    ...(typeof owner.hash === "string" ? { baseHash: owner.hash } : {}),
     ...(replacePaths.length > 0 ? { replacePaths } : {}),
   };
 }
@@ -127,7 +181,10 @@ function buildConfigOwnerPatch(
  * owner's revision and returns the restart hint, if any, plus the owner's billing-route warnings.
  */
 export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.ProcessEnv) {
-  const current = await requestOwner<{ hash?: unknown; path?: unknown }>("config.get", {});
+  const current = await requestOwner<{ hash?: unknown; path?: unknown; config?: unknown }>(
+    "config.get",
+    {},
+  );
   const selected = resolveConfigPath(env);
   if (typeof current.path !== "string" || identity(current.path) !== identity(selected)) {
     throw new Error(
@@ -146,7 +203,15 @@ export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.Pr
       restartPending?: unknown;
       billingRouteWarnings?: unknown;
       warnings?: unknown;
-    }>("config.patch", buildConfigOwnerPatch(change, current.hash));
+    }>("config.patch", buildConfigOwnerPatch(change, current)).catch(async (error: unknown) => {
+      if (!(await confirmSavedConfig(requestOwner, error))) {
+        throw error;
+      }
+      return null;
+    });
+    if (result === null) {
+      return { hint: "The Gateway applied the change.", warnings: [] };
+    }
     return {
       hint:
         result.restart || result.restartPending

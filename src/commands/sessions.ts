@@ -263,6 +263,19 @@ export async function sessionsCommand(
         const acpAgentId = parseAgentSessionKey(acpSessionKey)?.agentId ?? "acp";
         modelRef = { provider: "acpx", model: `${acpAgentId}-acp` };
       }
+      if (!modelRef) {
+        // No stored and no configured model leaves nothing model-derived to show.
+        return Object.assign(row, {
+          agentId,
+          acpRuntime,
+          agentRuntime: undefined,
+          contextTokens: undefined,
+          displayModelRef: undefined,
+          kind: classifySessionKind(row.key, entry),
+          runtimePolicySessionKey: undefined,
+          runtimeLabel: "",
+        });
+      }
       const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
         cfg,
         agentId,
@@ -464,8 +477,8 @@ export async function sessionsCommand(
           totalTokens: resolveSessionTotalTokens(row) ?? null,
           totalTokensFresh: resolveFreshSessionTotalTokens(row) !== undefined,
           contextTokens: row.contextTokens ?? null,
-          modelProvider: modelRef.provider,
-          model: modelRef.model,
+          modelProvider: modelRef?.provider ?? null,
+          model: modelRef?.model ?? null,
         });
       }),
     });
@@ -521,7 +534,7 @@ export async function sessionsCommand(
         kind: formatKindCell(row.kind, rich),
         key: formatSessionKeyCell(row.key, rich),
         age: formatSessionAgeCell(row.updatedAt, rich),
-        model: formatSessionModelCell(row.displayModelRef.model, rich),
+        model: formatSessionModelCell(row.displayModelRef?.model, rich),
         runtime: colorize(rich, theme.info, terminalText`${row.runtimeLabel}`),
         tokens: formatTokensCell(
           resolveSessionTotalTokens(row),

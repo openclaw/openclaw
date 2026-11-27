@@ -28,14 +28,11 @@ export function warnUnqualifiedConfiguredModel(model: string, defaultProvider: s
   );
 }
 
-export function warnUnresolvedConfiguredModel(
-  model: string,
-  defaultProvider: string,
-  defaultModel: string,
-): void {
+export function warnUnresolvedConfiguredModel(model: string): void {
   const safe = sanitizeForLog(model);
-  const fallback = sanitizeForLog(`${defaultProvider}/${defaultModel}`);
-  getLog().warn(`Model "${safe}" could not be resolved. Falling back to default "${fallback}".`);
+  getLog().warn(
+    `Model "${safe}" could not be resolved. Choose a provider/model in Settings → Models.`,
+  );
 }
 
 export function warnDisallowedConfiguredModel(

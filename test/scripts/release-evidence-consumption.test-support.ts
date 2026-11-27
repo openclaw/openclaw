@@ -41,6 +41,12 @@ const childPublisher = "Seal full release child evidence / Seal child receipt";
 // Only external transport is replaced; validation runs through production owners.
 export function recoveryConsumptionFixture(
   admitted: boolean | ReturnType<typeof candidatePublicationFixture> = false,
+  fixtureOptions: {
+    waivedFailure?: boolean;
+    normalCiReceiptAndroid?: "true" | "false";
+    omittedPluginJob?: boolean;
+    waiverPolicySha?: string;
+  } = {},
 ) {
   const direct =
     typeof admitted === "boolean"
@@ -121,8 +127,20 @@ export function recoveryConsumptionFixture(
   ) {
     return addArtifact(id, name, runId, makeStoredZip(files), sha);
   }
-  const sourceFile = (_sha: string, path = ".github/workflows/full-release-validation.yml") =>
-    readFileSync(path, "utf8");
+  const waiverPolicy: {
+    targetVersion: string;
+    targetSha: string;
+    childRole: string;
+    jobName: string;
+    reason: string;
+  }[] = [];
+  const sourceFile = (sha: string, path = ".github/workflows/full-release-validation.yml") =>
+    path === "scripts/lib/release-validation-waivers.json"
+      ? JSON.stringify({
+          schema: "openclaw.release-validation-waivers/v1",
+          waivers: sha === (fixtureOptions.waiverPolicySha ?? q) ? waiverPolicy : [],
+        })
+      : readFileSync(path, "utf8");
   const producer = { runId: "900", runAttempt: 1, fullRef: "refs/heads/main", sha: p };
   const source = createPublicationSourceFact(
     receiptRecoverySourceRequest(direct.admission.receipt, producer),
@@ -195,7 +213,11 @@ export function recoveryConsumptionFixture(
       direct.admission.receipt,
       binding,
       sourceFile(q, ".github/workflows/" + spec.workflow),
+      sourceFile(q),
     );
+    if (role === "normalCi" && fixtureOptions.normalCiReceiptAndroid !== undefined) {
+      inputs.include_android = fixtureOptions.normalCiReceiptAndroid;
+    }
     const current = {
       ...run(id, ".github/workflows/" + spec.workflow),
       display_title: displayTitle,
@@ -209,6 +231,32 @@ export function recoveryConsumptionFixture(
     const workload = coverage.requiredJobs.map((name, offset) =>
       job(10000 + index * 100 + offset, name, id),
     );
+    if (fixtureOptions.waivedFailure && role === "normalCi") {
+      workload[0]!.conclusion = "failure";
+      current.conclusion = "failure";
+      waiverPolicy.push({
+        targetVersion: version,
+        targetSha: c,
+        childRole: role,
+        jobName: workload[0]!.name,
+        reason: "Synthetic Q-only recovery grant",
+      });
+    }
+    if (fixtureOptions.omittedPluginJob && role === "pluginPrereleaseCandidate") {
+      const jobName = "plugin-prerelease-suite";
+      const offset = workload.findIndex((entry) => entry.name === jobName);
+      if (offset < 0) {
+        throw new Error("Expected the plugin suite in admitted coverage");
+      }
+      workload.splice(offset, 1);
+      waiverPolicy.push({
+        targetVersion: version,
+        targetSha: c,
+        childRole: role,
+        jobName,
+        reason: "Synthetic Q-only missing job grant",
+      });
+    }
     const publisher = job(10099 + index * 100, childPublisher, id);
     publisher.steps = [
       "Checkout trusted child evidence tooling",
@@ -250,7 +298,7 @@ export function recoveryConsumptionFixture(
       dispatchId,
       sourceParentRunId: direct.runId,
       sourceParentAttempt: 1,
-      workloadConclusion: "success",
+      workloadConclusion: current.conclusion,
       inputs,
       publisher: { jobId: String(publisher.id), jobName: childPublisher },
       ...composite,
@@ -600,6 +648,21 @@ export function recoveryConsumptionFixture(
     return value;
   };
   const github = (path: string): unknown => {
+    const waiverPath = "scripts/lib/release-validation-waivers.json";
+    if (path.startsWith("contents/" + waiverPath + "?ref=")) {
+      const bytes = Buffer.from(sourceFile(q, waiverPath));
+      return {
+        path: waiverPath,
+        type: "file",
+        encoding: "base64",
+        content: bytes.toString("base64"),
+        size: bytes.length,
+        sha: createHash("sha1")
+          .update("blob " + bytes.length + "\0")
+          .update(bytes)
+          .digest("hex"),
+      };
+    }
     const artifactMatch = /^actions\/artifacts\/(\d+)$/.exec(path);
     if (artifactMatch) {
       return required(metadata.get(artifactMatch[1]!), path);
@@ -694,12 +757,14 @@ export function recoveryConsumptionFixture(
     validateChildReuse: (
       selection: Parameters<typeof validateReusableReleaseChild>[0],
       request: Parameters<typeof validateReusableReleaseChild>[1],
-      options: { deadlineMs?: number } = {},
+      options: Pick<
+        NonNullable<Parameters<typeof validateReusableReleaseChild>[2]>,
+        "deadlineMs" | "waiverPolicy"
+      > = {},
     ) =>
       validateReusableReleaseChild(selection, request, {
         ...options,
         github: async (path: string) => github(path),
-        getJobLog: async (id: number) => required(logs.get(id), String(id)),
         downloadArchive: download,
       }),
     verifyRetainedPublicationArtifacts,

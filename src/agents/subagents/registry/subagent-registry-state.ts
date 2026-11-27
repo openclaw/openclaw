@@ -11,7 +11,7 @@ import {
   resolveRecordedRequester,
 } from "./subagent-child-owner-match.js";
 import {
-  isDeliverySuspended,
+  isDeliveryTerminalForRequesterSettle,
   projectSubagentRunForMaintenance,
   shouldPreserveSubagentForMaintenance,
 } from "./subagent-delivery-state.js";
@@ -51,6 +51,7 @@ import { resolveControllerSessionKey } from "./subagent-registry-read-topology.j
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { latestSubagentRun, recordLatestSubagentRun } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 import type { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
@@ -437,7 +438,7 @@ export async function prepareSubagentRunsSnapshotForRunIds(
         runIds: rows.map((entry) => entry.runId),
         sessionKeys: options.yieldedChildren
           ? rows
-              .filter((entry) => entry.pauseReason === "sessions_yield")
+              .filter((entry) => isSubagentPausedByYield(entry))
               .map((entry) => entry.childSessionKey)
           : [],
       };
@@ -523,7 +524,8 @@ export function countActiveSubagentRunsForSession(
           }
           if (
             hasSubagentRunEnded(entry)
-              ? typeof entry.cleanupCompletedAt !== "number" && !isDeliverySuspended(entry)
+              ? typeof entry.cleanupCompletedAt !== "number" &&
+                !isDeliveryTerminalForRequesterSettle(entry)
               : isRetainedUnendedSubagentRun(entry, now)
           ) {
             return true;

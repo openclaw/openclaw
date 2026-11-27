@@ -53,6 +53,7 @@ import {
   notifySkillsWatchAvailable,
   resetSkillsRefreshStateForTest,
 } from "./refresh-state.js";
+import { prepareSkillReadIndex } from "./skill-read-index.js";
 export { registerSkillsChangeListener } from "./refresh-state.js";
 
 const log = createSubsystemLogger("gateway/skills");
@@ -440,11 +441,13 @@ export async function projectSkillSnapshot(
   const skills = input.eligible.map(({ skill }, index) =>
     shareCatalogSkill({ ...skill, resourceRootIdentity: result.resourceRoots[index] }),
   );
-  return {
+  const snapshot = {
     ...result.snapshot,
     resolvedSkills: result.resolvedIndices.map((index) => skills[index]!),
     discoverySkills: result.discoveryIndices.map((index) => skills[index]!),
   };
+  prepareSkillReadIndex(snapshot);
+  return snapshot;
 }
 
 export async function prepareSkillStatusFacts(

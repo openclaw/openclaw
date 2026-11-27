@@ -145,7 +145,7 @@ and contribution-record gates at the Code SHA and refuse to dispatch on failure.
 A record target lost to a squash merge needs a corrected record and a new Code SHA.
 
 Record C/Q and independently trusted P. The helper defaults Q=C; on its
-candidate route, `--workflow-sha <Q>` may select a reviewed main-ancestor Q
+candidate route, `--workflow-sha <Q>` may select a reviewed exact Q
 without changing C. P performs lightweight admission before this same helper
 creates the exact Q transport and dispatches FRV. Missing Q contracts need a
 deliberate Q repair or candidate backport; never borrow moving-main requirements.
@@ -232,6 +232,13 @@ and, only if missing, create it with
 Run the candidate from a clean tracked worktree whose HEAD is the Release SHA,
 with its frozen dependencies installed. The helper creates and relaunches trusted
 Tooling SHA code itself; starting in the tooling checkout fails the target HEAD check.
+
+Stable/full still default to local Parallels smoke. Before dispatching or waiting
+for FRV, the checklist checks that the host has registered Parallels guests,
+a detectable shared network address, and the smoke provider credential.
+Use a configured host or, with explicit authorization to omit the local smoke,
+pass `--skip-parallels`. This does not waive required hosted validation.
+
 Then consume existing validation against the untagged Release SHA:
 
 ```bash
@@ -413,8 +420,8 @@ immutable child artifacts on recovery; never rebuild or republish successful
 versions. Each lane's own parent approval receipt lets its children skip their
 human gates; the detached ClawHub lane never reuses the core parent's receipt.
 Find that run in the core summary or `clawhub-detached-dispatch-<run>-<attempt>`
-artifact, then approve and monitor its own gate independently. The legacy
-`wait_for_clawhub` input never rejoins ClawHub to the core path.
+artifact, then approve and monitor its own gate independently. Core publication
+never waits for ClawHub.
 The npm children publish in `npm-publish` from the same protected tooling tag
 and require the parent attempt to remain live. Direct human npm recovery still
 requires its own `npm-release` approval. ClawHub children must never be approved
@@ -488,6 +495,14 @@ publish blocker. Requested Discord announcements use
 `$release-openclaw-announcement`; requested X posts use `$release-tweets`.
 Existing explicit posting authorization is required. Beta-only requests end
 after verification and any requested announcement.
+
+For a prerelease-to-final version change, use
+[stable-qualified beta to final](../../../../docs/reference/full-release-validation/evidence.md#stable-qualified-beta-to-final):
+a successful stable-profile beta FRV may supply product checks for its version-only
+final descendant. Admit a new final FRV with matching inputs and evidence reuse;
+prepare and qualify final publication artifacts afresh. Do not publish a final
+version to beta merely to make the later selector operation possible. Beta-profile
+FRV remains ineligible, and publication still requires the successful final parent.
 
 Stable publication and any dist-tag promotion to `latest` require exact
 stable/full validation with soak, blocking performance, and successful selected

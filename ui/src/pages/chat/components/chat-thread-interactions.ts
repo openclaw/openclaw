@@ -30,11 +30,11 @@ import type { InlineCommandPresentation } from "../chat-inline-command-presentat
 // Pane-local search, context menus, selection actions, and presentation resets.
 import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
+import type { ChatState } from "../chat-state-contract.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
-import type { FailedMessageEditSource } from "../failed-message-edit.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { createAsyncQuestionPresentation } from "./chat-async-question.ts";
@@ -60,6 +60,7 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-co
 import { mountThreadMenu, type ThreadMenuAction } from "./chat-thread-menu.tsx";
 import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 import type { ChatWelcomeIdentityProps } from "./chat-welcome.tsx";
+import type { WidgetCommentEditorScope } from "./widget-comment-intent.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -155,13 +156,15 @@ export type ChatThreadProps = Omit<
     /** First-turn content was already shown by New Session; never replace it with history placeholders. */
     initialSubmission?: boolean;
     routeLoadingSkeleton?: boolean;
-    /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
+    /** Older-history pagination: renders the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
     messages: unknown[];
     toolMessages: unknown[];
     /** Existing pane owner, forwarded into the transcript's detached render root. */
     toolMessageSource?: ChatToolMessageSource;
     guardianNotices?: ChatGuardianNotice[];
+    /** Pane scope for transient sharing notices, separate from canonical history. */
+    historyState?: ChatState;
     streamSegments: ChatStreamSegment[];
     reasoning?: import("../tool-stream-contract.ts").ChatReasoning | null;
     stream: string | null;
@@ -183,7 +186,6 @@ export type ChatThreadProps = Omit<
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
     onStartNewSession?: (runId: string, summary: string) => void;
-    failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
@@ -209,10 +211,12 @@ export type ChatThreadProps = Omit<
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
     onOpenManagedArtifact?: (href: string) => boolean;
+    /** Receives settled transcript file links; links the Gateway cannot open become text. */
+    workspaceFileLinkScope?: string;
+    onWorkspaceFileLinks?: (links: HTMLElement[]) => void;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
-    onNavigate?: (routeId: "cron", options: { search: string }) => void;
+    onNavigate?: ApplicationContext["navigate"];
     onHistoryIntent?: (event: Event) => void;
-    onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
     onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
     onSetReply?: (target: MessageReplyTarget) => void;
     replyMessageAccess?: ReplyMessageAccess;
@@ -221,7 +225,11 @@ export type ChatThreadProps = Omit<
     onFocusComposer?: () => void;
     commentAttachments?: readonly ChatAttachment[];
     commentsDisabled?: boolean;
-    onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onAddToChat?: (
+      selection: ChatSelectionSource,
+      anchorRect: DOMRect,
+      widget?: WidgetCommentEditorScope,
+    ) => void;
     onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
     onNewSessionSelection?: (selection: ChatSelectionSource) => void;
     /** Shows one of the session's subagents. */
@@ -421,6 +429,14 @@ export function handleTranscriptSelectionMouseDown(event: MouseEvent) {
     !(target instanceof Element) ||
     target.closest("a, button, input, select, textarea, summary, [contenteditable]")
   ) {
+    return undefined;
+  }
+  // A multi-click on layout can select a newline or the next list item's first word.
+  // Leave single presses native so drags can still start in the gap.
+  if (!event.shiftKey && target.matches(".chat-virtual-row, .chat-group, .chat-text :is(ul, ol)")) {
+    event.preventDefault();
+    thread.focus({ preventScroll: true });
+    thread.ownerDocument.getSelection()?.removeAllRanges();
     return undefined;
   }
   const bubble = target.closest(".chat-bubble");

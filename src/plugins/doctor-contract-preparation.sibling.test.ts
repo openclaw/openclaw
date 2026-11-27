@@ -146,11 +146,12 @@ it.for(failureModes)(
     );
     const legacy = fixture(mode);
     await using legacyCache = createPluginCache();
-    const legacyEntries = withPluginCache(legacyCache, () => {
-      legacy.rejectSelectedSource();
-      return listPluginDoctorStateMigrationEntries({ inventory: legacy.inventory });
-    });
-    expect(legacyEntries.map((entry) => entry.pluginId)).toEqual(["healthy-plugin"]);
+    expect(() =>
+      withPluginCache(legacyCache, () => {
+        legacy.rejectSelectedSource();
+        return listPluginDoctorStateMigrationEntries({ inventory: legacy.inventory });
+      }),
+    ).toThrow('Could not load the Doctor migration contract for plugin "invalid-plugin":');
     expect(observed.warn).toHaveBeenCalledWith(
       expect.stringContaining("failed to load doctor contract for invalid-plugin"),
     );
@@ -175,6 +176,9 @@ it.for(failureModes)(
     });
     expect([...collected.inspectedPluginIds]).toEqual(["healthy-plugin"]);
     expect(collected.plans.map((plan) => plan.pluginId)).toEqual(["healthy-plugin"]);
+    expect(collected.unavailablePlugins.get("invalid-plugin")).toMatchObject({
+      requiresStateMigration: true,
+    });
     expect(observed.warn).toHaveBeenCalledWith(
       expect.stringContaining("failed to load doctor contract for invalid-plugin"),
     );

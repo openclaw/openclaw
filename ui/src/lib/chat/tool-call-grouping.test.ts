@@ -23,11 +23,11 @@ describe("summarizeToolGroup", () => {
     );
     expect(
       summarizeToolGroup([prepared("search", "Find notes", { name: "custom_tool" }), ...launches]),
-    ).toBe("Used tools, launched subagents");
+    ).toBe("Launched subagents");
     expect(summarizeToolGroup(launches.slice(0, 1))).toBe("Launched subagents");
     // A launch that opened a session in its own right is not a subagent.
     expect(summarizeToolGroup(launches, { ownSessionLaunches: new Set(["story"]) })).toBe(
-      "Used tools, launched subagents",
+      "Launched subagents",
     );
     // A refused launch started no subagent.
     const refused = prepared("tool:refused", "Sub-agent", {
@@ -55,7 +55,7 @@ describe("summarizeToolGroup", () => {
           [command, "run-b:shared"],
         ]),
       }),
-    ).toBe("Ran commands, read files");
+    ).toBe("Read files, ran commands");
   });
 
   it("keeps approval and unknown outcomes but leaves failed and skipped steps to their rows", () => {
@@ -91,24 +91,29 @@ describe("summarizeToolGroup", () => {
         prepared("wait", "Wait for Agents", { name: "agents_wait" }),
         prepared("question", "Ask User", { name: "ask_user" }),
       ]),
-    ).toBe("Ran commands, read files, searched, waited for agents, asked questions");
+    ).toBe("Read files, ran commands, waited for agents, asked questions");
   });
 
   it.each([
-    ["completed", "completed", "Changed files"],
-    ["completed", "running", "Changing files"],
-    ["failed", "failed", "File changes"],
-    [undefined, undefined, "File changes · Outcome unknown"],
+    ["completed", "completed", "Changed files", "Read and changed files"],
+    ["completed", "running", "Changing files", "Read files, changing files"],
+    ["failed", "failed", "File changes", "Read files, file changes"],
+    [
+      undefined,
+      undefined,
+      "File changes · Outcome unknown",
+      "Read files, file changes · Outcome unknown",
+    ],
   ] as const)(
     "combines edit and write work without losing its state (%s, %s)",
-    (editStatus, writeStatus, expected) => {
+    (editStatus, writeStatus, expected, withRead) => {
       const actions = [
         prepared("edit", "Edit", { name: "edit", status: editStatus }),
         prepared("write", "Write", { name: "write", status: writeStatus }),
       ];
       expect(summarizeToolGroup(actions)).toBe(expected);
       expect(summarizeToolGroup([prepared("read", "Read", { name: "read" }), ...actions])).toBe(
-        "Read files, " + expected[0]!.toLowerCase() + expected.slice(1),
+        withRead,
       );
     },
   );
@@ -128,14 +133,16 @@ describe("summarizeToolGroup", () => {
         actions([
           "exec",
           "read",
+          "edit",
           "skills_search",
           "skills_read",
           "get_goal",
           "knowledge_grep",
+          "knowledge_record",
           "create_goal",
         ]),
       ),
-    ).toBe("Ran commands, read files, searched, used tools");
+    ).toBe("Read and changed files, ran commands");
     const memory = actions([
       "sessions_send",
       "knowledge_remember",
@@ -164,4 +171,21 @@ describe("summarizeToolGroup", () => {
     expect(summarizeToolGroup([{ ...actions[0]!, status: "running" }])).toBe("Using tools");
     expect(summarizeToolGroup([{ ...actions[0]!, status: "failed" }])).toBe("Tool calls");
   });
+
+  it.each([
+    ["skills_search", "completed", "Searched", "Read files"],
+    ["skills_search", "running", "Searching", "Read files, searching"],
+    ["skills_search", "failed", "Searches", "Read files, searches"],
+    ["memory_get", "completed", "Read memory", "Read files"],
+    ["knowledge_edit_body", "completed", "Updated memory", "Read files, updated memory"],
+  ] as const)(
+    "keeps %s (%s) meaningful alone and beside file work",
+    (name, status, alone, withRead) => {
+      const action = prepared("support", name, { name, status });
+      expect(summarizeToolGroup([action])).toBe(alone);
+      expect(summarizeToolGroup([prepared("read", "Read", { name: "read" }), action])).toBe(
+        withRead,
+      );
+    },
+  );
 });

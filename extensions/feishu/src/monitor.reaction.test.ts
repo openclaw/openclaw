@@ -9,10 +9,11 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
-import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 import { createFeishuTestEvent, withFeishuRuntimeDefaults } from "./bot.test-support.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import * as dedup from "./dedup.js";
+import type { FeishuMessageEvent } from "./event-types.js";
+import { parseFeishuMessageEvent } from "./message-content.js";
 import {
   monitorSingleAccount,
   resolveReactionSyntheticEvent,

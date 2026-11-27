@@ -35,9 +35,9 @@ const native: WorktreeGitPolicy = {
 };
 type GitConfigOptions = Pick<
   NonNullable<Parameters<typeof runGit>[2]>,
-  "baseEnv" | "env" | "signal" | "beforeRun" | "stateOwnerPath"
+  "baseEnv" | "env" | "signal" | "beforeRun" | "stateOwnerPath" | "idleIoPriority"
 >;
-type Guard = Pick<GitConfigOptions, "signal" | "beforeRun" | "env" | "stateOwnerPath">;
+type Guard = Omit<GitConfigOptions, "baseEnv">;
 const sharedDirectories = ["objects", "refs", "logs", "worktrees", "reftable"] as const;
 const sharedFiles = ["packed-refs", "shallow", "info/exclude"] as const;
 
@@ -179,6 +179,7 @@ export async function withWorktreeGitConfig<T>(
       assertActive();
       const guarded = {
         ...options,
+        idleIoPriority: options.idleIoPriority ?? guard.idleIoPriority,
         refMutationDirectory: common,
         stateOwnerPath: options.stateOwnerPath ?? guard.stateOwnerPath,
         beforeRun: composeSessionSourceAssertion([
@@ -201,11 +202,13 @@ export async function withWorktreeGitConfig<T>(
       const env = Object.fromEntries(
         Object.entries(inherited).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
       );
-      // Only the operation owner may supply a private snapshot index or commit identity.
+      // Only the operation owner may supply an index, optional-lock policy or commit identity.
       for (const [key, value] of Object.entries(options.env ?? {})) {
         if (
           value !== undefined &&
-          /^(?:GIT_INDEX_FILE|GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL|DATE))$/u.test(key)
+          /^(?:GIT_INDEX_FILE|GIT_OPTIONAL_LOCKS|GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL|DATE))$/u.test(
+            key,
+          )
         ) {
           env[key] = value;
         }

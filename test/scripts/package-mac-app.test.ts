@@ -18,6 +18,7 @@ import { createInterface } from "node:readline";
 import * as tar from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { UPDATE_COMPATIBILITY_CHUNK_HEADER } from "../../scripts/lib/update-compat-contract.mjs";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
 import { resolveNodeRuntimeExecutable } from "../../src/infra/node-runtime-executable.ts";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
@@ -499,7 +500,7 @@ ${scriptBlock("cleanup_package_build() {", "merge_framework_machos() {")}
     // Supply the canonical owner's required generated files as fixture inputs;
     // this test proves packaging admission, not the postbuild inventory itself.
     for (const output of listCoreRuntimePostBuildOutputs({ rootDir: root })) {
-      writeFiles(root, { [output]: "fixture output\n" });
+      writeFiles(root, { [output]: `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\n` });
     }
     const info = JSON.stringify({
       version: "1.2.3",

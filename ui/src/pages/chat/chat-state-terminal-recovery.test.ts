@@ -176,7 +176,7 @@ describe("terminal reply recovery", () => {
       fail();
       await vi.advanceTimersByTimeAsync(0);
       expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
-      expect(state.chatRunError).toMatchObject({ runId, summary: "Error: Storage is unavailable" });
+      expect(state.chatRunError).toMatchObject({ runId, summary: "Storage is unavailable" });
       fail();
       await vi.advanceTimersByTimeAsync(5_000);
       expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
