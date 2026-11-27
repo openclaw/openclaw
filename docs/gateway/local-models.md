@@ -366,12 +366,8 @@ windows), because a context window is not an output limit. Set
 `params: { num_predict: -1 }` to restore Ollama's unlimited default; an
 explicit request output cap still wins.
 
-Embedded agent runs also watch long text and reasoning from models with a known
-total parameter count in the **32B class or smaller** (less than 34 billion, to
-allow for rounded model names). Discovery/catalog metadata takes precedence over
-a size inferred from the model name. Active-parameter-only MoE names do not establish
-the total size. The detector stays off for larger models and models whose size is
-unknown. There is no separate setting.
+Embedded agent runs also watch long text and reasoning from every model. There is
+no separate setting.
 
 The first check starts around 16,000 characters, with increasing intervals and a
 bounded recent tail. A single repeated line, repeated windows, or a repeated period
