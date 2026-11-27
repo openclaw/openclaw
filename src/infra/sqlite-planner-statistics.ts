@@ -127,16 +127,15 @@ export function sqlitePlannerStatisticsNeedRefresh(database: DatabaseSync): bool
     }));
     const rows = statRows.filter((row) => row.tbl === name);
     const size = readTableRowLogEst(database, name);
-    if (size < 0) {
-      // ANALYZE of an empty table only deletes its earlier rows.
-      if (rows.length > 0) {
+    // ANALYZE rewrites a table with rows; on an empty table it only deletes earlier rows.
+    const analysisChanges = size >= 0 || rows.length > 0;
+    const analyzed = new Set(rows.map((row) => row.idx));
+    if (indexes.some((index) => !analyzed.has(index.name))) {
+      // An index without statistics is analyzed unconditionally.
+      if (analysisChanges) {
         return true;
       }
       continue;
-    }
-    const analyzed = new Set(rows.map((row) => row.idx));
-    if (indexes.some((index) => !analyzed.has(index.name))) {
-      return true;
     }
     // The table estimate comes from a full-table index row, else the table's own row.
     const recorded =
@@ -148,7 +147,9 @@ export function sqlitePlannerStatisticsNeedRefresh(database: DatabaseSync): bool
       recorded && Number.isSafeInteger(recordedRows)
         ? sqliteLogEst(recordedRows)
         : DEFAULT_TABLE_ROW_LOG_EST;
-    if (size < threshold - OPTIMIZE_SIZE_RANGE || size > threshold + OPTIMIZE_SIZE_RANGE) {
+    // A small recorded count also accepts an empty table (-1).
+    const lower = threshold < OPTIMIZE_SIZE_RANGE ? -1 : threshold - OPTIMIZE_SIZE_RANGE;
+    if ((size < lower || size > threshold + OPTIMIZE_SIZE_RANGE) && analysisChanges) {
       return true;
     }
   }

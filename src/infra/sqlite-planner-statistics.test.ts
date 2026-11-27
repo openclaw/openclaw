@@ -134,6 +134,18 @@ describe("SQLite planner maintenance", () => {
     observe("refreshed after delete", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
     observe("emptied table with statistics", "DELETE FROM plain;");
     observe("refreshed empty", "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;");
+    observe(
+      "analyzed single row deleted",
+      `CREATE TABLE single (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+       CREATE INDEX single_value ON single(value);
+       INSERT INTO single VALUES (1, 'one');
+       PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;
+       DELETE FROM single;`,
+    );
+    observe(
+      "refreshed after single delete",
+      "PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;",
+    );
     // Two short-row leaves under a one-cell root: the estimate counts the root's two
     // children, so a recorded count of 15 sits just outside optimize's 10x band.
     observe(
