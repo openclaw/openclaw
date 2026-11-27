@@ -474,7 +474,6 @@ export async function streamAgentResponse(
                           timestamp: Date.now(),
                           details: {
                             toolName: block?.type === "toolCall" ? block.name : undefined,
-                            whitespaceRunChars: run,
                           },
                         },
                       ],
