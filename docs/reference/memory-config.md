@@ -684,6 +684,7 @@ them, such as Gemini Embedding 2:
 | Key                       | Type       | Default    | Description                            |
 | ------------------------- | ---------- | ---------- | -------------------------------------- |
 | `multimodal.enabled`      | `boolean`  | `false`    | Enable multimodal indexing             |
+| `multimodal.allowPartial` | `boolean`  | `false`    | Skip unsupported media modalities      |
 | `multimodal.modalities`   | `string[]` | --         | `["image"]`, `["audio"]`, or `["all"]` |
 | `multimodal.maxFileBytes` | `number`   | `10485760` | Max file size for indexing (10 MiB)    |
 
@@ -691,11 +692,17 @@ them, such as Gemini Embedding 2:
 Only applies to files in `extraPaths`. Default memory roots stay Markdown-only. `fallback` must be `"none"`.
 </Note>
 
-Each embedding provider declares which media its models embed. Memory indexes
-the modalities you enable that the model supports and skips the rest:
-`openclaw memory status` shows them under **Skipped media**. Today
+Each embedding provider declares which media its models embed. By default,
+memory search rejects an embedding model that cannot embed every configured
+modality and leaves the existing index unchanged.
+
+Set `memory.search.multimodal.allowPartial` to `true` to index the supported
+subset, or only Markdown if the model supports no media. `openclaw memory status`
+shows unsupported modalities under **Skipped media**. Rebuilding then removes
+their entries from the index, not the original files.
+
 `gemini-embedding-2` (and its legacy preview identifier) embeds images and audio.
-Other providers index text only until their plugin declares media support.
+Other providers are treated as text-only unless their plugin declares media support.
 
 Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif`
 (images); `.mp3`, `.wav`, `.ogg`, `.opus`, `.m4a`, `.m2a`, `.aac`, `.flac`

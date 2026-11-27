@@ -106,10 +106,10 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-it("keeps per-agent multimodal config and warns when the new model skips its media", async () => {
+it.each([undefined, true])("changes an incompatible provider only with partial indexing (%s)", async (allowPartial) => {
   const chosen = adapter("openai");
   mocks.get.mockReturnValue(chosen);
-  const multimodal = { enabled: true, modalities: ["image" as const] };
+  const multimodal = { enabled: true, allowPartial, modalities: ["image" as const] };
   const config: OpenClawConfig = {
     ...memoryConfig({
       provider: "gemini",
@@ -121,6 +121,15 @@ it("keeps per-agent multimodal config and warns when the new model skips its med
   };
   const prompt = prompter({ selects: ["openai", "existing"], texts: ["text-embedding-3-small"] });
   const result = await runMemorySetupFlow(config, prompt);
+  if (!allowPartial) {
+    expect(result).toBe(config);
+    expect(chosen.create).not.toHaveBeenCalled();
+    expect(prompt.note).toHaveBeenCalledWith(
+      expect.stringContaining("not compatible"),
+      "Memory setup unchanged",
+    );
+    return;
+  }
   expect(result.memory?.search).toMatchObject({
     provider: "openai",
     model: "text-embedding-3-small",

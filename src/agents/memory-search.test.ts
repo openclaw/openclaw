@@ -350,7 +350,15 @@ describe("memory search config", () => {
   it.each(["gemini-embedding-2-preview", "gemini-embedding-001"])(
     "rejects a fallback with configured media even if %s skips them",
     (model) => {
-      expect(() => resolve(multimodalSearch({ model, fallback: "openai" }))).toThrow(
+      expect(() =>
+        resolve(
+          multimodalSearch({
+            model,
+            fallback: "openai",
+            multimodal: { enabled: true, allowPartial: true, modalities: ["image"] },
+          }),
+        ),
+      ).toThrow(
         /memory\.search\.multimodal does not support memory\.search\.fallback/,
       );
     },
@@ -385,7 +393,10 @@ describe("memory search config", () => {
     };
     registerEmbeddingProvider(legacy);
     const resolved = resolve(
-      multimodalSearch({ ...overrides, multimodal: { enabled: true, modalities: ["all"] } }),
+      multimodalSearch({
+        ...overrides,
+        multimodal: { enabled: true, allowPartial: skippedModalities.length > 0, modalities: ["all"] },
+      }),
     );
     expect(resolved?.multimodal).toEqual({
       enabled: true,

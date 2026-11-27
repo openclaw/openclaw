@@ -182,7 +182,7 @@ it("rebuilds a persisted v2026.11.5 CJK scope hash on normal search", async () =
   await closeManager(reopened);
 });
 
-it("recovers an existing media index when the new model skips configured media", async () => {
+it("keeps an existing media index until partial indexing is explicitly enabled", async () => {
   const media = path.join(fixture.paths.workspace, "media");
   await fs.mkdir(media);
   await fs.writeFile(path.join(media, "diagram.png"), "png");
@@ -193,13 +193,13 @@ it("recovers an existing media index when the new model skips configured media",
       model === "both" ? ["image", "audio"] : model === "image-only" ? ["image"] : [],
     create: async () => ({ provider: null }),
   });
-  const config = (model: string) =>
+  const config = (model: string, allowPartial?: boolean) =>
     fixture.createConfig({
       provider: "gemini",
       model,
       extraPaths: [media],
       fallback: "none",
-      multimodal: { enabled: true, modalities: ["all"] },
+      multimodal: { enabled: true, allowPartial, modalities: ["all"] },
     });
   const dbPath = await publishIndex(config("both"));
   const rows = () =>
@@ -213,12 +213,29 @@ it("recovers an existing media index when the new model skips configured media",
   expect(rows()).toEqual(["media/diagram.png", "media/meeting.wav", note]);
   const host = { runInBackgroundContext: runInMemoryTestBackgroundContext };
   const report = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  const exitCode = process.exitCode;
   try {
+    config("image-only");
+    await runMemoryStatus({ agent: "main", json: true }, host);
+    expect(error).toHaveBeenLastCalledWith(
+      expect.stringContaining("Unsupported modalities: audio"),
+    );
+    expect(report).toHaveBeenLastCalledWith([]);
+    expect(process.exitCode).toBe(1);
+    process.exitCode = exitCode;
+    await runMemoryIndex({ agent: "main", force: true }, host);
+    expect(error).toHaveBeenLastCalledWith(expect.stringContaining("Unsupported modalities: audio"));
+    expect(process.exitCode).toBe(1);
+    expect(rows()).toEqual(["media/diagram.png", "media/meeting.wav", note]);
+    expect(withDatabase(dbPath, readMeta).model).toBe("both");
+    process.exitCode = exitCode;
+
     for (const [model, skipped, expectedPaths] of [
       ["image-only", ["audio"], ["media/diagram.png", note]],
       ["text-only", ["image", "audio"], [note]],
     ] as const) {
-      const cfg = config(model);
+      const cfg = config(model, true);
       const before = rows();
       await runMemoryStatus({ agent: "main", json: true }, host);
       expect(report).toHaveBeenLastCalledWith([
@@ -241,6 +258,8 @@ it("recovers an existing media index when the new model skips configured media",
       await closeManager(reopened);
     }
   } finally {
+    process.exitCode = exitCode;
+    error.mockRestore();
     report.mockRestore();
   }
 });

@@ -289,9 +289,10 @@ run the hybrid MMR pass.
 ## Multimodal memory
 
 With an embedding model that embeds media, such as `gemini-embedding-2`, you
-can index images and audio alongside Markdown. Memory indexes only the
-modalities the model supports. This only applies to files under `memory.search.extraPaths`; default
-memory roots (`MEMORY.md`, `memory/*.md`) stay Markdown-only. Search queries
+can index images and audio alongside Markdown. The model must support every
+configured modality unless you opt in to partial indexing. This only applies to
+files under `memory.search.extraPaths`; default memory roots (`MEMORY.md`,
+`memory/*.md`) stay Markdown-only. Search queries
 remain text, but they match against visual and audio content. See
 [Memory configuration reference](/reference/memory-config#multimodal-memory)
 for setup.

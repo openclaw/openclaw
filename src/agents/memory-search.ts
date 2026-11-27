@@ -231,13 +231,7 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     maxFileBytes: overrides?.multimodal?.maxFileBytes ?? defaults?.multimodal?.maxFileBytes,
   });
   const configuredMediaActive = isMemoryMultimodalEnabled(configuredMultimodal);
-  if (configuredMediaActive && fallback !== "none") {
-    throw new Error(
-      'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
-    );
-  }
-  // Index only the media the model embeds. An adapter not yet registered keeps the
-  // configured modalities, as before this check moved from rejecting to skipping.
+  // Defer capability validation if the adapter has not been registered yet.
   const supportedMedia =
     configuredMediaActive &&
     primaryAdapter &&
@@ -246,6 +240,17 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
   const skippedModalities = supportedMedia
     ? configuredMultimodal.modalities.filter((modality) => !supportedMedia.includes(modality))
     : [];
+  const allowPartial = overrides?.multimodal?.allowPartial ?? defaults?.multimodal?.allowPartial;
+  if (skippedModalities.length && !allowPartial) {
+    throw new Error(
+      `memory.search.multimodal requires a provider adapter that supports multimodal embeddings for the configured model. Unsupported modalities: ${skippedModalities.join(", ")}.`,
+    );
+  }
+  if (configuredMediaActive && fallback !== "none") {
+    throw new Error(
+      'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
+    );
+  }
   const multimodal = skippedModalities.length
     ? {
         ...configuredMultimodal,
