@@ -187,6 +187,15 @@ export function createKnowledgeMemoryRuntime(stores: Stores): MemoryProviderRunt
                       }),
                     ).toString("base64url");
               const omittedSessions = request.sources?.includes("sessions");
+              const warnings = [result.coverage.message];
+              if (omittedSessions) {
+                warnings.push("Chat history was not searched.");
+              }
+              if (result.matchStrategy === "question-terms") {
+                warnings.push("Searched after omitting the question prefix.");
+              } else if (result.matchStrategy === "word-forms") {
+                warnings.push("Searched using alternate word forms.");
+              }
               return {
                 hits: result.hits
                   .filter(
@@ -222,7 +231,7 @@ export function createKnowledgeMemoryRuntime(stores: Stores): MemoryProviderRunt
                   result.coverage.complete && !nextCursor && !omittedSessions
                     ? ("complete" as const)
                     : ("partial" as const),
-                warning: `${result.coverage.message}${omittedSessions ? " Chat history was not searched." : ""}`,
+                warning: warnings.join(" "),
               };
             }),
           get: (request) =>

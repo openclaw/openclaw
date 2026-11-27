@@ -79,6 +79,9 @@ query with no explicit mode can try **one** adjustment:
   A successful search reports `matchStrategy: "word-forms"`. These forms are directional,
   not a general stemmer or a way to distinguish word senses.
 
+The shared `memory.search` response describes the adjustment in its `warning`
+field alongside any coverage notice.
+
 Explicit `all`, `any`, and `phrase` searches never use these adjustments. A
 query such as `orchid refunds` does not return a page about orchids alone.
 

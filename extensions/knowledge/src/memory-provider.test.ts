@@ -46,6 +46,24 @@ it("shared search/get/health roundtrip uses native publication, provenance and r
   expect((await f.service.record_detail({ id: saved.id }, f.tool)).record!.id).toBe(saved.id);
 });
 
+it("shared search discloses the adjustment alongside coverage, but not for a literal match", async () => {
+  const f = await memoryFixture(tempDirs);
+  const note = await f.save("Orchid", "Combinámos uma visita.");
+  const { provider } = await f.open();
+  const literal = await provider.search({ query: "orchid" });
+  expect(literal.hits).toMatchObject([{ reference: { id: note.id } }]);
+  expect(literal.warning).not.toMatch(/question prefix|alternate word forms/);
+  for (const [query, notice] of [
+    ["where is orchid", "omitting the question prefix"],
+    ["combinar", "using alternate word forms"],
+  ] as const) {
+    const page = await provider.search({ query });
+    expect(page.hits).toMatchObject([{ reference: { id: note.id } }]);
+    expect(page.warning).toContain(notice);
+    expect(page.warning).toContain(literal.warning);
+  }
+});
+
 it("ungranted conversation audiences never acquire private scope", async () => {
   const f = await memoryFixture(tempDirs);
   await f.save("Private sentinel");
