@@ -143,7 +143,13 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
   const toolNames = tools.map((t) => t.name);
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
   const accountId = params.command.accountId ?? params.ctx.AccountId;
-  const { runtimeInfo, reactionGuidance, messageToolHints } = await resolveAgentRuntimePrompt({
+  const {
+    runtimeInfo,
+    reactionGuidance,
+    messageToolHints,
+    sessionPromptDelivery,
+    runtimeAccountId,
+  } = await resolveAgentRuntimePrompt({
     config: params.cfg,
     agentId: sessionAgentId,
     workspaceDir,
@@ -188,6 +194,8 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
   });
   const systemPrompt = await buildConfiguredAgentSystemPrompt({
     preparedTtsPreferences: params.opts?.preparedTtsPreferences ?? (await prepareTtsPreferences()),
+    sessionPromptDelivery,
+    runtimeAccountId,
     config: params.cfg,
     preparedModelRuntime,
     agentId: sessionAgentId,

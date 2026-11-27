@@ -546,6 +546,8 @@ export async function buildPreparedCompactionRuntime(
         promptMode,
         promptSurface,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        sessionPromptDelivery: params.sessionEntry?.delivery,
+        runtimeAccountId: params.agentAccountId,
         acpEnabled: isAcpRuntimeSpawnAvailable({
           config: params.config,
           sandboxed: sandboxInfo?.enabled === true,

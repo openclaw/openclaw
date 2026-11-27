@@ -376,12 +376,19 @@ function renderTtsSystemPromptHint(
 export async function buildTtsSystemPromptHintAsync(
   cfg: OpenClawConfig,
   agentId?: string,
-  options?: { messageToolOnly?: boolean; preparedTtsPreferences?: PreparedTtsPreferences },
+  options?: Pick<
+    TtsSettingsSnapshotParams,
+    "channelId" | "accountId" | "preparedTtsPreferences"
+  > & {
+    messageToolOnly?: boolean;
+  },
 ): Promise<string | undefined> {
   return renderTtsSystemPromptHint(
     await resolveTtsSettingsSnapshotAsync({
       cfg,
       agentId,
+      channelId: options?.channelId,
+      accountId: options?.accountId,
       preparedTtsPreferences: options?.preparedTtsPreferences,
     }),
     options?.messageToolOnly,
