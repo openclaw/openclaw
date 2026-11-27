@@ -7,20 +7,12 @@ import {
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import {
-  createProviderOperationDeadline,
-  postJsonRequest,
-  readProviderJsonResponse,
-  resolveProviderOperationTimeoutMs,
-} from "openclaw/plugin-sdk/provider-http";
+import { postJsonRequest, readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { generateClawRouterGoogleImage } from "./image-google.js";
 import {
   assertClawRouterImageResponseOk,
   assertClawRouterImageLimits,
-  CLAWROUTER_IMAGE_TIMEOUT_MS,
-  isClawRouterGoogleImageModel,
   fetchClawRouterImageModels,
   isSupportedClawRouterImageModel,
   resolveClawRouterImageHttpContext,
@@ -29,10 +21,12 @@ import {
 // ClawRouter's JSON Images API ingress cap includes base64 references and all options.
 const MAX_EDIT_REQUEST_BYTES = 8 * 1024 * 1024;
 
-export async function generateClawRouterImage(req: ImageGenerationRequest) {
-  if (isClawRouterGoogleImageModel(req.model)) {
-    return generateClawRouterGoogleImage(req);
-  }
+export { generateClawRouterGoogleImage } from "./image-google.js";
+
+export async function generateClawRouterImage(
+  req: ImageGenerationRequest,
+  remainingTimeoutMs: () => number,
+) {
   const inputImages = req.inputImages ?? [];
   const mode = inputImages.length ? "edit" : "generate";
   if (!isSupportedClawRouterImageModel(req.model)) {
@@ -113,15 +107,6 @@ export async function generateClawRouterImage(req: ImageGenerationRequest) {
     throw new Error("ClawRouter image edit request exceeds the 8 MiB JSON size limit.");
   }
   req.signal?.throwIfAborted();
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: req.timeoutMs ?? CLAWROUTER_IMAGE_TIMEOUT_MS,
-    label: "ClawRouter image generation",
-  });
-  const remainingTimeoutMs = () =>
-    resolveProviderOperationTimeoutMs({
-      deadline,
-      defaultTimeoutMs: deadline.timeoutMs ?? CLAWROUTER_IMAGE_TIMEOUT_MS,
-    });
   const auth = await resolveApiKeyForProvider({
     provider: "clawrouter",
     cfg: req.cfg,

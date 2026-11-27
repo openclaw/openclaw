@@ -5,12 +5,7 @@ import {
   type ImageGenerationRequest,
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import {
-  createProviderOperationDeadline,
-  createProviderOperationTimeoutResolver,
-  postJsonRequest,
-  readProviderJsonResponse,
-} from "openclaw/plugin-sdk/provider-http";
+import { postJsonRequest, readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -116,7 +111,10 @@ function readQualifiedImages(payload: unknown) {
   return images;
 }
 
-export async function generateClawRouterGoogleImage(req: ImageGenerationRequest) {
+export async function generateClawRouterGoogleImage(
+  req: ImageGenerationRequest,
+  remaining: () => number,
+) {
   validateRequest(req);
   const configured = req.cfg.models?.providers?.clawrouter;
   if (configured?.request?.auth && configured.request.auth.mode !== "provider-default") {
@@ -145,13 +143,6 @@ export async function generateClawRouterGoogleImage(req: ImageGenerationRequest)
     throw new Error("ClawRouter Google image JSON exceeds 8 MiB");
   }
   req.signal?.throwIfAborted();
-  const remaining = createProviderOperationTimeoutResolver({
-    deadline: createProviderOperationDeadline({
-      timeoutMs: req.timeoutMs ?? 180_000,
-      label: "ClawRouter Google images",
-    }),
-    defaultTimeoutMs: 180_000,
-  });
   const auth = await resolveApiKeyForProvider({
     provider: "clawrouter",
     cfg: req.cfg,
