@@ -280,6 +280,19 @@ export async function runEarlyGitReleaseRecovery(
   };
   let fastForwarded = false;
   const abandon = async (why: string) => {
+    // A resumed runner can stop after the release migrated state; the previous build cannot
+    // open it, so the release keeps serving and the outcome names the finishing command.
+    if (moved()) {
+      const failed = await fail(
+        "early-release-recovery-stopped",
+        `The recovery stopped: ${why}. Your databases were already migrated, so the Gateway service keeps ${servesRelease() ? "the new release" : "the checkout"}. ${kept()}`,
+        `from the checkout run \`${FINISH}\``,
+      );
+      if ((await service.state()) !== "active") {
+        await service.start(false);
+      }
+      return failed;
+    }
     const moves = fastForwarded
       ? ` The checkout's branch was fast-forwarded to ${plan.target.slice(0, 11)} but not rebuilt; the Gateway still serves the previous build.`
       : "";

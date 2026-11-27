@@ -339,7 +339,7 @@ function runner(opts: Opts) {
     base,
     `git init -q -b main co && cd co && ${commit} a && ${commit} b && git rev-parse @`,
   );
-  sh(checkout, resumed ? "true" : opts.past ? `${commit} c` : "git reset -q --hard @~1");
+  sh(checkout, opts.past ? `${commit} c` : resumed ? "true" : "git reset -q --hard @~1");
   const planned = { state: 40, agents: { "/a": 1, "/b": 1 } };
   const migrated = { state: 41, agents: { "/a": 2, "/b": 2 } };
   // The early updater's link names the release that serves the previous build.
@@ -367,7 +367,7 @@ function runner(opts: Opts) {
     fs.writeFileSync(`${serviceFile}.before-update-recovery`, original);
     fs.rmSync(legacy);
   }
-  let schema = opts.migrates && restarts > 2 ? migrated : planned;
+  let schema = (opts.migrates && restarts > 2) || (resumed && opts.past) ? migrated : planned;
   // A resumed runner can find the release still migrating; it holds state until ready.
   let [migrating, alive, running, enabled, failed] = [resumed, 2, true, false, false];
   let loaded = true;
@@ -502,6 +502,12 @@ const runs: Run[] = [
   ["resumes during the boot migration and waits for it", { ...resumed, restarts: 1 }, "checkout"],
   ["changes nothing when the fast-forward fails", f(MERGE), "original"],
   ["never builds past the target", { past: true }, "original", "", "moved past"],
+  [
+    "keeps a migrated release when the checkout moved",
+    { ...resumed, past: true },
+    "release",
+    "stopped",
+  ],
   ["changes nothing when the service cannot move", f("release gateway install"), "original"],
   ["puts back a definition the install sent elsewhere", { elsewhere: "unit" }, "original"],
   ["puts back an environment the install rewrote", { elsewhere: "env" }, "original"],

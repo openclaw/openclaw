@@ -238,7 +238,8 @@ export async function startRecoveryJob(params: {
         environment,
         log,
       }),
-      { mode: 0o600 },
+      // launchd refuses a user LaunchAgent plist that group and others cannot read.
+      { mode: 0o644 },
     );
     const started = await run(["launchctl", "bootstrap", domain, plistPath]);
     return ok(started) ? null : `launchctl bootstrap failed (${tail(started)})`;
