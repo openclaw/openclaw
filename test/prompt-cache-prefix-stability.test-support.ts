@@ -103,7 +103,7 @@ function outputTrimmed(before: string, after: string): boolean {
     // can be cut short at the end of the output.
     const notice =
       typeof output === "string"
-        ? /\s*\[\.\.\. \d+ more characters truncated(?:[^\]]*\]\s*|[^\]]*$)/.exec(output)
+        ? /\s*\[\.\.\. \d+ chars omitted(?:[^\]]*\]\s*|[^\]]*$)/.exec(output)
         : null;
     if (
       response &&
