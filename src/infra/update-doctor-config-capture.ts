@@ -5,30 +5,26 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type {
+  DoctorConfigCapture,
+  DoctorConfigWriteAuthority,
   UpdateDoctorConfigChange,
   UpdateDoctorConfigWriteRefusal,
 } from "./update-doctor-config.js";
-import type { DoctorConfigCapture, UpdateDoctorWriteAuthority } from "./update-doctor-result.js";
 
 const doctorConfigWrites = new AsyncLocalStorage<{
   capture: DoctorConfigCapture;
-  authority?: UpdateDoctorWriteAuthority;
+  authority?: DoctorConfigWriteAuthority;
 }>();
 
 export function getUpdateDoctorConfigCapture(): DoctorConfigCapture | undefined {
   return doctorConfigWrites.getStore()?.capture;
 }
 
-export function captureUpdateDoctorConfigWrites<T>(
-  configPath: string,
+export function runWithUpdateDoctorConfigCapture<T>(
+  capture: DoctorConfigCapture,
   run: (capture: DoctorConfigCapture) => Promise<T>,
-  authority?: UpdateDoctorWriteAuthority,
+  authority?: DoctorConfigWriteAuthority,
 ): Promise<T> {
-  const capture: DoctorConfigCapture = {
-    path: path.resolve(configPath),
-    hash: "unchanged",
-    configChanges: [],
-  };
   return doctorConfigWrites.run(
     {
       capture,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
@@ -11,7 +12,6 @@ beforeAll(() => roots.setup());
 beforeEach(() => vi.resetModules());
 afterEach(async () => {
   vi.doUnmock("./io.write.js");
-  vi.doUnmock("../infra/update-doctor-result.js");
   const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
   closeOpenClawStateDatabaseForTest();
 });
@@ -78,15 +78,23 @@ it.each([
   }
 });
 
-it("reads and records normal observation without importing the writer or Doctor result handling", async () => {
+it("keeps ordinary config IO independent of Doctor result handling", () => {
+  expect(
+    findSourceImportBackedges(
+      [
+        "src/config/io.factory.ts",
+        "src/config/io.runtime-write-finalization.ts",
+        "src/config/mutate.ts",
+      ],
+      ["src/infra/update-doctor-result.ts"],
+    ),
+  ).toEqual([]);
+});
+
+it("reads and records normal observation without importing the writer", async () => {
   const loadWriter = vi.fn().mockRejectedValue(new Error("read imported the config writer"));
   // mock-isolation: Fail if the read-only path imports the config writer.
   vi.doMock("./io.write.js", loadWriter);
-  // mock-isolation: Loading update result handling here would also load database migration code.
-  const loadDoctorResult = vi.fn(() => {
-    throw new Error("read imported Doctor result handling");
-  });
-  vi.doMock("../infra/update-doctor-result.js", loadDoctorResult);
   const { io, configPath, raw, readRaw, health } = await fixture();
 
   expect(io.loadConfig().gateway?.port).toBe(18789);
@@ -100,7 +108,6 @@ it("reads and records normal observation without importing the writer or Doctor 
   });
   expect(await readRaw()).toBe(raw);
   expect(loadWriter).not.toHaveBeenCalled();
-  expect(loadDoctorResult).not.toHaveBeenCalled();
 });
 
 it("honors per-call unobserved mutation reads without disabling write auditing", async () => {

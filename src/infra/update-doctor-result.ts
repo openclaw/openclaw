@@ -15,15 +15,18 @@ import type {
   UpdateDatabaseGenerations,
   UpdateDatabaseWriteReceipt,
 } from "./update-database-generations.js";
-import { getUpdateDoctorConfigCapture } from "./update-doctor-config-capture.js";
+import {
+  getUpdateDoctorConfigCapture,
+  runWithUpdateDoctorConfigCapture,
+} from "./update-doctor-config-capture.js";
 import {
   UpdateDoctorConfigChangeSchema,
+  UpdateDoctorConfigFileWriteSchema,
+  UpdateDoctorConfigHashSchema,
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
-import type {
-  UpdateDoctorConfigChange,
-  UpdateDoctorConfigWriteRefusal,
-} from "./update-doctor-config.js";
+import type { DoctorConfigCapture, DoctorConfigWriteAuthority } from "./update-doctor-config.js";
+export type { DoctorConfigCapture } from "./update-doctor-config.js";
 import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
 import { runWithUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
 import {
@@ -34,7 +37,6 @@ import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-fa
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
 export {
-  captureUpdateDoctorConfigWrites,
   getUpdateDoctorConfigCapture,
   getUpdateDoctorConfigWriteAuthority,
   recordUpdateDoctorConfigMigration,
@@ -60,11 +62,6 @@ export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
     "Post-install doctor reported a recoverable update-time repair warning after the package install was verified; continuing with post-core plugin convergence.",
 };
 
-const configHashSchema = z.string().regex(/^[0-9a-f]{64}$/u);
-const configFileWriteSchema = z.object({
-  inputHash: configHashSchema.optional(),
-  hash: configHashSchema,
-});
 export const UpdateDoctorDeferredInspectionCheckIdsSchema = z
   .array(UpdateDoctorLintFindingSchema.shape.checkId.max(256))
   .max(128);
@@ -86,12 +83,12 @@ const DoctorMaintenanceRefusalSchema = z.discriminatedUnion("kind", [
 export type DoctorMaintenanceRefusal = z.infer<typeof DoctorMaintenanceRefusalSchema>;
 
 const doctorResultEvidence = {
-  configHash: z.union([z.literal("unchanged"), configHashSchema]).optional(),
-  configInputHash: configHashSchema.optional(),
+  configHash: z.union([z.literal("unchanged"), UpdateDoctorConfigHashSchema]).optional(),
+  configInputHash: UpdateDoctorConfigHashSchema.optional(),
   configFileWrites: z
     .record(
       z.string().refine((filePath) => path.isAbsolute(filePath)),
-      configFileWriteSchema,
+      UpdateDoctorConfigFileWriteSchema,
     )
     .optional()
     .catch(undefined),
@@ -185,25 +182,13 @@ export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly stri
   ].slice(0, 32);
 }
 
-export type DoctorConfigCapture = {
-  path: string;
-  hash: string;
-  inputHash?: string;
-  fileWrites?: Record<string, z.infer<typeof configFileWriteSchema>>;
-  configChanges: UpdateDoctorConfigChange[];
-  configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
-  deferredInspectionCheckIds?: string[];
-  warnings?: string[];
-};
 /** Runs a policy check under Doctor's held maintenance owner and its open scope. */
 type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
-export type UpdateDoctorWriteAuthority = {
+export type UpdateDoctorWriteAuthority = DoctorConfigWriteAuthority & {
   /** An optional work profile; config preparation still proves eligibility. */
   retirementOnly?: true;
   /** Parent Doctor phase deadline for nested managed-service inspection. */
   serviceInspectionDeadlineAtMs?: number;
-  inputHash: string;
-  assertCurrent: () => void;
   /** Doctor lends its held maintenance owner to `assertCurrent`; see doctor-policy-custody. */
   lendPolicyCustody?: (owner: DoctorPolicyCustodyOwner | undefined) => void;
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
@@ -411,6 +396,18 @@ export function createUpdateDoctorDatabaseWriteCapture(
       }
     },
   };
+}
+
+export function captureUpdateDoctorConfigWrites<T>(
+  configPath: string,
+  run: (capture: DoctorConfigCapture) => Promise<T>,
+  authority?: UpdateDoctorWriteAuthority,
+): Promise<T> {
+  return runWithUpdateDoctorConfigCapture(
+    { path: path.resolve(configPath), hash: "unchanged", configChanges: [] },
+    run,
+    authority,
+  );
 }
 
 /** Deferral requires an owned result channel, not just an inherited marker. */
