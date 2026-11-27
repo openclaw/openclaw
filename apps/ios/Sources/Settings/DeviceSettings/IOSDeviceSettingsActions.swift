@@ -131,25 +131,6 @@ enum IOSDeviceSettingsActions {
         return status
     }
 
-    /// Native Settings asks iOS first, then obtains relay consent before enabling enrollment.
-    static func activateNativeNotifications(
-        confirmDisclosure: @MainActor () async -> Bool,
-        isCurrent: @escaping @MainActor @Sendable () -> Bool) async -> UNAuthorizationStatus?
-    {
-        guard !Task.isCancelled, isCurrent() else { return nil }
-        var status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
-        guard !Task.isCancelled, isCurrent() else { return nil }
-        if status == .notDetermined {
-            guard let requestedStatus = await authorizeNotifications(
-                enableServing: false, isCurrent: isCurrent)
-            else { return nil }
-            status = requestedStatus
-        }
-        guard SettingsNotificationStatus(status).allowsNotifications else { return status }
-        return await self.setNotificationsEnabled(
-            true, openSettingsWhenDenied: false, confirmDisclosure: confirmDisclosure, isCurrent: isCurrent)
-    }
-
     static func openNotificationSettings() async -> Bool {
         guard !Task.isCancelled,
               let url = URL(string: UIApplication.openNotificationSettingsURLString)

@@ -199,29 +199,6 @@ extension SettingsProTab {
         self.pendingTargetSuppression.releaseAutoConnect(controller: self.gatewayController)
     }
 
-    func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
-        let supersededSetupLease = self.takeStagedGatewaySetupSuppression()
-        defer {
-            if let supersededSetupLease {
-                self.gatewayController.resumeAutoConnect(after: supersededSetupLease)
-            }
-        }
-        self.connectingGateway = .gateway(gateway.id)
-        defer {
-            self.connectingGateway = nil
-            self.refreshGatewayRegistry()
-        }
-        self.manualGatewayEnabled = false
-        self.gatewayAuthFields.selectTarget(
-            gateway.stableID,
-            instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
-            allowManualOverride: false)
-        GatewaySettingsStore.saveDiscoveredGatewayStableID(gateway.stableID, preferred: true)
-        if let err = await self.gatewayController.connectWithDiagnostics(gateway) {
-            self.setupStatusText = err
-        }
-    }
-
     func applySetupCodeAndConnect() async {
         guard let attemptID = self.beginGatewaySetupAttempt() else { return }
         defer {
@@ -778,25 +755,9 @@ extension SettingsProTab {
         return value.range(of: pattern, options: .regularExpression) != nil
     }
 
-    func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {
-        var lines: [String] = []
-        if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }
-        if let tailnet = gateway.tailnetDns { lines.append("Tailnet: \(tailnet)") }
-        if let gatewayPort = gateway.gatewayPort {
-            lines.append("Port: \(gatewayPort)")
-        }
-        return lines.isEmpty ? [gateway.debugID] : lines
-    }
-
     var gatewayConnected: Bool {
         !self.appModel.isAppleReviewDemoModeEnabled &&
             GatewayStatusBuilder.build(appModel: self.appModel) == .connected
-    }
-
-    /// First-run state: no paired gateways yet (local gateway fixtures fake a
-    /// pairing), so the status card surfaces Scan QR as the primary action.
-    var gatewayNeedsPairing: Bool {
-        self.gatewayRegistry.entries.isEmpty && !self.appModel.isLocalGatewayFixtureEnabled
     }
 
     var gatewayStatusPresentation: (detail: String, value: String) {

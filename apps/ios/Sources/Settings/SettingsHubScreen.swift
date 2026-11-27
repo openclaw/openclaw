@@ -107,10 +107,6 @@ struct SettingsHubScreen: View {
         }
     }
 
-    private var agentID: String {
-        self.appModel.chatAgentId.trimmedNonEmpty ?? "main"
-    }
-
     private var accountRequest: SettingsAccount.Request {
         SettingsAccount.Request(
             ownerID: self.appModel.chatViewModelOwnerID,

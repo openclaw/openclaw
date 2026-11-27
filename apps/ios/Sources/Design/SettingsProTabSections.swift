@@ -667,49 +667,6 @@ extension SettingsProTab {
         }
     }
 
-    func discoveredGatewayRow(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> some View {
-        let availability = self.gatewayController.discoveredGatewayConnectionAvailability(gateway)
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: gateway.name)
-                        .font(SettingsType.label)
-                    Text(verbatim: self.gatewayDetailLines(gateway).joined(separator: " • "))
-                        .font(SettingsType.description)
-                        .foregroundStyle(SettingsInk.secondary)
-                        .lineLimit(2)
-                }
-                Spacer(minLength: 8)
-                if availability.canConnect {
-                    Button {
-                        Task { await self.connect(gateway) }
-                    } label: {
-                        if self.connectingGateway == .gateway(gateway.id) {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Text(availability.actionTitle)
-                                .font(OpenClawType.captionSemiBold)
-                        }
-                    }
-                    .font(OpenClawType.captionSemiBold)
-                    .buttonStyle(.bordered)
-                    .disabled(self.connectingGateway != nil)
-                } else {
-                    Text(availability.actionTitle)
-                        .font(SettingsType.value)
-                        .foregroundStyle(OpenClawBrand.warn)
-                }
-            }
-
-            if let guidanceText = availability.guidanceText {
-                Text(guidanceText)
-                    .font(SettingsType.description)
-                    .foregroundStyle(SettingsInk.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
     /// Connect is the group's action row: the label style, no icon, gray only while disabled.
     var manualGatewayCard: some View {
         Section {

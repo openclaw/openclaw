@@ -99,10 +99,6 @@ struct SettingsSectionTitle: View {
         self.text = Text(title)
     }
 
-    init(verbatim title: String) {
-        self.text = Text(verbatim: title)
-    }
-
     var body: some View {
         self.text
             .font(SettingsType.sectionTitle)
@@ -604,17 +600,6 @@ enum SettingsNotificationPresentation: Equatable {
         case .denied: String(localized: "Denied")
         case .notSet: String(localized: "Not enabled")
         case .unknown: String(localized: "Unknown")
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .enabled:
-            OpenClawBrand.ok
-        case .denied, .setup, .unknown:
-            OpenClawBrand.warn
-        case .checking, .notSet, .off:
-            .secondary
         }
     }
 

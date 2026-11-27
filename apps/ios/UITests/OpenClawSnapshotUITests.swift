@@ -1245,15 +1245,24 @@ extension OpenClawSnapshotUITests {
     }
 
     func testLocalDeviceSettingsWorkWithoutDashboard() throws {
-        self.launchApp(for: Self.settingsFallbackTarget, appearance: "dark", screenshotMode: false)
-        let app = try XCTUnwrap(self.app)
-        let onboardingClose = app.buttons["Close"]
-        if onboardingClose.waitForExistence(timeout: 3) {
-            onboardingClose.tap()
-            XCTAssertTrue(onboardingClose.waitForNonExistence(timeout: 5))
+        func openOfflineSettings(appearance: String?) throws -> XCUIApplication {
+            self.launchApp(for: Self.settingsFallbackTarget, appearance: appearance, screenshotMode: false)
+            let app = try XCTUnwrap(self.app)
+            let onboardingClose = app.buttons["Close"]
+            if onboardingClose.waitForExistence(timeout: 3) {
+                onboardingClose.tap()
+                XCTAssertTrue(onboardingClose.waitForNonExistence(timeout: 5))
+            }
+            // A previously onboarded device without a saved Gateway opens Connection first.
+            if app.navigationBars["Gateway"].exists {
+                try self.selectSidebarDestination("Settings")
+            }
+            let settings = app.descendants(matching: .any)["SettingsHub.Native"]
+            XCTAssertTrue(settings.waitForExistence(timeout: 8))
+            return app
         }
-        let settings = app.descendants(matching: .any)["SettingsHub.Native"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 8))
+
+        let app = try openOfflineSettings(appearance: "dark")
         self.attachScreenshot(named: "native-settings-dark")
 
         let appearance = app.buttons["SettingsHub.Appearance"]
@@ -1286,13 +1295,7 @@ extension OpenClawSnapshotUITests {
 
         app.navigationBars["Permissions"].buttons.element(boundBy: 0).tap()
         // Relaunch without the screenshot appearance override to verify the saved preference.
-        self.launchApp(for: Self.settingsFallbackTarget, appearance: nil, screenshotMode: false)
-        let relaunchedApp = try XCTUnwrap(self.app)
-        let relaunchedOnboardingClose = relaunchedApp.buttons["Close"]
-        if relaunchedOnboardingClose.waitForExistence(timeout: 3) {
-            relaunchedOnboardingClose.tap()
-            XCTAssertTrue(relaunchedOnboardingClose.waitForNonExistence(timeout: 5))
-        }
+        let relaunchedApp = try openOfflineSettings(appearance: nil)
         XCTAssertTrue(relaunchedApp.buttons.matching(identifier: "SettingsHub.Appearance")
             .matching(NSPredicate(format: "label == %@", "Appearance, Light"))
             .firstMatch.waitForExistence(timeout: 5))

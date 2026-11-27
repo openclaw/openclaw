@@ -87,16 +87,6 @@ struct RootSidebar: View {
         destination != .desktop || self.appModel.isDesktopObserveAvailable
     }
 
-    private func togglePinnedPage(_ destination: RootTabs.SidebarDestination) {
-        var pages = self.storedPinnedPages
-        if let index = pages.firstIndex(of: destination) {
-            pages.remove(at: index)
-        } else {
-            pages.append(destination)
-        }
-        self.pinnedPagesStorage = RootTabs.pinnedSidebarPagesStorage(pages)
-    }
-
     /// Brand header with compact global actions. Connection and Settings live
     /// together in the footer so the header stays focused on navigation.
     private var brandHeader: some View {
@@ -960,22 +950,6 @@ struct RootSidebarIcon: View {
             .symbolRenderingMode(.monochrome)
             .frame(width: 22, height: 22)
             .accessibilityHidden(true)
-    }
-
-    /// A session's mark in search results and on the Sessions page.
-    static let sessionSymbol = "bubble.left"
-
-    /// The muted 15 pt mark that leads a list row in search and on the Sessions page.
-    static func listMark(systemName: String) -> some View {
-        RootSidebarIcon(systemName: systemName, pointSize: 15)
-            .foregroundStyle(OpenClawSidebarPalette.muted)
-    }
-
-    static func pagePointSize(for destination: RootTabs.SidebarDestination) -> CGFloat {
-        switch destination {
-        case .usage, .cron: 19
-        default: 16
-        }
     }
 
     static func symbolName(for destination: RootTabs.SidebarDestination) -> String {
