@@ -187,7 +187,6 @@ export function createGitHubPublishTool(
     sessionId?: string;
     runId?: string;
     onYield?: SessionsYieldCallback;
-    senderIsOwner?: boolean;
   } & Pick<
     SpawnedToolContext,
     "inheritedToolAllowlist" | "inheritedToolDenylist" | "sessionPermissionPolicy"
@@ -350,7 +349,6 @@ export function createGitHubPublishTool(
           requestOwners,
           onYield: options.onYield,
           signal,
-          senderIsOwner: options.senderIsOwner,
           ...(method === "sessions.github.action" || caller.operatorAuthority?.participationCeiling
             ? { retainRequester: true as const }
             : {}),

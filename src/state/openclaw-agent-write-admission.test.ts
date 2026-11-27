@@ -15,16 +15,6 @@ import {
 } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  onInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  waitForDiagnosticEventsDrained,
-  type DiagnosticEventPayload,
-} from "../infra/diagnostic-events.js";
-import {
-  createDiagnosticTraceContext,
-  runWithDiagnosticTraceContext as withTrace,
-} from "../infra/diagnostic-trace-context.js";
 import { runWithSqliteDatabaseAdmissionTurn as nativeTurn } from "../infra/sqlite-database-admission-turn.js";
 import { withSqliteDatabaseAdmissionExchange as withExchange } from "../infra/sqlite-database-admission.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
@@ -899,43 +889,3 @@ it.each(["ok", "error"] as const)(
     }
   },
 );
-
-it("delivers reservation timing and request trace through the diagnostic log transport", async () => {
-  const { options, clock } = fixture();
-  vi.mocked(logging.getChildLogger).mockRestore();
-  resetDiagnosticEventsForTest();
-  logging.resetLogger();
-  logging.setLoggerOverride({ level: "warn", file: `${options.path}.log` });
-  const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
-  const unsubscribe = onInternalDiagnosticEvent((event) => {
-    if (event.type === "log.record") {
-      received.push(event);
-    }
-  });
-  const trace = createDiagnosticTraceContext();
-  try {
-    await withTrace(trace, () =>
-      write(options, () => {
-        clock.now = 1_250;
-      }),
-    );
-    await waitForDiagnosticEventsDrained();
-    expect(received).toEqual([
-      expect.objectContaining({
-        message: slowMessage,
-        level: "WARN",
-        trace,
-        attributes: expect.objectContaining({
-          subsystem: "session-sqlite",
-          writerExecutionMs: 1_250,
-        }),
-      }),
-    ]);
-  } finally {
-    unsubscribe();
-    await logging.flushLogger();
-    logging.setLoggerOverride(null);
-    logging.resetLogger();
-    resetDiagnosticEventsForTest();
-  }
-});

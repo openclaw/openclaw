@@ -134,7 +134,9 @@ async function validateCatalogSchemaValue(
     schemaName === "inputSchema"
       ? resolveAgentToolExecutionSchema(entry.tool, entry.parameters)
       : entry.outputSchema;
-  if (entry.source !== "openclaw") {
+  // MCP input schemas let a call by name fail before the server with its schema in the error.
+  const mcpInput = entry.source === "mcp" && schemaName === "inputSchema";
+  if (entry.source !== "openclaw" && !mcpInput) {
     return undefined;
   }
   try {
@@ -154,6 +156,10 @@ async function validateCatalogSchemaValue(
       value,
     });
   } catch (error) {
+    if (mcpInput) {
+      // The server owns its schema; one OpenClaw cannot compile still reaches the server.
+      return undefined;
+    }
     throw markToolContractFailure(
       new Error(`Tool "${entry.id}" has an invalid ${schemaName}.`, { cause: error }),
       "invalid_contract",
@@ -429,6 +435,8 @@ export class ToolSearchRuntime {
     this.pluginRuntimeRefresh.assertCurrent();
     catalog.callCount += 1;
     const validateInput = this.options.validateInput && entry.source === "openclaw";
+    // MCP input is checked after hooks, like native input, but never coerced.
+    const validateMcpInput = this.options.validateInput && entry.source === "mcp";
     const normalizedInput = validateInput
       ? coerceToolExecutionArguments(
           entry,
@@ -516,7 +524,7 @@ export class ToolSearchRuntime {
       acceptedSnapshot = snapshot;
       return snapshot;
     };
-    const validateExecution = validateInput || outputVariants !== undefined;
+    const validateExecution = validateInput || validateMcpInput || outputVariants !== undefined;
     const executionTool = prepareToolSearchCatalogExecutionTool(entry, {
       ...this.options,
       validateInput: validateExecution,
@@ -576,7 +584,7 @@ export class ToolSearchRuntime {
         ? await runWithToolExecutionValidation(
             toolCallId,
             async (finalInput) => {
-              if (validateInput) {
+              if (validateInput || validateMcpInput) {
                 await assertCatalogInputMatchesSchema(entry, finalInput, options?.recoverySurface);
               }
               executedInput = asOptionalRecord(structuredClone(finalInput));

@@ -355,7 +355,7 @@ const run = (runId: string) => ({ __openclaw: { runId } });
 it("shows every run's reply below completed work when completions arrive without user input", async () => {
   const container = await renderTallTranscript("work-runs", [
     { role: "user", content: "Start two subagents", timestamp: 1_000 },
-    openAIMessage("Spawning both.", 1_500, run("run-user")),
+    openAIMessage("Spawning both.", 1_500, { ...run("run-user"), phase: "commentary" }),
     {
       role: "toolResult",
       toolCallId: "work-runs-spawn",
