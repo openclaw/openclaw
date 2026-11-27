@@ -165,6 +165,84 @@ observation means that owner is no longer current. Once `executionStarted` is
 true, the start watch is complete. See the
 [migration details](/plugins/sdk-migration#agent-turn-start-observation).
 
+### Notify a person's browsers
+
+A plugin Gateway method with the same `gatewayMethodDispatch` declaration can
+send a browser notification to one person through `push.web.send`. The call
+works only inside an authenticated plugin request, because it runs with that
+requester's scopes; background events, timers, and service hooks have no
+request scope and cannot dispatch it.
+
+```typescript
+import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+
+const response = await dispatchGatewayMethod("push.web.send", {
+  profileId: "profile-id",
+  category: "agent-question",
+  tag: "ticket-42",
+  path: "chat/research/main",
+  title: "Ticket assigned",
+  body: "Review ticket 42",
+});
+// response.payload: { sent, failed, skipped, pruned }
+```
+
+Authorization:
+
+- The requester needs `operator.write`, the same as `push.web.test`.
+- When named operator roles apply to the requester, a requester without
+  `operator.admin` can notify only their own profile, including its merged
+  aliases. Any other profile returns `FORBIDDEN`. Roles apply to everyone when
+  `gateway.roles.default` is set, and to current OpenClaw ID members whenever
+  `gateway.roles` is configured, even without a default.
+
+The Gateway chooses the devices, never the caller. It resolves merged profiles,
+rechecks each browser's pairing, current role, OpenClaw ID binding and scopes,
+then applies that person's category toggles, quiet hours, and agent filter.
+
+Request fields:
+
+- `category` must be `agent-finished`, `agent-question`, or
+  `scheduled-task-failed`. Approval requests and human mentions keep their own
+  delivery paths: core sends mention alerts itself after checking that the
+  person can see the session. `agent-question` also requires the device to hold
+  `operator.questions`.
+- `agentId`, when given, must be an agent in the Gateway config; an unknown
+  agent returns `INVALID_REQUEST`. The person's agent filter is matched against
+  it.
+- `path` is a Control UI path opened on click, relative to the Control UI base
+  path. It accepts letters, digits, `.`, `_`, `~`, `/`, `-`, and complete
+  percent escapes (`%` plus two hex digits), must start with a letter or digit,
+  and cannot contain a query (`?`), a fragment (`#`), an empty segment
+  (including a trailing `/`), or a `.`/`..` segment (also percent-encoded).
+  Control UI reads startup settings such as the Gateway URL from the query and
+  fragment, so a notification cannot carry them. A path also cannot open a
+  security decision: the approval (`approve`) and question (`ask`) documents
+  and the device-pairing join namespace (a `j` segment anywhere in the path)
+  are rejected, because those notifications have their own core delivery.
+- `title` (80 characters) and `body` (240 characters) appear only on devices
+  set to **Detailed**, on one line. Line breaks and other control characters
+  become spaces; other invisible or direction-changing characters are shown
+  escaped. A **Names only** device shows the category's generic text with the
+  permitted labels (device label, agent id), and a **Private** device, the
+  default, shows the generic text alone. Do not rely on `title` or `body`
+  reaching the person.
+- `tag` collapses repeated notifications. `urgency` and `ttlSeconds` (default 300) pass to the push service.
+
+Result counts:
+
+- `skipped` counts that person's authorized devices suppressed by their
+  preferences. Categories are off by default for a newly subscribed browser
+  until the person enables them in **Settings → Notifications**, so a fresh
+  subscriber shows up as `skipped`.
+- Devices the Gateway does not authorize (revoked, no longer bound to the
+  person, or missing a scope the category needs) enter no counter.
+- `pruned` counts failed deliveries whose endpoint the push service reported as
+  gone; the Gateway removes those subscriptions.
+- A person with no current subscription, or an unknown profile the requester
+  may target, returns zero counts rather than an error. Quiet hours suppress the
+  send; nothing is queued for later.
+
 ### Session resource methods
 
 A plugin can declare `sessionAccess` when registering an additive Gateway method:

@@ -61,7 +61,7 @@ The detail levels are:
 
 - **Private** — generic attention text only.
 - **Names only** — may include a sanitized person, session, device, agent, task, or automation label.
-- **Detailed** — currently uses the same bounded, sanitized producer-owned labels. Message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload.
+- **Detailed** — currently uses the same bounded, sanitized producer-owned labels. Message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload. [Notifications sent by plugins](#notifications-sent-by-plugins) show the sender's own short title and body only at this level.
 
 For browser **Agent finished** alerts, **Names only** and **Detailed** include the
 current explicit session label when the event has exactly one authoritative
@@ -86,6 +86,26 @@ Only browsers bound to the mentioned profile receive the alert. Each delivery re
 Your [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) does not depend on Web Push permission or this setting. Its entries and dismissals survive Gateway restarts within the seven-day retention window. Opening the Inbox, reconnecting, or restarting the Gateway does not resend old entries as browser notifications. The service worker shows browser alerts. The live Inbox update does not create a second OS notification. Human mention alerts are not implemented through the native macOS or iOS/Android push paths.
 
 To check targeting, have another eligible signed-in person select you from the chat `@` picker and send a normal message. Check **Inbox → Mentions**, then check the enabled browser alert. **Test all browsers** only checks browser push transport and can reach every registered subscription. It does not prove that a human mention was selected, committed, or addressed to your profile. Delivery is best-effort, not an exactly-once guarantee.
+
+### Notifications sent by plugins
+
+Plugins and operator clients can notify one person's browsers through the
+[`push.web.send`](/plugins/sdk-runtime/gateway-and-nodes#notify-a-persons-browsers)
+Gateway method, but only while handling an authenticated request, not from
+background events. These sends reuse the agent completion, agent question, or
+scheduled-task failure category, so your category toggles, quiet hours, agent
+filter, and lock-screen detail apply to them as well. Categories you have not
+enabled block them.
+
+Only browsers bound to your profile can receive them. With **Private** detail
+(the default) you see the category's generic text. With **Names only** you see
+the same generic text with the device and agent labels; the sender's own words
+never appear. Only with **Detailed** do you see the sender's sanitized title
+and body on one line. When
+named operator roles apply to the sender, only you or an operator with
+`operator.admin` can send to your profile.
+Clicking one opens an ordinary Control UI page; it never opens an approval,
+question, or device-pairing page.
 
 ### Use more than one Gateway on one phone
 

@@ -12,12 +12,12 @@ import { sanitizeExecApprovalDisplayText } from "./exec-approval-text-sanitize.j
 
 export const WEB_PUSH_USER_PREFERENCES_KEY = "notifications.web.v1";
 
-export function normalizeWebPushDisplayLabel(value: unknown): string | undefined {
+export function normalizeWebPushDisplayLabel(value: unknown, maxLength = 80): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   // Redact and escape before truncation; raw IDs still own filtering and authorization.
-  return truncateUtf16Safe(sanitizeExecApprovalDisplayText(value.trim()), 80) || undefined;
+  return truncateUtf16Safe(sanitizeExecApprovalDisplayText(value.trim()), maxLength) || undefined;
 }
 
 const DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES: WebPushNotificationPreferences = {

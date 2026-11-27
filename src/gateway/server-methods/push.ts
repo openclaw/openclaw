@@ -5,6 +5,7 @@ import {
   validateWebPushSubscribeParams,
   validateWebPushPreferencesGetParams,
   validateWebPushPreferencesSetParams,
+  validateWebPushSendParams,
   validateWebPushTestParams,
   validateWebPushUnsubscribeParams,
   validateWebPushVapidPublicKeyParams,
@@ -42,8 +43,16 @@ import {
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { sendProfileWebPush } from "../event-web-push.js";
 import { prepareDeviceTokenBindingLookup } from "../openclaw-id/device-token-binding.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
+import { operatorRefusalText } from "../operator-refusal.js";
+import {
+  isNamedOperatorRoleEnforcementEnabled,
+  isOperatorRoleEnforcedFor,
+  operatorRoleSubject,
+} from "../operator-role-enforcement.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -110,6 +119,48 @@ function createWebPushRequestGuard(options: PushRequestOptions) {
       };
     },
   };
+}
+
+/**
+ * When named operator roles govern the caller, it may notify only its own (canonical)
+ * profile unless it holds `operator.admin`. Roles govern every caller when
+ * `gateway.roles.default` is set, and a current OpenClaw ID member whenever a role catalog
+ * exists. Otherwise `operator.write` keeps the installation-wide model of `push.web.test`.
+ */
+async function mayTargetWebPushProfile(
+  options: Pick<GatewayRequestHandlerOptions, "client">,
+  cfg: Parameters<typeof isOperatorRoleEnforcedFor>[0],
+  profileId: string,
+): Promise<boolean> {
+  if (cfg?.gateway?.roles === undefined || hasGatewayAdminScope(options.client)) {
+    return true;
+  }
+  const memberPrincipal = options.client?.internal?.openclawIdPrincipal?.kind === "member";
+  const ownReference = options.client?.authenticatedUserProfile?.profileId;
+  if (!ownReference) {
+    return !isOperatorRoleEnforcedFor(cfg, {
+      profileId: undefined,
+      openclawIdMember: memberPrincipal,
+    });
+  }
+  const profiles = await prepareUserProfileCatalog();
+  try {
+    const own = profiles.readCurrentIdentity(ownReference);
+    const subject = operatorRoleSubject(own);
+    if (
+      !isOperatorRoleEnforcedFor(cfg, {
+        ...subject,
+        openclawIdMember: subject.openclawIdMember || memberPrincipal,
+      })
+    ) {
+      return true;
+    }
+    return Boolean(
+      own?.profileId && own.profileId === profiles.readCurrentIdentity(profileId)?.profileId,
+    );
+  } finally {
+    profiles.release();
+  }
 }
 
 type AuthorizedWebPushSubscription = {
@@ -434,6 +485,32 @@ export const pushHandlers = {
           (target) => setWebPushSubscriptionPreferences({ ...target, preferences }),
           () => ({ scope: "device", preferences }),
         );
+      });
+    },
+  ),
+
+  "push.web.send": defineValidatedGatewayHandler(
+    "push.web.send",
+    validateWebPushSendParams,
+    async ({ params, respond, context, client }) => {
+      const cfg = context.getRuntimeConfig();
+      const agentId =
+        params.agentId === undefined
+          ? undefined
+          : resolveConfiguredAgentIdOrRespondError(params.agentId, cfg, respond);
+      if (agentId === null) {
+        return;
+      }
+      await respondUnavailableOnThrow(respond, async () => {
+        if (!(await mayTargetWebPushProfile({ client }, cfg, params.profileId))) {
+          respondWebPushForbidden(
+            respond,
+            operatorRefusalText("role-denies", "send this notification to another profile"),
+          );
+          return;
+        }
+        const request = agentId === undefined ? params : { ...params, agentId };
+        respond(true, await sendProfileWebPush(context.getRuntimeConfig, request), undefined);
       });
     },
   ),
