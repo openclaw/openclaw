@@ -36,7 +36,7 @@ const enSessionNavigation = {
       multipleMatches: "More than one session matches {shortId}.",
       additionalMatches: "Search results remain. Use a longer id prefix.",
       notFoundTitle: "Session not found",
-      notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
+      notFoundExplanation: "OpenClaw couldn’t find a session for this link.",
       bootDraftRecovery: "Copy any text below before opening another session.",
       homeUnavailableTitle: "Start a session",
       homeUnavailableBody:
