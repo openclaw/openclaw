@@ -377,7 +377,7 @@ type BuildProviderReplayFamilyHooksOptions =
   | {
       /** Family that switches between Anthropic and OpenAI-compatible replay by request context. */
       family: "hybrid-anthropic-openai";
-      /** @deprecated No effect: Anthropic-model replay keeps stored thinking and the API strips what a model does not read. */
+      /** Ignored: Anthropic-model replay keeps stored thinking; the API strips what a model does not read. */
       anthropicModelDropThinkingBlocks?: boolean;
     };
 
