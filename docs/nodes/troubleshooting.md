@@ -3,6 +3,7 @@ summary: "Troubleshoot node pairing, foreground requirements, permissions, and t
 read_when:
   - Node is connected but camera/screen/exec tools fail
   - You need the node pairing versus approvals mental model
+  - A voice note has no transcript, a reply arrives as text only, or Talk will not start
 title: "Node troubleshooting"
 ---
 
@@ -193,6 +194,26 @@ For approval-backed `host=node` runs, the gateway also binds execution to the pr
 | `ACCESSIBILITY_REQUIRED`               | Grant Accessibility to the current OpenClaw app bundle in macOS System Settings.                                                                                                        |
 | `SYSTEM_RUN_DENIED: approval required` | Exec request needs explicit approval.                                                                                                                                                   |
 | `SYSTEM_RUN_DENIED: allowlist miss`    | Command blocked by allowlist mode. On Windows node hosts, shell-wrapper forms like `cmd.exe /c ...` are treated as allowlist misses in allowlist mode unless approved via the ask flow. |
+
+## Voice, audio, and Talk
+
+Use this section when a voice note produces no transcript, a reply arrives as text only, or Talk or dictation will not start. These failures are usually provider, permission, or audio-device problems rather than node pairing.
+
+| Symptom | Check | Where to look |
+| --- | --- | --- |
+| Voice note sent, but no transcript or an `[Attachment could not be read]` placeholder | Confirm which transcription provider or CLI was selected, and whether the file exceeded the 20 MB default cap or the entry's timeout. Provider errors and skipped entries appear in the Gateway log. | [Audio and voice notes](/nodes/audio), [Media understanding](/nodes/media-understanding) |
+| Reply arrives as text only, or no voice note is sent | Run `/tts status` to see the active provider, the latest fallback chain, and per-attempt outcomes. Check that the channel accepts voice notes in the selected output format. | [TTS commands](/tools/tts/commands), [TTS output](/tools/tts/output) |
+| Talk or dictation will not start | Grant microphone access to the client. In a browser, open the Control UI over HTTPS or localhost because browsers block the microphone on insecure origins. Confirm the Talk provider is ready. | [Talk mode](/nodes/talk), [Control UI Talk](/web/control-ui/chat#talk-mode-browser-realtime) |
+| Talk stops hearing after a device change or interruption | Reconnect the audio device, then restart the Talk session. On macOS, a dropped relay retries on a short bounded schedule before falling back to native speech, and the overlay reports the reason. | [When realtime cannot start](/nodes/talk/macos-relay#when-realtime-cannot-start) |
+| Voice wake does not react | Check microphone permission, keep the app in the foreground where the platform requires it, and confirm wake-word settings are enabled for the node. | [Voice wake](/nodes/voicewake) |
+
+Inspect the Gateway log for the provider or device error:
+
+```bash
+openclaw logs --follow
+```
+
+Use `/tts status` in the chat where the reply failed; it reports the fallback chain for the latest attempt.
 
 ## Fast recovery loop
 
