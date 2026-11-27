@@ -40,8 +40,7 @@ function readSessionDisplayFacts(entry: SubagentRunReadRecord | null, now: numbe
   return {
     identity,
     model: entry.model,
-    ownerSessionKey:
-      entry.controllerSessionKey?.trim() || entry.requesterSessionKey.trim() || undefined,
+    ownerSessionKey: resolveControllerSessionKey(entry).trim() || undefined,
     active: isSubagentRunLive(entry) || isSubagentRunQueued(entry),
     paused: isSubagentRunPausedForContinuation(entry),
     status: resolveSubagentSessionStatus(entry),
@@ -425,8 +424,8 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       atTime,
       patch,
       // Selection is captured; custody and elapsed runtime are current query facts.
-      getSessionDisplayFacts: (key, now = clock) =>
-        readSessionDisplayFacts(selectSessionDisplayRun(key), now),
+      getSessionDisplayFacts: (key, queryTime = clock) =>
+        readSessionDisplayFacts(selectSessionDisplayRun(key), queryTime),
       latestRunsByChildSessionKey,
       runsByChildSessionKey,
       activeRequesterSessionKeys: () => {
