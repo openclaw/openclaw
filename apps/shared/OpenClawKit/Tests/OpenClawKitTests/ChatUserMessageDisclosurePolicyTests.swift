@@ -14,9 +14,9 @@ struct ChatUserMessageDisclosurePolicyTests {
     @Test func `long prompts produce a bounded plain text preview`() {
         let lines = Array(repeating: "line", count: 13).joined(separator: "\n")
         #expect(ChatUserMessageDisclosurePolicy.collapsedPreview(lines) ==
-            Array(repeating: "line", count: 12).joined(separator: "\n") + "…")
+            Array(repeating: "line", count: 12).joined(separator: "\n"))
         #expect(ChatUserMessageDisclosurePolicy.collapsedPreview(
-            String(repeating: "a", count: 701)) == String(repeating: "a", count: 700) + "…")
+            String(repeating: "a", count: 701)) == String(repeating: "a", count: 700))
     }
 
     @Test func `mixed CRLF and LF count as lines and keep the original preview text`() {
