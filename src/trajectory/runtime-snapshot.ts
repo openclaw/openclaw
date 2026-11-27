@@ -1,4 +1,5 @@
 import { hash, randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
@@ -137,13 +138,11 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
   const consumed = new Set<TrajectoryEvent>();
   const replacements = new Map<TrajectoryEvent, TrajectoryEvent>();
   const parents = new Set<unknown>();
-  const sameRun = (left: TrajectoryEvent, right: TrajectoryEvent) =>
+  // The store scopes the rows; the snapshot UUID and sequence bind each fragment group.
+  const sameContext = (left: TrajectoryEvent, right: TrajectoryEvent) =>
     left.source === "runtime" &&
     right.source === "runtime" &&
-    left.sessionId === right.sessionId &&
     left.sessionKey === right.sessionKey &&
-    left.traceId === right.traceId &&
-    left.runId === right.runId &&
     left.ts === right.ts &&
     left.workspaceDir === right.workspaceDir &&
     left.provider === right.provider &&
@@ -155,9 +154,7 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
     if (
       event.type !== "model.completed" ||
       !data ||
-      !reference ||
-      typeof reference !== "object" ||
-      Array.isArray(reference) ||
+      !isRecord(reference) ||
       data.truncated !== true ||
       data.reason !== "trajectory-event-size-limit" ||
       !Array.isArray(data.droppedFields) ||
@@ -165,7 +162,7 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
     ) {
       continue;
     }
-    const { id, count, sha256 } = reference as Record<string, unknown>;
+    const { id, count, sha256 } = reference;
     parents.add(id);
     const fragments = typeof id === "string" ? groups.get(id) : undefined;
     if (
@@ -182,22 +179,29 @@ export function restoreTrajectorySnapshots(events: TrajectoryEvent[]): Trajector
       (left, right) => Number(left.data?.index) - Number(right.data?.index),
     );
     const parentSeq = event.sourceSeq ?? event.seq;
-    if (
-      !ordered.every(
-        (part, index) =>
-          sameRun(part, event) &&
-          part.data?.truncated === true &&
-          part.data.reason === "trajectory-snapshot-fragment" &&
-          part.data?.index === index &&
-          part.data.count === count &&
-          part.data.sha256 === sha256 &&
-          (part.sourceSeq ?? part.seq) === parentSeq - count + index &&
-          Array.isArray(part.data.messagesSnapshot),
-      )
-    ) {
+    const messages: unknown[] = [];
+    let complete = true;
+    for (const [index, part] of ordered.entries()) {
+      if (
+        !sameContext(part, event) ||
+        part.data?.truncated !== true ||
+        part.data.reason !== "trajectory-snapshot-fragment" ||
+        part.data.index !== index ||
+        part.data.count !== count ||
+        part.data.sha256 !== sha256 ||
+        (part.sourceSeq ?? part.seq) !== parentSeq - count + index ||
+        !Array.isArray(part.data.messagesSnapshot)
+      ) {
+        complete = false;
+        break;
+      }
+      for (const message of part.data.messagesSnapshot) {
+        messages.push(message);
+      }
+    }
+    if (!complete) {
       continue;
     }
-    const messages = ordered.flatMap((part) => part.data!.messagesSnapshot as unknown[]);
     if (hash("sha256", JSON.stringify(messages)) !== sha256) {
       continue;
     }

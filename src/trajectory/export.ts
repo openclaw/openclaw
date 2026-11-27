@@ -587,12 +587,11 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     }),
   );
-  const runtimeEvents = await loadTrajectoryRuntimeForExport({
-    sessionFile: params.sessionFile,
-    sessionId: params.sessionId,
-    sessionTarget,
-    maxEventCount: MAX_TRAJECTORY_RUNTIME_EVENTS,
-  });
+  const marker = sessionTarget ?? parseSqliteSessionFileMarker(params.sessionFile);
+  if (marker && marker.sessionId !== params.sessionId) {
+    throw new Error("Trajectory runtime target does not match the requested session");
+  }
+  const runtimeEvents = await loadTrajectoryRuntimeForExport(marker, MAX_TRAJECTORY_RUNTIME_EVENTS);
   assertCanonicalTrajectoryInputs(branchEntries, runtimeEvents);
   const { sessionId, sessionKey, workspaceDir } = params;
   const transcriptEvents = ((): TrajectoryEvent[] => {

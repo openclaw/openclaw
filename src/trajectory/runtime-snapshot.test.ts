@@ -23,10 +23,11 @@ const event: TrajectoryEvent = {
   runId: "run",
   data: { messagesSnapshot: snapshot, stopReason: "stop" },
 };
-function records() {
+function records(runId = event.runId) {
+  const current = { ...event, runId };
   return fragmentTrajectorySnapshot(
-    event,
-    Buffer.byteLength(JSON.stringify(event)),
+    current,
+    Buffer.byteLength(JSON.stringify(current)),
     TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   )!;
 }
@@ -47,8 +48,8 @@ describe("prepared trajectory snapshots", () => {
     expect(JSON.stringify(event)).toBe(before);
   });
 
-  it("keeps incomplete, duplicated, altered and cross-run groups explicitly partial", () => {
-    for (const mutation of ["missing", "duplicate", "payload", "run", "index", "digest"]) {
+  it("keeps incomplete, duplicated, altered and wrong-context groups explicitly partial", () => {
+    for (const mutation of ["missing", "duplicate", "payload", "context", "index", "digest"]) {
       const encoded = records().map(({ line }) => JSON.parse(line) as TrajectoryEvent);
       if (mutation === "missing") {
         encoded.shift();
@@ -59,8 +60,8 @@ describe("prepared trajectory snapshots", () => {
       if (mutation === "payload") {
         encoded[0]!.data!.messagesSnapshot = [];
       }
-      if (mutation === "run") {
-        encoded[0]!.runId = "another-run";
+      if (mutation === "context") {
+        encoded[0]!.sessionKey = "another-chat";
       }
       if (mutation === "index") {
         encoded[0]!.data!.index = 9;
@@ -99,11 +100,16 @@ describe("prepared trajectory snapshots", () => {
 
   it("keeps repeated recorder sequences in separate groups", () => {
     const first = records(),
-      second = records();
+      second = records("second-run");
     const decoded = restoreTrajectorySnapshots(
       [...first, ...second].map(({ line }) => JSON.parse(line)),
     );
     expect(decoded).toHaveLength(2);
     expect(decoded.map((part) => part.data?.messagesSnapshot)).toEqual([snapshot, snapshot]);
+    const mixed = restoreTrajectorySnapshots(
+      [second[0]!, ...first.slice(1)].map(({ line }) => JSON.parse(line)),
+    );
+    expect(mixed.find((part) => part.type === "model.completed")?.data?.truncated).toBe(true);
+    expect(mixed.some((part) => part.data?.messagesSnapshot)).toBe(false);
   });
 });
