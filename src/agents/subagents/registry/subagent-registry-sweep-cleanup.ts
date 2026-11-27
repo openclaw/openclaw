@@ -24,7 +24,11 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
-import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import {
+  getSubagentRunRuntimeKey,
+  isSameSubagentRun,
+  isSameSubagentRunOwner,
+} from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   shouldSuppressSubagentSessionCleanup,
@@ -129,7 +133,7 @@ export function createSubagentSweepContext(
   >();
   // Completion stays fresh across awaits, but deletion must retain the earlier
   // CAS identity. Bind it to the exact run so replacements wait for another pass.
-  const cleanupIdentities = new Map<object, FrozenSessionIdentity | undefined>();
+  const cleanupIdentities = new Map<object, ReturnType<typeof freezeSessionIdentity>>();
   function prepareCleanup(entries: readonly (readonly [string, SubagentRunRecord])[]) {
     for (const [, entry] of entries) {
       if (
@@ -389,7 +393,7 @@ export function createSubagentSweepContext(
               return (
                 !isCleanupCurrent(current, expected) ||
                 !isCollectorArchiveReady(current, now) ||
-                !liveGroup.some(([liveRunId]) => liveRunId === runId)
+                !liveGroup.some(([, member]) => isSameSubagentRun(member, expected))
               );
             })
           ) {
@@ -415,9 +419,7 @@ export function createSubagentSweepContext(
   return { ...readScope, prepareCleanup, sweepRun, sweepCollectorGroups };
 }
 
-type FrozenSessionIdentity = { sessionId: string; lifecycleRevision: string };
-
-function freezeSessionIdentity(entry: SubagentRunRecord): FrozenSessionIdentity | undefined {
+function freezeSessionIdentity(entry: SubagentRunRecord) {
   const authority = resolveSubagentChildAuthority(entry);
   return authority.status === "verified" ? authority.sessionIdentity : undefined;
 }
