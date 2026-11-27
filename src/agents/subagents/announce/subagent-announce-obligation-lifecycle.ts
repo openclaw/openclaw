@@ -205,6 +205,7 @@ function registerDetachedCompletion<Completion>(
       return;
     }
     let waiting = false;
+    let consumedDuringAdmission = false;
     try {
       if (shared.retiring && !shared.token && !isConsumed()) {
         await lifecycle.retire("unavailable", assertActive);
@@ -249,7 +250,14 @@ function registerDetachedCompletion<Completion>(
         waiting = true;
         return;
       }
-      const delivery = await lifecycle.deliver(completion, assertCurrent);
+      const delivery = await lifecycle.deliver(completion, () => {
+        assertCurrent();
+        // Another observer can confirm receipt while delivery awaits requester lookup.
+        if (isConsumed()) {
+          consumedDuringAdmission = true;
+          throw new Error("Completion was already consumed");
+        }
+      });
       if (released || !lifecycle.isCurrent()) {
         return;
       }
@@ -273,6 +281,10 @@ function registerDetachedCompletion<Completion>(
       }
     } catch (error) {
       if (!released && lifecycle.isCurrent()) {
+        if (consumedDuringAdmission) {
+          await retire();
+          return;
+        }
         if (lifecycle.readiness() === "unavailable") {
           await lifecycle.retire("unavailable", assertCurrent);
           release();

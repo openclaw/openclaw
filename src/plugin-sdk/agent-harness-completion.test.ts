@@ -94,7 +94,8 @@ it("keeps native consumption through an in-flight failure and separates a succes
   vi.useFakeTimers();
   const started = Promise.withResolvers<void>();
   const response = Promise.withResolvers<AgentHarnessCompletionDelivery>();
-  const send = vi.fn(() => {
+  const send = vi.fn((_completion: string, assertCurrent: () => void) => {
+    assertCurrent();
     started.resolve();
     return response.promise;
   });
@@ -126,7 +127,10 @@ it("keeps native consumption through an in-flight failure and separates a succes
       gatewayContextResolver: () => undefined,
     }),
   });
-  const successorSend = vi.fn(async () => direct());
+  const successorSend = vi.fn(async (_completion: string, assertCurrent: () => void) => {
+    assertCurrent();
+    return direct();
+  });
   const successor = registerAgentHarnessCompletion({
     ...registration,
     assignmentId: "native-turn-two",
@@ -149,6 +153,61 @@ it("keeps native consumption through an in-flight failure and separates a succes
     duplicate.release();
     successor.release();
     vi.useRealTimers();
+  }
+});
+
+it("retires a receipt recovered during requester lookup before admitting a parent wake", async () => {
+  const entered = Promise.withResolvers<void>();
+  const resumeLookup = Promise.withResolvers<void>();
+  mocks.resolveCompletionOrigin.mockImplementationOnce(async () => {
+    entered.resolve();
+    await resumeLookup.promise;
+    return undefined;
+  });
+  const retire = vi.fn(async (_outcome: string, assertCurrent: () => void) => {
+    assertCurrent();
+  });
+  const registration = {
+    scope: createAgentHarnessCompletionScope(source),
+    assignmentId: "recovered-native-turn",
+    isCurrent: () => true,
+    readiness: () => "ready" as const,
+    observeConsumption: async () => false,
+    deliver: (result: string, assertCurrent: () => void) =>
+      deliver({
+        result,
+        isSourceSessionAdmissionAllowed: () => {
+          try {
+            assertCurrent();
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      }),
+    retire,
+    settleExecution() {},
+    onError(error: unknown) {
+      throw error;
+    },
+  };
+  const owner = registerAgentHarnessCompletion(registration);
+  const replacement = registerAgentHarnessCompletion({
+    ...registration,
+    scope: createAgentHarnessCompletionScope(source),
+  });
+  try {
+    const pending = owner.complete("native result");
+    await entered.promise;
+    replacement.consume();
+    resumeLookup.resolve();
+    await pending;
+    expect(mocks.deliver).not.toHaveBeenCalled();
+    expect(retire).toHaveBeenCalledExactlyOnceWith("consumed", expect.any(Function));
+  } finally {
+    resumeLookup.resolve();
+    owner.release();
+    replacement.release();
   }
 });
 
