@@ -162,6 +162,7 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       const locationArgs = [
         input.databasePath,
         input.location,
+        command.type === "updateRuns.recoveryAdmission" ||
         command.type === "updateRuns.pluginCohortRecovery"
           ? openDoctorStateSchemaReadAdmission
           : undefined,

@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathEntryExists } from "./path-existence.js";
 import type { UpdateRecoveryAdmissionOptions } from "./update-run-recovery.js";
@@ -14,6 +19,18 @@ export async function assertUpdateRecoveryAdmission(
   );
   await assertUpdateRecoveryDirectoryAdmission(databasePath);
   options.pluginCohort?.fence.assertCurrent();
+}
+
+/** Read facts in the fixed worker; live continuation authority never crosses that boundary. */
+export async function readUpdateRecoveryAdmissionFactsAsync(options: OpenClawStateDatabaseOptions) {
+  const reply = await withArtifactPreservingStateReads(() =>
+    executeExistingOpenClawStateRead(
+      options,
+      { type: "updateRuns.recoveryAdmission" },
+      { current: true },
+    ),
+  );
+  return reply?.facts;
 }
 
 /** A restore directory beside the state database: evidence, unlike a failed listing. */

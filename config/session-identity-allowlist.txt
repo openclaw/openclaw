@@ -1318,7 +1318,7 @@ src/infra/update-run-read.kernel.ts	2
 src/infra/update-run-reconciliation.read.ts	2
 src/infra/update-run-recovery-schema.ts	13
 src/infra/update-run-recovery-store.ts	2
-src/infra/update-run-recovery.ts	2
+src/infra/update-run-recovery.ts	6
 src/infra/update-run-status.ts	1
 src/logging/diagnostic-owned-activity.ts	2
 src/logging/diagnostic-repeated-request-activity.ts	8
