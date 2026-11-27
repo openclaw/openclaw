@@ -1,0 +1,5 @@
+# Memory per-entry chunking marker test-lines allocation for PR #186649
+# net delta +187; test-lines ceiling 6664180 exceeded by 172 (total 6664352).
+# Covered by new per-entry chunking marker proof and dependency-graph change
+# (p emerge exclusion). Allocation: 172 lines.
+172
