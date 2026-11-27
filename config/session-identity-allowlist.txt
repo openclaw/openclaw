@@ -950,7 +950,7 @@ src/gateway/server-methods/sessions-read.ts	6
 src/gateway/server-methods/sessions-rewind.ts	9
 src/gateway/server-methods/sessions-search-projected.ts	2
 src/gateway/server-methods/sessions-sharing-authority.ts	7
-src/gateway/server-methods/sessions-sharing.ts	15
+src/gateway/server-methods/sessions-sharing.ts	14
 src/gateway/server-methods/sessions-suggestions-access.ts	6
 src/gateway/server-methods/sessions-suggestions.ts	14
 src/gateway/server-methods/sessions-typing.ts	8
