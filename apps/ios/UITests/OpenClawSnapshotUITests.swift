@@ -24,7 +24,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         name: "03-agent-connected")
     private static let settingsScreenshotTarget = ScreenshotTarget(
         initialTab: "settings",
-        initialDestination: "gateway",
+        initialDestination: "settings",
         name: "04-settings-connected")
     private static let settingsFallbackTarget = ScreenshotTarget(
         initialTab: "settings",
@@ -325,16 +325,28 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
     func testReleaseSettingsScreenshot() {
         self.captureReleaseScreenshot(Self.settingsScreenshotTarget) { app in
-            // The connected fixture must not also render the first-run pairing hero.
-            XCTAssertTrue(app.buttons["Reconnect"].waitForExistence(timeout: 5))
-            XCTAssertFalse(app.buttons["Scan QR to Pair"].exists)
+            XCTAssertTrue(app.descendants(matching: .any)["SettingsHub.Native"].waitForExistence(timeout: 8))
+            XCTAssertTrue(app.staticTexts["General"].isHittable)
+            XCTAssertFalse(app.webViews.firstMatch.exists)
         }
         guard let app = self.app else { return }
+        let hub = app.descendants(matching: .any)["SettingsHub.Native"]
+        let gateway = hub.buttons["SettingsHub.Gateway"]
+        for _ in 0..<8 where !gateway.isHittable {
+            hub.swipeUp()
+        }
+        gateway.tap()
+        let details = app.buttons["Connection details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        // A healthy connection needs neither recovery nor the first-run pairing hero.
+        XCTAssertFalse(app.buttons["Reconnect"].exists)
+        XCTAssertFalse(app.buttons["Scan QR to Pair"].exists)
+        details.tap()
         // After capture: the fixture never loads the saved manual Gateway, so controls that would
         // act on its route or credentials stay hidden down to the last row of the screen.
         let savedGatewayControls = [
             app.textFields["Host"],
-            app.buttons["Connect Manual"],
+            app.buttons["SettingsHub.ManualConnect"],
             app.secureTextFields["Gateway Auth Token"],
             app.secureTextFields["Gateway Password"],
         ]
@@ -352,7 +364,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
     func testWatchMessageDeliveryIsReachableFromSettings() throws {
         self.launchApp(for: Self.settingsFallbackTarget)
         let app = try XCTUnwrap(self.app)
-        XCTAssertTrue(app.descendants(matching: .any)["SettingsHub.Fallback"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.descendants(matching: .any)["SettingsHub.Native"].waitForExistence(timeout: 8))
+        let accessories = app.buttons["Accessories"]
+        XCTAssertTrue(accessories.waitForExistence(timeout: 5))
+        accessories.tap()
         let watch = app.buttons["settings-watch-row"]
         for _ in 0..<12 where !watch.isHittable {
             app.swipeUp()
@@ -436,7 +451,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(add.waitForExistence(timeout: 4))
         XCTAssertFalse(add.isEnabled)
         XCTAssertTrue(app.staticTexts[
-            "Header names cannot include spaces or other characters outside a single HTTP token.",
+            "Header names can’t include spaces or special characters.",
         ].waitForExistence(timeout: 4))
         XCTAssertEqual(name.value as? String, "X Client ID")
         self.saveScreen(named: "invalid-name-kept")
@@ -708,30 +723,27 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertFalse(app.navigationBars["Licenses"].exists)
     }
 
-    func testGatewaySettingsOpenedFromChatUsesRootSidebarNavigation() throws {
+    func testGatewaySettingsOpenedFromChatReturnsToChat() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
-
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "chat",
-            initialDestination: "chat",
-            name: "chat-settings-back"))
+        self.launchApp(for: Self.chatScreenshotTarget)
+        let app = try XCTUnwrap(self.app)
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 8))
 
         try self.openChatGatewaySettings()
-        let gatewayNavigationBar = try XCTUnwrap(self.app?.navigationBars["Gateway"])
-        XCTAssertTrue(gatewayNavigationBar.waitForExistence(timeout: 5))
-        XCTAssertTrue(self.app?.buttons["RootTabs.Sidebar.Show"].exists == true)
-        XCTAssertFalse(gatewayNavigationBar.buttons["BackButton"].exists)
-        self.attachScreenshot(named: "chat-gateway-root")
+        let gateway = app.navigationBars["Gateway"]
+        XCTAssertTrue(gateway.waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "chat-gateway-sheet")
+        gateway.buttons.element(boundBy: 0).tap()
 
-        let showSidebar = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Show"])
-        showSidebar.tap()
-        let settings = try XCTUnwrap(self.app?.buttons["Settings"])
+        let settings = app.descendants(matching: .any)["SettingsHub.Native"]
         XCTAssertTrue(settings.waitForExistence(timeout: 5))
-        settings.tap()
-
-        XCTAssertTrue(self.app?.navigationBars["Settings"].waitForExistence(timeout: 5) == true)
-        XCTAssertTrue(self.app?.buttons["RootTabs.Sidebar.Show"].exists == true)
-        self.attachScreenshot(named: "gateway-to-settings-via-sidebar")
+        app.buttons["SettingsHub.Close"].tap()
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
+        let hideSidebar = app.buttons["RootTabs.Sidebar.Hide"]
+        self.waitForHittable(true, of: hideSidebar)
+        hideSidebar.tap()
+        self.waitForHittable(true, of: composer)
     }
 
     func testChatComposerStartsCompactAndGrowsWithDraft() throws {
@@ -1235,46 +1247,48 @@ extension OpenClawSnapshotUITests {
     func testLocalDeviceSettingsWorkWithoutDashboard() throws {
         self.launchApp(for: Self.settingsFallbackTarget, appearance: "dark", screenshotMode: false)
         let app = try XCTUnwrap(self.app)
-        let onboardingClose = app.buttons["Close"]
-        if onboardingClose.waitForExistence(timeout: 3) {
-            onboardingClose.tap()
+        let settings = app.descendants(matching: .any)["SettingsHub.Native"]
+        if !settings.exists, app.buttons["Close"].waitForExistence(timeout: 3) {
+            app.buttons["Close"].tap()
         }
-        let localSettings = app.buttons["settings-device-row"]
-        XCTAssertTrue(localSettings.waitForExistence(timeout: 8))
-        self.attachScreenshot(named: "local-settings-fallback")
-        localSettings.tap()
+        XCTAssertTrue(settings.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "native-settings-dark")
 
-        let appearance = app.buttons["LocalDeviceSettings.Appearance"]
+        let appearance = app.buttons["SettingsHub.Appearance"]
         XCTAssertTrue(appearance.waitForExistence(timeout: 5))
         appearance.tap()
         app.buttons["Light"].tap()
-        XCTAssertTrue(app.buttons.matching(identifier: "LocalDeviceSettings.Appearance")
+        XCTAssertTrue(app.buttons.matching(identifier: "SettingsHub.Appearance")
             .matching(NSPredicate(format: "label == %@", "Appearance, Light"))
             .firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.webViews.firstMatch.exists)
         XCTAssertFalse(app.secureTextFields.firstMatch.exists)
-        self.attachScreenshot(named: "local-settings-appearance")
+        self.attachScreenshot(named: "native-settings-light")
 
-        let keepAwake = app.switches["LocalDeviceSettings.capabilities.keepAwakeEnabled"]
+        let keepAwake = app.switches["SettingsHub.KeepAwake"]
         let original = try XCTUnwrap(keepAwake.value as? String)
         keepAwake.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         self.waitForValue(original == "1" ? "0" : "1", of: keepAwake, timeout: 5)
         keepAwake.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         self.waitForValue(original, of: keepAwake, timeout: 5)
 
-        // Navigate away and back: read from the shared preference owner, not a temporary editor value.
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(localSettings.waitForExistence(timeout: 5))
-        localSettings.tap()
-        XCTAssertTrue(app.buttons.matching(identifier: "LocalDeviceSettings.Appearance")
-            .matching(NSPredicate(format: "label == %@", "Appearance, Light"))
-            .firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Permissions"].tap()
         let systemSettings = app.buttons["Open iOS Settings"]
         for _ in 0..<8 where !systemSettings.isHittable {
             app.swipeUp()
         }
         XCTAssertTrue(systemSettings.isHittable)
-        XCTAssertTrue(app.staticTexts["Precise Location"].exists)
-        self.attachScreenshot(named: "local-settings-permissions")
+        // Precise Location shows only once Location is granted; the access row is always there.
+        XCTAssertTrue(app.staticTexts["Location access"].exists)
+        self.attachScreenshot(named: "native-settings-permissions")
+
+        app.navigationBars["Permissions"].buttons.element(boundBy: 0).tap()
+        // Reopen the sheet so appearance is read from the shared preference owner.
+        app.buttons["SettingsHub.Close"].tap()
+        XCTAssertTrue(settings.waitForNonExistence(timeout: 5))
+        try self.selectSidebarDestination("Settings")
+        XCTAssertTrue(app.buttons.matching(identifier: "SettingsHub.Appearance")
+            .matching(NSPredicate(format: "label == %@", "Appearance, Light"))
+            .firstMatch.waitForExistence(timeout: 5))
     }
 }
