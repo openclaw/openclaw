@@ -7,7 +7,6 @@ import {
   MemoryWikiDashboardUnavailableError,
 } from "./compiled-cache.js";
 import { resolveMemoryWikiAgentConfig, resolveMemoryWikiConfig } from "./config.js";
-import { deferred } from "./deferred.test-helpers.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
@@ -117,6 +116,7 @@ async function createGateway(method: string, options: GatewayOptions = {}, agent
     api,
     getAppConfig: () => (agentScoped ? scopedAppConfig : {}),
     resolveConfig,
+    refreshSources: vi.fn(),
     ...options,
   });
   const handler:
@@ -322,20 +322,17 @@ describe("memory-wiki gateway methods", () => {
   it.each(["wiki.importInsights", "wiki.overview"])(
     "%s responds without waiting for source sync",
     async (method) => {
-      const { config, run, respond } = await createGateway(method);
-      const syncGate = deferred<Awaited<ReturnType<typeof syncMemoryWikiImportedSources>>>();
-      vi.mocked(syncMemoryWikiImportedSources).mockReturnValueOnce(syncGate.promise);
+      const refreshSources = vi.fn();
+      const { config, run, respond } = await createGateway(method, { refreshSources });
 
       await run();
 
-      expect(respond).toHaveBeenCalledOnce();
-      expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: {} });
+      expect(refreshSources).toHaveBeenCalledWith(config, {});
+      expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
       expect(loadMemoryWikiCompiledDashboards).toHaveBeenCalledWith(config);
       expect(readRespondPayload(respond)).toEqual(
         method === "wiki.importInsights" ? dashboards.importInsights : dashboards.overview,
       );
-      syncGate.resolve(emptySync);
-      await syncGate.promise;
     },
   );
 
@@ -379,8 +376,12 @@ describe("memory-wiki gateway methods", () => {
   ] as const)(
     "forwards wiki.search %s",
     async (query, maxResults, searchBackend, searchCorpus, mode, appConfig) => {
+      const refreshSources = vi.fn();
+      const signal = new AbortController().signal;
       const { config, run, respond } = await createGateway("wiki.search", {
         getAppConfig: () => appConfig,
+        resolveSourceSyncSignal: () => signal,
+        refreshSources,
       });
       await run({ query, maxResults, backend: searchBackend, corpus: searchCorpus, mode });
       expect(searchMemoryWiki).toHaveBeenCalledWith({
@@ -394,6 +395,8 @@ describe("memory-wiki gateway methods", () => {
         searchCorpus,
         mode,
       });
+      expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
+      expect(refreshSources).toHaveBeenCalledWith(config, appConfig);
       expect(readRespondPayload(respond)).toEqual({ items: [], total: 0 });
     },
   );

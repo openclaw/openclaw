@@ -141,7 +141,6 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     projection?: SessionRowProjection,
     members?: readonly string[],
   ) => {
-    participation.signal?.throwIfAborted();
     const participantTarget = resolveParticipantRunTarget(params, target);
     const error =
       (target && authorizesAgentRun && !participantTarget
@@ -514,8 +513,6 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     params.preparedProfiles?.admit();
   }
   const admittedInput = createAdmittedSessionSharingAuthority({
-    onIncarnationTransition: (previous, current) =>
-      participation.followIncarnation(previous, current),
     target: chatTarget,
     request: params,
     consumeSharing,
@@ -570,7 +567,6 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       committingFacts = previous;
     }
   };
-  participation.retain(authorizedTargets[0]);
   const authorization: SessionMutationAuthorization = {
     ...participation.admission,
     ...(params.preparedTargets

@@ -41,6 +41,8 @@ const cases = [
   ["no-operator-permission-read", "operator-permission-recheck-violation.ts", 4, [1, 4, 6, 8]],
   // A started run re-checks access (line 8) and mints its own authority (lines 1, 4 and 9).
   ["no-operator-permission-read", "run-authority-mint-violation.ts", 4, [1, 4, 8, 9]],
+  // The stop-on-access-loss module reads admission (lines 1, 6) and a role (lines 2, 6).
+  ["no-operator-permission-read", "stop-work-authority-read-violation.ts", 4, [1, 2, 6, 6]],
   // A refusal built at tool time (line 4) and a subclass (line 7); instanceof reads are fine.
   ["no-operator-refusal-construction", "operator-refusal-construction-violation.ts", 2, [4, 7]],
   // Planted divergence: a resumed turn reads its start kind; owner status comes from
@@ -60,7 +62,7 @@ const cases = [
 // A list that maps files to counts must match the references found in each file exactly.
 const allowlists = [
   ["no-operator-permission-read", "Permission read:", ADMISSION_FILES, 58],
-  ["no-operator-permission-read", "Run authority minted:", MINT_FILES, 7],
+  ["no-operator-permission-read", "Run authority minted:", MINT_FILES, 6],
   ["no-operator-permission-read", "Access re-check:", ACCESS_RECHECK_FILES, 2],
   ["no-operator-refusal-construction", "", REFUSAL_FILES, 9],
   ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 18],

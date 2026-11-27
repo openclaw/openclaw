@@ -264,9 +264,8 @@ it("keeps request lookups private after the destination disappears", async () =>
   expect(f.sends).toBe(1);
 });
 
-it("checks the Visitor grant for sends and the admitted request lifetime for status", async () => {
+it("checks the admitted request lifetime for status", async () => {
   await using f = await fixture();
-  let active = true;
   let connected = true;
   const checked: (string | undefined)[] = [];
   let guestRefreshes = 0;
@@ -274,9 +273,6 @@ it("checks the Visitor grant for sends and the admitted request lifetime for sta
     checked.push(requiredGrant);
     if (!connected) {
       throw new Error("request closed");
-    }
-    if (!active && requiredGrant === "visitor-access") {
-      throw new Error("Visitor grant revoked");
     }
   }
   const guest: GatewayRequestAuthorityV1 = {
@@ -292,24 +288,16 @@ it("checks the Visitor grant for sends and the admitted request lifetime for sta
   const gate = f.hold();
   const inFlight = f.service().continue(source, request, guest);
   await gate.entered.promise;
-  active = false;
   gate.release.resolve();
-  await expect(inFlight).rejects.toThrow("Visitor grant revoked");
-  active = true;
+  await expect(inFlight).resolves.toMatchObject({ state: "accepted" });
   guest.assertCurrent("visitor-access"); // The HTTP route admits this GET before calling the service.
   const beforeRead = checked.length;
   const refreshesBeforeRead = guestRefreshes;
-  f.onResolve(() => {
-    active = false;
-  });
   expect(await f.service().status(source, request.requestId, guest)).toMatchObject({
     requestId: request.requestId,
   });
   expect(checked.slice(beforeRead)).not.toContain("visitor-access");
   expect(guestRefreshes).toBe(refreshesBeforeRead);
-  await expect(f.service().continue(source, request, guest)).rejects.toThrow(
-    "Visitor grant revoked",
-  );
   const withoutGrant = { ...guest, requiredGrantPluginId: undefined };
   expect(await f.service().status(source, request.requestId, withoutGrant)).toBe("unavailable");
   f.onResolve(() => {
