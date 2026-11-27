@@ -276,17 +276,13 @@ function collectRatchetDeltas(
     .toSorted((left, right) => compareEntries(left.entry, right.entry));
 }
 
-function formatRatchetMessage(title: string, entries: readonly string[]) {
-  return [title, ...entries.map((entry) => "  " + entry)].join("\n");
-}
-
 export function reportRatchetFailures(
   groups: readonly { entries: readonly string[]; title: string }[],
   guidance?: string,
 ) {
   const active = groups.filter((group) => group.entries.length > 0);
   for (const group of active) {
-    console.error(formatRatchetMessage(group.title, group.entries));
+    console.error([group.title, ...group.entries.map((entry) => "  " + entry)].join("\n"));
   }
   if (active.length > 0 && guidance) {
     console.error(guidance);
@@ -298,6 +294,8 @@ type PerFileCountRatchetOptions = {
   baselinePath: string;
   baselineHeader: string;
   renameSourceRoots: string[];
+  // Reviewed owner cutovers only; additions must be funded by a smaller total baseline.
+  approvedTransfers?: ReadonlyMap<string, number>;
   collectCurrent: (options: { staged: boolean }) => ReadonlyMap<string, number>;
   // Throws when the file is missing at ref.
   countAtRef: (ref: string, filePath: string) => number;
@@ -351,14 +349,12 @@ function allowanceWithExistingBaseCounts(
 ) {
   const effective = new Map(allowed);
   for (const [filePath, count] of proposed) {
-    if (count <= (effective.get(filePath) ?? 0)) {
+    const allowedCount = effective.get(filePath) ?? 0;
+    if (count <= allowedCount) {
       continue;
     }
     try {
-      const baseCount = countAtRef(baseRef, filePath);
-      if (baseCount > (effective.get(filePath) ?? 0)) {
-        effective.set(filePath, baseCount);
-      }
+      effective.set(filePath, Math.max(allowedCount, countAtRef(baseRef, filePath)));
     } catch {
       // Missing base paths are branch additions and receive no allowance.
     }
@@ -395,27 +391,14 @@ export function runPerFileCountRatchet(
       : null;
     const current = options.collectCurrent({ staged: args.staged });
 
-    let baseline;
-    try {
-      baseline = loadRatchetSnapshot(root, baselinePath, args.staged, parseBaseline);
-    } catch {
-      if (args.prune && !args.staged && baseBaseline === null) {
-        writeBaseline(current);
-        console.log(
-          `Initialized ${baselinePath}: ${current.size} files, ${totalCount(current)} ${messages.countNoun}.`,
-        );
-        return 0;
-      }
-      throw new Error("Missing " + baselinePath + (args.staged ? " in the index" : ""));
-    }
-
     if (args.prune && !args.staged && baseBaseline === null) {
       writeBaseline(current);
       console.log(
-        `Refreshed initial ${baselinePath}: ${current.size} files, ${totalCount(current)} ${messages.countNoun}.`,
+        `Initialized ${baselinePath}: ${current.size} files, ${totalCount(current)} ${messages.countNoun}.`,
       );
       return 0;
     }
+    const baseline = loadRatchetSnapshot(root, baselinePath, args.staged, parseBaseline);
     const allowedBaseline =
       baseRef && baseBaseline
         ? baselineWithVerifiedRenames(
@@ -427,6 +410,20 @@ export function runPerFileCountRatchet(
             options.renameSourceRoots,
           )
         : baseBaseline;
+    if (options.approvedTransfers && baseRef && baseBaseline && allowedBaseline) {
+      const removed = [...baseBaseline]
+        .filter(([file, count]) => count > (baseline.get(file) ?? 0))
+        .reduce(
+          (sum, [file]) => sum + options.countAtRef(baseRef, file) - (current.get(file) ?? 0),
+          0,
+        );
+      for (const [filePath, count] of options.approvedTransfers ?? []) {
+        const added = (current.get(filePath) ?? 0) - options.countAtRef(baseRef, filePath);
+        if (removed > added && totalCount(baseline) < totalCount(baseBaseline)) {
+          allowedBaseline.set(filePath, Math.max(allowedBaseline.get(filePath) ?? 0, count));
+        }
+      }
+    }
     const currentAllowance =
       baseRef && baseBaseline
         ? allowanceWithExistingBaseCounts(baseRef, current, baseline, options.countAtRef)
