@@ -223,12 +223,12 @@ function browserRequest<T>(
 function browserAction(
   client: BrowserRequestClient,
   body: Record<string, unknown>,
-  operatorInput = false,
+  operatorInput?: boolean,
 ) {
   return browserRequest(client, {
     method: "POST",
     path: "/act",
-    ...(operatorInput ? { query: OPERATOR_INPUT } : {}),
+    ...(operatorInput === undefined ? {} : { query: { operatorInput } }),
     body,
   });
 }
@@ -504,18 +504,22 @@ export async function resizeBrowserViewport(
   client: BrowserRequestClient,
   params: { targetId: string; width: number; height: number },
 ) {
-  await browserAction(client, {
-    kind: "resize",
-    targetId: params.targetId,
-    width: Math.round(params.width),
-    height: Math.round(params.height),
-  });
+  await browserAction(
+    client,
+    {
+      kind: "resize",
+      targetId: params.targetId,
+      width: Math.round(params.width),
+      height: Math.round(params.height),
+    },
+    false,
+  );
 }
 
 async function evaluateInBrowser<T>(
   client: BrowserRequestClient,
   params: { targetId: string; fn: string },
-  operatorInput = false,
+  operatorInput?: boolean,
 ): Promise<T | null> {
   const result = asRecord(
     await browserAction(
@@ -606,10 +610,14 @@ export async function goBrowserHistory(
 
 export async function readBrowserPageMetrics(client: BrowserRequestClient, targetId: string) {
   const result = asRecord(
-    await evaluateInBrowser(client, {
-      targetId,
-      fn: "() => ({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, title: document.title, url: location.href })",
-    }),
+    await evaluateInBrowser(
+      client,
+      {
+        targetId,
+        fn: "() => ({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, title: document.title, url: location.href })",
+      },
+      false,
+    ),
   );
   const cssWidth = asFiniteNumber(result?.cssWidth);
   const cssHeight = asFiniteNumber(result?.cssHeight);

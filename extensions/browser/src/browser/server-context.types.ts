@@ -60,6 +60,7 @@ export type BrowserOperationOptions = OperatorBrowserPagesOption & {
 export type EnsureTabAvailableOptions = BrowserOperationOptions & {
   /** Allow a target-id-only tab when the caller can continue through Playwright. */
   allowPlaywrightFallback?: boolean;
+  preserveWarmup?: boolean;
 };
 
 export type ProfileContext = {

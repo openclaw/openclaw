@@ -7,13 +7,18 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { waitForBrowserStartup } from "../sdk-node-runtime.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
 import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
-import { isLocalManagedProfile, type ResolvedBrowserProfile } from "./config.js";
+import {
+  isLocalManagedProfile,
+  resolveManagedBrowserHeadlessMode,
+  type ResolvedBrowserProfile,
+} from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -210,6 +215,31 @@ export function registerProfileHandle(
   return true;
 }
 
+/** A conflicting explicit mode supersedes only a pending speculative start. */
+export function prepareAddressWarmupForStart(
+  state: () => BrowserServerState,
+  runtime: ProfileRuntimeState,
+  options?: { prewarm?: true; headless?: boolean },
+): Promise<ProfileTransitionResult> | undefined {
+  const actor = getProfileLifecycle(runtime);
+  const pendingWarmup = actor.addressWarmupOnly && actor.starts.size > 0;
+  actor.addressWarmupOnly = options?.prewarm === true;
+  if (options?.prewarm || !pendingWarmup || typeof options?.headless !== "boolean") {
+    return;
+  }
+  const current = state();
+  const warmupHeadless =
+    runtime.running?.headless ??
+    resolveManagedBrowserHeadlessMode(current.resolved, runtime.profile).headless;
+  if (options.headless !== warmupHeadless) {
+    return beginProfileTransition({
+      state: current,
+      runtime,
+      reason: "explicit browser launch mode requested",
+    });
+  }
+}
+
 /** An address edit may launch Chrome, but never close a browser someone has since used. */
 export function scheduleAddressWarmupExpiry(
   state: BrowserServerState,
@@ -224,8 +254,12 @@ export function scheduleAddressWarmupExpiry(
       return;
     }
     // A human or CDP client can navigate without going through this actor.
-    const pages = await readPages();
+    const pages = await readPages().catch(async () => {
+      await sleepWithAbort(1_000, undefined, { ref: false });
+      return unclaimed() ? await readPages() : null;
+    });
     if (
+      pages &&
       unclaimed() &&
       pages.length <= 1 &&
       pages.every(({ url }) =>
