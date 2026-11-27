@@ -3,12 +3,14 @@ import SwiftUI
 import UIKit
 
 /// The phone model picker: a system sheet with a list of Favorites, Recent and the providers. A provider
-/// pushes its models; with one provider its models sit at the root. Search covers every provider.
+/// pushes its models; with one provider its models sit at the root. Search covers every provider. Provider
+/// accounts, the last row, pushes the sign-in pages; the composer opens the sheet on them directly.
 struct ChatModelPickerSheet: View {
     let viewModel: OpenClawChatViewModel
+    /// The sheet opens on Provider accounts instead of the models.
+    let opensAccounts: Bool
     let onPick: () -> Void
     let onClose: () -> Void
-    let onSignIn: () -> Void
 
     @State private var detent: PresentationDetent?
     /// The root's height, taken from its content once per presentation, so everything on it, Model sign-in
@@ -28,63 +30,126 @@ struct ChatModelPickerSheet: View {
     @State private var isSearching = false
     /// Recent's order when the sheet opened, so it does not reshuffle while it is open.
     @State private var recentOrder: [String]?
+    @State private var path: [ChatModelPickerRoute] = []
+    /// The sign-in flow, shared by the accounts page and each provider's page for as long as the sheet is up.
+    @State private var accounts = ChatModelAccountsOwner()
 
     var body: some View {
         let catalog = self.viewModel.modelPickerCatalog(recentOrder: self.recentOrder)
-        NavigationStack {
-            List {
-                self.rootContent(catalog)
+        NavigationStack(path: self.$path) {
+            Group {
+                if self.opensAccounts {
+                    ChatModelAccountsPage(owner: self.accounts, viewModel: self.viewModel)
+                } else {
+                    self.modelsRoot(catalog)
+                }
             }
-            .listStyle(.insetGrouped)
-            .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
-            .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
-            .onScrollGeometryChange(for: CGFloat.self) {
-                // Nothing to fit until the list has laid out its rows.
-                $0.contentSize.height > 0 ? $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom : 0
-            } action: { _, height in
-                // The system's bottom inset already holds the search field; the extra margin is only there so
-                // the last row can scroll clear at large, and the resting height does not need it.
-                self.fitRestingHeight(to: height > 0 ? height - self.searchClearance : 0)
-            }
-            .navigationTitle(Text("Model"))
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 OpenClawSheetCloseItem(identifier: "chat-model-picker-close", action: self.onClose)
+                if self.viewModel.composerOffersEffortChoices {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        NavigationLink(value: ChatModelPickerRoute.effort) {
+                            HStack(spacing: 3) {
+                                Text("Effort")
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .accessibilityIdentifier("chat-model-picker-effort")
+                    }
+                }
             }
-            .searchable(
-                text: self.$query,
-                isPresented: self.$isSearching,
-                prompt: Text("Search models"))
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .navigationDestination(for: String.self) { providerID in
-                ChatModelPickerProviderPage(
-                    viewModel: self.viewModel,
-                    catalog: catalog,
-                    providerID: providerID,
-                    onPick: self.onPick)
+            .navigationDestination(for: ChatModelPickerRoute.self) { route in
+                switch route {
+                case let .provider(providerID):
+                    ChatModelPickerProviderPage(
+                        viewModel: self.viewModel,
+                        catalog: catalog,
+                        providerID: providerID,
+                        onPick: self.onPick)
+                case .accounts:
+                    ChatModelAccountsPage(owner: self.accounts, viewModel: self.viewModel)
+                case .effort:
+                    List {
+                        if self.viewModel.showsThinkingPicker || self.viewModel.composerPhoneEffortLockReason != nil {
+                            Section {
+                                ChatEffortBar(viewModel: self.viewModel, isSheetPage: true)
+                            }
+                        }
+                        if self.viewModel.selectedModelSupportsFastMode {
+                            Section {
+                                ChatEffortSpeedPicker(viewModel: self.viewModel)
+                                    .pickerStyle(.menu)
+                                    .font(OpenClawChatTypography.settingsBody)
+                                    .tint(Color(uiColor: .secondaryLabel))
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                    .listSectionSpacing(.compact)
+                    .contentMargins(.top, Self.listTopMargin, for: .scrollContent)
+                    .contentMargins(.bottom, 0, for: .scrollContent)
+                    .navigationTitle(Text("Effort"))
+                    .navigationBarTitleDisplayMode(.inline)
+                case let .account(accountID):
+                    ChatModelAccountPage(
+                        owner: self.accounts,
+                        viewModel: self.viewModel,
+                        accountID: accountID,
+                        onNeedsRoom: { self.detent = .large })
+                }
             }
         }
         .tint(.primary)
         .accessibilityIdentifier("chat-model-picker")
         .onAppear { self.recentOrder = self.recentOrder ?? self.viewModel.modelPickerRecentIDs }
+        // All pages share the same viewport, so Back reveals the laid-out list during the native pop.
         .presentationDetents([self.restingDetent, .large], selection: Binding(
-            get: { self.detent ?? self.restingDetent },
+            get: { self.detent == .large ? .large : self.restingDetent },
             set: { self.detent = $0 }))
         .presentationDragIndicator(.visible)
         // Below full height iOS draws the sheet as glass, which lets the composer's red button tint it
         // and turns the grouped rows gray. One opaque grouped background, as on the Pages sheet, keeps the
         // sheet and its rows the same at every height.
         .presentationBackground(Color(uiColor: .systemGroupedBackground))
-        // A catalog that failed or came back empty loads again each time the picker opens.
+        // A catalog that failed or came back empty loads again each time the picker opens, showing the
+        // loading state rather than the old failure while it does.
         .task {
             if self.viewModel.modelChoices.isEmpty {
-                await self.viewModel.fetchModels()
+                await self.viewModel.retryModelCatalog()
             } else {
                 // The cached or last list shows now; a fresh one replaces it quietly if it changed.
                 await self.viewModel.fetchModels()
             }
         }
+        // Closing the sheet ends a sign-in still running, as the old sign-in sheet's Close did.
+        .onDisappear { Task { await self.accounts.close() } }
+    }
+
+    private func modelsRoot(_ catalog: ChatModelPickerCatalog) -> some View {
+        List {
+            self.rootContent(catalog)
+        }
+        .listStyle(.insetGrouped)
+        .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
+        .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
+        .onScrollGeometryChange(for: CGFloat.self) {
+            // Nothing to fit until the list has laid out its rows.
+            $0.contentSize.height > 0 ? $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom : 0
+        } action: { _, height in
+            // The system's bottom inset already holds the search field; the extra margin is only there so
+            // the last row can scroll clear at large, and the resting height does not need it.
+            self.fitRestingHeight(to: height > 0 ? height - self.searchClearance : 0)
+        }
+        .navigationTitle(Text("Model"))
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(
+            text: self.$query,
+            isPresented: self.$isSearching,
+            prompt: Text("Search models"))
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
     }
 
     private var restingDetent: PresentationDetent {
@@ -129,15 +194,22 @@ struct ChatModelPickerSheet: View {
             }
         } else if self.viewModel.modelChoices.isEmpty {
             Section {
-                Group {
-                    if let message = self.viewModel.modelCatalogMessage {
-                        Text(message).font(OpenClawChatTypography.settingsBody).foregroundStyle(.secondary)
-                    } else {
-                        ProgressView().frame(maxWidth: .infinity)
+                if let message = self.viewModel.modelCatalogMessage {
+                    Text(message).font(OpenClawChatTypography.settingsBody).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("chat-model-picker-message")
+                    // As on the accounts page: the failure and the way to try again in one card.
+                    ChatModelSignInButtonRow(
+                        title: ChatModelAccountsCopy.tryAgain,
+                        isBusy: false,
+                        id: "chat-model-picker-try-again")
+                    {
+                        await self.viewModel.retryModelCatalog()
                     }
+                } else {
+                    ProgressView().frame(maxWidth: .infinity)
                 }
-                self.signInRow
             }
+            Section { self.signInRow }
         } else {
             // A model can sit in two sections at once; each section keeps its own row identities.
             if !catalog.favorites.isEmpty {
@@ -153,6 +225,11 @@ struct ChatModelPickerSheet: View {
                 } header: {
                     Text("Recent").font(OpenClawChatTypography.settingsSectionHeader)
                 }
+            }
+            if catalog.providers.count == 1, let provider = catalog.providers.first,
+               let need = self.signInNeed(provider)
+            {
+                ChatModelPickerSignInSection(providerID: provider.id, need: need)
             }
             Section {
                 if catalog.providers.count == 1, let provider = catalog.providers.first {
@@ -185,28 +262,54 @@ struct ChatModelPickerSheet: View {
             onPick: self.onPick)
     }
 
-    /// A plain drill-in row. The current model carries the check on the root and on its provider's page.
+    /// A plain drill-in row. The current model carries the check on the root and on its provider's page. A
+    /// second line appears only when none of its models can be used until someone signs in.
     private func providerRow(_ provider: ChatModelProviderSection) -> some View {
-        NavigationLink(value: provider.id) {
+        let need = self.signInNeed(provider)
+        return NavigationLink(value: ChatModelPickerRoute.provider(provider.id)) {
             HStack(spacing: 12) {
                 ChatProviderMark(providerID: provider.id)
-                Text(verbatim: provider.displayName)
-                    .font(OpenClawChatTypography.settingsBody)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: provider.displayName)
+                        .font(OpenClawChatTypography.settingsBody)
+                    if let need {
+                        Text(verbatim: need.pickerDescription)
+                            .font(OpenClawChatTypography.settingsFootnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .accessibilityIdentifier("chat-model-picker-provider-\(provider.id)")
     }
 
+    /// Model rows only say why they can't be used when the catalog reports it for this chat; so does this.
+    private func signInNeed(_ provider: ChatModelProviderSection) -> OpenClawChatModelUnavailableReason? {
+        self.viewModel.modelAvailabilityIsSessionScoped ? provider.signInNeed : nil
+    }
+
     private var signInRow: some View {
-        Button(action: self.onSignIn) {
-            Label {
-                Text("Model sign-in").font(OpenClawChatTypography.settingsBody).foregroundStyle(Color.primary)
-            } icon: {
-                Image(systemName: "key").foregroundStyle(.secondary)
-            }
+        NavigationLink(value: ChatModelPickerRoute.accounts) {
+            Text(ChatModelAccountsCopy.title).font(OpenClawChatTypography.settingsBody)
         }
         .accessibilityIdentifier("chat-model-sign-in")
+    }
+}
+
+/// Leads a provider whose models all wait on a sign-in to that provider's account.
+private struct ChatModelPickerSignInSection: View {
+    let providerID: String
+    let need: OpenClawChatModelUnavailableReason
+
+    var body: some View {
+        Section {
+            NavigationLink(value: ChatModelPickerRoute.account(self.providerID)) {
+                Text(self.need == .authFailed ? ChatModelAccountsCopy.signInAgain : ChatModelAccountsCopy.signIn)
+                    .font(OpenClawChatTypography.settingsBody)
+            }
+            .accessibilityIdentifier("chat-model-picker-sign-in-\(self.providerID)")
+        }
     }
 }
 
@@ -221,6 +324,9 @@ private struct ChatModelPickerProviderPage: View {
     var body: some View {
         let provider = self.catalog.providers.first { $0.id == self.providerID }
         List {
+            if let provider, self.viewModel.modelAvailabilityIsSessionScoped, let need = provider.signInNeed {
+                ChatModelPickerSignInSection(providerID: provider.id, need: need)
+            }
             Section {
                 ForEach(provider?.models ?? []) { model in
                     ChatModelPickerModelRow(

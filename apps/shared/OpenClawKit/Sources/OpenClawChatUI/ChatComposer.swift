@@ -1,4 +1,3 @@
-// swiftlint:disable file_length
 import CoreTransferable
 import Foundation
 import Observation
@@ -196,35 +195,40 @@ struct OpenClawChatComposer: View {
             }
             #endif
         }
+        #if os(macOS)
         .sheet(isPresented: Binding(
-            get: { self.signInContext != nil },
-            set: { if !$0 { self.signInContext = nil } }))
-        {
-            if let context = self.signInContext {
-                OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
+                get: { self.signInContext != nil },
+                set: {
+                    if !$0 {
+                        self.signInContext = nil
+                    }
+                })) {
+                    if let context = self.signInContext {
+                        OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
+                    }
             }
-        }
+        #endif
         #if os(iOS)
         // Presented from here, not from the shield: the shield leaves the hierarchy while capabilities reload.
-        .chatComposerPermissionsSheet(isPresented: self.$showsPermissionsSheet, viewModel: self.viewModel)
-            .modifier(ChatNewDraftFocus(composer: self))
-            .sheet(isPresented: self.$showsAddSheet, onDismiss: self.addSheetDidDismiss) {
-                ChatComposerAddSheet(
-                    viewModel: self.viewModel,
-                    isAttachmentInputEnabled: self.isAttachmentInputEnabled,
-                    onAttachPhotos: { assets in
-                        guard self.isAttachmentInputEnabled, !assets.isEmpty else { return }
-                        self.viewModel.addRecentPhotos(
-                            assets,
-                            owner: OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel))
-                    },
-                    onClose: self.closeAddSheet)
-            }
-            // A picker counts as gone once it starts to leave, so the keyboard is asked for then, not after its tile
-            // is ready.
-            .modifier(ChatPickerAttachmentFocus(
-                composer: self,
-                pickerPresented: self.showsPhotoPicker || self.showsFileImporter || self.showsCameraPicker))
+            .chatComposerPermissionsSheet(isPresented: self.$showsPermissionsSheet, viewModel: self.viewModel)
+        .modifier(ChatNewDraftFocus(composer: self))
+        .sheet(isPresented: self.$showsAddSheet, onDismiss: self.addSheetDidDismiss) {
+            ChatComposerAddSheet(
+                viewModel: self.viewModel,
+                isAttachmentInputEnabled: self.isAttachmentInputEnabled,
+                onAttachPhotos: { assets in
+                    guard self.isAttachmentInputEnabled, !assets.isEmpty else { return }
+                    self.viewModel.addRecentPhotos(
+                        assets,
+                        owner: OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel))
+                },
+                onClose: self.closeAddSheet)
+        }
+        // A picker counts as gone once it starts to leave, so the keyboard is asked for then, not after its tile
+        // is ready.
+        .modifier(ChatPickerAttachmentFocus(
+            composer: self,
+            pickerPresented: self.showsPhotoPicker || self.showsFileImporter || self.showsCameraPicker))
         #endif
         .onChange(of: self.presentationOwner) { _, _ in
             self.invalidateModelSignIn()
@@ -238,21 +242,6 @@ struct OpenClawChatComposer: View {
         #else
         false
         #endif
-    }
-
-    var modelSignInButton: some View {
-        Button {
-            self.performModelSignInAction(.open)
-        } label: {
-            HStack(spacing: 6) {
-                if self.modelSignInAction == .open {
-                    ProgressView().controlSize(.small)
-                }
-                Text("Model sign-in").font(OpenClawChatTypography.caption)
-            }
-        }
-        .disabled(self.modelSignInAction != nil)
-        .accessibilityIdentifier("chat-model-sign-in")
     }
 
     func performModelSignInAction(_ action: ModelSignInAction) {
@@ -285,7 +274,7 @@ struct OpenClawChatComposer: View {
         }
     }
 
-    private var modelSignInAction: ModelSignInAction? {
+    var modelSignInAction: ModelSignInAction? {
         self.modelSignInRequest?.action
     }
 

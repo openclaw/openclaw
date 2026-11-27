@@ -296,15 +296,10 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
 
     func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext? {
         guard self.fixture.sessionIDPrefix == "screenshot-fixture",
-              ScreenshotFixtureMode.modelSignInScenario != nil
+              ScreenshotFixtureMode.modelSignInScenario != nil,
+              await ModelSignInFixture.shared.supportsSignIn
         else { return nil }
-        return OpenClawChatModelSignInContext(
-            agentID: agentID ?? self.fixture.defaultAgentID,
-            request: { method, _ in
-                guard method == "models.authStatus" else { throw CancellationError() }
-                return Data(#"{"providers":[],"providerCapabilities":[]}"#.utf8)
-            },
-            isCurrent: { true })
+        return await ModelSignInFixture.shared.context(agentID: agentID ?? self.fixture.defaultAgentID)
     }
 
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
@@ -354,6 +349,17 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                     reasoning: false,
                     supportsFastMode: false),
             ]
+        }
+        if ScreenshotFixtureMode.modelSignInScenario != nil,
+           await ModelSignInFixture.shared.providersNeedingSignIn.contains("xai")
+        {
+            choices += try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
+            {"models":[{"id":"grok-5","name":"Grok 5","provider":"xai",
+              "available":false,"unavailableReason":"missing-auth","contextWindow":256000}]}
+            """#.utf8))
+        } else if ScreenshotFixtureMode.modelSignInScenario != nil {
+            choices.append(OpenClawChatModelChoice(
+                modelID: "grok-5", name: "Grok 5", provider: "xai", contextWindow: 256_000))
         }
         return choices
     }

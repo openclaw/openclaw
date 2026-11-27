@@ -938,7 +938,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(send.waitForExistence(timeout: 3))
         XCTAssertFalse(send.isEnabled)
         XCTAssertTrue(app.staticTexts[
-            "Authentication failed. Review the provider credential or sign-in, then retry.",
+            "Sign-in failed for this model.",
         ].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["chat-model-sign-in"].exists)
         self.attachScreenshot(named: "chat-composer-model-auth-failed")
@@ -1043,10 +1043,13 @@ extension OpenClawSnapshotUITests {
         let signIn = self.pickerSignInRow(in: app)
         XCTAssertTrue(signIn.isEnabled)
         signIn.tap()
-        XCTAssertTrue(app.staticTexts[
-            "No native sign-in options are available. Open Models in the web app, or update the Gateway.",
-        ].waitForExistence(timeout: 5))
-        app.buttons["Close"].tap()
+        // Provider accounts is a page of the model sheet, with the system back button.
+        XCTAssertTrue(app.navigationBars["Provider accounts"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["model-auth-provider-openai"].waitForExistence(timeout: 5), app.debugDescription)
+        // A pushed page carries back, not close, as a provider's models page does.
+        app.buttons["BackButton"].tap()
+        XCTAssertTrue(app.buttons["chat-model-picker-close"].waitForExistence(timeout: 5), app.debugDescription)
+        app.buttons["chat-model-picker-close"].tap()
     }
 
     func testModelSelectionTargetVariantsPersistInComposer() throws {

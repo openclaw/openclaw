@@ -39,7 +39,7 @@ struct ChatModelSignInTests {
         try await model.start(#require(model.authStatus?.loginOptions.first))
         #expect(model.sessionID != nil)
         await model.answer()
-        #expect(model.message == "The connection changed. Close sign-in and open it again.")
+        #expect(model.outcome == .connectionChanged)
         await model.close()
 
         #expect(model.sessionID == nil)
@@ -164,7 +164,7 @@ struct ChatModelSignInTests {
         #expect(model.sessionID != nil)
         #expect(statusReads == 1)
         #expect(catalogRefreshes == 0)
-        #expect(model.message == nil)
+        #expect(model.outcome == nil)
 
         if terminalStatus == "cancelled" {
             await model.cancel()
@@ -175,9 +175,14 @@ struct ChatModelSignInTests {
         #expect(model.sessionID == nil)
         #expect(model.step == nil)
         #expect(model.authStatus?.providers.first?.status == (terminalStatus == "cancelled" ? "missing" : "ok"))
-        #expect(model.message == (terminalStatus == "done"
-            ? "Sign-in finished."
-            : "Sign-in ended. Review the account status before trying again."))
+        if terminalStatus == "done" {
+            #expect(model.outcome == .finished)
+        } else {
+            guard case .ended = model.outcome else {
+                Issue.record("Expected an ended outcome, got \(String(describing: model.outcome))")
+                return
+            }
+        }
         #expect(statusReads == 2)
         #expect(catalogRefreshes == 1)
     }

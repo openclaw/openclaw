@@ -76,14 +76,24 @@ extension OpenClawChatViewModel {
         }
     }
 
+    /// Loads the model list again from the model sheet: the failure clears first, so the sheet shows its
+    /// loading state until the answer replaces it.
+    func retryModelCatalog() async {
+        self.modelCatalogMessage = nil
+        await self.fetchModels()
+    }
+
     public static let verboseLevelOptions = ["off", "on", "full"]
 
     public func modelSignInContext() async -> OpenClawChatModelSignInContext? {
         let session = self.currentSessionSnapshot()
         let agentID = session.deliveryAgentID ?? OpenClawChatSessionKey.agentID(from: session.key) ?? self.activeAgentId
         guard let context = await self.transport.acquireModelSignInContext(agentID: agentID) else {
+            // The phone's accounts page says so in place.
+            #if os(macOS)
             guard self.isCurrentSession(session) else { return nil }
             self.errorText = String(localized: "Model sign-in needs a newer Gateway. Update it or use /login.")
+            #endif
             return nil
         }
         guard self.isCurrentSession(session) else { return nil }
@@ -221,10 +231,18 @@ extension OpenClawChatViewModel {
               reason.blocksSend
         else { return nil }
         switch reason {
+        #if os(iOS)
+        // The phone's sign-in row sits next to this line and is the action.
+        case .missingAuth:
+            return String(localized: "This model needs a sign-in.")
+        case .authFailed:
+            return String(localized: "Sign-in failed for this model.")
+        #else
         case .missingAuth:
             return String(localized: "No provider credential is configured for this model. Set it up in Model Setup.")
         case .authFailed:
             return String(localized: "Authentication failed. Review the provider credential or sign-in, then retry.")
+        #endif
         case .cooldown, .unknown:
             return nil
         }
