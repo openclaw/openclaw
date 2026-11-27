@@ -473,9 +473,8 @@ function planTerminalCompletion(
       publishStatus: mutated && !suppressedForSteerRestart,
       publishProgress: !provisionalKill,
       endedHook: !suppressedForSteerRestart && !provisionalKill,
-      deferEndedHook:
-        completeParams.triggerCleanup === true && entry.expectsCompletionMessage === true,
-      cleanup: completeParams.triggerCleanup === true && !suppressedForSteerRestart,
+      deferEndedHook: completeParams.triggerCleanup && entry.expectsCompletionMessage === true,
+      cleanup: completeParams.triggerCleanup && !suppressedForSteerRestart,
       retireMcp: entry.spawnMode !== "session",
       cleanupTail: provisionalKill ? ("confirm-kill" as const) : ("announce" as const),
     },
