@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
+import { addClientToolsToToolCatalog, selectDirectMcpToolNames } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { buildToolSchemaDirectoryPrompt } from "./tool-search-directory.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -353,22 +353,32 @@ describe("usage-ranked MCP directory", () => {
 describe("direct MCP tools", () => {
   const visibleMcp = (applied: { result: { tools: AnyAgentTool[] } }) =>
     applied.result.tools.map((tool) => tool.name).filter((name) => name.includes("__"));
+  /** A pinning runner's first request: it chooses the direct MCP set by size. */
+  const firstRequest = (tools: AnyAgentTool[]) =>
+    apply(tools, {
+      catalogRef: { sessionPinnedToolNames: selectDirectMcpToolNames(tools, undefined) },
+    });
 
   it("declares a small catalog directly and keeps a large one behind tool_search", () => {
-    const catalogRef: ToolSearchCatalogRef = {};
-    const small = apply(
-      [mcpTool("tracker", "create", "Create an issue."), mcpTool("tracker", "list", "List.")],
-      { catalogRef },
-    );
+    const small = firstRequest([
+      mcpTool("tracker", "create", "Create an issue."),
+      mcpTool("tracker", "list", "List."),
+    ]);
     expect(visibleMcp(small)).toEqual(["tracker__create", "tracker__list"]);
     expect(small.directory).toBe("");
     // 40 tools with 300-character descriptions pass the measured 8,192-byte budget.
-    const large = apply(
+    const large = firstRequest(
       Array.from({ length: 40 }, (_, i) => mcpTool("big", `op_${i}`, "x".repeat(300))),
-      { catalogRef: {} },
     );
     expect(visibleMcp(large)).toEqual([]);
     expect(large.directory).toContain("- mcp:big:big__op_0");
+  });
+
+  it("keeps every MCP tool deferred for a runner without a session pin", () => {
+    // The tool list must not follow whichever MCP tools one run happened to list.
+    const unpinned = apply([mcpTool("tracker", "list", "List.")], { catalogRef: {} });
+    expect(visibleMcp(unpinned)).toEqual([]);
+    expect(unpinned.directory).toContain("- mcp:tracker:tracker__list");
   });
 
   it("keeps the session pin's MCP set when a server adds a tool mid-session", () => {
@@ -400,7 +410,7 @@ describe("direct MCP tools", () => {
         instructions: "Call query with ISO dates.",
       },
     });
-    const applied = apply([mcpTool("tracker", "list", "List."), guided], { catalogRef: {} });
+    const applied = firstRequest([mcpTool("tracker", "list", "List."), guided]);
     expect(visibleMcp(applied)).toEqual(["tracker__list"]);
     // The directory sends the model to tool_describe, which returns the instructions.
     expect(applied.directory).toContain("- mcp:guided:guided__query [instructions]: Query.");
