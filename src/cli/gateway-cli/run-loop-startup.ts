@@ -116,18 +116,39 @@ export type GatewayRunLoopParams = {
 };
 
 export function createGatewayRestartRecovery(
-  {
-    onRestartStartupFailure: onFailure,
-  }: {
-    onRestartStartupFailure?: GatewayRestartStartupFailureHandler;
-  },
+  params: Pick<GatewayRunLoopParams, "onRestartStartupFailure" | "resolveRestartPort" | "lockPort">,
   logger: Pick<SubsystemLogger, "info" | "error">,
   supervisor: GatewayOwnerSupervisor | null,
 ) {
+  const onFailure = params.onRestartStartupFailure;
+  let preparationFailure: { error: unknown } | undefined;
   let work:
     | { controller: AbortController; settled: ReturnType<GatewayRestartStartupFailureHandler> }
     | undefined;
   return {
+    async reacquireLock() {
+      preparationFailure = undefined;
+      let port: number | undefined;
+      try {
+        port = (await params.resolveRestartPort?.()) ?? params.lockPort;
+      } catch (error) {
+        // The next startup iteration owns recovery; do not acquire stale-port custody.
+        preparationFailure = { error };
+        return null;
+      }
+      return acquireGatewayLock({
+        port,
+        listenerMode: supervisor ? "supervised" : "foreground",
+        supervisor,
+      });
+    },
+    throwPreparationFailure() {
+      if (preparationFailure) {
+        const failure = preparationFailure;
+        preparationFailure = undefined;
+        throw failure.error;
+      }
+    },
     reportInstallationReplacement(
       replacement: GatewayInstallationReplacement,
     ): GatewayBootLifecycleCompletion {
