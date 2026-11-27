@@ -73,6 +73,7 @@ export function prepareMemoryIndexChunks({
   // Bound heading-only runs. A heading can still join its body up to the provider input limit.
   const maxMergedChunkEstimatedChars = Math.max(32, chunking.tokens * 4);
   const baseChunks: MemoryChunk[] = [];
+  let pendingHeadings: MemoryChunk | undefined;
   for (const chunk of source === "sessions"
     ? chunkSessionContentAtResetBoundary({
         content: indexingContent,
@@ -84,36 +85,33 @@ export function prepareMemoryIndexChunks({
     if (!chunk.text.trim()) {
       continue;
     }
-    const previous = baseChunks.at(-1);
-    if (
-      source === "memory" &&
-      previous &&
-      previous.entryStartLine === undefined &&
-      chunk.endLine > previous.endLine &&
-      // Annotated headings own their metadata; size-split headings also differ from source lines.
-      previous.text
-        .split("\n")
-        .every(
-          (line, index) =>
-            isHeadingOrBlank(line) &&
-            !line.includes("<!--") &&
-            line.trimEnd() === (sourceLines[previous.startLine + index - 1] ?? "").trimEnd(),
-        )
-    ) {
-      // Keep the following entry's annotation span, and do not repeat overlapping headings.
-      const following = chunk.text
-        .split("\n")
-        .slice(Math.max(0, previous.endLine - chunk.startLine + 1));
-      const mergedText = [previous.text, ...following].join("\n");
-      if (
-        !following.every(isHeadingOrBlank) ||
-        estimateStringChars(mergedText) <= maxMergedChunkEstimatedChars
-      ) {
-        chunk.text = mergedText;
-        chunk.startLine = previous.startLine;
-        chunk.hash = hashText(chunk.text);
-        baseChunks.pop();
+    if (source === "memory") {
+      const previous =
+        pendingHeadings && chunk.endLine > pendingHeadings.endLine ? pendingHeadings : undefined;
+      const firstNewLine = Math.max(chunk.startLine, (previous?.endLine ?? 0) + 1);
+      // Overlap can start partway through a heading already covered by the previous chunk.
+      const following = chunk.text.split("\n").slice(firstNewLine - chunk.startLine);
+      const headingsOnly = following.every(isHeadingOrBlank);
+      if (previous) {
+        const mergedText = [previous.text, ...following].join("\n");
+        if (!headingsOnly || estimateStringChars(mergedText) <= maxMergedChunkEstimatedChars) {
+          chunk.text = mergedText;
+          chunk.startLine = previous.startLine;
+          chunk.hash = hashText(chunk.text);
+          baseChunks.pop();
+        }
       }
+      // Only complete, unannotated headings can carry forward into the next chunk.
+      pendingHeadings =
+        headingsOnly &&
+        chunk.entryStartLine === undefined &&
+        following.every(
+          (line, index) =>
+            !line.includes("<!--") &&
+            line.trimEnd() === (sourceLines[firstNewLine + index - 1] ?? "").trimEnd(),
+        )
+          ? chunk
+          : undefined;
     }
     chunk.provenance = resolveChunkProvenance(entry, source, chunk, pathClassification.originClass);
     baseChunks.push(chunk);

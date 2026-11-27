@@ -54,6 +54,12 @@ it.each([0, 2])("keeps an over-budget heading with its body when overlap is %s",
   expect(chunks).toMatchObject([{ startLine: 1, endLine: 2, text: content, hash }]);
 });
 
+it("keeps a heading with its body after overlap clips the preceding heading", () => {
+  const section = "## Quasar schedule\nSaffron opens the north gate.";
+  const { chunks } = prepareHeading(`## Irrigation overview\n${section}`, 2);
+  expect(chunks.find((chunk) => chunk.text.includes("Quasar"))?.text).toContain(section);
+});
+
 it("preserves a heading continuation sharing the next chunk's source line", () => {
   const { chunks } = prepareHeading(`# ${"a".repeat(32)}\nBody`);
   expect(chunks.map((chunk) => chunk.text).join("")).toBe(`# ${"a".repeat(32)}\nBody`);
