@@ -306,12 +306,14 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
   items: TInput[];
+  signal?: AbortSignal;
   maxInputsPerRequest?: number;
   run: (items: TInput[]) => Promise<TOutput[]>;
   onSuccess?: (items: TInput[], outputs: TOutput[]) => void | Promise<void>;
   waitForRetry: (delayMs: number) => Promise<void>;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
+  params.signal?.throwIfAborted();
   const split = async (splitAt: number): Promise<TOutput[]> => {
     const results: TOutput[] = [];
     for (let start = 0; start < params.items.length; start += splitAt) {
@@ -333,10 +335,12 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   try {
     outputs = await runMemoryEmbeddingRetryLoop({
       profile: "index",
+      signal: params.signal,
       run: async () => await params.run(params.items),
       waitForRetry: params.waitForRetry,
     });
   } catch (err) {
+    params.signal?.throwIfAborted();
     const message = embeddingRetryMessage(err);
     if (
       isInvalidEmbeddingResponse(err) ||

@@ -325,6 +325,9 @@ function SenderIdentity(props: { frame: MessageGroupFrame }) {
       <Show when={frame().showSenderName}>
         <PersonName label={frame().who} link={activityLink()} class="chat-sender-name" />
       </Show>
+      <Show when={frame().suggestedByLabel}>
+        <span class="chat-message-source">{frame().suggestedByLabel}</span>
+      </Show>
       <Show when={frame().visibleSources?.length}>
         <span class="chat-message-source">
           {messageClientSourcesLabel(frame().visibleSources!)}
@@ -512,11 +515,11 @@ function FramedMessageGroup(props: {
     <div
       ref={(element) => (replyElements.group = element)}
       class={frame().className}
-      style={`${
+      style={
         frame().normalizedRole === "user" || frame().isForwarded
           ? (participantPalette.read()?.style(frame().senderHue) ?? "")
           : ""
-      }${options().frameFooter === false ? ";margin-block-end:calc(var(--chat-run-block-gap) - 2px)" : ""}`}
+      }
       data-chat-row-key={props.group.key}
       data-chat-streaming={props.group.isStreaming ? "true" : undefined}
       data-file-session-key={frame().sessionKey}
@@ -556,6 +559,7 @@ function FramedMessageGroup(props: {
                   frame().normalizedRole === "user" &&
                   Boolean(
                     frame().visibleSources?.length ||
+                    frame().suggestedByLabel ||
                     frame().isPeerGroup ||
                     (frame().showSenderName && frame().avatarPlacement !== "footer"),
                   ),
@@ -680,7 +684,9 @@ export function MessageGroup(props: {
     >
       <Show
         when={
-          normalizeRoleForGrouping(props.group.role) !== "tool" || options().showToolCalls !== false
+          Boolean(props.group.compaction) ||
+          normalizeRoleForGrouping(props.group.role) !== "tool" ||
+          options().showToolCalls !== false
         }
       >
         <Show

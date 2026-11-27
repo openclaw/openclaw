@@ -129,7 +129,19 @@ export async function ensureLoaded(
   const loadedJobs = (loaded.store.jobs ?? []).filter(isRecord);
   const jobs: CronJob[] = [];
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
-  const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
+  const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [];
+  for (const entry of loaded.invalidConfigRows) {
+    if (entry.reason === "inference-account-needs-doctor") {
+      warnInvalidPersistedCronJob({
+        state,
+        raw: entry.job ?? {},
+        index: entry.sourceIndex,
+        reason: entry.reason,
+      });
+    } else {
+      quarantinedConfigJobs.push(entry);
+    }
+  }
   for (const [index, raw] of loadedJobs.entries()) {
     if (!hasCanonicalCronDeliveryMode(raw.delivery)) {
       const warningKey = `delivery:${raw.id}`;

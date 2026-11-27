@@ -18,7 +18,9 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   activeWriterRunId: undefined,
   lastRunId: undefined,
   lifecycleRunId: undefined,
+  lifecycleRestartScope: undefined,
   resumeAfterRestart: undefined,
+  pendingShellCalls: undefined,
   mainRestartRecovery: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
@@ -37,7 +39,9 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "activeWriterRunId",
   "lastRunId",
   "lifecycleRunId",
+  "lifecycleRestartScope",
   "resumeAfterRestart",
+  "pendingShellCalls",
   "operatorSources",
   "mainRestartRecovery",
   "pendingProjectGitUrl",
@@ -74,8 +78,11 @@ function stripPrivateSessionEntryFields(
       Reflect.deleteProperty(projected, key);
     }
   }
-  if (identity === "public" && projected.createdActor) {
-    projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
+  if (identity === "public") {
+    delete projected.delegatedOperatorSource;
+    if (projected.createdActor) {
+      projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
+    }
   }
   delete projected.thinkingLevelSelection;
   delete projected.compactionCheckpoints;

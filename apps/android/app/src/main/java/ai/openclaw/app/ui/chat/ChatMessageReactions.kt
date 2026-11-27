@@ -15,9 +15,11 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddReaction
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -114,7 +116,12 @@ internal fun ChatReactionPicker(
     contentColor = ClawTheme.colors.text,
   ) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp),
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .verticalScroll(rememberScrollState())
+          .padding(horizontal = 20.dp)
+          .padding(bottom = 24.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       Text(if (custom) nativeStringResource("Add reaction") else nativeStringResource("Quick reactions"), style = ClawTheme.type.title)

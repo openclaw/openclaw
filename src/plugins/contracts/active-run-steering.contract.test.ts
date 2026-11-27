@@ -139,16 +139,13 @@ describe("plugin active-run steering", () => {
       if (delivery === "successor-run" || delivery === "successor-run-receipt") {
         startRun(queueMessage, true, "successor-run", target.storePath);
       }
-      expect(await (second ?? steer(input))).toEqual(
-        delivery === "successor-run" ? { steered: false, reason: "duplicate" } : steered,
-      );
+      // The controller stamps the accepted target run, so a replay names it.
+      expect(await (second ?? steer(input))).toEqual(steered);
       expect(await readTranscriptMessages(target)).toEqual([
         expect.objectContaining({
           content: input.text,
           idempotencyKey: input.idempotencyKey,
-          ...(delivery !== "successor-run"
-            ? { __openclaw: expect.objectContaining({ steerTargetRunId: "steered-run" }) }
-            : {}),
+          __openclaw: expect.objectContaining({ steerTargetRunId: "steered-run" }),
         }),
       ]);
       expect(modelInput).toEqual([input.text]);

@@ -180,6 +180,12 @@ function sessionsBoardView(input: Record<string, unknown>): WorkboardSessionsBoa
   const view: WorkboardSessionsBoardView = {};
   for (const [key, value] of Object.entries(input.view)) {
     switch (key) {
+      case "agentId":
+        if (typeof value !== "string" || !value.trim()) {
+          throw new Error("view.agentId must be a non-empty string.");
+        }
+        view.agentId = value.trim();
+        break;
       case "involvingMe":
       case "includePeople":
         if (typeof value !== "boolean") {
@@ -222,14 +228,12 @@ function sessionsBoardPage(
 }
 
 /**
- * Interactive Sessions-board writes wait in the store's mutation queue, so the
- * caller's full Gateway authority (transport, role/scope/profile authorization,
- * in-process lifetime) is rechecked immediately before the SQLite write.
+ * Interactive Sessions-board writes wait in the store's mutation queue. Keep
+ * the request lifetime and session fences immediately before the SQLite write.
  */
 function sessionsBoardCaller(
   context: Pick<
     GatewayMethodContext,
-    | "hasCurrentClientAuthority"
     | "sessionMutationAuthorization"
     | "sessionAccessAuthority"
     | "sessionMutationCommitGuard"
@@ -239,9 +243,6 @@ function sessionsBoardCaller(
   return {
     assertCurrent() {
       context.signal?.throwIfAborted();
-      if (context.hasCurrentClientAuthority?.() === false) {
-        throw new Error("Caller authority is no longer active.");
-      }
       context.sessionAccessAuthority?.assertCurrent();
       context.sessionMutationAuthorization?.assertCurrent();
       context.sessionMutationCommitGuard?.();

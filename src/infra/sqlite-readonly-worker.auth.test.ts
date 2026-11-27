@@ -402,7 +402,8 @@ it.each(["file", "birthtime"] as const)(
 it("observes agent initialization after a cold auth read in the same worker", async () => {
   const root = tempDirs.make("openclaw-auth-bootstrap-");
   const source = path.join(root, "openclaw-agent.sqlite");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  const readEnv = { OPENCLAW_STATE_DIR: root };
+  const env = { ...process.env, ...readEnv };
   new (requireNodeSqlite().DatabaseSync)(source).close();
   const expectedIdentity = readDatabasePathIdentitySync(source).key;
   const store = {
@@ -412,7 +413,7 @@ it("observes agent initialization after a cold auth read in the same worker", as
     },
   };
   await withSqliteReadOnlyWorkerScope(async () => {
-    expect(await read(source, "canonical", undefined, env)).toMatchObject({
+    expect(await read(source, "canonical", undefined, readEnv)).toMatchObject({
       store: { status: "missing", reason: "table" },
       state: { status: "missing", reason: "table" },
     });
@@ -435,10 +436,10 @@ it("observes agent initialization after a cold auth read in the same worker", as
             env,
           ),
         },
-        { source: "canonical", expectedIdentity, env },
+        { source: "canonical", expectedIdentity, env: readEnv },
       ),
     ).resolves.toEqual({ blocker: "survivor" });
-    expect((await read(source, "canonical", undefined, env)).store).toEqual({
+    expect((await read(source, "canonical", undefined, readEnv)).store).toEqual({
       status: "readable",
       raw: store,
     });

@@ -1,13 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { ensureControlUiAssetsBuilt } from "../src/infra/control-ui-assets.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../src/state/openclaw-agent-db-contract.js";
 import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "../src/state/openclaw-agent-schema-v25.test-support.js";
-import { readBuildIdFromBuildInfoForModuleUrl } from "../src/version.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 it(
@@ -33,18 +30,6 @@ it(
       },
     });
     try {
-      // CI runtime artifacts omit UI assets. Prepare the complete install before
-      // timing doctor so its source UI build cannot consume the migration deadline.
-      const [entrypoint] = await instance.entrypoint();
-      const buildId = readBuildIdFromBuildInfoForModuleUrl(
-        pathToFileURL(path.resolve(entrypoint!)).href,
-      );
-      expect(buildId).not.toBeNull();
-      const ui = await ensureControlUiAssetsBuilt(undefined, {
-        root: process.cwd(),
-        expectedBuildId: buildId,
-      });
-      expect(ui.ok, ui.ok ? undefined : ui.message).toBe(true);
       const databasePath = path.join(
         instance.stateDir,
         "agents",
@@ -141,7 +126,13 @@ it(
           OPENCLAW_AGENT_SCHEMA_VERSION,
         );
         expect(database.prepare("SELECT * FROM session_members").all()).toEqual([
-          { session_key: sessionKey, identity_id: "guest", added_by: "owner", added_at: 1 },
+          {
+            session_key: sessionKey,
+            identity_id: "guest",
+            added_by: "owner",
+            added_at: 1,
+            access: null,
+          },
         ]);
         const entry = database
           .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")

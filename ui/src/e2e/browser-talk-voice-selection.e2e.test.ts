@@ -133,6 +133,63 @@ suite.define(() => {
     });
   });
 
+  it("keeps a long retained Talk provider inside its selected segment on a phone", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true },
+      async ({ page }) => {
+        const provider = "internationalmeetingsspeechaccessibilityandinterpretationservice";
+        const config = { talk: { realtime: { provider } } };
+        await installMockGateway(page, {
+          methodResponses: {
+            "config.get": { exists: true, ...configSnapshot(config, "retained-provider") },
+            "config.schema": configSchema({
+              type: "object",
+              properties: { talk: { type: "object", additionalProperties: true } },
+            }),
+            "talk.catalog": {
+              realtime: {
+                activeProvider: "openai",
+                providers: [
+                  { id: "openai", label: "OpenAI", configured: true, models: ["realtime"] },
+                ],
+              },
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/talk");
+        const group = page.getByRole("radiogroup", { name: "Provider", exact: true });
+        const retained = group.getByRole("radio", { name: provider, exact: true });
+        await retained.waitFor({ state: "attached" });
+        expect(await retained.isChecked()).toBe(true);
+        await page.evaluate(() => document.fonts.ready.then(() => {}));
+        const fits = await retained.evaluate((input: HTMLInputElement) => {
+          const label = input.labels![0]!;
+          const text = [...label.childNodes].find(
+            (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+          );
+          if (!text) {
+            throw new Error("Missing visible provider label");
+          }
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          const bounds = label.getBoundingClientRect(),
+            style = getComputedStyle(label);
+          return [...range.getClientRects()].every(
+            (line) =>
+              line.left >= bounds.left + Number.parseFloat(style.paddingLeft) - 1 &&
+              line.right <= bounds.right - Number.parseFloat(style.paddingRight) + 1,
+          );
+        });
+        expect(fits, "every line stays inside the selected provider's padding").toBe(true);
+        await retained.focus();
+        await page.keyboard.press("ArrowRight");
+        await expect
+          .poll(() => group.getByRole("radio", { name: "Auto", exact: true }).isChecked())
+          .toBe(true);
+      },
+    );
+  });
+
   it("keeps the speaker voice editable and saved in Talk settings", async () => {
     await suite.withPage({}, async ({ page }) => {
       const config = {

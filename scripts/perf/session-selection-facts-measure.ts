@@ -50,6 +50,7 @@ import type { Row, SelectionChange } from "../../src/gateway/session-row-project
 import { createProfileSessionEntryFilter } from "../../src/gateway/session-sharing-read.js";
 import { buildSessionListRowMetadataContext } from "../../src/gateway/session-utils-projection.js";
 import { notifyListeners } from "../../src/shared/listeners.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -367,12 +368,7 @@ for (const name of workloads) {
   const collections: PerformanceEntry[] = [];
   const observer = new PerformanceObserver((list) => collections.push(...list.getEntries()));
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else {
     observer.observe({ entryTypes: ["gc"] });
   }

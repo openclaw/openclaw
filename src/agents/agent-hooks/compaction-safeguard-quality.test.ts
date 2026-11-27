@@ -14,16 +14,18 @@ const structuredSummary = (pendingAsk: string, decision = "Keep current flow.") 
   ].join("\n");
 
 describe("compaction summary request matching", () => {
-  it("keeps failed-check guidance alongside a still-live user request", () => {
+  it("archives decisions and limits open work while retaining the live user request", () => {
     const instructions = buildCompactionStructureInstructions(
       undefined,
       undefined,
       "Finish release preparation.",
     );
     expect(instructions).toContain(
-      "a check that ran and returned a failing result is completed, not an open TODO",
+      "Record settled user decisions, explicit approvals, and observed outcomes under ## Decisions, updating superseded facts when corrected.",
     );
-    expect(instructions).toContain("keep only the remaining remediation in ## Open TODOs");
+    expect(instructions).toContain(
+      "Limit ## Open TODOs to unfinished user-requested work or unresolved execution failures.",
+    );
     expect(instructions).toContain("Finish release preparation.");
     expect(instructions).toContain("Its run owner will resume it after compaction");
   });

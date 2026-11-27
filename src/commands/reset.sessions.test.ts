@@ -29,6 +29,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   withOpenClawTestState,
@@ -329,6 +330,47 @@ describe("reset canonical sessions", () => {
       expect(loadSessionEntry(scope)).toBeUndefined();
       await fs.access(scope.storePath);
       await fs.access(state.workspaceDir);
+    }));
+
+  it.each(["config", "credentials"] as const)(
+    "reports failed %s removal but removes the other path",
+    (failedRemoval) =>
+      withOpenClawTestState({ layout: "split", scenario: "minimal" }, async (state) => {
+        const credentials = await state.writeText("credentials/fixture", "synthetic");
+        const paths = { config: state.configPath, credentials: path.dirname(credentials) };
+        const removed = failedRemoval === "config" ? paths.credentials : paths.config;
+        const rm = fs.rm;
+        const failure = vi
+          .spyOn(fs, "rm")
+          .mockImplementation((target, options) =>
+            target === paths[failedRemoval]
+              ? Promise.reject(new Error("fixture removal failure"))
+              : rm(target, options),
+          );
+        const { runtime, log, error } = silentRuntime();
+
+        try {
+          await expect(reset(runtime)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        } finally {
+          failure.mockRestore();
+        }
+        expect(error).toHaveBeenCalledWith(expect.stringContaining("fixture removal failure"));
+        expect(log.mock.calls.flat().join("\n")).not.toMatch(/^Next:/m);
+        await fs.access(paths[failedRemoval]);
+        await expectMissing(removed);
+      }),
+  );
+
+  it("refuses to remove an OAuth directory that contains the active state lock", () =>
+    withOpenClawTestState({ layout: "split", scenario: "minimal" }, async (state) => {
+      const marker = await state.writeText("fixture", "keep state");
+      const { runtime, error } = silentRuntime();
+      await withEnvAsync({ OPENCLAW_OAUTH_DIR: state.stateDir }, async () => {
+        await expect(reset(runtime)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      });
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("contains an active state lock"));
+      await expectFileText(marker, "keep state");
+      await expectMissing(state.configPath);
     }));
 
   it("preserves a colliding archive's history while resetting other agents and independent paths", () =>

@@ -1,4 +1,7 @@
-import { runSummarizationCompletionFromSource } from "../../packages/agent-core/src/harness/compaction/summarization-completion.js";
+import {
+  formatSummaryInstructions,
+  runSummarizationCompletionFromSource,
+} from "../../packages/agent-core/src/harness/compaction/summarization-completion.js";
 import { prepareCompactionSummaryRequest } from "../../packages/agent-core/src/harness/compaction/summary-checkpoint-prompt.js";
 import type { BoundedConversation } from "../../packages/agent-core/src/harness/compaction/utils.js";
 import {
@@ -91,6 +94,22 @@ export async function summarizeCompactionHistory(params: CompactionSummaryParams
       params.summaryPrompt,
     ),
   );
+}
+
+/** The same summary instructions for a warm request, which already holds the history. */
+export function formatWarmCompactionSummaryInstructions(
+  params: Pick<
+    CompactionSummaryParams,
+    "model" | "reserveTokens" | "customInstructions" | "summaryPrompt" | "summarizationInstructions"
+  >,
+): string {
+  return formatSummaryInstructions({
+    prompt: prepareCompactionSummaryRequest(params).prompt,
+    customInstructions: buildCompactionSummarizationInstructions(
+      params.customInstructions,
+      params.summarizationInstructions,
+    ),
+  });
 }
 
 /** @internal Prepared sources rerender the original captured rows at each requested budget. */

@@ -3,7 +3,7 @@ import OpenClawKit
 import SwiftUI
 
 struct CommandSessionRow: View {
-    let item: CommandCenterTab.WorkItem
+    let item: SessionPresentation.WorkItem
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {

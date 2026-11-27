@@ -372,7 +372,7 @@ export function adoptSessionControllerSource(
     input.abortSignal.throwIfAborted();
   };
   assertAdoptable();
-  params.adapter.authority?.assertCurrent();
+  params.adapter.authority?.assertCurrent?.();
   assertAdoptable();
   input.target = params.target;
   input.protocolRunId = params.protocolRunId;
@@ -469,7 +469,7 @@ export function retargetSessionControllerSource(
     input.abortSignal.throwIfAborted();
   };
   assertUnbound();
-  input.sourceAdapter?.authority?.assertCurrent();
+  input.sourceAdapter?.authority?.assertCurrent?.();
   assertUnbound();
   const previous = input.mailbox;
   if (

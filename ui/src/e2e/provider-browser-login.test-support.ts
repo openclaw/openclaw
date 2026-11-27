@@ -33,7 +33,11 @@ export type ProviderBrowserLoginOptions = {
   cwd?: string;
   entrypoint?: string[];
   bootstrap?: ProviderBrowserLoginBootstrap;
+  /** First run: no chosen model, only an available local one (like a running llama.cpp). */
+  firstRun?: boolean;
 };
+
+export const localModelName = "Local fixture model";
 
 export async function startProviderBrowserLoginFixture(options: ProviderBrowserLoginOptions = {}) {
   const instance = await createOpenClawTestInstance({
@@ -231,12 +235,38 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
         agents: {
           ownership: "explicit",
           entries: { main: {} },
-          defaults: {
-            model: `${loginProvider}/ready`,
-            modelPolicy: { allow: [`${loginProvider}/*`] },
-          },
+          defaults: options.firstRun
+            ? {}
+            : {
+                model: `${loginProvider}/ready`,
+                modelPolicy: { allow: [`${loginProvider}/*`] },
+              },
         },
-        models: { catalogRefresh: { enabled: false } },
+        models: {
+          catalogRefresh: { enabled: false },
+          ...(options.firstRun
+            ? {
+                providers: {
+                  "local-fixture": {
+                    baseUrl: providerOrigin,
+                    api: "openai-completions",
+                    apiKey: "local-fixture-key",
+                    models: [
+                      {
+                        id: "local",
+                        name: localModelName,
+                        reasoning: false,
+                        input: ["text"],
+                        contextWindow: 32768,
+                        maxTokens: 4096,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      },
+                    ],
+                  },
+                },
+              }
+            : {}),
+        },
         cron: { enabled: false },
         logging: { file: path.join(root, "gateway-file.log") },
         plugins: {

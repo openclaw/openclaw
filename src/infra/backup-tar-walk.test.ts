@@ -4,7 +4,7 @@ import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -174,7 +174,7 @@ it.each([
       "--input-type=module",
       "-e",
       `
-    import { Parser } from "tar";
+    import { Parser } from "tar/raw";
     const links = [];
     const parser = new Parser({ onReadEntry(entry) {
       links.push({ entryPath: entry.path, linkpath: entry.linkpath });

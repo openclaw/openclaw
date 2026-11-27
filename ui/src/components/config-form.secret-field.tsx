@@ -136,29 +136,18 @@ function SecretFieldActions(props: {
   const held = () => props.hold.text() !== undefined;
   return (
     <Show when={held() || props.hold.saved()}>
-      <span class="cfg-secret-actions" data-saved={held() ? undefined : ""}>
-        <span class="cfg-secret-actions__buttons">
+      <span class="cfg-secret-actions state-stack">
+        <span class="cfg-secret-actions__buttons" aria-hidden={held() ? undefined : "true"}>
           <button
             type="button"
-            class="btn btn--sm primary"
+            class="btn btn--sm primary state-stack"
             aria-label={`${t("common.save")}: ${props.label}`}
             aria-busy={props.hold.saving() ? "true" : undefined}
             disabled={!held() || props.disabled || props.hold.saving()}
             onClick={() => props.onSave()}
           >
-            <span
-              class="cfg-secret-actions__label"
-              data-shown={props.hold.saving() ? undefined : ""}
-            >
-              {t("common.save")}
-            </span>
-            <span
-              class="cfg-secret-actions__label"
-              data-shown={props.hold.saving() ? "" : undefined}
-              aria-hidden="true"
-            >
-              {t("common.saving")}
-            </span>
+            <span aria-hidden={props.hold.saving() ? "true" : undefined}>{t("common.save")}</span>
+            <span aria-hidden={props.hold.saving() ? undefined : "true"}>{t("common.saving")}</span>
           </button>
           <button
             type="button"

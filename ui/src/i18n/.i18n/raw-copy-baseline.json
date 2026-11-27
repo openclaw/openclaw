@@ -418,6 +418,55 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "agents"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "gateway.roles.definitions."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "sandbox"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "sessions.invitedPermission"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "sessions.invitedTools"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "sessions.maxInvitedAccess"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/roles/role-editor.tsx",
+      "text": "sessions.others"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/pages/skills/library-detail.tsx",
       "text": "SKILL.md"
     },

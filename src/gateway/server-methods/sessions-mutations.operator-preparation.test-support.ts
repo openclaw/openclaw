@@ -32,7 +32,7 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-stat
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import * as profileReader from "../../state/user-profile-list.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { initializeRepository } from "../server.sessions.create.projects.test-support.js";
 import { createGatewaySession } from "../session-create-service.js";
 import * as creationTarget from "../session-create-target.js";
@@ -375,7 +375,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
       // Retire normal-scope actors before acquiring the existing-schema policy.
       await closeDatabases();
       await withExistingOpenClawStateSchema({ path: statePath }, async () => {
-        const preparation = captureGatewayOperatorRunAuthority({ client: caller, context });
+        const preparation = prepareGatewayOperatorRunAuthority({ client: caller, context });
         void preparation.catch(() => {});
         try {
           const result = await createGatewaySession({
@@ -514,7 +514,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
               }
               return prepared;
             });
-          const preparation = captureGatewayOperatorRunAuthority({
+          const preparation = prepareGatewayOperatorRunAuthority({
             client: caller,
             context,
             invocationAuthority: {

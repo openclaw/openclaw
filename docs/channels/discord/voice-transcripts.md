@@ -47,6 +47,9 @@ speech without conversational input or commands. Normal conversation requires a
 fresh receive stream after the current stream ends; brief pauses within
 `voice.captureSilenceGraceMs` keep the current stream and its recording-only behavior.
 
+Discord identifies the account sending each audio stream. Two people using one
+microphone share that account's speaker attribution.
+
 Full recording coverage requires batch audio understanding. Recording uses one
 per-speaker audio stream and batch transcription, with the
 receiver's user ID, independently resolved display label, and audio-ingress time.
@@ -121,7 +124,7 @@ and add an occupancy-driven transcript source:
   },
   tools: {
     media: {
-      models: [{ provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] }],
+      models: [{ provider: "openai", model: "gpt-transcribe", capabilities: ["audio"] }],
       audio: { enabled: true },
     },
   },
@@ -144,6 +147,10 @@ intent, which `voice.enabled: true` enables by default. Do not explicitly disabl
 `voice.allowedChannels` allowlist. Use `transcripts.autoStart`, not conversational
 `voice.autoJoin`, for this note-taking recipe. Tell participants that the bot
 captures and stores transcripts before enabling it.
+
+Speech-to-text reads the current `tools.media` config for each clip, so a
+changed transcription model or language applies to the next clip without a
+Gateway restart.
 
 For multiple Discord accounts, add `accountId` to select the voice-enabled bot
 unless the configured default account resolves it unambiguously. Configure at

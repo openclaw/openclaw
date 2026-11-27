@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
@@ -483,10 +483,9 @@ describe("mixed inline directives", () => {
       },
       models: createFixtureProviderModels("https://fixture.invalid/v1"),
     };
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "limited-operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { deny: ["fixture/blocked"] } }),
     });
     const sessionEntry = createSessionEntry();

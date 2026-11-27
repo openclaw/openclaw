@@ -12,7 +12,10 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { noteDoctorAgentMemorySchemaHealth } from "./doctor-agent-memory-schema.js";
+import {
+  checkDoctorAgentMemorySchemaPending,
+  noteDoctorAgentMemorySchemaHealth,
+} from "./doctor-agent-memory-schema.js";
 
 const tempDirs: string[] = [];
 
@@ -61,6 +64,32 @@ afterEach(() => {
   agentDatabase.closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
+});
+
+it("reports pending schema work read-only until the repair moves the metadata", async () => {
+  const { databasePath, env } = createRegisteredAgentDatabase();
+  expect(checkDoctorAgentMemorySchemaPending({ env, shouldRepair: true })).toBe("none");
+  recreateUnreleasedInlineMemoryMetadata(databasePath);
+  invalidateRegisteredAgentDatabasesMemo({ env });
+  // A read-only open of a WAL database may leave an empty -wal; a write leaves frames.
+  const family = [databasePath, `${databasePath}-wal`, `${databasePath}.seal`];
+  const snapshot = () =>
+    family.map((pathname) =>
+      fs.existsSync(pathname) && fs.statSync(pathname).size > 0
+        ? [pathname, fs.readFileSync(pathname), fs.statSync(pathname).mtimeMs]
+        : [pathname],
+    );
+  const before = snapshot();
+
+  expect(checkDoctorAgentMemorySchemaPending({ env, shouldRepair: true })).toBe("work");
+  expect(checkDoctorAgentMemorySchemaPending({ env, shouldRepair: false })).toBe("none");
+  expect(snapshot()).toEqual(before);
+  expect(readMemoryChunkColumns(databasePath)).toContain("importance");
+
+  const report = await repairMemory(env);
+  expect(report.repaired).toHaveLength(1);
+  expect(readMemoryChunkColumns(databasePath)).not.toContain("importance");
+  expect(checkDoctorAgentMemorySchemaPending({ env, shouldRepair: true })).toBe("none");
 });
 
 it("removes a stale clean-close seal before failed writable repair while inspection preserves it", async () => {

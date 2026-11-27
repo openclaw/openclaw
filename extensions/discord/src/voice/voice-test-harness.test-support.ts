@@ -1,8 +1,10 @@
 import { PassThrough } from "node:stream";
 import { VoiceOpcodes } from "discord-api-types/voice/v8";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { TranscriptStartRequest } from "openclaw/plugin-sdk/transcripts";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { ChannelType } from "../internal/discord.js";
@@ -150,26 +152,20 @@ function buildVoiceTestHarness() {
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     });
     mocks.decodeOpusStreamChunksMock.mockReset().mockResolvedValue(undefined);
-    mocks.resolveAudioInputBudgetMock
-      .mockReset()
-      .mockImplementation(async ({ cfg }) =>
-        cfg.tools?.media?.audio?.enabled === false
-          ? { enabled: false }
-          : { enabled: true, maxBytes: cfg.tools?.media?.audio?.maxBytes ?? 20 * 1024 * 1024 },
-      );
   });
 
   const createManager = (
     discordConfig: DiscordConfig = { voice: { enabled: true, mode: "stt-tts" } },
     clientOverride?: ReturnType<typeof createClient>,
-    cfgOverride: ManagerParams["cfg"] = {},
+    cfgOverride: OpenClawConfig = {},
     accountId = "default",
     botUserId?: string,
   ) => {
     const manager = new managerModule.DiscordVoiceManager({
       scheduler: createTestPluginServiceScheduler(),
       client: (clientOverride ?? createClient()) as never,
-      cfg: cfgOverride,
+      // Same reader the Discord monitor passes: follows the runtime snapshot when one is published.
+      readConfig: createRuntimeConfigReader(cfgOverride),
       discordConfig,
       accountId,
       runtime: createRuntime(),
@@ -200,7 +196,7 @@ function buildVoiceTestHarness() {
   const createAgentProxyManager = (
     client?: ReturnType<typeof createClient>,
     overrides?: AgentProxyConfigOverrides,
-    cfg?: ManagerParams["cfg"],
+    cfg?: OpenClawConfig,
     botUserId?: string,
   ) => createManager(makeAgentProxyConfig(overrides), client, cfg, "default", botUserId);
 
@@ -468,7 +464,7 @@ function buildVoiceTestHarness() {
       overrides: {
         client?: ReturnType<typeof createClient>;
         config?: AgentProxyConfigOverrides;
-        cfg?: ManagerParams["cfg"];
+        cfg?: OpenClawConfig;
       } = {},
     ) =>
       joinManagerFixture(

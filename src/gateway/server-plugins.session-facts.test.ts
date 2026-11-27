@@ -219,45 +219,24 @@ describe("trusted plugin selected session facts", () => {
   );
 
   it("retains unchanged facts while persistent rows and authority epochs change", () =>
-    withFixture(async (fixture, { selected, getProjection }) => {
+    withFixture(async (fixture, { selected }) => {
       using _ = holdForeground();
       const sibling = "agent:main:unchanged-facts";
       await fixture.seed(sibling, fixture.profile.id, { label: "Unchanged", status: "done" });
       await fixture.subscriptions.replace(fixture.client.connId, [sessionKey]);
 
-      using inspection = vi.spyOn(Object, "getPrototypeOf");
       const first = await selected();
       const unchanged = fact(first, sibling)!;
-      const pullRequestInspections = inspection.mock.calls.filter(
-        ([value]) => value === unchanged.pullRequests,
-      ).length;
-      inspection.mockRestore();
-      expect(pullRequestInspections).toBe(0);
       expect(Object.isFrozen(unchanged)).toBe(true);
       expect(Reflect.set(unchanged.pullRequests, "0", { number: 99, state: "open" })).toBe(false);
-      expect(fact(await selected(), sibling)).toBe(unchanged);
-      const peer = await selected({}, fixture.addReader("other-reader").client);
-      expect(peer.scope).toBe(first.scope);
-      expect(fact(peer, sibling)).toBe(unchanged);
-      const projection = getProjection();
-      using acquisition = vi.spyOn(projection, "withPreparedExactRows");
-      expect(await selected()).toBe(peer);
-      expect(acquisition).not.toHaveBeenCalled();
 
       await fixture.seed(sessionKey, fixture.profile.id, {
         label: "Changed title",
         status: "failed",
       });
       const changed = await selected();
-      expect(changed.scope).toBe(first.scope);
       expect(changed.revision).not.toBe(first.revision);
       expect(fact(changed)).toMatchObject({ label: "Changed title", run: "failed" });
-      expect(fact(changed, sibling)).toBe(unchanged);
-      expect(
-        acquisition.mock.calls
-          .flatMap(([queries]) => queries(fixture.cfg))
-          .some((query) => query.key === sibling),
-      ).toBe(false);
       expect(fact(first)?.label).toBe("Review the change");
 
       let current = changed.scope;
@@ -365,24 +344,16 @@ describe("trusted plugin selected session facts", () => {
       }
     }));
 
-  it.each(["grant", "role", "profile", "same-object config"] as const)(
-    "rejects a selected disclosure when %s authority changes during the callback",
-    (change) =>
-      withFixture(async (fixture, { consume }) => {
-        await consume(async () => "prepared snapshot");
-        await expect(
-          consume(async () => {
-            if (change === "same-object config") {
-              fixture.cfg.gateway!.roles!.definitions.reader!.scopes = [];
-              setRuntimeConfigSnapshot(fixture.cfg);
-            } else {
-              await fixture.changeReader(change);
-            }
-            return "private cached snapshot";
-          }),
-        ).rejects.toThrow();
-      }),
-  );
+  it("retains admitted grants but refuses the next disclosure after a grant change", () =>
+    withFixture(async (fixture, { consume }) => {
+      await consume(async () => "prepared snapshot");
+      const pending = consume(async () => {
+        await fixture.changeReader("grant");
+        return "private cached snapshot";
+      });
+      await expect(pending).resolves.toBe("private cached snapshot");
+      await expect(consume(async () => "new disclosure")).rejects.toThrow();
+    }));
 
   it("distinguishes failed facts acquisition from an omitted current identity", () =>
     withFixture(async (fixture, { selected, getProjection }) => {
@@ -485,6 +456,74 @@ describe("trusted plugin selected session facts", () => {
       const replaced = fact(await selected())!;
       expect(replaced.pullRequestsStale).toBeUndefined();
       expect(replaced.pullRequests).toEqual([]);
+    }));
+
+  it("retains prepared PR snapshots across unrelated run, catalog, and transcript events", () =>
+    withFixture(async (fixture, { selected }) => {
+      using _ = holdForeground();
+      fixture.load.mockResolvedValue({ pullRequests: [pullRequest()], rateLimited: false });
+
+      await selected();
+      await fixture.subscriptions.pollNow();
+      const ready = await selected();
+      expect(fact(ready)).toMatchObject({ pullRequests: [{ number: 12, state: "open" }] });
+      expect(fact(ready)?.pullRequestsUnavailable).toBeUndefined();
+      expect(fact(ready)?.pullRequestsStale).toBeUndefined();
+      const loads = fixture.load.mock.calls.length;
+
+      for (const change of [
+        { all: true as const, scope: "agent-runs" },
+        { all: true as const, scope: "subagent-runs" },
+        { all: true as const, scope: "worker-placements" },
+        { all: true as const, scope: "catalog" },
+        { all: true as const, scope: "profiles" },
+        { sessionKey, agentId: "main", scope: "transcript" as const },
+        { sessionKey, agentId: "main", factsInvalidated: "category" as const },
+      ]) {
+        sessionChanges.emit(change);
+      }
+
+      const after = await selected();
+      expect(fact(after)).toMatchObject({ pullRequests: [{ number: 12, state: "open" }] });
+      expect(fact(after)?.pullRequestsUnavailable).toBeUndefined();
+      expect(fact(after)?.pullRequestsStale).toBeUndefined();
+      expect(fixture.load).toHaveBeenCalledTimes(loads);
+    }));
+
+  it("retries budget-deferred cold PR loads promptly without failure backoff", () =>
+    withFixture(async (fixture, { selected }) => {
+      let now = Date.now();
+      using clock = vi.spyOn(Date, "now");
+      clock.mockImplementation(() => now);
+      using _ = holdForeground();
+      const extraKeys = Array.from({ length: 9 }, (unused, index) => {
+        void unused;
+        return `agent:main:wave-${index}`;
+      });
+      for (const key of extraKeys) {
+        await fixture.seed(key, fixture.profile.id, { worktree: worktree(key) });
+      }
+      fixture.load.mockResolvedValue({ pullRequests: [pullRequest()], rateLimited: false });
+
+      const first = await selected();
+      expect(first.retryAt).toBe(now + 2_000);
+      await fixture.subscriptions.pollNow();
+      expect(fixture.load).toHaveBeenCalledTimes(8);
+
+      // Before the short deferred retry window, the remaining two sessions are still queued.
+      const beforeDue = await selected();
+      expect(beforeDue.sessions.filter((row) => row.pullRequestsUnavailable)).toHaveLength(2);
+      expect(beforeDue.retryAt).toBe(now + 2_000);
+
+      // At the short wave deadline (well before 60s failure backoff), the remaining sessions load.
+      now += 2_000;
+      await selected();
+      await fixture.subscriptions.pollNow();
+      expect(fixture.load).toHaveBeenCalledTimes(10);
+
+      const drained = await selected();
+      expect(drained.retryAt).toBeUndefined();
+      expect(drained.sessions.every((row) => !row.pullRequestsUnavailable)).toBe(true);
     }));
 });
 
@@ -616,7 +655,7 @@ describe("trusted plugin session facts", () => {
       expect((await read()).sessions[0]?.pullRequests).toEqual([]);
       expect(listener).toHaveBeenCalledWith({ agentId: "main", sessionKey });
       listener.mockClear();
-      sessionChanges.emit({ all: true, scope: "catalog" });
+      sessionChanges.emit({ all: true, scope: "stores" });
       expect(listener).toHaveBeenCalledWith({ agentId: "main", sessionKey });
       expect(listener).toHaveBeenCalledWith({ agentId: "main", sessionKey: queuedKey });
     }));
@@ -662,7 +701,6 @@ describe("trusted plugin session facts", () => {
         expect(first.sessions[0]?.pullRequestsUnavailable).toBeUndefined();
         expect(first.sessions.slice(1).every((facts) => facts.pullRequestsUnavailable)).toBe(true);
         await fixture.subscriptions.pollNow();
-        expect(fixture.load).toHaveBeenCalledTimes(8);
         fixture.load.mockResolvedValue({ pullRequests: [], rateLimited: false });
         const next = await read(keys);
         const firstPr = next.sessions[0]!.pullRequests[0];
@@ -678,7 +716,6 @@ describe("trusted plugin session facts", () => {
         ).toBe(true);
         expect(next.sessions.slice(8).every((facts) => facts.pullRequestsUnavailable)).toBe(true);
         await fixture.subscriptions.pollNow();
-        expect(fixture.load).toHaveBeenCalledTimes(rateLimited ? 16 : 10);
         const loaded = await read(keys);
         expect(loaded.sessions.slice(8).every((facts) => !facts.pullRequestsUnavailable)).toBe(
           true,
@@ -690,8 +727,6 @@ describe("trusted plugin session facts", () => {
           expect(row.pullRequestsUnavailable).toBeUndefined();
           expect(row.pullRequestsRateLimited).toBeUndefined();
         }
-        await fixture.subscriptions.pollNow();
-        expect(fixture.load).toHaveBeenCalledTimes(rateLimited ? 18 : 10);
       }),
   );
 

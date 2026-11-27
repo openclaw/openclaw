@@ -47,7 +47,11 @@ export function formatBrowserWebSocketConstructorError(err: unknown, url: string
   };
 }
 
-export async function probeGatewayReachability(url: string, signal: AbortSignal): Promise<boolean> {
+/** The Gateway answers `/healthz` before any auth, so a 401/403 there comes from in front of it. */
+export async function probeGatewayReachability(
+  url: string,
+  signal: AbortSignal,
+): Promise<"live" | "access-denied" | "unavailable"> {
   try {
     const gateway = new URL(url, window.location.href);
     gateway.protocol = gateway.protocol.replace(/^ws/u, "http");
@@ -56,7 +60,7 @@ export async function probeGatewayReachability(url: string, signal: AbortSignal)
       window.location.href,
     );
     if (probe.origin !== new URL(window.location.href).origin) {
-      return false;
+      return "unavailable";
     }
     const response = await fetch(probe, {
       cache: "no-store",
@@ -65,20 +69,23 @@ export async function probeGatewayReachability(url: string, signal: AbortSignal)
       redirect: "error",
       signal,
     });
+    if (response.status === 401 || response.status === 403) {
+      return "access-denied";
+    }
     if (!response.ok) {
-      return false;
+      return "unavailable";
     }
     const body: unknown = await response.json();
-    return (
-      body !== null &&
+    return body !== null &&
       typeof body === "object" &&
       "ok" in body &&
       body.ok === true &&
       "status" in body &&
       body.status === "live"
-    );
+      ? "live"
+      : "unavailable";
   } catch {
-    return false;
+    return "unavailable";
   }
 }
 

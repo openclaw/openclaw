@@ -98,6 +98,7 @@ shell-completion metadata.
 - `image edit` and `image describe-many` require at least one `--file`; `embedding create` requires at least one `--text`. Repeat the flag for multiple inputs. Omitting it is a usage error, not an empty successful result, and no inference request is sent.
 - Use `model run --thinking <level>` for a one-shot thinking/reasoning override: `off`, `minimal`, `low`, `medium`, `high`, `adaptive`, `xhigh`, or `max`.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
+- For `audio transcribe` and `video describe`, `--model` sends the file only to that model; if it fails, the error is returned and no configured `tools.media.models` entry is tried.
 - For `image describe`, `--file` accepts local paths and HTTP(S) URLs; remote URLs go through the normal media-fetch SSRF policy.
 - Stateless execution commands (`model run`, `image *`, `audio *`, `video *`, `web *`, `embedding *`) default to local. Gateway-managed state commands (`tts status`) default to gateway.
 - The local path never requires the gateway to be running.
@@ -135,7 +136,7 @@ openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
 openclaw infer model run --prompt-file ./prompts/judge.txt --json
 openclaw infer model run --prompt-stdin --json < ./prompts/judge.txt
 openclaw infer model run --prompt "Summarize this changelog entry" --model openai/gpt-5.4 --json
-openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-2.5-flash --json
+openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-3.5-flash-lite --json
 openclaw infer model run --prompt "Use more reasoning here" --thinking high --json
 openclaw infer model providers --agent <id> --json
 openclaw infer model inspect --model gpt-6-astra --json
@@ -146,7 +147,7 @@ Use full `<provider/model>` refs with `--local` to smoke-test one provider witho
 ```bash
 openclaw infer model run --local --model anthropic/claude-sonnet-4-6 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model cerebras/gpt-oss-120b --prompt "Reply with exactly: pong" --json
-openclaw infer model run --local --model google/gemini-2.5-flash --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model google/gemini-3.5-flash-lite --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model groq/openai/gpt-oss-120b --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/qwen3.8 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/gemma4:e4b --prompt "Describe this image." --file ./photo.jpg --json
@@ -207,7 +208,7 @@ Notes:
   ```bash
   openclaw infer image providers --json
   openclaw infer image generate \
-    --model google/gemini-3.1-flash-image \
+    --model google/gemini-nano-banana-2.1 \
     --prompt "Minimal flat test image: one blue square on a white background, no text." \
     --output ./openclaw-infer-image-smoke.png \
     --json

@@ -127,7 +127,7 @@ it.each([
         speech: {
           activeProvider: talkProvider,
           providers: [
-            { id: "openai", configured: talkReady },
+            { id: "openai", configured: talkReady, apiKeyRequired: !talkReady },
             { id: "other", configured: true },
           ],
         },
@@ -143,6 +143,7 @@ it.each([
     expect(picker).toMatchObject({
       realtimeStatus: ready ? "ready" : "unavailable",
       dictationStatus: "ready",
+      apiKeyProviders: { speech: ready ? undefined : "openai" },
     });
     expect(request.mock.calls.some(([method]) => method === "tts.status")).toBe(!talkProvider);
   },

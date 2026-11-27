@@ -329,9 +329,9 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
         }
         expect(new Set(sessionIds).size).toBe(2);
         expect(requests).toEqual(
-          modelIds.map((model) => ({
+          modelIds.map(() => ({
             url: `${baseUrl}/responses`,
-            model,
+            model: "gpt-4.1",
             authorization: `Bearer ${credential}`,
             account: profileId === subscriptionId ? "synthetic-account" : null,
           })),
@@ -451,6 +451,7 @@ it.each([
       await writeConfig(state, cfg);
       const { CronService } = await import("./service.js");
       const { createNoopLogger } = await import("./service.test-harness.js");
+      const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
       const { createTestGatewayScheduler } =
         await import("../test-utils/gateway-scheduler-clock.js");
       const { createDirectChatContext } =
@@ -469,6 +470,8 @@ it.each([
           defaultAgentId: "main",
           log: createNoopLogger(),
           enqueueSystemEvent() {},
+          admitScheduledOccurrence: ({ job }) =>
+            admitScheduledOccurrence({ cfg, job, agentId: "main", trigger: "cron" }),
           onEvent(event) {
             if (event.action === "finished") {
               finished.push(event);

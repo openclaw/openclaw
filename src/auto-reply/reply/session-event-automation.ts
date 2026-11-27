@@ -92,6 +92,27 @@ export type ScheduledAutomationAdmission = Pick<
   "admissionDeferred" | "admissionDeferredReason"
 >;
 
+/** Keep provider admission tied to the selected model of this scheduled occurrence. */
+export function withScheduledSessionProviderAdmission(
+  automation: ScheduledSessionAutomation | undefined,
+  onWait: (provider: string) => void,
+): ScheduledSessionAutomation | undefined {
+  const slot = automation?.providerRunSlot;
+  if (!automation || !slot) {
+    return automation;
+  }
+  return {
+    ...automation,
+    beforeModelRun(provider) {
+      if (slot.tryStart(provider)) {
+        return true;
+      }
+      onWait(provider);
+      return false;
+    },
+  };
+}
+
 /** Wait behind foreground work, then recheck the same automation's current start policy. */
 export async function prepareScheduledAutomationStart(params: {
   automation?: ScheduledSessionAutomation;
@@ -152,13 +173,14 @@ export async function settleSessionEventTurn(params: {
   >
 > {
   const { automation, runId, deliveryEvidence } = params;
-  if (params.outcome !== "completed") {
-    const detail =
-      deliveryEvidence?.meta?.error?.message ||
-      deliveryEvidence?.payloads?.find((payload) => payload.isError && payload.text?.trim())?.text;
+  const failed = params.outcome !== "completed";
+  const presentedError =
+    deliveryEvidence?.meta?.error?.message ||
+    deliveryEvidence?.payloads?.find((payload) => payload.isError && payload.text?.trim())?.text;
+  if (failed) {
     params.onFailure(
-      detail || `Session event execution ${params.outcome}`,
-      !detail && params.outcome === "failed",
+      presentedError || `Session event execution ${params.outcome}`,
+      !presentedError && params.outcome === "failed",
     );
   }
   await params.prepareCurrent();
@@ -199,7 +221,7 @@ export async function settleSessionEventTurn(params: {
       usage: projectCronRunUsage(deliveryEvidence?.meta?.agentMeta?.usage),
       replyDisposition: deliveryEvidence?.meta?.terminalReply?.disposition,
       diagnostics: createCronRunDiagnosticsFromAgentResult(deliveryEvidence, {
-        finalStatus: params.outcome === "completed" ? "ok" : "error",
+        finalStatus: failed ? "error" : "ok",
       }),
     },
   };
@@ -234,6 +256,8 @@ export async function settleSessionEventTurn(params: {
       jobId: automation.job.id,
       runStartedAt: automation.job.state.runningAtMs ?? params.runStartedAt,
       conversation: { sessionKey: params.sessionKey },
+      // This turn's own reply already carries the result in model context.
+      displayOnly: true,
       payloads,
       signal: params.signal,
       deliveryAttemptFence: {

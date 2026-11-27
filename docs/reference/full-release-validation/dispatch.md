@@ -26,15 +26,23 @@ performance/soak gates remain.
 
 Record all identities with the request:
 
-| Identity | Ownership / selection                                                                                                                                                           |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| C        | Source, package bytes, version, baselines.                                                                                                                                      |
-| Q        | Complete qualification workflow closure; defaults to C. On `--trusted-workflow-ref candidate`, `--workflow-sha <Q>` selects an exact reviewed main ancestor, never moving main. |
-| P        | Independently trusted admission, aggregate policy, verification, publication. Authenticates C/Q, normalized inputs, and immutable Q transport before dispatch.                  |
+| Identity | Ownership / selection                                                                                                                                                                       |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C        | Source, package bytes, version, baselines.                                                                                                                                                  |
+| Q        | Complete qualification workflow closure and grant ledger; defaults to C. `--workflow-sha <Q>` pins assessed executable tooling or its authorized ledger-only descendant, never moving main. |
+| P        | Independently trusted admission, aggregate policy, verification, publication. Authenticates C/Q, normalized inputs, and immutable Q transport before dispatch.                              |
 
 Invoking attests review of exact C/Q/coverage. `--trusted-workflow-ref main` and
 protected-tooling routes supply diagnostic/main-qualification/postpublish-confidence
 evidence only, never fresh publication evidence.
+
+Before creating a fresh validation request, the helper scans mock factories and
+the baseline from the committed candidate SHA using the installed tooling. It
+does not check out the candidate or execute its code. A failure stops dispatch.
+Use `--skip-local-mock-preflight` only to defer the local check to the hosted
+workflow (for example, when diagnosing older tooling). The override logs the
+candidate SHA and does not change the hosted guard or admission. Build-only
+preparation and retained requests do not run this local scan.
 
 ```bash
 PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
@@ -83,10 +91,103 @@ recovery without source admission. Registry-admitted parents supply authenticate
 planning summaries instead of two local registry sweeps. Preparation/publication
 compare actual operands: changing the command cannot turn normal admission into prepared.
 
+## Check the hosted npm source and package build
+
+For a **new publish-purpose all-group FRV**, add `-f preflight_first=true` to
+the `pnpm ci:full-release` command above to hold expensive validation until the
+candidate passes its hosted source and package build checks. Admission tooling
+(P) and qualification tooling (Q) must both support this input. The default
+starts independent jobs in parallel.
+
+**Prepare initial release npm artifacts** starts the usual npm producer once. On the
+first parent attempt it waits for the source aggregate and verified raw package
+descriptor before CI, plugin, Docker, performance, and other requested validation
+jobs can start. The parallel schedule’s **Prepare release npm artifacts** job shows as skipped.
+When existing publication artifacts pass their normal reuse checks, the npm
+preparation job returns them directly. SDK, dependency, and package qualification
+retain their existing checks and publication requirements.
+
+This ordering saves downstream runner time when source or packaging fails.
+For a healthy candidate those jobs start later. Changing this scheduling option
+keeps green evidence eligible under the existing coverage rules. On failure, inspect the source or package job, repair the
+candidate and start a fresh all-group request if the other children never
+started. Retrying the parent can recover previously dispatched children. It
+cannot turn a failed initial preflight into a successful one.
+
+An all-group Full Release Validation run already starts these checks in its
+**Prepare npm artifacts** child. Follow that child when one exists. Its
+`*-artifacts-npm-dispatch` artifact contains `dispatch.json`: match
+`request.sourceSha` (C), `request.toolingSha` (Q), and the parent run/attempt
+in `request.dispatchId`. Use the child run ID and attempt for the job lookup below.
+
+Before FRV, a release owner can request the same hosted checks as a standalone
+diagnostic. Select the frozen Code SHA and an existing protected
+`release-publish/*` tag for the reviewed Tooling SHA. Regular beta and stable
+all-group FRV use `beta` for this producer. For an extended-stable candidate,
+use `extended-stable` and its canonical `extended-stable/YYYY.M.33` branch.
+Source comes from C even when Q differs.
+
+```bash
+C="<full-code-sha>"
+Q="<full-tooling-sha>"
+Q_REF="release-publish/${Q:0:12}-<decimal-id>"
+DIST_TAG=beta
+RELEASE_CANDIDATE_BRANCH=""
+REPO=repos/openclaw/openclaw
+
+[[ "$C" =~ ^[0-9a-f]{40}$ && "$Q" =~ ^[0-9a-f]{40}$ &&
+   "$Q_REF" =~ ^release-publish/${Q:0:12}-[1-9][0-9]*$ &&
+   "$(gh api "$REPO/git/ref/tags/$Q_REF" --jq .object.sha)" == "$Q" ]] || {
+  echo "Check the full Code SHA, Tooling SHA, and protected tooling tag." >&2
+  exit 1
+}
+gh api --method POST -H "X-GitHub-Api-Version: 2026-03-10" \
+  "$REPO/actions/workflows/openclaw-npm-release.yml/dispatches" \
+  -f "ref=$Q_REF" -f "inputs[tag]=$C" -F 'inputs[preflight_only]=true' \
+  -f "inputs[npm_dist_tag]=$DIST_TAG" \
+  -f "inputs[release_candidate_branch]=$RELEASE_CANDIDATE_BRANCH" \
+  --jq '{run: .workflow_run_id, url: .html_url}'
+```
+
+Record the returned run ID. If the dispatch response is lost, locate the run
+in Actions before retrying. Inspect the exact attempt (initially `1`):
+
+```bash
+RUN="<npm-producer-run-id>"
+ATTEMPT=1
+API="repos/openclaw/openclaw/actions/runs/$RUN/attempts/$ATTEMPT"
+gh api "$API" --jq '{path, event, display_title, head_branch, head_sha, run_attempt, status, conclusion,
+  preflight: [.referenced_workflows[]? | select(.path | contains("/openclaw-npm-preflight.yml@"))]}'
+gh api --paginate "$API/jobs?per_page=100" --jq '
+  .jobs[] | select(.name | endswith(" / Check npm release source") or
+                          endswith(" / Prepare publishable npm package")) |
+  [.name, .run_attempt, .head_sha, .status, .conclusion, .html_url] | @tsv'
+```
+
+For standalone, match `openclaw-npm-release.yml`, the `[C] preflight parent=manual/1`
+title, and Q's ref and SHA. For FRV, match `full-release-artifacts.yml` and the
+admitted child. Both callers must show OpenClaw's reusable `openclaw-npm-preflight.yml`
+at Q. Record hosted source and package build success once **both** jobs show the
+expected attempt, Q, and `completed / success`.
+With older candidates, the current workflow runs the full source check in
+`guards` when the target lacks stage or lint-shard selection. Use the aggregate
+source result. Record a failed job with its URL and leave missing or unfinished
+proof unverified.
+
+SDK, dependency, and package-content checks can still be running at that point.
+Full npm qualification ends at **Qualify prepared npm package**. A standalone
+diagnostic supplies a fix handoff. Each FRV request applies its own admission
+and [evidence reuse rules](/reference/full-release-validation/stages).
+
 ## Recover qualification tooling without changing the candidate
 
-Only for diagnosed qualification/orchestration defects—not product failures or
-unexplained red jobs. Local controller updates cannot retrofit frozen workflows.
+Use executable tooling recovery only for diagnosed qualification/orchestration
+defects—not product failures or unexplained red jobs. Local controller updates
+cannot retrofit frozen workflows. For an explicitly authorized waiver,
+use the [Q-only ledger procedure](/reference/full-release-validation/evidence#release-tooling-waivers):
+commit directly to Q without a grant PR to `main` or a C change, then use a fresh
+request/admission with that exact Q. Its ledger-only delta permits eligible raw
+receipt reuse and reevaluation, not reuse of an earlier aggregate verdict.
 
 1. Preserve old request, C/Q/P, parent run/attempt, failed logs, and successful
    receipts. Reconcile uncertain writes and settle owned active trees before
@@ -104,7 +205,7 @@ unexplained red jobs. Local controller updates cannot retrofit frozen workflows.
 
 ```bash
 CANDIDATE_SHA="<unchanged-full-candidate-sha>"
-QUALIFICATION_SHA="<reviewed-full-main-ancestor-q-sha>"
+QUALIFICATION_SHA="<reviewed-full-q-sha>"
 PUBLISHER_SHA="<reviewed-full-main-p-sha>"
 PUBLICATION_SELECTION='<original-reviewed-publication-selection-json>'
 pnpm ci:full-release \
@@ -122,17 +223,35 @@ pnpm ci:full-release \
   -f fail_fast=false
 ```
 
+For an explicitly selected historical qualification, add both inputs before the
+new request is admitted:
+
+- `-f qualification_baselines_json='<original-baseline-object>'` selects exact
+  published stable predecessors, validated against C and the release context.
+  Without this input, a fresh request resolves the current baseline policy.
+- `-f publication_artifact_source_json='{"runId":"<original-parent>","runAttempt":1}'`
+  selects original publication artifacts independently of the parent verdict.
+  It requires candidate admission, `rerun_group=all`, and `reuse_evidence=true`.
+  The original source admission, sealed candidate, producer receipts, and exact
+  package digest must agree. Missing or changed evidence fails closed instead
+  of rebuilding different bytes. Cross-Q selection retains the original tooling identity; workload evidence
+  is authenticated separately.
+
+Both selections are frozen in P admission and the execution plan. Resume keeps
+them unchanged even when npm advances. The new parent must pass its own gates;
+selecting a failed historical parent never adopts its aggregate verdict.
+
 The helper obtains P admission through `openclaw-release-prepare.yml`, then
 creates immutable `release-ci/*` at Q. Never create it or assemble admission
 manually. `--dry-run` previews the tuple, not hosted admission or success.
 
 5. Record new admission and parent run/attempt; require fresh parent success and
    strict verification before publication. Whole-parent reuse keeps exact Q/P.
-   Cross-Q child reuse requires authenticated identical workload closure and exact
-   C, role, effective inputs, candidate descriptor, receipt, artifact, and live-attempt
-   checks; retain producer Q. Plan-cache-only repairs may qualify; filenames,
-   green jobs, or fix SHAs alone prove neither closure nor eligibility. Missing
-   evidence/changed closure requires fresh work, never relabeling.
+   [Cross-Q child reuse](/reference/full-release-validation/stages) keeps exact C,
+   role, effective inputs, candidate descriptor, receipt, artifact, live attempt,
+   and authenticated producer Q. Current Q grants are reevaluated. Tooling and
+   harness changes do not force reruns; set `reuse_evidence=false` to execute the
+   new harness. Missing or invalid evidence requires fresh work, never relabeling.
 
 ### November 2026 plan-cache restoration incident
 
@@ -163,11 +282,10 @@ at original Q=C and exact recorded inputs:
 | Candidate release checks      | `43747437691/1` | `14178081554`       |
 | Independent release checks    | `43744253043/2` | `14177235935`       |
 
-All five must rerun: independent-Q changes shared qualification scripts under
-current conservative closure policy. Original receipts remain historical, not
-cross-Q evidence; later parent-only changes may preserve eligible children after
-strict verification. Existing npm/Docker bytes/receipts are not a qualified new-Q
-bundle. Reacquire/qualify selected stages against unchanged C; preserve coverage,
+At the time, all five needed reruns under the former cross-Q closure rule.
+Under the current rule, assess each receipt against the new parent and reuse only
+if strict verification accepts it. Existing npm/Docker bytes/receipts are not a
+qualified new-Q bundle. Reacquire/qualify selected stages against unchanged C; preserve coverage,
 soak, platforms, and exact policy-grant scope. Rerun missing/failed required work.
 New P admission, successful FRV, immutable plan, and final verification are mandatory.
 
@@ -290,3 +408,13 @@ source manifest, trusted tooling, and child tuple must match.
 
 Final verification independently chooses newest available Decision/Drain artifacts;
 both bind the same plan/child tuple, retaining possibly different source attempts.
+
+### Historical artifact and workload identity
+
+Historical selection preserves the producer's original Q and verifies the
+original admission, plan, exact producer attempts, and package/image receipts.
+It does not relabel the publication bytes or inherit a prior aggregate verdict.
+Child-workload reuse is a separate decision: authenticate the producer tooling
+lineage, exact candidate and effective inputs, and live attempts, and apply the
+current admitted waiver policy. Set `reuse_evidence=false` to require fresh
+execution instead of selecting a historical publication source.

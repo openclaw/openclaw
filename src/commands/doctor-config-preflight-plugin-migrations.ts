@@ -288,7 +288,22 @@ export function createDoctorPluginMigrationPreparation(params: {
         reportPending(plugin);
       }
     },
-    observe(result: MigrationMessages) {
+    observe(result: MigrationMessages, metadata?: PluginMetadataSnapshot) {
+      for (const failure of result.deferredPluginMigrations ?? []) {
+        const pending = retain({
+          ...failure,
+          ...resolveDeferredPluginMigrationConfigPaths({
+            config: sourceSnapshot?.sourceConfigBeforeMigrations ?? sourceSnapshot?.sourceConfig,
+            pluginId: failure.pluginId,
+            compatibilityMigrationPaths: metadata?.plugins.find((record) =>
+              matchesOwner(record.id, failure.pluginId),
+            )?.configContracts?.compatibilityMigrationPaths,
+          }),
+        });
+        previousById.set(pending.pluginId, pending);
+        deferred = [...deferred.filter((entry) => entry.pluginId !== pending.pluginId), pending];
+        refreshSnapshot = true;
+      }
       requirePlugins(result.requiredPluginIds ?? [], "requiresStateMigration");
       for (const pluginId of result.statelessPluginIds ?? []) {
         inspectedStatelessPluginIds.add(pluginId);

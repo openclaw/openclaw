@@ -114,7 +114,7 @@ function incompatibleCandidateError(params: {
   return new Error(
     `Automation ${jobLabel(params.job)} runs ${params.provider} on account ${binding.profileId}${params.runtime ? ` and can't run it on runtime ${params.runtime}` : ""}. ` +
       (reason ? `${reason} ` : "") +
-      `To choose an account explicitly: openclaw automations edit ${params.job.id} --model <provider/model>@<profileId> (list accounts: openclaw models auth list).`,
+      `To choose an account explicitly: openclaw automations edit ${params.job.id} --model <provider/model>@<profileId> (list accounts: openclaw gateway call models.authStatus).`,
     params.cause === undefined ? undefined : { cause: params.cause },
   );
 }

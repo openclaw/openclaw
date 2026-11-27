@@ -194,38 +194,36 @@ struct OpenClawSidebarHeaderAction {
     let systemName: String
     let accessibilityLabel: OpenClawTextValue
     var accessibilityIdentifier: String?
-    /// Set for a drawer's reveal control. The action stays non-nil while the drawer is
-    /// presented, so a toggle does not rebuild the destination; readers of `isShown`
-    /// hide the control instead.
+    /// The drawer's reveal control stays in its toolbar slot while the drawer covers it.
+    /// Only the button observes this presentation.
     var drawerPresentation: RootSidebarPresentation?
     let action: () -> Void
 
-    /// A presented drawer covers the destination, so its reveal control leaves the header.
-    /// Read this only in small views and modifiers: the reader re-evaluates on every toggle.
+    /// Read only in the button to avoid rebuilding the destination or its toolbar.
     var isShown: Bool {
         self.drawerPresentation?.isPresented != true
     }
 }
 
-/// Builds `content` only while the sidebar reveal control is shown.
+/// Builds `content` for a destination that owns the sidebar reveal control.
 struct OpenClawSidebarRevealContent<Content: View>: View {
     let action: OpenClawSidebarHeaderAction?
     @ViewBuilder let content: (OpenClawSidebarHeaderAction) -> Content
 
     var body: some View {
-        if let action = self.action, action.isShown {
+        if let action = self.action {
             self.content(action)
         }
     }
 }
 
-/// Sets navigation bar visibility from whether the sidebar reveal control is shown.
+/// Keeps navigation bar visibility tied to the destination's header configuration.
 struct OpenClawSidebarRevealToolbarVisibility: ViewModifier {
     let action: OpenClawSidebarHeaderAction?
-    let visibility: (_ isRevealShown: Bool) -> Visibility
+    let visibility: (_ hasRevealControl: Bool) -> Visibility
 
     func body(content: Content) -> some View {
-        content.toolbar(self.visibility(self.action?.isShown == true), for: .navigationBar)
+        content.toolbar(self.visibility(self.action != nil), for: .navigationBar)
     }
 }
 
@@ -233,10 +231,8 @@ struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
 
     var body: some View {
-        if self.action.isShown {
-            self.identified(self.button.buttonStyle(.plain))
-                .transition(.opacity)
-        }
+        self.identified(self.button.buttonStyle(.plain))
+            .opacity(self.action.isShown ? 1 : 0)
     }
 
     private var button: some View {
@@ -280,12 +276,10 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
 
     @ToolbarContentBuilder
     var body: some ToolbarContent {
-        if self.action.isShown {
-            if #available(iOS 27.1, *) {
-                self.item.axisBehavior(.verticalPreferred).visibilityPriority(.high)
-            } else {
-                self.item
-            }
+        if #available(iOS 27.1, *) {
+            self.item.axisBehavior(.verticalPreferred).visibilityPriority(.high)
+        } else {
+            self.item
         }
     }
 

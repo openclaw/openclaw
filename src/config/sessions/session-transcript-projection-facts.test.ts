@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureTranscriptSql } from "../../../test/helpers/transcript-plan-stats.js";
 import {
   readSqliteDatabaseScopedWriteToken,
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { appendSqliteTrajectoryRuntimeEventsWithWriter } from "../../trajectory/runtime-store.sqlite.js";
 import { readSessionTranscriptBoundedActiveContextCore as readBoundedContext } from "./session-accessor.sqlite-active-context.js";
@@ -43,6 +46,7 @@ import type { SessionTranscriptProjectionReceipt } from "./session-transcript-pr
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import { messageEvent } from "./transcript-message.test-support.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 // mock-isolation: These owner transactions do not exercise background entry maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -389,6 +393,304 @@ it("covers the first append after hydrating an empty actor", async () => {
   });
 });
 
+function accountingEvents(olderCount: number, textSuffix = "", repeat = 256) {
+  const older = Array.from({ length: olderCount }, (_, index) =>
+    messageEvent(`old-${index}`, index ? `old-${index - 1}` : null, {
+      role: "assistant",
+      content: "older payload ".repeat(repeat) + textSuffix,
+      __openclaw: { turnTainted: true },
+    }),
+  );
+  const trailing = {
+    role: "toolResult",
+    toolCallId: "synthetic-tool",
+    toolName: "exec",
+    content: [{ type: "text", text: "tool result ".repeat(repeat) + textSuffix }],
+    isError: false,
+    timestamp: 1,
+  };
+  return {
+    trailing,
+    events: [
+      ...older,
+      messageEvent("current-user", `old-${olderCount - 1}`, {
+        role: "user",
+        content: "current question ".repeat(repeat) + textSuffix,
+      }),
+      messageEvent("current-answer", "current-user", {
+        role: "assistant",
+        content: "current answer ".repeat(repeat) + textSuffix,
+        usage: { input: 200, output: 7 },
+      }),
+      messageEvent("current-tool", "current-answer", trailing),
+    ],
+  };
+}
+
+it.each(["compressed", "plaintext", "escaped Unicode"])(
+  "loads only the settled accounting suffix through native SQLite (%s)",
+  async (storage) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      // An escaped surrogate is supported identity storage, not a compressed payload.
+      const { events, trailing } = accountingEvents(
+        512,
+        storage === "escaped Unicode" ? "\ud800" : "",
+        storage === "plaintext" ? 32 : 256,
+      );
+      const f = fixture(events);
+      const db = requireNativeSqliteDatabase(f.database.db);
+      expect(
+        db
+          .prepare(`SELECT
+          sum(event_json IS NULL AND event_zstd IS NOT NULL AND navigation_json IS NOT NULL) AS compressed,
+          sum(event_json IS NOT NULL AND event_zstd IS NULL AND navigation_json IS NULL) AS plaintext
+          FROM transcript_events WHERE session_id = ?`)
+          .get(f.scope.sessionId),
+      ).toMatchObject(
+        storage === "compressed"
+          ? { compressed: 515, plaintext: 0 }
+          : { compressed: 0, plaintext: 515 },
+      );
+      const expected = {
+        usage: { promptTokens: 200, outputTokens: 7, trailingMessages: [trailing] },
+        turnTainted: false,
+      };
+      const options = { includeByteSize: false, includeUsage: true, includeTurnTaint: true };
+      const decompressions = vi.spyOn(resolveZstdCodec(), "decompress");
+      const parses = vi.spyOn(JSON, "parse");
+      const expectedDecompressions = storage === "compressed" ? 3 : 0;
+      const evaluated: number[] = [];
+      db.function("observe_accounting_payload", (seq, payload) => {
+        evaluated.push(Number(seq));
+        return payload;
+      });
+      try {
+        expect(
+          readProjection(f.database, f.scope, (projection) => {
+            decompressions.mockClear();
+            parses.mockClear();
+            const { result, queries } = captureTranscriptSql(db, () =>
+              readSessionTranscriptAccountingFromProjection(projection, options),
+            );
+            expect(result).toEqual(expected);
+            expect(decompressions).toHaveBeenCalledTimes(expectedDecompressions);
+            // Only required bodies cross the JSON hydration boundary, including identity rows.
+            expect(parses.mock.calls.filter(([text]) => text.includes('"content":'))).toHaveLength(
+              3,
+            );
+            const navigationQueries = queries.filter(({ columns }) =>
+              columns.includes("navigation"),
+            );
+            expect(navigationQueries).toHaveLength(1);
+            const navigation = db.prepare(navigationQueries[0]!.sql).all();
+            expect(navigation).toHaveLength(512);
+            // The native result itself must stay compact, not just discard bodies after parsing.
+            if (storage !== "escaped Unicode") {
+              expect(
+                navigation.every((row) => Buffer.byteLength(String(row.navigation)) < 256),
+              ).toBe(true);
+            }
+            const payloadQueries = queries.filter(({ columns }) => columns.includes("event_zstd"));
+            expect(payloadQueries).toHaveLength(1);
+            for (const query of payloadQueries) {
+              const plan = db
+                .prepare(`EXPLAIN QUERY PLAN ${query.sql}`)
+                .all()
+                .map((row) => String(row.detail));
+              expect(plan.find((detail) => detail.startsWith("SEARCH "))).toMatch(
+                /^SEARCH active /u,
+              );
+              expect(plan).toContainEqual(
+                expect.stringMatching(/^SEARCH event .*\(session_id=\? AND seq=\?\)/u),
+              );
+              expect(plan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+            }
+            // Observe native payload expression evaluation, including work hidden by a sorter.
+            db.exec(`CREATE TEMP VIEW transcript_events AS
+            SELECT event.session_id, event.seq, event.event_json, event.navigation_json,
+              event.event_utf8_bytes,
+              observe_accounting_payload(event.seq, event.event_zstd) AS event_zstd
+            FROM main.transcript_events AS event`);
+            try {
+              decompressions.mockClear();
+              expect(readSessionTranscriptAccountingFromProjection(projection, options)).toEqual(
+                expected,
+              );
+              expect(evaluated).toEqual([514, 513, 512]);
+              expect(decompressions).toHaveBeenCalledTimes(expectedDecompressions);
+            } finally {
+              db.exec("DROP VIEW temp.transcript_events");
+            }
+            return result;
+          }),
+        ).toMatchObject({ kind: "value", value: expected });
+      } finally {
+        parses.mockRestore();
+        decompressions.mockRestore();
+      }
+      expect(db.isTransaction).toBe(false);
+      f.write(() =>
+        f.append([
+          messageEvent("after-accounting", "current-tool", { role: "user", content: "next" }),
+        ]),
+      );
+      expect(f.read()).toMatchObject({ kind: "value" });
+    });
+  },
+);
+
+it.each([511, 512])("keeps the conservative taint limit at %s candidates", async (count) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture(
+      Array.from({ length: count }, (_, index) =>
+        messageEvent(`answer-${index}`, index ? `answer-${index - 1}` : null, {
+          role: "assistant",
+          content: "answer",
+          usage: { input: 200, output: 7 },
+        }),
+      ),
+    );
+    expect(
+      readProjection(f.database, f.scope, (projection) =>
+        readSessionTranscriptAccountingFromProjection(projection, {
+          includeByteSize: false,
+          includeUsage: true,
+          includeTurnTaint: true,
+        }),
+      ),
+    ).toEqual({
+      kind: "value",
+      value: {
+        usage: { promptTokens: 200, outputTokens: 7, trailingMessages: [] },
+        turnTainted: count === 512,
+      },
+    });
+  });
+});
+
+it.each([
+  {
+    kind: "duplicate ids",
+    events: [
+      messageEvent("a", null, { role: "assistant", usage: { input: 10, output: 1 } }),
+      messageEvent("b", "a", { role: "assistant", content: "branch" }),
+      { type: "leaf", id: "rewind", parentId: "b", targetId: "a" },
+      messageEvent("c", "rewind", { role: "assistant", usage: { input: 30, output: 3 } }),
+      messageEvent("a", null, { role: "assistant", usage: { input: 40, output: 4 } }),
+      { type: "leaf", id: "select-c", parentId: "a", targetId: "c" },
+    ],
+    expectedUsage: { promptTokens: 30, outputTokens: 3, trailingMessages: [] },
+  },
+  {
+    kind: "escaped navigation",
+    events: [
+      messageEvent("\ud800", null, { role: "assistant", usage: { input: 20, output: 2 } }),
+      messageEvent("\udc00", "\ud800", { role: "assistant", usage: { input: 40, output: 4 } }),
+      { type: "leaf", id: "select-surrogate", parentId: "\udc00", targetId: "\ud800" },
+    ],
+    expectedUsage: { promptTokens: 20, outputTokens: 2, trailingMessages: [] },
+  },
+  {
+    kind: "parentless entries",
+    events: [
+      { type: "message", id: "a", message: { role: "assistant", usage: { input: 20, output: 2 } } },
+      { type: "message", id: "b", message: { role: "assistant", usage: { input: 40, output: 4 } } },
+      { type: "leaf", id: "select-a", parentId: "b", targetId: "a" },
+    ],
+    expectedUsage: { promptTokens: 20, outputTokens: 2, trailingMessages: [] },
+  },
+])(
+  "preserves logical accounting order for flat imports ($kind)",
+  async ({ events, expectedUsage }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture([events[0]!]);
+      const db = requireNativeSqliteDatabase(f.database.db);
+      f.write(() => {
+        // Import writes preserve raw duplicate ids instead of applying append idempotency.
+        const insert = createTranscriptEventInserter(db, f.scope.sessionId);
+        for (let seq = 1; seq < events.length; seq += 1) {
+          insert({ seq, eventJson: JSON.stringify(events[seq]), createdAt: 1 });
+        }
+        markIndexDirty(db, f.scope.sessionId);
+        reconcileIndex(db, f.scope.sessionId);
+      });
+      expect(
+        readProjection(f.database, f.scope, (projection) => {
+          // Older flat projections retain raw controls; accounting must select before stopping.
+          db.exec(`CREATE TEMP VIEW session_transcript_active_events AS
+          SELECT session_id, seq AS active_position, seq AS event_seq,
+            NULL AS message_position, 1 AS context_eligible
+          FROM main.transcript_events`);
+          try {
+            return readSessionTranscriptAccountingFromProjection(projection, {
+              includeByteSize: false,
+              includeUsage: true,
+            });
+          } finally {
+            db.exec("DROP VIEW temp.session_transcript_active_events");
+          }
+        }),
+      ).toEqual({
+        kind: "value",
+        value: { usage: expectedUsage },
+      });
+      expect(db.isTransaction).toBe(false);
+    });
+  },
+);
+
+it.each(["older-body", "required-body", "navigation", "older-nul", "required-nul"] as const)(
+  "keeps accounting conservative for required corruption but skips irrelevant bodies (%s)",
+  async (failure) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { events, trailing } = accountingEvents(16);
+      const f = fixture(events);
+      const db = requireNativeSqliteDatabase(f.database.db);
+      const options = { includeByteSize: false, includeUsage: true, includeTurnTaint: true };
+      const expected = {
+        usage: { promptTokens: 200, outputTokens: 7, trailingMessages: [trailing] },
+        turnTainted: false,
+      };
+      const corruptSeq = failure === "required-body" || failure === "required-nul" ? 17 : 10;
+      const literalNul = failure.endsWith("-nul");
+      const corruptIdentity = JSON.stringify(events[corruptSeq]).replaceAll("'", "''");
+      expect(
+        readProjection(f.database, f.scope, (projection) => {
+          // Connection-local corruption leaves the canonical writer and navigation facts intact.
+          db.exec(`CREATE TEMP VIEW transcript_events AS
+            SELECT event.session_id, event.seq,
+              CASE WHEN event.seq = ${corruptSeq} AND ${literalNul ? 1 : 0}
+                THEN '${corruptIdentity}' || char(0)
+                WHEN event.seq = ${corruptSeq} AND ${failure !== "navigation" ? 1 : 0}
+                THEN NULL ELSE event.event_json END AS event_json,
+              CASE WHEN event.seq = ${corruptSeq} AND ${failure !== "navigation" ? 1 : 0}
+                THEN x'01' ELSE event.event_zstd END AS event_zstd,
+              CASE WHEN event.seq = ${corruptSeq} AND ${failure !== "navigation" ? 1 : 0}
+                THEN 0 ELSE event.event_utf8_bytes END AS event_utf8_bytes,
+              CASE WHEN event.seq = ${corruptSeq} AND ${literalNul ? 1 : 0} THEN NULL
+                WHEN event.seq = ${corruptSeq} AND ${failure === "navigation" ? 1 : 0}
+                THEN '{"navigation":null}' ELSE event.navigation_json END AS navigation_json
+            FROM main.transcript_events AS event`);
+          try {
+            return readSessionTranscriptAccountingFromProjection(projection, options);
+          } finally {
+            db.exec("DROP VIEW temp.transcript_events");
+          }
+        }),
+      ).toEqual({
+        kind: "value",
+        value: failure === "older-body" ? expected : { turnTainted: true },
+      });
+      expect(db.isTransaction).toBe(false);
+      expect(
+        readProjection(f.database, f.scope, (projection) =>
+          readSessionTranscriptAccountingFromProjection(projection, options),
+        ),
+      ).toEqual({ kind: "value", value: expected });
+    });
+  },
+);
+
 it("preserves bounded context and accounting with compact committed receipts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
@@ -560,5 +862,41 @@ it("keeps stored header bytes, event limits and admitted-turn fences in the cove
       events: [header],
       serializedBytes: headerBytes,
     });
+  });
+});
+
+it("charges conversation, not the saved system-prompt checkpoint, as active transcript bytes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    // Issue #202172: a large tool surface made the checkpoint most of the measured size.
+    const checkpoint = {
+      type: "custom",
+      id: "sp",
+      parentId: "assistant",
+      customType: "openclaw.system-prompt",
+      data: { prefix: "x".repeat(150_000), routeKey: "r", historyId: "h" },
+    };
+    const conversationBytes = [user, assistant].reduce(
+      (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
+      0,
+    );
+    const expected = { kind: "value", value: { byteSize: conversationBytes, eventCount: 2 } };
+    const options = { includeByteSize: true, includeUsage: false };
+    const f = fixture([user, assistant, checkpoint as TranscriptEvent]);
+    const accounting = () =>
+      readProjection(f.database, f.scope, (projection) =>
+        readSessionTranscriptAccountingFromProjection(projection, options),
+      );
+    // SQLite counter.
+    expect(accounting()).toEqual(expected);
+    // Actor counter seeded at hydration.
+    expect(withReceipt(f.receipt(), accounting)).toEqual(expected);
+    // Actor counter advanced by an append: a new checkpoint after compaction adds nothing.
+    const state = f.hydrate();
+    f.write(() =>
+      withActorTransaction(f.database, state, () =>
+        f.append([{ ...checkpoint, id: "sp-2", parentId: "sp" } as TranscriptEvent]),
+      ),
+    );
+    expect(withReceipt(f.receipt(state), accounting)).toEqual(expected);
   });
 });

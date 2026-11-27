@@ -33,6 +33,17 @@ the crate's sources and build inputs. Run it again after pulling native changes.
 It is opt-in: `pnpm build` does not compile Rust. Restart your source Gateway
 after building to use the binding.
 
+Git prepared-release updates reuse a current host binary from the serving
+worktree or original checkout when the native crate matches. If the update needs
+to rebuild the binding, Rust and the native build tools must be available to the
+updater. If that build fails, the update stops before switching releases and the
+current Gateway keeps running. Check the build error, fix the toolchain, and retry.
+Updates do not build iroh on checkouts without a local host binary.
+
+If the Gateway already serves from a prepared release and the binding is missing,
+run `pnpm build:iroh` in that release's `openclaw` directory, not in the original
+checkout. Then restart the Gateway.
+
 An installed build without the transport cannot enable OpenClaw ID remote access;
 the Gateway keeps running and other access methods remain available.
 
@@ -355,6 +366,14 @@ Cloudflare dependency or login flow. Only the generic exec secret provider
 invokes the exact command an operator configures. Resolved edge-auth headers are
 sent only when the target matches the configured `gateway.remote.url` scope,
 only over `wss://`, and never across redirects.
+
+When the Gateway uses [trusted-proxy auth](/gateway/trusted-proxy-auth), the
+proxy identity authenticates these connections, so a CLI or TUI behind it needs
+no Gateway token or password: its first `openclaw tui` connection sends a device
+pairing request for an administrator to approve. The approved device grant
+limits that device; no named operator role (`gateway.roles.default`) is needed.
+A Gateway on token or password auth still requires that credential; edgeAuth
+only gets the connection through the proxy.
 
 ## Credential precedence
 

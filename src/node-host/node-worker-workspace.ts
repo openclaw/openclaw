@@ -13,7 +13,6 @@ import type {
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
   NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND,
-  projectNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
@@ -23,6 +22,7 @@ import type {
 } from "../worker/node-workspace-retain-protocol.js";
 import { isWorkspaceInspectionCommand } from "../worker/workspace-inspection-protocol.js";
 import { inspectSessionWorkspace } from "../worker/workspace-inspection.js";
+import type { NodeWorkerCommandIsolation } from "./node-worker-command-filesystem.js";
 import { NodeWorkerDeviceFolders } from "./node-worker-device-folder.js";
 import {
   snapshotNodeWorkerExecutionEnv,
@@ -44,13 +44,10 @@ import {
   createNodeWorkerTempWorkspace,
 } from "./node-worker-workspace-admission.js";
 import {
-  nodeWorkspaceManifestCapture,
+  executeNodeWorkerWorkspaceCommand,
   projectWorkspaceOperationResult,
-  runNodeWorkspaceManifestCapture,
-  workspaceCommandEnv,
 } from "./node-worker-workspace-commands.js";
 import {
-  assertWorkspaceArgv,
   removeNodeWorkerWorkspaceEntry,
   buildNodeWorkerWorkspaceRetainSnapshot,
   type NodeWorkerWorkspaceRetainSnapshot,
@@ -85,6 +82,7 @@ export class NodeWorkerWorkspaceRuntime {
   private readonly root: string;
   private readonly seedsRoot: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly isolation?: NodeWorkerCommandIsolation;
   private readonly deviceFolders: NodeWorkerDeviceFolders;
   private readonly platformTrust?: NodeWorkerPlatformTrust;
   private readonly credentialScrubber?: NodeWorkerCredentialScrubber;
@@ -110,6 +108,7 @@ export class NodeWorkerWorkspaceRuntime {
       folders?: readonly string[];
       managedIdentityTransport?: NodeWorkerManagedIdentityTransport;
       platformTrust?: NodeWorkerPlatformTrust;
+      filesystemIsolation?: boolean;
     } = {},
   ) {
     const env = options.env ?? process.env;
@@ -122,17 +121,21 @@ export class NodeWorkerWorkspaceRuntime {
     // Git artifacts are machine caches, outside the per-lease state scrub boundary.
     const home = env.HOME ?? env.USERPROFILE ?? os.homedir();
     this.seedsRoot = path.resolve(home, ".openclaw-worker", "git-seeds");
-    this.prepared = new NodeWorkerPreparedWorkspaceRuntime(
-      home,
-      { env },
-      this.workspaceHashMemos,
-      options.ephemeral === true,
-    );
     this.platformTrust = options.platformTrust;
     this.env = snapshotNodeWorkerExecutionEnv(
       env,
       options.managedIdentityTransport,
       this.platformTrust,
+    );
+    this.isolation = options.filesystemIsolation
+      ? { bundleRoot: this.root, env: this.env }
+      : undefined;
+    this.prepared = new NodeWorkerPreparedWorkspaceRuntime(
+      home,
+      { env },
+      this.workspaceHashMemos,
+      options.ephemeral === true,
+      this.isolation,
     );
     this.credentialScrubber = options.managedIdentityTransport
       ? createNodeWorkerCredentialScrubber(options.managedIdentityTransport.header)
@@ -565,6 +568,15 @@ export class NodeWorkerWorkspaceRuntime {
         const homeDir = deviceFolder
           ? ensureContainedDirectory(sessionRoot, String(input.generation))
           : (prepared?.home_dir ?? sessionRoot);
+        const isolation = this.isolation && {
+          ...this.isolation,
+          placement: {
+            gatewayNamespace: input.gatewayNamespace,
+            environmentId: input.environmentId,
+            sessionId: input.sessionId,
+            ownerEpoch: input.generation,
+          },
+        };
         if (prepared && (input.resetWorkspace !== undefined || input.seed)) {
           throw new Error(
             "INVALID_REQUEST: a consumed prepared workspace cannot be reset or reseeded",
@@ -616,6 +628,8 @@ export class NodeWorkerWorkspaceRuntime {
               environmentId: input.environmentId,
               workspaceDir: workspacePath,
               manifestHome: homeDir,
+              baseEnv: this.env,
+              isolation,
               ...(prepared && this.prepared.store
                 ? { prepared: { row: prepared, store: this.prepared.store } }
                 : {}),
@@ -673,51 +687,20 @@ export class NodeWorkerWorkspaceRuntime {
           : prepared
             ? workspacePath
             : ensureContainedDirectory(sessionRoot, workspaceName);
-        const commandEnv = workspaceCommandEnv(homeDir, this.env);
-        if (input.quiescence) {
-          if (input.argv[1] !== workspaceDir) {
-            throw new Error("INVALID_REQUEST: workspace quiescence root does not match its owner");
-          }
-          const stdout = await this.quiescence.execute(
-            {
-              input,
-              workspaceDir,
-              env: commandEnv,
-              retainWorkspace: () =>
-                this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
-            },
-            signal,
-          );
-          return projectWorkspaceOperationResult(workspaceDir, stdout);
-        }
-        assertWorkspaceArgv(workspaceDir, input.argv);
-        const capture = input.process
-          ? undefined
-          : nodeWorkspaceManifestCapture(input.argv, workspaceDir);
-        if (capture) {
-          const stdout = await runNodeWorkspaceManifestCapture({
-            ...capture,
-            home: homeDir,
-            memo: input.input,
-            env: this.env,
-            signal: AbortSignal.any([
-              ...(signal ? [signal] : []),
-              AbortSignal.timeout(input.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-            ]),
-          });
-          return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
-        }
-        const output = await this.processes.execute({
+        return await executeNodeWorkerWorkspaceCommand({
           input,
-          assertCurrent: assertProcessCurrent,
           workspaceDir,
-          env: commandEnv,
+          homeDir,
+          env: this.env,
+          isolation,
           signal,
           timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          assertCurrent: assertProcessCurrent,
           retainWorkspace: () =>
             this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
+          processes: this.processes,
+          quiescence: this.quiescence,
         });
-        return input.process ? output : projectNodeWorkerWorkspaceExecResult(workspaceDir, output);
       });
       const result = typeof admitted === "function" ? await admitted() : admitted;
       result.stdout = this.credentialScrubber?.scrub(result.stdout) ?? result.stdout;

@@ -6,6 +6,8 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
   interruptedUpdate?: "before" | "prepared" | "exchanging" | "publishing" | "after" | "risk";
   /** The killed updater reserved a cohort for this run or another; risk fails its repair. */
   pluginCohort?: "own" | "foreign" | "risk";
+  /** An older run carries a data-at-risk mark that post-core repair finds consistent. */
+  olderMark?: true;
   finalizeFailure?: true;
   trigger?: "cli" | "api" | "campaign";
   origin?: UpdateRunRecord["origin"];

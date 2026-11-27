@@ -136,6 +136,46 @@ describe("cron service store seam coverage", () => {
     await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
   });
 
+  it("withholds account migrations without quarantining or deleting them during sibling saves", async () => {
+    const { storePath } = await makeStorePath();
+    const pending = createReloadCronJob({ id: "pending-account" });
+    const transferred = createReloadCronJob({ id: "pending-owner" });
+    const malformed = createReloadCronJob({ id: "malformed-sibling" });
+    const healthy = createReloadCronJob({ id: "healthy-sibling" });
+    await writeJobStore(storePath, [pending, transferred, malformed, healthy]);
+    const db = openOpenClawStateDatabase().db;
+    const update = db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, ?, json(?)) WHERE job_id = ?",
+    );
+    update.run(
+      "$.inferenceBinding",
+      JSON.stringify({ version: 1, profileId: "synthetic" }),
+      pending.id,
+    );
+    update.run("$.ownerTransferPending", "true", transferred.id);
+    update.run("$.schedule.kind", JSON.stringify("unsupported"), malformed.id);
+    const readPending = () =>
+      db
+        .prepare("SELECT * FROM cron_jobs WHERE job_id IN (?, ?) ORDER BY job_id")
+        .all(pending.id, transferred.id);
+    const before = readPending();
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state);
+    expect(state.store?.jobs.map(({ id }) => id)).toEqual([healthy.id]);
+    expect(readPending()).toEqual(before);
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toMatchObject([
+      { reason: "invalid-schedule", job: { id: malformed.id } },
+    ]);
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toHaveLength(1);
+    await writeJobStore(storePath, [{ ...healthy, name: "Edited healthy job" }]);
+    expect(readPending()).toEqual(before);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: pending.id }),
+      expect.stringContaining("doctor --fix"),
+    );
+  });
+
   it("quarantines unsatisfiable schedules and persisted timestamps outside the Date domain", async () => {
     const { storePath } = await makeStorePath();
     const invalidInterval = createReloadCronJob({

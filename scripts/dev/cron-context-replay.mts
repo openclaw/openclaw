@@ -56,6 +56,7 @@ import { resolveCronModelPin } from "../../src/cron/run-inference.js";
 import { resolveCronSessionTargetSessionKey } from "../../src/cron/session-target.js";
 import { resolveCronRunToolsAllow } from "../../src/cron/tools-allow.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../../src/gateway/operator-role-enforcement.js";
 import { decodeGatewayOperatorRecoverySource } from "../../src/gateway/operator-run-recovery-source.codec.js";
 
 type Args = { stateDir: string; configPath?: string; json: boolean; emitFixtures?: string };
@@ -573,7 +574,8 @@ async function main() {
           owner =
             profiles.has(requester.profileId) &&
             !profiles.get(requester.profileId) &&
-            (!cfg.gateway?.roles || requester.profileId === GATEWAY_OWNER_PROFILE_ID);
+            (!isNamedOperatorRoleEnforcementEnabled(cfg) ||
+              requester.profileId === GATEWAY_OWNER_PROFILE_ID);
           ownerCheck = "checked";
         } else if (requester.kind === "unknown") {
           owner = false;

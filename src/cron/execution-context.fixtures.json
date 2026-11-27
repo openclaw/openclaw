@@ -2,7 +2,6 @@
   {
     "job": {
       "id": "fixture-job-1",
-      "agentId": "main",
       "name": "fixture 1",
       "enabled": true,
       "createdAtMs": 0,
@@ -19,58 +18,6 @@
         "toolsAllow": [
           "*"
         ]
-      },
-      "delivery": {
-        "mode": "none"
-      },
-      "state": {},
-      "scheduledToolPolicy": {
-        "version": 1,
-        "mode": "trusted"
-      }
-    },
-    "expected": {
-      "status": "ready",
-      "principal": "operator",
-      "placement": "detached",
-      "labels": {
-        "admissionSource": "equal",
-        "ownerEmbedded": "equal",
-        "ownerCli": "gain-intended",
-        "automations": "equal",
-        "automationsCli": "gain-intended",
-        "requesterYield": "equal",
-        "board": "equal",
-        "eventTarget": "equal",
-        "memory": "equal",
-        "workspace": "equal",
-        "sandbox": "equal"
-      }
-    }
-  },
-  {
-    "job": {
-      "id": "fixture-job-2",
-      "agentId": "main",
-      "name": "fixture 2",
-      "enabled": false,
-      "createdAtMs": 0,
-      "updatedAtMs": 0,
-      "schedule": {
-        "kind": "every",
-        "everyMs": 60000
-      },
-      "sessionTarget": "isolated",
-      "wakeMode": "now",
-      "payload": {
-        "kind": "agentTurn",
-        "message": "fixture",
-        "toolsAllow": [
-          "*"
-        ]
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "scheduledToolPolicy": {
@@ -100,7 +47,6 @@
   {
     "job": {
       "id": "fixture-job-3",
-      "agentId": "main",
       "name": "fixture 3",
       "enabled": false,
       "createdAtMs": 0,
@@ -119,9 +65,6 @@
           "automations"
         ],
         "toolsAllowIsDefault": true
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -171,7 +114,6 @@
   {
     "job": {
       "id": "fixture-job-4",
-      "agentId": "main",
       "name": "fixture 4",
       "enabled": false,
       "createdAtMs": 0,
@@ -190,9 +132,6 @@
           "automations"
         ],
         "toolsAllowIsDefault": true
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -242,7 +181,6 @@
   {
     "job": {
       "id": "fixture-job-5",
-      "agentId": "main",
       "name": "fixture 5",
       "enabled": false,
       "createdAtMs": 0,
@@ -261,9 +199,6 @@
           "automations"
         ],
         "toolsAllowIsDefault": true
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -308,7 +243,6 @@
   {
     "job": {
       "id": "fixture-job-6",
-      "agentId": "main",
       "name": "fixture 6",
       "enabled": false,
       "createdAtMs": 0,
@@ -326,9 +260,6 @@
           "read",
           "automations"
         ]
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -370,7 +301,6 @@
   {
     "job": {
       "id": "fixture-job-7",
-      "agentId": "main",
       "name": "fixture 7",
       "enabled": false,
       "createdAtMs": 0,
@@ -387,9 +317,6 @@
         "toolsAllow": [
           "read"
         ]
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "scheduledToolPolicy": {
@@ -419,7 +346,6 @@
   {
     "job": {
       "id": "fixture-job-8",
-      "agentId": "main",
       "name": "fixture 8",
       "enabled": true,
       "createdAtMs": 0,
@@ -439,9 +365,6 @@
         ],
         "toolsAllowIsDefault": true,
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -483,7 +406,6 @@
   {
     "job": {
       "id": "fixture-job-9",
-      "agentId": "main",
       "name": "fixture 9",
       "enabled": false,
       "createdAtMs": 0,
@@ -501,9 +423,6 @@
           "*"
         ],
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "scheduledToolPolicy": {
@@ -533,7 +452,6 @@
   {
     "job": {
       "id": "fixture-job-10",
-      "agentId": "main",
       "name": "fixture 10",
       "enabled": false,
       "createdAtMs": 0,
@@ -551,9 +469,6 @@
           "read",
           "automations"
         ]
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "scheduledToolPolicy": {
@@ -583,7 +498,6 @@
   {
     "job": {
       "id": "fixture-job-11",
-      "agentId": "main",
       "name": "fixture 11",
       "enabled": false,
       "createdAtMs": 0,
@@ -600,9 +514,6 @@
         "toolsAllow": [
           "read"
         ]
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "scheduledToolPolicy": {
@@ -632,7 +543,6 @@
   {
     "job": {
       "id": "fixture-job-12",
-      "agentId": "main",
       "name": "fixture 12",
       "enabled": false,
       "createdAtMs": 0,
@@ -649,9 +559,6 @@
         "toolsAllow": [
           "*"
         ]
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "scheduledToolPolicy": {
@@ -681,7 +588,6 @@
   {
     "job": {
       "id": "fixture-job-13",
-      "agentId": "main",
       "name": "fixture 13",
       "enabled": false,
       "createdAtMs": 0,
@@ -699,9 +605,6 @@
           "*"
         ],
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "scheduledToolPolicy": {
@@ -731,7 +634,6 @@
   {
     "job": {
       "id": "fixture-job-14",
-      "agentId": "main",
       "name": "fixture 14",
       "enabled": false,
       "createdAtMs": 0,
@@ -751,9 +653,6 @@
         ],
         "toolsAllowIsDefault": true,
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -803,7 +702,6 @@
   {
     "job": {
       "id": "fixture-job-15",
-      "agentId": "main",
       "name": "fixture 15",
       "enabled": false,
       "createdAtMs": 0,
@@ -819,9 +717,6 @@
         "argv": [
           "true"
         ]
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {}
     },
@@ -847,7 +742,6 @@
   {
     "job": {
       "id": "fixture-job-16",
-      "agentId": "main",
       "name": "fixture 16",
       "enabled": false,
       "createdAtMs": 0,
@@ -864,9 +758,6 @@
         "toolsAllow": [
           "*"
         ]
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "scheduledToolPolicy": {
@@ -896,7 +787,6 @@
   {
     "job": {
       "id": "fixture-job-17",
-      "agentId": "main",
       "name": "fixture 17",
       "enabled": false,
       "createdAtMs": 0,
@@ -915,9 +805,6 @@
           "automations"
         ],
         "toolsAllowIsDefault": true
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -966,7 +853,6 @@
   {
     "job": {
       "id": "fixture-job-18",
-      "agentId": "main",
       "name": "fixture 18",
       "enabled": false,
       "createdAtMs": 0,
@@ -985,9 +871,6 @@
           "automations"
         ],
         "toolsAllowIsDefault": true
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -1037,7 +920,6 @@
   {
     "job": {
       "id": "fixture-job-19",
-      "agentId": "main",
       "name": "fixture 19",
       "enabled": false,
       "createdAtMs": 0,
@@ -1055,9 +937,6 @@
           "read"
         ],
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -1107,7 +986,6 @@
   {
     "job": {
       "id": "fixture-job-20",
-      "agentId": "main",
       "name": "fixture 20",
       "enabled": false,
       "createdAtMs": 0,
@@ -1125,9 +1003,6 @@
           "*"
         ],
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -1177,7 +1052,6 @@
   {
     "job": {
       "id": "fixture-job-21",
-      "agentId": "main",
       "name": "fixture 21",
       "enabled": false,
       "createdAtMs": 0,
@@ -1195,9 +1069,6 @@
           "*"
         ],
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -1246,7 +1117,6 @@
   {
     "job": {
       "id": "fixture-job-22",
-      "agentId": "main",
       "name": "fixture 22",
       "enabled": false,
       "createdAtMs": 0,
@@ -1263,9 +1133,6 @@
         "toolsAllow": [
           "*"
         ]
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -1315,7 +1182,6 @@
   {
     "job": {
       "id": "fixture-job-23",
-      "agentId": "main",
       "name": "fixture 23",
       "enabled": false,
       "createdAtMs": 0,
@@ -1333,9 +1199,6 @@
           "*"
         ],
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -1398,7 +1261,6 @@
   {
     "job": {
       "id": "fixture-job-24",
-      "agentId": "main",
       "name": "fixture 24",
       "enabled": true,
       "createdAtMs": 0,
@@ -1416,9 +1278,6 @@
           "*"
         ],
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -1481,7 +1340,6 @@
   {
     "job": {
       "id": "fixture-job-25",
-      "agentId": "main",
       "name": "fixture 25",
       "enabled": true,
       "createdAtMs": 0,
@@ -1499,9 +1357,6 @@
           "*"
         ],
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -1563,7 +1418,6 @@
   {
     "job": {
       "id": "fixture-job-26",
-      "agentId": "main",
       "name": "fixture 26",
       "enabled": true,
       "createdAtMs": 0,
@@ -1581,91 +1435,6 @@
           "*"
         ],
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
-      },
-      "state": {},
-      "owner": {
-        "agentId": "main",
-        "sessionKey": "agent:main:dashboard:session-1",
-        "accountId": "default"
-      },
-      "scheduledToolPolicy": {
-        "version": 1,
-        "mode": "account",
-        "ownerSessionKey": "agent:main:dashboard:session-1",
-        "ownerAccountId": "default"
-      },
-      "sourceConversation": {
-        "sessionKey": "agent:main:dashboard:session-1",
-        "sessionId": "parent-session",
-        "lifecycleRevision": "rev-1"
-      },
-      "createdActor": {
-        "type": "human",
-        "source": "profile",
-        "id": "profile-1"
-      },
-      "toolsAllowProvenance": {
-        "version": 1,
-        "source": "final-executable-surface",
-        "callerOrigin": {
-          "kind": "external",
-          "channel": "webchat"
-        }
-      }
-    },
-    "parentRow": {
-      "sessionId": "parent-session",
-      "lifecycleRevision": "rev-1",
-      "archived": false,
-      "sandboxRequired": false
-    },
-    "owner": true,
-    "expected": {
-      "status": "ready",
-      "principal": "parent",
-      "placement": "child",
-      "labels": {
-        "admissionSource": "equal",
-        "ownerEmbedded": "equal",
-        "ownerCli": "gain-intended",
-        "automations": "equal",
-        "automationsCli": "gain-intended",
-        "requesterYield": "equal",
-        "board": "retarget",
-        "eventTarget": "retarget",
-        "memory": "gain-intended",
-        "workspace": "equal",
-        "sandbox": "equal"
-      }
-    }
-  },
-  {
-    "job": {
-      "id": "fixture-job-27",
-      "agentId": "main",
-      "name": "fixture 27",
-      "enabled": false,
-      "createdAtMs": 0,
-      "updatedAtMs": 0,
-      "schedule": {
-        "kind": "every",
-        "everyMs": 60000
-      },
-      "sessionTarget": "current",
-      "wakeMode": "now",
-      "payload": {
-        "kind": "agentTurn",
-        "message": "fixture",
-        "toolsAllow": [
-          "*"
-        ],
-        "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -1727,7 +1496,6 @@
   {
     "job": {
       "id": "fixture-job-28",
-      "agentId": "main",
       "name": "fixture 28: v2026.10.6 operator-linked trusted job",
       "enabled": false,
       "createdAtMs": 0,
@@ -1744,9 +1512,6 @@
         "toolsAllow": [
           "*"
         ]
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "scheduledToolPolicy": {
@@ -1788,7 +1553,6 @@
   {
     "job": {
       "id": "fixture-job-29",
-      "agentId": "main",
       "name": "fixture 29: agent-created linked job without a requester",
       "enabled": false,
       "createdAtMs": 0,
@@ -1806,9 +1570,6 @@
           "*"
         ],
         "model": "openai/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {},
       "owner": {
@@ -1865,7 +1626,6 @@
   {
     "job": {
       "id": "fixture-job-30",
-      "agentId": "main",
       "name": "fixture 30",
       "enabled": true,
       "createdAtMs": 0,
@@ -1875,15 +1635,11 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "sessionKey": "agent:main:dashboard:session-1",
       "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
         "model": "anthropic/fixture@provider:profile"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {}
     },
@@ -1913,7 +1669,6 @@
   {
     "job": {
       "id": "fixture-job-31",
-      "agentId": "main",
       "name": "fixture 31",
       "enabled": true,
       "createdAtMs": 0,
@@ -1923,16 +1678,12 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "sessionKey": "agent:main:dashboard:session-1",
       "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
         "model": "anthropic/fixture@provider:profile",
         "modelRuntime": "claude-cli"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {}
     },
@@ -1962,7 +1713,6 @@
   {
     "job": {
       "id": "fixture-job-32",
-      "agentId": "main",
       "name": "fixture 32",
       "enabled": true,
       "createdAtMs": 0,
@@ -1972,16 +1722,12 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "sessionKey": "agent:main:dashboard:session-1",
       "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
         "model": "anthropic/fixture@provider:profile",
         "modelRuntime": "claude-cli"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {}
     },
@@ -2011,7 +1757,6 @@
   {
     "job": {
       "id": "fixture-job-33",
-      "agentId": "main",
       "name": "fixture 33",
       "enabled": true,
       "createdAtMs": 0,
@@ -2021,16 +1766,12 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "sessionKey": "agent:main:dashboard:session-1",
       "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
         "model": "anthropic/fixture@provider:profile",
         "modelRuntime": "claude-cli"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {}
     },
@@ -2064,7 +1805,6 @@
   {
     "job": {
       "id": "fixture-job-34",
-      "agentId": "main",
       "name": "fixture 34",
       "enabled": true,
       "createdAtMs": 0,
@@ -2074,16 +1814,12 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "sessionKey": "agent:main:dashboard:session-1",
       "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
         "model": "anthropic/fixture@provider:profile",
         "modelRuntime": "claude-cli"
-      },
-      "delivery": {
-        "mode": "none"
       },
       "state": {}
     },

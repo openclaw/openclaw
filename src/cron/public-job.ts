@@ -24,6 +24,8 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   delete state.runningReceiptId;
   delete state.conditionCheckReceiptId;
   delete state.runSlotWaitReceiptId;
+  delete state.runSlotWaitProvider;
+  delete state.extraRunSlotReceiptId;
   delete state.startupCatchupAtMs;
   delete state.pacedNextRunAtMs;
   delete state.forcePreservedNextRunAtMs;

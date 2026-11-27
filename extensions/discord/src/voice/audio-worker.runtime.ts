@@ -13,7 +13,8 @@ if (!port) {
 }
 const options: DiscordAudioWorkerOptions = workerData;
 const media = new DiscordAudioWorker(options, (event: DiscordAudioEvent) => {
-  port.postMessage(event);
+  // libopus returns a fresh PCM allocation, independent of its reusable WASM heap.
+  port.postMessage(event, event.type === "capture-frame" ? [event.frame.pcm.buffer] : []);
   if (event.type === "stopped") {
     port.close();
   }

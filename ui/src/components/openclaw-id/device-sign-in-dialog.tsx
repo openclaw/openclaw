@@ -121,6 +121,7 @@ export function showDeviceSignInDialog(params: {
                           </button>
                           <a
                             class="btn primary"
+                            data-link-reader-external
                             href={code().verificationUriComplete ?? code().verificationUri}
                             target="_blank"
                             rel="noopener noreferrer"

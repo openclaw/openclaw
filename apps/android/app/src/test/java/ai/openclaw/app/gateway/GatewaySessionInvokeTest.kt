@@ -203,6 +203,33 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
+  fun rosterRefusalRetainsTheTopLevelRetryHintWithoutInventingErrorDetails() =
+    runBlocking {
+      val connected = CompletableDeferred<Unit>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(testJson()) { socket, id, method, _ ->
+          if (method == "connect") {
+            socket.send(connectResponseFrame(id))
+          } else if (method == "sessions.list") {
+            socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"try later","retryable":true,"retryAfterMs":1750}}""")
+          }
+        }
+      val harness = createNodeHarness(connected = connected, lastDisconnect = lastDisconnect) { GatewaySession.InvokeResult.ok("{}") }
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+        val result = harness.session.requestDetailed("sessions.list", "{}")
+        assertFalse(result.ok)
+        val error = requireNotNull(result.error)
+        assertNull(error.details)
+        assertEquals(1750, error.retryAfterMs)
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
   fun connect_usesGatewayChallengeTimestamp() =
     runBlocking {
       val json = testJson()

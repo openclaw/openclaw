@@ -11,6 +11,7 @@ import { captureAuthProfileAuthorization } from "../../../agents/auth-profiles/a
 import { loadAuthProfileStoreForRuntimeAsync } from "../../../agents/auth-profiles/store-runtime.js";
 import { resolveProviderModelAuthPolicy } from "../../../agents/model-auth-policy.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import { captureRuntimeConfig } from "../../../config/runtime-source-projection.js";
 import { resolveSessionModelOverrideSource } from "../../../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -20,8 +21,10 @@ import { resolveCronPreflightCandidates } from "../../../cron/isolated-agent/run
 import { normalizeCronJobCreate } from "../../../cron/normalize.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
+import { prepareProviderModelPolicySurfaces } from "../../../plugins/provider-model-routes.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import { readAppliedUpgradeShadowRoots } from "../../../state/state-upgrade-receipts.js";
 import { prepareCronInferenceDiagnosticSession } from "./inference-session.js";
 import { inspectCronJobsForDoctor, repairCronInferenceBindingsForDoctor } from "./store-repair.js";
 
@@ -64,6 +67,8 @@ export async function maybeRepairCronInferenceBindings(params: {
     if (!maintenance?.ownsSchemaMaintenance) {
       throw new Error("Automation account migration requires offline Doctor maintenance.");
     }
+    await prepareProviderModelPolicySurfaces();
+    const shadowRoots = readAppliedUpgradeShadowRoots(resolveStateDir(env));
     const cfg = captureRuntimeConfig(params.cfg);
     for (const stored of pending) {
       const { inferenceBinding: binding, ownerTransferPending, ...definition } = stored.definition!;
@@ -183,11 +188,9 @@ export async function maybeRepairCronInferenceBindings(params: {
           profileId: binding.profileId,
           cfg: selected.owner.config,
           agentDir: selected.owner.agentDir,
+          upgradeRecovery: { recordedId: binding.authorizationId, shadowRoots },
           assertCurrent() {},
         });
-        if (authorization.authorizationId !== binding.authorizationId) {
-          throw new Error("its saved sign-in was replaced or revoked");
-        }
         authorization.assertCurrent();
         retained.push(authorization);
         authorization = undefined;
@@ -234,7 +237,10 @@ export async function maybeRepairCronInferenceBindings(params: {
       changes,
     );
     return {
-      changes: [...descriptions, `Saved pre-repair cron backup: ${result.backupPath}`],
+      changes: [
+        ...descriptions,
+        ...(result.backupPath ? [`Saved pre-repair cron backup: ${result.backupPath}`] : []),
+      ],
       warnings: result.warnings ?? [],
     };
   } catch (error) {

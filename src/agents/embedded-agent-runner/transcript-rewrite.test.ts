@@ -23,6 +23,8 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
+import { sessionManagerReadInitialContext } from "../sessions/session-manager-current-turn.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
 import { textToolResult } from "../test-helpers/sparse-transcript.test-support.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 import {
@@ -119,6 +121,43 @@ function findAssistant(sessionManager: SessionManager, text: string) {
 }
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {
+  it("shares sealed history during rewrite and detaches only writable SDK exposure", async () => {
+    const { directory, target } = await persistedTarget("sealed-rewrite");
+    const seed = await SessionManager.openAsync(target, directory);
+    const first = expectDefined(
+      await seed.appendMessageAsync(toolResult("read", "unchanged", 1)),
+      "first seed entry",
+    );
+    const last = expectDefined(
+      await seed.appendMessageAsync(toolResult("read", "replace", 2)),
+      "last seed entry",
+    );
+    const manager = await SessionManager.openAsync(target);
+    const original = manager[sessionManagerReadTranscriptBranch]()[0];
+    if (original?.type !== "message" || original.message.role !== "toolResult") {
+      throw new Error("Missing sealed history");
+    }
+    const message = original.message;
+    const context = await manager[sessionManagerReadInitialContext]();
+    const before = JSON.stringify(context);
+    await rewrite(manager, last, toolResult("read", "replacement", 2));
+    const retained = manager[sessionManagerReadTranscriptBranch]()[0];
+    expect(retained?.type === "message" && retained.message).toBe(message);
+    expect(() => {
+      message.content.push({ type: "text", text: "shared mutation" });
+    }).toThrow(TypeError);
+    const writable = manager.getEntry(first);
+    if (writable?.type !== "message" || writable.message.role !== "toolResult") {
+      throw new Error("Missing writable SDK message");
+    }
+    writable.message.content.push({ type: "text", text: "SDK mutation" });
+    expect(JSON.stringify(context)).toBe(before);
+    expect((await SessionManager.openAsync(target)).buildSessionContext().messages).toMatchObject([
+      { content: [{ text: "unchanged" }] },
+      { content: [{ text: "replacement" }] },
+    ]);
+  });
+
   it.each([
     { collected: false, excludeFromContext: false },
     { collected: true, excludeFromContext: true },

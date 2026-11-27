@@ -260,12 +260,12 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
-function profileAllowsGatewayConfigReads(profile?: string, alsoAllow?: string[]): boolean {
+function profileAllowsGatewayManagementActions(profile?: string, alsoAllow?: string[]): boolean {
   const policy = resolveToolProfilePolicy(profile);
   if (!policy?.allow || policy.allow.includes("*")) {
     return true;
   }
-  // Limited profiles expose updates; configuration reads still require an explicit grant.
+  // Limited profiles expose maintenance only, unless they explicitly grant the gateway tool.
   const allow = normalizeUniqueSingleOrTrimmedStringList(alsoAllow);
   return allow.length > 0 && createToolPolicyMatcher({ allow })("gateway");
 }
@@ -420,9 +420,9 @@ export function resolveEffectiveToolPolicy(params: {
     providerProfileAlsoAllow: agentProviderPolicy?.alsoAllow ?? providerPolicy?.alsoAllow,
   };
 
-  const gatewayConfigReadAllowed =
-    profileAllowsGatewayConfigReads(profile, effectivePolicy.profileAlsoAllow) &&
-    profileAllowsGatewayConfigReads(
+  const gatewayManagementActionsAllowed =
+    profileAllowsGatewayManagementActions(profile, effectivePolicy.profileAlsoAllow) &&
+    profileAllowsGatewayManagementActions(
       effectivePolicy.providerProfile,
       effectivePolicy.providerProfileAlsoAllow,
     );
@@ -473,7 +473,7 @@ export function resolveEffectiveToolPolicy(params: {
     }
   }
 
-  return { ...effectivePolicy, gatewayConfigReadAllowed };
+  return { ...effectivePolicy, gatewayManagementActionsAllowed };
 }
 
 function throwUnavailableScheduledAccount(accountId: string, missingCreatorChannel = false): never {

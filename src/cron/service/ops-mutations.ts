@@ -140,6 +140,7 @@ export async function add(
         streamSandbox: opts?.streamSandbox,
         streamOperatorSource: opts?.streamOperatorSource,
         enabledExplicit: opts?.enabledExplicit,
+        keepDeclarationFor: opts?.keepDeclarationFor,
         systemOwned: opts?.systemOwned,
         createdActor: opts?.createdActor,
         sourceConversation: opts?.sourceConversation,
@@ -161,6 +162,12 @@ export async function add(
     }
     const job = plan.job;
     const existing = plan.previous.jobs.find((entry) => entry.id === job.id);
+    if (existing && opts?.keepDeclarationFor) {
+      // No mutation: do not capture new runtime authority or republish the operator's job.
+      source.assertCurrent();
+      opts.commitGuard?.();
+      return { ...existing, created: false, updated: false, job: existing };
+    }
     const captured = consumeRuntimeAuthorityMutationOptions(opts);
     Object.assign(mutation.options, captured);
     if (!existing?.pluginCommand) {

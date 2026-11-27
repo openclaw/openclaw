@@ -19,10 +19,8 @@ import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-ident
 import type { Context } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type UserTurnInput,
-} from "../../../sessions/user-turn-transcript.js";
+import type { UserTurnInput } from "../../../sessions/user-turn-input.types.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   isUserMessage,
   readModelPromptProjection,

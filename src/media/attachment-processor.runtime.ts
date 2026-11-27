@@ -2,7 +2,7 @@ import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classif
 import { inspectBase64 } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
-import { readImageMetadataFromHeader } from "./image-ops.js";
+import { readImageMetadataFromHeader } from "./image-header-metadata.js";
 import { sniffMimeFromBase64 } from "./sniff-mime-from-base64.js";
 
 export const ATTACHMENT_OFFLOAD_THRESHOLD_BYTES = 2_000_000;

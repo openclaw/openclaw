@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import * as noteModule from "../../../../packages/terminal-core/src/note.js";
 import { captureAuthProfileAuthorization } from "../../../agents/auth-profiles/authorization.js";
 import { persistAuthProfileBatch } from "../../../agents/auth-profiles/upsert-with-lock.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
@@ -7,10 +8,14 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../../cron/store.js";
 import { getCronStoreKysely } from "../../../cron/store/schema.js";
 import type { CronStoredJob } from "../../../cron/types.js";
+import { runLegacyCronHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
 import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { withDoctorConfigMaintenance } from "../../doctor-config-flow.test-support.js";
+import {
+  prepareDoctorContext,
+  withDoctorConfigMaintenance,
+} from "../../doctor-config-flow.test-support.js";
 import { maybeRepairCronInferenceBindings } from "./inference-binding-migration.js";
 import { inspectCronJobsForDoctor } from "./store-repair.js";
 
@@ -101,10 +106,20 @@ it("backs up captured accounts, converts exact routes, and pauses mismatches wit
       (await maybeRepairCronInferenceBindings({ cfg, shouldRepair: false })).warnings,
     ).toHaveLength(3);
     expect(await inspectCronJobsForDoctor({ env: process.env })).toEqual(pending);
-    const result = await withDoctorConfigMaintenance(() =>
-      maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
-    );
-    expect(result.warnings).toEqual([]);
+    const changes: string[] = [];
+    const notes = vi.spyOn(noteModule, "note").mockImplementation((message) => {
+      changes.push(...String(message).split("\n"));
+    });
+    try {
+      await withDoctorConfigMaintenance(async () => {
+        await using ctx = await prepareDoctorContext(state.configPath);
+        await runLegacyCronHealth(ctx);
+      });
+    } finally {
+      notes.mockRestore();
+    }
+    expect((await loadCronJobsStore(storePath)).jobs).toHaveLength(4);
+    const result = { changes };
     expect(result.changes).toEqual(
       expect.arrayContaining([
         expect.stringContaining(

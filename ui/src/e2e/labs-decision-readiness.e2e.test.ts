@@ -18,6 +18,44 @@ const options = {
   viewport: { width: 1280, height: 1000 },
 } as const;
 suite.define(() => {
+  it("keeps the prediction model picker and the next setting still when the choice changes", async () => {
+    await suite.withPage(
+      { ...options, hasTouch: true, isMobile: true, viewport: { width: 1180, height: 820 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: { "config.get": configSnapshot({}, "labs-picker-1") },
+        });
+        await page.goto(suite.server.baseUrl + "settings/labs");
+        const labs = page.locator("openclaw-labs-page");
+        const picker = labs.getByRole("combobox", { name: "Prediction model" });
+        const next = labs.getByText("Speech bubbles", { exact: true });
+        await labs.getByRole("switch", { name: "Decision assistance" }).waitFor();
+        await picker.scrollIntoViewIfNeeded();
+        await page.evaluate(() => document.fonts.ready);
+        const original = await picker.boundingBox();
+        const originalNext = await next.boundingBox();
+        await gateway.deferNext("config.patch");
+        await picker.tap();
+        await picker.getByRole("option", { name: "Session model" }).tap();
+        await gateway.waitForRequest("config.patch");
+        const updated = configSnapshot(
+          {
+            gateway: {
+              controlUi: { experimental: { composerPredictions: { model: "conversation" } } },
+            },
+          },
+          "labs-picker-2",
+        );
+        await gateway.setMethodResponse("config.get", updated);
+        await gateway.resolveDeferred("config.patch", { ok: true, ...updated });
+        await expect.poll(() => picker.isEnabled()).toBe(true);
+        expect(await picker.inputValue()).toBe("conversation");
+        expect(await picker.boundingBox()).toEqual(original);
+        expect(await next.boundingBox()).toEqual(originalNext);
+      },
+    );
+  });
+
   it("keeps Labs decision readiness distinct and recovers a rejected save", async () => {
     await suite.withPage(options, async ({ page }) => {
       const saved = configSnapshot(

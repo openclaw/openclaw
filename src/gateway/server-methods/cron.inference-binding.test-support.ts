@@ -164,6 +164,7 @@ async function createFixture(stateDir: string, agentDir: string) {
           ),
       }),
       client,
+      hasCurrentClientAuthority: client ? () => !client.invalidated : undefined,
       sessionMutationCommitGuard: options.beforeCommit,
       isWebchatConnect: () => false,
     });

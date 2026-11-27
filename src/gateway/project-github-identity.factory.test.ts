@@ -323,7 +323,7 @@ describe("Factory project read admission composition", () => {
   it("rejects a handshake from another Enterprise host even when the account ID matches", async () => {
     const caller = client();
     caller.authenticatedUserId = "github:previous.ghe.com:42";
-    await expect(prepare(caller)).rejects.toThrow("caller authority changed");
+    await expect(prepare(caller)).rejects.toThrow("caller connection or identity changed");
     expect(requests).toEqual([]);
   });
 

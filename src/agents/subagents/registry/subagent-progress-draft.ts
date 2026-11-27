@@ -3,6 +3,7 @@ import type { ProgressContinuationDraft } from "../../../channels/progress-conti
 import { onAgentEventForRun, type AgentEventPayload } from "../../../infra/agent-events.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { formatSubagentProgressReference } from "../../agent-activity-presentation.js";
+import { isSubagentDeliveryClosed } from "./subagent-delivery-state.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -37,11 +38,7 @@ const taskId = (entry: SubagentRunRecord) => entry.taskRunId ?? entry.runId;
  * kill intent can still roll back, so only accepted cancellation ends the debt.
  */
 function owesCompletion(entry: SubagentRunRecord | undefined): entry is SubagentRunRecord {
-  return (
-    entry?.requesterSettleWake !== undefined &&
-    entry.suppressCompletionDelivery !== true &&
-    entry.killReconciliation?.suppressTaskDelivery !== true
-  );
+  return entry?.requesterSettleWake !== undefined && !isSubagentDeliveryClosed(entry);
 }
 
 /** Steering and resumed yields replace a task's execution under the same task id. */

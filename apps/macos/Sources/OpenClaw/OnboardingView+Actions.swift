@@ -91,7 +91,8 @@ extension OnboardingView {
     func advanceAfterInference() {
         guard self.activePageIndex != self.reachabilityPageIndex,
               self.activePageIndex != self.readyPageIndex else { return }
-        let destination = self.state.connectionMode == .local ? self.reachabilityPageIndex : self.readyPageIndex
+        let destination = self.state.connectionMode == .local && MacOpenClawIDFeature.isEnabled
+            ? self.reachabilityPageIndex : self.readyPageIndex
         if let cursor = self.pageOrder.firstIndex(of: destination) {
             withAnimation { self.currentPage = cursor }
         }
