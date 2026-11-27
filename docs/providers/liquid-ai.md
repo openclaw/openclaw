@@ -32,7 +32,7 @@ Enter your Liquid AI API key in the protected prompt. The provider also recogniz
 Connecting Liquid stores credentials only: it does not select a chat model or
 replace an existing primary or utility model.
 
-Liquid AI is separate from [Liquid Inference](/providers/liquid-inference).
+Liquid AI is separate from [Architect Inference](/providers/architect-inference).
 The `liquid-ai` provider uses only its own auth profiles and `LIQUIDAI_API_KEY`;
 it does not use the exchange's `liquid` provider or `LIQUID_API_KEY`.
 
