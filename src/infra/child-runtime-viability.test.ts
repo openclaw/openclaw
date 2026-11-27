@@ -1,4 +1,5 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { once } from "node:events";
 import { accessSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +9,7 @@ import {
   classifyChildRuntimeFailure,
   formatChildRuntimeSpawnWarning,
   formatMissingChildRuntimeWarning,
+  observeChildRuntime,
   readChildRuntimeViability,
   prepareChildRuntimeViability,
 } from "./child-runtime-viability.ts";
@@ -76,6 +78,42 @@ it("records a permanent loader failure once and does not confuse a post-handshak
   expect(classifyChildRuntimeFailure({ execPath, signal: "SIGABRT" })).toBe(failure);
   expect(readChildRuntimeViability({ execPath }).available).toBe(false);
   expect(log.error).toHaveBeenCalledExactlyOnceWith(failure?.message);
+});
+
+it("preserves a library filename split across stderr writes", async () => {
+  const library = "lib🧭.so";
+  const first = Buffer.concat([
+    Buffer.from("node: error while loading shared libraries: lib"),
+    Buffer.from("🧭").subarray(0, 2),
+  ]);
+  const second = Buffer.concat([Buffer.from("🧭").subarray(2), Buffer.from(".so\n")]);
+  const child = spawn(
+    process.execPath,
+    [
+      "-e",
+      [
+        "const [first, second] = process.argv.slice(1);",
+        "process.stderr.write(Buffer.from(first, 'base64'));",
+        "process.stdin.once('data', () => {",
+        "  process.stderr.write(Buffer.from(second, 'base64'));",
+        "  process.exitCode = 127;",
+        "});",
+      ].join("\n"),
+      first.toString("base64"),
+      second.toString("base64"),
+    ],
+    { stdio: ["pipe", "ignore", "pipe"] },
+  );
+  const diagnose = observeChildRuntime(child, "/fixture/split-stderr-node");
+  // Wait until the first write is actually delivered before releasing the second.
+  child.stderr.once("data", () => child.stdin.end("continue"));
+  const [exitCode] = await once(child, "close");
+
+  expect(exitCode).toBe(127);
+  expect(await diagnose()).toMatchObject({
+    code: "NODE_RUNTIME_UNAVAILABLE",
+    message: expect.stringContaining(library),
+  });
 });
 
 it.each([undefined, "/fixture/replaced-node"])(
