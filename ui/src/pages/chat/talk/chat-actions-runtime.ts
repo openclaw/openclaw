@@ -195,6 +195,9 @@ export async function startChatRealtimeSession(
     voiceController = controller;
     state.realtimeTalk.update({ realtimeTalkVoiceController: controller });
   }
+  let endedConversation:
+    | typeof state.realtimeTalk.snapshot.realtimeTalkConversationState
+    | undefined;
   let autoEnableCameraAttempted = false;
   const forCurrentSession =
     <Args extends unknown[]>(callback: (...args: Args) => void) =>
@@ -207,9 +210,29 @@ export async function startChatRealtimeSession(
     client,
     sessionKey,
     {
-      onStatus: forCurrentSession((status, detail) => {
+      onStatus: (status, detail) => {
+        const snapshot = state.realtimeTalk.snapshot;
+        if (snapshot.realtimeTalkSession !== session) {
+          // Accepted transcript writes can settle after a normal remote close.
+          if (
+            status === "error" &&
+            detail &&
+            snapshot.realtimeTalkStatus === "ended" &&
+            snapshot.realtimeTalkConversationState === endedConversation &&
+            state.client === client &&
+            state.sessionKey === sessionKey &&
+            state.connected
+          ) {
+            state.realtimeTalk.update({
+              realtimeTalkStatus: "error",
+              realtimeTalkDetail: formatUiExternalText(detail),
+            });
+          }
+          return;
+        }
         if (status === "ended") {
           stopRealtimeTalk(state, { preserveConversation: true });
+          endedConversation = state.realtimeTalk.snapshot.realtimeTalkConversationState;
           state.realtimeTalk.update({ realtimeTalkStatus: "ended" });
           return;
         }
@@ -241,7 +264,7 @@ export async function startChatRealtimeSession(
           autoEnableCameraAttempted = true;
           void setRealtimeTalkCameraEnabled(state, true, { disableAutoEnableOnFailure: true });
         }
-      }),
+      },
       onInputNotice: forCurrentSession((detail) => {
         state.realtimeTalk.update({
           realtimeTalkInputNotice: formatUiExternalText(detail),
