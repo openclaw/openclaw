@@ -29,9 +29,14 @@ const { values } = parseArgs({
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0, "iterations must be positive");
 assert(values.mode === "cpu" || values.mode === "allocation", "mode must be cpu or allocation");
-const source = path.join(realpathSync(values.root), "src/gateway/session-swarm-summary.ts");
+const source = path.join(
+  realpathSync(values.root),
+  "src/agents/subagents/registry/subagent-session-swarm-summary.ts",
+);
 const sourceSha256 = createHash("sha256").update(readFileSync(source)).digest("hex");
-const { buildSessionSwarmSummary }: typeof import("../../src/gateway/session-swarm-summary.js") =
+const {
+  buildSessionSwarmSummary,
+}: typeof import("../../src/agents/subagents/registry/subagent-session-swarm-summary.js") =
   await import(pathToFileURL(source).href);
 const sessionKey = "agent:main:dashboard:synthetic";
 const groupCount = 40;

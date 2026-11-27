@@ -1,5 +1,5 @@
-import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
+import type { SessionRow } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 
 const MAX_ACTIVE_GROUPS = 4;
 type SwarmSummary = NonNullable<SessionRow["swarm"]>;
