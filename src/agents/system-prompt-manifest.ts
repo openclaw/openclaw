@@ -315,5 +315,19 @@ export const SYSTEM_PROMPT_SECTIONS = [
 
 export type SystemPromptSectionId = (typeof SYSTEM_PROMPT_SECTIONS)[number]["id"];
 
-/** @internal Fresh-install system-prompt ceiling: 12 KiB. */
-export const FRESH_INSTALL_SYSTEM_PROMPT_BUDGET_BYTES = 12_288;
+/**
+ * @internal Byte ceilings for what the embedded runtime sends on each measured route: the size
+ * measured on main when the ceiling was set, plus 5%, rounded up to 256 B. Tests fail on growth;
+ * a change that shrinks a surface lowers its ceiling in the same PR. Tool bytes are compact JSON
+ * of the compacted tool set's `{ name, description, parameters }`.
+ */
+export const PROMPT_BUDGET_BYTES = {
+  /** system-prompt.inventory-snapshot.test.ts: fresh-install renderer fixture. */
+  freshInstallSystemPrompt: 12_288,
+  /** attempt-prompt-budget.test.ts: fresh Gateway WebChat turn. */
+  gatewayWebChatSystemPrompt: 14_592,
+  gatewayWebChatTools: 18_944,
+  /** attempt-prompt-budget.test.ts: configured Telegram agent with workspace files. */
+  configuredAgentSystemPrompt: 15_104,
+  configuredAgentTools: 22_272,
+} as const;

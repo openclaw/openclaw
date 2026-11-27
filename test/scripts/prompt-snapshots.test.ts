@@ -39,6 +39,11 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
   return content.slice(start, end);
 }
 
+// Codex app-server Telegram turn: measured on main plus 5%, rounded up to 256 B. A change that
+// shrinks either surface lowers its ceiling in the same PR.
+const CODEX_APP_SERVER_PROMPT_BUDGET_BYTES = 13_824;
+const CODEX_APP_SERVER_TOOLS_BUDGET_BYTES = 65_792;
+
 let generated: Awaited<ReturnType<typeof createHappyPathPromptSnapshotFiles>>;
 let pluginLoaderCallsBefore: number;
 let pluginLoaderCallsAfter: number;
@@ -137,6 +142,32 @@ describe("happy path prompt snapshots", () => {
         );
       }
     }
+  });
+
+  it("keeps the Codex app-server prompt and tool specs within budget", () => {
+    const content = (fileName: string) => {
+      const file = generated.find((candidate) => path.basename(candidate.path) === fileName);
+      if (!file) {
+        throw new Error(`missing generated ${fileName}`);
+      }
+      return file.content;
+    };
+    // Every model-bound layer is a `text` fence after this heading; renderer prose is not.
+    const snapshot = content(CODEX_PROMPT_SNAPSHOT_FILES["telegram-direct"]);
+    const layersStart = snapshot.indexOf("## Reconstructed Model-Bound Prompt Layers");
+    if (layersStart === -1) {
+      throw new Error("Missing model-bound prompt layers");
+    }
+    const layers = snapshot.slice(layersStart);
+    const promptBytes = [...layers.matchAll(/^(`{3,})text\n([\s\S]*?)\n\1$/gmu)].reduce(
+      (sum, match) => sum + Buffer.byteLength(match[2], "utf8"),
+      0,
+    );
+    expect(promptBytes).toBeLessThanOrEqual(CODEX_APP_SERVER_PROMPT_BUDGET_BYTES);
+    const tools = JSON.stringify(JSON.parse(content("codex-dynamic-tools.telegram-direct.json")));
+    expect(Buffer.byteLength(tools, "utf8")).toBeLessThanOrEqual(
+      CODEX_APP_SERVER_TOOLS_BUDGET_BYTES,
+    );
   });
 
   it("rejects invalid Codex dynamic-tool materialization scenarios", async () => {
