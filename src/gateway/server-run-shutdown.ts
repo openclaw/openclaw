@@ -1,7 +1,7 @@
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
-import type { RestartResumeNotice } from "../auto-reply/get-reply-options.types.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import type { RestartResumeNotice } from "../infra/agent-run-registry.types.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";

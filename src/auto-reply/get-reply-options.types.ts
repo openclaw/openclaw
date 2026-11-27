@@ -10,6 +10,7 @@ import type {
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { AgentCommandOutputEventFields } from "../infra/agent-activity-events.js";
 import type { AgentApprovalEventData } from "../infra/agent-events.types.js";
+import type { RestartResumeNotice } from "../infra/agent-run-registry.types.js";
 import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
@@ -67,9 +68,6 @@ export type PreparedAgentRunStart = {
   options?: ReplyDispatchRun;
   transcriptStart: PreparedReplyTranscriptStart | null;
 };
-
-/** Best-effort notice after this run's restart marker commits, before its transport closes. */
-export type RestartResumeNotice = (signal: AbortSignal) => Promise<void>;
 
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;

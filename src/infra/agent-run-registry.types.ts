@@ -1,5 +1,4 @@
 import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
-import type { RestartResumeNotice } from "../auto-reply/get-reply-options.types.js";
 import type { VerboseLevel } from "../auto-reply/thinking.shared.js";
 import type {
   AgentRunApprovalLeases,
@@ -8,6 +7,9 @@ import type {
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 
 export type AgentRunModel = { provider: string; model: string };
+
+/** Best-effort notice after this run's restart marker commits, before its transport closes. */
+export type RestartResumeNotice = (signal: AbortSignal) => Promise<void>;
 
 export type AgentRunEventState = { seq: number; terminalPublication?: symbol };
 

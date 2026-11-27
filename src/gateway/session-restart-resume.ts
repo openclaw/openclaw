@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
 import { isVisibleSpawnedSession } from "../agents/subagents/spawn/subagent-capabilities.js";
-import type { RestartResumeNotice } from "../auto-reply/get-reply-options.types.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -25,6 +24,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import type { RestartResumeNotice } from "../infra/agent-run-registry.types.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { completeGatewayAgentRestartRecovery } from "../infra/gateway-boot-lifecycle.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
