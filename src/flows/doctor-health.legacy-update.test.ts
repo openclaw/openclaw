@@ -8,7 +8,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import * as serviceMaintenance from "../cli/update-cli/update-command-service-maintenance.js";
 import { ensureHeartbeatMonitorJobs } from "../commands/doctor-heartbeat-cadence-migration.js";
+import { decodeDoctorHeartbeatJobRows } from "../commands/doctor-heartbeat-jobs.js";
 import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
+import { recoverDoctorHeartbeatRun } from "../commands/doctor-heartbeat-run-recovery.js";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
@@ -27,6 +29,11 @@ import {
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "../cron/store/run-history.kernel.js";
+import { readActiveCronRunReceiptsInDatabase } from "../cron/store/run-receipt-read.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  prepareCronRunReceiptClaim,
+} from "../cron/store/run-receipt-store.test-support.js";
 import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { getCronStoreKysely } from "../cron/store/schema.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
@@ -197,6 +204,10 @@ afterEach(() => {
 
 it.each([
   "stopped",
+  "receipt-owner",
+  "mismatched-receipt",
+  "missing-run-owner",
+  "legacy-default",
   "live",
   "unproved",
   "notification",
@@ -207,6 +218,20 @@ it.each([
   async (ownership) => {
     await resultState(async (state, resultPath) => {
       const cfg: OpenClawConfig = createDoctorConfig(state);
+      const missingRunOwner = ownership === "missing-run-owner";
+      const receiptOwner = ownership === "receipt-owner";
+      const mismatchedReceipt = ownership === "mismatched-receipt";
+      const legacyDefault = ownership === "legacy-default";
+      if (legacyDefault) {
+        cfg.agents = { entries: { work: {} } };
+      } else if (ownership === "stopped" || receiptOwner || mismatchedReceipt || missingRunOwner) {
+        cfg.agents = {
+          ...cfg.agents,
+          ownership: "explicit",
+          entries: { ...cfg.agents?.entries, system: {} },
+          defaults: { systemAgent: { agentId: "system" } },
+        };
+      }
       await state.writeConfig(cfg);
       const configBefore = fs.readFileSync(state.configPath);
       const storePath = resolveCronJobsStorePathFromConfig(cfg, state.env);
@@ -214,7 +239,13 @@ it.each([
       const disabledDuringConversion =
         ownership === "notification-disabled" || ownership === "notification-resume-disabled";
       const startupNotification = ownership === "notification" || disabledDuringConversion;
-      const offline = ownership === "stopped" || startupNotification;
+      const offline =
+        ownership === "stopped" ||
+        receiptOwner ||
+        mismatchedReceipt ||
+        missingRunOwner ||
+        legacyDefault ||
+        startupNotification;
       const storeKey = runOpenClawStateWriteTransaction(
         ({ db }) => {
           const key = resolveCronStoreKeyInDatabase(db, storePath, state.env);
@@ -224,8 +255,7 @@ it.each([
             {
               id: "interrupted-monitor",
               name: "Heartbeat",
-              agentId: "main",
-              declarationKey: "heartbeat:main",
+              ...(legacyDefault ? {} : { agentId: "main", declarationKey: "heartbeat:main" }),
               enabled: true,
               createdAtMs: runningAtMs,
               updatedAtMs: runningAtMs,
@@ -237,6 +267,18 @@ it.each([
             },
             0,
           );
+          const receipt =
+            receiptOwner || mismatchedReceipt || missingRunOwner
+              ? claimCronRunReceiptInDatabaseForTest({
+                  database: db,
+                  prepared: prepareCronRunReceiptClaim({
+                    storePath,
+                    job,
+                    agentId: missingRunOwner ? "retired" : "system",
+                    startedAtMs: mismatchedReceipt ? runningAtMs - 1 : runningAtMs,
+                  }),
+                })
+              : undefined;
           replaceCronRuntimeAuthorityRows({ db, storeKey: key, jobs: [job] });
           const row = loadCronRows(db, key)[0]!;
           // Reproduce the discriminator written by the published heartbeat owner.
@@ -250,6 +292,14 @@ it.each([
                   ...JSON.parse(row.job_json),
                   payload: { kind: "heartbeat" },
                 }),
+                ...(receipt
+                  ? {
+                      state_json: JSON.stringify({
+                        ...JSON.parse(row.state_json),
+                        runningReceiptId: receipt.receiptId,
+                      }),
+                    }
+                  : {}),
               })
               .where("store_key", "=", key),
           );
@@ -287,6 +337,9 @@ it.each([
           ({ db }) => ({
             rows: loadCronRows(db, storeKey),
             history: readCronRunRecordsInDatabase(db),
+            activeReceipts: readActiveCronRunReceiptsInDatabase(db, storeKey, [
+              "interrupted-monitor",
+            ]),
           }),
           { env: state.env },
         )!;
@@ -315,6 +368,26 @@ it.each([
           if (offline) {
             expect(await service.readRuntime()).toMatchObject({ status: "stopped" });
           }
+          if (legacyDefault) {
+            // The monitor planner requires an owner. Exercise legacy recovery at its boundary.
+            runOpenClawStateWriteTransaction(
+              (database) => {
+                const [job] = decodeDoctorHeartbeatJobRows(loadCronRows(database.db, storeKey));
+                expect(job).toBeDefined();
+                expect(job?.agentId).toBeUndefined();
+                const recovered = recoverDoctorHeartbeatRun({
+                  database,
+                  storeKey,
+                  job: job!,
+                  cfg,
+                  nowMs: runningAtMs + 1_000,
+                });
+                expect(recovered?.state.runningAtMs).toBeUndefined();
+              },
+              { env: state.env },
+            );
+            return;
+          }
           if (ownership === "notification-resume-disabled") {
             // Reproduce a durable pending receipt left by an interrupted Doctor
             // after payload conversion, before config retirement disabled it.
@@ -331,7 +404,16 @@ it.each([
         await expect(runDoctor(runtime)).resolves.toBeUndefined();
         expect(runtime.exit).not.toHaveBeenCalledWith(1);
         const after = read();
-        if (startupNotification) {
+        if (legacyDefault) {
+          expectResult(resultPath, { status: "ok" });
+          expect(after.history).toEqual([
+            expect.objectContaining({
+              agentId: undefined,
+              status: "failed",
+              startedAt: runningAtMs,
+            }),
+          ]);
+        } else if (startupNotification) {
           expectResult(resultPath, { status: "ok" });
           expect(loadedCronStoreFromRows(after.rows).store.jobs[0]).toMatchObject({
             payload: { kind: "agentTurn" },
@@ -403,7 +485,7 @@ it.each([
             await cron.waitForIdle();
             await gateway?.release();
           }
-        } else if (ownership === "stopped") {
+        } else if (ownership === "stopped" || receiptOwner) {
           expectResult(resultPath, { status: "ok" });
           expect(after.rows[0]?.payload_kind).toBe("agentTurn");
           expect(JSON.parse(after.rows[0]!.state_json)).toMatchObject({
@@ -414,11 +496,32 @@ it.each([
           expect(after.history).toEqual([
             expect.objectContaining({
               jobId: "interrupted-monitor",
+              agentId: receiptOwner ? "system" : "main",
               status: "failed",
               startedAt: runningAtMs,
             }),
           ]);
+          expect(after.activeReceipts).toEqual([]);
+          if (receiptOwner) {
+            expect(before.activeReceipts).toEqual([expect.objectContaining({ agentId: "system" })]);
+          }
         } else {
+          if (mismatchedReceipt) {
+            expect(before.activeReceipts).toEqual([
+              expect.objectContaining({ agentId: "system", startedAtMs: runningAtMs - 1 }),
+            ]);
+            expect(runtime.error).toHaveBeenCalledWith(
+              expect.stringContaining("has a receipt that does not match its running marker"),
+            );
+          }
+          if (missingRunOwner) {
+            expect(before.activeReceipts).toEqual([
+              expect.objectContaining({ agentId: "retired" }),
+            ]);
+            expect(runtime.error).toHaveBeenCalledWith(
+              expect.stringContaining('run owner "retired" is not configured'),
+            );
+          }
           expect(after).toEqual(before);
           expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
           expectResult(resultPath, {
