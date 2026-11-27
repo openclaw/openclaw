@@ -38,10 +38,12 @@ import {
   type IsolatedCompletionDiagnostics,
 } from "./isolated-completion-diagnostics.js";
 import {
+  createIsolatedHarnessDispatcher,
+  runBuiltInIsolatedCompletionWithProfiles,
+} from "./isolated-completion-harness-dispatch.js";
+import {
   createIsolatedCompletionModelAuthority,
-  prepareIsolatedHostAuthorization,
   resolveIsolatedStreamParams,
-  type AgentHarnessIsolatedCompletionParams,
 } from "./isolated-completion-model-authority.js";
 import {
   IsolatedCompletionError,
@@ -446,7 +448,8 @@ async function runIsolatedCompletionOwned(
       };
       const prepareHostAuthorization = async (
         authProfileId: string | undefined,
-      ): Promise<Extract<AgentHarnessIsolatedCompletionAuthorization, { owner: "host" }>> => {
+        profileFailover = false,
+      ) => {
         const prepared = await prepareSimpleCompletionModel(
           {
             cfg: config,
@@ -459,6 +462,7 @@ async function runIsolatedCompletionOwned(
             allowBundledStaticCatalogFallback: true,
             skipAgentDiscovery: true,
             bindAuthOwner: true,
+            profileFailover,
             workspaceDir,
             preparedModelRuntime: lease.snapshot,
             signal: request.abortSignal,
@@ -471,10 +475,34 @@ async function runIsolatedCompletionOwned(
         if ("error" in prepared) {
           throw new Error(`Isolated completion preparation failed: ${prepared.error}`);
         }
-        return { owner: "host", ...prepared };
+        return { owner: "host" as const, ...prepared };
       };
+      const dispatch = createIsolatedHarnessDispatcher({
+        harness,
+        commonParams,
+        request,
+        usageOwner,
+        diagnostics,
+        modelAuthority,
+        getModelForAuthorization: () => modelForAuthorization,
+        remainingTimeoutMs,
+        assertCurrent,
+      });
       let result: AgentHarnessIsolatedCompletionResult | undefined;
-      if (harness.runIsolatedCompletionV2) {
+      if (
+        harness.runIsolatedCompletionV2 &&
+        selection.builtIn &&
+        !request.authProfileId &&
+        !isolatedReadOnly
+      ) {
+        result = await runBuiltInIsolatedCompletionWithProfiles({
+          usageOwner,
+          assertCurrent,
+          signal: request.abortSignal,
+          prepare: () => prepareHostAuthorization(undefined, true),
+          dispatch: dispatch.v2,
+        });
+      } else if (harness.runIsolatedCompletionV2) {
         let harnessAuth:
           | {
               model: Model;
@@ -624,33 +652,9 @@ async function runIsolatedCompletionOwned(
             if (!hasAuthCandidate(attempt)) {
               throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
             }
-            assertCurrent();
-            const execution = modelAuthority.bind(modelForAuthorization, authorization);
-            execution.assertCurrent();
-            const dispatch = () =>
-              observeIsolatedCompletionUsage<AgentHarnessIsolatedCompletionResult>(
-                { ...usageOwner, runtimeKind: "harness", assertCurrent: execution.assertCurrent },
-                (onResult) =>
-                  harness.runIsolatedCompletionV2!({
-                    ...commonParams,
-                    ...execution,
-                    onResult,
-                    assertCurrent: execution.assertCurrent,
-                    timeoutMs: remainingTimeoutMs(),
-                    authorization:
-                      authorization.owner === "host"
-                        ? prepareIsolatedHostAuthorization(harness, authorization)
-                        : authorization,
-                    ...(request.outputSchema ? { outputSchema: request.outputSchema } : {}),
-                    streamParams: resolveIsolatedStreamParams(request, completionModel),
-                  }),
-                (completion) => completion.assistant,
-              );
-            const pending = diagnostics ? diagnostics.dispatch("harness", dispatch) : dispatch();
+            const pending = dispatch.v2(authorization, completionModel);
             priorProfileAttempted ||= attempt?.kind === "profile";
             const candidate = await pending;
-            execution.assertCurrent();
-            assertCurrent();
             if (isRetryableIsolatedQuotaFailure(candidate.assistant)) {
               // Returned quota failures must enter the same core-owned profile loop as throws.
               // Terminal errors and tool-bearing output never authorize another attempt.
@@ -670,32 +674,7 @@ async function runIsolatedCompletionOwned(
             : new Error("No prepared auth attempt succeeded.", { cause: firstError });
         }
       } else {
-        const authorization = await prepareHostAuthorization(request.authProfileId);
-        const harnessParams: Omit<AgentHarnessIsolatedCompletionParams, "timeoutMs"> = {
-          ...commonParams,
-          streamParams: resolveIsolatedStreamParams(request, authorization.model),
-          model: authorization.model,
-          auth: authorization.auth,
-          sourceAuthFingerprint: authorization.sourceAuthFingerprint,
-        };
-        assertCurrent();
-        const execution = modelAuthority.bind(modelForAuthorization);
-        const dispatch = () =>
-          observeIsolatedCompletionUsage<AgentHarnessIsolatedCompletionResult>(
-            { ...usageOwner, runtimeKind: "harness", assertCurrent: execution.assertCurrent },
-            (onResult) =>
-              harness.runIsolatedCompletion!(
-                prepareIsolatedHostAuthorization(harness, {
-                  ...harnessParams,
-                  ...execution,
-                  onResult,
-                  timeoutMs: remainingTimeoutMs(),
-                }),
-              ),
-            (completion) => completion.assistant,
-          );
-        result = await (diagnostics ? diagnostics.dispatch("harness", dispatch) : dispatch());
-        execution.assertCurrent?.();
+        result = await dispatch.legacy(await prepareHostAuthorization(request.authProfileId));
       }
       return {
         text: requireIsolatedAssistantText(result.assistant),
