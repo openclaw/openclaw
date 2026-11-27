@@ -9,7 +9,7 @@ struct SlashFilterCache {
 }
 
 private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
-private let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
+let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
 
 extension OpenClawChatViewModel {
     public var canSend: Bool {

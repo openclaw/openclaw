@@ -177,6 +177,7 @@ struct RootTabs: View {
                    self.appModel.consumeNewChatRequest(self.appModel.newChatRequestID)
                 {
                     _ = await viewModel.startNewSession()
+                    viewModel.startNewChatDraft(focusComposer: UIDevice.current.userInterfaceIdiom == .phone)
                 }
             }
     }

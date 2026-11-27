@@ -27,6 +27,8 @@ public final class OpenClawChatViewModel {
         }
     }
 
+    var newChatDraft: NewChatDraft?
+    public var defaultFollowUpMode: OpenClawChatQueueMode?
     public internal(set) var replyTarget: OpenClawChatReplyTarget?
     public let webConversation: OpenClawWebConversation?
     var isApplyingWebSession = false
@@ -1473,6 +1475,7 @@ extension OpenClawChatViewModel {
         let previousRouteLeaseTask = previousPatchTail?.routeLeaseTask
         // Task scheduling is not FIFO. Chain lease capture separately so a
         // reconnect cannot give an older mutation a newer route than its successor.
+        let draftLease = self.newChatDraftSettingsLease(for: target)
         let routeLeaseTask = Task { [weak self] in
             _ = await previousRouteLeaseTask?.value
             return await self?.transport.acquireSessionSettingsRouteLease()
