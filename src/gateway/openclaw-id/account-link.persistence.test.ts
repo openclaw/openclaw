@@ -146,6 +146,13 @@ it("a device grant from another account never creates a profile's first link", a
     ok: true,
     payload: { account: { sub: "ocid-victim" }, link: "linked" },
   });
+  // Another account on the now-linked profile is told to unlink first, and is not added.
+  approver = "ocid-collider";
+  expect(await deviceSignIn(connection, true)).toMatchObject({
+    ok: true,
+    payload: { account: { sub: "ocid-collider" }, link: "profile_linked" },
+  });
+  expect(await readOpenClawIdLinkedProfile("ocid-collider")).toBeNull();
   expect(await readOpenClawIdLinksOfProfile(victim.id)).toEqual([
     { accountId: "ocid-victim", email: VICTIM_EMAIL },
   ]);

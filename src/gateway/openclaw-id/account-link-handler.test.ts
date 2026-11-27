@@ -140,6 +140,7 @@ describe("openclawId.account linking", () => {
       setTimeout(resolve, 5);
     });
     store.linkedProfile.mockResolvedValueOnce(null);
+    store.linksOf.mockResolvedValueOnce([]);
     expect(await call(personal, { action: "device_poll", state, link: true })).toMatchObject({
       ok: true,
       payload: { account: { sub: "acct-owner" }, link: "link_approval_required" },
@@ -203,9 +204,16 @@ describe("openclawId.account linking", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(store.linkedProfile).toHaveBeenLastCalledWith("acct-owner");
     store.linkedProfile.mockResolvedValueOnce(null);
+    store.linksOf.mockResolvedValueOnce([]);
     expect(await call(personal, { action: "link_held", idToken: held })).toMatchObject({
       ok: true,
       payload: { link: "link_approval_required" },
+    });
+    // An unlinked account on a profile that already holds another one needs an unlink first.
+    store.linkedProfile.mockResolvedValueOnce(null);
+    expect(await call(personal, { action: "link_held", idToken: held })).toMatchObject({
+      ok: true,
+      payload: { link: "profile_linked" },
     });
     store.linkedProfile.mockResolvedValueOnce({ profileId: "profile-other", updatedAt: 0 });
     expect(await call(personal, { action: "link_held", idToken: held })).toMatchObject({

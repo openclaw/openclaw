@@ -352,10 +352,14 @@ export function verifyHeldOpenClawIdSignIn(
 // started the grant. Only the separately authorized profile-link workflow may create
 // a binding; here we may recognize an exact subject already bound to this profile.
 async function readVerifiedProfileLink(profileId: string, accountId: string) {
-  const { readOpenClawIdLinkedProfile } = await import("../../state/user-profile-openclaw-id.js");
+  const { readOpenClawIdLinkedProfile, readOpenClawIdLinksOfProfile } =
+    await import("../../state/user-profile-openclaw-id.js");
   const binding = await readOpenClawIdLinkedProfile(accountId);
   if (!binding) {
-    return "link_approval_required" as const;
+    // A profile that already holds another account needs an unlink, not an invitation.
+    return (await readOpenClawIdLinksOfProfile(profileId)).length > 0
+      ? ("profile_linked" as const)
+      : ("link_approval_required" as const);
   }
   return binding.profileId === profileId ? "linked" : "linked_elsewhere";
 }

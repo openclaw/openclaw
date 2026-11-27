@@ -25,6 +25,7 @@ const store = vi.hoisted(() => ({
       updatedAt: 0,
     }),
   ),
+  linksOf: vi.fn(async (_profileId: string) => [] as Array<{ accountId: string; email: null }>),
 }));
 // The personal-profile authority owner has its own tests; here it grants what the socket
 // holds unless the person's current role was lowered (`roleLowered`).
@@ -59,6 +60,7 @@ vi.mock("../../state/user-profile-openclaw-id.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-openclaw-id.js")>()),
   linkCanonicalOpenClawIdUserProfile: store.link,
   readOpenClawIdLinkedProfile: store.linkedProfile,
+  readOpenClawIdLinksOfProfile: store.linksOf,
 }));
 const security = vi.hoisted(() => vi.fn());
 vi.mock("../../infra/diagnostic-events.js", async (importOriginal) => ({
