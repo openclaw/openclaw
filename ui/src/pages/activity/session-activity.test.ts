@@ -211,6 +211,37 @@ describe("session activity projection", () => {
     ]);
   });
 
+  it("preserves first-seen days and member references across revisited buckets", () => {
+    const older: GatewaySessionRow = {
+      key: "older",
+      kind: "direct",
+      lastActivityAt: new Date(2026, 7, 16, 12).getTime(),
+    };
+    const newer = { ...older, key: "newer", lastActivityAt: new Date(2026, 7, 17, 12).getTime() };
+    const tied = { ...older, key: "tied" };
+    const unknown: GatewaySessionRow = {
+      key: "unknown",
+      kind: "direct",
+      lastActivityAt: 0,
+      updatedAt: -1,
+    };
+    const rows = [older, newer, unknown, tied, older];
+    const activity = projectSessionActivity(result(rows));
+    expect(activity.days.map(({ key, timestamp }) => [key, timestamp])).toEqual([
+      ["2026-08-16", new Date(2026, 7, 16).getTime()],
+      ["2026-08-17", new Date(2026, 7, 17).getTime()],
+      ["unknown", null],
+    ]);
+    const expected = [[older, tied, older], [newer], [unknown]];
+    for (const [index, day] of activity.days.entries()) {
+      expect(day.sessions).toHaveLength(expected[index]!.length);
+      expect(day.sessions).not.toBe(rows);
+      day.sessions.forEach((row, member) => expect(row).toBe(expected[index]![member]));
+    }
+    expect(activity.sessions).toBe(rows);
+    [older, newer, unknown, tied, older].forEach((row, index) => expect(rows[index]).toBe(row));
+  });
+
   it.each([
     { lastActivityAt: 0, lastInteractionAt: Number.NaN, updatedAt: 120, createdAt: 100 },
     { lastActivityAt: Number.POSITIVE_INFINITY, updatedAt: null, createdAt: 120 },

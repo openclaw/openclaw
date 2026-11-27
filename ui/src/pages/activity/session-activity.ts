@@ -210,17 +210,10 @@ export function projectSessionActivity(result: SessionsListResult | undefined) {
     watchedSessions: [],
     count: person.sessionCount,
   }));
-  const grouped = new Map<string, GatewaySessionRow[]>();
-  for (const row of visible) {
+  const grouped = Map.groupBy(visible, (row) => {
     const timestamp = sessionActivityTimestamp(row);
-    const key = timestamp > 0 ? dayKey(timestamp) : "unknown";
-    const existing = grouped.get(key);
-    if (existing) {
-      existing.push(row);
-    } else {
-      grouped.set(key, [row]);
-    }
-  }
+    return timestamp > 0 ? dayKey(timestamp) : "unknown";
+  });
   const days = [...grouped.entries()].map(([key, sessions]) => ({
     key,
     timestamp:
