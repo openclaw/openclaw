@@ -4,6 +4,7 @@ import {
   type UsersListParams,
   type UsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
@@ -32,13 +33,42 @@ import {
   resolveUserRoleAssignmentError,
 } from "./users-profile-access.js";
 
+type RoleSessions = GatewayOperatorRoleDefinition["sessions"];
+
+const OTHERS_ORDER = ["none", "view", "suggest", "write"];
+const INVITED_ORDER = ["read", "suggest", "send"];
+
+/**
+ * Session permissions only narrow along their order: none < view < suggest < write, and
+ * none < invited < write, where an invitation narrows when its access ceiling drops. Invited and
+ * view or suggest are not comparable, so a change between them counts as a loss.
+ */
+function sessionsNarrowed(before: RoleSessions, after: RoleSessions): boolean {
+  if (isDeepStrictEqual(before, after) || before.others === "none" || after.others === "write") {
+    return false;
+  }
+  if (before.others !== "invited" && after.others !== "invited") {
+    return OTHERS_ORDER.indexOf(after.others) < OTHERS_ORDER.indexOf(before.others);
+  }
+  if (before.others !== "invited" || after.others !== "invited") {
+    return true;
+  }
+  const { maxInvitedAccess: beforeCeiling, ...beforeRest } = before;
+  const { maxInvitedAccess: afterCeiling, ...afterRest } = after;
+  return (
+    !isDeepStrictEqual(beforeRest, afterRest) ||
+    beforeCeiling === undefined ||
+    afterCeiling === undefined ||
+    INVITED_ORDER.indexOf(afterCeiling) < INVITED_ORDER.indexOf(beforeCeiling)
+  );
+}
+
 /**
  * A role write loses access unless the new effective role keeps every operator scope, agent and
- * session permission of the old one. Session permissions compare only when equal or when the new
- * role writes every session; any other difference counts as a loss, as does a role that cannot
- * be resolved. Other role limits (tools, sandbox, projects) apply to the next request only.
+ * session permission of the old one. A role that cannot be resolved is not comparable, so it
+ * counts as a loss. Other role limits (tools, sandbox, projects) apply to the next request only.
  */
-function roleChangeLosesAccess(
+export function roleChangeLosesAccess(
   cfg: OpenClawConfig,
   change: UserProfileRoleChange,
   identity: { githubLogin?: string | null; openclawIdAccountIds?: readonly string[] } | undefined,
@@ -66,7 +96,7 @@ function roleChangeLosesAccess(
     }) ||
     (after.agents !== "*" &&
       (before.agents === "*" || before.agents.some((agent) => !after.agents.includes(agent)))) ||
-    (after.sessions.others !== "write" && !isDeepStrictEqual(before.sessions, after.sessions))
+    sessionsNarrowed(before.sessions, after.sessions)
   );
 }
 
