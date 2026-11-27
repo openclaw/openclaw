@@ -387,7 +387,7 @@ function MemoryCatalogSections(props: MemoryViewProps) {
 function SettingsTab(props: MemoryViewProps) {
   const catalogScope = createMemo(() => props.catalogScope);
   return (
-    <ShellLayoutBoundary traits={{ settingsPage: true }}>
+    <>
       <div class="settings-page">
         <Errored
           fallback={(_error) => (
@@ -421,7 +421,7 @@ function SettingsTab(props: MemoryViewProps) {
           )}
         </SettingsSection>
       </div>
-    </ShellLayoutBoundary>
+    </>
   );
 }
 

@@ -222,7 +222,8 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    changed plugins through the existing runtime lifecycle. The run settles and
    sends one notice after this work finishes. Plugin failures appear in that
    summary with the failed step and exact next command; they never fail the core
-   update or trigger rollback.
+   update or trigger rollback. A successful reload's warnings stay in the plugin
+   step details without marking activation failed or requesting a retry.
 
 Packaged bundled plugins belong to the selected core release, not a second
 plugin installation. Channel synchronization retires obsolete compiled-bundle
@@ -471,6 +472,13 @@ database objects, catalog snapshots, or queried row values.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
+The release CLI uses one client deadline for Gateway requests, status polling,
+restart requests, and a capability-consent retry through a replacement Gateway.
+Expiry stops client work and joins connection cleanup; it does not cancel an
+accepted server update or invalidate a published trial. Run `openclaw update status`
+before retrying an unconfirmed request. Preparation and installed-package delegation
+retain their own lifecycle budgets. The installed CLI must contain this repair.
+
 Gateway post-ready maintenance and `openclaw update repair` refresh the known
 legacy Git launcher from development build `d44f263`, which incorrectly counted
 `gateway status` as a start. The candidate must contain this repair. It applies
@@ -481,6 +489,26 @@ rollback behavior; it does not settle the trial or rewrite update history. This
 is recovery for an observed development install, not a stable-release migration.
 The normal next release update replaces the legacy launcher with the resident
 launcher.
+
+Git installs that tracked main before the resident launcher can retain a format-1
+trial. Before listening, the Gateway captures the matching publication. When the
+selected running build reaches core readiness, it rechecks the selection and removes the
+trial so a later restart can't roll back that healthy release. Channel health and
+update history writes don't gate trial removal.
+
+If the older updater calls the candidate's native install or restart command,
+the candidate tries to link that publication to the original run before carrying
+out the service action. The Gateway separately recovers the matching run after
+the older updater exits, even if that updater removed the trial after its own
+healthy response but failed to write history. It retries while it serves if the driver is still
+running or the history write fails. A Gateway restart before recovery can leave
+the original history entry unchanged with the healthy release still selected.
+
+The Gateway preserves existing repair acknowledgments, unrelated failures, and
+recovery records. It needs one matching publication receipt before it can record
+success and run advisory Doctor inspections and plugin maintenance. If the older
+updater exits because it can't read the migrated schema, its exit status still
+reflects that refusal.
 
 Prepared-release plugin maintenance normally runs after the candidate has migrated
 state and reported ready. Downgrades retain pre-trial maintenance because older

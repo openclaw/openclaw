@@ -1,7 +1,7 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.LocationMode
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import android.Manifest
 import android.content.Context
 import android.location.Location
@@ -183,7 +183,7 @@ class LocationPrivacyTest : NodeHandlerRobolectricTest() {
     }
   }
 
-  private fun payload(result: GatewaySession.InvokeResult): JsonObject {
+  private fun payload(result: InvokeResult): JsonObject {
     assertTrue("location command failed: " + result.error, result.ok)
     return Json.parseToJsonElement(requireNotNull(result.payloadJson)).jsonObject
   }

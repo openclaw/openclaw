@@ -8,7 +8,6 @@ import "../../styles/identity-avatar.css";
 import "../../styles/agent-row-chip.css";
 import { createMemo, createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -77,13 +76,11 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
   });
   return (
     <Show when={Boolean(route() && location())} fallback={<LoadingState />}>
-      <ShellLayoutBoundary traits={{ activityPage: true }}>
-        <HubPageHeader
-          active="activity"
-          wide
-          docsUrl="https://docs.openclaw.ai/web/control-ui/settings#activity-tab"
-        />
-      </ShellLayoutBoundary>
+      <HubPageHeader
+        active="activity"
+        wide
+        docsUrl="https://docs.openclaw.ai/web/control-ui/settings#activity-tab"
+      />
       <SettingsWorkspace fillHeight>
         <Show when={route()?.mode !== "run"}>
           <HubTabs
