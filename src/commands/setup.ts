@@ -21,6 +21,7 @@ import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { displayPath, isRecord, resolveUserPath, shortenHomePath } from "../utils.js";
 
 type SetupOptions = { workspace?: string; skipBootstrap?: boolean; json?: boolean };
+const STARTER_FILES_NOTE = "starter files are created by the first conversation";
 
 export async function setupCommand(
   opts?: SetupOptions,
@@ -79,7 +80,6 @@ async function planSetupConfig(snapshot: ConfigFileSnapshot, opts: SetupOptions 
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
-  const skipBootstrap = opts?.skipBootstrap === true || resolvedDefaults.skipBootstrap === true;
   const shouldWriteSkipBootstrap =
     opts?.skipBootstrap === true && resolvedDefaults.skipBootstrap !== true;
   const skipBootstrapPath = ["agents", "defaults", "skipBootstrap"];
@@ -201,8 +201,6 @@ async function planSetupConfig(snapshot: ConfigFileSnapshot, opts: SetupOptions 
     cfg,
     workspace,
     selectedAgentId,
-    skipBootstrap,
-    skipOptionalBootstrapFiles: resolvedDefaults.skipOptionalBootstrapFiles,
     applyWrites,
     configChanged:
       !snapshot.exists ||
@@ -252,6 +250,7 @@ async function setupUnderOwner(opts: SetupOptions | undefined, runtime: RuntimeE
       workspace,
       baseConfig: plan.cfg,
       expectedConfigHash: snapshot.hash ?? null,
+      skipBootstrap: true,
     });
     next = onboardingAgent.config;
     creationConfigHash = onboardingAgent.configHash;
@@ -291,15 +290,12 @@ async function setupUnderOwner(opts: SetupOptions | undefined, runtime: RuntimeE
     );
   }
 
-  const ws = await (
-    await import("../agents/workspace.js")
-  ).ensureAgentWorkspace({
-    dir: workspace,
-    ensureBootstrapFiles: !plan.skipBootstrap,
-    skipOptionalBootstrapFiles: plan.skipOptionalBootstrapFiles,
-  });
+  // Baseline never seeds starter files or runs git init: the bootstrap ritual needs a
+  // conversation to finish, so the first persistent conversation seeds the workspace.
+  const workspaceDir = resolveUserPath(workspace);
+  await fs.mkdir(workspaceDir, { recursive: true });
   if (!opts?.json) {
-    runtime.log(`Workspace OK: ${displayPath(ws.dir)}`);
+    runtime.log(`Workspace OK: ${displayPath(workspaceDir)} (${STARTER_FILES_NOTE})`);
   }
 
   const sessionsDir = await ensureSessionsDir(selectedAgentId);
@@ -311,7 +307,7 @@ async function setupUnderOwner(opts: SetupOptions | undefined, runtime: RuntimeE
   finishSetup(opts, runtime, {
     configPath,
     configStatus: plan.configChanged ? (snapshot.exists ? "updated" : "created") : "unchanged",
-    workspaceDir: ws.dir,
+    workspaceDir,
     sessionsDir,
   });
 }
@@ -387,7 +383,7 @@ async function setupWithGatewayOwner(
       runtime.log(restartHint);
     }
     runtime.log(
-      `Workspace: ${displayPath(resolveUserPath(plan.workspace))} (owned by the running Gateway, which seeds missing files on the agent's first run)`,
+      `Workspace: ${displayPath(resolveUserPath(plan.workspace))} (owned by the running Gateway; ${STARTER_FILES_NOTE})`,
     );
   }
   finishSetup(opts, runtime, {
@@ -416,7 +412,7 @@ function finishSetup(
   },
 ): void {
   if (opts?.json) {
-    writeRuntimeJson(runtime, { ok: true, ...result });
+    writeRuntimeJson(runtime, { ok: true, ...result, starterFiles: "first-conversation" });
     return;
   }
   runtime.log(`Sessions OK: ${displayPath(result.sessionsDir)}`);

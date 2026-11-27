@@ -99,9 +99,11 @@ describe("setupCommand", () => {
           configStatus: "created",
           workspaceDir: workspace,
           sessionsDir: path.join(home, ".openclaw", "agents", "main", "sessions"),
+          starterFiles: "first-conversation",
         });
       }
-      expect((await fs.stat(path.join(workspace, "AGENTS.md"))).isFile()).toBe(true);
+      // The first conversation owns seeding; baseline leaves the workspace empty, with no git repo.
+      expect(await fs.readdir(workspace)).toEqual([]);
     });
   });
 
