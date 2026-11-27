@@ -55,9 +55,9 @@ it("keeps host-owned controls out of public attempt and tool inputs", () => {
   expectTypeOf<AsyncTools>().not.toHaveProperty("onWebSearchConfiguration");
 });
 
-it("preserves explicitly allowed tools in an asynchronously prepared lean surface", async () => {
+it("preserves explicitly allowed tools in an asynchronously prepared compact surface", async () => {
   const runtime = await surface("async", {
-    agents: { defaults: { experimental: { localModelLean: true } } },
+    agents: { defaults: { agentProfileId: "openclaw/small" } },
     tools: { allow: ["browser"], codeMode: false, toolSearch: false },
   });
   const tools = ["browser", "tts"].map((name) => ({
@@ -70,12 +70,24 @@ it("preserves explicitly allowed tools in an asynchronously prepared lean surfac
   expect(runtime.compactTools(tools).tools.map((tool) => tool.name)).toEqual(["browser"]);
 });
 
+it("accepts the deprecated localModelLeanApplied option as agentProfileApplied", async () => {
+  using create = vi.spyOn(toolSurfaceCore, "createAgentHarnessToolSurfaceRuntimeCore");
+  const runtime = await surface("async", { tools: { toolSearch: true } });
+  const internal = expectDefined(create.mock.results[0]?.value, "core surface");
+  using compact = vi.spyOn(internal, "compactTools");
+  runtime.compactTools([], { hookContext: { agentId: "sdk-legacy" }, localModelLeanApplied: true });
+  expect(compact).toHaveBeenCalledExactlyOnceWith([], {
+    hookContext: { agentId: "sdk-legacy" },
+    agentProfileApplied: true,
+  });
+});
+
 it.each(["sync", "async"] as const)("projects only public %s controls", async (mode) => {
   using create = vi.spyOn(toolSurfaceCore, "createAgentHarnessToolSurfaceRuntimeCore");
   const runtime = await surface(mode, { tools: { toolSearch: true } });
   const internal = expectDefined(create.mock.results[0]?.value, "core surface");
   using compact = vi.spyOn(internal, "compactTools");
-  const publicOptions = { hookContext: { agentId: "sdk-public" }, localModelLeanApplied: true };
+  const publicOptions = { hookContext: { agentId: "sdk-public" }, agentProfileApplied: true };
   const options = { ...publicOptions, prepared: { preserveToolNames: ["browser"] } };
   const result = runtime.compactTools([], options);
   expect(runtime).not.toHaveProperty("plan");

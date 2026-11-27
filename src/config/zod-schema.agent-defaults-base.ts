@@ -84,7 +84,6 @@ export const AgentDefaultsBaseSchema = z.strictObject({
       /** Global opt-in for automatic Decision experiments; model selection is separate. */
       decisionAssistance: z.boolean().optional(),
       usageRankedToolIndex: z.boolean().optional(),
-      localModelLean: z.boolean().optional(),
     })
     .optional(),
   userTimezone: z.string().optional(),

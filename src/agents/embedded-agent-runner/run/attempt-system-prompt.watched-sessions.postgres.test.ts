@@ -23,6 +23,7 @@ import {
   registerMainSessionGroupWatch,
 } from "../../../sessions/session-state-events.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { resolveAgentProfile } from "../../agent-profiles.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
@@ -89,6 +90,7 @@ describe.skipIf(!mixedAgentConnection)("attempt watched-session prompt refresh",
         onTestFinished(() => admission.close());
         const capabilities = new Set(["sessions_history", "sessions_list"]);
         const prepared = await prepareEmbeddedAttemptSystemPrompt({
+          agentProfile: resolveAgentProfile({}),
           attempt: {
             provider: "openai",
             modelId: "fixture",

@@ -402,7 +402,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
     legacyRules: [
       rule(
         ["wizard", "localModelLeanAutoModel"],
-        "wizard.localModelLeanAutoModel is retired; local models now use Tool Search without reducing their capabilities.",
+        "wizard.localModelLeanAutoModel is retired; local models use Tool Search, and agentProfileId selects a smaller profile.",
       ),
     ],
     apply: (raw, changes) => {
@@ -423,7 +423,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
           changes.push("Removed onboarding-owned agents.defaults.experimental.localModelLean.");
         } else {
           changes.push(
-            "Retained explicit or unowned agents.defaults.experimental.localModelLean=true; remove it or set it to false to restore the full tool capabilities through Tool Search.",
+            "Retained explicit or unowned agents.defaults.experimental.localModelLean=true for the Agent Profile migration. To keep the full tool surface instead, remove it or set it to false, or set agentProfileId to openclaw/base.",
           );
         }
       }

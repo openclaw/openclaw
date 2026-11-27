@@ -17,6 +17,7 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import { hasReducedToolProfile, type ResolvedAgentProfile } from "../../agent-profiles.js";
 import { isHostSystemTurn } from "../../agent-tools.turn-authority.js";
 import {
   buildBootstrapPromptWarningNotice,
@@ -94,6 +95,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   runGrantedToolDirectory?: () => string | undefined;
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
+  agentProfile: ResolvedAgentProfile;
   effectiveTools: PromptTools;
   isRawModelRun: boolean;
   modelToolsEnabled: boolean;
@@ -199,6 +201,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
             },
             {
               contextTokenBudget: attempt.contextTokenBudget,
+              toolSearchDirectoryCompact: hasReducedToolProfile(params.agentProfile),
               usageRanking: params.getUsageRanking?.(),
             },
           )
@@ -494,6 +497,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     sessionKey: attempt.sessionKey,
     provider: attempt.provider,
     model: attempt.modelId,
+    agentProfile: {
+      id: params.agentProfile.profile.id,
+      selectionSource: params.agentProfile.selectionSource,
+    },
     workspaceDir: params.setup.effectiveWorkspace,
     bootstrapMaxChars: params.bootstrap.bootstrapMaxChars,
     bootstrapTotalMaxChars: params.bootstrap.bootstrapTotalMaxChars,
@@ -501,6 +508,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       analysis: params.bootstrap.bootstrapAnalysis,
       warning: params.bootstrap.bootstrapPromptWarning,
     }),
+    workspaceContext: params.bootstrap.workspaceContextReport,
     sandbox: params.setup.sandboxReport,
     systemPrompt: attemptSystemPrompt.systemPrompt,
     injectedWorkspaceFiles: params.bootstrap.bootstrapInjectionStats,

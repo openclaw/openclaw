@@ -40,7 +40,16 @@ describe("automatic local-model lean migration", () => {
     if (expected === true) {
       expect(changes).toContainEqual(expect.stringContaining("remove it or set it to false"));
     }
-    expect(findLegacyConfigIssues(raw)).toEqual([]);
+    // Only the Agent Profile migration may still report the flags this one leaves.
+    const profileIssuePaths = [
+      "agents.entries",
+      ...(expected !== undefined ? ["agents.defaults.experimental.localModelLean"] : []),
+    ];
+    expect(
+      findLegacyConfigIssues(raw)
+        .map((issue) => issue.path)
+        .toSorted(),
+    ).toEqual(profileIssuePaths.toSorted());
     const migrated = structuredClone(raw);
     expect(applyRetiredMigrations(raw)).toEqual({ raw: migrated, changes: [] });
   });

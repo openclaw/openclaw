@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import type { ApprovalHandler, Session, Turn } from "@muse-code/sdk";
+import type { Session, Turn } from "@muse-code/sdk";
 import {
   createAgentHarnessAttemptLifecycle,
   emitAgentHarnessAttemptEvent,
@@ -38,6 +38,7 @@ import {
   appendSessionTranscriptMessagesByIdentity,
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { selectApprovalChoice } from "./src/approval-choice.js";
 import { consumeTurn } from "./src/events.js";
 import { MusePool, openMuseSession } from "./src/runtime.js";
 import { museTurnUsage } from "./src/usage.js";
@@ -59,26 +60,6 @@ function museRefusal(message: string): AgentHarnessPreflightError {
 
 // Matches the Codex harness: a pending native approval should not hold a turn for hours.
 const APPROVAL_TIMEOUT_MS = 120_000;
-
-function selectApprovalChoice(
-  request: Parameters<ApprovalHandler>[0],
-  decision: string | null | undefined,
-) {
-  const wanted = decision === "allow-once" ? "approved" : "denied";
-  const choice =
-    request.availableChoices.find(
-      (candidate) => candidate.decision === wanted && candidate.scope === "once",
-    ) ??
-    (wanted === "denied"
-      ? request.availableChoices.find(
-          (candidate) => candidate.decision === "denied" || candidate.decision === "abort",
-        )
-      : undefined);
-  if (!choice) {
-    throw new Error(`Muse offered no safe ${wanted} approval choice`);
-  }
-  return { choiceId: choice.choiceId };
-}
 
 export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnessV2 {
   const pool = new MusePool(options.binaryPath);
@@ -341,6 +322,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
             params.hostCapabilities.assertActive();
             const history = retained.buildSessionContext().messages;
             const bootstrap = await resolveBootstrapContextForRun({
+              modelProvider: params.provider,
+              modelId: params.modelId,
               workspaceDir: params.workspaceDir,
               config: params.config,
               sessionKey: params.sessionKey,
