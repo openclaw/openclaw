@@ -9,6 +9,7 @@ import { isRouteId, locationForRoute, routePageSpec, type RouteId } from "../app
 import { selectShellRouteState } from "../app/app-host-route-state.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { childSessionListQuery } from "../lib/sessions/child-session-data.ts";
 import * as toast from "../lib/toast.ts";
 import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import {
@@ -215,31 +216,50 @@ describe("personal navigation rail", () => {
     const { sidebar, sessions, result, dom } = await fixture();
     const key = "agent:main:main";
     const childKey = "agent:main:subagent:worker";
-    for (const status of [undefined, "queued", "running"] as const) {
-      sessions.publishList({
-        agentId: "main",
-        result: {
-          ...result,
-          sessions: [
-            { key, kind: "direct", childSessions: [childKey], hasActiveSubagentRun: true },
-            ...(status
-              ? [
-                  {
-                    key: childKey,
-                    kind: "direct" as const,
-                    spawnedBy: key,
-                    status,
-                    hasActiveRun: true,
-                  },
-                ]
-              : []),
-          ],
-        },
-      });
+    const childWindow = { ...childSessionListQuery(key), source: "sidebar" as const };
+    const firstRead = createDeferred<typeof result>();
+    let children = { ...result, count: 0, sessions: [] as GatewaySessionRow[] };
+    sessions.list.mockImplementation(async (query) => {
+      if (query?.spawnedBy !== key) {
+        return sessions.result;
+      }
+      await firstRead.promise;
+      return children;
+    });
+    const running = () => dom.query(".sidebar-footer-bar__home .session-glyph__ring") !== null;
+    sessions.publishList({
+      agentId: "main",
+      result: {
+        ...result,
+        sessions: [{ key, kind: "direct", childSessions: [childKey], hasActiveSubagentRun: true }],
+      },
+    });
+    await sidebar.updateComplete;
+    expect(running()).toBe(false);
+
+    for (const status of ["queued", "running", "done"] as const) {
+      const ts = children.ts + 1;
+      children = {
+        ...result,
+        ts,
+        count: 1,
+        sessions: [
+          {
+            key: childKey,
+            sessionId: childKey,
+            kind: "direct",
+            spawnedBy: key,
+            status,
+            updatedAt: ts,
+          },
+        ],
+      };
+      firstRead.resolve(result);
+      await sessions.sessions.refreshList({ ...childWindow, force: true });
+      await sidebar.sessionData.loadChildSessions(key);
       await sidebar.updateComplete;
-      expect(dom.query(".sidebar-footer-bar__home .session-glyph__ring") !== null).toBe(
-        status === "running",
-      );
+      expect(sidebar.sessionData.childSessionRowsByParent[key]?.[0]?.status).toBe(status);
+      expect(running(), status).toBe(status === "running");
     }
   });
 
