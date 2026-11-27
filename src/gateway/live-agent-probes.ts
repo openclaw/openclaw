@@ -26,6 +26,7 @@ type CronListCliResult = {
     id?: string;
     name?: string;
     sessionTarget?: string;
+    includeRecentChat?: boolean;
     agentId?: string | null;
     sessionKey?: string | null;
     payload?: { kind?: string; text?: string; message?: string };
@@ -40,6 +41,7 @@ type LiveCronProbeSpec = {
   message: string;
   at: string;
   argsJson: string;
+  placement: { sessionTarget: string; includeRecentChat?: boolean };
 };
 
 /** Selects the packaged launcher when built, otherwise the canonical source runner. */
@@ -95,6 +97,9 @@ export function createLiveCronProbeSpec(
   const at = resolveTimestampMsToIsoString(
     resolveExpiresAtMsFromDurationSeconds(LIVE_CRON_PROBE_DELAY_SECONDS) ?? Date.now(),
   );
+  const placement = params.sessionKey
+    ? { sessionTarget: `session:${params.sessionKey}` }
+    : { sessionTarget: "isolated", includeRecentChat: true };
   const argsJson = JSON.stringify({
     action: "add",
     job: {
@@ -103,13 +108,13 @@ export function createLiveCronProbeSpec(
       payload: { kind: "agentTurn", message, ...(params.model ? { model: params.model } : {}) },
       // Live harnesses use synthetic channels that must not become announce targets.
       delivery: { mode: "none" },
-      sessionTarget: params.sessionKey ? `session:${params.sessionKey}` : "current",
+      ...placement,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       enabled: true,
     },
   });
-  return { nonce, name, message, at, argsJson };
+  return { nonce, name, message, at, argsJson, placement };
 }
 
 export function buildLiveCronProbeMessage(params: {
@@ -128,7 +133,7 @@ export function buildLiveCronProbeMessage(params: {
       "Use the OpenClaw MCP automations tool from server `openclaw`. " +
       discoverTools +
       `Call it with JSON arguments ${params.argsJson}. ` +
-      "Preserve the JSON exactly, including job.sessionTarget and job.sessionKey; do not omit, rename, or flatten those fields. " +
+      "Pass every JSON field exactly as supplied, including job.sessionTarget, job.includeRecentChat, and any job.sessionKey. " +
       "Do the actual tool call; I will verify externally with the OpenClaw cron CLI. " +
       `After the cron job is created, reply exactly: ${params.exactReply}`
     );
@@ -141,7 +146,7 @@ export function buildLiveCronProbeMessage(params: {
   return (
     retryIntro +
     `Use these exact JSON arguments: ${params.argsJson}. ` +
-    "Preserve job.sessionTarget and job.sessionKey exactly as provided. " +
+    "Preserve job.sessionTarget, job.includeRecentChat, and any job.sessionKey exactly as supplied. " +
     `If the cron job is created, reply exactly: ${params.exactReply}. ` +
     "If the tool call is cancelled, the job is not created, or you cannot confirm creation, " +
     "reply briefly saying that and ask me to retry. No markdown. " +
@@ -238,7 +243,7 @@ export function assertCronJobMatches(params: {
   expectedName: string;
   expectedMessage: string;
   expectedSessionKey: string;
-  expectedSessionTarget?: string;
+  expectedPlacement?: LiveCronProbeSpec["placement"];
   expectedAgentId?: string;
 }) {
   if (params.job.name !== params.expectedName) {
@@ -258,8 +263,14 @@ export function assertCronJobMatches(params: {
     throw new Error(`cron sessionKey mismatch: ${params.job.sessionKey ?? "<missing>"}`);
   }
   const expectedSessionTarget =
-    params.expectedSessionTarget ?? `session:${params.expectedSessionKey}`;
+    params.expectedPlacement?.sessionTarget ?? `session:${params.expectedSessionKey}`;
   if (params.job.sessionTarget !== expectedSessionTarget) {
     throw new Error(`cron sessionTarget mismatch: ${params.job.sessionTarget ?? "<missing>"}`);
+  }
+  const expectedIncludeRecentChat = params.expectedPlacement?.includeRecentChat ?? false;
+  if ((params.job.includeRecentChat ?? false) !== expectedIncludeRecentChat) {
+    throw new Error(
+      `cron includeRecentChat mismatch: ${params.job.includeRecentChat ?? "<missing>"}`,
+    );
   }
 }

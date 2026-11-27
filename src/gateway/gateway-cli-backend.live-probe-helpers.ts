@@ -422,7 +422,7 @@ export async function verifyCliCronMcpProbe(params: {
     expectedName: cronProbe.name,
     expectedMessage: cronProbe.message,
     expectedSessionKey: params.sessionKey,
-    expectedSessionTarget: "current",
+    expectedPlacement: cronProbe.placement,
   });
   if (createdJob?.id) {
     await removeCliCronJobBestEffort({

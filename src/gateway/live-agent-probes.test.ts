@@ -1,5 +1,7 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { validateCronAddParams } from "../../packages/gateway-protocol/src/index.js";
+import { normalizeCronJobCreate } from "../cron/normalize.js";
 
 const runExecMock = vi.hoisted(() => vi.fn());
 // mock-isolation: Child execution is the external I/O boundary; this fixture must not spawn a CLI.
@@ -85,6 +87,15 @@ it("builds a retryable cron prompt with provider-specific fallback wording", () 
       payload: expect.objectContaining({ model: "openai/gpt-5.6-luna@openai:manual" }),
     }),
   );
+});
+
+it("accepts fresh cron probe creation with the calling session as recent chat", () => {
+  const sessionKey = "agent:dev:main";
+  const args: { job: unknown } = JSON.parse(createLiveCronProbeSpec().argsJson);
+  const job = normalizeCronJobCreate(args.job, { sessionContext: { sessionKey } });
+
+  expect(validateCronAddParams(job)).toBe(true);
+  expect(job).toMatchObject({ sessionTarget: "isolated", includeRecentChat: true, sessionKey });
 });
 
 it("builds a cron probe spec when the process clock is outside the Date range", () => {
