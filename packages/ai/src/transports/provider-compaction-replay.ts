@@ -8,6 +8,7 @@ import {
   resolveNewestOpenAIResponsesCompactionReplay,
 } from "./openai-responses-compaction-replay.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
+import { readResponsesInputReplayState } from "./openai-responses-input-replay.js";
 import {
   createCompactionReplayWindowFactCollector as createWindowFactCollector,
   isAssistantReplayMessage,
@@ -212,22 +213,27 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
       : checkpoint.mode === "complete-window"
         ? estimateResponsesInput(checkpoint.output, estimate, checkpoint.outputTokens)
         : estimate.text(checkpoint.item.encrypted_content);
-  // The checkpoint-producing request predates its replacement window, and another
-  // route measured its own window. Later same-route usage measures this replay.
+  // The checkpoint-producing request predates its replacement window, another route
+  // measured its own window, and a response whose input order was rewritten (deferred
+  // results delivered after it) did not see everything before it. Only the rest anchor.
   const { contextUsage: _staleContextUsage, ...usage } = checkpoint.owner.usage;
   const tail: T[] = [];
   for (const message of messages.slice(ownerIndex + 1)) {
+    if (!isAssistantReplayMessage(message) || message.usage.contextUsage === undefined) {
+      tail.push(message);
+      continue;
+    }
+    const deferred = readResponsesInputReplayState(message)?.after;
     if (
-      !isAssistantReplayMessage(message) ||
-      message.usage.contextUsage === undefined ||
-      (message.provider === model.provider &&
-        message.api === model.api &&
-        message.model === model.id)
+      message.provider === model.provider &&
+      message.api === model.api &&
+      message.model === model.id &&
+      !(Array.isArray(deferred) && deferred.length > 0)
     ) {
       tail.push(message);
       continue;
     }
-    const { contextUsage: _otherRouteContextUsage, ...billedUsage } = message.usage;
+    const { contextUsage: _unmeasuredContextUsage, ...billedUsage } = message.usage;
     tail.push({ ...message, usage: billedUsage });
   }
   return {

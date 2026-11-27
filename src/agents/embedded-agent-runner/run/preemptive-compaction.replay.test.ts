@@ -84,6 +84,15 @@ describe("provider checkpoint prompt pressure", () => {
     expect(pressure([owner, otherRoute])).toBeGreaterThan(20_000);
   });
 
+  it("does not anchor on a response whose request deferred earlier input past it", () => {
+    const owner = checkpoint("retained content ".repeat(8_000));
+    // A steering response sent before a deferred tool result was delivered.
+    const steered = Object.assign(assistant(2_001), {
+      openclawResponsesInputReplay: { afterResponseId: "resp_parent", before: [], after: ["fp"] },
+    });
+    expect(pressure([owner, steered])).toBeGreaterThan(20_000);
+  });
+
   it("counts async tool results persisted before the terminal usage record as new input", () => {
     const owner = checkpoint("retained content ".repeat(8_000));
     const terminal: AssistantMessage = {
