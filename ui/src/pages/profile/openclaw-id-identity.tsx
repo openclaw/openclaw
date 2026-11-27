@@ -1,9 +1,9 @@
-// Settings → Profile → Identity: link this profile to an OpenClaw ID (OCF-510). Shown while the
-// OpenClaw ID Labs switch is on; linking is offered only on a connection with a verified
-// personal sign-in. Signing in there proves both sides on one connection, so the Gateway links
-// that account to this profile with no picker. Owner devices of a linked account then arrive
-// as this person. Linking grants nothing; owner authority still comes from each device's
-// certificate.
+// Settings → Profile → Identity: this profile's OpenClaw ID link (OCF-510). Shown while the
+// OpenClaw ID Labs switch is on; Check link runs only on a connection with a verified personal
+// sign-in. Anyone holding a device code can approve it, so the sign-in only confirms an
+// existing link; an admin creates the first one by inviting the account to this profile and
+// approving it in People. Owner devices of a linked account then arrive as this person.
+// Linking grants nothing; owner authority still comes from each device's certificate.
 import { createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
 import { clawNameFromHostname } from "../../components/openclaw-id/claw-name.ts";
 import { RetryAction, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -137,7 +137,10 @@ export function OpenClawIdIdentity() {
                 <Show
                   when={current().links.length > 0}
                   fallback={
-                    <SettingsStatus kind="muted" label={t("profilePage.openclawId.notLinked")} />
+                    <>
+                      <SettingsStatus kind="muted" label={t("profilePage.openclawId.notLinked")} />
+                      <span> {t("profilePage.openclawId.notLinkedHelp")}</span>
+                    </>
                   }
                 >
                   <span class="identity-emails">

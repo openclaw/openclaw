@@ -612,11 +612,11 @@ the authorization code.
 
 ### Link OpenClaw ID to your profile
 
-Through a personal sign-in, **Settings → Profile → Identity → OpenClaw ID → Link**
+Through a personal sign-in, **Settings → Profile → Identity → OpenClaw ID → Check link**
 runs the same device sign-in and checks the account against your profile. Anyone who
 has the device code can approve a device sign-in, so it never creates your profile's
-first OpenClaw ID link. It reports **Linked** when that account is already linked to your
-profile, and otherwise says how to get the link approved. To attach the account, an owner
+first OpenClaw ID link. When that account is already linked to your profile, the row
+shows it with **Unlink**. Otherwise it says an admin links it. To attach the account, an owner
 invites it as **Existing person on this claw** and approves the request (see below).
 When the claw's OpenClaw ID owner account is linked to your profile, owner devices
 arrive as you (your name, sessions, personal instructions and My GitHub) instead of
@@ -624,9 +624,9 @@ the shared owner. Their owner authority still
 comes from each device's certificate, and linking grants or removes nothing.
 
 If this browser already signed in with OpenClaw ID through the same personal sign-in,
-**Link** uses that sign-in and asks for no second code. The Gateway reuses only an ID
+**Check link** uses that sign-in and asks for no second code. The Gateway reuses only an ID
 token it received from the issuer itself for your profile and that has not expired.
-Without one, for example after the sign-in expired or the Gateway restarted, **Link**
+Without one, for example after the sign-in expired or the Gateway restarted, **Check link**
 shows one device code as before.
 
 - One profile per account: linking an account already linked to another profile, or to
@@ -712,11 +712,12 @@ administrator, and anything over the OpenClaw ID tunnel. If setup asks for a
    Discovery and publishes its descriptor and membership snapshot. Without one,
    the claw is linked locally and can be published later.
 
-Through a personal sign-in, setup also links the OpenClaw ID you signed in with to
-your profile, as **Link OpenClaw ID to your profile** does, so your owner devices
-arrive as you. If that link is refused (for example, the account is already linked
-to another profile), remote access stays on and you can link from
-**Settings → Profile**. The Gateway log records who ran each step and over which
+Through a personal sign-in, setup also checks whether the OpenClaw ID you signed in
+with is linked to your profile, as **Check link** does. It never creates the first
+link. When the account is not linked, remote access stays on and the note under the
+steps says an admin links it by inviting this OpenClaw ID to your profile and
+approving the request in People. **Check your link** there signs in again when the
+Gateway no longer holds this browser's sign-in. The Gateway log records who ran each step and over which
 identity (`openclaw-id: remote access …` with the route, auth method, profile and
 verified user), and emits a matching `security.event`.
 

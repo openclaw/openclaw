@@ -111,10 +111,10 @@ const enOpenClawIdDialogs = {
     step_relay: "Connecting {name}",
     stepRelayOffline: "Remote access is not connected yet. This claw will keep trying.",
     stepProfileNotLinked:
-      "Your OpenClaw ID isn't linked to your profile yet. Link it in Settings → Profile.",
+      "Your OpenClaw ID isn't linked to your profile yet. An admin links it by inviting this OpenClaw ID to your profile and approving the request in People.",
     profileLinkSignIn:
-      "Your OpenClaw ID isn't linked to your profile yet. Sign in again to link it.",
-    linkProfile: "Link your profile",
+      "Your OpenClaw ID isn't linked to your profile yet. Sign in again to check the link.",
+    linkProfile: "Check your link",
     doneBody: "Your claw address is https://{host}. Keep your recovery kit safe.",
     publicationPending: "Setup is still in progress.",
     doneNeedsLinkCode:
