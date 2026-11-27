@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { channel } from "node:diagnostics_channel";
+import { channel as diagnosticsChannel } from "node:diagnostics_channel";
 import path from "node:path";
 import { MessageChannel, type Worker } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
@@ -55,7 +55,7 @@ type ArchiveConnection = {
   retiring?: Promise<void>;
 };
 
-const memoryPressure = channel("openclaw.memory.critical");
+const memoryPressure = diagnosticsChannel("openclaw.memory.critical");
 
 function clearArchiveIdle(connection: ArchiveConnection) {
   connection.idle.clear(connection);
