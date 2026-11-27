@@ -134,7 +134,7 @@ extension OpenClawChatComposer {
         #elseif os(iOS)
         self.cleanAttachmentMenu
         if self.viewModel.supportsComposerCapabilities {
-            self.cleanInlinePermissionMenu
+            self.cleanInlinePermissionButton
         }
         #else
         self.cleanAttachmentMenu
@@ -415,7 +415,7 @@ extension OpenClawChatComposer {
             return String(localized: "Changing the model requires operator.write or operator.admin access.")
         }
         if self.viewModel.isUpdatingSessionSettings {
-            return String(localized: "Saving session settings.")
+            return String(localized: "Saving session settings…")
         }
         return nil
     }
@@ -430,7 +430,7 @@ extension OpenClawChatComposer {
             return String(localized: "Thinking and Fast controls require operator.write or operator.admin access.")
         }
         if self.viewModel.isUpdatingSessionSettings {
-            return String(localized: "Saving session settings.")
+            return String(localized: "Saving session settings…")
         }
         return nil
     }
