@@ -62,7 +62,7 @@ async function setup() {
       expectedRevision: r!.revision,
       expectedHash: r!.hash,
       reason: "Evidence-backed context update",
-      annotations,
+      ...(annotations === undefined ? {} : { annotations }),
       ...extra,
     };
     const result = await f.service.annotate(input, f.owner);
@@ -132,6 +132,30 @@ it("context annotations preserve assertion text/lifecycle, append evidence, and 
   await expect(f.service.annotate(input, f.operator)).rejects.toThrow(/chat/);
   expect((await f.service.record_detail({ id: original.id }, f.owner)).record!.lifecycle).toBe(
     "active",
+  );
+});
+
+it("appends evidence without annotations while rejecting empty and nested updates", async () => {
+  const f = await setup(),
+    claim = await f.claim();
+  const before = (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner))
+    .record;
+  await expect(f.annotate(claim.id, undefined)).rejects.toThrow(/Invalid annotation/);
+  await expect(f.annotate(claim.id, {})).rejects.toThrow(/Invalid annotation/);
+  await expect(
+    f.annotate(claim.id, { entities: [f.source.id], addEvidence: f.evidence }),
+  ).rejects.toThrow(/Invalid annotation/);
+  const evidence = { ...f.evidence[0], start_line: 2, end_line: 2 };
+  const { input, result } = await f.annotate(claim.id, undefined, { addEvidence: [evidence] });
+  const after = (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner))
+    .record;
+  expect(after!.metadata!.evidence).toEqual([...f.evidence, evidence]);
+  expect(after!.body).toBe(before!.body);
+  expect(after!.lifecycle).toBe(before!.lifecycle);
+  expect(after!.revision).toBe(before!.revision + 1);
+  expect((await f.service.annotate(input, f.owner)).revision).toBe(result.revision);
+  await expect(f.service.annotate({ ...input, annotations: {} }, f.owner)).rejects.toThrow(
+    /request|replay|intent/i,
   );
 });
 
@@ -439,11 +463,10 @@ it("entity annotations link a claim by ID without changing its assertion, and re
   const before = (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner))
     .record;
   expect(before!.metadata!.entities).toBe(undefined);
-  const { input } = await f.annotate(
-    claim.id,
-    {},
-    { entities: [alex.id], reason: "Relink unique subject" },
-  );
+  const { input } = await f.annotate(claim.id, undefined, {
+    entities: [alex.id],
+    reason: "Relink unique subject",
+  });
   const linked = (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner))
     .record;
   expect(linked!.metadata!.entities).toStrictEqual([alex.id]);
@@ -479,7 +502,7 @@ it("entity annotations link a claim by ID without changing its assertion, and re
     f.owner,
   );
   await expect(f.annotate(claim.id, {}, { entities: [sam.id] })).rejects.toThrow(/active pages/);
-  await f.annotate(claim.id, {}, { entities: [] });
+  await f.annotate(claim.id, undefined, { entities: [] });
   expect(
     (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner)).record!
       .metadata!.entities,
