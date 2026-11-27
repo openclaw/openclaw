@@ -279,9 +279,7 @@ export function renderChatComposerView(
       <div class="agent-chat__composer-float" ref={[elementRef(props.onComposerFloatRef)]}>
         <div class="chat-footer__context" ref={(element) => (state.composerContext = element)}>
           {props.footerContent}
-          <Show when={state.fileReferences}>
-            {(owner) => <ComposerFileReferences owner={owner()} composer={props} state={state} />}
-          </Show>
+          <ComposerFileReferences composer={props} state={state} />
           <ComposerTaskSlot
             state={state}
             draft={context().visibleDraft}

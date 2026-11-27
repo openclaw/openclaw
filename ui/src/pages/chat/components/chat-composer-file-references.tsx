@@ -1,73 +1,82 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, lazy, Show } from "solid-js";
 import { registerChatFileReferencesEnglish } from "../../../i18n/locales/en-chat-file-references.ts";
 import { prepareFileReferenceDestination } from "../../../lib/chat/file-reference-destination.ts";
-import { fileReferenceText } from "../../../lib/chat/file-references.ts";
 import { focusComposerInput } from "../../../lib/composer-input.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { ComposerFileReferenceOwner } from "../composer-file-references.ts";
+import { readComposerFileReferenceSource } from "./chat-composer-file-reference-options.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatFileReferencesEnglish);
 
-const phaseCopy = {
-  idle: "idle",
-  preparing: "preparing",
-  searching: "searching",
-  choosing: "choosing",
-  confirming: "confirming",
-  committed: "committed",
-  copied: "copied",
-  denied: "denied",
-  unsupported: "unsupported",
-  stale: "stale",
-  expired: "expired",
-  offline: "offline",
-  "no-matches": "noMatches",
-  "copy-failed": "copyFailed",
-  "conversion-failed": "conversionFailed",
-  "outcome-unknown": "unknown",
-} as const;
+const ComposerFileReferenceReview = lazy(() => import("./chat-composer-file-reference-review.tsx"));
 
 export function ComposerFileReferences(props: {
-  owner: ComposerFileReferenceOwner;
   composer: ChatComposerProps;
   state: ChatComposerState;
 }) {
-  const projection = createMemo(() => projectOwner(props.owner, (owner) => owner));
-  const read = () => projection().read();
-  const focus = (target: HTMLTextAreaElement | null) => {
+  const readSource = () => readComposerFileReferenceSource(props.composer, props.state);
+  const [loadedOwner, setLoadedOwner] = createSignal<ComposerFileReferenceOwner | null>(null);
+  const owner = () => loadedOwner() ?? props.state.fileReferences;
+  const [loading, setLoading] = createSignal(false);
+  const [failure, setFailure] = createSignal<"unsupported" | "conversionFailed" | null>(null);
+  const projection = createMemo(() => {
+    const current = owner();
+    return current ? projectOwner(current, (value) => value) : null;
+  });
+  const enable = async (input: HTMLInputElement) => {
+    setFailure(null);
     const state = props.state;
-    queueMicrotask(() => {
-      if (target?.isConnected && target === state.composerTextarea) {
-        focusComposerInput(target, { preventScroll: true });
+    if (state.fileReferences) {
+      state.fileReferences.enable(input.checked);
+      input.checked = state.fileReferences.enabled;
+      return;
+    }
+    const source = readSource();
+    if (!source.connected || !source.eligible || !input.checked) {
+      input.checked = false;
+      return;
+    }
+    setLoading(true);
+    try {
+      const { ComposerFileReferenceOwner } =
+        await import("./chat-composer-file-reference-review.tsx");
+      const current = readSource();
+      if (
+        !input.isConnected ||
+        source.client !== current.client ||
+        source.sessionKey !== current.sessionKey ||
+        source.agentId !== current.agentId ||
+        !current.connected ||
+        !current.eligible
+      ) {
+        return;
       }
-    });
-  };
-  const cancel = () => {
-    const target = props.state.composerTextarea;
-    props.owner.cancel();
-    focus(target);
-  };
-  const confirm = async () => {
-    const owner = props.owner;
-    const target = props.state.composerTextarea;
-    await owner.confirm();
-    if (owner === props.owner && owner.phase === "committed") {
-      focus(target);
+      const loaded = (state.fileReferences ??= new ComposerFileReferenceOwner(readSource));
+      loaded.enable(true);
+      setLoadedOwner(loaded);
+    } catch {
+      setFailure("unsupported");
+    } finally {
+      input.checked = state.fileReferences?.enabled ?? false;
+      setLoading(false);
     }
   };
   const convert = async () => {
-    const input = props.state.composerTextarea;
+    const state = props.state;
+    const input = state.composerTextarea;
     if (!input) {
       return;
     }
+    setFailure(null);
     try {
       const destination = await prepareFileReferenceDestination(input);
       if (input !== props.state.composerTextarea) {
         return;
       }
-      props.owner.cancel();
+      props.state.fileReferences?.cancel();
       if (destination) {
         destination.clearReferences();
       } else {
@@ -77,10 +86,19 @@ export function ComposerFileReferences(props: {
           [],
         );
       }
-      focus(input);
+      queueMicrotask(() => {
+        if (input.isConnected && input === state.composerTextarea) {
+          focusComposerInput(input, { preventScroll: true });
+        }
+      });
     } catch {
       if (input === props.state.composerTextarea) {
-        props.owner.cancel("conversion-failed");
+        const current = props.state.fileReferences;
+        if (current) {
+          current.cancel("conversion-failed");
+        } else {
+          setFailure("conversionFailed");
+        }
       }
     }
   };
@@ -89,9 +107,10 @@ export function ComposerFileReferences(props: {
       <label class="composer-file-references__option">
         <input
           type="checkbox"
-          checked={read().enabled}
-          disabled={!props.composer.connected || props.composer.canCompose === false}
-          onChange={(event) => props.owner.enable(event.currentTarget.checked)}
+          checked={projection()?.read().enabled ?? false}
+          aria-busy={loading() ? "true" : undefined}
+          disabled={loading() || !props.composer.connected || props.composer.canCompose === false}
+          onChange={(event) => void enable(event.currentTarget)}
         />
         {t("chat.fileReferences.enable")}
       </label>
@@ -100,152 +119,20 @@ export function ComposerFileReferences(props: {
           {t("chat.fileReferences.convert")}
         </button>
       </Show>
-      <Show when={read().enabled}>
-        <p class="muted">{t("chat.fileReferences.instructions")}</p>
-        <p class="muted">{t("chat.fileReferences.privacy")}</p>
-        <label class="composer-file-references__option">
-          <input
-            type="checkbox"
-            checked={read().literal}
-            onChange={(event) => props.owner.setLiteral(event.currentTarget.checked)}
-          />
-          {t("chat.fileReferences.literal")}
-        </label>
-        <label class="composer-file-references__option">
-          <input
-            type="checkbox"
-            checked={read().commandMode}
-            onChange={(event) => props.owner.setCommandMode(event.currentTarget.checked)}
-          />
-          {t("chat.fileReferences.commandMode")}
-        </label>
+      <Show when={failure()}>
+        {(key) => <p role="status">{t(`chat.fileReferences.${key()}`)}</p>}
       </Show>
-      <Show when={read().phase !== "idle"}>
-        <p role="status" aria-live="polite">
-          {read().phase === "choosing" && read().candidates.length
-            ? t("chat.fileReferences.results", { count: String(read().candidates.length) })
-            : t(`chat.fileReferences.${phaseCopy[read().phase]}`)}
-        </p>
-      </Show>
-      <Show when={read().open}>
-        <div
-          class="composer-file-references__review"
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-              cancel();
-            }
-          }}
-        >
-          <h3>{t("chat.fileReferences.title")}</h3>
-          <p>
-            {t("chat.fileReferences.progress", {
-              current: String(read().commandNumber),
-              total: String(read().commandCount),
-            })}
-          </p>
-          <label class="field">
-            <span>{t("chat.fileReferences.query")}</span>
-            <input
-              type="text"
-              value={read().query}
-              maxlength="2048"
-              spellcheck="false"
-              disabled={read().busy || read().phase === "outcome-unknown"}
-              onInput={(event) => props.owner.setQuery(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void props.owner.search();
-                }
-              }}
+      <Show when={owner()}>
+        {(loaded) => (
+          <ChatLazyBoundary>
+            <ComposerFileReferenceReview
+              owner={loaded()}
+              read={() => projection()?.read() ?? loaded()}
+              paneId={props.composer.paneId}
+              state={props.state}
             />
-          </label>
-          <button
-            type="button"
-            class="btn btn--small"
-            disabled={read().busy || read().phase === "outcome-unknown"}
-            onClick={() => void props.owner.search()}
-          >
-            {t("chat.fileReferences.search")}
-          </button>
-          <fieldset
-            class="composer-file-references__candidates"
-            disabled={read().busy || read().phase === "outcome-unknown"}
-          >
-            <legend>{t("chat.fileReferences.selected")}</legend>
-            <For each={read().candidates}>
-              {(candidate) => (
-                <div class="composer-file-references__candidate">
-                  <label>
-                    <input
-                      type="radio"
-                      name={`${props.composer.paneId}-file-reference`}
-                      checked={read().selected?.objectId === candidate.reference.objectId}
-                      onChange={() => props.owner.select(candidate.reference.objectId)}
-                    />
-                    <bdi>{fileReferenceText(candidate.reference).slice(1)}</bdi>
-                  </label>
-                  <details>
-                    <summary>{t("chat.fileReferences.inspect")}</summary>
-                    <p>
-                      <bdi>{candidate.reference.rootLabel}</bdi>
-                    </p>
-                    <code dir="auto">{fileReferenceText(candidate.reference).slice(1)}</code>
-                  </details>
-                </div>
-              )}
-            </For>
-          </fieldset>
-          <Show when={!read().indexComplete && read().capability}>
-            <p>{t("chat.fileReferences.incomplete")}</p>
-          </Show>
-          <Show when={read().nextCursor}>
-            <button
-              type="button"
-              class="btn btn--small"
-              disabled={read().busy}
-              onClick={() => void props.owner.search(true)}
-            >
-              {t("chat.fileReferences.more")}
-            </button>
-          </Show>
-          <Show when={!read().supportsBinding}>
-            <p>{t("chat.fileReferences.copyOnly")}</p>
-          </Show>
-          <openclaw-modal-actions>
-            <button type="button" class="btn" onClick={cancel}>
-              {t("chat.fileReferences.cancel")}
-            </button>
-            <button
-              type="button"
-              class="btn"
-              disabled={!read().selected || read().busy || read().phase === "outcome-unknown"}
-              onClick={() => void props.owner.copy(false)}
-            >
-              {t("chat.fileReferences.copyPath")}
-            </button>
-            <button
-              type="button"
-              class="btn"
-              disabled={!read().selected || read().busy || read().phase === "outcome-unknown"}
-              onClick={() => void props.owner.copy(true)}
-            >
-              {t("chat.fileReferences.copyReference")}
-            </button>
-            <Show when={read().supportsBinding}>
-              <button
-                type="button"
-                class="btn primary"
-                disabled={!read().selected || read().busy || read().phase === "outcome-unknown"}
-                onClick={() => void confirm()}
-              >
-                {t("chat.fileReferences.insert")}
-              </button>
-            </Show>
-          </openclaw-modal-actions>
-        </div>
+          </ChatLazyBoundary>
+        )}
       </Show>
     </section>
   );

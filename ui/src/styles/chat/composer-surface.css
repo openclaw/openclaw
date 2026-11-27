@@ -1591,8 +1591,7 @@
   padding: 6px 12px;
 }
 
-.composer-file-references__option,
-.composer-file-references__candidate label {
+.composer-file-references__option {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -1603,8 +1602,7 @@
   overflow-y: auto;
 }
 
-.composer-file-references__candidate bdi,
-.composer-file-references__candidate code {
+.composer-file-references__path {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }

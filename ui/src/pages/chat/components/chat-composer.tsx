@@ -14,7 +14,6 @@ import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { navigateToModelProvider } from "../../model-providers/navigation.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
-import { ComposerFileReferenceOwner } from "../composer-file-references.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import { navigateToSpeechSettings } from "../voice-api-key-navigation.ts";
 import { createComposerDictationOptions } from "./chat-composer-dictation-options.ts";
@@ -71,11 +70,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     createProjection(() => draftState() ?? {}, {}, { shallow: true }),
   );
   const readFileReferenceSource = () => readComposerFileReferenceSource(currentProps, state);
-  if (state.fileReferences) {
-    state.fileReferences.rebind(readFileReferenceSource);
-  } else {
-    state.fileReferences = new ComposerFileReferenceOwner(readFileReferenceSource);
-  }
+  state.fileReferences?.rebind(readFileReferenceSource);
   const goalComposer = createGoalComposer(() => currentProps, state);
   const microphonePicker = (state.microphonePicker ??= new ComposerMicrophoneOwner());
   if (!state.dictation) {
