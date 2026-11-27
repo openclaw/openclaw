@@ -2,20 +2,24 @@ import type { EarlyApplicationGateway } from "./early-gateway.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { createStartupLifecycle, StartupStep } from "./startup-lifecycle.ts";
 
+async function loadSessionsTablePriority() {
+  try {
+    const { prioritizeInitialSessionsTable } =
+      await import("../lib/sessions/session-table-priority.ts");
+    return prioritizeInitialSessionsTable;
+  } catch {
+    // A failed scheduler fetch falls back to ordinary list ordering.
+    return undefined;
+  }
+}
+
 export function prepareApplicationGatewayStart(
   gateway: ApplicationGateway,
   earlyGateway: EarlyApplicationGateway | undefined,
   prioritizeSessionsTable: boolean,
   lifecycle: ReturnType<typeof createStartupLifecycle>,
 ): StartupStep {
-  // Fetch the optional scheduler alongside the Sessions view. A failed import falls
-  // back to ordinary list ordering so the Gateway can still start.
-  const tablePriority = prioritizeSessionsTable
-    ? import("../lib/sessions/session-table-priority.ts").then(
-        (module) => module.prioritizeInitialSessionsTable,
-        () => undefined,
-      )
-    : undefined;
+  const tablePriority = prioritizeSessionsTable ? loadSessionsTablePriority() : undefined;
 
   return () => {
     lifecycle.addDisposer(() => {
