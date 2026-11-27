@@ -8,6 +8,19 @@ import { card, mount, props, text } from "./view.test-support.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
 
+it("does not show model setup advice while the initial provider read is pending", () => {
+  const pending = props({ loading: true, configuredModels: [] });
+  const container = mount(pending);
+  const setup = () => container.querySelector("[data-model-readiness]");
+  expect(setup()).toBeNull();
+
+  mount({ ...pending, loading: false, catalogDiscovering: true }, container);
+  expect(setup()).toBeNull();
+
+  mount({ ...pending, loading: false }, container);
+  expect(setup()).not.toBeNull();
+});
+
 it("uses the scoped check outcome without hiding catalog or account problems", () => {
   const viewProps = props({ cards: [card({ catalogStatus: "ready" })] });
   const container = mount(viewProps);
