@@ -92,7 +92,6 @@ abstract class GenerateGatewayProtocol : Exec() {
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidApplicationId = "ai.openclaw.app"
-val openClawAndroidAbis = listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
 val openClawAndroidVersionDefaults = rootProject.extra["openClawAndroidVersionDefaults"] as Provider<Properties>
 
@@ -380,15 +379,17 @@ android {
     buildConfigField("String", "GIT_COMMIT", "\"$openClawBuildCommit\"")
     buildConfigField("String", "BUILD_TIMESTAMP", "\"$openClawBuildTimestamp\"")
     ndk {
-      abiFilters += openClawAndroidAbis
+      // Android Lint reads the literal ABI names when it checks ChromeOS support.
+      abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
     }
   }
 
+  val releaseApkAbis = defaultConfig.ndk.abiFilters.toTypedArray()
   splits {
     abi {
       isEnable = true
       reset()
-      include(*openClawAndroidAbis.toTypedArray())
+      include(*releaseApkAbis)
       isUniversalApk = true
     }
   }
