@@ -386,6 +386,24 @@ with the report, then remove that task-owned probe directory.
 
 ## Fingerprint reuse after a host import
 
+For first reuse of a template-derived projection, use the same frozen fingerprint
+observers with `--acceleration --sandbox-backend podman --sandbox-image IMAGE`.
+Supply a clean Git export through `--fixture-source`, with a pnpm lockfile and the
+synthetic source tree. Each arm needs a new `--output`; this workload does not
+support `--reuse-fixture`, owner switches, or restart stages. It records template
+preparation, the first unchanged reuse, subsequent reuse, and the changed-file
+sequence below. Compare each phase and their total so moving work into template
+preparation remains visible. Both live metadata probes must still run; an
+unchanged clone should reuse prepared hashes rather than read every file again.
+
+Use two baseline controls and at least five counterbalanced pairs, run serially
+on the same native filesystem. Require identical accepted bytes and a reduction
+in first-reuse hashes before claiming a latency gain. Report wall time, CPU,
+allocation, and all observed tails, including cold preparation. A compiled native
+filesystem worker from the same implementation may be selected with
+`--filesystem-worker file:///owned-proof/dist/infra/fs-safe-copy.worker.js`;
+use the same qualified worker in both arms and retain its source identity.
+
 `--fingerprint-import --mode preparation --serial-turns --burst 1` measures
 real guest export, host import, and the immediately following reuse call. It
 requires a simple generated fixture with at least 200 files. Each arm starts

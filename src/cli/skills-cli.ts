@@ -91,7 +91,11 @@ async function loadSkillsStatusReport(
   agentId: string | undefined,
   signal?: AbortSignal,
 ): Promise<SkillStatusReport> {
-  const resolved = await resolveSkillsWorkspace({ agentId, bestEffort: true });
+  const resolved = await resolveSkillsWorkspace({
+    agentId,
+    bestEffort: true,
+    useSystemAgent: true,
+  });
   try {
     return await callSkillsGateway<SkillStatusReport>({
       config: resolved.config,

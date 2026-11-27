@@ -23,7 +23,8 @@ const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 async function snapshot(...args: Parameters<typeof diagnosticOutput>) {
-  expect(await diagnosticOutput(...args)).toMatchSnapshot();
+  const output = await diagnosticOutput(...args);
+  expect({ text: output.text }).toMatchSnapshot();
 }
 
 describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
@@ -71,7 +72,14 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
       expect(store.namespace).toMatch(/^doctor_proof_/);
     }
     expect(new Set(physical.map((store) => store.namespace)).size).toBe(physical.length);
-    await snapshot(postgresRoot, diagnosticConfig(connection), descriptors, stores, connection);
+    await snapshot(
+      postgresRoot,
+      diagnosticConfig(connection),
+      descriptors,
+      stores,
+      ["postgres"],
+      connection,
+    );
   });
 
   it.each(["state", "agent"] as const)(
@@ -93,7 +101,7 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
         postgres: { connection },
       };
       const stores = await inspect(root, config);
-      await snapshot(root, config, descriptors, stores, connection);
+      await snapshot(root, config, descriptors, stores, ["sqlite", postgresFamily], connection);
     },
   );
 
@@ -102,7 +110,15 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
       "postgresql://synthetic-user:synthetic-password@127.0.0.1:1/unreachable";
     const config = diagnosticConfig(unreachableConnection);
     const stores = await inspect(postgresRoot, config);
-    await snapshot(postgresRoot, config, descriptors, stores, connection, unreachableConnection);
+    await snapshot(
+      postgresRoot,
+      config,
+      descriptors,
+      stores,
+      ["postgres"],
+      connection,
+      unreachableConnection,
+    );
   });
 
   it("reports keyword-only capability and the administrator grant when pgvector is missing", async () => {
@@ -132,7 +148,7 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
       };
       const stores = await inspect(root, config);
       const agent = stores.find((store) => store.family === "agent")!;
-      await snapshot(root, config, descriptors, agent, isolatedConnection);
+      await snapshot(root, config, descriptors, agent, ["sqlite", "agent"], isolatedConnection);
     } finally {
       await isolated.end();
       await client.query(`DROP DATABASE "${database}"`);

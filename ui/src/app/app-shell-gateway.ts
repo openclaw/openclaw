@@ -76,6 +76,7 @@ export class ShellGatewayOwner {
     profileId: string;
     runtimeConfig: ApplicationContext["runtimeConfig"];
     invalidationId: number;
+    generation: number;
     failed: boolean;
     retryAttempt: number;
     retryTimer?: ReturnType<typeof globalThis.setTimeout>;
@@ -468,7 +469,7 @@ export class ShellGatewayOwner {
       void connectionBootstrap.run("runtime-config", () =>
         this.ensureRuntimeConfig(snapshot, context.runtimeConfig),
       );
-      if (this.host.routeState.routeId && !context.agents.state.agentsList) {
+      if (context.agents && !context.agents.state.agentsList) {
         void connectionBootstrap.run("agents", () =>
           this.ensureAgentsList(snapshot, context.agents),
         );
@@ -552,8 +553,7 @@ export class ShellGatewayOwner {
       this.agentsListClient = null;
       return Promise.resolve();
     }
-    const routeId = this.host.routeState.routeId;
-    if (!agents || !routeId || agents.state.agentsList) {
+    if (!agents || agents.state.agentsList) {
       return Promise.resolve();
     }
     if (this.agentsListClient === snapshot.client && this.agentsListSource === agents) {
@@ -585,10 +585,7 @@ export class ShellGatewayOwner {
   ): Promise<void> {
     const { client, selfUser, phase, hello } = context.gateway.snapshot;
     const profileId = selfUser?.id;
-    if (!profileId) {
-      return Promise.resolve();
-    }
-    if (phase !== "connected" || !client) {
+    if (!profileId || phase !== "connected" || !client) {
       return Promise.resolve();
     }
     const runtimeConfig = context.runtimeConfig;
@@ -597,6 +594,7 @@ export class ShellGatewayOwner {
       previous?.client === client &&
       previous.profileId === profileId &&
       previous.runtimeConfig === runtimeConfig &&
+      previous.generation === this.preferenceGeneration &&
       previous.invalidationId === profilePreferencesState.invalidationId;
     if (!force && sameSource && (!previous.failed || previous.retryTimer !== undefined)) {
       return previous.promise;
@@ -609,6 +607,7 @@ export class ShellGatewayOwner {
       profileId,
       runtimeConfig,
       invalidationId: profilePreferencesState.invalidationId,
+      generation: this.preferenceGeneration,
       failed: false,
       retryAttempt: !force && sameSource ? previous.retryAttempt : retryAttempt,
       promise: Promise.resolve(),

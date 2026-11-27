@@ -48,6 +48,7 @@ export async function stopExactClientRun(params: {
   runId: string;
   active: RpcSourceRef;
   userInitiated?: boolean;
+  participationOnly?: boolean;
   lifecycleRevision?: string;
   assertCurrent?: () => void;
   hookContext: Omit<SessionStopHookContext, "sessionKey" | "sessionId">;
@@ -128,6 +129,10 @@ export async function stopExactClientRun(params: {
           onAbortCommitted: markAborted,
         }).aborted,
       stopChildren: async (applyParentStop) => {
+        if (params.participationOnly) {
+          await applyParentStop();
+          return { stopped: 0, failed: 0 };
+        }
         result.descendants = await abortControlledSubagents({
           cfg: params.cfg,
           sessionKey,

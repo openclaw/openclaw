@@ -505,6 +505,7 @@ describe("mutable file operand binding", () => {
           [["bash", "-c", "source loaded.sh"], null],
           [["bash", "-c", "echo ok; source loaded.sh"], null],
           [["env", "BASH_ENV=loaded.sh", "bash", "-c", "echo ok"], environment],
+          [["env", "-SBASH_ENV=loaded.sh", "bash", "-c", "echo ok"], environment],
           ["bash -c 'echo ok'", environment, true],
           [["node", "--env-file=approved.env", "app.js"], null],
           [["bash", "-c", "sh < payload.sh"], null],

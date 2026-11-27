@@ -127,6 +127,7 @@ export type McpLoopbackRequestContext = {
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;
   execSession?: ExecSessionDefaults;
+  sessionProjectMoveEligible?: boolean;
   execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   bashElevated?: ExecElevatedDefaults;
   trigger?: string;

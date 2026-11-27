@@ -21,6 +21,7 @@ import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { configuredModelSupportsNativeVideo } from "../../model-input.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
@@ -48,7 +49,7 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
-import { applySessionForkRequest, sessionForkGatesHostedTools } from "../session-fork-request.js";
+import { applySessionForkRequest } from "../session-fork-request.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -228,10 +229,11 @@ export async function settleEmbeddedAttemptStream(input: {
     const usageAssistant = hasNonzeroUsage(completedAssistantUsage)
       ? currentAttemptCompletedAssistant
       : transcriptUsageSnapshot?.assistant;
-    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
-      provider: attempt.provider,
-      modelId: attempt.modelId,
-    });
+    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(
+      sessionManager,
+      { provider: attempt.provider, modelId: attempt.modelId },
+      attempt.promptCacheKeepWarm,
+    );
     const promptCache = buildContextEnginePromptCacheInfo({
       retention: input.cache.retention,
       lastCallUsage,
@@ -361,7 +363,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   sandboxSessionKey: string;
   sandbox?: SandboxContext | null;
   codeModeControlsEnabled: boolean;
-  /** Hidden Tool Search directory entries that a direct call hydrates in this run. */
+  /** Hidden catalog entries that a direct call hydrates in this run (directory or on-demand). */
   getDeferredToolEntries?: () => readonly { name: string }[] | undefined;
   providerPromptState: {
     state: ProviderPromptState;
@@ -507,6 +509,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
         workspaceDir: input.workspaceDir,
         agentWorkspaceDir: attempt.workspaceDir,
         workspaceOnly: input.workspaceOnly,
+        maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
         localRoots: input.workspaceOnly
           ? undefined
           : () =>
@@ -548,6 +551,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
       ...(deferredToolNames ? { [PROVIDER_DEFERRED_TOOL_NAMES]: deferredToolNames } : {}),
       ...(attempt.providerStateScope ? { [PROVIDER_STATE_SCOPE]: attempt.providerStateScope } : {}),
+      ...(attempt.sessionForkRequest?.cachePrewarm ? { cachePrewarm: true as const } : {}),
     };
     // Async payload preparation outlives stream admission; managed fetch rechecks Access at egress.
     return withGuardedFetchBeforeRequest(assertAccessCurrent, () =>
@@ -594,15 +598,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
-    // Hosted search executes before client-side gates, so it must honor the execution cap.
-    // Tool-free forks may keep it listed only when the provider blocks it with tool_choice none.
+    // Hosted search executes before client-side gates, so it honors the execution cap. A session
+    // fork lists it like its session, so the fork shares the session's cached tools prefix.
     webSearchEnabled:
       attempt.disableTools !== true &&
       attempt.toolOverrides?.webSearch !== false &&
       (!attempt.toolExecutionAllow ||
-        isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search") ||
-        (attempt.sessionForkRequest !== undefined &&
-          sessionForkGatesHostedTools(attempt.model.api, attempt.toolExecutionAllow))),
+        attempt.sessionForkRequest !== undefined ||
+        isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search")),
     runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
     sandboxToolPolicy: input.sandbox?.tools,
@@ -706,6 +709,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       {
         runId: attempt.runId,
         sessionId: attempt.sessionId,
+        authScope: input.agentDir,
         accountRoute: selectedCredential.identityKey,
       },
     );

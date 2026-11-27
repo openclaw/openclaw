@@ -75,8 +75,6 @@ it("verifies primary inference before creation without using its output as the g
   activeConfig();
   vi.mocked(verifySetupInferenceConfig).mockResolvedValue(verified);
   const options = invocation();
-  let authorityCurrent = true;
-  options.hasCurrentClientAuthority = () => authorityCurrent;
   const prepared = await prepareAgentOnboarding(options, "bot-stable", {
     name: "New agent",
     onboarding: true,
@@ -90,9 +88,6 @@ it("verifies primary inference before creation without using its output as the g
   expect(cfg.agents?.entries).not.toHaveProperty("bot-stable");
   options.context.getRuntimeConfig = () => ({ ...cfg });
   expect(prepared.assertCurrent).toThrow("Gateway settings changed");
-  expect(prepared.assertAuthorityCurrent).not.toThrow();
-  authorityCurrent = false;
-  expect(prepared.assertAuthorityCurrent).toThrow("Gateway requester authority changed");
 });
 it("rejects failed inference and settings drift before persistence", async () => {
   activeConfig();
@@ -293,13 +288,20 @@ it("runs a chat-based Template opening hidden, under the agent's own tool policy
 });
 
 it("reports failed transcript admission without changing the already-created agent receipt", async () => {
-  const options = invocation();
-  options.hasCurrentClientAuthority = () => false;
-  const result = await completeAgentOnboarding(options, "main");
-  expect(result).toEqual({
-    status: "error",
-    sessionKey: "agent:main:home",
-    error: expect.stringContaining("authority changed"),
+  await withOpenClawTestState({ label: "onboarding-commit-refused" }, async () => {
+    const options = invocation();
+    options.sessionMutationCommitGuard = () => {
+      throw new Error("Fixture session commit refused");
+    };
+    const result = await completeAgentOnboarding(options, "main");
+    expect(result).toEqual({
+      status: "error",
+      sessionKey: "agent:main:home",
+      error: expect.stringContaining("Fixture session commit refused"),
+    });
+    expect(
+      loadSessionEntryReadOnly({ agentId: "main", sessionKey: "agent:main:home" }),
+    ).toBeUndefined();
   });
 });
 

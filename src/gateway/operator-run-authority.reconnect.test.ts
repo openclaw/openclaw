@@ -67,15 +67,14 @@ it.each([
       captured.release();
     }
     if (check !== "before-sources") {
-      expect(captured.authority.signal?.aborted).toBe(false);
-      expect(captured.authority.assertCurrent).not.toThrow();
+      expect(captured.authority.signal?.aborted).not.toBe(true);
       expect(log).not.toHaveBeenCalled();
       return;
     }
     await expect(
       enqueueCommandInLane("authority-diagnostic", async () => {
         try {
-          captured.authority.assertCurrent();
+          captured.authority.retain?.();
         } catch (error) {
           throw toSandboxProvisioningError(
             createOpenClawStateLeaseError(
@@ -253,13 +252,10 @@ it.each([
     const first = proof.connect({ clientId });
     const original = await proof.capture(first.client);
     first.connection.abort(new Error("synthetic socket retired"));
-    original.authority.assertCurrent();
     const second = proof.connect({ clientId });
     const reconnected = await proof.capture(second.client);
     expect(reconnected.authority.source).toBe(original.authority.source);
     expect(reconnected.authority).not.toBe(original.authority);
-    original.authority.assertCurrent();
-    reconnected.authority.assertCurrent();
     const principal = await proof.capture(second.client, "principal");
     expect(principal.authority.source).toBe(original.authority.source);
     const copied = await proof.capture(second.client, "copy");
@@ -269,15 +265,9 @@ it.each([
     const afterRelease = await proof.capture(proof.connect({ clientId }).client);
     expect(afterRelease.authority.source).not.toBe(retainedIdentity);
     invalidateGatewayDeviceRevocation(proof.context, "reconnect-device", "operator");
-    expect(() => original.authority.assertCurrent()).toThrow();
-    expect(() => reconnected.authority.assertCurrent()).toThrow();
-    expect(afterRelease.authority.signal?.aborted).toBe(false);
-    expect(() => afterRelease.authority.assertCurrent()).not.toThrow();
-    for (let turn = 0; turn < 3; turn++) {
-      const fresh = await proof.capture(proof.connect().client);
-      fresh.authority.assertCurrent();
-      expect(() => afterRelease.authority.assertCurrent()).not.toThrow();
-    }
+    expect(original.authority.retain).toThrow();
+    expect(reconnected.authority.retain).toThrow();
+    expect(afterRelease.authority.signal?.aborted).not.toBe(true);
   }),
 );
 
@@ -310,9 +300,7 @@ it("keeps unproven, reduced, foreign and rotated reconnect sources separate", ()
     const accessBound = await proof.capture(scoped.client);
     expect(accessBound.authority.source).not.toBe(original.authority.source);
     access.abort(new Error("synthetic access grant retired"));
-    expect(accessBound.authority.signal?.aborted).toBe(false);
-    expect(() => accessBound.authority.assertCurrent()).not.toThrow();
-    original.authority.assertCurrent();
+    expect(accessBound.authority.signal?.aborted).not.toBe(true);
   }));
 
 it.each(["widened", "narrowed"] as const)(

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -13,14 +13,25 @@ import { persistSessionTranscriptTurn } from "../../config/sessions/session-acce
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
+import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildContextReply } from "./commands-context-report.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { commandFixture } from "./commands-handler-fixture.test-support.js";
+import type * as CostRuntime from "./commands-session-cost.runtime.js";
+import { loadCurrentSessionCostSummary } from "./commands-session-cost.runtime.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+// The `/usage cost` reader has its own suite; here the card only formats what it returns.
+vi.mock("./commands-session-cost.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof CostRuntime>()),
+  loadCurrentSessionCostSummary: vi.fn<typeof CostRuntime.loadCurrentSessionCostSummary>(
+    async () => null,
+  ),
+}));
 
 function makeParams(
   commandBodyNormalized: string,
@@ -265,10 +276,160 @@ describe("buildContextReply", () => {
   );
 
   it("describes compactable chat history counts in help output", async () => {
-    const result = await buildContextReply(makeParams("/context", false));
+    const result = await buildContextReply(makeParams("/context help", false));
     expect(result.text).toContain(
       "/context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
     );
+  });
+
+  it("shows the prompt budget card for bare /context", async () => {
+    const result = await buildContextReply(
+      makeParams("/context", false, { contextTokens: 8_192, totalTokens: 4_000 }),
+    );
+    expect(result.text).toBe(
+      [
+        "🧠 Prompt budget · 4k / 8.2k · 49%",
+        "🟦🟦🟦🟦🟦🟦🟦🟦🟧🟧🟧🟧🟧🟩🟨⬜⬜⬜⬜⬜",
+        "",
+        "🟦 Messages & other · ~3.7k",
+        "🟧 Workspace files · ~2.5k",
+        "🟩 Tool schemas · ~8",
+        "🟨 Skills catalog · ~3",
+        "🟪 System instructions · ~0",
+        "",
+        "More: /context list · /context detail · /context map · /context json",
+      ].join("\n"),
+    );
+  });
+
+  it("measures the card against the last run's validated prompt budget, like the Control UI", async () => {
+    const usage = { input: 100, output: 5, cacheRead: 900, cacheWrite: 0, totalTokens: 1_005 };
+    await withTranscript(
+      [
+        { role: "user", content: "hi", timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "a" }], usage, timestamp: 2 },
+        { role: "assistant", content: [{ type: "text", text: "b" }], usage, timestamp: 3 },
+      ],
+      async (target) => {
+        const params = makeParams("/context", false, {
+          contextTokens: 8_192,
+          totalTokens: 4_000,
+          ...target,
+        });
+        const status: NonNullable<SessionEntry["contextBudgetStatus"]> = {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: Date.now(),
+          provider: "ollama",
+          model: "qwen2.5:7b",
+          route: "fits",
+          shouldCompact: false,
+          estimatedPromptTokens: 4_000,
+          contextTokenBudget: 8_192,
+          promptBudgetBeforeReserve: 5_000,
+          reserveTokens: 3_192,
+          effectiveReserveTokens: 3_192,
+          remainingPromptBudgetTokens: 1_000,
+          overflowTokens: 0,
+          toolResultReducibleChars: 0,
+          messageCount: 2,
+          unwindowedMessageCount: 2,
+        };
+        const entry = expectDefined(params.sessionEntry, "session entry");
+
+        entry.contextBudgetStatus = { ...status, sessionId: target.sessionId };
+        const lines = (await buildContextReply(params)).text?.split("\n");
+        expect(lines?.[0]).toBe("🧠 Prompt budget · 4k / 5k · 80%");
+        // Read from the stored transcript: both calls of the latest run count.
+        expect(lines).toContain("Latest run: 90.00% cache");
+        // A budget recorded for another model is not this session's limit.
+        entry.contextBudgetStatus = { ...status, sessionId: target.sessionId, model: "other" };
+        expect((await buildContextReply(params)).text?.split("\n")[0]).toBe(
+          "🧠 Prompt budget · 4k / 8.2k · 49%",
+        );
+      },
+    );
+  });
+
+  it("shows latest-run and whole-session cache and cost like the Control UI", async () => {
+    const usage = (overrides: Partial<SessionCostSummary>): SessionCostSummary => ({
+      input: 500,
+      output: 0,
+      cacheRead: 9_000,
+      cacheWrite: 500,
+      totalTokens: 10_000,
+      totalCost: 154.52,
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+      cacheUnmeasuredInput: 0,
+      ...overrides,
+    });
+    // The latest run made two measured calls and one without cache telemetry: the rate
+    // sums the measured calls (90%) instead of aggregate input over the last call's reads.
+    const call = (callUsage: Record<string, unknown>) => ({
+      role: "assistant",
+      content: [],
+      usage: callUsage,
+    });
+    const recentMessages = [
+      { role: "user", content: "older" },
+      call({ input: 1_000, cacheRead: 0, cacheWrite: 0 }),
+      { role: "user", content: "latest" },
+      call({ input: 100, cacheRead: 900, cacheWrite: 0 }),
+      call({ input: 500, cacheRead: 0, cacheTelemetry: { state: "unavailable" } }),
+      call({ input: 100, cacheRead: 900, cacheWrite: 0 }),
+    ];
+    await withTranscript(recentMessages, async (target) => {
+      const params = makeParams("/context", false, {
+        contextTokens: 8_192,
+        totalTokens: 4_000,
+        ...target,
+      });
+      expectDefined(params.sessionEntry, "session entry").estimatedCostUsd = 0.306;
+      const lines = async (sessionUsage: SessionCostSummary | null) => {
+        vi.mocked(loadCurrentSessionCostSummary).mockResolvedValueOnce(sessionUsage);
+        const result = await buildContextReply(params);
+        return (result.text ?? "")
+          .split("\n")
+          .filter((line) => /^(Latest run|Session total):/.test(line));
+      };
+
+      expect(await lines(usage({}))).toEqual([
+        "Latest run: 90.00% cache · $0.31",
+        "Session total: 90.00% cache · $154.52",
+      ]);
+      // A partly priced total is a lower bound; usage without any price is never $0.
+      expect((await lines(usage({ missingCostEntries: 2 })))[1]).toBe(
+        "Session total: 90.00% cache · ≥ $154.52",
+      );
+      expect((await lines(usage({ totalCost: 0, missingCostEntries: 3 })))[1]).toBe(
+        "Session total: 90.00% cache · unpriced",
+      );
+      // Calls without a cache split are left out of the rate, not counted as misses.
+      expect((await lines(usage({ input: 10_500, cacheUnmeasuredInput: 10_000 })))[1]).toBe(
+        "Session total: 90.00% cache · $154.52",
+      );
+      expect(await lines(null)).toEqual(["Latest run: 90.00% cache · $0.31"]);
+    });
+  });
+
+  it("keeps the budget bar at 20 cells when small categories take their minimum cell", async () => {
+    const result = await buildContextReply(
+      makeParams("/context", false, { contextTokens: 100_000, totalTokens: 99_000 }),
+    );
+    const bar = result.text?.split("\n")[1];
+    expect(bar).toMatch(/^(?:🟦|🟧|🟩|🟨|🟪|⬜){20}$/u);
+  });
+
+  it("does not invent a message share when cached usage is stale", async () => {
+    const result = await buildContextReply(
+      makeParams("/context", false, { contextTokens: 8_192, totalTokensFresh: false }),
+    );
+    expect(result.text?.split("\n")[0]).toBe("🧠 Prompt budget · ? / 8.2k");
+    expect(result.text).toContain("🟦 Messages & other · unknown");
   });
 
   it("shows bootstrap truncation warning in list output when context exceeds configured limits", async () => {

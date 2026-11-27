@@ -1,9 +1,15 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as native from "../daemon/exec-file.js";
 import type * as RuntimePinState from "../daemon/runtime-pin-state.js";
 import type * as ServiceLayout from "../daemon/service-layout.js";
 import type * as ServiceReconciliation from "../daemon/service-reconciliation.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import type * as Service from "../daemon/service.js";
+import { resolveGatewayService } from "../daemon/service.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const mocks = vi.hoisted(() => ({
   readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(),
@@ -14,7 +20,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof Service>()),
-  resolveGatewayService: () => ({ readCommand: mocks.readCommand, stage: mocks.stage }),
+  resolveGatewayService: vi.fn(() => ({ readCommand: mocks.readCommand, stage: mocks.stage })),
 }));
 vi.mock("../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof RuntimePinState>()),
@@ -30,6 +36,9 @@ vi.mock("../daemon/service-reconciliation.js", async (importOriginal) => ({
   reconcileGatewayServiceDefinition: mocks.reconcile,
 }));
 import { stageReleaseService } from "./convert-service.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 const command: GatewayServiceCommandConfig = {
   programArguments: [
@@ -96,3 +105,45 @@ it("leaves system-owned and foreign definitions on their forwarding entries", as
   expect(mocks.reconcile).not.toHaveBeenCalled();
   expect(mocks.stage).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  "converts without a user bus only when there is no installed unit (unit=%s)",
+  async (installed) => {
+    mockProcessPlatform("linux");
+    const home = dirs.make("openclaw-convert-no-bus-");
+    const env = {
+      HOME: home,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-no-bus",
+      XDG_RUNTIME_DIR: path.join(home, "runtime"),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/missing-bus`,
+    };
+    const unit = path.join(home, ".config/systemd/user/openclaw-gateway-no-bus.service");
+    if (installed) {
+      await fs.mkdir(path.dirname(unit), { recursive: true });
+      await fs.writeFile(unit, "[Service]\nExecStart=/global/openclaw/dist/index.js gateway\n");
+    }
+    vi.spyOn(native, "execFileUtf8").mockResolvedValue({
+      code: 1,
+      termination: "exit",
+      stdout: "",
+      stderr: "Failed to connect to bus: No such file or directory",
+    });
+    const actual = await vi.importActual<typeof Service>("../daemon/service.js");
+    vi.mocked(resolveGatewayService).mockReturnValueOnce(actual.resolveGatewayService());
+
+    const conversion = stageReleaseService({ ...params, env });
+    if (installed) {
+      await expect(conversion).rejects.toMatchObject({
+        reason: "systemd-user-bus-unavailable",
+        message: expect.stringContaining("systemctl --user status"),
+      });
+      expect(await fs.readFile(unit, "utf8")).toBe(
+        "[Service]\nExecStart=/global/openclaw/dist/index.js gateway\n",
+      );
+    } else {
+      await expect(conversion).resolves.toBeUndefined();
+    }
+    expect(mocks.reconcile).not.toHaveBeenCalled();
+    expect(mocks.stage).not.toHaveBeenCalled();
+  },
+);

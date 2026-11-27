@@ -4,6 +4,10 @@ import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { SessionSystemPromptReport } from "../../../../../src/config/sessions/session-system-prompt-report.js";
+import {
+  buildContextBudgetCategories,
+  buildDeferredContextGroups,
+} from "../../../../../src/shared/context-budget-categories.js";
 import { createDeferredCore } from "../../../../../src/shared/deferred.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { sessionContextReportsForGateway } from "../../../lib/session-context-report.ts";
@@ -16,10 +20,6 @@ import {
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import {
-  buildChatContextCategories,
-  buildDeferredContextGroups,
-} from "./chat-context-breakdown-model.ts";
 import { ChatContextBreakdown } from "./chat-context-breakdown.tsx";
 import { ChatContextPanel } from "./chat-context-panel.tsx";
 
@@ -76,7 +76,7 @@ const refresh = (gateway: ContextGateway) =>
 const categoryButton = (container: HTMLElement, id: string) =>
   container.querySelector<HTMLButtonElement>(`[data-context-category="${id}"]`)!;
 function expectTokens(value: SessionSystemPromptReport, expected: Array<number | null>) {
-  const categories = buildChatContextCategories(value, 50000);
+  const categories = buildContextBudgetCategories(value, 50000);
   expect(categories.map(({ id, tokens }) => [id, tokens])).toEqual(
     ["messages", "files", "tools", "skills", "system"].map((id, i) => [id, expected[i]]),
   );
@@ -85,7 +85,7 @@ function expectTokens(value: SessionSystemPromptReport, expected: Array<number |
 
 it("subtracts embedded prompt sections once, and leaves unmeasured and inconsistent sizes unknown", () => {
   expectTokens(report, [37000, 4000, 3000, 2000, 4000]);
-  expect(buildChatContextCategories(report, 1000)[0]?.tokens).toBeNull();
+  expect(buildContextBudgetCategories(report, 1000)[0]?.tokens).toBeNull();
   const native = structuredClone(report);
   Object.assign(native.injectedWorkspaceFiles[0]!, {
     path: "/private/AGENTS.md",
@@ -194,7 +194,7 @@ it("groups duplicate filenames by producer origin and keeps deferred schemas out
       { name: "remote", source: "client", schemaChars: null },
     ],
   };
-  const categories = buildChatContextCategories(grouped, 50000);
+  const categories = buildContextBudgetCategories(grouped, 50000);
   const groups = (id: string) => categories.find((category) => category.id === id)?.groups;
   expect(
     groups("files")?.map((group) => [group.kind, group.tokens, group.entries[0]?.key]),

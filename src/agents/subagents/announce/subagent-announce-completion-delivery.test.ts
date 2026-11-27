@@ -158,7 +158,6 @@ it.each([
     const ambientAuthority = createTestOperatorAuthority({
       profileId: "previous-requester",
       scopes: ["operator.read"],
-      assertCurrent() {},
     });
     const input = reserveSessionControllerSource("agent:main:continuation", {
       target: captureSessionTarget({

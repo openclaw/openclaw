@@ -16,10 +16,8 @@ import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-cont
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
 import type { TemplateAddStateWorkerOperations } from "../templates/add-state-worker-contract.js";
 import type { GitHubPublicationSourceOperations } from "./github-publication-source-contract.js";
-import type {
-  OpenClawAgentDatabaseWorkerLeaseReceipt,
-  releaseExitedOpenClawAgentDatabaseLeaseInDatabase,
-} from "./openclaw-agent-db-lease.js";
+import type { releaseExitedOpenClawAgentDatabaseLeaseInDatabase } from "./openclaw-agent-db-lease-rows.js";
+import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import type { StateSchemaPublicationBlocker } from "./openclaw-state-schema-publication.js";
 import type { RegisteredStateWorkerOperations } from "./openclaw-state-worker-registry.js";

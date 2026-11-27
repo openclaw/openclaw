@@ -19,6 +19,7 @@ import { projectModelProviderConfig } from "../../src/config/model-provider-conf
 import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../src/config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const mode = process.argv[2] ?? "timing";
 const requests = Number(process.argv[3] ?? 500);
@@ -105,12 +106,7 @@ for (const selectedArm of arms) {
   }
   const inspector = new Session();
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const loadBefore = os.loadavg();
   const cpu = process.cpuUsage();

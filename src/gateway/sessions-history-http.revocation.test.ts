@@ -11,7 +11,6 @@ const history = (messages: unknown[] = []) => ({ items: [], nextCursor: null, me
 
 class FixtureState {
   onUpdate?: (update: InternalSessionTranscriptUpdate) => void;
-  authRevoked = false;
   gatewayConfig: { trustedProxies?: string[]; allowRealIpFallback?: boolean } = {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,
@@ -24,7 +23,7 @@ class FixtureState {
   sessionStartedAt = 1;
   beforeRead?: () => Promise<void>;
   beforeRefresh?: () => Promise<void>;
-  beforeAuth?: () => Promise<void>;
+  beforePublish?: () => Promise<void>;
   beforeInline?: () => Promise<void>;
 }
 let fixture = new FixtureState();
@@ -48,42 +47,17 @@ vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
   };
 });
 
-// mock-isolation: Drive explicit auth revocation gates without consulting live HTTP auth state.
+// mock-isolation: The request is admitted once; later publishes never consult HTTP auth.
 vi.mock("./http-utils.js", () => ({
   getHeader: (req: IncomingMessage, name: string) => {
     const value = req.headers[name.toLowerCase()];
     return Array.isArray(value) ? value[0] : value;
   },
-  resolveSharedSecretHttpOperatorScopes: () => ["operator.read"],
   authorizeScopedGatewayHttpRequestOrReply: async () => ({
     cfg: { gateway: {} },
     requestAuth: fixture.profile ? { authenticatedUserProfile: fixture.profile } : {},
     operatorScopes: ["operator.read"],
   }),
-  checkGatewayHttpRequestAuth: async (params: {
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-  }) => {
-    await fixture.beforeAuth?.();
-    const unconfigured =
-      fixture.gatewayConfig.trustedProxies === undefined &&
-      fixture.gatewayConfig.allowRealIpFallback === undefined;
-    const reason = fixture.authRevoked
-      ? "trusted_proxy_user_not_allowed"
-      : unconfigured &&
-          params.trustedProxies === undefined &&
-          params.allowRealIpFallback === undefined
-        ? "trusted_proxy_no_proxies_configured"
-        : undefined;
-    if (reason) {
-      return { ok: false as const, authResult: { ok: false, reason } };
-    }
-    return {
-      ok: true as const,
-      requestAuth:
-        !unconfigured && fixture.profile ? { authenticatedUserProfile: fixture.profile } : {},
-    };
-  },
 }));
 
 // mock-isolation: HTTP history fixtures control visibility and target replacement during awaited reads.
@@ -96,7 +70,7 @@ vi.mock("./session-sharing.js", () => ({
 vi.mock("./session-sharing-preparation.js", () => ({
   prepareSessionMutationFacts: async () => ({
     storageTarget: { agentId: "main", canonicalKey: "agent:main:main", storePath: "/tmp" },
-    prepareRead: () => undefined,
+    prepareRead: () => fixture.beforePublish?.(),
     readCurrent: () => ({
       target: {
         agentId: "main",
@@ -330,23 +304,14 @@ function emitTranscriptTextUpdate(
   });
 }
 
-async function expectStreamClosedWithoutMessage(res: MockRes, text: string) {
-  await vi.waitFor(() => expect(res.writableEnded).toBe(true));
-  expect(res.writes.join("")).not.toContain("event: message");
-  expect(res.writes.join("")).not.toContain(text);
-}
-
 beforeEach(() => setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig }));
 
 const frames = (res: MockRes) => res.writes.filter((frame) => frame.startsWith("event:"));
 const frameNames = (res: MockRes) =>
   frames(res).map((frame) => frame.split("\n")[0]?.replace(/^event: /, ""));
 const changes = {
-  revocation: { visible: false },
-  sharing: { visible: false },
   replacement: { sessionId: "replacement" },
   reset: { lifecycleRevision: "after-reset" },
-  authentication: { authRevoked: true },
   close: {},
   failure: {},
 };
@@ -367,10 +332,8 @@ it("hides sessions from a verified role without visibility", async () => {
 });
 
 it.each([
-  ["application/json", "revocation"],
   ["text/event-stream", "replacement"],
   ["application/json", "reset"],
-  ["text/event-stream", "authentication"],
 ] as const)("withholds initial %s history after %s during its read", async (accept, change) => {
   fixture.profile = guestProfile;
   using barrier = readBarrier();
@@ -396,24 +359,25 @@ it.each([
   expect(fixture.onUpdate).toBeUndefined();
 });
 
-it("withholds a pending refresh after profile revocation", async () => {
+it("keeps streaming an admitted stream after profile revocation", async () => {
   fixture.profile = guestProfile;
   using res = await openStream();
   using barrier = readBarrier();
   fixture.beforeRefresh = barrier.wait;
+  const refreshed = waitForFrame(res, "private refreshed history");
   fixture.onUpdate?.({ sessionFile: SESSION_FILE });
   await barrier.entered.promise;
   fixture.visible = false;
   barrier.release.resolve();
-  await expectStreamClosedWithoutMessage(res, "private refreshed history");
-  expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(1);
-  expect(fixture.onUpdate).toBeUndefined();
+  await refreshed;
+  expect(frameNames(res)).toEqual(["history", "history"]);
+  expect(fixture.onUpdate).toBeDefined();
 });
 
 it("keeps inline delivery between coalesced refreshes", async () => {
   using res = await openStream();
   using barrier = readBarrier();
-  fixture.beforeAuth = barrier.wait;
+  fixture.beforePublish = barrier.wait;
   fixture.onUpdate?.({ sessionFile: SESSION_FILE });
   await barrier.entered.promise;
   fixture.onUpdate?.({ sessionFile: SESSION_FILE });
@@ -427,7 +391,7 @@ it("keeps inline delivery between coalesced refreshes", async () => {
   expect(res.writes.join("")).toContain("inline between refreshes");
 });
 
-it.each(["sharing", "replacement", "reset", "close", "failure"] as const)(
+it.each(["replacement", "reset", "close", "failure"] as const)(
   "withholds a delayed inline message after %s",
   async (change) => {
     fixture.profile = guestProfile;
@@ -491,22 +455,8 @@ it.each([
   expect(res.req.listenerCount("error")).toBe(0);
 });
 
-it("rechecks SSE auth against live proxy config", async () => {
-  using res = await openStream();
-
-  fixture.gatewayConfig = {};
-  setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig });
-
-  emitTranscriptTextUpdate("stale-proxy event");
-
-  await expectStreamClosedWithoutMessage(res, "stale-proxy event");
-});
-
 it("ignores transcript updates outside this stream", async () => {
   using res = await openStream();
-
-  fixture.gatewayConfig = {};
-  setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig });
 
   emitTranscriptTextUpdate("other session", {
     sessionFile: "/tmp/other-session.jsonl",

@@ -16,7 +16,7 @@ type Entry = {
   watches: ReturnType<typeof observeOwnedDirectory>[];
 };
 
-/** Picker facts survive reader-worker retirement; only ref/config events invalidate them. */
+/** Picker facts survive reader-worker retirement; Git metadata events invalidate them. */
 export function createBranchReadCache(environment: () => unknown) {
   const entries = new Map<string, Entry>();
   return {
@@ -96,13 +96,23 @@ export function createBranchReadCache(environment: () => unknown) {
                 );
               }
               if (observation) {
-                selected.watches.push(
-                  observeOwnedDirectory(observation.root, (filename, event) => {
-                    if (!filename || filename === ".git") {
-                      invalidate(filename, event);
-                    }
-                  }),
-                );
+                // A nearer repository can appear anywhere between the requested folder and root.
+                for (
+                  let directory = path.resolve(input.repoRoot);
+                  ;
+                  directory = path.dirname(directory)
+                ) {
+                  selected.watches.push(
+                    observeOwnedDirectory(directory, (filename, event) => {
+                      if (!filename || filename === ".git") {
+                        invalidate(filename, event);
+                      }
+                    }),
+                  );
+                  if (directory === observation.root || path.dirname(directory) === directory) {
+                    break;
+                  }
+                }
                 selected.watches.push(
                   observeOwnedDirectory(path.join(observation.commonDir, "refs"), invalidate, {
                     recursive: true,

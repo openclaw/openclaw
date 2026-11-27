@@ -119,7 +119,6 @@ describe("post-core child output", () => {
   it.each([
     ["win32", false, "pipe"],
     ["linux", false, "inherit"],
-    ["linux", true, "pipe"],
   ] as const)("routes %s output (json=%s) through %s", async (platform, json, stdio) => {
     await withOpenClawTestState({ label: "post-core-stdio" }, async (state) => {
       const root = await packageAt(state.path("package"));

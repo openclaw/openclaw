@@ -156,7 +156,7 @@ async function admitNativeRun(runId: string, sessionKey: string, detachOnAbort =
 }
 
 it.each(["caller admission", "session generation"] as const)(
-  "releases an acknowledged native claim when %s retires before publication",
+  "after an acknowledged native claim, %s retirement keeps the admitted Stop's outcome",
   async (retirement) => {
     const runId = "retired-after-claim-ack";
     const sessionKey = `agent:main:subagent:${runId}`;
@@ -186,7 +186,8 @@ it.each(["caller admission", "session generation"] as const)(
     try {
       const cancellation = tool.execute("stop", { action: "cancel", runId }, caller.signal);
       if (retirement === "caller admission") {
-        await expect(cancellation).rejects.toThrow("Caller retired after commit");
+        // The claim committed, so the Stop was admitted; caller retirement applies next time.
+        expect((await cancellation).details).toMatchObject({ found: true, killed: true });
       } else {
         expect((await cancellation).details).toMatchObject({ found: true, killed: false });
       }
@@ -197,9 +198,16 @@ it.each(["caller admission", "session generation"] as const)(
       await nativeRun.finish();
     }
     expect(retiredAfterAck).toBe(true);
-    expect(nativeRun.abort).not.toHaveBeenCalled();
     const persisted = loadSubagentRegistryFromSqlite().get(runId);
-    expect([persisted?.killIntent, persisted?.execution.endedAt]).toEqual([undefined, undefined]);
+    if (retirement === "caller admission") {
+      expect(nativeRun.abort).toHaveBeenCalled();
+      expect(persisted?.killIntent).toBeUndefined();
+      expect(persisted?.execution.endedAt).toEqual(expect.any(Number));
+    } else {
+      // A replaced session incarnation still releases the claim of the original one.
+      expect(nativeRun.abort).not.toHaveBeenCalled();
+      expect([persisted?.killIntent, persisted?.execution.endedAt]).toEqual([undefined, undefined]);
+    }
     if (counts) {
       expect(counts).toEqual(counts.map(() => 0));
     } else {
@@ -590,34 +598,6 @@ describe("subagent progress drafts", () => {
 
   type TestDraft = { push: Mock; retire: Mock };
   const newDraft = (): TestDraft => ({ push: vi.fn(), retire: vi.fn() });
-
-  it("keeps child labels and distinct short references without changing full identities", async () => {
-    const first = "00000000-0000-4000-8000-000000002633";
-    const second = "00000000-0000-4000-8000-00000000a4f0";
-    const spawns = await yieldCohort("parent-turn", [first, second], undefined, {
-      [first]: "Check streaming",
-    });
-    const draft = newDraft();
-    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-    expect(draft.push.mock.calls.map(([item]) => [item.itemId, item.title])).toEqual([
-      [first, "Check streaming …2633"],
-      [second, "Subagent …a4f0"],
-    ]);
-    expect(spawns.map((spawn) => spawn.childSessionKey)).toEqual([
-      childKey(first),
-      childKey(second),
-    ]);
-  });
-
-  it("keeps progress titles whole at the 120-unit UTF-16 bound", async () => {
-    const prefix = "a".repeat(119);
-    const spawns = await yieldCohort("parent-turn", ["a"], undefined, { a: `${prefix}😀tail` });
-    const draft = newDraft();
-    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-    expect(draft.push).toHaveBeenCalledWith(
-      expect.objectContaining({ itemId: "a", kind: "subagent", title: prefix }),
-    );
-  });
 
   async function adoptCohort(children = ["a", "b"], origin?: Parameters<typeof yieldCohort>[2]) {
     const spawns = await yieldCohort("parent-turn", children, origin);

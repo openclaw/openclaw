@@ -188,12 +188,17 @@ const operationHandlers = new Map<
   PluginStateOperationHandler<PluginStateOperationDefinitions>
 >();
 
-function operationHandlerKey(input: PluginStateOperationInput): string {
+function operationHandlerKey(
+  input: Extract<PluginStateOperationInput, { exportName: string }>,
+): string {
   return JSON.stringify([input.module.modulePath, input.module.boundaryRoot, input.exportName]);
 }
 
 /** Load plugin code before entering any native read or write transaction. */
 export async function preparePluginStateOperation(input: PluginStateOperationInput): Promise<void> {
+  if ("deleteKeys" in input) {
+    return;
+  }
   const key = operationHandlerKey(input);
   if (operationHandlers.has(key)) {
     return;
@@ -263,7 +268,17 @@ export function executePluginStateCommand(
   }
   if (command.type === "pluginState.executeOperation") {
     try {
-      const handler = operationHandlers.get(operationHandlerKey(command.input));
+      const operationInput = command.input;
+      const handler: PluginStateOperationHandler<PluginStateOperationDefinitions> | undefined =
+        "deleteKeys" in operationInput
+          ? (_command, tx) => {
+              for (const key of operationInput.deleteKeys) {
+                for (const index of operationInput.writeStores) {
+                  tx.delete(index, key);
+                }
+              }
+            }
+          : operationHandlers.get(operationHandlerKey(operationInput));
       if (!handler) {
         throw new Error("Plugin state operation was not prepared");
       }

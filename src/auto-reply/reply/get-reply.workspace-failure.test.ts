@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { holdWorkspacePreparationSnapshot } from "../../agents/workspace-preparation-queue.test-support.js";
 import {
   WorkspaceAliasRepointedError,
@@ -52,79 +51,54 @@ it.each([
   }
 });
 
-it("rejects queued reply preparation after abort or operator revocation without workspace effects", async ({
-  signal,
-}) => {
+it("rejects queued reply preparation after abort without workspace effects", async ({ signal }) => {
   vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-  for (const authority of ["abort", "operator"] as const) {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "reply-workspace-authority-",
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "reply-workspace-authority-",
+  });
+  const held = holdWorkspacePreparationSnapshot(state.workspaceDir);
+  const leader = held.run(() => actualWorkspace.ensureAgentWorkspace({ dir: state.workspaceDir }));
+  try {
+    await held.ready(leader, signal);
+    const queued = createDeferred();
+    vi.mocked(ensureAgentWorkspace).mockImplementationOnce((params) => {
+      const pending = actualWorkspace.ensureAgentWorkspace(params);
+      queued.resolve();
+      return pending;
     });
-    const held = holdWorkspacePreparationSnapshot(state.workspaceDir);
-    const leader = held.run(() =>
-      actualWorkspace.ensureAgentWorkspace({ dir: state.workspaceDir }),
+    const controller = new AbortController();
+    const reason = new Error("Reply aborted while workspace preparation was queued");
+    const options: InternalGetReplyOptions = { abortSignal: controller.signal };
+    const preparing = held.run(() =>
+      getReplyFromConfig(buildGetReplyCtx(), options, {
+        agents: { defaults: { workspace: state.workspaceDir } },
+      }),
     );
-    try {
-      await held.ready(leader, signal);
-      const queued = createDeferred();
-      vi.mocked(ensureAgentWorkspace).mockImplementationOnce((params) => {
-        const pending = actualWorkspace.ensureAgentWorkspace(params);
-        queued.resolve();
-        return pending;
-      });
-      const controller = new AbortController();
-      const reason = new Error(
-        `Reply ${authority} authority retired while workspace preparation was queued`,
-      );
-      const options: InternalGetReplyOptions =
-        authority === "abort"
-          ? { abortSignal: controller.signal }
-          : {
-              operatorAuthority: createTestOperatorAuthority({
-                profileId: "workspace-test-operator",
-                scopes: ["operator.write"],
-                signal: controller.signal,
-                assertCurrent: () => {},
-              }),
-            };
-      mocks.initSessionState.mockClear();
-      mocks.resolveReplyDirectives.mockClear();
-      vi.mocked(runPreparedReply).mockClear();
-      const preparing = held.run(() =>
-        getReplyFromConfig(buildGetReplyCtx(), options, {
-          agents: { defaults: { workspace: state.workspaceDir } },
-        }),
-      );
-      await beforeSettlement(
-        queued.promise,
-        preparing,
-        signal,
-        "Reply did not queue workspace preparation",
-      );
-      controller.abort(reason);
-      held.release();
-      await leader;
-      const error = await preparing.catch((caught: unknown) => caught);
-      expect(await fs.readdir(state.workspaceDir)).toEqual([]);
-      if (authority === "abort") {
-        expect(error).toMatchObject({
-          name: "AbortError",
-          message: "Reply canceled during preprocessing",
-          cause: reason,
-        });
-      } else {
-        expect(error).toBe(reason);
-      }
-      expectCallCounts(
-        0,
-        mocks.initSessionState,
-        mocks.resolveReplyDirectives,
-        vi.mocked(runPreparedReply),
-      );
-    } finally {
-      await held.dispose();
-      await state.cleanup();
-    }
+    await beforeSettlement(
+      queued.promise,
+      preparing,
+      signal,
+      "Reply did not queue workspace preparation",
+    );
+    controller.abort(reason);
+    held.release();
+    await leader;
+    const error = await preparing.catch((caught: unknown) => caught);
+    expect(await fs.readdir(state.workspaceDir)).toEqual([]);
+    expect(error).toMatchObject({
+      name: "AbortError",
+      message: "Reply canceled during preprocessing",
+      cause: reason,
+    });
+    expectCallCounts(
+      0,
+      mocks.initSessionState,
+      mocks.resolveReplyDirectives,
+      vi.mocked(runPreparedReply),
+    );
+  } finally {
+    await held.dispose();
+    await state.cleanup();
   }
 });

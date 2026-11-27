@@ -338,10 +338,18 @@ describe("user message disclosure", () => {
     }
   });
 
+  const fortyLines = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`);
   it.each([
-    { name: "exactly 1200 UTF-16 code units", markdown: "a".repeat(1_200) },
-    { name: "forty short lines", markdown: Array(40).fill("a").join("\n") },
-  ])("keeps $name fully visible", ({ markdown }) => {
+    { name: "exactly 1200 UTF-16 code units", markdown: "a".repeat(1_200), folded: false },
+    { name: "forty LF lines", markdown: fortyLines.join("\n"), folded: false },
+    { name: "forty CRLF lines", markdown: fortyLines.join("\r\n"), folded: false },
+    {
+      name: "forty-one bare CR lines",
+      markdown: ["first", ...fortyLines].join("\r"),
+      folded: true,
+    },
+    { name: "forty-one mixed lines", markdown: `first\r${fortyLines.join("\n")}`, folded: true },
+  ])("applies the disclosure threshold to $name", ({ markdown, folded }) => {
     const container = document.createElement("div");
 
     mountSolid(
@@ -355,8 +363,8 @@ describe("user message disclosure", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-message-disclosure")).toBeNull();
-    for (const line of markdown.split("\n").filter(Boolean)) {
+    expect(container.querySelector(".chat-message-disclosure") !== null).toBe(folded);
+    for (const line of markdown.split(/[\r\n]+/)) {
       expect(container.textContent).toContain(line);
     }
   });

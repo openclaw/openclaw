@@ -36,6 +36,7 @@ import { constants, PerformanceObserver, type PerformanceNodeEntry } from "node:
 import { setImmediate, setTimeout } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -272,12 +273,7 @@ try {
   const postWarmBarrierElapsedMs = performance.now() - barrierStarted;
   gc.observe({ entryTypes: ["gc"] });
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const loadBefore = loadavg();
   const memoryBefore = process.memoryUsage();

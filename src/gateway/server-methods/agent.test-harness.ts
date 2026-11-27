@@ -10,6 +10,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -353,6 +354,20 @@ export function operatorWriteCliClient(
         mode: "cli",
       },
       scopes,
+    },
+  };
+}
+
+/** A local owner CLI socket carrying its admitted owner authority; the grant decides. */
+export function localOwnerCliClient(): NonNullable<AgentHandlerArgs["client"]> {
+  return {
+    ...operatorWriteCliClient(["operator.admin"]),
+    internal: {
+      isLocalClient: true,
+      operatorRunAuthority: createTestOperatorAuthority({
+        profileId: "gateway-owner",
+        scopes: ["operator.admin"],
+      }),
     },
   };
 }

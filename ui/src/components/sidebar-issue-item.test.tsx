@@ -24,16 +24,16 @@ import {
 
 const item: SidebarAttentionItem = {
   type: "attention",
-  category: "automations",
+  category: "system",
   dismissal: null,
   requiresAction: true,
-  kind: "cronFailed",
+  kind: "modelAuthExpired",
   severity: "error",
-  icon: "clock",
-  label: "Nightly backup",
-  detail: "Failed now",
-  action: { kind: "navigate", routeId: "cron" },
-  signature: "backup",
+  icon: "plug",
+  label: "OpenAI",
+  detail: "Sign-in required",
+  action: { kind: "navigate", routeId: "model-providers" },
+  signature: "openai",
 };
 
 const container = document.createElement("div");
@@ -67,7 +67,7 @@ it("renders a dismiss control only when the producer supplies the action", () =>
   const onDismiss = vi.fn();
   render(() => <SidebarIssueItem item={item} handlers={{ ...shared, onDismiss }} />);
   const dismiss = find(".sidebar-issues-panel__dismiss");
-  expect(dismiss?.getAttribute("aria-label")).toBe("Dismiss Nightly backup");
+  expect(dismiss?.getAttribute("aria-label")).toBe("Dismiss OpenAI");
   expect(dismiss?.hasAttribute("title")).toBe(false);
   dismiss?.click();
   expect(onDismiss).toHaveBeenCalledOnce();
@@ -236,7 +236,8 @@ describe("renderSidebarUpdateSurface", () => {
       try {
         await vi.waitFor(() => expect(harness.overlays.snapshot.updateRun?.runId).toBe(run.runId));
         const card = renderUpdate(harness.context);
-        card.querySelector<HTMLButtonElement>(".sidebar-update-card__action")!.click();
+        card.querySelector("summary")!.click();
+        card.querySelector<HTMLButtonElement>(".sidebar-issues-panel__action")!.click();
         const { modal } = await getRenderedModalDialog(document.body);
         render(null);
         expect(card.isConnected).toBe(false);
@@ -420,7 +421,7 @@ describe("renderSidebarUpdateSurface", () => {
     );
     expect(card.querySelector(".sidebar-update-card__hold")?.textContent?.trim()).toBe("Hold 1 h");
     expect(card.querySelector(".sidebar-update-card__title")?.textContent).toBe(
-      "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
+      "✅ OpenClaw updated to 2026.9.2.",
     );
   });
 });

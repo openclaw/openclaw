@@ -21,6 +21,7 @@ import {
   runCronJob,
   startCronEdit,
 } from "./index.ts";
+import { receiveCronInventoryEvent } from "./inventory-connection.ts";
 import { loadCronRuns, updateCronRunsFilter } from "./runs.ts";
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
@@ -95,17 +96,14 @@ describe("cron controller", () => {
   });
 
   it.each([false, true])("appends from the accepted snapshot (changed=%s)", async (changed) => {
-    const stale = createCronJob("stale", "Stale");
-    const stable = createCronJob("stable", "Stable");
-    const current = createCronJob("current", "Current");
+    const stale = createCronJob("stale", "A Stale");
+    const stable = createCronJob("stable", "B Stable");
+    const current = createCronJob("current", "C Current");
     const page = (jobs: CronJob[], revision: string, overrides: Partial<CronJobsListResult> = {}) =>
       cronJobsListResponse(jobs, { snapshotRevision: revision, limit: 2, ...overrides });
     const responses = [
       page([stale, stable], "revision-a", { total: 3, hasMore: true, nextOffset: 2 }),
-      page(changed ? [] : [current], changed ? "revision-b" : "revision-a", {
-        total: changed ? 2 : 3,
-        offset: 2,
-      }),
+      page([current], "revision-a", { total: 3, offset: 2 }),
       ...(changed ? [page([stable, current], "revision-b")] : []),
     ];
     const offsets: number[] = [];
@@ -117,8 +115,12 @@ describe("cron controller", () => {
       }
       return response;
     });
-    const state = createStateWithRequest(request, { cronJobsLimit: 2 });
+    const state = createStateWithRequest(request, { cronJobsLimit: 2, cronJobsSortBy: "name" });
     await loadCronJobsPage(state);
+    expect(state.cronJobs.map((job) => job.id)).toEqual(["stale", "stable"]);
+    if (changed) {
+      receiveCronInventoryEvent(state.client!, { type: "event", event: "cron.inventory.changed" });
+    }
     await loadCronJobsPage(state, { append: true });
     expect(offsets).toEqual(changed ? [0, 2, 0] : [0, 2]);
     expect(state.cronJobs.map((job) => job.id)).toEqual(
@@ -178,23 +180,14 @@ describe("cron controller", () => {
     if (!tableFilters) {
       await loadCronJobsPage(state);
     }
-    first.resolve(
-      cronJobsListResponse(
-        [],
-        tableFilters ? { snapshotRevision: "revision-b", total: 1, offset: 1 } : {},
-      ),
-    );
+    first.resolve(cronJobsListResponse());
     await pending;
-    expect(payloads[0]).toMatchObject({ offset: tableFilters ? 1 : 0 });
-    expect(payloads[1]).toMatchObject({ offset: 0 });
+    expect(payloads[0]).toMatchObject({ offset: 0, scheduleKind: "all", lastRunStatus: "all" });
     if (tableFilters) {
-      expect(payloads[1]).toMatchObject({ scheduleKind: "cron", lastRunStatus: "unknown" });
-    } else {
-      for (const field of ["scheduleKind", "lastRunStatus", "trigger"]) {
-        expect(payloads[1]).not.toHaveProperty(field);
-      }
+      expect(payloads[1]).toMatchObject({ offset: 0, scheduleKind: "cron", lastRunStatus: "all" });
     }
-    expect(request).toHaveBeenCalledTimes(2);
+    // Returning to the original query reuses its complete admitted inventory.
+    expect(request).toHaveBeenCalledTimes(tableFilters ? 2 : 1);
     expect(state).toMatchObject({
       cronJobsReloadPending: false,
       cronJobsReloadPendingTableFilters: false,

@@ -360,6 +360,27 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     },
   );
 
+  it("does not start another model call from a read overtaken by a successful title write", async () => {
+    const naming = pendingLabel();
+    const params = titleParams();
+    const first = maybeGenerateSessionTitle(params);
+    await naming.started;
+
+    const delayedRead = createDeferredCore<SessionEntry>();
+    mocks.load.mockReturnValueOnce(delayedRead.promise);
+    const duplicate = maybeGenerateSessionTitle(params);
+    try {
+      naming.resolve("Release Planning");
+      await expect(first).resolves.toBe(true);
+    } finally {
+      // The worker had read the unnamed row before the winning write committed.
+      delayedRead.resolve(baseEntry);
+      await duplicate;
+    }
+
+    expectCalls(1, mocks.generate, mocks.patch);
+  });
+
   it("retries a joined title write failure only once", async () => {
     const naming = pendingLabel(true);
     const params = titleParams();

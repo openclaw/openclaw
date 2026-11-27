@@ -29,7 +29,6 @@ type ParentForkDecisionParams = {
 };
 
 type ForkSessionFromParentParams = ParentForkDecisionParams & {
-  maxTokens?: number;
   parentSessionKey: string;
   agentId: string;
   commitGuard?: () => void;
@@ -89,11 +88,17 @@ export async function forkSessionFromParent(
   return fork.status === "created" ? fork.transcript : null;
 }
 
-export async function prepareSessionForkFromParent(params: ForkSessionFromParentParams) {
+export type SessionForkAdmission =
+  | { enforceTokenLimit: false }
+  | { enforceTokenLimit: true; maxTokens?: number };
+
+export async function prepareSessionForkFromParent(
+  params: ForkSessionFromParentParams & SessionForkAdmission,
+) {
   return await prepareSessionForkTranscript({
     ...resolveParentForkParams(params),
-    enforceTokenLimit: true,
-    ...(params.maxTokens ? { maxTokens: params.maxTokens } : {}),
+    enforceTokenLimit: params.enforceTokenLimit,
+    ...(params.enforceTokenLimit ? { maxTokens: params.maxTokens } : {}),
   });
 }
 

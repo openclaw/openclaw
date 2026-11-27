@@ -1,6 +1,5 @@
 // Plans grouped targeted Docker lane matrix entries without installed dependencies.
 import { fileURLToPath } from "node:url";
-import { expandInstalledRecoveryLanes } from "./e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
 import { expandUpdateFirstHopCompatLanes } from "./lib/update-first-hop-lanes.mjs";
@@ -27,6 +26,8 @@ const LONG_LANE_ORDER = [
   "update-first-hop-compat",
   "update-restart-auth",
   "plugin-update",
+  // Prioritize ACPX only at the hosted 64-job capacity; smaller matrices keep base order.
+  "acpx-openclaw-tools-bridge",
   "legacy-operator-state",
   "root-managed-vps-upgrade",
 ];
@@ -53,6 +54,7 @@ function sanitizeLabel(value) {
 /**
  * @param {{
  *   groupSize?: number | string;
+ *   maxParallel?: number | string;
  *   lanes?: string;
  *   upgradeSurvivorBaseline?: string;
  *   upgradeSurvivorBaselineScope?: "all-scenarios" | "legacy-operator-state";
@@ -69,6 +71,7 @@ function sanitizeLabel(value) {
  */
 export function planTargetedDockerLaneGroups({
   groupSize = 1,
+  maxParallel = 32,
   lanes,
   upgradeSurvivorBaseline,
   upgradeSurvivorBaselineScope = "all-scenarios",
@@ -76,14 +79,13 @@ export function planTargetedDockerLaneGroups({
   upgradeSurvivorScenarios = "",
 } = {}) {
   // Each recorded first-hop source becomes its own job.
-  const selectedLanes = expandInstalledRecoveryLanes(
-    expandUpdateFirstHopCompatLanes(splitTokens(lanes)),
-  );
+  const selectedLanes = expandUpdateFirstHopCompatLanes(splitTokens(lanes));
   if (selectedLanes.length === 0) {
     throw new Error("docker_lanes is required when planning targeted Docker lane groups.");
   }
 
   const parsedGroupSize = parsePositiveInt(groupSize, "groupSize");
+  const capacity = parsePositiveInt(maxParallel, "maxParallel");
   if (!["all-scenarios", "legacy-operator-state"].includes(upgradeSurvivorBaselineScope)) {
     throw new Error("Unknown upgrade survivor baseline scope.");
   }
@@ -273,7 +275,10 @@ export function planTargetedDockerLaneGroups({
           const family = lane.startsWith("update-first-hop-compat-")
             ? "update-first-hop-compat"
             : lane;
-          const index = LONG_LANE_ORDER.indexOf(family);
+          const index =
+            family === "acpx-openclaw-tools-bridge" && capacity !== 64
+              ? -1
+              : LONG_LANE_ORDER.indexOf(family);
           return index < 0 ? LONG_LANE_ORDER.length : index;
         }),
       );
@@ -287,6 +292,7 @@ const isMain = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv
 if (isMain) {
   const options = {
     groupSize: process.env.GROUP_SIZE,
+    maxParallel: process.env.MAX_PARALLEL,
     lanes: process.env.LANES,
     upgradeSurvivorBaseline: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC,
     upgradeSurvivorBaselineScope: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE,

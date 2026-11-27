@@ -145,7 +145,6 @@ async function runCommandPreflightMaintenance(
   const assertActive = () => {
     opts.abortSignal?.throwIfAborted();
     assertSourceCurrent?.();
-    operatorAuthority?.assertCurrent();
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
   };
   assertActive();

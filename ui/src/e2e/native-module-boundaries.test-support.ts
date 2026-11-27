@@ -1,4 +1,5 @@
 import { describe, expect, it, onTestFinished } from "vitest";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { computedStyles } from "./config-composer-fixtures.test-support.ts";
 import {
@@ -134,6 +135,33 @@ export function defineNativeModuleBoundaryTests(
         .toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => dialog.count()).toBe(0);
+    });
+
+    it("lets Escape close the Inbox when a sidebar tooltip finishes loading after the click", async () => {
+      const { page, held } = await openWithHeldModule("ui/src/components/solid/tooltip.tsx", {
+        pathname: "new",
+      });
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const collapse = sidebar.getByRole("button", { name: "Collapse sidebar", exact: true });
+      const tooltip = sidebar.locator("openclaw-sidebar-collapse-toggle openclaw-tooltip");
+      const inbox = sidebar.locator(".sidebar-issues-button");
+      const dialog = page.getByRole("dialog", { name: "Inbox" });
+      await page.clock.install();
+      await collapse.hover();
+      await held.request;
+      // Release the cold renderer inside the rich tooltip's pointer-leave grace period.
+      await pauseVirtualClock(page);
+      await inbox.click();
+      await expect
+        .poll(() => dialog.evaluate((el) => el.contains(document.activeElement)))
+        .toBe(true);
+      held.release();
+      await tooltip.evaluate(
+        (el) => (el as HTMLElementTagNameMap["openclaw-tooltip"]).updateComplete,
+      );
+      await page.keyboard.press("Escape");
+      await expect.poll(() => dialog.count()).toBe(0);
+      await expect.poll(() => inbox.evaluate((el) => el === document.activeElement)).toBe(true);
     });
 
     it("keeps overlay motion anchored to its owning interaction", async () => {

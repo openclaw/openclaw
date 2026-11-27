@@ -307,16 +307,13 @@ describe("operator access cancellation", () => {
           setUserProfileRole(profile.id, "revoked");
           invalidateOperatorRolePolicy(profile.id, { roleOnly: true });
           expect(retained.authority!.signal?.aborted).not.toBe(true);
-          expect(retained.authority!.assertCurrent).not.toThrow();
           if (kind === "owner") {
             setOpenClawIdTunnelPrincipalLookup(() => undefined);
           }
           await f.settle();
           run.expectCurrent();
           expect(retained.authority!.signal?.aborted).not.toBe(true);
-          expect(retained.authority!.assertCurrent).not.toThrow();
-          expect(request.authority.signal?.aborted).toBe(false);
-          expect(request.authority.assertCurrent).not.toThrow();
+          expect(request.authority.signal?.aborted).not.toBe(true);
           await expect(origin.restore()).rejects.toThrow();
         } finally {
           request.release();
@@ -369,8 +366,7 @@ describe("operator access cancellation", () => {
         const next = await f.register("demoted-continuation");
         const retained = await next.retain(undefined, continuation);
         expect(retained.authority?.scopes).toEqual(["operator.read"]);
-        expect(request.authority.signal?.aborted).toBe(false);
-        expect(request.authority.assertCurrent).not.toThrow();
+        expect(request.authority.signal?.aborted).not.toBe(true);
       } finally {
         request.release();
       }
@@ -401,7 +397,6 @@ describe("operator access cancellation", () => {
         retained.armCancellation();
         occurrence.retire();
         // Retiring the source claim does not cancel the separately accepted turn.
-        expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
         target.expectCurrent();
         const continuationClient = createSyntheticPluginRuntimeClient({
@@ -438,9 +433,7 @@ describe("operator access cancellation", () => {
         );
         const next = await f.register("after-device-revocation", undefined, {}, false, true);
         await expect(next.retain(undefined, continuationClient)).rejects.toThrow();
-        expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
-        expect(admittedChild.authority!.assertCurrent).not.toThrow();
         expect(admittedChild.authority!.signal?.aborted).not.toBe(true);
       } finally {
         restored.release();
@@ -457,7 +450,6 @@ describe("operator access cancellation", () => {
       try {
         retained.release();
         expect(release).not.toHaveBeenCalled();
-        expect(retained.authority!.assertCurrent).not.toThrow();
       } finally {
         releaseChild();
         retained.release();
@@ -715,7 +707,7 @@ describe("operator access cancellation", () => {
       guest.expectCurrent();
       expect(f.context.broadcast).not.toHaveBeenCalled();
       expect(f.transcript()).toEqual(transcript);
-      expect(() => retained.authority?.assertCurrent()).toThrow();
+      expect(retained.authority?.signal?.aborted).toBe(true);
 
       const aborted = createDeferredCore();
       guest.controller.signal.addEventListener("abort", () => aborted.resolve(), { once: true });

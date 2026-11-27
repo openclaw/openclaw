@@ -88,6 +88,7 @@ type PreparedProjection = {
   sourceRevision: string;
   board: WorkboardSessionsBoard;
   expires: number;
+  retryAt: number;
   facts?: Map<string, CachedFacts>;
   placements?: Placements;
 };
@@ -120,12 +121,18 @@ function sessionSelection(board: WorkboardSessionsBoard, view?: WorkboardSession
   };
 }
 
-function inScope(facts: WorkboardSessionFacts, board: WorkboardSessionsBoard, now: number) {
+function inScope(
+  facts: WorkboardSessionFacts,
+  board: WorkboardSessionsBoard,
+  now: number,
+  view?: WorkboardSessionsBoardView,
+) {
   const scope = board.sessions.scope;
   // The board's own agent conversation edits the board; it is not work to place on it.
   return (
     facts.key !== board.sessions.agentSessionKey &&
     (!scope?.agentIds?.length || scope.agentIds.includes(facts.agentId)) &&
+    (!view?.agentId || facts.agentId === view.agentId) &&
     (scope?.includeArchived === true || !facts.archived) &&
     facts.lastActivityAt >= now - (scope?.maxAgeHours ?? 72) * 3_600_000
   );
@@ -156,6 +163,35 @@ function createOwner(
   let hasRead = false;
   let factsFailureLogged = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryTimerAt = Infinity;
+  const scheduleRetryWake = (retryAt: number | undefined) => {
+    if (stopped || !isCurrent() || retryAt === undefined || !Number.isFinite(retryAt)) {
+      return;
+    }
+    const targetAt = Math.max(retryAt, Date.now() + 5_000);
+    if (retryTimer && retryTimerAt <= targetAt) {
+      return;
+    }
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+    }
+    retryTimerAt = targetAt;
+    retryTimer = setTimeout(
+      () => {
+        retryTimer = undefined;
+        retryTimerAt = Infinity;
+        if (stopped || !isCurrent()) {
+          return;
+        }
+        params.store.invalidateSessionBoards();
+        revision = params.store.sessionsRevision;
+        params.store.announceChangeEpoch();
+      },
+      Math.max(0, targetAt - Date.now()),
+    );
+    retryTimer.unref?.();
+  };
   const assertCurrent = () => {
     if (stopped || !isCurrent()) {
       throw new Error("Sessions board service is no longer active.");
@@ -189,6 +225,7 @@ function createOwner(
     board: WorkboardSessionsBoard,
     source: SourceSnapshot,
     placements: Map<string, Placements[number]>,
+    view?: WorkboardSessionsBoardView,
     preparedFacts?: Map<string, CachedFacts>,
   ) => {
     for (const key of source.missingSessionKeys ?? []) {
@@ -236,16 +273,14 @@ function createOwner(
     }
     const fallback = sessionsBoardFallback(board);
     const sessions: WorkboardSessionsBoardRead["sessions"] = [];
-    const prWarnings = new Map<string, number>();
+    let rateLimitedCount = 0;
     for (const [key, cached] of resolved) {
       const { facts, source: row } = cached;
-      if (!inScope(facts, board, Date.now())) {
+      if (!inScope(facts, board, Date.now(), view)) {
         continue;
       }
-      if (facts.pullRequestsUnavailable || facts.pullRequestsRateLimited) {
-        const availability = cached.stale ? "stale" : "not loaded yet";
-        const reason = `${availability}${facts.pullRequestsRateLimited ? " (GitHub rate limited)" : ""}`;
-        prWarnings.set(reason, (prWarnings.get(reason) ?? 0) + 1);
+      if (facts.pullRequestsRateLimited) {
+        rateLimitedCount += 1;
       }
       if (cached.row) {
         sessions.push(cached.row);
@@ -290,9 +325,9 @@ function createOwner(
     } else {
       factsFailureLogged = false;
     }
-    for (const [reason, count] of prWarnings) {
+    if (rateLimitedCount > 0) {
       warnings.push(
-        `Pull-request facts for ${count} ${count === 1 ? "session" : "sessions"} are ${reason}.`,
+        `GitHub is rate limiting pull request updates for ${rateLimitedCount} ${rateLimitedCount === 1 ? "session" : "sessions"}.`,
       );
     }
     return {
@@ -336,6 +371,7 @@ function createOwner(
     assertReadCurrent();
     return params.gateway.withSessionFacts(sessionSelection(board, view), async (source) => {
       assertReadCurrent();
+      scheduleRetryWake(source.retryAt);
       const key = JSON.stringify([id, view, source.scope ?? source.revision]);
       const admittedAt = Date.now();
       const previous = projections.get(key);
@@ -344,7 +380,8 @@ function createOwner(
         projection &&
         (projection.revision !== admittedRevision ||
           projection.sourceRevision !== source.revision ||
-          projection.expires < admittedAt)
+          projection.expires < admittedAt ||
+          projection.retryAt <= admittedAt)
       ) {
         projection = undefined;
       }
@@ -354,6 +391,7 @@ function createOwner(
           sourceRevision: source.revision,
           board,
           expires: source.activityExpiresAt ?? Infinity,
+          retryAt: source.retryAt ?? Infinity,
           read: Promise.resolve().then(async () => {
             const placements =
               (previous?.board === board ? previous.placements : undefined) ??
@@ -367,6 +405,7 @@ function createOwner(
               board,
               source,
               new Map(placements.map((pin) => [pin.sessionKey, pin])),
+              view,
               isDeepStrictEqual(previous?.board.sessions.columns, board.sessions.columns)
                 ? previous?.facts
                 : undefined,
@@ -411,6 +450,11 @@ function createOwner(
       clearTimeout(timer);
     }
     timer = undefined;
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+    }
+    retryTimer = undefined;
+    retryTimerAt = Infinity;
     lastKnown.clear();
     projections.clear();
     boards.clear();

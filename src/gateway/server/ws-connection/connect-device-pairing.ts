@@ -720,7 +720,6 @@ export async function authorizeGatewayConnectDevice(
     context,
     { ...state, scopes, handoffBootstrapProfile },
     hasServerApprovedDeviceTokenBaseline,
-    isConnectAuthorizationCurrent,
   );
   const tokens =
     role === "operator"

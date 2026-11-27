@@ -169,6 +169,8 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   onCommitRequest?: () => void;
   nativeStopped?: Promise<void>;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
+  /** Capture a delivered result before releasing the writer and its fallible companions. Must not throw. */
+  onResultReceived?: (result: Result) => void;
   validationOwner?: SqliteMutationWorkerValidationOwner;
   validationPath?: string;
   /** Opening proof remains revocable and is adopted only against the worker's native identity. */
@@ -510,6 +512,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
       } else if (message.type === "reclaimed") {
         settlement.resolve({ kind: "completed" });
         result = message.result;
+        params.onResultReceived?.(message.result);
         validation = message.validation;
         if (params.completion === "result") {
           finish();

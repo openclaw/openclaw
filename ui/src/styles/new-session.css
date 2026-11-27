@@ -1759,6 +1759,11 @@ span.new-session-page__select {
 .new-session-page__context-tray .new-session-page__trigger-label {
   min-inline-size: 8ch;
   max-width: 300px;
+
+  /* Checkout has no desktop loading placeholder to reserve label space for. */
+  &:where(#new-session-checkout-trigger > *) {
+    min-inline-size: 0;
+  }
 }
 
 .new-session-page__picker-chevron {
@@ -1953,6 +1958,31 @@ span.new-session-page__select {
   flex: 1 1 0;
   min-width: 30%;
   margin-inline-start: 0;
+}
+
+/* Keep project identities to a title and a hint, not a paragraph. */
+.new-session-page__project-popover
+  .new-session-page__picker-root
+  .session-menu__item:has(> .session-menu__sub):not(:has(> .new-session-page__submenu-chevron)) {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 14px;
+  grid-template-areas: "icon title check" ". hint .";
+  row-gap: 0;
+
+  & > .session-menu__icon {
+    grid-area: icon;
+  }
+  & > .session-menu__text {
+    grid-area: title;
+  }
+  & > .session-menu__check {
+    grid-area: check;
+  }
+  & > .session-menu__sub {
+    grid-area: hint;
+    min-width: 0;
+    top: auto;
+  }
 }
 
 .new-session-page__picker-popover .session-menu__check,
