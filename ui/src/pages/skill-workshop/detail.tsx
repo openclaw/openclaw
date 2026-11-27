@@ -384,14 +384,12 @@ function Instructions(props: { view: WorkshopView; reads: WorkshopReads }) {
   );
 }
 
-/** Support files grouped by their folder; root files come first without a label. */
+/** Support files grouped by folder in encounter order; root files have no label. */
 function fileGroups(files: readonly string[]) {
-  const groups = new Map<string, string[]>();
-  for (const file of files) {
+  const groups = Map.groupBy(files, (file) => {
     const slash = file.lastIndexOf("/");
-    const folder = slash === -1 ? "" : file.slice(0, slash);
-    groups.set(folder, [...(groups.get(folder) ?? []), file]);
-  }
+    return slash === -1 ? "" : file.slice(0, slash);
+  });
   return [...groups].map(([folder, entries]) => ({ folder, entries }));
 }
 

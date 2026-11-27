@@ -16,7 +16,8 @@ vi.mock("../../agent-settings.js", () => ({
   resolveEffectiveCompactionMode: () => "default",
 }));
 
-vi.mock("../../transcript-policy.js", () => ({
+vi.mock("../../transcript-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../transcript-policy.js")>()),
   resolveTranscriptPolicy: () => ({
     allowSyntheticToolResults: false,
     repairToolUseResultPairing: true,

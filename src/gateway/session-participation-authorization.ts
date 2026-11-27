@@ -12,23 +12,17 @@ import {
   type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
 import { intersectSessionPermissionModes } from "../agents/session-permission-mode.js";
-import {
-  captureSessionParticipationSource,
-  retainSessionParticipation,
-} from "../config/sessions/session-participation-source.js";
+import { captureSessionParticipationSource } from "../config/sessions/session-participation-source.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { requiresSessionParticipation } from "./method-scopes.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";
 import { isParticipantPublicationMethod } from "./session-method-policy.js";
-import type {
-  AuthorizedSessionMutationTarget,
-  SessionMutationAuthorizationParams,
-} from "./session-sharing-authorization.js";
+import type { SessionMutationAuthorizationParams } from "./session-sharing-authorization.js";
 import { hiddenSessionNotFound, type SessionSharingTarget } from "./session-sharing-policy.js";
 import type { createSessionSharingConsumption } from "./session-sharing-read.js";
 
-/** The exact target owns the invitation alternative and its permanent revocation signal. */
+/** The exact target owns the invitation alternative, fixed when the request is admitted. */
 export function createSessionParticipationAuthorization(
   params: SessionMutationAuthorizationParams,
 ) {
@@ -41,36 +35,13 @@ export function createSessionParticipationAuthorization(
       params.requestParams,
     );
   let ceiling: ParticipationCeiling | undefined;
-  let lifetime: ReturnType<typeof retainSessionParticipation> | undefined;
   return {
     isBoundedMethod,
     get admission() {
-      return ceiling
-        ? {
-            participationCeiling: ceiling,
-            participationSignal: lifetime?.signal,
-            release: () => lifetime?.release(),
-          }
-        : {};
+      return ceiling ? { participationCeiling: ceiling } : {};
     },
     get ceiling() {
       return ceiling;
-    },
-    get signal() {
-      return lifetime?.signal;
-    },
-    release: () => lifetime?.release(),
-    followIncarnation: (previous: string | null, current: string) =>
-      lifetime?.followIncarnation(previous, current),
-    retain: (target: AuthorizedSessionMutationTarget | undefined) => {
-      if (ceiling && target?.resolved && target.sessionId) {
-        lifetime = retainSessionParticipation({
-          profileId: ceiling.profileId,
-          agentId: target.resolved.agentId,
-          sessionKey: target.resolved.canonicalKey,
-          sessionId: target.sessionId,
-        });
-      }
     },
     authorize: ({
       targetRef,

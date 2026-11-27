@@ -2,7 +2,6 @@ import { expect, it } from "vitest";
 import { DEFAULT_PARTICIPATION_TOOLS } from "../agents/participation-ceiling.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { publishSessionParticipationMemberChange } from "../config/sessions/session-participation-source.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -162,55 +161,6 @@ it("admits only bounded methods for a send invitation with read scope", async ()
       expect(result.error).not.toBeNull();
       result.authorization?.release?.();
     }
-    const original = await resolveSessionMutationAuthorizationAsync({
-      client,
-      context,
-      method: "chat.send",
-      requestParams: scope,
-      participationRequired: true,
-    });
-    const lifetime = original.authorization?.retainForRun?.();
-    original.authorization?.release?.();
-    expect(lifetime).toBeDefined();
-    const target = {
-      profileId,
-      agentId: "main",
-      sessionKey: scope.sessionKey,
-      sessionId: "participation-id",
-    };
-    for (const sibling of [
-      { ...target, sessionId: "old" },
-      { ...target, profileId: "other" },
-      { ...target, agentId: "other" },
-      { ...target, sessionKey: "agent:main:sibling" },
-    ]) {
-      publishSessionParticipationMemberChange(sibling.agentId, sibling.sessionKey, {
-        sessionId: sibling.sessionId,
-        identityId: sibling.profileId,
-        present: false,
-      });
-      expect(lifetime?.signal?.aborted).toBe(false);
-    }
-    // The next effect is refused permanently even if fresh membership again permits a new input.
-    publishSessionParticipationMemberChange(target.agentId, target.sessionKey, {
-      sessionId: target.sessionId,
-      identityId: target.profileId,
-      present: false,
-    });
-    expect(lifetime?.signal?.aborted).toBe(true);
-    expect(() => lifetime?.assertCurrent()).toThrow();
-    const successor = await resolveSessionMutationAuthorizationAsync({
-      client,
-      context,
-      method: "chat.send",
-      requestParams: scope,
-      participationRequired: true,
-    });
-    expect(successor.error).toBeNull();
-    expect(successor.authorization?.participationSignal?.aborted).toBe(false);
-    expect(() => lifetime?.assertCurrent()).toThrow();
-    lifetime?.release();
-    successor.authorization?.release?.();
     for (const invitedTools of [[], ["read"], ["read", "message", "exec"]]) {
       guestRole.sessions.invitedTools = invitedTools;
       const result = await resolveSessionMutationAuthorizationAsync({

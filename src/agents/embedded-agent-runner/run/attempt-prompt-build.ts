@@ -390,6 +390,8 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   appendOnlyRuntimeContext?: boolean;
   executionHost?: boolean;
   inHistorySystemUpdates?: boolean;
+  /** The route drops turn-scoped system updates after the next user message. */
+  clearsTurnScopedSystemUpdates?: boolean;
   attempt: PromptContextAttempt;
   capabilityToolNames: ReadonlySet<string>;
   boundaryTimezone?: string;
@@ -512,7 +514,21 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
           sessionTarget: attempt.sessionTarget,
           runId: attempt.runId,
           agentId: input.sessionAgentId,
-          includeEmptySnapshots: input.appendOnlyRuntimeContext === true,
+          // Diff base: earlier carriers this request sends. Routes that do not retain
+          // carriers send none; routes that clear turn-scoped updates drop those.
+          sentHistory: input.appendOnlyRuntimeContext
+            ? sessionMessages.filter(
+                (message) =>
+                  !input.clearsTurnScopedSystemUpdates ||
+                  !(
+                    "details" in message &&
+                    typeof message.details === "object" &&
+                    message.details !== null &&
+                    "turnScoped" in message.details &&
+                    message.details.turnScoped === true
+                  ),
+              )
+            : [],
         });
   // A dispatched user's projection is frozen. Fresh fallback hooks belong to
   // the continuation context, never a second copy of the user or their images.

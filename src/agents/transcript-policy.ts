@@ -168,3 +168,11 @@ export function resolveTranscriptPolicy(params: {
   }
   return policy;
 }
+
+/** The Anthropic transport sends turn-scoped system updates with `clear_at: "next_user_message"`. */
+export function clearsTurnScopedSystemUpdates(
+  policy: Pick<TranscriptPolicy, "inHistorySystemUpdates">,
+  modelApi: string | undefined,
+): boolean {
+  return policy.inHistorySystemUpdates === true && modelApi === "anthropic-messages";
+}

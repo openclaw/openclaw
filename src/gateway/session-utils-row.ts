@@ -616,7 +616,7 @@ export function presentSessionRow(
   }
   const subagentRuns =
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
-  const { subagentRun, fields } =
+  const { subagent, fields } =
     options.preparedRunState ??
     projectGatewaySessionRunState({
       key: row.key,
@@ -630,7 +630,7 @@ export function presentSessionRow(
       },
     });
   Object.assign(row, fields);
-  const usage = source.usageByFallbackModel?.get(subagentRun?.model);
+  const usage = source.usageByFallbackModel?.get(subagent?.model);
   row.usageReport ??= usage?.usageReport;
   row.totalTokens = freshSessionTotalTokens ?? asNonNegativeFiniteNumber(usage?.totalTokens);
   row.totalTokensFresh =

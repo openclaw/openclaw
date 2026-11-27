@@ -27,6 +27,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createLargeTrajectoryUsage } from "./export.test-helpers.js";
 import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "./paths.js";
+import { restoreTrajectorySnapshots } from "./runtime-snapshot.js";
 import * as runtimeStoreWriter from "./runtime-store-writer.js";
 import {
   loadSqliteTrajectoryRuntimeEvents,
@@ -101,7 +102,7 @@ function oversizedMessages() {
   }));
 }
 
-async function createMarkerRecorder() {
+async function createMarkerRecorder(maxRuntimeFileBytes?: number) {
   const storePath = path.join(
     tempDirs.make("openclaw-trajectory-runtime-"),
     "agents/main/sessions/sessions.json",
@@ -118,6 +119,7 @@ async function createMarkerRecorder() {
       sessionId: target.sessionId,
       sessionKey: target.sessionKey,
       sessionFile: formatSqliteSessionFileMarker(target),
+      maxRuntimeFileBytes,
     }),
   );
   return { recorder, storePath, sessionKey: target.sessionKey };
@@ -365,8 +367,10 @@ describe("trajectory runtime", () => {
     },
   );
 
-  it("stores bounded oversized runtime events in SQLite", async () => {
-    const { recorder: runtimeRecorder, storePath } = await createMarkerRecorder();
+  it("keeps oversized snapshots partial when their fragments exceed the capture window", async () => {
+    const { recorder: runtimeRecorder, storePath } = await createMarkerRecorder(
+      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+    );
     const usage = createLargeTrajectoryUsage();
     runtimeRecorder.recordEvent("model.completed", {
       usage,
@@ -577,32 +581,37 @@ describe("trajectory runtime", () => {
       messagesSnapshot: oversizedMessages(),
     });
 
-    expectBoundedCapture();
-    const parsed = captured();
+    const parsed = expectDefined(
+      restoreTrajectorySnapshots(writes.map((line) => JSON.parse(line)))[0],
+      "completed event",
+    );
+    const data = expectDefined(parsed.data, "completion data");
     expect(parsed.type).toBe("model.completed");
-    expect(parsed.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
+    expect(data).toMatchObject({
       usage,
       promptCache,
       assistantTexts: ["done"],
       finalPromptText: "inspect",
     });
-    expect(parsed.data.finalPromptTextOriginalLength).toBeUndefined();
-    expect(parsed.data.messagesSnapshot).toBeUndefined();
-    expect(parsed.data.droppedFields).toEqual(["messagesSnapshot"]);
+    expect(data.finalPromptTextOriginalLength).toBeUndefined();
+    expect(data.messagesSnapshot).toEqual(oversizedMessages());
+    expect(data.truncated).toBeUndefined();
     const secondUsage = { input: 12, output: 3, total: 15 };
     recorder.recordEvent("model.completed", {
       usage: secondUsage,
       assistantTexts: ["final answer"],
     });
-    expect(writes).toHaveLength(2);
-    expect(captured().data.usage).toEqual(usage);
-    expect(captured(1).data).toMatchObject({
+    const logical = restoreTrajectorySnapshots(writes.map((line) => JSON.parse(line)));
+    expect(logical).toHaveLength(2);
+    expect(logical[0]?.data?.usage).toEqual(usage);
+    expect(logical[1]?.data).toMatchObject({
       usage: secondUsage,
       assistantTexts: ["final answer"],
     });
-    expect(captured(1).data.truncated).toBeUndefined();
+    expect(logical[1]?.data?.truncated).toBeUndefined();
+    expect(
+      writes.every((line) => Buffer.byteLength(line) <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES),
+    ).toBe(true);
   });
   it("preserves stopReason while dropping oversized preserved fields to keep runtime events bounded", async () => {
     const oversizedUsage = Object.fromEntries(
