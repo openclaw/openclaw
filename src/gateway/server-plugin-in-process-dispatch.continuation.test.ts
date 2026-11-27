@@ -73,10 +73,17 @@ function createOperatorScope(profileName: string, scopes = ["operator.write"]) {
   };
 }
 
+// mock-isolation: Capture caller authority at dispatch without starting an actual turn.
 vi.mock("./agent-turn/agent-turn-service.js", () => ({
   createAgentTurnService: (_params: unknown, assertContextCurrent?: () => void) => ({
     startTurn: (input: unknown) => startTurn(input, assertContextCurrent),
-    waitForTurn,
+  }),
+}));
+
+vi.mock("./agent-turn/agent-wait.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-turn/agent-wait.js")>()),
+  prepareExactAgentTurnWait: (_context: unknown, params: unknown) => ({
+    wait: () => waitForTurn(params),
   }),
 }));
 
