@@ -75,8 +75,22 @@ describe("degenerate tool-call arguments through Chat Completions", () => {
           role: "assistant",
           stopReason: "error",
           errorCode: "degenerate_output",
+          // Attribution without content: the tool name and the run length, never the arguments.
+          diagnostics: [
+            {
+              type: "degenerate_output",
+              details: { toolName: "record", whitespaceRunChars: expect.any(Number) },
+            },
+          ],
         });
-        expect(JSON.stringify(messages.at(-1))).not.toContain('"type":"toolCall"');
+        const last = messages.at(-1);
+        if (last?.role !== "assistant") {
+          throw new Error("expected an assistant message");
+        }
+        expect(last.diagnostics?.[0]?.details?.whitespaceRunChars).toBeGreaterThanOrEqual(4 * 1024);
+        const recorded = JSON.stringify(last);
+        expect(recorded).not.toContain('"type":"toolCall"');
+        expect(recorded).not.toContain("return 1;");
       },
     );
     expect(calls).toEqual([]);
