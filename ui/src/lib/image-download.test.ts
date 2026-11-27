@@ -1,11 +1,46 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { downloadLightboxImage } from "../components/image-lightbox-files.ts";
+import { downloadTextFile } from "./download.ts";
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+it.each([false, true])(
+  "preserves text download cleanup when dispatch throws: %s",
+  async (throws) => {
+    vi.useFakeTimers();
+    const create = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:text");
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      expect(this.href).toBe("blob:text");
+      expect(this.download).toBe("report.txt");
+      expect(revoke).not.toHaveBeenCalled();
+      if (throws) {
+        throw new Error("Native download unavailable");
+      }
+    });
+    const save = () => downloadTextFile("report.txt", "  exact\r\nbytes 🦞\n");
+    if (throws) {
+      expect(save).toThrow("Native download unavailable");
+    } else {
+      save();
+    }
+    const payload = create.mock.calls[0]?.[0];
+    expect(payload).toBeInstanceOf(Blob);
+    if (payload instanceof Blob) {
+      expect(payload.type).toBe("text/plain");
+      expect(await payload.text()).toBe("  exact\r\nbytes 🦞\n");
+    }
+    expect(revoke).not.toHaveBeenCalled();
+    await vi.runOnlyPendingTimersAsync();
+    expect(revoke.mock.calls).toEqual(throws ? [] : [["blob:text"]]);
+  },
+);
 
 it.each([
   { mimeType: "image/jpeg", extension: "jpg" },

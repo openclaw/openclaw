@@ -13,7 +13,14 @@ afterEach(() => restoreMocksAndGlobals());
 it.each(["save", "error", "retire"])("releases its download owner after %s", async (outcome) => {
   const bytes = createDeferredCore<{ url: string; filename: string } | null>();
   const events: string[] = [];
-  const save = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+  const createUrl = vi.spyOn(URL, "createObjectURL");
+  const fetchFile = vi.fn();
+  vi.stubGlobal("fetch", fetchFile);
+  const save = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    expect(this.getAttribute("href")).toBe("/api/artifacts/download/connection/ticket");
+    expect(this.download).toBe("report.md");
     events.push("save");
   });
   vi.spyOn(toast, "showToast").mockImplementation(() => {
@@ -58,6 +65,8 @@ it.each(["save", "error", "retire"])("releases its download owner after %s", asy
     ]),
   );
   expect(save).toHaveBeenCalledTimes(outcome === "save" ? 1 : 0);
+  expect(createUrl).not.toHaveBeenCalled();
+  expect(fetchFile).not.toHaveBeenCalled();
 });
 
 it.each(["unmount", "session", "connection"])(
