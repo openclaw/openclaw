@@ -185,6 +185,26 @@ describe("candidate admission for a system unit run by another account", () => {
     );
   });
 
+  it("keeps the reinstall with the account and package manager that own the installation", async () => {
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      username: "admin",
+      uid: 1000,
+      gid: 1000,
+      homedir: "/home/admin",
+      shell: "/bin/sh",
+    });
+    const context = JSON.parse(fs.readFileSync(contextPath, "utf8")) as UpdateAdmissionContext;
+    context.installation.packageManager = "pnpm";
+    fs.writeFileSync(contextPath, JSON.stringify(context), { mode: 0o600 });
+
+    const verdict = await admit();
+
+    expect(verdict.reasons[0]?.message).toContain("this update runs as admin");
+    expect(verdict.reasons[0]?.nextAction).toContain(
+      `Then run pnpm add -g --allow-build=openclaw openclaw@${candidateVersion} and sudo systemctl restart openclaw-gateway.service.`,
+    );
+  });
+
   it("asks for the unit's own selectors when they come from an environment file", async () => {
     systemd.readCommand.mockRejectedValue(mismatch({ selectorsIncomplete: true }));
 

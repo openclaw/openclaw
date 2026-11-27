@@ -71,7 +71,7 @@ async function formatRefusal(
   mismatch: SystemdServiceAccountMismatch,
   params: { env: NodeJS.ProcessEnv; packageManager: string; candidateVersion: string },
 ) {
-  const caller = os.userInfo().username;
+  const { username: caller, uid } = os.userInfo();
   const { serviceUser: user, unitName: unit } = mismatch;
   const home = mismatch.selectors.HOME ?? (await readSystemdAccountHome(user));
   const unitEnv = { ...mismatch.selectors, ...(home ? { HOME: home } : {}) };
@@ -89,12 +89,14 @@ async function formatRefusal(
       ? `sudo -u ${quoteCliArg(user)} env <the unit's HOME, OPENCLAW_HOME, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH and OPENCLAW_PROFILE> openclaw backup create --verify --output <directory>`
       : `sudo -u ${quoteCliArg(user)} env ${selectors.join(" ")} openclaw backup create --verify --output ${quoteCliArg(home)}`;
   const spec = quoteCliArg(`openclaw@${params.candidateVersion}`);
+  // The package stays with the account that ran this update, and its global directory.
+  const owner = uid === 0 ? "sudo " : "";
   const install =
     params.packageManager === "pnpm"
-      ? `sudo pnpm add -g --allow-build=openclaw ${spec}`
+      ? `${owner}pnpm add -g --allow-build=openclaw ${spec}`
       : params.packageManager === "bun"
-        ? `sudo bun add -g --trust ${spec}`
-        : `sudo npm install -g ${spec} --allow-scripts=openclaw`;
+        ? `${owner}bun add -g --trust ${spec}`
+        : `${owner}npm install -g ${spec} --allow-scripts=openclaw`;
   const nextAction = `Update this system service by hand (${SYSTEM_SERVICE_UPDATE_DOCS}). First make a verified backup of its state as ${user}: ${backup}. Then run ${install} and sudo systemctl restart ${quoteCliArg(unit)}.`;
   return { message, nextAction };
 }
