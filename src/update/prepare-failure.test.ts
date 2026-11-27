@@ -12,6 +12,10 @@ import { getUpdateRunAsync, listUpdateRunsAsync } from "../infra/update-run-read
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import * as updateWrites from "../infra/update-run-write.async.js";
 import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
+import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -154,13 +158,21 @@ it("retires all foreign unfinished runs while preserving the serving trial's han
     await switchLink(path.relative(prefix, checkout), prefix);
     const run = await createUpdateRunAsync({ trigger: "cli" });
     expect(
-      await prepareUpdate({
-        runId: run.runId,
-        runningRoot: checkout,
-        runningVersion: VERSION,
-        channel: "dev",
-        node,
-      }),
+      await withArtifactPreservingStateReads(() =>
+        withOpenClawStateDatabaseReadSnapshot(
+          async () => {
+            await listUpdateRunsAsync({ active: true });
+            return prepareUpdate({
+              runId: run.runId,
+              runningRoot: checkout,
+              runningVersion: VERSION,
+              channel: "dev",
+              node,
+            });
+          },
+          { env: process.env },
+        ),
+      ),
     ).toMatchObject({ status: "failed", reason: "no-target" });
     expect(target).toHaveBeenCalledOnce();
     expect(await listUpdateRunsAsync({ active: true })).toMatchObject([
