@@ -19,6 +19,7 @@ import { z } from "zod";
 import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
 import {
   generatePluginNpmPackageLockWithRetry,
+  readGeneratedBundledChannelConfigs,
   resolveAugmentedPluginNpmPackageJson as resolvePackageJson,
   resolveAugmentedPluginNpmManifest as resolveManifest,
   runPluginNpmCiWithRetry,
@@ -109,6 +110,25 @@ function writeGeneratedChannelMetadata(repoDir: string, pluginId = "twitch"): vo
     ])} as const;\n`,
   );
 }
+
+it("reads both flat and per-channel packed schema rows without running the source", () => {
+  const root = tempDirs.make("openclaw-packed-channel-config-");
+  const row = { pluginId: "fixture", channelId: "channel", schema: channelSchema };
+  const json = JSON.stringify(row);
+  const split = Math.floor(json.length / 2);
+  for (const source of [
+    `const RAW_BUNDLED_CHANNEL_CONFIG_METADATA = ${JSON.stringify(["[", json, "]"])}.join("");`,
+    `const loadPackedChannelRows = () => [\n${JSON.stringify([json.slice(0, split), json.slice(split)])}\n];`,
+  ]) {
+    writeFileText(
+      join(root, "src/config/bundled-channel-config-metadata.generated.ts"),
+      `${source}\nthrow new Error("publishing must not execute application code");`,
+    );
+    expect(readGeneratedBundledChannelConfigs(root).get("fixture")).toEqual({
+      channel: { schema: channelSchema },
+    });
+  }
+});
 
 function readPackageJson(packageDir: string, name = "package.json") {
   return JSON.parse(readText(packageDir, name));

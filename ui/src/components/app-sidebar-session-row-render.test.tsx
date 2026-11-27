@@ -248,18 +248,13 @@ it("keeps the unread badge on an idle child with an icon", () => {
   expect(dom.query('.session-glyph__badge[aria-label="Unread"]')).not.toBeNull();
 });
 
-it("shows quiet background work on the own glyph and gives an active run precedence", () => {
+it("keeps a session with only background processes idle", () => {
   const { dom, session, setCurrent } = mountRow({ backgroundProcessCount: 1, icon: "book" });
   const indicator = () => dom.query('.session-glyph__ring[role="img"]');
-  expect(indicator()?.getAttribute("aria-label")).toBe("Background work running");
-  expect(indicator()?.classList.contains("session-glyph__ring--background")).toBe(true);
+  expect(indicator()).toBeNull();
   setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true });
   flush();
   expect(indicator()?.getAttribute("aria-label")).toBe("Active run");
-  expect(indicator()?.classList.contains("session-glyph__ring--background")).toBe(false);
-  setCurrent({ ...session, backgroundProcessCount: undefined });
-  flush();
-  expect(indicator()).toBeNull();
 });
 
 it.each([undefined, 1])(
@@ -271,7 +266,6 @@ it.each([undefined, 1])(
     );
     const ring = () => dom.query('.sidebar-session-indicator [role="img"]');
     expect(ring()?.getAttribute("aria-label")).toBe("Subagents working");
-    expect(ring()?.classList.contains("session-glyph__ring--background")).toBe(false);
     expect(dom.query('.session-row-aside [aria-label="Subagents working"]')).toBeNull();
     expect(dom.all('[aria-label="Unread"]')).toHaveLength(0);
     expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toContain(
@@ -281,7 +275,6 @@ it.each([undefined, 1])(
     setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true, status: "running" });
     flush();
     expect(ring()?.getAttribute("aria-label")).toBe("Active run");
-    expect(ring()?.classList.contains("session-glyph__ring--background")).toBe(false);
 
     // Preserve the existing queued-parent signal while its subagents are running.
     setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true, status: "queued" });

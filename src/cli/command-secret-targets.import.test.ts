@@ -30,6 +30,44 @@ describe("command secret targets module import", () => {
     vi.resetModules();
   });
 
+  it("reads independent model credential target sets without channel or web discovery", async () => {
+    const denyUnrelatedImport = () => {
+      throw new Error("Model targets loaded channel or web discovery");
+    };
+    // mock-isolation: Channel metadata must throw on import to detect eager channel discovery.
+    vi.doMock("../channels/plugins/read-only.js", denyUnrelatedImport);
+    // mock-isolation: The web fetch provider runtime must throw on import to detect eager discovery.
+    vi.doMock("../plugins/web-fetch-providers.runtime.js", denyUnrelatedImport);
+    // mock-isolation: The web search provider runtime must throw on import to detect eager discovery.
+    vi.doMock("../plugins/web-search-providers.runtime.js", denyUnrelatedImport);
+    try {
+      const { getModelsCommandSecretTargetIds } = await import("./model-secret-targets.js");
+      const ids = getModelsCommandSecretTargetIds();
+      ids.clear();
+      expect(getModelsCommandSecretTargetIds()).toEqual(
+        new Set([
+          "models.providers.*.apiKey",
+          "models.providers.*.headers.*",
+          "models.providers.*.request.headers.*",
+          "models.providers.*.request.auth.token",
+          "models.providers.*.request.auth.value",
+          "models.providers.*.request.proxy.tls.ca",
+          "models.providers.*.request.proxy.tls.cert",
+          "models.providers.*.request.proxy.tls.key",
+          "models.providers.*.request.proxy.tls.passphrase",
+          "models.providers.*.request.tls.ca",
+          "models.providers.*.request.tls.cert",
+          "models.providers.*.request.tls.key",
+          "models.providers.*.request.tls.passphrase",
+        ]),
+      );
+    } finally {
+      vi.doUnmock("../channels/plugins/read-only.js");
+      vi.doUnmock("../plugins/web-fetch-providers.runtime.js");
+      vi.doUnmock("../plugins/web-search-providers.runtime.js");
+    }
+  });
+
   it("can resolve configured-channel status targets without the full registry", async () => {
     const listSecretTargetRegistryEntries = vi.fn(() => {
       throw new Error("registry touched too early");

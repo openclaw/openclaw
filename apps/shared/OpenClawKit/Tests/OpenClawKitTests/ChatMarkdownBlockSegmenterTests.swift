@@ -29,8 +29,9 @@ struct ChatMarkdownBlockSegmenterTests {
         #expect(self.segments("  \n\n ") == [])
     }
 
-    @Test func `crlf input is normalized`() {
-        let blocks = self.segments("alpha\r\n```\r\ncode\r\n```")
+    @Test(arguments: ["\n", "\r\n", "\r"])
+    func `fenced code after prose recognizes CommonMark line endings`(_ newline: String) {
+        let blocks = self.segments(["alpha", "```", "code", "```"].joined(separator: newline))
         #expect(blocks == [
             .prose("alpha"),
             .code(ChatCodeBlock(language: nil, code: "code", isComplete: true)),

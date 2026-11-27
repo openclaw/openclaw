@@ -8,7 +8,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import type { PluginSettingId } from "../../plugins/plugin-setting-id.ts";
 import { Icon } from "./icon.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
-import { Switch, type SwitchSize } from "./switch.tsx";
+import { Switch } from "./switch.tsx";
 import "../tooltip.ts";
 
 export type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
@@ -326,17 +326,6 @@ export function SettingsNavRow(
   );
 }
 
-export function SettingsToggle(
-  props: SettingsToggleControl & {
-    ariaLabel: string;
-    ariaDescription?: string;
-    size?: SwitchSize;
-    inputRef?: (element: HTMLInputElement) => void;
-  },
-) {
-  return <Switch {...props} />;
-}
-
 export function SettingsToggleRow(
   props: SettingsToggleControl &
     SettingsRowIdentity & {
@@ -384,12 +373,6 @@ export function SettingsToggleRow(
         />
       </div>
     </div>
-  );
-}
-
-export function SettingsDefaultDescription(props: { value: string; overridden: boolean }) {
-  return (
-    <Show when={props.overridden}>{t("configForm.defaultValue", { value: props.value })}</Show>
   );
 }
 

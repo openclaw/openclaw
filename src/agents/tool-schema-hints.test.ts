@@ -104,7 +104,7 @@ describe("tool schema hints", () => {
     );
   });
 
-  it("renders only required keys, at every level, once an input hint overflows", () => {
+  it("keeps required details on overflow and adds optional root fields only when they fit", () => {
     const item = closedObject({
       text: Type.String(),
       kind: Type.Union(["fact", "preference", "decision"].map((kind) => Type.Literal(kind))),
@@ -119,7 +119,7 @@ describe("tool schema hints", () => {
       note: Type.Optional(Type.String()),
     });
     expect(inputHint(schema)).toBe(
-      '{ attribution: string; items: Array<{ kind: "fact" | "preference" | "decision"; text: string; ... }>; requestId: string; ... }',
+      '{ attribution: string; items: Array<{ kind: "fact" | "preference" | "decision"; text: string; ... }>; requestId: string; note?: string; ... }',
     );
 
     // Union variants keep their required keys instead of collapsing to unknown.
@@ -142,7 +142,7 @@ describe("tool schema hints", () => {
       nullable: true,
     };
     expect(inputHint(closedObject({ choice: nullable, note: long }))).toBe(
-      "{ choice: { id: string; ... } | null; ... }",
+      "{ choice: { id: string; ... } | null; note?: string; ... }",
     );
     expect(
       inputHint(
@@ -152,6 +152,28 @@ describe("tool schema hints", () => {
         ]),
       ),
     ).toBe("{ id: string; ... } | { name: string }");
+  });
+
+  it("keeps optional mutation fields visible without exceeding the input hint budget", () => {
+    const schema = closedObject({
+      expectedHash: Type.String(),
+      expectedRevision: Type.Integer({ minimum: 1 }),
+      id: Type.String(),
+      reason: Type.String(),
+      requestId: Type.String(),
+      expectedVaultId: Type.Optional(Type.String()),
+      annotations: Type.Optional(fields(12, (i) => `annotation_${i}`)),
+      entities: Type.Optional(Type.Array(Type.String())),
+      addEvidence: Type.Optional(Type.Array(fields(12, (i) => `evidence_${i}`))),
+    });
+    const hint = inputHint(schema);
+    expect(hint).toContain("expectedRevision: number /* integer, >= 1 */");
+    expect(hint).toContain("requestId: string");
+    expect(hint).toContain("entities?: Array<...>");
+    expect(hint).toContain("addEvidence?: Array<...>");
+    expect(hint).toContain("annotations?: { ... }");
+    expect(hint.length).toBeLessThanOrEqual(300);
+    expect(outputHint(schema)).toContain("evidence_11: string");
   });
 
   it("shortens required types that still overflow and keeps the result bounded", () => {

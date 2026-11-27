@@ -6,24 +6,20 @@ import {
 } from "../../../sessions/session-controller.lifecycle.js";
 import type { captureSubagentCommands } from "./subagent-control-commands.js";
 
-/** One native Stop retains acceptance, caller failure, and its cleanup observations. */
+/**
+ * One native Stop retains acceptance and its cleanup observations. The caller's authority
+ * was checked once before the kill claim; an accepted Stop finishes without re-checking it.
+ */
 export function createSubagentKillAcceptance(params: {
   stopAcceptance: { accepted: boolean };
-  assertCallerCurrent: () => void;
   assertNativeCurrent: () => void;
   ownsSessionIncarnation: () => boolean;
   isKillOwnerCurrent: () => boolean;
   commands?: ReturnType<typeof captureSubagentCommands>;
 }) {
-  let acceptedCallerFailure: { error: unknown } | undefined;
   let acceptedPreparationFailure: { error: unknown } | undefined;
-  const acceptedFailures = () => [
-    ...new Set(
-      [acceptedCallerFailure, acceptedPreparationFailure].flatMap((failure) =>
-        failure ? [failure.error] : [],
-      ),
-    ),
-  ];
+  const acceptedFailures = () =>
+    acceptedPreparationFailure ? [acceptedPreparationFailure.error] : [];
   const prepare = (run: () => Promise<void>) => async () => {
     try {
       await run();
@@ -55,36 +51,15 @@ export function createSubagentKillAcceptance(params: {
     if (
       accepted &&
       params.commands?.owners.length &&
-      !acceptedCallerFailure &&
       params.ownsSessionIncarnation() &&
       params.isKillOwnerCurrent()
     ) {
-      try {
-        params.assertCallerCurrent();
-        params.commands.cancel(() => {
-          params.assertCallerCurrent();
-          params.assertNativeCurrent();
-          if (!params.ownsSessionIncarnation() || !params.isKillOwnerCurrent()) {
-            throw new Error("Subagent command cancellation lost its native owner.");
-          }
-        });
-      } catch (error) {
-        if (hasSqliteWorkerOutcomeUnknown(error)) {
-          throw error;
+      params.commands.cancel(() => {
+        params.assertNativeCurrent();
+        if (!params.ownsSessionIncarnation() || !params.isKillOwnerCurrent()) {
+          throw new Error("Subagent command cancellation lost its native owner.");
         }
-        // Caller revocation fences fresh effects, but the accepted native claim
-        // still owns settlement. A lost native owner cannot take that path.
-        try {
-          params.assertNativeCurrent();
-        } catch (nativeError) {
-          throw new AggregateError(
-            [error, nativeError],
-            "Subagent cancellation authority and native ownership changed",
-            { cause: nativeError },
-          );
-        }
-        acceptedCallerFailure = { error };
-      }
+      });
     }
   };
   const drain = async (release: Promise<void>, isInterrupted: () => boolean): Promise<boolean> => {
@@ -192,9 +167,6 @@ export function createSubagentKillAcceptance(params: {
     accept,
     drain,
     finish,
-    get callerFailure() {
-      return acceptedCallerFailure;
-    },
     get preparationFailed() {
       return acceptedPreparationFailure !== undefined;
     },

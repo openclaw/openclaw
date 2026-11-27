@@ -76,7 +76,7 @@ export function writeSessionEntryPatchInDatabase(
   database: OpenClawAgentDatabase,
   params: Pick<
     Parameters<typeof applySessionEntryPatchInDatabase>[1],
-    "sessionKey" | "writeBase" | "next" | "options" | "invalidateArchiveUndo"
+    "sessionKey" | "writeBase" | "next" | "options" | "invalidateArchiveUndo" | "shellCallMutation"
   > & { fresh: SqliteLifecycleTargetSnapshot },
 ): SessionEntryPatchMutation {
   const { fresh } = params;
@@ -96,6 +96,7 @@ export function writeSessionEntryPatchInDatabase(
   const selectedPreviousEntry = fresh[0]?.entry ?? params.writeBase;
   const postimages: SessionEntryWritePostimages = new Map();
   const persisted = writeSessionEntry(database, params.sessionKey, params.next, {
+    shellCallMutation: params.shellCallMutation,
     archiveUndo: params.invalidateArchiveUndo ? { kind: "invalidate" } : undefined,
     ...(params.options.consumePendingReset ? { consumePendingReset: true } : {}),
     ...(params.options.providerReviewMutation ? { providerReviewMutation: true } : {}),

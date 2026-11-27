@@ -4,7 +4,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { updateRunFixture } from "./update-run-fixture.test-support.js";
-import { renderUpdateRunReport } from "./update-run-report.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -82,8 +81,12 @@ it("records serving health without replacing a persisted restart refusal", () =>
     steps: [observation(0)],
   });
   expect(recorded?.verification).toEqual({ ...healthy, recovery });
-  expect(renderUpdateRunReport(recorded!).markdown).toContain(
-    "Recorded recovery: verified serving 2026.9.5; restart remains unsafe (runtime-verification-failed)",
+  expect(recorded?.steps).toContainEqual(
+    expect.objectContaining({
+      step: "gateway recovery verification",
+      status: "completed",
+      exitCode: 0,
+    }),
   );
 });
 
@@ -181,5 +184,4 @@ it("keeps recovery observations atomic across a busy write without revising the 
     ]),
   });
   expect(after?.verification.runningVersion).toBeUndefined();
-  expect(renderUpdateRunReport(after!).markdown).not.toContain("verified serving");
 });

@@ -964,18 +964,24 @@ function readGeneratedBundledChannelConfigEntries(source: string): unknown {
     }
   }
 
-  const compactMatch = source.match(
-    /const RAW_BUNDLED_CHANNEL_CONFIG_METADATA = \[([\s\S]*?)\]\.join\(""\);/u,
-  );
-  if (!compactMatch?.[1]) {
+  const rowsMatch = source.match(/^const loadPackedChannelRows = \(\) => (\[[\s\S]*?^\]);/mu);
+  const packedMatch =
+    rowsMatch ??
+    source.match(/const RAW_BUNDLED_CHANNEL_CONFIG_METADATA = (\[[\s\S]*?\])\.join\(""\);/u);
+  if (!packedMatch?.[1]) {
     return undefined;
   }
   try {
-    const chunks = JSON5.parse(`[${compactMatch[1]}]`);
-    if (!Array.isArray(chunks) || chunks.some((chunk) => typeof chunk !== "string")) {
+    const packed: unknown = JSON5.parse(packedMatch[1]);
+    const rows = rowsMatch ? packed : [packed];
+    if (
+      !Array.isArray(rows) ||
+      !rows.every((row) => Array.isArray(row) && row.every((chunk) => typeof chunk === "string"))
+    ) {
       return undefined;
     }
-    return JSON.parse(chunks.join(""));
+    const entries = rows.map((row) => JSON.parse(row.join("")));
+    return rowsMatch ? entries : entries[0];
   } catch {
     return undefined;
   }

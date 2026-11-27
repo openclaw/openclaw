@@ -43,13 +43,7 @@ type Claim = {
   failure?: Error;
   lastSequence: number;
   ownerSequence: number;
-  ownerMessages: Map<
-    number,
-    {
-      request: Extract<BrokerResourceRequest, { type: "resource-owner" }>;
-      size: number;
-    }
-  >;
+  ownerMessages: Map<number, Buffer>;
   pending?: { requestId: number; completion: Deferred };
 };
 
@@ -65,7 +59,9 @@ export class BrokerResourceClaims {
 
   constructor(
     private readonly host: {
-      transmit(request: Exclude<BrokerResourceRequest, { type: "resource-attach" }>): Promise<void>;
+      transmit(
+        request: Buffer | Exclude<BrokerResourceRequest, { type: "resource-attach" }>,
+      ): Promise<void>;
       markReady(pid: number, generation: number): void;
       refreshReference(): void;
     },
@@ -158,9 +154,7 @@ export class BrokerResourceClaims {
           throw new SpawnBrokerError("Native resource owner delivery capacity exceeded");
         }
         claim.ownerSequence = sequence;
-        const request: Extract<BrokerResourceRequest, { type: "resource-owner" }> =
-          deserialize(serialized);
-        claim.ownerMessages.set(sequence, { request, size: serialized.length });
+        claim.ownerMessages.set(sequence, serialized);
         this.bufferedBytes += serialized.length;
         this.bufferedMessages++;
         this.host.refreshReference();
@@ -169,7 +163,7 @@ export class BrokerResourceClaims {
           active();
           const pending = claim.ownerMessages.get(sequence);
           if (!claim.closed && pending) {
-            await this.host.transmit(pending.request);
+            await this.host.transmit(pending);
           }
         })().catch((cause: unknown) => {
           const error = toErrorObject(cause, "Native resource owner delivery failed");
@@ -262,7 +256,7 @@ export class BrokerResourceClaims {
       const pending = claim.ownerMessages.get(response.sequence);
       if (pending) {
         claim.ownerMessages.delete(response.sequence);
-        this.bufferedBytes -= pending.size;
+        this.bufferedBytes -= pending.length;
         this.bufferedMessages--;
         if (response.type === "resource-owner-rejected") {
           const error = toErrorObject(
@@ -378,7 +372,7 @@ export class BrokerResourceClaims {
 
   private clearOwnerMessages(claim: Claim): void {
     for (const pending of claim.ownerMessages.values()) {
-      this.bufferedBytes -= pending.size;
+      this.bufferedBytes -= pending.length;
       this.bufferedMessages--;
     }
     claim.ownerMessages.clear();

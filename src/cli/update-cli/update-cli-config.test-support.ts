@@ -1,17 +1,14 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { onTestFinished, vi, type Mock } from "vitest";
+import { vi, type Mock } from "vitest";
 import type { runPostCorePluginConvergence } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import type { readConfigFileSnapshot as ReadConfigFileSnapshot } from "../../config/config.js";
-import { resolveConfigPath } from "../../config/paths.js";
 import type {
   OpenClawConfig,
   ConfigFileSnapshot,
   ConfigValidationIssue,
 } from "../../config/types.openclaw.js";
-import { isMissingPathError } from "../../infra/errors.js";
 import { writeJsonFixture } from "./update-cli-package.test-support.js";
 import type { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
@@ -164,32 +161,6 @@ export function createUpdateCliConfigFixtures(deps: {
           parsed: options.preserveParsed ? deps.baseSnapshot.parsed : config,
           resolved: deps.baseSnapshot.resolved,
           hash: "post-doctor-hash",
-        }),
-      );
-    },
-    useFileBackedConfig: async (): Promise<void> => {
-      const configPath = resolveConfigPath();
-      const previous = await fs.readFile(configPath, "utf8").catch((error: unknown) => {
-        if (!isMissingPathError(error)) {
-          throw error;
-        }
-        return undefined;
-      });
-      onTestFinished(async () => {
-        if (previous === undefined) {
-          await fs.rm(configPath, { force: true });
-        } else {
-          await fs.writeFile(configPath, previous);
-        }
-      });
-      const raw = "{}\n";
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, raw, { mode: 0o600 });
-      vi.mocked(deps.readConfigFileSnapshot).mockResolvedValue(
-        fixtures.configSnapshot(deps.baseConfig, {
-          path: configPath,
-          raw,
-          hash: createHash("sha256").update(raw).digest("hex"),
         }),
       );
     },

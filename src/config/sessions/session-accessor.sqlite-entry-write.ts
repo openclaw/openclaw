@@ -42,6 +42,7 @@ import { clearSessionCollaborationForKey } from "./session-accessor.sqlite-node-
 import { prepareSessionEntryWindowRow } from "./session-accessor.sqlite-provenance.js";
 import { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
 import { hasValidSessionEntryIdentity } from "./session-accessor.sqlite-status.js";
+import { readCommittedShellReceipts } from "./session-accessor.sqlite-transcript-identity.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import {
@@ -159,6 +160,26 @@ function prepareSessionEntryWrite(
     options,
   );
   normalizedEntry = normalized.entry;
+  const shell = normalizedEntry.pendingShellCalls;
+  if (options.shellCallMutation && shell) {
+    // Only a committed result bearing the host's private receipt key settles a call.
+    // Reconcile inside this transaction so a crash between result append and cleanup is harmless.
+    const settled = readCommittedShellReceipts(
+      database,
+      normalizedEntry.sessionId,
+      shell.calls.map((call) => call.key),
+    );
+    const calls = shell.calls.filter((call) => !settled.has(call.key));
+    if (calls.length > 64) {
+      throw new Error(
+        "Too many shell commands are awaiting a saved result; the new command was not started.",
+      );
+    }
+    normalizedEntry = {
+      ...normalizedEntry,
+      pendingShellCalls: calls.length ? { ...shell, calls } : undefined,
+    };
+  }
   const archiveUndo = prepareSessionArchiveUndoWrite({
     database,
     sessionKey,

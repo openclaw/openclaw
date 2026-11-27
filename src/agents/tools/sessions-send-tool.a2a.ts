@@ -7,6 +7,7 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { ChatRef } from "../../sessions/chat-ref.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { formatSessionsSendDeliveryFailureNotice } from "../../sessions/sessions-send-failure-notice.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -49,7 +50,7 @@ export async function runSessionsSendA2AFlow(params: {
   reply?: AgentWaitResult & { replyText?: string };
   notifyRequesterOnWaitFailure?: boolean;
   deliverRequesterReply?: (
-    reply: Pick<Parameters<typeof runAgentStep>[0], "message" | "extraSystemPrompt">,
+    reply: Pick<Parameters<typeof runAgentStep>[0], "message" | "extraSystemPrompt" | "hideInput">,
   ) => Promise<void>;
 }) {
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
@@ -85,13 +86,15 @@ export async function runSessionsSendA2AFlow(params: {
         ((wait.status === "error" && !wait.retryableTransportError) ||
           isTerminalAgentWaitTimeout(wait))
       ) {
-        const error = wait.error?.trim() ? `: ${wait.error.trim()}` : "";
         await deliverRequesterReply({
           ...requesterStepContext,
           sessionKey: params.requesterSessionKey,
-          message: wait.sourceReplyDelivered
-            ? `sessions_send target run for ${params.displayKey} failed${error}. The target's final reply was already delivered to its source conversation. Do not resend; report the run failure.`
-            : `sessions_send delivery to ${params.displayKey} failed${error}. The target may not have received the message; retry or report the failure instead of assuming delivery succeeded.`,
+          hideInput: true,
+          message: formatSessionsSendDeliveryFailureNotice({
+            displayKey: params.displayKey,
+            error: wait.error,
+            sourceReplyDelivered: wait.sourceReplyDelivered,
+          }),
           extraSystemPrompt: wait.sourceReplyDelivered
             ? "The target run failed after its final source reply was delivered. Preserve the run error diagnosis. Do not resend the message or the reply."
             : "A previous sessions_send delivery failed after it was accepted. Inspect the accepted operation before retrying, or report the failure. Preserve attributed session-tool delivery; do not replace it with an operator CLI request. Do not assume the target received the message.",

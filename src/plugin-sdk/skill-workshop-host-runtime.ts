@@ -4,7 +4,11 @@
 // no public SDK contract yet.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export { listWorkshopChanges, recordWorkshopChange } from "../skills/workshop-changes/changes.js";
+export {
+  listWorkshopChanges,
+  recordWorkshopChange,
+  WORKSHOP_CHANGES_MAX_LIMIT,
+} from "../skills/workshop-changes/changes.js";
 export type {
   WorkshopActor,
   WorkshopChange,

@@ -16,6 +16,7 @@ import type {
   ChannelIngressQueueClaim,
   ChannelIngressQueueRecord,
 } from "../../src/channels/message/ingress-queue.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -88,12 +89,7 @@ try {
   await run(500);
   const hostLoad = loadavg();
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const cpuBefore = process.threadCpuUsage();
   const started = performance.now();

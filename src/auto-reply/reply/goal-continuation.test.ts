@@ -640,35 +640,49 @@ describe("Goal return from committed child custody", () => {
     }
   });
 
-  it("resumes the Goal once, on the partition that settles its cohort last", async () => {
-    const f = retainedGoal();
-    const sibling: SubagentRunRecord = {
-      ...f.child,
-      runId: "goal-sibling",
-      childSessionKey: `${f.child.childSessionKey}-sibling`,
-      requesterSettleWake: {
-        ...f.child.requesterSettleWake!,
-        batchRunIds: ["goal-child", "goal-sibling"],
-      },
-    };
-    createGoalContinuationReturn(f.params)(() => {
-      bindGoalContinuationExecution(f.params.sourceRunId, f.params.sessionKey);
-      promoteGoalContinuationYield({
-        requesterTurnRunId: f.params.sourceRunId,
-        entries: [f.child, sibling],
-        rearmGeneration: 1,
+  it.each([false, true])(
+    "resumes the Goal on its last partition (retired peer: %s)",
+    async (retiredPeer) => {
+      const f = retainedGoal();
+      const batchRunIds = ["goal-child", "goal-sibling", ...(retiredPeer ? ["retired-child"] : [])];
+      f.child.requesterSettleWake = { ...f.child.requesterSettleWake!, batchRunIds };
+      const sibling: SubagentRunRecord = {
+        ...f.child,
+        runId: "goal-sibling",
+        childSessionKey: `${f.child.childSessionKey}-sibling`,
+        requesterSettleWake: {
+          ...f.child.requesterSettleWake!,
+          batchRunIds,
+        },
+      };
+      createGoalContinuationReturn(f.params)(() => {
+        bindGoalContinuationExecution(f.params.sourceRunId, f.params.sessionKey);
+        promoteGoalContinuationYield({
+          requesterTurnRunId: f.params.sourceRunId,
+          entries: [f.child, sibling],
+          rearmGeneration: 1,
+        });
       });
-    });
-    f.operation.complete();
-    // The first ready result is an ordinary settle turn while its sibling still works.
-    expect(f.publish()).toBeUndefined();
-    await f.finish();
-    expect(enqueueFollowupRun).not.toHaveBeenCalled();
-    const context = f.publish(true, "settle-run", normal, true, [sibling]);
-    expect(context?.text).toContain("Active goal: Finish the checklist");
-    await finishGoalContinuationSettlement([sibling], true);
-    expect(enqueueFollowupRun).toHaveBeenCalledOnce();
-  });
+      f.operation.complete();
+      // The first ready result is an ordinary settle turn while its sibling still works.
+      // Dispatch records only the ready partition in each member's wake.
+      f.child.requesterSettleWake = {
+        ...f.child.requesterSettleWake!,
+        batchRunIds: [f.child.runId],
+      };
+      expect(f.publish()).toBeUndefined();
+      await f.finish();
+      expect(enqueueFollowupRun).not.toHaveBeenCalled();
+      const context = f.publish(true, "settle-run", normal, true, [sibling]);
+      expect(context?.text).toContain("Active goal: Finish the checklist");
+      sibling.requesterSettleWake = {
+        ...sibling.requesterSettleWake!,
+        batchRunIds: [sibling.runId],
+      };
+      await finishGoalContinuationSettlement([sibling], true);
+      expect(enqueueFollowupRun).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["settle-run", "independent-command"])(
     "injects Goal context at the actual built-in harness only for the admitted settlement (%s)",
