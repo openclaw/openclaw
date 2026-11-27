@@ -20,10 +20,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // Work a one-shot `agent --local` turn starts before its first model request. Every
 // Node process and worker thread boots its own module graph on the critical path, so
 // counts catch cold-start regressions that wall time on a shared CI host cannot.
-// The budget is exact: lower it in the PR that removes work. NODE_OPTIONS carries the
-// ledger into descendant processes that inherit the environment and into every worker;
-// spawn calls are counted separately for descendants that start with a clean environment.
-const COLD_START_BUDGET = { nodeProcesses: 4, nodeSpawns: 5, workerThreads: 18 };
+// The budget is a ceiling set from Linux CI (macOS starts one worker fewer); lower it in
+// the PR that removes work. NODE_OPTIONS carries the ledger into descendant processes
+// that inherit the environment and into every worker; spawn calls are counted
+// separately for descendants that start with a clean environment.
+const COLD_START_BUDGET = { nodeProcesses: 4, nodeSpawns: 5, workerThreads: 19 };
 
 const LEDGER_PRELOAD = `
 import fs from "node:fs";
@@ -62,7 +63,7 @@ if (ledger && !globalThis[marker]) {
 
 // Windows always respawns for its stack size, so its launch topology differs by design.
 it.skipIf(process.platform === "win32")(
-  "agent --local starts exactly its budget of processes and workers before the first request",
+  "agent --local stays within its process and worker budget before the first request",
   { timeout: 120_000 },
   async () => {
     const root = tempDirs.make("openclaw-local-cold-start-");
@@ -140,7 +141,10 @@ it.skipIf(process.platform === "win32")(
           counts.workerThreads++;
         }
       }
-      expect(counts).toEqual(COLD_START_BUDGET);
+      const report = JSON.stringify(counts);
+      expect(counts.nodeProcesses, report).toBeLessThanOrEqual(COLD_START_BUDGET.nodeProcesses);
+      expect(counts.nodeSpawns, report).toBeLessThanOrEqual(COLD_START_BUDGET.nodeSpawns);
+      expect(counts.workerThreads, report).toBeLessThanOrEqual(COLD_START_BUDGET.workerThreads);
     } finally {
       await server.close();
     }
