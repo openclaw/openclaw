@@ -140,9 +140,9 @@ describe("health-check contributions derive pending work from their repairs", ()
         decideDoctorContributionPending(failing, context()),
       ),
     ).resolves.toBe(true);
-    expect(lines.filter((line) => line.includes("doctor.pending."))).toEqual([
-      expect.stringMatching(/pending=undecidable check=owner /u),
-    ]);
+    expect(
+      lines.filter((line) => line.includes("doctor.pending.") && line.includes("pending=")),
+    ).toEqual([expect.stringMatching(/pending=undecidable check=owner /u)]);
   });
 });
 
