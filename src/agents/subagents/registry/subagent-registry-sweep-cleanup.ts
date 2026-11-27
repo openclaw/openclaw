@@ -158,7 +158,7 @@ export function createSubagentSweepContext(
           if (result === "pending") {
             return;
           }
-          suppressSessionCleanup = result === "changed";
+          suppressSessionCleanup = result === "changed" || result === "suppressed";
           if (result === "deleted") {
             if (
               !isCleanupCurrent(runs.get(runId), entry) ||
