@@ -45,8 +45,6 @@ function firstTransportHookCall(mock: { mock: { calls: unknown[][] } }): Record<
   return call as Record<string, unknown>;
 }
 
-import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
-import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 import { createOpenAIResponsesContextManagementWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import { createGoogleThinkingPayloadWrapper } from "../plugin-sdk/provider-stream-shared.js";
 import {
@@ -85,41 +83,15 @@ function installFullProviderRuntimeDepsForTest() {
           params.context,
         );
       }
-      if (params.provider === "amazon-bedrock") {
-        return isAnthropicFamilyCacheTtlEligible({
-          provider: params.provider,
-          modelId: params.context.modelId,
-        })
-          ? params.context.streamFn
-          : createTestBedrockNoCacheWrapper(params.context.streamFn);
-      }
       if (params.provider === "google") {
         return createGoogleThinkingPayloadWrapper(
           params.context.streamFn,
           params.context.thinkingLevel,
         );
       }
-      if (params.provider === "kimi") {
-        return params.context.streamFn;
-      }
-      if (params.provider === "minimax" || params.provider === "minimax-portal") {
-        return createMinimaxFastModeWrapper(
-          params.context.streamFn,
-          params.context.extraParams?.fastMode === true,
-        );
-      }
       return params.context.streamFn;
     },
   });
-}
-
-function createTestBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
-  return (model, context, options) =>
-    underlying(model, context, {
-      ...options,
-      cacheRetention: "none",
-    });
 }
 
 function withMinimalProviderRuntimeDepsForTest<T>(run: () => T): T {
@@ -305,20 +277,6 @@ describe("applyExtraParamsToAgent", () => {
       runResponsesPayloadMutationCase({ ...params, payload: params.payload ?? {} }),
     );
   }
-
-  it("restores explicit MiniMax-M3 maxTokens when rewriting budget thinking", () => {
-    const payload = runResponsesPayloadMutationCase({
-      thinkingLevel: "adaptive",
-      model: {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M3",
-      } as Model<"anthropic-messages">,
-      payload: { max_tokens: 8692, thinking: { type: "enabled", budget_tokens: 8192 } },
-      options: { maxTokens: 500 },
-    });
-    expect(payload).toStrictEqual({ max_tokens: 500, thinking: { type: "adaptive" } });
-  });
 
   it.each([
     ["DeepSeek V4", "deepseek-v4-pro"],

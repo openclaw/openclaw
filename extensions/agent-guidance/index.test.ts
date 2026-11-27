@@ -75,8 +75,16 @@ it("retains a registration snapshot until a new registration reads edited files"
 it.each([
   ["array", []],
   ["unknown field", { extra: true }],
-  ["relative directory", { directory: "relative" }],
-  ["NUL directory", { directory: "/bad\0" }],
+  [
+    "relative directory",
+    { directory: "relative" },
+    "directory must be an absolute operator-controlled path",
+  ],
+  [
+    "NUL directory",
+    { directory: "/bad\0" },
+    "directory must be an absolute operator-controlled path",
+  ],
   ["missing agents", { agents: undefined }],
   ["empty agents", { agents: [] }],
   ["blank agent", { agents: [" "] }],
@@ -87,10 +95,14 @@ it.each([
   ["too many agents", { agents: Array.from({ length: 65 }, (_, i) => `agent-${i}`) }],
   ["null files", { append: null }],
   ["duplicate files", { prepend: ["instructions.md"] }],
-  ["too many files", { append: Array.from({ length: 9 }, (_, i) => `${i}.md`) }],
+  [
+    "too many files",
+    { append: Array.from({ length: 9 }, (_, i) => `${i}.md`) },
+    "configure 1 to 8 instruction files in total",
+  ],
   ["missing files", { append: undefined }],
   ["empty files", { prepend: [], append: [] }],
-])("rejects %s configuration", (_name, extra) => {
+])("rejects %s configuration", (_name, extra, expectedError = "agent-guidance:") => {
   if (Array.isArray(extra)) {
     expect(valid(extra)).toBe(false);
     return;
@@ -99,7 +111,7 @@ it.each([
   if (["unknown field", "empty agents", "missing files", "empty files"].includes(_name)) {
     expect(valid(value)).toBe(false);
   }
-  expect(() => registerGuidance(value)).toThrow("agent-guidance:");
+  expect(() => registerGuidance(value)).toThrow(expectedError);
 });
 
 it.each([

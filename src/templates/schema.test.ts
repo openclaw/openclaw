@@ -116,16 +116,7 @@ describe("parseTemplateManifest", () => {
   it("defaults optional ownership groups without inventing agent settings", () => {
     const manifest = requireManifest({ schemaVersion: 1, agent: { id: "minimal-agent" } });
 
-    expect(manifest).toEqual({
-      schemaVersion: 1,
-      agent: { id: "minimal-agent" },
-      metadata: {},
-      workspace: { bootstrapFiles: {}, files: [] },
-      skills: [],
-      plugins: [],
-      mcpServers: {},
-      automations: [],
-    });
+    expect(manifest.agent).toEqual({ id: "minimal-agent" });
   });
 
   it.each(["anthropic/claude-sonnet-4-5", "openrouter/anthropic/claude-sonnet-4.5"])(

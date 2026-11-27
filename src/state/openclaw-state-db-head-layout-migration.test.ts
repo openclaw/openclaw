@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
 import { recordSessionStateEventsInDatabase } from "../sessions/session-state-events.kernel.js";
 import { readSessionStateSequence } from "../sessions/session-state-events.read.worker.js";
+import { stateV24Schema } from "./openclaw-historical-imports.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -21,10 +22,7 @@ import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.te
 import { migrateSqliteTableWithoutRowid } from "./sqlite-table-layout-migration.js";
 
 // v25 changes only metadata; its physical schema is identical to v24.
-const legacySchema = readFileSync(
-  new URL("../../test/fixtures/sqlite/openclaw-state-schema-v24.sql", import.meta.url),
-  "utf8",
-);
+const legacySchema = stateV24Schema();
 const directories = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
@@ -142,6 +140,7 @@ it.each(["runtime", "doctor"] as const)(
         scope,
         [
           "operator_approvals",
+          "worker_session_placements",
           "schema_meta",
           "config_machine_state",
           "github_publication_requests",

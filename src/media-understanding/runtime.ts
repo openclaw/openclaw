@@ -8,10 +8,13 @@ import {
   findDecisionReason,
   normalizeDecisionReason,
 } from "../../packages/media-understanding-common/src/format.js";
+import type { RunMediaUnderstandingFileResult } from "../../packages/media-understanding-common/src/types.js";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { MEDIA_CAPABILITY_DEFAULTS } from "./defaults.constants.js";
 import {
@@ -41,9 +44,9 @@ import type {
   DescribeVideoFileParams,
   ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
-  RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
+export type { RunMediaUnderstandingFileResult } from "../../packages/media-understanding-common/src/types.js";
 export type {
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
@@ -52,7 +55,6 @@ export type {
   DescribeVideoFileParams,
   ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
-  RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
 
@@ -371,10 +373,9 @@ export async function describeVideoFile(
 }
 
 /** Prepares the largest input that any configured transcription fallback can accept. */
-export async function resolveAudioInputBudget(params: {
-  cfg: OpenClawConfig;
-}): Promise<{ enabled: false } | { enabled: true; maxBytes: number }> {
-  const { cfg } = params;
+function selectAudioInputBudget(
+  cfg: OpenClawConfig,
+): { enabled: false } | { enabled: true; maxBytes: number } {
   const config = cfg.tools?.media?.audio;
   if (config?.enabled === false) {
     return { enabled: false };
@@ -393,6 +394,33 @@ export async function resolveAudioInputBudget(params: {
     maxBytes: Math.max(
       ...candidates.map((entry) => resolveMaxBytes({ cfg, capability, config, entry })),
     ),
+  };
+}
+
+export async function resolveAudioInputBudget(params: { cfg: OpenClawConfig }) {
+  return selectAudioInputBudget(params.cfg);
+}
+
+function audioBudgetRegistryOwner() {
+  // Capability resolution prefers the request's retained registry over the live registry.
+  return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistryVersion();
+}
+
+/** Prepare at setup so a speaker can be admitted synchronously under the current config. */
+export function createAudioInputBudgetReader(readConfig: () => OpenClawConfig) {
+  let cfg = readConfig();
+  let budget = selectAudioInputBudget(cfg);
+  let registry = audioBudgetRegistryOwner();
+  return () => {
+    const current = readConfig();
+    const currentRegistry = audioBudgetRegistryOwner();
+    // Config and installed provider capabilities both affect the eligible fallback sizes.
+    if (cfg !== current || registry !== currentRegistry) {
+      budget = selectAudioInputBudget(current);
+      cfg = current;
+      registry = audioBudgetRegistryOwner();
+    }
+    return budget;
   };
 }
 

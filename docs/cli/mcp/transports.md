@@ -154,9 +154,21 @@ The per-requester flow is sender-driven:
 2. OpenClaw returns a sign-in link for that sender instead of exposing another sender's credentials.
 3. The provider redirects through the Gateway callback. After the callback succeeds, the sender retries the tool call with their connected account.
 
+In authenticated Control UI chat, ask the agent to connect the server to get
+an OAuth link for your current verified profile. Verified people using Gateway
+chat through a trusted proxy or calling the OpenAI-compatible APIs use the same
+personal account as MCP Apps. This does not change transport sender IDs or turn
+attribution. If you previously connected through a shared Gateway backend identity,
+sign in once as yourself; the existing backend credential is not copied or deleted.
+
+Settings → MCP and the CLI still manage shared operator credentials, not personal
+connections. Scheduled work and subagents do not inherit a person's account. If
+several people steer the same ongoing browser turn, start a new turn before
+requesting personal access.
+
 For per-requester accounts, missing `gateway.publicOrigin` is reported by the sign-in result and `openclaw doctor`. Shared operator sign-in instead falls back to the Gateway's loopback address. `openclaw mcp login` and `openclaw mcp logout` manage only shared credentials, not per-requester accounts.
 
-Sign-in links are single-use bearer links: any chat participant who opens one connects their own account to the sender the link was issued for. Use per-requester OAuth in channels where every trusted sender is mutually trusted; a requester-private sign-in handoff is tracked as follow-up work.
+Sign-in links are single-use bearer links: any chat participant who opens one connects their own account to the sender the link was issued for. Use per-requester OAuth only on mutually trusted chat surfaces or in a private session; a requester-private sign-in handoff is tracked as follow-up work.
 
 The shared operator flow uses the following commands:
 

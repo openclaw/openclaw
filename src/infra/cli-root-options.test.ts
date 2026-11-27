@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   resolveGatewayCommandPath,
   resolveGatewayRunPreBootstrapOptions,
+  shouldPreserveGatewayProcessArgv,
 } from "../cli/gateway-run-argv.js";
 import {
   getCommandArgsWithRootOptions,
@@ -15,6 +16,16 @@ const positionals = (
   args: string[],
   options: Parameters<typeof getCommandPositionalsWithRootOptions>[1],
 ) => getCommandPositionalsWithRootOptions(cliArgs(...args), options);
+
+it("retains Linux Gateway argv for installation identity without retaining inline secrets", () => {
+  const foreground = cliArgs("gateway", "run", "--token-file", "/private/token");
+  expect(shouldPreserveGatewayProcessArgv(foreground, "linux")).toBe(true);
+  expect(shouldPreserveGatewayProcessArgv(foreground, "darwin")).toBe(false);
+  expect(shouldPreserveGatewayProcessArgv(cliArgs("gateway", "status"), "linux")).toBe(false);
+  for (const args of [["--token=fixture"], ["--password", "fixture"]]) {
+    expect(shouldPreserveGatewayProcessArgv(cliArgs("gateway", ...args), "linux")).toBe(false);
+  }
+});
 
 it("classifies value-like and flag-like tokens", () => {
   expect(

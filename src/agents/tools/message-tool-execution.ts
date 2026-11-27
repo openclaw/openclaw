@@ -33,6 +33,7 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
@@ -141,6 +142,10 @@ function* createMessageToolSteps(
     inferredCurrentChannel.currentChannelProvider,
     options?.sourceReplyDeliveryMode,
   );
+  // Only a session bound to an external chat can have no viewer of the internal sink.
+  const sourceReplyTranscriptOnly =
+    options?.inputProvenance?.kind === "inter_session" &&
+    sessionDeliveryChannel(sessionEntry) !== undefined;
   const resolvedAgentId =
     options?.agentId ??
     (options?.agentSessionKey
@@ -597,7 +602,7 @@ function* createMessageToolSteps(
                   sandboxRoot: options?.sandboxRoot,
                   sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
                   sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
-                  sourceReplyTranscriptOnly: options?.inputProvenance?.kind === "inter_session",
+                  sourceReplyTranscriptOnly,
                   // Only an admitted channel source can arm terminal restart reconciliation.
                   // Preserve progress even without a source turn: recovery must not
                   // mistake its persisted mirror for a completed assistant reply.
@@ -675,7 +680,7 @@ function* createMessageToolSteps(
           };
           const currentSourceReply =
             result.handledBy === "internal-source"
-              ? options?.inputProvenance?.kind !== "inter_session"
+              ? !sourceReplyTranscriptOnly
               : await isDeliveredCurrentSourceReplyAsync(sourceReply);
           // A completed provider write must settle even if its caller was revoked
           // while awaiting the accepted response. Its next request stays fenced.

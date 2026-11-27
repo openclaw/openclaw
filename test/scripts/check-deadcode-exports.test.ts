@@ -337,16 +337,43 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     ).not.toContain("plugin-prerelease-test-plan.mts");
   });
 
-  it("models named Solid lazy consumers without retaining a deleted loader", () => {
-    const source = `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  it("models named Solid lazy consumers in every UI loader without retaining a deleted loader", () => {
+    const sources: Record<string, string> = {
+      "settings-sidebar-lazy.tsx": `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSidebar",
-});`;
-    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+});`,
+      // A second loader in another directory, as #204200 added for the chat bubble.
+      "chat-message-bubble-view.tsx": `const Notice = lazy(() => import("./chat-read-aloud-status.tsx"), {
+  export: "RecordingApiKeyNotice",
+});`,
+      "chat-message-bubble-view.test.tsx": `lazy(() => import("./test-only.tsx"), { export: "TestOnly" });`,
+    };
+    const dirs: Record<string, string> = {
+      "settings-sidebar-lazy.tsx": path.resolve("ui/src/components"),
+      "chat-message-bubble-view.tsx": path.resolve("ui/src/pages/chat/components"),
+      "chat-message-bubble-view.test.tsx": path.resolve("ui/src/pages/chat/components"),
+    };
+    vi.spyOn(fs, "readdirSync").mockReturnValue(
+      Object.keys(sources).map((name) => ({
+        name,
+        parentPath: dirs[name],
+        isFile: () => true,
+      })) as never,
+    );
+    const read = vi
+      .spyOn(fs, "readFileSync")
+      .mockImplementation(((file: string) => sources[path.basename(file)] ?? "") as never);
     const compile = knipConfig.compilers.mjs;
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+    const compiled = compile("// config", "config/knip-vite-consumers.mjs");
+    expect(compiled).toContain(
       'import { ShellSettingsSidebar as __solidLazy0 } from "../ui/src/components/settings-sidebar-shell.tsx";',
     );
-    read.mockReturnValue("const SettingsSidebar = null;");
+    expect(compiled).toContain(
+      'from "../ui/src/pages/chat/components/chat-read-aloud-status.tsx";',
+    );
+    expect(compiled).toContain("import { RecordingApiKeyNotice as __solidLazy");
+    expect(compiled).not.toContain("TestOnly");
+    read.mockImplementation((() => "const SettingsSidebar = null;") as never);
     expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
       "ShellSettingsSidebar",
     );

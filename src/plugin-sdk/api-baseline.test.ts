@@ -477,6 +477,24 @@ export {};`,
   expect(firstExport(changed)?.closureHash).not.toBe(firstExport(baseline)?.closureHash);
 });
 
+it("keeps resolved runtime-only side-effect imports out of the declaration closure", async () => {
+  const source = "export type Fixture = string;";
+  const baseline = await renderSourceFixture(source);
+  const withRuntime = await renderSourceFixture({
+    "fixture.ts": `import "../../runtime.mjs";
+${source}`,
+    "../../runtime.mjs": "globalThis.fixtureInitialized = true;",
+  });
+
+  expect(withRuntime).toEqual(baseline);
+});
+
+it("rejects a missing runtime side-effect import instead of dropping it", async () => {
+  await expect(
+    renderSourceFixture('import "../../missing.mjs";\nexport type Fixture = string;'),
+  ).rejects.toThrow("src/plugin-sdk/fixture.ts -> ../../missing.mjs");
+});
+
 it("ignores unreachable declarations beside a transitive export", async () => {
   const render = (extra = "") =>
     renderSourceFixture({

@@ -96,7 +96,7 @@ it("keeps required beta.1 trust closeout downstream of public activation on both
     assert(closeout, file);
     expect(closeout.needs).toContain(activation);
     expect(closeout.if).toContain("-beta.1");
-    expect(closeout.if).toContain("result == 'success'");
+    expect(closeout.if).toContain(`needs.${activation}.result == 'success'`);
     expect(closeout.uses).toBe("./.github/workflows/plugin-npm-trust-closeout.yml");
     expect(closeout["continue-on-error"]).not.toBe(true);
     for (const [name, job] of Object.entries(jobs)) {
@@ -173,6 +173,7 @@ it.each(["success", "failure"])(
     const env = {
       ...process.env,
       PATH: bin + ":" + process.env.PATH,
+      FORCE_COLOR: "1",
       GH_TOKEN: "",
       GITHUB_TOKEN: "",
       CALLS: calls,
@@ -210,6 +211,7 @@ it.each(["success", "failure"])(
       encoding: "utf8",
     });
     expect(verify.status, verify.stderr).toBe(conclusion === "success" ? 0 : 1);
+    expect(verify.stdout).toContain(`plugin-npm-release.yml finished with ${conclusion} in 1m00s:`);
     const requests = readFileSync(calls, "utf8")
       .trim()
       .split("\n")

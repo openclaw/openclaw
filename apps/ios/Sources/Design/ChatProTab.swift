@@ -294,7 +294,7 @@ struct ChatProTab: View {
     /// never headlines: the title stays empty until the session is named (web `titlePending`).
     private var headerSessionTitle: String? {
         guard let session = self.viewModel?.currentSessionEntry() else { return nil }
-        let title = CommandCenterTab.sessionTitle(session)
+        let title = SessionPresentation.title(session)
         return title.isEmpty || title == session.key ? nil : title
     }
 
@@ -549,21 +549,28 @@ struct ChatProTab: View {
 
     private func exportTranscript() {
         guard let viewModel else { return }
-        let title = viewModel.sessions.first { $0.key == viewModel.sessionKey }?.displayName
-        let filename = ChatTranscriptExporter.filename(
-            sessionTitle: title,
-            sessionKey: viewModel.sessionKey)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenClawTranscripts", isDirectory: true)
-        let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
-
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try viewModel.exportTranscriptMarkdown().write(to: fileURL, atomically: true, encoding: .utf8)
+            let fileURL = try Self.writeTranscript(for: viewModel, in: directory)
             self.transcriptShareItem = TranscriptShareItem(fileURL: fileURL)
         } catch {
             self.showsTranscriptExportError = true
         }
+    }
+
+    static func writeTranscript(for viewModel: OpenClawChatViewModel, in directory: URL) throws -> URL {
+        let title = viewModel.currentSessionEntry()?.displayName
+        let key = viewModel.sessionKey
+        let filename = ChatTranscriptExporter.filename(sessionTitle: title, sessionKey: key)
+        let markdown = ChatTranscriptExporter.markdown(
+            sessionTitle: title,
+            sessionKey: key,
+            messages: viewModel.messages)
+        let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
+        return fileURL
     }
 
     /// Chat follows the operator session; buildChat reports connected only when it can serve chat.

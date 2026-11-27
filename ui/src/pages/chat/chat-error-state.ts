@@ -1,3 +1,8 @@
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+
+/** Presentation-only marker set by the boundary that refuses an expected action. */
+export const EXPECTED_CHAT_REFUSAL = Symbol("expected-chat-refusal");
+
 export type ChatErrorState = ReturnType<typeof createChatErrorState>;
 
 export function createChatErrorState() {
@@ -37,7 +42,13 @@ export function createChatErrorState() {
       publish();
     },
     setRecoverableChatError(message: string, detail?: unknown): () => void {
-      const error = { message, detail };
+      const error = {
+        message,
+        detail:
+          detail instanceof GatewayRequestError && detail.gatewayCode === "FORBIDDEN"
+            ? EXPECTED_CHAT_REFUSAL
+            : detail,
+      };
       lastError = chatError = error;
       publish();
       return () => {

@@ -57,7 +57,7 @@ describe("authenticated Talk permission parity", () => {
       context: {
         logGateway: createSubsystemLogger("test/talk-permission-parity"),
       },
-      authority: resolveTalkAgentConsultAuthority(client.connect.scopes, client),
+      authority: resolveTalkAgentConsultAuthority(client),
       getVoiceSessionId: () => voiceSessionId,
       initialItems: [],
       ...overrides,
@@ -112,7 +112,10 @@ describe("authenticated Talk permission parity", () => {
   beforeAll(async () => {
     state = await createOpenClawTestState({ label: "voice-permission-parity", applyEnv: true });
     config = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      agents: {
+        defaults: { model: "anthropic/claude-opus-4-6" },
+        entries: { main: { workspace: state.workspaceDir } },
+      },
       plugins: { enabled: false },
       tools: { exec: { host: "gateway", mode: "full" } },
     };
@@ -170,13 +173,18 @@ describe("authenticated Talk permission parity", () => {
         cwd,
         sessionRoot: cwd,
         permissionMode: "guarded",
-        execOverrides: { host: "node", node: "session-node", nodeCwd: "/node/task" },
+        // The typed-turn owner carries the session's exec pin; exec defaults resolve from it.
+        execSession: expect.objectContaining({
+          execHost: "node",
+          execNode: "session-node",
+          execCwd: "/node/task",
+        }),
       });
       return { payloads: [{ text: "Prepared." }], meta: {} };
     });
     const runner = createRunner({
       config: cfg,
-      authority: resolveTalkAgentConsultAuthority(ownerClient.connect.scopes, ownerClient),
+      authority: resolveTalkAgentConsultAuthority(ownerClient),
     });
     expect(
       await runner.runArgs({
@@ -232,7 +240,7 @@ describe("authenticated Talk permission parity", () => {
         text: "Completed.",
       });
       await expect(runner.runArgs({ question: "Start another action" })).rejects.toThrow(
-        /authority|active|closed/,
+        /ended or changed|closed/,
       );
     } finally {
       retained.release();

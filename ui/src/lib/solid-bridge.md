@@ -61,6 +61,12 @@ signal, so unchanged inputs do not invalidate other properties' computations.
 Imperative callers await the host's `updateComplete` for committed synchronous
 output. Each host retains its mount promise to preserve disconnect/reconnect
 ordering. Solid-owned hosts publish into their parent's existing render cycle.
+An optional `updateComplete(host)` hook composes an owner's commit receipt after
+the bridge mount completes. Read the current owner and its receipt inside the
+hook, not before mounting; return `false` for a retired commit or `undefined`
+when no owner exists. This does not transfer resource reconciliation or disposal
+to the bridge.
+
 Completion does not wait for async resources, layout, or animations. Callers must
 retain semantically unchanged object and callback references at their projection
 owner; the bridge compares property values by identity.

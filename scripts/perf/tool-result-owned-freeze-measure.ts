@@ -24,6 +24,7 @@ import {
 } from "../../src/agents/embedded-agent-runner/tool-result-truncation.js";
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const mode = process.argv[2] ?? "timing";
 const totalRequests = Number(process.argv[3] ?? 3000);
@@ -121,12 +122,7 @@ for (const workload of workloads) {
   global.gc?.();
   const inspector = new Session();
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const loadBefore = os.loadavg();
   const cpuBefore = process.threadCpuUsage();

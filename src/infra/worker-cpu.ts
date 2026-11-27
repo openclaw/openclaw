@@ -6,6 +6,7 @@ import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage, WorkerMemorySample } from "./diagnostic-process-types.js";
+import { freezeOwnedDiagnosticSnapshot } from "./diagnostic-value-snapshot.js";
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { resolveProcessRuntimeWorkerFile } from "./runtime-worker-process-generation.js";
@@ -645,8 +646,14 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
       return;
     }
     recordWorkerHeap(source, record.heapUsed);
-    // The private producer supplies native counters; retain the cloned sample as-is.
+    // The private port already cloned these rows. Seal the nested rows shared with samples.
     delete record.gc;
+    if (record.heapSpaces) {
+      freezeOwnedDiagnosticSnapshot(record.heapSpaces);
+    }
+    if (record.retainedData) {
+      freezeOwnedDiagnosticSnapshot(record.retainedData);
+    }
     source.heap = { value: record, sampledAt: performance.now() };
     source.memoryPending = false;
     source.memoryUnavailable = false;

@@ -3,7 +3,6 @@ import { t } from "../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { formatCompactTokenCount } from "../../lib/format.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { CompactionStatus, RunOutputUsage } from "./tool-stream-contract.ts";
 
@@ -25,14 +24,27 @@ export function isContextCompactionMessage(message: unknown): boolean {
 }
 
 export function matchesCompactionOperation(message: unknown, status: CompactionStatus): boolean {
-  const record = asRecord(message);
-  const marker = asRecord(record?.["__openclaw"]);
+  const marker = asRecord(asRecord(message)?.["__openclaw"]);
   return Boolean(
-    (marker?.kind === "compaction" || isContextCompactionMessage(message)) &&
     status.runId &&
     marker?.runId === status.runId &&
-    (!status.itemId || marker.itemId === status.itemId),
+    (!status.itemId || marker.itemId === status.itemId) &&
+    (marker.kind === "compaction" || isContextCompactionMessage(message)),
   );
+}
+
+export function resolveLegacyCompactionMatch(
+  history: readonly unknown[],
+  status: CompactionStatus | null | undefined,
+) {
+  const candidates =
+    status?.runId && !status.itemId
+      ? history.filter((message) => matchesCompactionOperation(message, status))
+      : [];
+  return {
+    manualMarker: status?.manualOperation && candidates.length === 1 ? candidates[0] : undefined,
+    hasSameRunMarker: candidates.length > 0,
+  };
 }
 
 // Retain presentation timing only within the transcript cache's session window.
@@ -97,38 +109,49 @@ export function buildGuardianNoticeItem(
   };
 }
 
-export function buildCompactionDividerItem(
+function compactionOperationKey(runId: unknown, itemId: unknown): string | undefined {
+  return typeof runId === "string" && runId && typeof itemId === "string" && itemId
+    ? `compaction:operation:${JSON.stringify([runId, itemId])}`
+    : undefined;
+}
+
+export function buildCompactionActivityItem(
   marker: Record<string, unknown>,
   timestamp: number,
   index: number,
   phase: "active" | "complete" = "complete",
-): Extract<ChatItem, { kind: "divider" }> {
-  const tokensBefore = marker.tokensBefore;
-  const tokensAfter = marker.tokensAfter;
-  const metric =
-    typeof tokensBefore === "number" &&
-    Number.isFinite(tokensBefore) &&
-    typeof tokensAfter === "number" &&
-    Number.isFinite(tokensAfter) &&
-    tokensAfter >= 0 &&
-    tokensBefore > tokensAfter
-      ? t("chat.compaction.savedTokensWithPercent", {
-          count: formatCompactTokenCount(Math.floor(tokensBefore - tokensAfter)),
-          percent: String(Math.round(((tokensBefore - tokensAfter) / tokensBefore) * 1_000) / 10),
-        })
-      : null;
+): Extract<ChatItem, { kind: "compaction" }> {
   return {
-    kind: "divider",
+    kind: "compaction",
     key:
-      typeof marker.id === "string"
-        ? `divider:compaction:${marker.id}`
-        : `divider:compaction:${timestamp}:${index}`,
-    label: t(
-      phase === "active" ? "chat.composer.compactingContext" : "chat.composer.contextCompacted",
-    ),
-    compaction: phase,
-    ...(metric === null ? {} : { metric }),
+      compactionOperationKey(marker.runId, marker.itemId) ??
+      (typeof marker.id === "string"
+        ? `compaction:${marker.id}`
+        : `compaction:${timestamp}:${index}`),
+    label: t(phase === "active" ? "chat.compaction.running" : "chat.compaction.completed"),
+    phase,
+    tokensBefore: typeof marker.tokensBefore === "number" ? marker.tokensBefore : undefined,
+    tokensAfter: typeof marker.tokensAfter === "number" ? marker.tokensAfter : undefined,
     timestamp,
+  };
+}
+
+export function buildLiveCompactionActivity(
+  status: CompactionStatus,
+): Extract<ChatItem, { kind: "compaction" }> {
+  return {
+    ...buildCompactionActivityItem(
+      {},
+      status.startedAt ?? status.completedAt ?? Date.now(),
+      0,
+      status.phase === "complete" ? "complete" : "active",
+    ),
+    key:
+      compactionOperationKey(status.runId, status.itemId) ??
+      `compaction:live:${status.runId}:manual`,
+    ...(status.completedAt != null && status.startedAt != null
+      ? { durationMs: status.completedAt - status.startedAt }
+      : {}),
   };
 }
 

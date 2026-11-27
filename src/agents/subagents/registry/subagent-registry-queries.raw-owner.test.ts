@@ -7,7 +7,6 @@ import {
   listRunsForControllerFromRuns as listControlledRuns,
 } from "./subagent-registry-queries.js";
 import { countActiveSubagentRunsForSession as countActiveRuns } from "./subagent-registry-state.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildSubagentRunView } from "./subagent-run-view.js";
 
 function toRunMap<T extends { runId: string }>(...runs: T[]) {
@@ -76,7 +75,7 @@ it.each([
   },
 );
 it.each(["none", "running", "pending"] as const)(
-  "accounts for %s grandchildren below a suspended child",
+  "accounts for %s grandchildren below a delivered child",
   (status) => {
     const now = Date.now();
     const hasGrandchild = status !== "none";
@@ -85,13 +84,12 @@ it.each(["none", "running", "pending"] as const)(
       childSessionKey: "agent:main:subagent:parent",
       endedAt: now - (hasGrandchild ? 3_000 : 2_000),
     });
-    const suspended: SubagentRunRecord["delivery"] = { status: "suspended", suspendedAt: now };
     const child = makeRun({
-      runId: "suspended-child",
+      runId: "delivered-child",
       requesterSessionKey: parent.childSessionKey,
-      childSessionKey: "agent:main:subagent:suspended-child",
+      childSessionKey: "agent:main:subagent:delivered-child",
       endedAt: now - (hasGrandchild ? 2_000 : 1_000),
-      delivery: hasGrandchild ? suspended : { ...suspended, suspendedReason: "permanent_failure" },
+      delivery: { status: "delivered" },
     });
     const entries = [parent, child];
     if (hasGrandchild) {
@@ -103,7 +101,7 @@ it.each(["none", "running", "pending"] as const)(
           createdAt: now - 1_000,
           startedAt: now - 1_000,
           ...(status === "running"
-            ? { delivery: suspended }
+            ? { delivery: { status: "pending" } }
             : { endedAt: now, delivery: { status: "pending" } }),
         }),
       );
@@ -119,7 +117,7 @@ it.each(["none", "running", "pending"] as const)(
     }
     expect(runs.get(child.runId)).toBe(child);
     expect(child.cleanupCompletedAt).toBeUndefined();
-    expect(child.delivery?.status).toBe("suspended");
+    expect(child.delivery?.status).toBe("delivered");
   },
 );
 

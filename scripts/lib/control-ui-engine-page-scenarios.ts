@@ -105,6 +105,7 @@ export const enginePageFixtureCounts = {
   catalog: 1000,
   approvals: 200,
   worktrees: 300,
+  projects: 300,
   workshop: 300,
   workshopChanges: 50,
   apps: 100,
@@ -948,6 +949,11 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       'openclaw-worktrees-page input[aria-label="Repository"]',
     ),
   },
+  projects: {
+    ready: "openclaw-projects-page tbody tr",
+    rows: { selector: "openclaw-projects-page tbody tr", minimum: 300 },
+    action: click("openclaw-projects-page tbody tr", ".projects-detail"),
+  },
   workboard: {
     ready: ".workboard-card",
     action: workboardCardMenu,
@@ -979,6 +985,11 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
         return { matchingTemplates: 1 };
       },
     },
+  },
+  roles: {
+    ready: ".settings-workspace .settings-section",
+    actionUnavailable:
+      "Role changes rewrite Gateway config and reconnect people; listing is measured.",
   },
   about: {
     ready: "openclaw-about-page",
@@ -1389,6 +1400,7 @@ function createPageFixture(
           "device.pair.list",
           "environments.list",
           "worktrees.list",
+          "projects.list",
           "approval.history",
           "exec.approval.grants.list",
           "transcripts.status",
@@ -1470,6 +1482,15 @@ function createPageFixture(
             ownerKind: "manual",
             createdAt: time - index * 1000,
             lastActiveAt: time - index * 1000,
+          })),
+        },
+        "projects.list": {
+          projects: Array.from({ length: quantity.projects }, (_, index) => ({
+            id: `census-${index}`,
+            displayName: `census-project-${index}`,
+            source: "registered",
+            repositoryIdentity: `census/project-${index}`,
+            repoRoot: `/synthetic/projects/${index}`,
           })),
         },
         "skills.workshop.list": {

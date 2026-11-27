@@ -70,6 +70,7 @@ function roleConfig(): OpenClawConfig {
         default: "reader",
         definitions: {
           administrator: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+          deputy: { scopes: ["operator.admin"], agents: "*", sessions: { others: "view" } },
           reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
           'night "ops"': { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
         },
@@ -89,7 +90,8 @@ function profileClient(
   };
 }
 
-it.each(["failed delivery", "self downgrade"] as const)(
+// Demoting yourself out of operator.admin is refused, so the self case moves between admin roles.
+it.each(["failed delivery", "self role change"] as const)(
   "retires role policy and connections through %s",
   async (scenario) => {
     const state = await createOpenClawTestState({
@@ -103,7 +105,9 @@ it.each(["failed delivery", "self downgrade"] as const)(
       setUserProfileRole(requester.id, "administrator");
       const target = ensureProfileForEmail("reader@example.test");
       setUserProfileRole(target.id, "administrator");
-      const changed = scenario === "self downgrade" ? requester : target;
+      const self = scenario === "self role change";
+      const changed = self ? requester : target;
+      const nextRole = self ? "deputy" : "reader";
       release = (await prepareUserProfileCatalog()).release;
       expect(resolveOperatorRolePolicyForProfile(changed.id, roleConfig())?.scopes).toEqual([
         "operator.admin",
@@ -140,17 +144,17 @@ it.each(["failed delivery", "self downgrade"] as const)(
           id: "role-delivery",
           method: "users.setRole",
           expectedProfileId: requester.id,
-          params: { profileId: changed.id, role: "reader" },
+          params: { profileId: changed.id, role: nextRole },
         },
         client,
       );
-      expect(readResidentUserProfileIdentity(changed.id)?.role).toBe("reader");
+      expect(readResidentUserProfileIdentity(changed.id)?.role).toBe(nextRole);
       expect(resolveOperatorRolePolicyForProfile(changed.id, roleConfig())?.scopes).toEqual([
-        "operator.read",
+        self ? "operator.admin" : "operator.read",
       ]);
       expect(await harness.awaitResponseFrame("role-delivery")).toMatchObject(
-        scenario === "self downgrade"
-          ? { ok: true, payload: { profile: { id: requester.id, role: "reader" } } }
+        self
+          ? { ok: true, payload: { profile: { id: requester.id, role: nextRole } } }
           : {
               ok: false,
               error: {
@@ -159,14 +163,14 @@ it.each(["failed delivery", "self downgrade"] as const)(
               },
             },
       );
-      expect(scenario === "self downgrade" ? clientClose : targetClose).toHaveBeenCalledOnce();
-      expect(scenario === "self downgrade" ? targetClose : clientClose).not.toHaveBeenCalled();
+      expect(self ? clientClose : targetClose).toHaveBeenCalledOnce();
+      expect(self ? targetClose : clientClose).not.toHaveBeenCalled();
       // A committed role is history even when its RPC result could not be delivered.
       expect((await listSystemChanges({})).entries).toEqual([
         expect.objectContaining({
           kind: "operation",
           source: "config-rpc",
-          summary: `Role for profile ${changed.id} changed from "administrator" to "reader" by profile ${requester.id}`,
+          summary: `Role for profile ${changed.id} changed from "administrator" to "${nextRole}" by profile ${requester.id}`,
         }),
       ]);
     } finally {

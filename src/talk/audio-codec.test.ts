@@ -45,6 +45,17 @@ function processInFrames(input: Buffer, inputRate: number, outputRate: number) {
   return chunks;
 }
 
+it.each([
+  [239, 439],
+  [240, 441],
+  [241, 442],
+])("resamples %i samples at 24 kHz to %i at 44.1 kHz", (inputSamples, outputSamples) => {
+  const input = Buffer.alloc(inputSamples * 2, 0x2a);
+  const expected = Buffer.alloc(outputSamples * 2, 0x2a);
+  expect(resamplePcm(input, 24_000, 44_100)).toEqual(expected);
+  expect(Buffer.concat(processInFrames(input, 24_000, 44_100))).toEqual(expected);
+});
+
 describe("createStreamingPcmResampler", () => {
   it("matches whole-buffer resampling across 20 ms chunk boundaries", () => {
     const input = createSine(48_000, 1_000);

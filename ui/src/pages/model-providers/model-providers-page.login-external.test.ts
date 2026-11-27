@@ -2,10 +2,11 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { loginOption } from "../../test-helpers/model-providers.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { chooseLogin, loginHarness } from "./model-providers-page.login.test-support.ts";
-import { appendPage, unmountPage } from "./model-providers-page.test-support.tsx";
+import { appendPage, createAuthStatus, unmountPage } from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -64,6 +65,53 @@ describe("Models provider login", () => {
       unmountPage(page);
     }
   });
+
+  it.each([true, false])(
+    "settles a sign-in the Gateway lost on a closed socket by its saved account (saved: %s)",
+    async (accountSaved) => {
+      vi.spyOn(window, "open").mockReturnValue(null);
+      const { context, request, cancel, publishPhase, snapshot } = loginHarness();
+      snapshot.hello!.auth!.recoveryScope = "provider-sign-in-recovery";
+      const originalRequest = request.getMockImplementation()!;
+      const page = appendPage(context);
+      try {
+        await chooseLogin(page, "Example browser sign-in");
+        await waitForSolid(() =>
+          expect(page.querySelector("input[name=wizard-text]")).not.toBeNull(),
+        );
+        // The callback finished while the socket was down; its reply and session are gone.
+        request.mockImplementation(async (method, ...args) => {
+          if (method === "wizard.next") {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "wizard not found",
+              details: { code: "WIZARD_NOT_FOUND" },
+            });
+          }
+          return method === "models.authStatus" && accountSaved
+            ? createAuthStatus([
+                {
+                  provider: "example",
+                  profiles: [{ profileId: "example:default", type: "oauth", status: "ok" }],
+                },
+              ])
+            : originalRequest(method, ...args);
+        });
+        publishPhase("reconnecting");
+        publishPhase("connected");
+        await waitForSolid(() =>
+          expect(
+            accountSaved
+              ? page.querySelector(".model-setup-wizard--done")
+              : document.body.textContent?.includes("This sign-in session ended."),
+          ).toBeTruthy(),
+        );
+      } finally {
+        cancel.resolve({ status: "cancelled" });
+        unmountPage(page);
+      }
+    },
+  );
 
   it("keeps the browser sign-in link visible while its automatic callback read is held", async () => {
     vi.spyOn(window, "open").mockReturnValue(null);

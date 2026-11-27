@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { GatewaySessionMessageSubscription } from "@openclaw/gateway-client/browser";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type {
@@ -268,16 +269,24 @@ suite.define(() => {
         const detail = subagents.locator(".chat-subagent-detail");
         proof.stage = "wait for child task transcript";
         await detail.getByText(fixture.childTask, { exact: false }).waitFor();
-        proof.stage = "observe child in-flight startup response";
-        const history = payloadOf(
-          await wire.waitFor(
-            (rpc) =>
-              rpc.request.method === "chat.startup" &&
-              paramsOf(rpc).sessionKey === childKey &&
-              Boolean((rpc.response.payload as ChatHistoryResult | undefined)?.inFlightRun),
-          ),
-        ) as ChatHistoryResult;
-        const run = history.inFlightRun!;
+        proof.stage = "observe child in-flight history subscription";
+        const subscription = payloadOf(
+          await wire.waitFor((rpc) => {
+            const history = (rpc.response.payload as GatewaySessionMessageSubscription | undefined)
+              ?.initialHistory;
+            return (
+              rpc.request.method === "sessions.messages.subscribe" &&
+              paramsOf(rpc).key === childKey &&
+              history?.ok === true &&
+              Boolean((history.payload as ChatHistoryResult).inFlightRun)
+            );
+          }),
+        ) as GatewaySessionMessageSubscription;
+        const history = subscription.initialHistory;
+        if (!history?.ok) {
+          throw new Error("Child history subscription did not succeed");
+        }
+        const run = (history.payload as ChatHistoryResult).inFlightRun!;
         proof.childHistory = { runId: run.runId, sessionAbortable: run.sessionAbortable ?? false };
         expect(run.runId).toBeTruthy();
         expect(run.runId).not.toBe(parentRunId);

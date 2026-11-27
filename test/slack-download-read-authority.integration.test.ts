@@ -796,7 +796,9 @@ describe("Slack download authority through artifact completion", () => {
 
   it("preserves replacement content at a rejected result's former artifact path", async () => {
     await withDownloadFixture({ phase: "result", replaceResultFile: true }, async (fixture) => {
-      await expect(fixture.invoke()).rejects.toThrow(/no longer active/i);
+      await expect(fixture.invoke()).rejects.toThrow(
+        "Plugin slack was reloaded during the read. Retry the action.",
+      );
       const remaining = (await filesUnder(fixture.mediaDir)).filter(
         (file) => file !== fixture.preservedPath,
       );
@@ -864,7 +866,7 @@ describe("Gateway message.action Slack download completion", () => {
         expect(response.error?.message).toMatch(
           options.revoke === "turn"
             ? "The message turn has ended. Start a new turn to retry."
-            : /no longer active/i,
+            : "Plugin slack was reloaded during the read. Retry the action.",
         );
         expect(fixture.gatewayResponses).toHaveLength(1);
         expect(fixture.gatewayCacheWrites.some((entry) => entry.ok)).toBe(false);

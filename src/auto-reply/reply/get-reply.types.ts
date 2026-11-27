@@ -170,7 +170,6 @@ export function prepareInternalGetReplyOptions(
   const { operatorAuthority = channelAuthority, ...options }: InternalGetReplyOptions = opts ?? {};
   if (operatorAuthority !== undefined) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   return { ...options, operatorAuthority };
 }
