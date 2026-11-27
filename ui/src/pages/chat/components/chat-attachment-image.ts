@@ -110,7 +110,7 @@ async function readResizeDimensions(
   return { width, height };
 }
 
-async function checkPngAnimation(file: File, signal: AbortSignal): Promise<void> {
+async function hasPngAnimation(file: File, signal: AbortSignal): Promise<boolean> {
   // PNG's animation control must precede IDAT. Skip metadata by declared length
   // without buffering it; do not silently flatten an oversized APNG to frame 1.
   for (let offset = 33; offset + 12 <= file.size;) {
@@ -123,10 +123,10 @@ async function checkPngAnimation(file: File, signal: AbortSignal): Promise<void>
       break;
     }
     if (type === 0x6163544c) {
-      throw new Error("Animated PNG cannot be resized without losing animation");
+      return true;
     }
     if (type === 0x49444154) {
-      return;
+      return false;
     }
     offset += length + 12;
   }
@@ -162,8 +162,12 @@ export async function resizeChatAttachmentImage(
   if (file.size <= maxBytes && Math.max(width, height) <= 4096) {
     return file;
   }
-  if (file.type === "image/png") {
-    await checkPngAnimation(file, signal);
+  if (file.type === "image/png" && (await hasPngAnimation(file, signal))) {
+    // Dimension-only preparation is optional; preserve animation when bytes already fit.
+    if (file.size <= maxBytes) {
+      return file;
+    }
+    throw new Error("Animated PNG cannot be resized without losing animation");
   }
   // Queue wait is not a stalled read. Each worker gets the full read watchdog.
   onProcessingChange(false);

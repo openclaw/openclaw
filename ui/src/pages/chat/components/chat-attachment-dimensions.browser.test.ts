@@ -195,24 +195,57 @@ describe.runIf("__vitest_browser__" in globalThis)("dimension-aware attachment p
     ).toBe(marked);
   });
 
-  it("does not flatten an APNG that needs dimension preparation", async () => {
-    const bytes = Uint8Array.from(
-      atob(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jhZkAAAAASUVORK5CYII=",
-      ),
-      (char) => char.charCodeAt(0),
-    );
-    new DataView(bytes.buffer).setUint32(16, 5000);
-    const control = new Uint8Array(20);
-    new DataView(control.buffer).setUint32(0, 8);
-    new DataView(control.buffer).setUint32(4, 0x6163544c);
-    const source = new File([bytes.slice(0, 33), control, bytes.slice(33)], "animated.png", {
-      type: "image/png",
-    });
-    await expect(
-      resizeChatAttachmentImage(source, 6 * 1024 * 1024, new AbortController().signal, () => {}),
-    ).rejects.toThrow("Animated PNG");
-  });
+  it.each(["file", "data-url paste"] as const)(
+    "preserves byte-valid 5000x1000 APNG animation via %s and rejects byte overflow",
+    async (route) => {
+      // Valid two-frame, 1-bit grayscale APNG: black then white, 100 ms per frame.
+      // 5000x1000 (5 MP) exceeds the side target, not the 25 MP decode budget.
+      const bytes = Uint8Array.from(atob(
+        "iVBORw0KGgoAAAANSUhEUgAAE4gAAAPoAQAAAAAaySnyAAAACGFjVEwAAAACAAAAAPONk3AAAAAaZmNUTAAAAAAAABOIAAAD6AAAAAAAAAAAAAEACgAAAkGFdwAAAnVJREFUeNrtwTEBAAAAwqD1T20KP6AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADgZ43XAAHnmKFsAAAAGmZjVEwAAAABAAATiAAAA+gAAAAAAAAAAAABAAoAAJkyb6MAAAbpZmRBVAAAAAJ42u3SQREAAAzCMPybBhf7LJHQawqXIgGOw3HgOBwHjsNxOA4ch+PAcTgOHIfjcBw4DseB43AcOA7H4ThwHI4Dx+E4cByOw3HgOBwHjsNx4Dgch+PAcTgOHIfjwHE4DseB43AcOA7HgeNwHI4Dx+E4cByOA8fhOBwHjsNx4DgcB47DcTgOHIfjwHE4DseB43AcOA7HgeNwHI4Dx+E4cByOA8fhOBwHjsNx4DgcB47DcTgOHIfjwHE4DhyH43AcOA7HgeNwHDgOx+E4cByOA8fhOHAcjsNx4DgcB47DceA4HIfjwHE4DhyH48BxOA7HgeNwHDgOx+E4CXAcjgPH4ThwHI7DceA4HAeOw3HgOByH48BxOA4ch+PAcTgOx4HjcBw4DseB43AcjgPH4ThwHI4Dx+E4HAeOw3HgOBwHjsNxOA4ch+PAcTgOHIfjcBw4DseB43AcOA7H4ThwHI4Dx+E4cByOw3HgOBwHjsNxOA4ch+PAcTgOHIfjcBw4DseB43AcOA7H4ThwHI4Dx+E4cByOw3HgOBwHjsNx4Dgch+PAcTgOHIfjwHE4DseB43AcOA7HgeNwHI4Dx+E4cByOA8fhOBwHjsNx4DgcB47DcTgOHIfjwHE4DsdJgONwHDgOx4HjcByOA8fhOHAcjgPH4TgcB47DceA4HAeOw3E4DhyH48BxOA4ch+NwHDgOx4HjcBw4DsfhOHAcjgPH4ThwHI7DceA4HAeOw3HgOByH48BxOA4ch+PAcTgOx4HjcBw4DseB43AcjgPH4ThwHI7DceA4HAeOw3HgOByH48BxOA4ch+PAcTgOx4HjcBw4DseB43AcjgPH4ThwHI4Dx+E4HAeOw3HgOBwHjsNxOA4ch+PAcTgOHIfjcBw4DseB43AcOA7H4ThwHI4Dx+E4cByOw3HgOBwHjsNxOE4CHIfjwHE4DhyH43AcOA7HgeNwHDgOx+E4cByOA8fhOHAcjsNx4DgcB47DceA4HIfjwHE4DhyH48BxOA7HgeNwHDgOx4HjcByOA8fhOHAcjgPH4TgcB47DceA4HAeOw3E4DhyH48BxOA4ch+NwHDgOx4HjcByOA8fhOHAcjgPH4TgcB47DceA4HAeOw3E4DhyH48BxOA4ch+NwHDgOx4HjcBw4DsfhOHAcjgPH4ThwHI7DceA4HAeOw3HgOByH48BxOA4ch+PAcTgOx4HjcBw4DseB43AcjgPH4ThwHI7DcRLgOBwHjsNx4Dgch+PAcTgOHIfjwHE4DseB43AcOA7HgeNwHI4Dx+E4cByOA8fhOBwHjsNx4DgcB47DcTgOHIfjwHE4DhyH43AcOA7HgeNwHDgOx+E4cByOA8fhOHAcjsNx4DgcB47DceA4HIfjwHE4DhyH43AcOA7HgeNwHDgOx+E4cByOA8fhOHAcjsNx4DgcB47DceA4HIfjwHE4DhyH48BxOA7HgeNwHDgOx4HjcByOA8fhOHAcjgPH4TgcB47DceA4HAeOw3E4DhyH48BxOA4ch+NwHDgOx4HjcByOkwDH4ThwHI4Dx+E4HAeOw3HgOBwHjsNxOA4ch+PAcTgOHIfjcBw4DseB43AcOA7H4ThwHI4Dx+E4cByOw3HgOBwHjsNx4Dgch+PAcTgOHIfjwHE4DseB43AcOA7HgeNwHI4Dx+E4cByOA8fhOBwHjsNx4Dgch+PAcTgOHIfjwHE4DseB43AcOA7HgeNwHI4Dx+E4cByOA8fhOBwHjsNx4DgcB47DcTgOHIfjwHE4DhyH43AcOA7HgeNwHDgOx+E4cByOA8fhOHAcjsNx4DgcB47DceA4HIfjwHE4DhyH43CcBDgOx4HjcBw4DsfhOHAcjgPH4ThwHI7DceA4HAeOw3HgOByH48BxOA4ch+PAcTgOx4HjcBw4DseB43AcjgPH4ThwHI4Dx+E4HAeOw3HgOBwHjsNxOA4ch+PAcTgOHIfjcBw4DseB43AcOA7H4ThwHI4Dx+E4HAeOw3HgOBwHjsNxOA4ch+PAcTgOHIfjcBw4DseB43AcOA7H4ThwHI4Dx+E4cByOw3HgOBwHjsNx4Dgch+PAcTgOHIfjwHE4DseB43AcOA7HgeNwHI4Dx+E4cByOA8fhOBwHjsNx4Dgch+MkwHE4DhyH48BxOA7HgeNwHDgOx4HjcByOA8fhOHAcjgPH4TgcB47DceA4HAeOw3E4DhyH48BxOA4ch+NwHDgOx4HjcBw4DsfhOHAcjgPH4ThwHI7DceA4HAeOw3HgOByH48BxOA4ch+PAcTgOx4HjcBw4DsfhOHAcjgPH4ThwHI7DceA4HAeOw3HgOByH48BxOA4ch+PAcTgOx4HjcBw4DseB43Aczww+4G0Zl51kjAAAAABJRU5ErkJggg=="
+      ), (char) => char.charCodeAt(0));
+      const source = new File([bytes], "animated.png", { type: "image/png" });
+      const bitmap = await createImageBitmap(source);
+      try {
+        expect([bitmap.width, bitmap.height]).toEqual([5000, 1000]);
+      } finally {
+        bitmap.close();
+      }
+      const processing: boolean[] = [];
+      expect(await resizeChatAttachmentImage(
+        source, source.size, new AbortController().signal, (value) => processing.push(value),
+      )).toBe(source);
+      expect(processing).toEqual([]);
+      await expect(resizeChatAttachmentImage(
+        source, source.size - 1, new AbortController().signal, (value) => processing.push(value),
+      )).rejects.toThrow("Animated PNG");
+      expect(processing).toEqual([]);
+      for (const limit of [source.size, source.size - 1]) {
+        const draft = createAttachmentDraft({
+          maxBytes: 20 * 1024 * 1024,
+          maxImageBytes: limit,
+          maxBatchBytes: 20 * 1024 * 1024,
+        });
+        onTestFinished(draft.dispose);
+        if (route === "file") {
+          appendChatAttachmentFiles([source], draft.props);
+        } else {
+          const transfer = new DataTransfer();
+          transfer.setData("text/plain", "data:image/png;base64," + bytesToBase64(bytes));
+          handleChatAttachmentPaste(new ClipboardEvent("paste", { clipboardData: transfer }), draft.props);
+        }
+        await draft.done;
+        expect(draft.pending).toEqual([1, 0]);
+        expect(draft.reads.failureCount).toBe(limit === source.size ? 0 : 1);
+        expect(draft.attachments()).toHaveLength(limit === source.size ? 1 : 0);
+        if (limit === source.size) {
+          const attachment = expectDefined(draft.attachments()[0], "animated attachment");
+          const payload = expectDefined(getChatAttachmentBlob(attachment), "original APNG");
+          expect(attachment.mimeType).toBe("image/png");
+          expect(new Uint8Array(await payload.arrayBuffer())).toEqual(bytes);
+        }
+      }
+    },
+  );
 
   it("reports a corrupt JPEG worker decode without publishing a replacement", async () => {
     const source = new File(
