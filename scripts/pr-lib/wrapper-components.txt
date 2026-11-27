@@ -2166,6 +2166,7 @@ src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
 src/state/openclaw-agent-db-lease-inspection.ts
 src/state/openclaw-agent-db-lease-provenance.ts
+src/state/openclaw-agent-db-lease-rows.ts
 src/state/openclaw-agent-db-lease.ts
 src/state/openclaw-agent-db-legacy-schema.ts
 src/state/openclaw-agent-db-lifecycle.ts
