@@ -240,21 +240,22 @@ it.each([false, true])(
         activeModel: "shared-id",
         activeModelProvider: "second",
       },
-    ];
+    ] satisfies [GatewaySessionRow, ...GatewaySessionRow[]];
+    const [named, fallback, done, unknown, rerouted] = rows;
     const f = mountRows(() => rows, mobile);
     await f.waitForCount(openSelector(mobile), rows.length);
     const text = (row: GatewaySessionRow) =>
       f.panel.querySelector('[data-session-key="' + row.key + '"] ' + openSelector(mobile))
         ?.textContent;
-    expect(text(rows[0])).toMatch(/18s.*·.*Model A/);
-    expect(text(rows[0])?.includes("Working for")).toBe(!mobile);
-    expect(text(rows[3])).toMatch(/Working for.*12s/);
-    expect(text(rows[1])).toContain("model-c");
-    expect(text(rows[1])).not.toContain("Model B");
-    expect(text(rows[2])).toContain("model-d");
-    expect(text(rows[3])).not.toContain("·");
-    expect(text(rows[4])).toContain("shared-id");
-    expect(text(rows[4])).not.toContain("First provider's model");
+    expect(text(named)).toMatch(/18s.*·.*Model A/);
+    expect(text(named)?.includes("Working for")).toBe(!mobile);
+    expect(text(unknown)).toMatch(/Working for.*12s/);
+    expect(text(fallback)).toContain("model-c");
+    expect(text(fallback)).not.toContain("Model B");
+    expect(text(done)).toContain("model-d");
+    expect(text(unknown)).not.toContain("·");
+    expect(text(rerouted)).toContain("shared-id");
+    expect(text(rerouted)).not.toContain("First provider's model");
   },
 );
 
