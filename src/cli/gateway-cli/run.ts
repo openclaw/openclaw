@@ -5,7 +5,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { rethrowStartupConfigFailure } from "../../commands/doctor-startup-migration-refusal.js";
 import type {
-  ConfigFileSnapshot,
   GatewayBindMode,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";

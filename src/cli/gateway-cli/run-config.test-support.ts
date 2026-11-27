@@ -114,8 +114,8 @@ export function registerGatewayRunConfigGuardTests({
           nextPort ?? 18789,
         ]);
         expect(
-          (startGatewayServer.mock.calls[1]?.[1] as GatewayServerOptions).startupConfigSnapshotRead
-            ?.snapshot.config,
+          (startGatewayServer.mock.calls[1]?.[1] as GatewayServerOptions | undefined)
+            ?.startupConfigSnapshotRead?.snapshot.config,
         ).toEqual(configState.snapshot.config);
       },
     );
