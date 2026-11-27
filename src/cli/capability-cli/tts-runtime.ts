@@ -110,19 +110,18 @@ export async function runTtsConvert(params: {
     result = localResult;
     attempts = localResult.attempts ?? [];
   }
-  let outputPath = result.audioPath;
+  let output: { path?: string; mimeType?: string; size?: number } = { path: result.audioPath };
   if (params.output && result.audioPath) {
     const buffer = await fs.readFile(result.audioPath);
     signal?.throwIfAborted();
     // Match image/video outputs: the extension follows the audio actually returned.
-    const written = await writeOutputAsset({
+    output = await writeOutputAsset({
       buffer,
       outputPath: params.output,
       outputIndex: 0,
       outputCount: 1,
       subdir: "tts",
     });
-    outputPath = written.path;
   }
   return {
     ok: true,
@@ -132,7 +131,7 @@ export async function runTtsConvert(params: {
     attempts,
     outputs: [
       {
-        path: outputPath,
+        ...output,
         format: result.outputFormat,
         voiceCompatible: result.voiceCompatible,
       },
