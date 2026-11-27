@@ -1,3 +1,5 @@
+import { isLoopbackHostname } from "../lib/gateway-locality.ts";
+
 export function resolveGatewayHttpOrigin(gatewayUrl: string, hostOrigin: string): string {
   const gateway = new URL(gatewayUrl || hostOrigin, hostOrigin);
   if (gateway.protocol === "ws:") {
@@ -63,4 +65,16 @@ export function resolveSandboxHostUrl(
     throw new Error(invalidMessage);
   }
   return resolved.href;
+}
+
+/** True when no explicit sandbox origin is set and the derived one is not loopback. */
+export function isDerivedRemoteSandboxOrigin(
+  explicitOrigin: string | undefined,
+  resolvedOrigin: string,
+): boolean {
+  return (
+    !explicitOrigin &&
+    Boolean(resolvedOrigin) &&
+    !isLoopbackHostname(new URL(resolvedOrigin).hostname)
+  );
 }

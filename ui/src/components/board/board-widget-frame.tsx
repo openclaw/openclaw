@@ -8,7 +8,6 @@ import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
-import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { subscribeDocumentVisibility } from "../../lib/reactive/platform.ts";
 import { observeWindowMessage } from "../../lib/reactive/window-message.ts";
@@ -18,7 +17,11 @@ import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-them
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
 import { McpAppConfirmation } from "../mcp-app-confirm-solid.tsx";
 import { createMcpAppConfirm } from "../mcp-app-confirm.ts";
-import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
+import {
+  isDerivedRemoteSandboxOrigin,
+  resolveGatewayHttpOrigin,
+  resolveSandboxHostUrl,
+} from "../sandbox-host.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import { BoardWidgetTicketRefresh, type FrameRefresh } from "./board-widget-ticket-refresh.ts";
 
@@ -43,22 +46,11 @@ function documentHidden(): boolean {
 // cannot distinguish that from a real authorization failure or an unreachable
 // sandbox — so terminal messages keep their fact but add the deployment hint
 // operators otherwise never find.
-function derivedRemoteSandboxOrigin(
-  widget: Pick<BoardWidget, "sandboxOrigin">,
-  resolvedSandboxOrigin: string,
-): boolean {
-  return (
-    !widget.sandboxOrigin &&
-    Boolean(resolvedSandboxOrigin) &&
-    !isLoopbackHostname(new URL(resolvedSandboxOrigin).hostname)
-  );
-}
-
 function resolveBoardFrameFailureMessage(
   widget: Pick<BoardWidget, "sandboxOrigin">,
   resolvedSandboxOrigin: string,
 ): string {
-  return derivedRemoteSandboxOrigin(widget, resolvedSandboxOrigin)
+  return isDerivedRemoteSandboxOrigin(widget.sandboxOrigin, resolvedSandboxOrigin)
     ? t("board.widget.sandboxOriginRequired")
     : t("board.widget.frameAuthorizationFailed");
 }
@@ -622,7 +614,8 @@ export function createBoardWidgetFrame(host: {
         visible: contentVisible,
         painting: initialPaint && !waiting && !renderStalled,
         waiting,
-        sandboxUnreachable: sandboxUnreachable && derivedRemoteSandboxOrigin(value, sandboxOrigin),
+        sandboxUnreachable:
+          sandboxUnreachable && isDerivedRemoteSandboxOrigin(value.sandboxOrigin, sandboxOrigin),
         stalled: renderStalled,
         covered: host.loadingCovered?.(),
         linkFailed,
