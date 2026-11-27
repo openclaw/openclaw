@@ -14,8 +14,8 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import {
   listAgentIds,
+  resolveAgentOperationAgentId,
   resolveConfiguredAgentId,
-  resolveDefaultAgentId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -135,7 +135,7 @@ function resolveExplicitMemoryAgent(cfg: OpenClawConfig, agent?: string): string
   return trimmed ? resolveConfiguredAgentId(cfg, trimmed) : undefined;
 }
 export function resolveMemoryAgent(cfg: OpenClawConfig, agent?: string) {
-  return resolveExplicitMemoryAgent(cfg, agent) ?? resolveDefaultAgentId(cfg);
+  return resolveExplicitMemoryAgent(cfg, agent) ?? resolveAgentOperationAgentId(cfg);
 }
 export function resolveMemoryAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   const explicit = resolveExplicitMemoryAgent(cfg, agent);
