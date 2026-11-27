@@ -195,7 +195,13 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
         : buffer.subarray(0, FILE_TYPE_SNIFF_MAX_BYTES),
     );
     if (type?.mime) {
-      return normalizeMimeType(type.mime);
+      // file-type reports Ogg-contained Opus as ext "opus" with a "codecs=opus" mime
+      // parameter, distinct from other Ogg payloads (Vorbis, FLAC, Speex all report plain
+      // "audio/ogg"). normalizeMimeType strips mime parameters, so map it to this module's
+      // own canonical audio/opus MIME before that happens -- otherwise it collapses to the
+      // same generic "audio/ogg" as every other Ogg variant and a requested .opus output
+      // can never match what the sniffed bytes report.
+      return type.ext === "opus" ? "audio/opus" : normalizeMimeType(type.mime);
     }
   } catch {
     // fall through to manual magic-byte sniffs
