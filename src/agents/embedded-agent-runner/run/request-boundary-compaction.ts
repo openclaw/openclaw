@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
+import { isToolChoiceCacheNeutral, resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import {
   captureOpenAIResponsesCompaction,
   requestPreparedOpenAIResponsesCompaction,
@@ -274,6 +274,13 @@ export function createRequestBoundaryCompaction(params: {
         });
       }
       let failure = "compaction did not complete";
+      // A tool-only reply ends this boundary but not later ones: the call was never run.
+      let toolOnlyReply = false;
+      // The warm request may differ only outside the cached prefix. Where the protocol keeps
+      // `tool_choice` out of its cache key, forbid a tool call the summary would never run.
+      const summaryOptions = isToolChoiceCacheNeutral(model.api)
+        ? { ...requestOptions, toolChoice: "none" as const }
+        : requestOptions;
       const compacted = await params.session[agentSessionRunWarmCompaction](
         async (instructions, signal) => {
           try {
@@ -296,7 +303,7 @@ export function createRequestBoundaryCompaction(params: {
                         },
                       ],
                     },
-                    { ...requestOptions, signal: timeoutSignal },
+                    { ...summaryOptions, signal: timeoutSignal },
                   ),
                 ),
               params.timeoutMs,
@@ -307,12 +314,13 @@ export function createRequestBoundaryCompaction(params: {
               },
             );
             recordSessionModelUsage(params.session.sessionManager, response.usage);
+            // Summary text beside a tool call is the summary; the call is never executed.
             const summary =
-              response.stopReason === "stop" &&
-              !response.content.some((block) => block.type === "toolCall")
+              response.stopReason === "stop" || response.stopReason === "toolUse"
                 ? extractSummaryText(response)
                 : undefined;
             if (summary === undefined) {
+              toolOnlyReply = response.stopReason === "toolUse";
               throw new Error(
                 `the reply ended with ${response.stopReason} and no usable summary${
                   response.errorMessage ? `: ${response.errorMessage}` : ""
@@ -329,7 +337,7 @@ export function createRequestBoundaryCompaction(params: {
       );
       assertActive();
       if (!compacted) {
-        failed = true;
+        failed = !toolOnlyReply;
         return fallback(failure);
       }
       if (params.postCompaction) {

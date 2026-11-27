@@ -61,6 +61,13 @@ export type ModelCatalogCompatConfig = {
   supportsStrictMode?: boolean;
   supportsJsonSchemaResponseFormat?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
+  /** Name of the sampling seed field; Mistral uses `random_seed`. */
+  seedField?: "seed" | "random_seed";
+  emitsDsmlToolCalls?: boolean;
+  requiresTypedUnionBranches?: boolean;
+  requiresNonEmptyUserOrAssistantMessage?: boolean;
+  cacheControlSystemOnly?: boolean;
+  cacheControlSharedSystem?: boolean;
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
   requiresThinkingAsText?: boolean;

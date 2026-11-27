@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import { expect, it, vi } from "vitest";
 import * as navigation from "../config/sessions/session-cold-storage-navigation.js";
+import * as maintenanceLease from "../state/openclaw-agent-db-maintenance-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentSchema } from "../state/openclaw-agent-db-schema.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -266,5 +267,40 @@ it("resumes a backed-up pre-change archive migration after interruption without 
       warnings: [],
     });
     expect(inspect()).toEqual(retained);
+  });
+});
+
+it("leases an admitted database only while it has a cold archive to backfill", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    openOpenClawStateDatabase({ env: state.env });
+    const pathname = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    {
+      using database = new DatabaseSync(pathname);
+      seedAgentV38Schema(database);
+      database.exec(`INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+        VALUES ('agent:main:retained', 'archive-a', '{"sessionId":"archive-a","updatedAt":1}', 1);`);
+      seedArchive(database, "archive-a");
+      await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+        ensureOpenClawAgentSchema(database, "main", pathname);
+      });
+    }
+    const target = {
+      agentId: "main",
+      path: pathname,
+      realPath: fs.realpathSync.native(pathname),
+      source: "disk" as const,
+    };
+    const leases = vi.spyOn(maintenanceLease, "withAgentDatabaseMaintenanceLease");
+    const run = () => migrateSessionColdNavigation({ env: state.env, preparedTargets: [target] });
+    expect((await run()).changes).toContainEqual(
+      expect.stringContaining("Retained navigation for 1 cold transcript(s)"),
+    );
+    expect(leases).toHaveBeenCalledTimes(1);
+    const before = fs.readFileSync(pathname);
+    expect(await run()).toEqual({ changes: [], warnings: [] });
+    expect(leases).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(pathname).equals(before)).toBe(true);
+    leases.mockRestore();
   });
 });

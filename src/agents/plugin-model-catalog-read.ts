@@ -3,6 +3,7 @@ import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { readSqliteInspectionBudgetAsync } from "../infra/sqlite-readonly-worker.js";
 import { createSqliteWorkerTransferCollector } from "../infra/sqlite-worker-transfer.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { createOwnedWorkerTaskPool, WorkerTaskError } from "../infra/worker-task-pool.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type {
@@ -56,7 +57,11 @@ function catalogReadPool(): CatalogReadPool {
     );
     pools.set(key, pool);
     const retained = pool;
-    source.runtimeGeneration?.retain(pool, async () => {
+    // Both executable CLI cleanup and delegated update Doctor join the default native source.
+    const owner =
+      source.runtimeGeneration ??
+      captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+    owner.retain(pool, async () => {
       await retained.close();
       pools.delete(key);
     });

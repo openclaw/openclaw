@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { BrowserTabsResult } from "../client.types.js";
 import { DEFAULT_UPLOAD_DIR } from "../paths.js";
+import { readTargetId } from "../pw-chromium.test-support.js";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
 import { chromiumTempDirs as tempDirs, withChromiumPage } from "./chromium.test-support.js";
 import { registerBrowserRoutes } from "./index.js";
@@ -138,6 +140,28 @@ describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
         );
       });
     }, 30_000);
+
+    it("rejects a crashed tab before the snapshot deadline and keeps its sibling usable", async () => {
+      await withContentPage(async ({ page, call, targetId }) => {
+        const sibling = await page.context().newPage();
+        await sibling.setContent("<h1>Sibling page</h1>");
+        const siblingId = await readTargetId(sibling);
+        const session = await page.context().newCDPSession(page);
+        const crashed = page.waitForEvent("crash");
+        void session.send("Page.crash").catch(() => {});
+        await crashed;
+
+        const snapshot = await call("get", "/snapshot", {}, {}, AbortSignal.timeout(5_000));
+        expect(snapshot).toMatchObject({
+          statusCode: 409,
+          body: { error: expect.stringMatching(/tab crashed.*new tab/i) },
+        });
+        const { tabs } = (await call("get", "/tabs")).body as BrowserTabsResult;
+        expect(tabs.filter((tab) => tab.crashed).map((tab) => tab.targetId)).toEqual([targetId]);
+        const healthy = await call("get", "/snapshot", { targetId: siblingId, format: "ai" });
+        expect(healthy.body).toMatchObject({ snapshot: expect.stringContaining("Sibling page") });
+      });
+    }, 20_000);
 
     it("cancels text inspection blocked by a dialog and reads again after dismissal", async () => {
       await withContentPage(async ({ page, call }) => {
