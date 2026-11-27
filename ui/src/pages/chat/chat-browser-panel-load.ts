@@ -1,30 +1,55 @@
-import { lazy } from "solid-js";
+import { lazy, lazyModule } from "solid-js";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
-import { sessionBrowserTabList } from "../../components/browser/browser-session-tab-list.ts";
 import type { SidebarPanelDefinitionParams } from "./chat-pane-embedded-types.ts";
 
-export const Browser = lazy(() => import("../../components/browser/browser-panel.ts"), {
-  export: "BrowserPanelHost",
-});
+const loadSessionTabList = lazyModule(
+  () => import("../../components/browser/browser-session-tab-list.ts"),
+);
+
+export const Browser = lazy(
+  async () => {
+    const [panel] = await Promise.all([
+      import("../../components/browser/browser-panel.ts"),
+      loadSessionTabList(),
+    ]);
+    return panel;
+  },
+  { export: "BrowserPanelHost" },
+);
 
 export function prepareChatBrowserPanel(props: SidebarPanelDefinitionParams) {
   const { state } = props;
   if (!state.browserPanelAvailable) {
     return;
   }
-  void Browser.preload().catch(() => {});
-  if (
-    state.client &&
-    state.connected &&
-    state.sessionKey.trim() &&
-    isBrowserPanelAvailable({ phase: "connected", hello: state.hello })
-  ) {
-    sessionBrowserTabList(
-      "prepare",
-      state.client,
-      state.sessionKey,
-      props.preferredBrowserTab?.tab,
-      props.sessionBrowserTabs ?? [],
-    );
+  const { client, sessionKey } = state;
+  if (client && state.connected && sessionKey.trim()) {
+    const generation = client.connectionGeneration;
+    const prepare = ({ sessionBrowserTabList }: Awaited<ReturnType<typeof loadSessionTabList>>) => {
+      if (
+        state.client === client &&
+        state.sessionKey === sessionKey &&
+        client.connectionGeneration === generation &&
+        state.connected &&
+        isBrowserPanelAvailable({ phase: "connected", hello: state.hello })
+      ) {
+        void sessionBrowserTabList(
+          "prepare",
+          client,
+          sessionKey,
+          props.preferredBrowserTab?.tab,
+          props.sessionBrowserTabs ?? [],
+        );
+      }
+    };
+    const loaded = loadSessionTabList.peek();
+    if (loaded) {
+      prepare(loaded);
+    } else {
+      void loadSessionTabList()
+        .then(prepare)
+        .catch(() => {});
+    }
   }
+  void Browser.preload().catch(() => {});
 }

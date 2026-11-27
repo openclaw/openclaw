@@ -12,27 +12,34 @@ import { SidebarPanelLauncher } from "./components/chat-sidebar-region-header.ts
 
 afterEach(cleanupSolid);
 
-it.each(["pointerenter", "focus", "click"])("starts just the scoped tab read on %s", (event) => {
-  preserveDocumentStyle();
-  const request = vi.fn(async () => ({ running: true, tabs: [] }));
-  const { state } = createTestChatPane({ client: createGatewayBrowserClientFixture({ request }) });
-  state.browserPanelAvailable = true;
-  state.hello = gatewayHelloForMethods(["browser.request"]);
-  const definitions = sidebarPanelDefinitions(sidebarPanelFixtureParams(state));
-  const open = vi.fn();
-  const view = mountSolid(() => <SidebarPanelLauncher definitions={definitions} onOpen={open} />);
-  const option = view.getByRole("button", { name: /Browser/ });
-  request.mockClear();
-  option.dispatchEvent(new Event(event, { bubbles: true }));
-  expect(request).toHaveBeenCalledExactlyOnceWith("browser.request", {
-    method: "GET",
-    path: "/tabs",
-    tabScope: { sessionKey: state.sessionKey, referencedTabs: [] },
-  });
-  if (event !== "click") {
-    expect(open).not.toHaveBeenCalled();
-    option.click();
-    expect(request).toHaveBeenCalledTimes(1);
-  }
-  expect(open).toHaveBeenCalledExactlyOnceWith("browser");
-});
+it.each(["pointerenter", "focus", "click"])(
+  "starts just the scoped tab read on %s",
+  async (event) => {
+    preserveDocumentStyle();
+    const request = vi.fn(async () => ({ running: true, tabs: [] }));
+    const { state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture({ request }),
+    });
+    state.browserPanelAvailable = true;
+    state.hello = gatewayHelloForMethods(["browser.request"]);
+    const definitions = sidebarPanelDefinitions(sidebarPanelFixtureParams(state));
+    const open = vi.fn();
+    const view = mountSolid(() => <SidebarPanelLauncher definitions={definitions} onOpen={open} />);
+    const option = view.getByRole("button", { name: /Browser/ });
+    request.mockClear();
+    option.dispatchEvent(new Event(event, { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledExactlyOnceWith("browser.request", {
+        method: "GET",
+        path: "/tabs",
+        tabScope: { sessionKey: state.sessionKey, referencedTabs: [] },
+      });
+    });
+    if (event !== "click") {
+      expect(open).not.toHaveBeenCalled();
+      option.click();
+      expect(request).toHaveBeenCalledTimes(1);
+    }
+    expect(open).toHaveBeenCalledExactlyOnceWith("browser");
+  },
+);

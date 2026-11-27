@@ -36,7 +36,7 @@ export function sessionBrowserTabList(
 ) {
   const previous = prepared.get(client);
   if (mode === "take" && !previous) {
-    return;
+    return undefined;
   }
   const params = {
     method: "GET",
