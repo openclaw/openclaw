@@ -970,18 +970,13 @@ describe("OpenAI completions compatibility and tools", () => {
   it.each(["direct", "managed"] as const)(
     "never sends an empty tools array or an orphan tool choice in %s mode",
     (mode) => {
-      const send = ({ compat, ...fields }: Partial<ToolsModel>, context: Context) =>
-        requestMode(
-          mode,
-          { ...makeCompletionsModel(fields), compat },
-          { toolChoice: "none" },
-          context,
-        );
-      for (const params of [
-        send(toolsNative, { ...historyContext(), tools: [brokenTool] }),
-        send(toolsNative, historyContext()),
-        send(proxy, historyContext()),
-      ]) {
+      const cases: [CompletionsModel, Context][] = [
+        [toolsNative, { ...historyContext(), tools: [brokenTool] }],
+        [toolsNative, historyContext()],
+        [proxy, historyContext()],
+      ];
+      for (const [model, context] of cases) {
+        const params = requestMode(mode, model, { toolChoice: "none" }, context);
         expect(params).not.toHaveProperty("tools");
         expect(params).not.toHaveProperty("tool_choice");
       }
