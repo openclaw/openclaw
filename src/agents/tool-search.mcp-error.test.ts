@@ -7,6 +7,7 @@ import { runAgentLoop, type AgentEvent } from "../plugin-sdk/agent-core.js";
 import { catalogTool, staticRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import { isToolResultError } from "./tool-result-error.js";
 import {
   singleToolCallStreamFn,
@@ -20,7 +21,11 @@ import {
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
-async function createDeferredMcpCall(result: CallToolResult) {
+async function createDeferredMcpCall(
+  result: CallToolResult,
+  inputSchema: Record<string, unknown> = { type: "object", properties: {} },
+) {
+  const calls: unknown[] = [];
   const catalog = {
     version: 1 as const,
     generatedAt: 0,
@@ -36,6 +41,7 @@ async function createDeferredMcpCall(result: CallToolResult) {
       catalogTool("searchServer", "query", {
         description: "Query the search backend",
         fallbackDescription: "Query the search backend",
+        inputSchema,
       }),
     ],
   };
@@ -45,11 +51,14 @@ async function createDeferredMcpCall(result: CallToolResult) {
     configFingerprint: "fingerprint",
     getCatalog: async () => catalog,
     peekCatalog: () => catalog,
-    callTool: async () => result,
+    callTool: async (_server, _tool, input) => {
+      calls.push(input);
+      return result;
+    },
   });
   const materialized = await materializeBundleMcpToolsForRun({ runtime });
   const target = expectDefined(materialized.tools[0], "materialized MCP tool");
-  return { callTool: createDeferredCall(target), target };
+  return { callTool: createDeferredCall(target), target, calls };
 }
 
 function createDeferredCall(target: AnyAgentTool) {
@@ -79,6 +88,27 @@ describe("Tool Search MCP failures", () => {
       .join("\n");
     expect(text).toContain("Saved preview");
     expect(text).not.toContain(image.data);
+  });
+
+  it("rejects invalid MCP arguments before the server with the schema to retry from", async () => {
+    const inputSchema = {
+      type: "object",
+      properties: { text: { type: "string" }, limit: { type: "integer" } },
+      required: ["text"],
+      additionalProperties: false,
+    };
+    const { target, calls } = await createDeferredMcpCall(
+      { content: [{ type: "text", text: "3 hits" }] },
+      inputSchema,
+    );
+    // Runs wrap bundle MCP tools with the before-tool-call hook, which validates after hooks.
+    const callTool = createDeferredCall(wrapToolWithBeforeToolCallHook(target));
+    await expect(
+      callTool.execute("invalid", { id: target.name, args: { query: "x" } }),
+    ).rejects.toThrow(`Input schema: ${JSON.stringify(inputSchema)}`);
+    expect(calls).toEqual([]);
+    await callTool.execute("valid", { id: target.name, args: { text: "x", limit: 3 } });
+    expect(calls).toEqual([{ text: "x", limit: 3 }]);
   });
 
   it.each([
