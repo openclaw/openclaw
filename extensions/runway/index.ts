@@ -124,15 +124,15 @@ function buildCreateBody(
       ? 5
       : Math.max(2, Math.min(MAX_DURATION_SECONDS, normalizedDuration));
   if (model === "veo3") {
-    if (req.durationSeconds !== undefined && req.durationSeconds !== 8) {
+    if (normalizedDuration !== undefined && normalizedDuration !== 8) {
       throw new Error("Runway veo3 requires durationSeconds to be 8.");
     }
     duration = 8;
   } else if (VEO_MODELS.has(model)) {
-    if (req.durationSeconds !== undefined && !VEO_31_DURATION_SECONDS.has(req.durationSeconds)) {
+    if (normalizedDuration !== undefined && !VEO_31_DURATION_SECONDS.has(normalizedDuration)) {
       throw new Error(`Runway ${model} requires durationSeconds to be 4, 6, or 8.`);
     }
-    duration = req.durationSeconds ?? 4;
+    duration = normalizedDuration ?? 4;
   }
   const hasReferenceInput =
     (req.inputImages?.length ?? 0) > 0 || (req.inputVideos?.length ?? 0) > 0;

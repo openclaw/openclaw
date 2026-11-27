@@ -180,9 +180,12 @@ it.each([
   ["veo3.1", undefined, 4],
   ["veo3.1", 4, 4],
   ["veo3.1", 6, 6],
+  ["veo3.1", 5.9, 6],
+  ["veo3.1_fast", 5.9, 6],
   ["veo3.1", 8, 8],
   ["veo3", undefined, 8],
   ["veo3", 8, 8],
+  ["veo3", 7.9, 8],
 ] as const)(
   "submits %s text duration %s as %i seconds",
   async (model, durationSeconds, duration) => {
