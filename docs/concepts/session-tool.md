@@ -94,7 +94,13 @@ requesting session as its parent. It inherits that turn's sandbox requirement, t
 policy, and permission mode, so it is never less contained than the turn that
 created it. Agent targets, spawn depth, and child limits follow the same
 `subagents` admission rules. Unlike a visible spawn, the session is not registered
-as a supervised run.
+as a supervised run. Its `sessions_send` reports are visible updates, not private
+subagent coordination. This distinction is recorded when the session is created;
+older sessions without that marker keep their existing classification. Create a
+new independent session to use visible reports. Supervised `sessions_spawn`
+coordination remains private. Later `sessions_send` messages from its creator
+are peer messages, so an exact `NO_REPLY` returns `status: "no_reply"`; the
+opening `message` still requires a result.
 
 For an admitted, authenticated channel sender whose account and sender ID have no
 linked profile, `sessions_create` ignores a supplied `user` and uses the same

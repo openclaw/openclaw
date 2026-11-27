@@ -267,7 +267,7 @@ describe("happy path prompt snapshots", () => {
     expect(stats.additionalContext.chars).toBe(contextTexts.join("\n\n").length);
   });
 
-  it("keeps managed persona outside native collaboration and user-input history", async () => {
+  it("keeps workspace persona on the thread, outside collaboration and user-input history", async () => {
     for (const scenario of ["telegram-direct", "discord-group"]) {
       const snapshot = await materializeCodexPromptSnapshot(scenario);
       const turnSection = renderedPromptSection(
@@ -284,15 +284,16 @@ describe("happy path prompt snapshots", () => {
         "### Request Instructions: OpenClaw Parent-Local Context",
         "### Developer: Codex Permission Instructions",
       );
-      expect(parentLocal).toContain("## OpenClaw Agent Soul");
-      for (const name of ["SOUL.md", "IDENTITY.md", "USER.md"]) {
-        expect(parentLocal).toContain("<" + name + " contents will be here>");
-      }
+      expect(parentLocal).not.toContain("## OpenClaw Agent Soul");
       const shared = renderedPromptSection(
         snapshot,
         "### Developer: OpenClaw Runtime Instructions",
         "### Developer: Codex Collaboration Mode Instructions",
       );
+      expect(shared).toContain("## OpenClaw Agent Soul");
+      for (const name of ["SOUL.md", "IDENTITY.md", "USER.md"]) {
+        expect(shared).toContain("<" + name + " contents will be here>");
+      }
       expect(shared).toContain("<collaboration_mode>");
       expect(shared).toContain("silence is not an answer or approval");
       expect(shared).toContain("```text\n<thread_policy>\n");
@@ -307,7 +308,7 @@ describe("happy path prompt snapshots", () => {
         "### User: Turn Input Text",
         "### Tools: Dynamic Tool Catalog",
       );
-      for (const nativeHistory of [shared, collaboration, input]) {
+      for (const nativeHistory of [collaboration, input]) {
         expect(nativeHistory).not.toContain("<SOUL.md contents will be here>");
         expect(nativeHistory).not.toContain("<IDENTITY.md contents will be here>");
         expect(nativeHistory).not.toContain("<USER.md contents will be here>");

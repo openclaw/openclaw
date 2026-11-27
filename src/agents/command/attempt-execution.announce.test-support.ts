@@ -178,6 +178,13 @@ export function createSubagentAnnounceSessionStore(
   };
 }
 
+const INDEPENDENT_SESSION_ENTRY = {
+  spawnDepth: 1,
+  spawnedBy: "agent:main:dashboard:creator",
+  parentSessionKey: "agent:main:dashboard:creator",
+  createdIndependently: true,
+} as const;
+
 export const INTER_SESSION_REPLY_POLICY_CASES = [
   ["optional", "agent:main:subagent:completion", "discord"],
   [
@@ -226,5 +233,34 @@ export const INTER_SESSION_REPLY_POLICY_CASES = [
     "sessions_send",
     undefined,
     { spawnDepth: 1 },
+  ],
+  // A sessions_create session keeps spawn lineage but receives sends as a peer.
+  [
+    "required",
+    "agent:main:dashboard:independent-peer",
+    "webchat",
+    undefined,
+    "sessions_send",
+    undefined,
+    INDEPENDENT_SESSION_ENTRY,
+  ],
+  // Its opening task still owes a result, whichever opening source the gateway records.
+  [
+    "result-required",
+    "agent:main:dashboard:independent-spawn-opening",
+    "webchat",
+    undefined,
+    "sessions_spawn",
+    undefined,
+    INDEPENDENT_SESSION_ENTRY,
+  ],
+  [
+    "result-required",
+    "agent:main:dashboard:independent-create-opening",
+    "webchat",
+    undefined,
+    "sessions_create",
+    undefined,
+    INDEPENDENT_SESSION_ENTRY,
   ],
 ] as const;

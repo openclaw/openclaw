@@ -78,8 +78,10 @@ so repeated stops across process lifetimes are logged at info without the hint.
 Restart-intent settlement has a one-second bound, including queued signals and
 closed stores. If it stalls, SIGTERM proceeds with ordinary graceful shutdown:
 record running sessions for resume, abort work, and run bounded cleanup. A locally
-authorized SIGUSR2 can continue without the stored intent; an unauthorized signal
-still requires authorization. A timed-out stored restart intent may be lost.
+authorized SIGUSR2 can continue without the stored intent. An external SIGUSR2
+that times out follows the normal `commands.restart` policy: it schedules a
+restart if enabled and is ignored if disabled. A timed-out stored restart intent
+may be lost.
 
 A SIGTERM that arrives after an in-process restart released Gateway state stops
 the Gateway and logs at info, since no restart intent can be read then. Deep local status shows

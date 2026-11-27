@@ -1,13 +1,17 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { chromium, type BrowserContext, type Page } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   chromeProductRoots,
@@ -19,6 +23,7 @@ import { useNativeHostLaunchFixture } from "../src/browser/extension-install.tes
 import { getGatewayExtensionRelayModule } from "../src/browser/extension-relay.runtime.js";
 import { DEFAULT_UPLOAD_DIR } from "../src/browser/paths.js";
 import { getPageForTargetId } from "../src/browser/pw-session.js";
+import { runExtensionRelayDaemon } from "../src/browser/relay-daemon.js";
 import {
   createBrowserRouteDispatcher,
   type BrowserDispatchRequest,
@@ -26,7 +31,11 @@ import {
 } from "../src/browser/routes/dispatcher.js";
 import { createBrowserRouteContext } from "../src/browser/server-context.js";
 import { getFreePort } from "../src/browser/test-port.js";
-import { getBrowserControlState, stopBrowserControlService } from "../src/control-service.js";
+import {
+  getBrowserControlState,
+  startBrowserControlServiceFromConfig,
+  stopBrowserControlService,
+} from "../src/control-service.js";
 import { createBootstrapDiagnostic } from "./bootstrap-diagnostics.test-support.js";
 import { proveLabeledRefScreenshot } from "./labeled-screenshot.test-support.js";
 import chromeExtensionManifest from "./manifest.json" with { type: "json" };
@@ -805,4 +814,161 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
       },
     );
   }, 120_000);
+
+  // The user's own browser: dark system appearance, a probe tab behind the active tab,
+  // and a harness connection that emulates nothing.
+  async function withRelayProbe(
+    topology: "owned" | "borrowed",
+    use: (probe: {
+      page: Page;
+      dispatch: (
+        route: string,
+        body?: BrowserDispatchRequest["body"],
+      ) => Promise<BrowserDispatchResponse>;
+    }) => Promise<void>,
+  ) {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-extension-relay-probe-")),
+    );
+    cleanups.push(async () => await fs.rm(root, { recursive: true, force: true }));
+    const stateDir = path.join(root, "state");
+    const token = relayTestKey(11);
+    await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      path.join(stateDir, "credentials", "browser-extension-relay.secret"),
+      `${token}\n`,
+      { mode: 0o600 },
+    );
+    const relayPort = await getFreePort();
+    const config = {
+      gateway: { auth: { mode: "token" as const, token: "relay-probe-test" } },
+      browser: { profiles: { e2e: { driver: "extension" as const, cdpPort: relayPort } } },
+    };
+    setRuntimeConfigSnapshot(config, config);
+    cleanups.push(async () => clearRuntimeConfigSnapshot());
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      if (topology === "borrowed") {
+        const daemon = await runExtensionRelayDaemon({ port: relayPort });
+        cleanups.push(async () => {
+          daemon.stop();
+          await daemon.done;
+        });
+      }
+      const state = required(
+        await startBrowserControlServiceFromConfig(),
+        "Browser control did not start",
+      );
+      cleanups.push(stopBrowserControlService);
+      expect(state.extensionRelays?.get("e2e")?.ownership).toBe(topology);
+      state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: true };
+      const cdpPort = await getFreePort();
+      const child = spawn(
+        chromium.executablePath(),
+        [
+          "--headless=new",
+          // CI runs as root in a container, where Chromium refuses its sandbox.
+          "--no-sandbox",
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--password-store=basic",
+          "--use-mock-keychain",
+          "--force-dark-mode",
+          "--enable-unsafe-extension-debugging",
+          `--remote-debugging-port=${cdpPort}`,
+          `--user-data-dir=${path.join(root, "chromium")}`,
+        ],
+        { stdio: "ignore" },
+      );
+      cleanups.push(async () => {
+        child.kill("SIGKILL");
+      });
+      let browser: Browser | undefined;
+      await vi.waitFor(
+        async () => {
+          browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`, {
+            noDefaults: true,
+          });
+        },
+        { timeout: 15_000 },
+      );
+      const context = required(
+        browser?.contexts()[0],
+        "Chromium did not expose its default context",
+      );
+      const extensionDir = path.dirname(fileURLToPath(import.meta.url));
+      await loadUnpackedExtension(context, extensionDir);
+      const extensionPage = await context.newPage();
+      await extensionPage.goto(
+        `chrome-extension://${await waitForExtensionId(context, extensionDir)}/options.html`,
+      );
+      expect(
+        await sendExtensionMessage(extensionPage, {
+          type: "pair",
+          pairingString: `ws://127.0.0.1:${relayPort}/extension#${token}`,
+          accessMode: "all",
+        }),
+      ).toMatchObject({ ok: true });
+      const page = await context.newPage();
+      await page.goto(
+        `data:text/html,${encodeURIComponent('<title>Relay probe</title><input id="field">')}`,
+      );
+      await (await context.newPage()).bringToFront();
+      expect(await page.evaluate(() => document.visibilityState)).toBe("hidden");
+      expect(await page.evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches)).toBe(
+        true,
+      );
+      const dispatcher = createBrowserRouteDispatcher(
+        createBrowserRouteContext({ getState: () => state, refreshConfigFromDisk: false }),
+      );
+      let targetId: string | undefined;
+      await expect
+        .poll(
+          async () => {
+            const tabs = await dispatcher.dispatch({
+              method: "GET",
+              path: "/tabs",
+              query: { profile: "e2e" },
+            });
+            targetId = responseTabs(tabs)?.find((tab) => tab.url === page.url())?.targetId;
+            return targetId;
+          },
+          { timeout: 15_000 },
+        )
+        .toBeTruthy();
+      await use({
+        page,
+        dispatch: (route, body) =>
+          dispatcher.dispatch({
+            method: body === undefined ? "GET" : "POST",
+            path: route,
+            body: body && { ...body, targetId },
+            query: { profile: "e2e", targetId },
+          }),
+      });
+    });
+  }
+
+  it.each(["owned", "borrowed"] as const)(
+    "keeps the user's dark color scheme through the %s relay",
+    async (topology) => {
+      await withRelayProbe(topology, async ({ page, dispatch }) => {
+        expectSuccess(await dispatch("/snapshot"));
+        expect(await page.evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches)).toBe(
+          true,
+        );
+      });
+    },
+    60_000,
+  );
+
+  it.each(["owned", "borrowed"] as const)(
+    "clicks in a background tab through the %s relay",
+    async (topology) => {
+      await withRelayProbe(topology, async ({ page, dispatch }) => {
+        expectSuccess(await dispatch("/act", { kind: "click", selector: "#field" }));
+        expect(await page.evaluate(() => document.activeElement?.id)).toBe("field");
+      });
+    },
+    60_000,
+  );
 });

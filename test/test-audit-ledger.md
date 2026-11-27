@@ -134,6 +134,7 @@ Standalone, non-additive counts; source-only unless local qualification is separ
 
 ## Unresolved obligations and limits
 
+- [192862](https://github.com/openclaw/openclaw/pull/192862) closes the native skills fixture when the model catalog write fails. The prior native suite covered three cases. The setup failure check preserved the original error and verified that the listener closed.
 - Qualify C / D at actual owners; preserve independent wire / identity / authority / lifecycle / platform / work-count keepers.
 - Transfer Android loading / blank-auth, persisted outbox keys / epochs, terminal projection and native PCM / decoder / reader rows before consolidation; retain typed host-error precedence / active-run settlement.
 - Keep CodeMode warmed worker-leg deadline / interruption separate from cancellation-table host-error precedence and settlement.

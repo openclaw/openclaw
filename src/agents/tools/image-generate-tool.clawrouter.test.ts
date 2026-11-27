@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { buffer } from "node:stream/consumers";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { encodePngRgba } from "../../media/png-encode.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
@@ -79,7 +80,13 @@ it("edits an inbound PNG with the exact OpenAI model and router credential, then
           });
           response.setHeader("Content-Type", "application/json");
           if (request.url === "/v1/catalog") {
-            response.end(JSON.stringify(inventory));
+            response.end(
+              JSON.stringify({
+                ...inventory,
+                observedAt: new Date().toISOString(),
+                scope: { authType: "proxy_key", credentialId: "synthetic-router-id" },
+              }),
+            );
           } else if (request.url === "/v1/images/edits") {
             response.end(JSON.stringify({ data: [{ b64_json: PNG.toString("base64") }] }));
           } else {
@@ -132,6 +139,15 @@ it("edits an inbound PNG with the exact OpenAI model and router credential, then
         fsPolicy: { workspaceOnly: true },
       });
       expect(tool).not.toBeNull();
+      await expect(
+        tool!.execute("over-limit-google-edit", {
+          prompt: "Edit the reference",
+          model: "clawrouter/google/gemini-3-pro-image",
+          image: upload.path,
+          count: 2,
+        }),
+      ).rejects.toThrow("clawrouter edit supports at most 1 output image.");
+      expect(calls).toHaveLength(0);
       const result = await tool!.execute("uploaded-reference", {
         prompt: "Make the square blue",
         model: "clawrouter/" + MODEL,
@@ -160,4 +176,53 @@ it("edits an inbound PNG with the exact OpenAI model and router credential, then
     await releaseListener();
     await claim.release();
   }
+});
+
+it("uses the same request key for inferred and explicit Google edit resolution", async () => {
+  await withOpenClawTestState({ label: "clawrouter-edit-resolution" }, async (state) => {
+    const model = "clawrouter/google/gemini-3-pro-image";
+    const cfg: OpenClawConfig = {
+      plugins: { allow: ["clawrouter"], entries: { clawrouter: { enabled: true } } },
+      agents: { defaults: { mediaModels: { image: { primary: model } } } },
+      models: {
+        providers: {
+          clawrouter: {
+            api: "openai-responses",
+            baseUrl: "http://127.0.0.1:1",
+            apiKey: "synthetic-router-key",
+            models: [],
+          },
+        },
+      },
+    };
+    const tool = createImageGenerateTool({
+      config: cfg,
+      agentDir: state.agentDir(),
+      agentSessionKey: "agent:main:main",
+      workspaceDir: state.workspaceDir,
+      fsPolicy: { workspaceOnly: true },
+    });
+    expect(tool).not.toBeNull();
+    const png = encodePngRgba(Buffer.alloc(3200 * 1800 * 4), 3200, 1800);
+    // A data URL keeps the source dimensions through the media loader.
+    const image = "data:image/png;base64," + png.toString("base64");
+    const taskStatus = await import("../media-generation-task-status.js");
+    const lookup = vi
+      .spyOn(taskStatus, "findDuplicateGuardImageGenerationTaskForSession")
+      .mockRejectedValue(new Error("stop at duplicate lookup"));
+    try {
+      const input = { prompt: "Edit the reference", image };
+      for (const params of [input, { ...input, resolution: "4K" }]) {
+        await expect(tool!.execute("router-edit-resolution", params)).rejects.toThrow(
+          "stop at duplicate lookup",
+        );
+      }
+      expect(lookup).toHaveBeenCalledTimes(2);
+      const [inferred, explicit] = lookup.mock.calls.map(([, query]) => query?.requestKey);
+      expect(inferred).toMatch(/^[a-f0-9]{64}$/);
+      expect(explicit).toBe(inferred);
+    } finally {
+      lookup.mockRestore();
+    }
+  });
 });

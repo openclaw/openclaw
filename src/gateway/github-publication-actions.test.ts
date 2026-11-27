@@ -7,13 +7,17 @@ import {
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
+import {
+  ensureProjectRegistrySchema,
+  insertProjectRegistryInDatabase,
+} from "../projects/project-registry.kernel.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   commandResult,
@@ -46,6 +50,89 @@ describe("session PR actions through the agent tool and registered Gateway metho
     sandbox: "required",
     realWorktree: true,
   });
+
+  it.each(["published", "bound"] as const)(
+    "posts a comment without approval only on the session's %s PR",
+    async (selection) => {
+      const f = await fixture();
+      ensureProjectRegistrySchema({ database: f.database });
+      const project = insertProjectRegistryInDatabase(f.database.db, {
+        source: "registered",
+        displayName: "OpenClaw",
+        repoRoot: f.local!.cwd,
+        originUrl: "https://github.com/openclaw/openclaw.git",
+      });
+      await upsertSessionEntryCore(f.guestSource.session, { projectId: project.id });
+      const entry = loadSessionEntryReadOnly(f.guestSource.session)!;
+      if (selection === "bound") {
+        await upsertSessionEntryCore(f.guestSource.session, {
+          worktree: {
+            ...entry.worktree!,
+            githubPullRequest: {
+              url: "https://github.com/openclaw/openclaw/pull/7",
+              host: "github.com",
+              number: 7,
+              base: {
+                repository: "openclaw/openclaw",
+                repositoryId: 10,
+                branch: "main",
+                commit: "a".repeat(40),
+              },
+              head: {
+                repository: "contributor/openclaw",
+                repositoryId: 20,
+                branch: "topic",
+                commit: "b".repeat(40),
+              },
+              origin: "external-pr",
+              preparedHeadCommit: "b".repeat(40),
+            },
+          },
+        });
+      }
+      vi.stubGlobal("fetch", async () => Response.json({ visibility: "public" }));
+      onTestFinished(() => {
+        vi.unstubAllGlobals();
+      });
+      const issueNumber = selection === "bound" ? 7 : 125200;
+      const url = `https://github.com/openclaw/openclaw/pull/${issueNumber}#issuecomment-123`;
+      const body = "I verified the fix.";
+      mocks.runCommand
+        .mockClear()
+        .mockResolvedValue(commandResult(JSON.stringify({ id: 123, url, body, authorId: 42 })));
+      await expect(
+        f.invoke("guest", { action: "create_comment", issueNumber, body }),
+      ).resolves.toMatchObject({ details: { status: "posted", url } });
+      await expect(
+        f.invoke("guest", {
+          action: "create_comment",
+          issueNumber: selection === "bound" ? 125200 : 8,
+          body,
+        }),
+      ).rejects.toThrow("GitHub comment approval is unavailable");
+      if (selection === "bound") {
+        const current = loadSessionEntryReadOnly(f.guestSource.session)!.worktree!;
+        for (const boundUrl of [
+          "https://github.com/other/openclaw/pull/7",
+          "https://other.example/openclaw/openclaw/pull/7",
+        ]) {
+          await upsertSessionEntryCore(f.guestSource.session, {
+            worktree: {
+              ...current,
+              githubPullRequest: { ...current.githubPullRequest!, url: boundUrl },
+            },
+          });
+          await expect(
+            f.invoke("guest", { action: "create_comment", issueNumber, body }),
+          ).rejects.toThrow("GitHub comment approval is unavailable");
+        }
+      }
+      expect(mocks.runCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.arrayContaining(["POST", `repos/openclaw/openclaw/issues/${issueNumber}/comments`]),
+        expect.objectContaining({ input: JSON.stringify({ body }) }),
+      );
+    },
+  );
 
   it.each(["local", "repository"] as const)(
     "lets a guest manage its %s task PR from the unbound parent while preserving merge authority",

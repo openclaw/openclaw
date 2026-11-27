@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildFileEntry,
   buildMultimodalChunkForIndexing,
   createMemorySearchDeadlineControl,
   MEMORY_SEARCH_DEADLINE_CONTROL,
@@ -41,7 +40,11 @@ import {
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
 import { resolveChunkProvenance } from "./manager-index-preparation.js";
-import { prepareSessionIndexSource, readMemoryIndexSource } from "./manager-index-source.js";
+import {
+  prepareSessionIndexSource,
+  readMemoryIndexSource,
+  verifyMemoryIndexFile,
+} from "./manager-index-source.js";
 import { memoryPublicationGroup } from "./manager-publication-transfer.js";
 import {
   resolveMemoryIndexProviderIdentities,
@@ -81,7 +84,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   protected batchFailure: { count: number; lastError?: string; lastProvider?: string } = {
     count: 0,
   };
-  protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
+  protected abstract markEmbeddingProviderFailure(err: unknown): void;
   private readonly activeProviderUses = new Map<MemoryEmbeddingProvider, Set<Promise<void>>>();
   private syncProviderGenerationRelease: (() => void) | null = null;
   private syncProviderGenerationOwners = 0;
@@ -323,7 +326,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           error: formatErrorMessage(err),
         });
       }
-      this.markLocalEmbeddingProviderDegraded(err);
+      this.markEmbeddingProviderFailure(err);
       throw createMemoryEmbeddingOperationError({
         operation: structured ? "structured-batch" : "batch",
         providerId: provider.id,
@@ -378,7 +381,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     } catch (error) {
       // An interrupted check says nothing about the provider's health.
       if (provider === this.provider && !signal?.aborted) {
-        this.markLocalEmbeddingProviderDegraded(error);
+        this.markEmbeddingProviderFailure(error);
       }
       throw error;
     }
@@ -499,18 +502,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       const replacements = activeItems.map((item) => this.sourceReplacement(item, generation));
       const prepare = async (): Promise<boolean> => {
         for (let index = activeItems.length - 1; index >= 0; index--) {
-          const {
-            prepared: { entry, source },
-          } = activeItems[index]!;
-          if (source !== "memory") {
-            continue;
-          }
-          const current = await (this.memoryFiles?.inspectFile ?? buildFileEntry)(
-            entry.absPath,
-            this.workspaceDir,
-            this.settings.multimodal,
-          );
-          if (current?.hash !== entry.hash) {
+          const { entry, source } = activeItems[index]!.prepared;
+          if (
+            source === "memory" &&
+            !(await verifyMemoryIndexFile(
+              replacements[index]!,
+              entry.absPath,
+              this.workspaceDir,
+              this.settings.multimodal,
+              this.memoryFiles,
+            ))
+          ) {
             this.dirty = true;
             log.debug("memory source changed while indexing; queued incremental retry", {
               path: entry.path,
@@ -523,14 +525,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         assertCurrent();
         return replacements.length > 0;
       };
-      const published =
+      const batch =
         replacements.length > 1 && memoryPublicationGroup(replacements)
-          ? await database.replaceSource(replacements, assertCurrent, prepare)
-          : await database.replaceSource(
-              expectDefined(replacements[0], "memory source publication"),
-              assertCurrent,
-              prepare,
-            );
+          ? replacements
+          : expectDefined(replacements[0], "memory source publication");
+      const published = await database.replaceSource(batch, assertCurrent, prepare);
       if (!published) {
         return;
       }

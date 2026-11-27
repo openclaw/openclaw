@@ -186,11 +186,8 @@ export async function runAnnounceAgentCall(params: {
 }
 
 export {
-  isDirectMessageDeliveryTarget,
-  hasMessagingToolDeliveryToSource,
   isGatewayAgentRunPending,
   resolvePrivateCompletionDeliveryResult,
-  buildRequesterCompletionDeliveryResult,
 } from "./subagent-announce-obligation.js";
 
 type DirectCompletionContent = { content: string; mediaUrls: string[]; audioAsVoice?: boolean };
@@ -283,7 +280,6 @@ export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
   requesterSessionId?: string;
-  requesterLifecycleRevision?: string;
   requesterAgentId?: string;
   directIdempotencyKey: string;
   deliveryTarget: {

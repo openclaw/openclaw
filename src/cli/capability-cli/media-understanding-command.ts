@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { findDecisionReason } from "../../../packages/media-understanding-common/src/format.js";
 import { resolveFilesystemPath } from "../../infra/home-dir.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
@@ -71,6 +72,17 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
             throw new Error(
               "No audio transcription provider is configured or ready. Configure an audio-capable tools.media.models entry, or pass --model <provider/model> after configuring that provider's auth/API key.",
             );
+          }
+          if (audio && result.decision?.outcome === "disabled") {
+            throw new Error(
+              "Audio transcription is disabled (tools.media.audio.enabled is false).",
+            );
+          }
+          if (audio && result.decision?.outcome === "skipped") {
+            const reason = findDecisionReason(result.decision, "skipped");
+            if (reason) {
+              throw new Error(`Cannot transcribe ${filePath}: ${reason.replace(/^\w+: /u, "")}`);
+            }
           }
           throw new Error(
             `No ${audio ? "transcript" : "description"} returned for ${kind}: ${filePath}`,

@@ -36,6 +36,17 @@ export const openClawIdAccessCheck: HealthCheck = {
   },
 };
 
+/** Read-only: whether {@link runOpenClawIdAccessHealth} would offer the plugins.allow repair. */
+export function hasOpenClawIdAccessAllowlistRepair(
+  ctx: Pick<DoctorHealthFlowContext, "cfg" | "sourceConfigValid">,
+): boolean {
+  return (
+    ctx.sourceConfigValid &&
+    openClawIdAccessWarning(ctx.cfg) !== undefined &&
+    openClawIdAccessBlockReason(ctx.cfg) === "not in allowlist"
+  );
+}
+
 export async function runOpenClawIdAccessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   let findings = await openClawIdAccessCheck.detect({
     mode: "doctor",
@@ -43,8 +54,7 @@ export async function runOpenClawIdAccessHealth(ctx: DoctorHealthFlowContext): P
     runtime: ctx.runtime,
   });
   if (
-    findings.some(({ requirement }) => requirement === "allowlist") &&
-    ctx.sourceConfigValid &&
+    hasOpenClawIdAccessAllowlistRepair(ctx) &&
     (await ctx.prompter.confirmAutoFix({
       message:
         "Add openclaw-id-access to plugins.allow so the OpenClaw ID Access page can load? The config file is rewritten as JSON and comments are removed. All other plugin policy is preserved.",
