@@ -3,6 +3,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:
 import path from "node:path";
 import { z } from "zod";
 import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs";
+import { prepareNativeCandidateGateway } from "./native-candidate-gateway.js";
 import { parseReleaseVersion } from "./release-version.mjs";
 
 const REGISTRY = "https://registry.npmjs.org";
@@ -277,12 +278,25 @@ export async function selectIOSReleaseGateway(options: SelectionOptions): Promis
   }
 }
 
-export async function prepareIOSReleaseGateway(options: SelectionOptions & { installDir: string }) {
-  const selection = await selectIOSReleaseGateway(options);
+export async function prepareIOSReleaseGateway(options: {
+  targetSha: string;
+  signal: AbortSignal;
+  selectionDir?: string;
+  installDir: string;
+  candidateDir?: string;
+}) {
+  if (options.candidateDir) {
+    return prepareNativeCandidateGateway({ ...options, candidateDir: options.candidateDir });
+  }
+  const selectionDir = options.selectionDir;
+  if (!selectionDir) {
+    throw new Error("Published Gateway qualification requires a selection directory.");
+  }
+  const selection = await selectIOSReleaseGateway({ ...options, selectionDir });
   await mkdir(options.installDir);
   await Promise.all(
     ["package.json", "package-lock.json"].map((file) =>
-      copyFile(path.join(options.selectionDir, file), path.join(options.installDir, file)),
+      copyFile(path.join(selectionDir, file), path.join(options.installDir, file)),
     ),
   );
   await npm(["ci", "--no-audit", "--no-fund"], options.installDir, options.signal);
@@ -308,5 +322,10 @@ export async function prepareIOSReleaseGateway(options: SelectionOptions & { ins
     throw new Error("Installed Gateway identity differs from the selected stable release.");
   }
   options.signal.throwIfAborted();
-  return { cwd, entrypoint: [path.join(cwd, "openclaw.mjs")], identity: selection };
+  return {
+    cwd,
+    entrypoint: [path.join(cwd, "openclaw.mjs")],
+    identity: selection,
+    dispose: undefined,
+  };
 }

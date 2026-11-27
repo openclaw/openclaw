@@ -10,11 +10,11 @@ import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-s
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import type { MemoryEmbeddingCacheRetireFence } from "./manager-embedding-cache-retire.js";
+import { buildMemoryEmbeddingBatches } from "./manager-embedding-policy.js";
 import {
   collectMemoryCachedEmbeddings,
   isValidMemoryEmbedding,
-} from "./manager-embedding-cache.js";
-import { buildMemoryEmbeddingBatches } from "./manager-embedding-policy.js";
+} from "./manager-embedding-vectors.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheMutation,

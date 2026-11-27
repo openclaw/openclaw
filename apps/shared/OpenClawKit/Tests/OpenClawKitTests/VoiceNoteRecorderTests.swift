@@ -394,6 +394,7 @@ final class VoiceNoteRecorderTests: XCTestCase {
         let recorder = OpenClawVoiceNoteRecorder(
             capture: capture,
             timerIntervalNanoseconds: 2_000_000)
+        defer { recorder.cancel() }
 
         let started = await recorder.start()
         XCTAssertTrue(started)

@@ -29,7 +29,7 @@ export function createWorkerPortalToolExecutor(params: WorkerPortalToolExecutorD
     const assertPortalAuthority = () => {
       assertSource();
       if (!params.placements.isWorkerTurnToolAuthorized(source.turnClaim, "portal")) {
-        throw new Error("Worker session tool authority changed");
+        throw new Error("Worker turn ended or lacks this tool. Start a new turn.");
       }
       const environment = params.environments.get(request.identity.environmentId);
       if (

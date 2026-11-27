@@ -130,6 +130,7 @@ export function writeWorkerGcProfiles(profiles: WorkerGcProfiles): Promise<strin
     ] as const) {
       const filename = `${prefix}.${kind}profile.json`;
       await replaceFileAtomic({
+        allowDrvfsRenameRecovery: true,
         filePath: path.join(directory, filename),
         content,
         mode: 0o600,

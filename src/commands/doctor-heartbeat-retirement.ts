@@ -13,6 +13,7 @@ import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { prepareProviderModelPolicySurfaces } from "../plugins/provider-model-routes.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
@@ -53,6 +54,7 @@ export async function retireHeartbeatWithDoctor(
   const cfg = inheritLegacyDefaultAgentId(sourceConfig, structuredClone(sourceConfig));
   migrateHeartbeatVisibility(cfg, []);
   validateLegacyHeartbeatConfig(cfg);
+  await prepareProviderModelPolicySurfaces();
   const heartbeatSources = new Map(
     listAgentIds(cfg).map((agentId) => [agentId, resolveLegacyHeartbeatConfig(cfg, agentId)]),
   );

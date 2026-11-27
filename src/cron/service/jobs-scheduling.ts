@@ -120,7 +120,6 @@ export function resolveNextRunAtMsOrDisable(params: {
   }
   autoDisableCronJob({
     job: params.job,
-    reason: "schedule-errors",
     atMs: params.state.deps.nowMs(),
     consecutiveErrors: 1,
     deferredNotifications: params.deferredNotifications,
@@ -454,7 +453,6 @@ export function recordScheduleComputeError(params: {
   if (errorCount >= MAX_SCHEDULE_ERRORS) {
     autoDisableCronJob({
       job,
-      reason: "schedule-errors",
       atMs: state.deps.nowMs(),
       consecutiveErrors: errorCount,
       deferredNotifications: params.deferredNotifications,

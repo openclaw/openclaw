@@ -1,6 +1,7 @@
 import { AgentHarnessProjectionSettlement } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   AgentHarnessModelRequestPolicyError,
+  AgentHarnessRuntimeUpdateRequiredError,
   classifyAgentHarnessTerminalOutcome,
   prepareAgentRunTerminalReply,
   type AgentMessage,
@@ -98,7 +99,8 @@ export abstract class CodexTurnProjection {
   /** Structured overloads may continue once the exact settled transcript is captured. */
   settledTurnFailureFinalizationAllowed = false;
   protected promptError: unknown;
-  private requestPolicyDenialMessage: string | undefined;
+  /** Native message behind a host-owned prompt error; a bare completion keeps that error. */
+  private hostPromptErrorMessage: string | undefined;
   protected promptErrorSource: AttemptFailureSource | null = null;
   protected providerRefusal: CodexProviderRefusal | undefined;
   protected synthesizedMissingToolResultError: string | null = null;
@@ -497,25 +499,32 @@ export abstract class CodexTurnProjection {
       if (this.promptError instanceof AgentHarnessModelRequestPolicyError) {
         this.promptError = undefined;
         this.promptErrorSource = null;
-        this.requestPolicyDenialMessage = undefined;
+        this.hostPromptErrorMessage = undefined;
       }
       return;
     }
     if (
-      this.promptError instanceof AgentHarnessModelRequestPolicyError &&
+      (this.promptError instanceof AgentHarnessModelRequestPolicyError ||
+        this.promptError instanceof AgentHarnessRuntimeUpdateRequiredError) &&
       params.codexErrorInfo == null &&
-      (!params.message || params.message === this.requestPolicyDenialMessage)
+      (!params.message || params.message === this.hostPromptErrorMessage)
     ) {
       return;
     }
     this.promptError =
-      resolveCodexPromptError({
-        message: params.message,
-        codexErrorInfo: params.codexErrorInfo,
-        rateLimits: params.rateLimits,
-      }) ?? params.fallbackMessage;
-    this.requestPolicyDenialMessage =
-      this.promptError instanceof AgentHarnessModelRequestPolicyError ? params.message : undefined;
+      resolveCodexPromptError(
+        {
+          message: params.message,
+          codexErrorInfo: params.codexErrorInfo,
+          rateLimits: params.rateLimits,
+        },
+        { model: this.params.modelId, ...this.options.codexRuntime },
+      ) ?? params.fallbackMessage;
+    this.hostPromptErrorMessage =
+      this.promptError instanceof AgentHarnessModelRequestPolicyError ||
+      this.promptError instanceof AgentHarnessRuntimeUpdateRequiredError
+        ? params.message
+        : undefined;
     this.promptErrorSource = params.promptErrorSource;
   }
 

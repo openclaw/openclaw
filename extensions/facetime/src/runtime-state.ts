@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { FaceTimeCallStatusEvent, AuthenticatedFaceTimeOwner } from "./call-events.js";
+import type { FaceTimeCallStatusEvent, AuthenticatedFaceTimeCaller } from "./call-events.js";
 import type { HelperActionResult } from "./helper-results.js";
 import type { FaceTimeHelperPeer } from "./helper-rpc.js";
 import type { FaceTimeHelperSupervisorStatus } from "./helper-supervisor.js";
@@ -69,7 +69,7 @@ export class ActiveFaceTimeCall {
   constructor(params: {
     callUUID: string;
     phase: "ringing" | "active";
-    owner: AuthenticatedFaceTimeOwner;
+    owner: AuthenticatedFaceTimeCaller;
     handle?: string;
     peer?: FaceTimeHelperPeer;
   }) {

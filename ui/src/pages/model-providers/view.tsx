@@ -10,14 +10,13 @@ import {
   SettingsLoadingSkeleton,
   SettingsPage,
   SettingsPageHeader,
-  SettingsRow,
   SettingsSection,
-  SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatTimeMs } from "../../lib/format.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import {
   ModelProviderIcon,
@@ -28,19 +27,14 @@ import "../../styles/model-providers.css";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { DefaultModels } from "./default-models-view.tsx";
+import { ProviderCatalog } from "./provider-catalog.tsx";
 import {
   ApiKeyInput,
   configMutationDisabled,
   ProviderRow,
   UnconnectedProviderRow,
 } from "./provider-row.tsx";
-import {
-  hasVerifiedProvider,
-  isProviderUsable,
-  needsModelSetup,
-  renderMutationMessage,
-  ModelProviderConnectAction,
-} from "./view-status.tsx";
+import { hasVerifiedProvider, isProviderUsable, renderMutationMessage } from "./view-status.tsx";
 import type { ModelProvidersViewProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -105,7 +99,7 @@ function AddProvider(props: ModelProvidersViewProps) {
                   class="btn primary"
                   disabled={disabled() || !props.addProviderId || !props.addProviderKey.trim()}
                   // With no usable model yet, saving also makes this key the agent's model.
-                  onClick={() => props.onAddProvider(needsModelSetup(props))}
+                  onClick={() => props.onAddProvider(props.modelRequired)}
                 >
                   {props.busy["check:add"]
                     ? t("modelProviders.apiKey.checking")
@@ -132,49 +126,6 @@ function AddProvider(props: ModelProvidersViewProps) {
   );
 }
 
-/** Setup prompt shown only until a usable model exists; Provider access takes over after. */
-function ModelReadiness(props: ModelProvidersViewProps) {
-  const signedIn = () => props.cards.some(hasVerifiedProvider);
-  return (
-    <Show when={needsModelSetup(props)}>
-      <div class="model-providers__setup" data-model-readiness="model-required">
-        <SettingsSection title={t("modelProviders.readiness.title")}>
-          <SettingsRow
-            title={t("modelProviders.readiness.heading")}
-            description={
-              signedIn()
-                ? t("modelProviders.readiness.signedInNoModels")
-                : t("modelProviders.readiness.notConfigured")
-            }
-            control={
-              <>
-                <SettingsStatus
-                  kind="warn"
-                  label={
-                    signedIn()
-                      ? t("modelProviders.readiness.noModels")
-                      : t("modelProviders.readiness.modelRequired")
-                  }
-                />
-                {/* An open API key form holds the page's one accent action until it closes. */}
-                <button
-                  class={["btn", { primary: !props.keyEditorProvider }]}
-                  data-models-connect
-                  disabled={configMutationDisabled(props) || props.loginBusy}
-                  title={props.mutationBlockedReason ?? ""}
-                  onClick={() => props.onConnectProvider()}
-                >
-                  {t("modelProviders.login.action")}
-                </button>
-              </>
-            }
-          />
-        </SettingsSection>
-      </div>
-    </Show>
-  );
-}
-
 function renderProviderNoticeRow(text: string, detail?: string) {
   return (
     <div class="settings-row" role="alert">
@@ -189,46 +140,126 @@ function renderProviderNoticeRow(text: string, detail?: string) {
 }
 
 export function ModelProviders(props: ModelProvidersViewProps) {
+  // A provider counts once the agent can use it; its other credential owners count with it.
+  const connected = createMemo(() => {
+    const ids = new Set<string>();
+    for (const card of props.cards.filter(isProviderUsable)) {
+      for (const id of [card.id, ...card.credentialProviderIds]) {
+        ids.add(canonicalModelAuthProviderId(id));
+      }
+    }
+    return ids;
+  });
+  // Settled once per load: a reload keeps the catalog, and any search typed in it, in place.
+  const first = createMemo<boolean | undefined>((previous) =>
+    props.providerDetailsReady === false || props.loading ? previous : connected().size === 0,
+  );
+  const available = (model: { available?: boolean }) => model.available !== false;
+  // A provider with credentials can list models, so its listing errors (shown in the defaults
+  // heading, with Retry) matter; before that the defaults are empty controls.
+  const providerSetUp = () =>
+    props.cards.some((card) => isProviderUsable(card) || card.profiles.length > 0);
+  const savedDefaults = () => {
+    const saved = props.defaultModels;
+    return (
+      Boolean(
+        saved.primary ||
+        saved.fallbacks.length ||
+        saved.utilityModel ||
+        saved.decisionModel ||
+        saved.subagentModel,
+      ) ||
+      props.thinkingOverridden ||
+      props.fastModeOverridden
+    );
+  };
+  // A decision model works without a chat model, so its choices alone keep the defaults reachable.
+  const hasDefaults = () =>
+    savedDefaults() ||
+    props.configuredModels.some(available) ||
+    providerSetUp() ||
+    props.decisionModels.length > 0;
+  // A new user's first action is the catalog; unset defaults wait below it. Saved defaults and
+  // returning users keep them on top, where data arriving later never pushes them down.
+  const defaultsBelow = () => first() === true && !savedDefaults();
+  const defaults = () => (
+    <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
+      <DefaultModels
+        {...props}
+        models={props.configuredModels}
+        selection={props.defaultModels}
+        canMutate={props.defaultsMutationBlockedReason === null && !props.configBusy}
+        mutationBlockedReason={props.defaultsMutationBlockedReason}
+        message={props.messages.defaults}
+        // Before any provider or default is set up, providers can't list models and the
+        // catalog is the call to action; a listing failure isn't news then.
+        catalogDiscoveryError={
+          !props.defaultModels.primary && !providerSetUp() ? null : props.catalogDiscoveryError
+        }
+      />
+    </div>
+  );
+  const signedInNoModels = () =>
+    props.modelRequired &&
+    props.cards.some(hasVerifiedProvider) &&
+    !props.configuredModels.some(available);
+  const catalog = () => (
+    <ProviderCatalog
+      providers={props.catalogProviders}
+      connected={connected()}
+      first={first() === true}
+      agentLabel={props.credentialAgentLabel}
+      disabled={configMutationDisabled(props) || props.loginBusy || props.addProviderOpen}
+      loading={props.loading}
+      initialQuery={first() ? props.providerQuery : undefined}
+      searchRef={props.catalogSearchRef}
+      onConnect={props.onCatalogConnect}
+      onDiscover={props.onDiscover}
+      discoverDisabled={props.discoverDisabled}
+    />
+  );
   return (
     <>
-      <SettingsPage>
-        <>
-          <ModelReadiness {...props} />
-          <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
-            <DefaultModels
-              {...props}
-              models={props.configuredModels}
-              selection={props.defaultModels}
-              canMutate={props.defaultsMutationBlockedReason === null && !props.configBusy}
-              mutationBlockedReason={props.defaultsMutationBlockedReason}
-              message={props.messages.defaults}
-              // Before any provider or default is set up, providers can't list models and the
-              // setup prompt above is the call to action; a listing failure isn't news then.
-              catalogDiscoveryError={
-                !props.defaultModels.primary &&
-                !props.cards.some((card) => isProviderUsable(card) || card.profiles.length > 0)
-                  ? null
-                  : props.catalogDiscoveryError
-              }
-            />
-          </div>
+      <SettingsPage carapace>
+        {props.accountRecovery}
+        <Show when={signedInNoModels()}>
+          <InlineAlert tone="warning" role="status" data-model-readiness="no-models">
+            {t("modelProviders.readiness.signedInNoModels")}
+          </InlineAlert>
+        </Show>
+        <Show when={hasDefaults() && (first() === false || savedDefaults())}>{defaults()}</Show>
+        <Show
+          when={first() !== undefined}
+          fallback={
+            <div class="model-providers__loading">
+              <SettingsLoadingSkeleton rows={2} />
+            </div>
+          }
+        >
+          <Show when={first()}>{catalog()}</Show>
+          <Show when={props.loading && first() === false}>
+            <SettingsLoadingSkeleton rows={2} />
+          </Show>
           <Show
-            when={props.providerDetailsReady !== false}
-            fallback={
-              <div class="model-providers__loading">
-                <SettingsLoadingSkeleton rows={1} />
-              </div>
+            when={
+              !props.loading &&
+              (props.cards.length > 0 ||
+                props.error ||
+                props.providerUsageFailed ||
+                props.providerUsageStalled)
             }
           >
-            {props.installedAgents}
             <ProviderAccess {...props} />
-            {props.providerUsageStalled ? (
-              <InlineAlert tone="warning" role="status">
-                {t("usage.providerUsage.stalled")}
-              </InlineAlert>
-            ) : undefined}
           </Show>
-        </>
+          {props.installedAgents}
+          <Show when={hasDefaults() && defaultsBelow()}>{defaults()}</Show>
+          <Show when={first() === false}>{catalog()}</Show>
+          {props.providerUsageStalled ? (
+            <InlineAlert tone="warning" role="status">
+              {t("usage.providerUsage.stalled")}
+            </InlineAlert>
+          ) : undefined}
+        </Show>
       </SettingsPage>
       <AddProvider {...props} />
     </>
@@ -266,17 +297,37 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           time: formatTimeMs(props.updatedAt, { hour: "numeric", minute: "2-digit" }),
         })
       : undefined;
-  // Setup with nothing connected has no list to filter.
-  const nothingToSearch = () =>
-    needsModelSetup(props) && props.cards.length === 0 && !props.error && !search();
-  const providerRows = () => (
-    <>
-      <Show when={!nothingToSearch()}>
+  // A short list reads at a glance; the filter earns its row on a long one. Once shown (or seeded
+  // by a link) it stays, so clearing the field never removes it mid-typing.
+  const filterable = createMemo<boolean>(
+    (shown) => shown === true || props.cards.length > 6 || Boolean(search()),
+  );
+  return (
+    <SettingsSection
+      carapace
+      title={t("modelProviders.accessTitle")}
+      description={t("modelProviders.accessDescription", { agent: props.credentialAgentLabel })}
+      actions={
+        <>
+          <button type="button" class="btn btn--sm btn--ghost" onClick={() => props.onOpenUsage()}>
+            {t("modelProviders.viewUsage")}
+          </button>
+          <RefreshButton
+            class="model-providers__refresh-button"
+            label={t("common.refresh")}
+            tooltip={refreshTooltip()}
+            disabled={props.refreshing}
+            onClick={() => props.onRefresh()}
+          />
+        </>
+      }
+    >
+      <Show when={filterable()}>
         <label class="field model-providers__search">
           <input
             type="search"
-            aria-label={t("modelProviders.search")}
-            placeholder={t("modelProviders.search")}
+            aria-label={t("modelProviders.searchConnected")}
+            placeholder={t("modelProviders.searchConnected")}
             value={search()}
             onInput={(event) => setSearch(event.currentTarget.value)}
           />
@@ -303,94 +354,33 @@ function ProviderAccess(props: ModelProvidersViewProps) {
             {renderProviderNoticeRow(t("usage.providerUsage.unavailable"))}
           </SettingsGroup>
         ) : undefined}
-        {props.cards.length === 0 && !props.error ? (
-          <SettingsGroup>
-            <SettingsEmpty
-              message={
-                <>
-                  <strong>{t("modelProviders.emptyTitle")}</strong>
-                  <br />
-                  {t("modelProviders.emptySubtitle")}
-                </>
-              }
-            />
+        <Show when={connected().length > 0}>
+          <SettingsGroup carapace>
+            <ul class="provider-list">
+              <For each={connected()} keyed={(card) => card.id}>
+                {(card) => <ProviderRow {...props} card={card()} />}
+              </For>
+            </ul>
           </SettingsGroup>
-        ) : (
-          <>
-            <Show when={connected().length > 0}>
-              <SettingsGroup carapace>
-                <ul class="provider-list">
-                  <For each={connected()} keyed={(card) => card.id}>
-                    {(card) => <ProviderRow {...props} card={card()} />}
-                  </For>
-                </ul>
-              </SettingsGroup>
-            </Show>
-            <Show when={unconnected().length > 0}>
-              <section class="settings-section provider-list__section">
-                <h3 class="settings-section__heading">{t("modelProviders.row.notConnected")}</h3>
-                <SettingsGroup carapace>
-                  <ul class="provider-list provider-list--quiet">
-                    <For each={unconnected()} keyed={(card) => card.id}>
-                      {(card) => <UnconnectedProviderRow {...props} card={card()} />}
-                    </For>
-                  </ul>
-                </SettingsGroup>
-              </section>
-            </Show>
-          </>
-        )}
+        </Show>
+        <Show when={unconnected().length > 0}>
+          <section class="settings-section provider-list__section">
+            <h3 class="settings-section__heading">{t("modelProviders.row.notConnected")}</h3>
+            <SettingsGroup carapace>
+              <ul class="provider-list provider-list--quiet">
+                <For each={unconnected()} keyed={(card) => card.id}>
+                  {(card) => <UnconnectedProviderRow {...props} card={card()} />}
+                </For>
+              </ul>
+            </SettingsGroup>
+          </section>
+        </Show>
         {props.cards.length > 0 && matchingCards().length === 0 ? (
           <SettingsEmpty message={t("modelProviders.noMatches")} />
         ) : undefined}
       </div>
-    </>
-  );
-
-  return (
-    <SettingsSection
-      carapace
-      title={t("modelProviders.accessTitle")}
-      description={t("modelProviders.accessDescription", { agent: props.credentialAgentLabel })}
-      actions={
-        <>
-          <button type="button" class="btn btn--sm btn--ghost" onClick={() => props.onOpenUsage()}>
-            {t("modelProviders.viewUsage")}
-          </button>
-          {needsModelSetup(props) ? undefined : props.providerScope}
-          <RefreshButton
-            class="model-providers__refresh-button"
-            label={t("common.refresh")}
-            tooltip={refreshTooltip()}
-            disabled={props.refreshing}
-            onClick={() => props.onRefresh()}
-          />
-        </>
-      }
-    >
-      <>
-        {props.accountRecovery}
-        {props.loading ? (
-          <SettingsGroup>
-            <SettingsLoadingSkeleton />
-          </SettingsGroup>
-        ) : props.cards.length === 0 &&
-          props.installedAgents !== undefined &&
-          !props.error &&
-          !props.providerUsageFailed ? undefined : (
-          providerRows()
-        )}
-      </>
     </SettingsSection>
   );
-}
-
-/** Provider access connects for the agent its description names. */
-export function renderModelProviderScope(props: {
-  onConnect: () => void;
-  connectDisabled: boolean;
-}): JSX.Element {
-  return <ModelProviderConnectAction {...props} compact />;
 }
 
 export function renderModelProvidersPageShell(props: {

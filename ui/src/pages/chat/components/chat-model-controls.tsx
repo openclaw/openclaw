@@ -2,25 +2,16 @@ import { createMemo, type Accessor } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { t as translate } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
+import { resolveDaybreakAccessProgram } from "../../../lib/chat/daybreak-access-program.ts";
+import { resolvePreferredServerChatModelValue } from "../../../lib/chat/model-ref.ts";
 import {
-  normalizeChatModelProviderId,
-  resolvePreferredServerChatModelValue,
-} from "../../../lib/chat/model-ref.ts";
-import {
+  hasNoConnectedChatModel,
   prepareChatModelSelectCatalog,
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
 } from "../../../lib/chat/model-select-state.ts";
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
-import {
-  canonicalModelAuthProviderId,
-  listEffectiveModelAuthProviders,
-} from "../../../lib/model-auth.ts";
 import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
-import {
-  describeModelProviderAuth,
-  type ModelProviderAuthLabel,
-} from "../../../lib/model-provider-auth-label.ts";
 import {
   isSessionRuntimePinned,
   resolveModelRuntimeEntry,
@@ -28,7 +19,6 @@ import {
 import { i18nRevision, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ChatEffortPicker, type ChatEffortPickerParams } from "./chat-effort-picker.tsx";
 import {
-  normalizeChatModelProviderGroupId,
   prepareChatModelCatalog,
   resolveChatModelPickerLabel,
 } from "./chat-model-catalog-presentation.ts";
@@ -93,16 +83,16 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         state.retired === true,
         state.initialized,
         props.modelSelectionTarget,
-        props.modelAuthStatusResult,
-        props.accountSelection,
         props.agentDefaultModel,
         overrides,
         props.sessionKey,
         props.modelSwitching,
         props.selectedAgentRuntime,
         props.modelSelectionLocked,
+        props.sessionRowCurrent,
         session?.model,
         session?.modelProvider,
+        session?.modelDisplayName,
         session?.modelOverrideSource,
         session?.runtimeSelectionLocked,
         session?.contextTokens,
@@ -119,31 +109,27 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         // Unrelated lazy catalogs must not rebuild every model choice.
         t("chat.modelControls.defaultWithModel"),
         t("chat.selectors.lockedSessionModel"),
-        t("chat.modelControls.api"),
-        t("chat.modelControls.subscription"),
-        t("chat.modelControls.nativeLogin"),
-        t("modelSetup.candidates.signInNeeded"),
       ] as const;
     },
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
   );
   const selection = createMemo(() => {
-    // selectionInputs tracks the copy used here and by the plain auth helper.
+    // selectionInputs tracks the copy used here.
     const [
       policy,
       retired,
       initialized,
       modelSelectionTarget,
-      modelAuthStatusResult,
-      accountSelection,
       agentDefaultModel,
       modelOverrides,
       sessionKey,
       modelSwitching,
       selectedRuntimeOverride,
       modelSelectionLocked,
+      sessionRowCurrent,
       sessionModel,
       sessionProvider,
+      sessionModelDisplayName,
       sessionOverrideSource,
       sessionRuntimeLocked,
       sessionContextTokens,
@@ -158,46 +144,6 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     const uninitialized = initialized === false;
     const catalogOwnsChoices = retired || uninitialized || policy?.restricted === true;
     const selectionScopeLabel = MODEL_SELECTION_SCOPE_LABELS.get(modelSelectionTarget ?? "");
-    const providerAuth = new Map<string, ModelProviderAuthLabel>();
-    const headingKey = (id: string) => {
-      const provider = normalizeChatModelProviderId(id);
-      // Usage aliases are not billing identities: Claude CLI's native account
-      // and the direct Anthropic API connection own separate authentication identities.
-      return provider === "claude-cli"
-        ? provider
-        : normalizeChatModelProviderGroupId(canonicalModelAuthProviderId(provider));
-    };
-    // Alias records (e.g. google and google-gemini-cli) share one heading, so merge
-    // them under that key first; iterating raw records let the later one overwrite it.
-    for (const provider of listEffectiveModelAuthProviders(
-      modelAuthStatusResult?.providers ?? [],
-      headingKey,
-    )) {
-      const selectedId =
-        accountSelection?.kind === "automatic" ? undefined : accountSelection?.authProfileId;
-      const selectedProfile =
-        selectedId && provider.provider === "claude-cli"
-          ? modelAuthStatusResult?.providers
-              .filter((record) => canonicalModelAuthProviderId(record.provider) === "anthropic")
-              .flatMap((record) => record.profiles)
-              .find((profile) => profile.profileId === selectedId)
-          : undefined;
-      const auth = describeModelProviderAuth(
-        selectedProfile ? { ...provider, profiles: [selectedProfile] } : provider,
-        { authProfileId: selectedId },
-      );
-      if (auth) {
-        providerAuth.set(headingKey(provider.provider), auth);
-        // A saved account can serve either runtime, but the direct API's
-        // automatic credential summary must not label native CLI login.
-        if (
-          provider.provider === "anthropic" &&
-          provider.profiles.some((profile) => profile.profileId === selectedId)
-        ) {
-          providerAuth.set("claude-cli", auth);
-        }
-      }
-    }
     const {
       currentOverride: rawCurrentOverride,
       defaultModel,
@@ -232,6 +178,21 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     // A running turn can report its old model (or fallback) after a new choice is saved.
     const defaultProviderHint = defaultsProvider ?? "";
     const defaultCatalogEntry = catalog.entry(defaultModel);
+    const sessionModelValue = resolvePreferredServerChatModelValue(
+      sessionModel,
+      sessionProvider,
+      modelCatalog,
+    );
+    const selectedValue = currentOverride || defaultModel;
+    const selectedEntry = catalog.entry(selectedValue);
+    // Before the first scoped catalog, a live role-projected row can name the saved
+    // preference. It cannot admit options or name a different optimistic selection.
+    const labelValue =
+      uninitialized && !retired && sessionRowCurrent ? rawCurrentOverride : selectedValue;
+    const rowLabel =
+      !selectedEntry && labelValue && labelValue === sessionModelValue
+        ? sessionModelDisplayName?.trim()
+        : undefined;
     const canonicalDefaultLabel = resolveChatModelPickerLabel(defaultCatalogEntry, defaultLabel);
     const pickerDefaultLabel =
       defaultModel && canonicalDefaultLabel !== defaultLabel
@@ -355,16 +316,14 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         value: currentOverride,
         label: resolveChatModelPickerLabel(
           currentCatalogEntry,
-          currentCatalogEntry?.name.trim() || currentOverride,
+          currentCatalogEntry?.name.trim() || rowLabel || currentOverride,
         ),
         provider: catalog.provider(currentOverride, currentProviderHint),
       });
     }
     // A persisted pin can match a changed default; equality cannot establish inheritance.
     const selectedAgentRuntime =
-      selectedRuntimeOverride ??
-      sessionRuntimeId ??
-      catalog.entry(currentOverride || defaultModel)?.agentRuntime?.id;
+      selectedRuntimeOverride ?? sessionRuntimeId ?? selectedEntry?.agentRuntime?.id;
     const defaultRuntime = defaultCatalogEntry?.agentRuntime?.id ?? defaultsRuntimeId;
     // A default model can still have a runtime pin; only the configured model/runtime pair inherits Default.
     const pickerValue =
@@ -375,11 +334,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     const activeModelOption = modelOptions.find((option) =>
       isModelPickerOptionSelected(option, pickerValue, selectedAgentRuntime),
     );
-    const activeSessionModel = sessionModel
-      ? catalog.entry(
-          resolvePreferredServerChatModelValue(sessionModel, sessionProvider, modelCatalog),
-        )
-      : undefined;
+    const activeSessionModel = catalog.entry(sessionModelValue);
     const activeOptionModel = activeModelOption
       ? catalog.entry(activeModelOption.value)
       : undefined;
@@ -409,13 +364,13 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
     // A lock prevents model changes; the concrete selection still owns its label.
     // Without a selection, neither the runtime nor the agent default identifies it.
     const committedModelLabel =
-      modelSelectionLocked === true && !currentOverride
+      modelSelectionLocked === true && !currentOverride && !(uninitialized && rowLabel)
         ? translate("chat.selectors.lockedSessionModel")
         : resolveChatModelPickerLabel(
-            catalog.entry(currentOverride || defaultModel),
+            selectedEntry,
             formatPickerModelLabel(
               selectOptions.find((entry) => entry.value === currentOverride)?.label ??
-                (catalog.entry(currentOverride)?.name.trim() || currentOverride || defaultLabel),
+                (currentCatalogEntry?.name.trim() || rowLabel || currentOverride || defaultLabel),
             ),
             currentOverride || defaultModel ? triggerRuntime : null,
           );
@@ -425,7 +380,6 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       retired,
       uninitialized,
       selectionScopeLabel,
-      providerAuth,
       currentOverride,
       defaultModel,
       modelOverrideSource,
@@ -499,7 +453,6 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       retired,
       uninitialized,
       selectionScopeLabel,
-      providerAuth,
       currentOverride,
       defaultModel,
       modelOptions,
@@ -511,6 +464,16 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       triggerRuntime,
     } = selection();
     const catalogState = props.modelCatalogState;
+    const setupRequired =
+      catalogState.hasSnapshot &&
+      catalogState.status === "ready" &&
+      !catalogState.pendingProviders?.length &&
+      !policy?.restricted &&
+      !(
+        props.selectedSession?.placement?.state === "active" &&
+        props.selectedSession.placement.inference === "worker"
+      ) &&
+      hasNoConnectedChatModel(props.modelCatalog, props.modelAuthStatusResult);
     const thinking = resolveChatThinkingSelectState({
       catalog: props.modelCatalog,
       defaults: props.thinkingDefaults,
@@ -588,29 +551,31 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       !props.modelSwitching
         ? accessProgramModel?.availableAccessPrograms?.cyber
         : undefined;
-    const hasAccessSelection =
-      props.requestedAccessProgram !== undefined || effectiveAccessProgram !== undefined;
-    const showAccessProgram =
-      Boolean(props.onAccessProgramSelect) &&
-      (hasAccessSelection || accessPrograms?.some((program) => program !== "standard"));
+    const daybreak = resolveDaybreakAccessProgram(
+      accessPrograms,
+      props.requestedAccessProgram ?? effectiveAccessProgram,
+    );
+    const showAccessProgram = Boolean(props.onAccessProgramSelect) && daybreak.visible;
     const accessProgramDisabled =
       commonDisabled || !hasResolvableModel || Boolean(props.accessProgramMutationDisabledReason);
     const effortDisabled =
       commonDisabled ||
-      (!(showAccessProgram && hasAccessSelection) &&
-        (!hasResolvableModel ||
-          ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
-            (!showAccessProgram || accessProgramDisabled))));
+      !hasResolvableModel ||
+      ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
+        (!showAccessProgram || accessProgramDisabled));
     // An empty catalog must not expose fallback speed controls for an unavailable model.
     const confirmedEmptyCatalog =
       catalogState.hasSnapshot &&
       modelOptions.length === 0 &&
       !catalogState.pendingProviders?.length;
-    const reserveEffortPicker = !hasResolvableModel && !(showAccessProgram && hasAccessSelection);
     return {
-      showEffort: !confirmedEmptyCatalog || Boolean(showAccessProgram && hasAccessSelection),
+      showEffort: !setupRequired && !confirmedEmptyCatalog,
       model: {
-        providerAuth: props.modelAuthStatusResult ? providerAuth : undefined,
+        modelAuthStatusResult: props.modelAuthStatusResult,
+        authProfileId:
+          props.accountSelection?.kind === "automatic"
+            ? undefined
+            : props.accountSelection?.authProfileId,
         accountSection: props.renderAccountSection?.(currentOverride || defaultModel),
         contextWindow:
           contextWindows.length > 1
@@ -636,7 +601,12 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
           : selectionScopeLabel
             ? t(selectionScopeLabel)
             : undefined,
-        modelOptions,
+        // Missing sign-in is not missing configuration. Keep diagnosed catalog rows;
+        // only the undiagnosed inherited default is a phantom in an unconfigured chat.
+        modelOptions:
+          setupRequired && !sessionModelPinned
+            ? modelOptions.filter((option) => !option.isDefault || option.unavailableReason)
+            : modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
         selectedAgentRuntime,
@@ -650,7 +620,11 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
             ? ""
             : formatPickerModelLabel(committedModelLabel),
         triggerModelValue: currentOverride || undefined,
-        triggerStatusLabel: props.modelSelectionLocked ? undefined : catalogTriggerStatus,
+        triggerStatusLabel: props.modelSelectionLocked
+          ? undefined
+          : setupRequired
+            ? t("modelSetup.required.action")
+            : catalogTriggerStatus,
         onModelSetup:
           policy?.restricted || retired || uninitialized ? undefined : props.onModelSetup,
         onProviderSettings:
@@ -666,10 +640,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         accessProgram:
           showAccessProgram && props.onAccessProgramSelect
             ? {
-                requested: props.requestedAccessProgram,
-                previous: props.daybreakAccessProgram,
-                effectiveAccessProgram,
-                programs: accessPrograms,
+                daybreak,
                 disabled: accessProgramDisabled,
                 sessionKey: props.sessionKey,
                 onSelect: props.onAccessProgramSelect,
@@ -688,7 +659,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
           props.onFastModeSelect?.(next, targetSessionKey),
         onThinkingSelect: async (next, targetSessionKey) =>
           props.onThinkingSelect?.(next, targetSessionKey),
-        reserved: reserveEffortPicker,
+        reserved: !hasResolvableModel,
       },
     };
   });

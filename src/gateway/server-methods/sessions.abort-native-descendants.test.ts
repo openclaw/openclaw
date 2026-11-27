@@ -33,7 +33,6 @@ import {
   abortContext,
   expectAbortFailure,
   expectCancelledSession,
-  revocableAuthority,
   seedYieldedSession,
   stopSession,
 } from "./sessions.abort-lifecycle.test-support.js";
@@ -143,17 +142,15 @@ it.each([
 });
 
 it.each(["reserved", "indexed"] as const)(
-  "exact %s Stop rejects foreign and revoked requesters before native cancellation",
+  "exact %s Stop rejects foreign requesters before native cancellation",
   async (route) => {
     await seedYieldedParent();
     const context = abortContext();
     const parent = parentRun(route, { owner: { connId: "owner" } });
-    const client = { connId: "owner", connect: { scopes: ["operator.write"] }, invalidated: false };
     const cancel = vi.fn(async () => ({ killed: 1, cancelledRequesters: [requester] }));
     const prepare = vi.fn();
     installHarness(async (_params, run) => {
       prepare();
-      client.invalidated = true;
       return run(cancel);
     });
     const foreignResponse = await chatAbort(context, {
@@ -162,13 +159,6 @@ it.each(["reserved", "indexed"] as const)(
     expectAbortFailure(foreignResponse, "unauthorized", "INVALID_REQUEST");
     expect(prepare).not.toHaveBeenCalled();
     expect(parent.input.abortSignal.aborted).toBe(false);
-    await expect(chatAbort(context, { client })).rejects.toThrow(
-      "Gateway requester authority changed",
-    );
-    expect(prepare).toHaveBeenCalledOnce();
-    expect(cancel).not.toHaveBeenCalled();
-    // Reserved sources stop before native preparation; accepted parent effects remain.
-    expect(parent.input.abortSignal.aborted).toBe(route === "reserved");
   },
 );
 
@@ -410,19 +400,15 @@ it.each(["embedded", "reserved", "indexed"] as const)(
   },
 );
 
-it.each(["declined", "revoked", "prepared"] as const)(
+it.each(["declined", "prepared"] as const)(
   "preserves the parent fence with %s native preparation",
   async (ending) => {
     await seedYieldedParent();
-    const authority = revocableAuthority("Stop authority revoked");
     const cancel = vi.fn(async () => ({ killed: 0, cancelledRequesters: [] }));
     installHarness(
       ending === "prepared"
         ? (_params, run) => run(cancel)
         : async () => {
-            if (ending === "revoked") {
-              authority.revoke();
-            }
             throw new Error("Native preparation failed");
           },
     );
@@ -431,15 +417,9 @@ it.each(["declined", "revoked", "prepared"] as const)(
       cfg: getRuntimeConfig(),
       ...requester,
       beforeKill,
-      assertCurrent: authority.assertCurrent,
     });
-    if (ending === "revoked") {
-      await expect(stop).rejects.toThrow("Stop authority revoked");
-      expect(beforeKill).not.toHaveBeenCalled();
-    } else {
-      expect(await stop).toBeUndefined();
-      expect(beforeKill).toHaveBeenCalledOnce();
-    }
+    expect(await stop).toBeUndefined();
+    expect(beforeKill).toHaveBeenCalledOnce();
     expect(loadSessionEntry(target)?.status).toBeUndefined();
     expect(cancel).not.toHaveBeenCalled();
   },

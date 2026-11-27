@@ -108,6 +108,24 @@ it("rejects malformed declared triggers without changing persisted jobs", async 
   expect(await cron.list()).toEqual([expect.objectContaining({ trigger: validTrigger })]);
 });
 
+it("keeps an existing create-only declaration byte-for-byte without granting visibility", async () => {
+  const { cron, storePath } = await setup();
+  const owner = { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" };
+  const first = await add(cron, declaration({ owner, enabled: false }));
+  const before = await storedJob(storePath, first.id);
+  const proposed = declaration({ owner, name: "rewritten", enabled: true });
+  const policy = { keepDeclarationFor: owner, enabledExplicit: true };
+  await expect(add(cron, proposed, { ...policy, matchesExisting: () => false })).rejects.toThrow(
+    "cron declarationKey is unavailable in the current scope",
+  );
+  expect(await add(cron, proposed, { ...policy, matchesExisting: () => true })).toMatchObject({
+    created: false,
+    updated: false,
+    id: first.id,
+  });
+  expect((await loadCronStore(storePath)).jobs).toEqual([before]);
+});
+
 it("creates, no-ops, and converges in place while preserving state and enablement", async () => {
   const { cron } = await setup();
   const created = await add(cron, declaration({ declarationKey: "  agent:ops:daily-report  " }), {

@@ -87,6 +87,12 @@ The next slot and the last results persist in
 down, the pass catches up 60 seconds after the next start. Two passes never run
 at once.
 
+With the `lean` resource profile, initialization waits for Knowledge's first
+use, including an authorized maintenance-status read. Catch-up is scheduled 60
+seconds after that activation instead of Gateway startup. Status reads await
+initialization before reporting saved results. See
+[Lean resource policy](/plugins/knowledge#lean-resource-policy).
+
 ## Status
 
 **Settings → Maintenance** in the Knowledge page shows the schedule, next run,

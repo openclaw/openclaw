@@ -119,7 +119,7 @@ export async function inspectManagedHandoffSentinel(
   assertCurrent?.();
   const reply = await executeExistingOpenClawStateRead(
     { env: context.environment, path: context.admission.databasePath },
-    { type: "restartSentinel.managedHandoffInspect", input },
+    { type: "restartSentinel.managedHandoffInspect", input: { ...input } },
     { context, current: true },
   );
   context.admission.assertCurrent();

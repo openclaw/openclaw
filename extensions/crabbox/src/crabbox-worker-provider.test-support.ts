@@ -140,7 +140,7 @@ export function classProfile(
   };
 }
 
-export function mappedCatalog(profiles: unknown[]) {
+function mappedCatalog(profiles: unknown[]) {
   return { disposition: "mapped", profiles };
 }
 

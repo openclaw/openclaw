@@ -1,4 +1,6 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { forceFullGc } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadGitHubDetail } from "./detail.js";
 import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
@@ -165,6 +167,34 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
+
+it.each(["issue", "pull", "commit"] as const)(
+  "releases the raw %s response while keeping the complete document cached",
+  async (kind) => {
+    const payload = kind === "commit" ? commit() : item();
+    const body = JSON.stringify(payload);
+    const responses: WeakRef<object>[] = [];
+    const parse = JSON.parse;
+    const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      const result: unknown = parse(text, reviver);
+      if (text === body && result !== null && typeof result === "object") {
+        responses.push(new WeakRef(result));
+      }
+      return result;
+    });
+    const input = target(kind);
+    const fetcher = publicFetch(payload);
+    const document = await loadGitHubDetail(input, undefined, fetcher);
+    spy.mockRestore();
+    expect(responses).toHaveLength(1);
+    await nextTurn();
+    forceFullGc();
+    expect(responses[0]?.deref()).toBeUndefined();
+    const requests = fetcher.mock.calls.length;
+    expect(await loadGitHubDetail(input, undefined, fetcher)).toBe(document);
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+  },
+);
 
 describe("GitHub detail selected read identity", () => {
   it.each(["pull", "commit"] as const)("authenticates %s and refresh", async (kind) => {

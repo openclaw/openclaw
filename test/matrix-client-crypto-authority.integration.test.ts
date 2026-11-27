@@ -74,7 +74,7 @@ it.each([true, false])("guards SDK callback scope: closed=%s", async (closeB) =>
 
       // Resume DNS outside B's final fence while A and the generation remain live.
       const result = closeB
-        ? expect(nestedRequest).rejects.toThrow("Channel read authority is no longer active.")
+        ? expect(nestedRequest).rejects.toThrow("Channel read ended. Retry the action.")
         : expect(nestedRequest).resolves.toEqual(PROFILE);
       dnsResult.resolve(DNS_ANSWER);
       await result;

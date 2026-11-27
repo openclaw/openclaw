@@ -4,8 +4,7 @@ import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { sanitizeSupportLogRecord } from "../logging/diagnostic-support-log-redaction.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { testApi as loggerTest } from "../logging/logger.test-support.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -23,7 +22,7 @@ beforeAll(() => logPaths.setup());
 afterAll(() => logPaths.cleanup());
 afterEach(async () => {
   vi.useRealTimers();
-  await loggerTest.flushFileLogQueueForTests();
+  await flushLogger();
   resetLogger();
   resetDiagnosticEventsForTest();
   loggingState.rawConsole = null;
@@ -93,7 +92,7 @@ it.each(["release", "timeout"] as const)(
     expect(instance.retentionSnapshot().total).toBe(0);
     await vi.runOnlyPendingTimersAsync();
     vi.useRealTimers();
-    await loggerTest.flushFileLogQueueForTests();
+    await flushLogger();
     const lines = fs
       .readFileSync(file, "utf8")
       .trim()

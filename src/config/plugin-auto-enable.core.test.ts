@@ -3,11 +3,13 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as pluginNormalization from "../plugins/config-normalization-shared.js";
+import * as currentPluginMetadata from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import {
   applyPluginAutoEnable,
@@ -589,7 +591,27 @@ describe("applyPluginAutoEnable core", () => {
     },
   );
 
-  it("does not reuse same-turn results for omitted metadata after current snapshot replacement", () => {
+  it("loads one registry to detect and materialize configured plugins", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: "fixture/model" } },
+      plugins: { allow: ["existing"] },
+    };
+    const manifestRegistry = makeRegistry([
+      { id: "fixture", channels: [], providers: ["fixture"], origin: "bundled" },
+    ]);
+    vi.spyOn(currentPluginMetadata, "getCurrentPluginMetadataSnapshot").mockReturnValue(undefined);
+    const load = vi
+      .spyOn(pluginMetadata, "loadPluginMetadataSnapshot")
+      .mockReturnValue(createPluginMetadataSnapshot({ config, manifestRegistry }));
+
+    const result = applyPluginAutoEnable({ config, env });
+
+    expect(result.config.plugins?.entries?.fixture?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["existing", "fixture"]);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves current metadata once per apply and observes replacement between calls", () => {
     const config: OpenClawConfig = { channels: { apn: { someKey: "value" } } };
     const firstRegistry = makeRegistry([{ id: "apn-one", channels: ["apn"] }]);
     const secondRegistry = makeRegistry([{ id: "apn-two", channels: ["apn"] }]);
@@ -598,12 +620,15 @@ describe("applyPluginAutoEnable core", () => {
       { config, env },
     );
 
+    const current = vi.spyOn(currentPluginMetadata, "getCurrentPluginMetadataSnapshot");
     const first = applyPluginAutoEnable({ config, env });
+    expect(current).toHaveBeenCalledTimes(1);
     setCurrentPluginMetadataSnapshot(
       createPluginMetadataSnapshot({ config, manifestRegistry: secondRegistry }),
       { config, env },
     );
     const second = applyPluginAutoEnable({ config, env });
+    expect(current).toHaveBeenCalledTimes(2);
 
     expect(first.config.plugins?.entries?.["apn-one"]?.enabled).toBe(true);
     expect(second.config.plugins?.entries?.["apn-two"]?.enabled).toBe(true);

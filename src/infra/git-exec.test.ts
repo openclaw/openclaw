@@ -443,13 +443,20 @@ describe("required Git output", () => {
     });
   });
 
-  it.skipIf(process.platform !== "linux").for([false, true])(
-    "joins a capped Git child after held birth preparation (cancelled: %s)",
-    async (cancelled, { signal }) => {
+  it
+    .skipIf(process.platform !== "linux")
+    .for(
+      (["buffered", "text", "bytes"] as const).flatMap((mode) =>
+        [false, true].map((cancelled) => ({ mode, cancelled })),
+      ),
+    )(
+    "joins a capped $mode Git child after held birth preparation (cancelled: $cancelled)",
+    async ({ mode, cancelled }, { signal }) => {
       await withGitBlob(Buffer.alloc(4096, "x"), async (root, args) => {
         const entered = createDeferred();
         const resume = createDeferred();
-        const returned = createDeferred<processExec.SpawnResult>();
+        const returned =
+          createDeferred<Pick<processExec.SpawnResult, "cleanup" | "outputLimitExceeded">>();
         const abort = new AbortController();
         const finished = vi.fn();
         const bufferedFinished = vi.fn();
@@ -474,20 +481,40 @@ describe("required Git output", () => {
           return await readFile(file, options);
         });
         const syncReads = vi.spyOn(syncFs, "readFileSync");
-        const run = processRunner.runCommandWithTimeout;
-        vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (...params) => {
-          const result = await run(...params);
-          returned.resolve(result);
-          return result;
-        });
+        if (mode === "bytes") {
+          const run = processRunner.runCommandBuffersWithTimeout;
+          vi.spyOn(processRunner, "runCommandBuffersWithTimeout").mockImplementation(
+            async (...params) => {
+              const result = await run(...params);
+              returned.resolve(result);
+              return result;
+            },
+          );
+        } else {
+          const run = processRunner.runCommandWithTimeout;
+          vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (...params) => {
+            const result = await run(...params);
+            returned.resolve(result);
+            return result;
+          });
+        }
         const buffered = processExec.runCommandBuffered;
         vi.spyOn(processExec, "runCommandBuffered").mockImplementation((...params) =>
           buffered(...params).finally(bufferedFinished),
         );
-        const work = executeGitCommandBuffered(root, args, {
-          maxOutputBytes: 64,
-          signal: abort.signal,
-        }).finally(finished);
+        const execute =
+          mode === "buffered"
+            ? executeGitCommandBuffered
+            : mode === "bytes"
+              ? executeGitCommandBytes
+              : executeGitCommand;
+        const work = (async () =>
+          await execute(root, args, {
+            maxOutputBytes: 64,
+            terminateOnOutputLimit: true,
+            signal: abort.signal,
+            killProcessTree: true,
+          }))().finally(finished);
         const outcome = work.then(
           (value) => ({ value }),
           (error: unknown) => ({ error }),
@@ -514,8 +541,15 @@ describe("required Git output", () => {
           expect(finished).not.toHaveBeenCalled();
           resume.resolve();
           const result = await withinTest(work, signal);
-          expect(result).toMatchObject({ termination: "output-limit", code: null });
-          expect(result.error).toBeUndefined();
+          expect(result).toMatchObject({
+            termination: mode === "buffered" ? "output-limit" : "signal",
+            code: null,
+          });
+          if (mode === "buffered") {
+            expect(result).not.toHaveProperty("error");
+          } else {
+            expect(result).toMatchObject({ outputLimitExceeded: true, cleanup: "cooperative" });
+          }
           expect(result.stdout.toString()).toBe("x".repeat(64));
           expect(createGitCommandError("git cat-file blob", result).message).toContain(
             "output limit exceeded",

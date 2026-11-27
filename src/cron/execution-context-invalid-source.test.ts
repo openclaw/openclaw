@@ -21,7 +21,7 @@ it.each([
     trigger: "cron",
   });
   try {
-    const minted = occurrence.mint({
+    const minted = await occurrence.mint({
       cfg: {},
       agentId: "main",
       runId: "invalid-run",

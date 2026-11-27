@@ -7,7 +7,6 @@ import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
   findCliTerminalStopError,
@@ -309,8 +308,8 @@ export async function recoverEmbeddedRunAttempt(input: {
     sessionPersistence: params.sessionPersistence,
     sessionKey: runInput.resolvedSessionKey,
     agentId: params.agentId,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    defaultProvider: preparedRuntime.provider,
+    defaultModel: preparedRuntime.modelId,
     currentProvider: preparedRuntime.provider,
     currentModel: preparedRuntime.modelId,
     currentAgentRuntimeOverride: params.agentHarnessRuntimeOverride,
@@ -327,8 +326,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       cfg: params.config,
       sessionKey: runInput.resolvedSessionKey,
       agentId: params.agentId,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
+      defaultProvider: preparedRuntime.provider,
+      defaultModel: preparedRuntime.modelId,
       expectedSelection: requestedSelection,
     });
     log.info(
@@ -559,7 +558,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       // Native snapshots contain only this attempt; embedded retries reload their full transcript.
       // Accumulating embedded snapshots retains another history on every provider rejection.
       messages: runtime.pluginHarnessOwnsTransport ? attempt.messagesSnapshot : undefined,
-      ...(rejectedWithoutOutput ? { replayCurrentUserTurn: true } : {}),
+      unsettledTail: !rejectedWithoutOutput,
     });
     recordRecoveryDecision("accepted", "transient_retry");
     return retry({

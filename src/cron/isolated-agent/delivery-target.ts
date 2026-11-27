@@ -238,11 +238,12 @@ export async function resolveDeliveryTarget(
         accountId: jobPayload.accountId,
       },
     });
-    return resolved.channel !== "none" && resolved.to
+    const to = stripSelectedProviderPrefix({ channel: resolved.channel, to: resolved.to });
+    return resolved.channel !== "none" && to
       ? {
           ok: true,
           channel: resolved.channel,
-          to: resolved.to,
+          to,
           accountId: resolved.accountId,
           threadId: resolved.threadId,
           mode: "explicit",

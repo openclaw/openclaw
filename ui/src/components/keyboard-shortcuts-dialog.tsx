@@ -12,7 +12,7 @@ import {
 import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
-import { Icon } from "./solid/icon.tsx";
+import { DialogHeader } from "./solid/dialog-header.tsx";
 import { KeyboardShortcut } from "./solid/kbd.tsx";
 import "./keyboard-shortcuts-dialog.css";
 import "./modal-dialog.tsx";
@@ -200,16 +200,12 @@ export const KeyboardShortcutsDialog = defineSolidBridge<DialogProps, DialogMeth
           onModal-cancel={close}
           onKeyDown={(event) => void handleKeydown(event)}
         >
-          <div class="dialog">
-            <header class="header">
-              <h2>{t("shortcutsOverlay.title")}</h2>
-              <button class="close" type="button" aria-label={t("common.close")} onClick={close}>
-                <span aria-hidden="true">
-                  <Icon name="x" />
-                </span>
-              </button>
-            </header>
-            <div class="body">
+          <div class="oc-dialog">
+            <DialogHeader
+              title={t("shortcutsOverlay.title")}
+              onClose={() => (host.isOpen = false)}
+            />
+            <div class="oc-dialog__body">
               <For each={resolveKeyboardShortcutSections(props.sendShortcut)}>
                 {(section) => (
                   <section>

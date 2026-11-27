@@ -13,10 +13,13 @@ import {
   getLoadedRuntimePluginRegistry,
   registryContainsRuntimePluginIds,
 } from "./active-runtime-registry.js";
-import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
+import {
+  normalizePluginsConfig,
+  resolvePreparedPluginRegistrationConfigKey,
+  type NormalizedPluginsConfig,
+} from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
-import { resolvePluginRegistrationConfigKey } from "./loader-registration-config.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -500,10 +503,9 @@ export function createProviderRegistryResolver(dependencies: {
         config: params.config,
         activationSourceConfig: resolvePluginActivationSourceConfig(params),
       };
-      registrationConfigKey = resolvePluginRegistrationConfigKey({
-        runtimeEntries: normalizePluginsConfig(registrationConfig.config?.plugins).entries,
-        sourceEntries: normalizePluginsConfig(registrationConfig.activationSourceConfig?.plugins)
-          .entries,
+      registrationConfigKey = resolvePreparedPluginRegistrationConfigKey({
+        runtimeConfig: registrationConfig.config?.plugins,
+        sourceConfig: registrationConfig.activationSourceConfig?.plugins,
       });
     }
     if (params.skipIfLoadInFlight && loadOptions && isPluginRegistryLoadInFlight(loadOptions)) {

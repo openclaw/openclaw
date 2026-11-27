@@ -389,13 +389,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
       try {
         const joinedWatchGeneration = this.syncingMemoryWatchGeneration;
-        await this.syncing;
+        await this.joinIndexSync(this.syncing, options?.background);
         if (!this.closing && !this.closed) {
           // MemoryManagerSessionSyncOps resumes yielded work via syncBackground after idle.
           // Join only newer watch generations; another waiter may already own that pass.
           const nextSync = this.syncing;
           if (nextSync !== null && this.syncingMemoryWatchGeneration > joinedWatchGeneration) {
-            return await nextSync;
+            return await this.joinIndexSync(nextSync, options?.background);
           }
           if (this.dirty && this.memoryWatchGeneration > joinedWatchGeneration) {
             return await this.syncAdmitted(params, options);
@@ -418,7 +418,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     this.syncingMemoryWatchGeneration = this.memoryWatchGeneration;
     const run = async () => {
-      this.syncIsBackground = options?.background ?? false;
+      this.setSyncBackground(options?.background);
       let outcome: MemorySyncOutcome;
       await this.publishedDatabase.withPublicationGeneration(async () => {
         const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
@@ -523,6 +523,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       return outcome;
     };
     this.syncing = this.syncOutcomes.track(run).finally(() => {
+      this.setSyncBackground(false);
       this.syncing = null;
     });
     return this.syncing;
@@ -708,7 +709,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   private async closeOnce(): Promise<void> {
-    this.closing = true;
+    this.beginClosing();
     this.sessionSyncQueue.clear();
     await this.awaitManagerIdle();
     this.closed = true;

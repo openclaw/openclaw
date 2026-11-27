@@ -26,7 +26,7 @@ export function CloudWorkerMachineClass(props: {
     { value: customValue(), label: t("cloudWorkersPage.fields.customMachineClass") },
   ]);
   return (
-    <div style={{ display: "grid", gap: "var(--space-2)" }}>
+    <div style={{ display: "grid", "flex-grow": 1, gap: "var(--space-2)" }}>
       <Show when={props.options.length > 0}>
         <Picker
           id="cloud-worker-machine-class"

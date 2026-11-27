@@ -123,6 +123,43 @@ function createStartupContext(basePath = ""): ApplicationContext {
 }
 
 describe("Dynamic route startup bridge", () => {
+  it.each(["", "/ui", "/portable/control"])(
+    "canonicalizes the index document at %s on startup and history navigation",
+    async (basePath) => {
+      const history = createHistory(`${basePath}/index.html`, "?draft=hello", "#first");
+      const { router, route } = createTestRouter("chat");
+      route.loader = vi.fn(() => ({}));
+      await startApplicationRouter(router, history, basePath, createStartupContext(basePath));
+      expect(history.location()).toEqual({
+        pathname: `${basePath}/chat`,
+        search: "?draft=hello",
+        hash: "#first",
+      });
+      expect(router.getState().status).toBe("success");
+      history.visit({ pathname: `${basePath}/INDEX.HTML`, search: "?draft=next", hash: "#second" });
+      await vi.waitFor(() => {
+        expect(router.getState().location).toEqual({
+          pathname: `${basePath}/chat`,
+          search: "?draft=next",
+          hash: "#second",
+        });
+        expect(router.getState().status).toBe("success");
+      });
+      expect(history.location()).toEqual(router.getState().location);
+    },
+  );
+
+  it.each(["/ui/unknown/index.html", "/ui/other.html", "/ui/beam/unfinished-share-5"])(
+    "preserves explicit non-entry document %s",
+    async (pathname) => {
+      const history = createHistory(pathname, "?draft=hello", "#anchor");
+      const { router } = createTestRouter("chat");
+      await startApplicationRouter(router, history, "/ui", createStartupContext("/ui"));
+      expect(history.location()).toEqual({ pathname, search: "?draft=hello", hash: "#anchor" });
+      expect(router.getState().status).toBe("notFound");
+    },
+  );
+
   it("defers a cold slug until hello and loads each tab at its real pathname", async () => {
     const history = createHistory("/ui/reports", "?p.range=week", "#latest");
     const replace = history.replace;

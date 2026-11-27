@@ -23,6 +23,7 @@ export function createProcessToolScope(
     sessionKey?: string;
     agentId?: string;
     sessionStore?: string;
+    includeAncestors?: boolean;
   },
   assertCallerCurrent: () => void,
 ) {
@@ -62,7 +63,12 @@ export function createProcessToolScope(
     assertCurrent,
     [Symbol.asyncDispose]: release,
     resolveAncestorScopes: async () => {
-      if (!agentId || !sessionKey || scopeKey !== sessionKey) {
+      if (
+        defaults.includeAncestors === false ||
+        !agentId ||
+        !sessionKey ||
+        scopeKey !== sessionKey
+      ) {
         return;
       }
       assertCurrent();

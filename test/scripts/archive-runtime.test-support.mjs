@@ -5,10 +5,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import * as tarEsm from "tar";
+import * as tarEsm from "tar/raw";
 
 const require = createRequire(import.meta.url);
-const tar = process.argv.includes("--commonjs") ? require("tar") : tarEsm;
+const tar = process.argv.includes("--commonjs") ? require("tar/raw") : tarEsm;
 // Dependencies have already observed a writable descriptor during import.
 // Protect the host's Buffer before using any archive operation.
 Object.defineProperty(Buffer, "concat", { writable: false });

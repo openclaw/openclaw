@@ -1,4 +1,3 @@
-import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./provider-types.js";
 import type {
   queryTranscriptReadEntries,
   readLatestTranscriptEntry,
@@ -25,6 +24,7 @@ import type {
   readRecentStoppedTranscriptSession,
   readTranscriptSummaryInputRevision,
 } from "./store-sqlite.js";
+import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./types.js";
 
 type SessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 
@@ -50,7 +50,7 @@ export type TranscriptReadRequests = {
     output: ReturnType<typeof readTranscriptExportPathOwners>;
   };
   "transcripts.summarySnapshot": {
-    input: { session: SessionIdentity; maxUtterances: number };
+    input: { session: SessionIdentity; maxUtterances: number; minimumNextSequence?: number };
     output: ReturnType<typeof readTranscriptSummarySnapshot>;
   };
   "transcripts.sessionEntries": {

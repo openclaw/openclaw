@@ -6,16 +6,15 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { ExpectedCliError } from "../expected-cli-error.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../failure-output.js";
 import { CronCliError } from "./cron-cli-error.js";
+import { parseAt, parsePositiveCronDurationMs } from "./input-options.js";
 import { resolveCronCreateScheduleFromArgs as createSchedule } from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   getCronChannelOptions,
   handleCronCliError,
-  parseAt,
   parseCronCommandEnv,
   parseCronStringList,
-  parsePositiveCronDurationMs,
   printCronList,
   printCronShow,
 } from "./shared.js";
@@ -324,7 +323,7 @@ it.each([
 });
 
 describe("handleCronCliError", () => {
-  const recovery =
+  const machineMessage =
     "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
   const missingJob = () =>
     new GatewayClientRequestError({
@@ -332,15 +331,15 @@ describe("handleCronCliError", () => {
       message: "transport-neutral lookup miss",
       details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
     });
-  it("renders typed lookup misses as expected machine failures", () => {
+  it("guides typed lookup misses to disabled automations without changing machine output", () => {
     const { thrown, json, stderr } = renderJsonError(
       missingJob(),
-      ["cron", "show", "missing-job"],
+      ["cron", "get", "missing-job"],
       "Could not start the CLI.",
     );
     expect(thrown).toBeInstanceOf(ExpectedCliError);
-    expect(json).toEqual({ ok: false, error: { type: "cli_error", message: recovery } });
-    expect(stderr).toContain(recovery);
+    expect(json).toEqual({ ok: false, error: { type: "cli_error", message: machineMessage } });
+    expect(stderr).toContain("`openclaw cron list --all`");
     for (const forbidden of ["Could not start the CLI.", "openclaw doctor", "OPENCLAW_DEBUG"]) {
       expect(stderr).not.toContain(forbidden);
     }

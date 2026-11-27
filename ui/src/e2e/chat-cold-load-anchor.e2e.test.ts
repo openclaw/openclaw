@@ -6,6 +6,7 @@ import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
+  openAiAuthor,
 } from "./chat-flow.test-support.ts";
 import { installColdLoadTitleTrace } from "./cold-load-title.test-support.ts";
 import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
@@ -221,6 +222,7 @@ suite.define(() => {
           {
             role: "assistant",
             runId,
+            ...openAiAuthor,
             content: "Synthetic final reply: the report is ready.",
             timestamp: 1_800_000_040_000,
             __openclaw: {

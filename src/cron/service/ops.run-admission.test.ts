@@ -36,6 +36,16 @@ function blockedRun(
 }
 
 describe("cron service run admission", () => {
+  it("tells the operator to repair retired heartbeat options before Run now", async () => {
+    const job = { ...makeJob("retired-heartbeat-option"), idleOnly: false };
+    const { state } = await createCronRunFixture(fixtures.makeStorePath().storePath, job);
+    try {
+      await expect(enqueueRun(state, job.id, "force")).rejects.toThrow("openclaw doctor --fix");
+    } finally {
+      stop(state);
+    }
+  });
+
   it("keeps a queued condition's ownership after a state edit before evaluation", async () => {
     const waitingJob = makeJob("condition-state-before-evaluation", dueAt);
     waitingJob.schedule = { kind: "every", everyMs: 60_000, anchorMs: dueAt };

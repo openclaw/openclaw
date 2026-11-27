@@ -3,16 +3,25 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { DEFAULT_PROACTIVE_PROMPT } from "../../../cron/default-proactive-job.js";
+import { resolveCronDeliveryDefaultsScope } from "../../../cron/delivery-defaults.js";
+import { resolveCronDeliveryPlan } from "../../../cron/delivery-plan.js";
+import { hasExplicitCronDeliveryTarget } from "../../../cron/delivery-target-validation.js";
 import { hasRetiredHeartbeatOptions } from "../../../cron/persisted-shape.js";
 import { readDefaultProactiveJobReceiptsByKeyAsync } from "../../../cron/proactive-job-receipt.js";
+import { resolveCronRunAdmissionSource } from "../../../cron/run-authority.js";
 import { compareCronRunRecordsNewestFirst } from "../../../cron/run-history-detail.js";
 import { readCronScratchSnapshotByKey } from "../../../cron/scratch-read.js";
+import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
+import { resolveCronDeliverySessionKey } from "../../../cron/session-target.js";
 import { resolveCronStoreKeyAsync } from "../../../cron/store/paths.js";
 import {
   readCronRunHistoryCandidates,
   readCronRunHistoryRecords,
 } from "../../../cron/store/read-only.js";
+import type { CronStoredJob } from "../../../cron/types.js";
 
 async function lastDeliveredRoute(storeKey: string, jobId: string) {
   const { records } = await readCronRunHistoryCandidates(storeKey, jobId);
@@ -57,6 +66,7 @@ async function lastDeliveredRoute(storeKey: string, jobId: string) {
 export async function migrateRetiredHeartbeatOptions(
   storePath: string,
   jobs: Record<string, unknown>[],
+  cfg: OpenClawConfig,
 ): Promise<string[]> {
   const affected = jobs.filter(hasRetiredHeartbeatOptions);
   if (affected.length === 0) {
@@ -68,6 +78,7 @@ export async function migrateRetiredHeartbeatOptions(
     return id ? [id] : [];
   });
   const receipts = await readDefaultProactiveJobReceiptsByKeyAsync(storeKey, agents);
+  const defaultAgentId = tryResolveAmbientOwnerAgentId(cfg);
   const notes: string[] = [];
   for (const job of affected) {
     const id = normalizeOptionalString(job.id);
@@ -75,6 +86,16 @@ export async function migrateRetiredHeartbeatOptions(
     const label = JSON.stringify(normalizeOptionalString(job.name) ?? id ?? "Unnamed automation");
     const payload = asOptionalRecord(job.payload);
     const delivery = asOptionalRecord(job.delivery);
+    const storedJob = job as unknown as CronStoredJob;
+    const operatorSource = storedJob.operatorSource;
+    const skipEmptyScratch = payload?.kind === "agentTurn" && payload.skipIfScratchEmpty === true;
+    const blocksDirectMessages = delivery?.directPolicy === "block" && delivery.mode !== "webhook";
+    const retainExecutionRevision =
+      typeof operatorSource?.executionRevision === "string" &&
+      job.idleOnly !== true &&
+      !skipEmptyScratch &&
+      !blocksDirectMessages &&
+      operatorSource.executionRevision === resolveCronOperatorExecutionRevision(storedJob);
     const pause: string[] = [];
     const defaultCheck = Boolean(
       agentId &&
@@ -91,7 +112,7 @@ export async function migrateRetiredHeartbeatOptions(
       notes.push(`Automation ${label}: removed Wait until idle.`);
     }
     if (payload && "skipIfScratchEmpty" in payload) {
-      if (payload.kind === "agentTurn" && payload.skipIfScratchEmpty === true) {
+      if (skipEmptyScratch) {
         // A setup job that never had scratch did not skip. Preserve custom jobs'
         // explicit policy, and don't start a setup job that already uses scratch.
         const scratch =
@@ -110,7 +131,7 @@ export async function migrateRetiredHeartbeatOptions(
       notes.push(`Automation ${label}: removed Skip empty scratch.`);
     }
     if (delivery && "directPolicy" in delivery) {
-      if (delivery.directPolicy === "block" && delivery.mode !== "webhook") {
+      if (blocksDirectMessages) {
         pause.push("it used to block direct messages and could now send them");
       }
       delete delivery.directPolicy;
@@ -120,12 +141,24 @@ export async function migrateRetiredHeartbeatOptions(
       delete delivery.channel;
       if (delivery.target === "owner") {
         notes.push(`Automation ${label}: kept automatic owner direct-message delivery.`);
+      } else if (
+        operatorSource ||
+        storedJob.sourceConversation ||
+        resolveCronRunAdmissionSource(storedJob) !== "operator-schedule" ||
+        storedJob.sessionTarget === "current" ||
+        resolveCronDeliverySessionKey(storedJob) ||
+        hasExplicitCronDeliveryTarget(
+          resolveCronDeliveryPlan(
+            storedJob,
+            resolveCronDeliveryDefaultsScope(cfg.cron, storedJob, defaultAgentId),
+          ),
+        )
+      ) {
+        notes.push(`Automation ${label}: kept saved delivery routing.`);
       } else {
         const route =
           id && delivery.mode === "announce" ? await lastDeliveredRoute(storeKey, id) : undefined;
         if (route) {
-          delete delivery.accountId;
-          delete delivery.threadId;
           Object.assign(delivery, route);
           notes.push(
             `Automation ${label}: pinned delivery to its last recorded successful destination (${route.channel}).`,
@@ -142,6 +175,12 @@ export async function migrateRetiredHeartbeatOptions(
       notes.push(
         `Paused automation ${label} because ${pause.join(" and ")}. Review its settings before re-enabling it.`,
       );
+    }
+    if (retainExecutionRevision) {
+      storedJob.operatorSource = {
+        ...operatorSource,
+        executionRevision: resolveCronOperatorExecutionRevision(storedJob),
+      };
     }
   }
   return notes;

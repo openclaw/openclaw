@@ -283,9 +283,16 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         routing: defaultAgentId ? { defaultAgentId } : {},
         accountId: "requested-account",
         threadId: 42,
+        target: "owner",
       });
       if (recipient) {
         await delivery;
+        expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
+          {},
+          recipient,
+          expect.objectContaining({ target: "owner" }),
+          expect.anything(),
+        );
         expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
           expect.objectContaining({
             agentId: recipient,

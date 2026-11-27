@@ -311,7 +311,7 @@ describe("loadSkillCard", () => {
 
 it("requests the discovery feed when the query is empty", async () => {
   request.mockResolvedValue({ results: [] });
-  await expect(searchClawHub(state.client!, "   ")).resolves.toEqual([]);
+  await expect(searchClawHub(state.client!, { query: "   " })).resolves.toEqual({ results: [] });
   expect(request).toHaveBeenCalledWith(
     "skills.search",
     { query: undefined, limit: 20 },

@@ -3,8 +3,11 @@ import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import type { AgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
@@ -576,5 +579,19 @@ export function parseJsonMessageParam(params: Record<string, unknown>, key: stri
     params[key] = JSON.parse(trimmed) as unknown;
   } catch {
     throw new Error(`--${key} must be valid JSON`);
+  }
+}
+
+/** Normalization drops a captionless table; reject it before any part is sent. */
+export function requirePresentationTableCaptions(params: Record<string, unknown>): void {
+  const blocks = asOptionalRecord(params.presentation)?.blocks;
+  for (const block of Array.isArray(blocks) ? blocks : []) {
+    const record = asOptionalRecord(block);
+    if (record && normalizeOptionalLowercaseString(record.type) === "table") {
+      readToolStringParam(record, "caption", {
+        required: true,
+        label: "presentation.blocks[].caption",
+      });
+    }
   }
 }

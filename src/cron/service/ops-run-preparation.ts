@@ -1,4 +1,8 @@
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import {
+  CRON_HEARTBEAT_OPTIONS_REPAIR_REQUIRED_MESSAGE,
+  hasRetiredHeartbeatOptions,
+} from "../persisted-shape.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
@@ -180,6 +184,9 @@ export async function inspectManualRunPreflight(
   }
   assertCronHostExecutionAllowed(state, job);
   assertCanonicalCronDeliveryMode(job.delivery);
+  if (mode === "force" && hasRetiredHeartbeatOptions(job)) {
+    throw new TypeError(CRON_HEARTBEAT_OPTIONS_REPAIR_REQUIRED_MESSAGE);
+  }
   if (opts?.onExit && (!isJobEnabled(job) || job.state.autoDisabled)) {
     return { ok: true, ran: false, reason: "disabled" };
   }

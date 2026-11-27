@@ -124,15 +124,19 @@ it("rejects invalid, incomplete, and failed-engine responses", async () => {
   await expect(search()).rejects.toThrow("engine (timeout)");
 });
 
-it.each(["example.com", "internal"])("gates private redirects from search.%s", async (host) => {
-  const redirect = "https://127.0.0.1/search";
+it.each([
+  ["example.com", "127.0.0.1", false],
+  ["internal", "127.0.0.1", false],
+  ["internal", "search.internal", true],
+] as const)("gates redirects from search.%s to %s", async (host, redirectHost, allowed) => {
+  const redirect = `https://${redirectHost}/search`;
   const fetch = mockFetch(Response.redirect(redirect), [row("local")]);
   const endpoint = `https://search.${host}/searxng`;
   const pending = search({ config: searchConfig(endpoint) });
-  if (host === "internal") {
+  if (allowed) {
     await expect(pending).resolves.toMatchObject({ count: 1 });
   } else {
     await expect(pending).rejects.toMatchObject({ name: "SsrFBlockedError" });
   }
-  expect(fetch).toHaveBeenCalledTimes(host === "internal" ? 2 : 1);
+  expect(fetch).toHaveBeenCalledTimes(allowed ? 2 : 1);
 });

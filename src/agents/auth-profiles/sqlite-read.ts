@@ -534,7 +534,7 @@ export async function readPersonalCatalogProfiles(
 ): Promise<PersonalCatalogProfiles> {
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
-    { type: "userModelAccounts.catalog", selection },
+    { type: "userModelAccounts.catalog", selection: { ...selection } },
     { context, current: true, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();

@@ -135,18 +135,13 @@ monitoring jobs:
 - `--active-hours-timezone <zone>` chooses an IANA timezone, `user` (the default,
   using the configured user timezone), or `local` (Gateway host). This is
   independent of the schedule's `--tz`.
-- `--idle-only` gives foreground work priority. `--no-idle-only` turns that
-  policy off.
-- `--skip-if-scratch-empty` skips an agent turn with explicitly empty scratch.
-  Missing scratch still runs. `--no-skip-if-scratch-empty` turns this off.
 - `--include-reasoning` includes reasoning returned by an agent alongside a meaningful result;
   `--no-include-reasoning` keeps it out. This does not set the thinking level.
 
 A new window requires both endpoints. An edit can update just one field of an
-existing window. `automations edit --clear-active-hours` removes the window;
-`--clear-idle-only` removes the stored idle policy. Do not combine a clear flag
-with its corresponding set flag. The scratch and reasoning flags require an
-agent-turn payload (`--message` on creation).
+existing window. Use `automations edit --clear-active-hours` on its own to
+remove the window. The reasoning flag requires an agent-turn payload
+(`--message` on creation).
 
 Manual force-runs bypass cadence but still respect the execution window and
 the job's authority and delivery policies. See
@@ -226,7 +221,9 @@ Use `automations add|create --webhook <url>` or `automations edit <job-id> --web
 
 Reminders created from an active chat preserve the live chat delivery target for announce delivery. Internal session keys may be lowercase. Do not use them as a source of truth for case-sensitive provider IDs such as Matrix room IDs.
 
-### Owner targets and direct-message policy
+<a id="owner-targets-and-direct-message-policy" />
+
+### Owner targets
 
 `--delivery-target owner` resolves a positively identified owner DM dynamically
 instead of following the last group conversation. It cannot be combined with
@@ -234,11 +231,8 @@ instead of following the last group conversation. It cannot be combined with
 recipient and thread; setting an explicit recipient replaces owner targeting.
 Use `--clear-delivery-target` to remove it.
 
-`--direct-policy allow|block` controls direct/DM delivery for the job. The
-default is `allow`; `block` prohibits DMs. Use `--clear-direct-policy` to remove
-the stored policy. These policies support agent-turn jobs in any supported session,
-including `main`, and non-main command or script jobs with chat delivery.
-They cannot be set and cleared in the same command.
+Owner targeting supports agent-turn jobs in any supported session, including
+`main`, and non-main command or script jobs with chat delivery.
 
 ### Failure delivery
 
@@ -248,7 +242,7 @@ Failure notifications resolve in this order:
 2. `delivery.failureDestination` on the job, layered over the global destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The `cron.failureDestination` block, retired in 2026.8.1, is merged into them by `openclaw doctor --fix`.
 3. The job's primary announce target (when neither of the above resolves to a concrete destination).
 
-Jobs with one of those routes default to an execution-failure notice from the first failure, with a 1-hour cooldown; the same unresolved failure repeats at most daily. Owned jobs send that notice to their owner conversation's agent, which fixes the problem or tells you. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job, but not the auto-disable safety notification. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy. Terminal one-shot failures bypass `after`: eligible owned jobs receive a repair turn in their owner conversation, other jobs use an enabled failure-alert route, and jobs without one receive the auto-disable safety notice. Operator cancellations and runs retired by a Gateway restart stay quiet.
+Jobs with one of those routes default to an execution-failure notice from the first failure, with a 1-hour cooldown; the same unresolved failure repeats at most daily. Owned jobs send that notice to their owner conversation's agent, which fixes the problem or tells you. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy. Terminal one-shot failures bypass `after`: eligible owned jobs receive a repair turn in their owner conversation, and other jobs use an enabled failure-alert route. Operator cancellations and runs retired by a Gateway restart stay quiet. A failed run never disables a job.
 
 Repeated failures with the same cause stay grouped into one incident across Gateway restarts. A changed cause or destination can notify after the cooldown. Successful completion clears the incident silently; the recovery stays in automation history. Skipped runs and unknown delivery outcomes do not count as recovery. If script setup cannot refresh tools after a plugin reload, the alert explains that automatic recovery failed before the script ran.
 
@@ -286,7 +280,7 @@ daylight-saving transition are reported separately as `--at` errors.
 One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence and successful executions with explicit `delivery.bestEffort: true` complete and delete normally. Use `--keep-after-run` to preserve successful jobs too.
 </Note>
 
-An `at` job records a terminal execution failure after a permanent error or exhausted retries. An `on-exit` job fired by its watcher is terminal on any execution error, including a transient one, because retrying would rerun the watched command. These failures record `state.autoDisabled`, which `openclaw doctor` reports. Manually force-running a paused `on-exit` job preserves its pause without recording an auto-disable.
+An `at` job ends after a permanent error or exhausted retries. An `on-exit` job fired by its watcher ends on any execution error, including a transient one, because retrying would rerun the watched command. Its owner is notified of that final failure; the job records no auto-disable reason.
 
 ### Recurring jobs
 
@@ -374,7 +368,7 @@ Isolated automation turns require a final deliverable rather than an interim sta
 
 ### Silent token suppression
 
-For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. The terminal producer records this decision; delivery does not reparse the reply.
+For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. Reasoning the model closes with a tag such as `</think>` before that exact token counts as the same silent final. The terminal producer records this decision; delivery does not reparse the reply.
 
 For example, this final reply sends no chat message:
 
@@ -565,11 +559,6 @@ openclaw automations scratch <job-id> --unset          # remove the scratch row
 ```
 
 Scratch is stored in the shared state database, capped at 256 KiB, and never included in `automations list`/`automations get`/`automations runs` output. Writes are compare-and-swap guarded against the revision read at command start. Pass `--expected-revision <n>` to pin an explicit revision instead. Present scratch becomes bounded model prompt context, so do not store secrets in it. See [Job scratch and quiet results](/automation/cron-jobs/payloads#job-scratch-and-quiet-results) for self-scoped scratch and result actions.
-
-For a job with `--skip-if-scratch-empty`, blank text, comments, headings, fence
-markers, and empty checklist stubs skip the run. `--unset` removes scratch;
-missing scratch still runs. Use `automations disable <job-id>` to stop the job
-regardless of scratch content.
 
 Agent and session retargeting:
 

@@ -3,7 +3,6 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import {
   selectAgentHarness,
@@ -16,6 +15,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../model-auth.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../model-selection-config.js";
 import { isOpenAIProvider } from "../openai-routing.js";
 import {
   providerUsesCredentialScopedModelMetadata,
@@ -58,13 +58,12 @@ export function resolveCompactionRuntimeSelection(params: {
     (params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
       ? undefined
       : params.agentId);
-  const policyTarget = resolveEmbeddedCompactionTarget({
-    ...params,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const policyProvider = policyTarget.provider ?? DEFAULT_PROVIDER;
-  const policyModelId = policyTarget.model ?? DEFAULT_MODEL;
+  const policyTarget = resolveEmbeddedCompactionTarget(params);
+  const policyProvider = policyTarget.provider;
+  const policyModelId = policyTarget.model;
+  if (!policyProvider || !policyModelId) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   const policy = resolveAgentHarnessPolicy({
     provider: policyProvider,
     modelId: policyModelId,
@@ -92,8 +91,8 @@ export function resolveCompactionRuntimeSelection(params: {
     ...policyTarget,
     ...resolveCompactionTargetRuntime(policyTarget.provider, selectedHarnessRuntime),
   };
-  const provider = target.provider ?? DEFAULT_PROVIDER;
-  const modelId = target.model ?? DEFAULT_MODEL;
+  const provider = target.provider ?? policyProvider;
+  const modelId = target.model ?? policyModelId;
   const selectedRuntime = normalizeOptionalAgentRuntimeId(selectedHarnessRuntime);
   return {
     attemptNativeHarnessCompaction: Boolean(

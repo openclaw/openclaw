@@ -10,18 +10,23 @@ import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { spawnCommand } from "../../process/exec-spawn.js";
+import { gitBackupCommandRuntimeEntrypoint } from "../../snapshot/git-backup-command-runtime.test-support.js";
 import {
   createGitBackup,
   restoreGitBackupRef,
   verifyGitBackupRef,
 } from "../../snapshot/git-backup.js";
+import { createStateDatabaseFixture } from "../../snapshot/git-backup.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { acquireGatewayLock } from "../gateway-lock.js";
 import { requireGitCommand } from "../git-exec.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import { agentPortProvider } from "./agent-port.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
-import { installDatabaseEngineSelection } from "./context.js";
+import { installDatabaseEngineSelection, withDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import { logbookPortProvider } from "./logbook-port.js";
 import { materializeDatabasePort } from "./port.worker.js";
@@ -253,6 +258,77 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
       await admin.end();
     }
   });
+
+  it.each([false, true])(
+    "refreshes PostgreSQL scopes from the scheduled command beside a running owner (mixed engines: %s)",
+    (mixed) =>
+      lifetime.run(async () => {
+        const selectedState = mixed
+          ? withDatabaseEngineSelection(await resolveDatabaseEngineSelection({}), () =>
+              createStateDatabaseFixture(path.join(root, "mixed")),
+            ).stateDir
+          : stateDir;
+        const configPath = path.join(selectedState, "openclaw.json");
+        const config: OpenClawConfig = {
+          ...authoredConfig.config,
+          ...(mixed
+            ? {
+                database: {
+                  families: { agent: { engine: "postgres" } },
+                  postgres: { connection: fixtureConnection.href },
+                },
+              }
+            : {}),
+        };
+        await fs.writeFile(configPath, JSON.stringify(config));
+        const env = {
+          ...process.env,
+          ...gitEnv,
+          HOME: root,
+          OPENCLAW_STATE_DIR: selectedState,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_TEST_RUNTIME_LOG: "1",
+        };
+        const owner = await withDatabaseEngineSelection(
+          await resolveDatabaseEngineSelection(config),
+          () => acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 }),
+        );
+        expect(owner).not.toBeNull();
+        try {
+          const repositoryPath = path.join(root, mixed ? "mixed-online" : "all-online");
+          for (const updatedAt of [2, 3]) {
+            await client.query(
+              `UPDATE "${namespaces.get(agent)}".session_nodes SET updated_at=$1`,
+              [updatedAt],
+            );
+            const command = await spawnCommand(
+              [
+                process.execPath,
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeWorkerUrl(gitBackupCommandRuntimeEntrypoint),
+                ),
+                repositoryPath,
+              ],
+              { env, timeout: 120_000 },
+            );
+            expect(command.exitCode, command.stderr).toBe(0);
+            expect(JSON.parse(command.stdout).warnings).toEqual([]);
+            expect(
+              exportedRows(
+                path.join(repositoryPath, "agents/main/postgres/database.sqlite"),
+                "SELECT updated_at FROM session_nodes",
+              ),
+            ).toEqual([{ updated_at: updatedAt }]);
+            expect(
+              await git(repositoryPath, ["show", "HEAD:agents/main/postgres/manifest.json"]),
+            ).toContain('"engine": "postgres"');
+          }
+        } finally {
+          await owner?.release();
+        }
+      }),
+    120_000,
+  );
 
   it(
     "keeps distinct scopes, preserves degraded agents, and prunes removed Matrix stores without losing extras or history",

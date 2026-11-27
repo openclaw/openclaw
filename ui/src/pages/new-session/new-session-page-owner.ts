@@ -487,7 +487,7 @@ export class NewSessionPageOwner {
     if (this.place.requiredPlacement) {
       return t("newSession.requiredWorkerHint");
     }
-    return this.place.selectedAgent()?.description ? undefined : t("newSession.hint");
+    return undefined;
   }
 
   welcomeOptions(): DraftWelcomeOptions {

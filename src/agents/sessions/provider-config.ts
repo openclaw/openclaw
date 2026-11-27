@@ -9,7 +9,7 @@ import type {
 import type {
   OAuthProviderInterface,
   OAuthLoginCallbacks as ProviderOAuthLoginCallbacks,
-} from "../../plugin-sdk/provider-oauth-runtime.js";
+} from "../../llm/utils/oauth/types.js";
 import type { ProviderAuthMode } from "./model-registry-schema.js";
 
 /** Shared fields accepted by extension and registry provider registration. */

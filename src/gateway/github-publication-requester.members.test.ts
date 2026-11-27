@@ -1,15 +1,18 @@
 // Install transport fixtures before publication owners enter the module cache.
 // oxfmt-ignore
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   decodeGitHubPublicationRequester,
   encodeGitHubPublicationRequester,
 } from "../state/github-publication-requester.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForOpenClawIdIdentity,
   mergeCanonicalUserProfiles,
+  setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
@@ -24,6 +27,7 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 
 const checkpoint = vi.hoisted(() => vi.fn());
 // mock-isolation: Repository checkpoints are external worker I/O; requester policy and storage are real.
@@ -80,11 +84,27 @@ it("refuses unattested membership and member-attributed System publication snaps
   ).toBeUndefined();
 });
 
+it("keeps stored requester records from before participation byte-identical", () => {
+  // The 2026.11.8 encoder wrote only version/actor/scopes/grant; main later added origin.
+  for (const stored of [
+    '{"version":1,"actor":{"kind":"operator","profileId":"profile"},"scopes":["operator.write"],"grant":null}',
+    '{"version":1,"actor":{"kind":"system"},"scopes":[],"grant":null}',
+    '{"version":1,"actor":{"kind":"operator","profileId":"profile"},"scopes":["operator.write"],"grant":null,"origin":{"agentId":"main","sessionKey":"agent:main:main","sessionId":"session","lifecycleRevision":null,"runId":"run"}}',
+  ]) {
+    const decoded = expectDefined(decodeGitHubPublicationRequester(stored), stored);
+    expect(decoded).not.toHaveProperty("participation");
+    expect(encodeGitHubPublicationRequester(decoded)).toBe(stored);
+  }
+});
+
 describe("member publication authority", () => {
   installGitHubPublicationTestHarness({
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+  beforeEach(async () => {
+    onTestFinished((await prepareUserProfileCatalog()).release);
   });
 
   it.each(
@@ -92,13 +112,14 @@ describe("member publication authority", () => {
       ["recorded-source", "principal-only"].map((format) => ({ change, format })),
     ),
   )(
-    "uses the connection's membership on queued publication ($change, $format)",
+    "uses the canonical profile role and current membership on queued publication ($change, $format)",
     async ({ change, format }) => {
       const f = await createRequesterPublicationFixture(checkpoint, "repository");
       const linked = await ensureCanonicalUserProfileForOpenClawIdIdentity({
         accountId: "publication-member",
       });
       await mergeCanonicalUserProfiles(linked.id, f.guestProfile);
+      await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       const captured = await createGitHubPublicationRequesterFixture({
         profileId: f.guestProfile,
@@ -160,22 +181,32 @@ describe("member publication authority", () => {
         setRuntimeConfigSnapshot(next);
       }
       if (change !== "allowed") {
-        expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+        expect(restored.assertCurrent).not.toThrow();
         await expect(
           restoreGitHubPublicationRequester(
             json,
             f.guestSource.session,
             f.guestSource.context.getCommittedRuntimeConfig,
           ),
-        ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+        ).rejects.toThrow(
+          change === "policy required"
+            ? GatewayOperatorAccessUnavailableError
+            : GitHubPublicationRequesterUnavailableError,
+        );
       }
       await f.placements.releaseTurn(claim);
       const restarted = f.restart();
-      await restarted.resumeSessionRequests();
+      if (change === "policy required") {
+        await expect(restarted.resumeSessionRequests()).rejects.toBeInstanceOf(AggregateError);
+      } else {
+        await restarted.resumeSessionRequests();
+      }
       expect(await restarted.readAsync(accepted.requestId)).toMatchObject(
         change === "allowed"
           ? { status: "published" }
-          : { status: "failed", code: "identity_changed" },
+          : change === "policy required"
+            ? { status: "requested" }
+            : { status: "failed", code: "identity_changed" },
       );
       expect(f.publishedTitles).toEqual(change === "allowed" ? ["member-publication"] : []);
       if (change !== "allowed") {
@@ -184,12 +215,13 @@ describe("member publication authority", () => {
     },
   );
   it.each(forPublicationBackends(["member", "linked owner", "nonmember"] as const))(
-    "rechecks parent-format $change provenance at recovery and write ($backend)",
+    "rechecks parent-format $change provenance at recovery, not during admitted work ($backend)",
     async ({ backend, change }) => {
       const f = await createRequesterPublicationFixture(checkpoint, backend);
       const config = structuredClone(f.config);
       delete config.gateway!.roles!.default;
       setRuntimeConfigSnapshot(config);
+      await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
       if (change === "linked owner") {
         setOpenClawIdTunnelPrincipalLookup(() => ownerPrincipal);
       }
@@ -236,7 +268,7 @@ describe("member publication authority", () => {
         );
         onTestFinished(knownNonmember.release);
         expect(knownNonmember.assertCurrent).not.toThrow();
-        expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+        expect(restored.assertCurrent).not.toThrow();
         await expect(
           restoreGitHubPublicationRequester(
             json,
@@ -278,6 +310,9 @@ describe("member publication authority", () => {
         accountId: "publication-owner",
       });
       await mergeCanonicalUserProfiles(linked.id, f.guestProfile);
+      if (change === "other sign-in") {
+        await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
+      }
       setOpenClawIdTunnelPrincipalLookup(() => ownerPrincipal);
       const captured = await createGitHubPublicationRequesterFixture({
         profileId: f.guestProfile,
@@ -313,9 +348,9 @@ describe("member publication authority", () => {
       expect(f.publishedTitles).toEqual(["recorded-source-publication"]);
     },
   );
-  it("uses a nonadministrator member's role instead of the restrictive profile default", async () => {
+  it("uses the assigned nonadministrator profile role despite a stale member role label", async () => {
     const f = await createRequesterPublicationFixture(checkpoint, "repository");
-    const writer = { ...principal, role: "writer" };
+    const writer = { ...principal, role: "stale-role-label" };
     const next = structuredClone(f.config);
     next.gateway!.roles!.definitions.writer = {
       scopes: ["operator.write"],
@@ -323,6 +358,7 @@ describe("member publication authority", () => {
       sessions: { others: "write" },
     };
     setRuntimeConfigSnapshot(next);
+    await setCanonicalUserProfileRole(f.guestProfile, "writer");
     setOpenClawIdTunnelPrincipalLookup(() => writer);
     const captured = await createGitHubPublicationRequesterFixture({
       profileId: f.guestProfile,
@@ -342,6 +378,7 @@ describe("member publication authority", () => {
   });
   it("waits for membership hydration rather than permanently revoking a valid requester", async () => {
     const f = await createRequesterPublicationFixture(checkpoint, "repository");
+    await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
     setOpenClawIdTunnelPrincipalLookup(() => principal);
     const captured = await createGitHubPublicationRequesterFixture({
       profileId: f.guestProfile,

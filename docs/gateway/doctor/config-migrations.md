@@ -669,11 +669,13 @@ direct messages the job previously blocked, and reports which jobs to review
 before re-enabling. The default Proactive check normally stays enabled on its
 existing schedule. It can now run while another session on the agent is working.
 
-For primary `channel: "last"` delivery, Doctor uses the last recorded successful
-destination, including the account and thread when recorded. With no recorded
-destination, Doctor removes the channel selection, reports the fallback, and
-lets the job resolve its destination normally. Owner delivery still resolves
-the owner’s direct messages; separate failure-alert routing is unchanged.
+Doctor removes the primary `channel: "last"` selection and preserves saved
+coordinates, configured defaults, and conversation-bound routing. For an
+operator job with no such route or retained requester authority, Doctor can
+pin the last recorded successful destination, including its account and thread.
+Jobs without a recorded destination use normal route resolution. Owner delivery
+still resolves the owner’s direct messages. Failure alerts retain their own
+route settings.
 
 ## Legacy cron delivery settings
 
@@ -1175,7 +1177,10 @@ The Codex plugin's `codex-native-assignment-repair` runs during
 `openclaw doctor --fix` and update-time Doctor, after session repair. It collapses
 proven duplicate assignments for the same child and native turn and removes
 assignments whose requester session, lifecycle, or connection is provably
-obsolete. Compatible aliases retain their receipt and recorded-result metadata;
+obsolete. An assignment is kept only when its lifecycle revision equals the
+requester's, including legacy owners where both are absent. A revision on only
+one side, such as after a reset that kept the session ID, cannot be recovered
+and is removed. Compatible aliases retain their receipt and recorded-result metadata;
 conflicting facts produce a recoverable warning without changing the row.
 Separate pending turns of one child are preserved. Repairs use the
 existing SQLite backup and exact-row compare-and-apply owner; no database schema

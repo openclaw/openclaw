@@ -18,6 +18,9 @@ import { decodeCronStreamOperatorSource } from "./stream-operator-source.js";
 import { parseCronStreamSandboxTarget } from "./stream-sandbox-target.js";
 import type { CronJobState } from "./types.js";
 
+export const CRON_HEARTBEAT_OPTIONS_REPAIR_REQUIRED_MESSAGE =
+  "Retired heartbeat options; run openclaw doctor --fix";
+
 /** Refuse unrepaired definitions without changing their persisted data. */
 export function hasRetiredHeartbeatOptions(job: {
   payload?: unknown;

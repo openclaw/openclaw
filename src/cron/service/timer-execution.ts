@@ -4,7 +4,11 @@ import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
-import { hasRetiredHeartbeatOptions } from "../persisted-shape.js";
+import { cronOperatorSourceRefusal } from "../operator-source-error.js";
+import {
+  CRON_HEARTBEAT_OPTIONS_REPAIR_REQUIRED_MESSAGE,
+  hasRetiredHeartbeatOptions,
+} from "../persisted-shape.js";
 import { readDefaultProactiveJobReceiptsByKeyAsync } from "../proactive-job-receipt.js";
 import { isProactiveJobMigrationPending } from "../proactive-job-receipt.kernel.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
@@ -56,7 +60,7 @@ export async function executeJobCore(
   if (hasRetiredHeartbeatOptions(job)) {
     return {
       status: "skipped",
-      summary: "Retired heartbeat options; run openclaw doctor --fix",
+      summary: CRON_HEARTBEAT_OPTIONS_REPAIR_REQUIRED_MESSAGE,
       executionStarted: false,
     };
   }
@@ -191,12 +195,15 @@ export async function executeJobCore(
         streamBatch: options?.streamBatch,
         abortSignal,
         executionIdentity: options?.executionIdentity,
-      });
+      }).catch(cronOperatorSourceRefusal);
       sessionPreparation?.notices.assertCurrent();
       // Trigger scripts may settle after cancellation; never start payload work
       // or persist trigger results for a run that has already been aborted.
       if (abortSignal?.aborted) {
         return resolveAbortError();
+      }
+      if ("status" in evaluation) {
+        return evaluation;
       }
       if (evaluation.kind === "error") {
         return {
@@ -356,6 +363,7 @@ async function executeMainSessionCronJob(
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
     onLaneWait: options?.onLaneWait,
+    providerRunSlot: options?.providerRunSlot,
     executionIdentity: options?.executionIdentity,
     job,
     text,
@@ -460,6 +468,7 @@ async function executeDetachedCronJob(
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
     onLaneWait: options?.onLaneWait,
+    providerRunSlot: options?.providerRunSlot,
     executionIdentity: options?.executionIdentity,
   });
 

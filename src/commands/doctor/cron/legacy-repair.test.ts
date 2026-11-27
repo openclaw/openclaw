@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPreview } from "../../../cron/delivery-preview.js";
+import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import * as cronStore from "../../../cron/store.js";
 import {
   loadCronQuarantinedJobs,
@@ -15,8 +16,10 @@ import {
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { recordCronRun } from "../../../cron/store/run-history.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
-import type { CronDeliveryTrace, CronJob } from "../../../cron/types.js";
+import type { CronDeliveryTrace, CronJob, CronStoredJob } from "../../../cron/types.js";
+import { legacyMemberSnapshot } from "../../../gateway/openclaw-id/member-source-role-import.test-support.js";
 import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
+import { withInstalledOfficialProviderCustody } from "../../../plugins/provider-policy-custody.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -91,33 +94,47 @@ it(
     const storePath = fixture.statePath("cron", "jobs.json");
     const backed = job("backed", { delivery: { mode: "announce", channel: "last" } });
     const untraced = job("untraced", { delivery: { mode: "announce", channel: "last" } });
+    const explicit = job("explicit", {
+      delivery: { mode: "announce", channel: "last", to: "telegram:current" },
+    });
+    const bound: CronStoredJob = {
+      ...job("bound", { delivery: { mode: "announce", channel: "last" } }),
+      sourceConversation: { sessionKey: "agent:main:chat", sessionId: "creating-chat" },
+    };
     const owner = job("owner", {
       delivery: { mode: "announce", target: "owner", channel: "last" },
     });
     Object.assign(owner, { idleOnly: true });
     Object.assign(owner.payload, { skipIfScratchEmpty: true });
     Object.assign(owner.delivery!, { directPolicy: "block" });
-    await saveJobs(storePath, backed, untraced, owner);
+    await saveJobs(storePath, backed, untraced, owner, explicit, bound);
     const route = { channel: "telegram", to: "fixture-room", accountId: "ops", threadId: 42 };
     const storeKey = cronStoreKey(storePath);
     const time = Date.now() - 1000;
-    const saveTrace = (suffix: string, offset: number, delivery: CronDeliveryTrace) =>
+    const saveTrace = (
+      jobId: string,
+      suffix: string,
+      offset: number,
+      delivery: CronDeliveryTrace,
+    ) =>
       recordCronRun({
         storeKey,
-        jobId: backed.id,
-        runId: "cron:backed:" + suffix,
+        jobId,
+        runId: `cron:${jobId}:${suffix}`,
         agentId: "main",
         startedAt: time + offset,
         endedAt: time + offset + 1,
         status: "succeeded",
         detail: { storeKey, delivery },
       });
-    await saveTrace("delivered", 10, {
-      delivered: true,
-      resolved: { ok: true, channel: "telegram", to: "planned-only" },
-      receipts: [{ ...route, messageId: "fixture-receipt" }],
-    });
-    await saveTrace("failed", 20, {
+    for (const entry of [backed, explicit, bound]) {
+      await saveTrace(entry.id, "delivered", 10, {
+        delivered: true,
+        resolved: { ok: true, channel: "telegram", to: "planned-only" },
+        receipts: [{ ...route, messageId: "fixture-receipt" }],
+      });
+    }
+    await saveTrace(backed.id, "failed", 20, {
       delivered: false,
       resolved: { ok: true, channel: "slack", to: "never-sent" },
     });
@@ -130,7 +147,13 @@ it(
     expect(result.changes.join("\n")).toContain("no previous delivery destination was recorded");
     expect(result.changes.join("\n")).toContain('Paused automation "owner"');
     const jobs = await readJobs(storePath);
-    expect(jobs.map((entry) => entry.id)).toEqual([backed.id, untraced.id, owner.id]);
+    expect(jobs.map((entry) => entry.id)).toEqual([
+      backed.id,
+      untraced.id,
+      owner.id,
+      explicit.id,
+      bound.id,
+    ]);
     expect(jobs[0]?.delivery).toEqual({ mode: "announce", ...route });
     expect(jobs[1]).toMatchObject({ enabled: true, delivery: { mode: "announce" } });
     expect(jobs[1]?.delivery).not.toHaveProperty("channel");
@@ -141,7 +164,48 @@ it(
     expect(jobs[2]).not.toHaveProperty("idleOnly");
     expect(jobs[2]?.payload).not.toHaveProperty("skipIfScratchEmpty");
     expect(jobs[2]?.delivery).not.toHaveProperty("directPolicy");
+    expect(jobs[3]?.delivery).toEqual({ mode: "announce", to: "telegram:current" });
+    expect(jobs[4]?.delivery).toEqual({ mode: "announce" });
     expect((await repair(storePath)).changes).toEqual([]);
+  }),
+);
+
+it(
+  "retains current scheduled execution authority through neutral heartbeat option repair",
+  withState(async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    const current = {
+      ...job("current-authority", {
+        agentId: "main",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        delivery: { mode: "none" },
+      }),
+      idleOnly: false,
+    };
+    const source = {
+      kind: "gateway" as const,
+      version: 1 as const,
+      agentId: "main",
+      sourceRunId: "original-turn",
+      snapshot: legacyMemberSnapshot(),
+    };
+    const revision = resolveCronOperatorExecutionRevision(current);
+    const stale = { ...current, id: "stale-authority" };
+    await saveJobs(
+      storePath,
+      Object.assign(current, { operatorSource: { source, executionRevision: revision } }),
+      Object.assign(stale, { operatorSource: { source, executionRevision: "stale" } }),
+    );
+
+    expect((await repair(storePath)).warnings).toEqual([]);
+    const [repaired, stillStale] = (await loadCronStore(storePath)).jobs;
+    const next = expectDefined(repaired);
+    expect(next.operatorSource).toEqual({
+      source,
+      executionRevision: resolveCronOperatorExecutionRevision(next),
+    });
+    expect(next.operatorSource?.executionRevision).not.toBe(revision);
+    expect(stillStale?.operatorSource).toEqual({ source, executionRevision: "stale" });
   }),
 );
 
@@ -377,7 +441,7 @@ it(
 );
 
 it(
-  "preserves unknown delivery mode 42 alongside legacy hints",
+  "preserves an unsupported delivery row with retired options while repairing a sibling",
   withState(async (state) => {
     const storePath = state.statePath("cron", "jobs.json");
     const deliveryJob = (id: string, message: string, delivery: CronJob["delivery"]): CronJob => ({
@@ -399,7 +463,7 @@ it(
     );
     const db = openOpenClawStateDatabase().db;
     db.prepare(
-      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.delivery.mode', json(?), '$.isolation', json(?)) WHERE store_key = ? AND job_id = 'sqlite-job'",
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.delivery.mode', json(?), '$.isolation', json(?), '$.idleOnly', json('false')) WHERE store_key = ? AND job_id = 'sqlite-job'",
     ).run(JSON.stringify(42), JSON.stringify({ legacy: "retain me" }), cronStoreKey(storePath));
     db.prepare(
       "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.delivery.mode') WHERE store_key = ? AND job_id = 'repairable-sibling'",
@@ -672,4 +736,31 @@ it.each(["load", "commit"])(
         expect(await fs.readFile(`${file}.migrated`)).toEqual(bytes);
       }
     })(),
+);
+
+it(
+  "prepares an installed provider policy before checking retired models under Doctor custody",
+  withState(async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    await saveJobs(storePath, {
+      ...job("disabled-legacy", { enabled: false }),
+      payload: { kind: "agentTurn", message: "run", model: "anthropic/claude-sonnet-4-6" },
+    });
+    const cfg = {
+      cron: { store: storePath },
+      agents: { defaults: { modelPolicy: { allow: ["arcee/trinity-large-thinking"] } } },
+    } as OpenClawConfig;
+
+    const result = await withInstalledOfficialProviderCustody(
+      fixture.statePath("policy-owner"),
+      async () =>
+        await applyLegacyCronStoreRepair({
+          cfg,
+          state: expectDefined(await loadLegacyCronRepairState({ cfg, storePath }), "cron state"),
+          repairRetiredModelRefs: true,
+        }),
+    );
+
+    expect(result.warnings).toEqual([]);
+  }),
 );

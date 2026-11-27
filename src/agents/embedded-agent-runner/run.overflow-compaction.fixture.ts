@@ -38,6 +38,7 @@ export async function acquireOverflowCompactionPreparedModelRuntime(
       : undefined,
     metadataSnapshot,
     modelCatalog,
+    isCurrent: () => true,
     createStores: () => ({ authStorage: {}, modelRegistry: {} }),
   };
   return {

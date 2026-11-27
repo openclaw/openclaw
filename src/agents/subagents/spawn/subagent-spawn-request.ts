@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { deriveGatewayOperatorAuthorityForDelegation } from "../../../gateway/operator-run-invocation.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
@@ -17,17 +18,21 @@ import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js"
 import { holdQueuedSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "./subagent-depth.js";
 import { createSubagentSessionStore } from "./subagent-session-store.js";
+import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
 import {
   rejectSubagentSpawnRequest,
   type SpawnSubagentContext,
   type SpawnSubagentParams,
 } from "./subagent-spawn-contract.js";
+import { captureSubagentSpawnGatewayContext } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
+import { resolveParticipationSpawnError } from "./subagent-spawn-participation.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 import {
   getGlobalHookRunner,
   getRuntimeConfig,
+  hasInProcessGatewayContext,
   resolveGatewaySessionStoreTargetInWorker,
 } from "./subagent-spawn.runtime.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
@@ -37,8 +42,29 @@ const BLIND_FORK_ERROR =
 
 export async function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
-  ctx: SpawnSubagentContext,
+  inputContext: SpawnSubagentContext,
 ) {
+  const gateway = captureSubagentSpawnGatewayContext();
+  if (gateway.operatorAuthority?.participationCeiling) {
+    gateway.operatorAuthority = deriveGatewayOperatorAuthorityForDelegation(
+      gateway.operatorAuthority,
+      {
+        permission: inputContext.sessionPermissionPolicy?.mode,
+        execPolicy: inputContext.sessionPermissionPolicy?.execPolicy,
+      },
+    );
+  }
+  const ctx = inputContext;
+  if (
+    gateway.operatorAuthority?.participationCeiling &&
+    (!ctx.assertActive || (!gateway.gatewayContextResolver && !hasInProcessGatewayContext()))
+  ) {
+    return rejectSubagentSpawnRequest(
+      "forbidden",
+      "Participating helpers require a current Gateway-local spawn invocation.",
+    );
+  }
+  ctx.assertActive?.();
   if (params.worktreeName !== undefined) {
     try {
       validateName(params.worktreeName);
@@ -182,7 +208,10 @@ export async function resolveSubagentSpawnRequest(
       );
     }
   };
-  const earlyRequester = !params.collect ? await captureRequester() : undefined;
+  const earlyRequester =
+    !params.collect || gateway.operatorAuthority?.participationCeiling
+      ? await captureRequester()
+      : undefined;
   if (earlyRequester && !earlyRequester.ok) {
     return earlyRequester;
   }
@@ -234,6 +263,38 @@ export async function resolveSubagentSpawnRequest(
   const targetAgentId = effectiveRequestedAgentId
     ? normalizeAgentId(effectiveRequestedAgentId)
     : requesterAgentId;
+  const participationError = resolveParticipationSpawnError(
+    { ...params, agentId: targetAgentId },
+    ctx,
+    requesterAgentId,
+  );
+  if (participationError) {
+    return rejectSubagentSpawnRequest("forbidden", participationError);
+  }
+  // Participant runtime selection must finish before either admission owner reserves work.
+  const participationChildPlan =
+    gateway.operatorAuthority?.participationCeiling && earlyRequester
+      ? await resolveSubagentChildPlan({
+          request: { ...params, context: contextMode },
+          ctx,
+          operatorAuthority: gateway.operatorAuthority,
+          cfg,
+          requesterInternalKey,
+          requesterAgentId,
+          targetAgentId,
+          requesterEntry: earlyRequester.requesterEntry,
+          sandboxMode: params.sandbox === "require" ? "require" : "inherit",
+          swarmEnabled: swarmConfig.enabled,
+          requesterSandboxed: ctx.sandboxed,
+          spawnedBy: {
+            profileId: gateway.creatorProfileId,
+            operatorAuthority: gateway.operatorAuthority,
+          },
+        })
+      : undefined;
+  if (participationChildPlan && !participationChildPlan.ok) {
+    return participationChildPlan;
+  }
   const configuredAgentIds = listAgentIds(cfg);
   const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
   const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
@@ -372,6 +433,7 @@ export async function resolveSubagentSpawnRequest(
       return {
         ok: true as const,
         resolved: {
+          gateway,
           taskName,
           spawnMode,
           cleanup,
@@ -386,6 +448,7 @@ export async function resolveSubagentSpawnRequest(
           ownership,
           requesterEntry: requester.requesterEntry,
           requesterTarget: requester.requesterTarget,
+          participationChildPlan,
           // Descendants of a blind requester stay blind; their prompts would otherwise name the route.
           blind: params.blind === true || requester.requesterEntry?.blindPrompt === true,
           requesterAgentId,
