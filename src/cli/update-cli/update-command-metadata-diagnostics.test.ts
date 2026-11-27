@@ -165,13 +165,13 @@ it.each([
   }
 });
 
-function readPrintedFailureReport() {
+function readPrintedFailureResult() {
   expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
   const result = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0];
-  if (!isRecord(result) || typeof result.reportPath !== "string") {
-    throw new Error("The failed command did not print its saved report path.");
+  if (!isRecord(result)) {
+    throw new Error("The failed command did not print its result.");
   }
-  return { result, markdown: fs.readFileSync(result.reportPath, "utf8") };
+  return result;
 }
 
 it.each([
@@ -264,9 +264,9 @@ it.each([
   }
   vi.spyOn(shared, "resolveTargetVersion").mockRejectedValueOnce(error);
   await rejectUpdate({ tag: "2026.9.2", dryRun: true }, "ExitError");
-  const printed = readPrintedFailureReport();
+  const printed = readPrintedFailureResult();
   const message = entry.kind === "graph" ? "Lookup failed" : "Target response was invalid";
-  expect(printed.result).toMatchObject({
+  expect(printed).toMatchObject({
     status: "error",
     reason: "update-failed",
     steps: failureSteps({
@@ -279,7 +279,6 @@ it.each([
       message: expect.stringContaining(message),
     }),
   });
-  expect(printed.markdown).toContain(message);
   const recordedRun = ledger.listUpdateRuns()[0];
   expect(recordedRun).toBeDefined();
   const report = await prepareUpdateFailureReport({
@@ -288,7 +287,6 @@ it.each([
     result: { status: "error", mode: "unknown", steps: [], durationMs: 0 },
   });
   if (entry.kind === "graph") {
-    expect(printed.markdown).toContain("OpenClaw update failed");
     expectContains(report.body, ["EACCES", "ECONNRESET", "Connection refused"]);
     expect(report.body).not.toContain("Transport failed");
   } else {
@@ -313,12 +311,7 @@ it.each([
       expect(report.body).toContain("Rollback outcome: not needed");
     }
   }
-  for (const output of [
-    report.body,
-    JSON.stringify(recordedRun),
-    JSON.stringify(printed.result),
-    printed.markdown,
-  ]) {
+  for (const output of [report.body, JSON.stringify(recordedRun), JSON.stringify(printed)]) {
     for (const privateText of privateValues) {
       expect(output).not.toContain(privateText);
     }

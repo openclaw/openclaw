@@ -19,6 +19,7 @@ import {
   sendMinimalGatewayResponse,
 } from "../gateway/minimal-gateway.test-helpers.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import { defaultRuntime } from "../runtime.js";
 import * as resolveStore from "../secrets/resolve-store.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
@@ -44,8 +45,6 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
     params: ReturnType<typeof parseMinimalGatewayRequestFrame>["params"];
   };
 
-  type WireRun = Pick<UpdateRunRecord, "runId" | "status" | "phase" | "steps" | "after" | "origin">;
-
   async function withWireGateway(
     options: {
       restartMethod?: "update.run" | "gateway.restart.request";
@@ -56,7 +55,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
       root: string;
       tag: string | undefined;
       runId: string;
-      output: WireRun;
+      output: UpdateRunRecord;
       requests: string[];
       receipts: Array<Pick<WireRequest, "method" | "params">>;
       tokens: Array<string | undefined>;
@@ -95,14 +94,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
         }),
       );
       const runId = tag ? "run-cli" : "run-wire";
-      const output: WireRun = {
-        runId,
-        status: "succeeded",
-        phase: "finished",
-        steps: [],
-        after: {},
-        origin: {},
-      };
+      const output = createUpdateRunRecordFixture(runId, { status: "succeeded" });
       const json: unknown[] = [];
       vi.spyOn(defaultRuntime, "writeJson").mockImplementation((record) => {
         json.push(record);
@@ -204,17 +196,15 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
     async (scenario, { signal }) => {
       const heldRequest = createDeferred<WireRequest>();
       const heldClosed = createDeferred();
-      const firstStatusClosed = createDeferred();
       let held: WireRequest | undefined;
       let statusRequests = 0;
-      let running: WireRun;
+      let running: UpdateRunRecord;
       await withWireGateway(
         {
           handleRequest: (request) => {
             if (request.method === "update.runs.get") {
               statusRequests++;
               if (scenario === "status" && statusRequests === 1) {
-                request.ws.once("close", () => firstStatusClosed.resolve());
                 sendMinimalGatewayResponse(request.ws, request.id, { run: running });
                 return true;
               }
@@ -232,7 +222,7 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
           },
         },
         async (peer) => {
-          running = { ...peer.output, status: "running", phase: "staging" };
+          running = { ...peer.output, status: "running", phase: "staging", finishedAtMs: null };
           vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
           const deadline = Date.now() + 5_000;
           let outcome: { error?: unknown } | undefined;
@@ -255,22 +245,13 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
             // Readiness owns timers before opening the real socket. Drive those
             // without consuming the budget we reserve for the withheld response.
             await waitForFast(() => expect(peer.requests).toContain("update.run"));
-            if (scenario === "status") {
-              await waitForFast(() => expect(peer.requests).toContain("update.runs.get"));
-              await withinTest(
-                awaitGateBeforeSettlement(
-                  firstStatusClosed.promise,
-                  command,
-                  "command settled before observing the running update",
-                ),
-                signal,
-              );
-              await nextEventLoopTurn();
-              await vi.advanceTimersByTimeAsync(0);
-              await vi.advanceTimersByTimeAsync(2_000);
-            }
-            await waitForFast(() =>
-              expect(held, "Gateway received the held request").toBeDefined(),
+            const remaining = deadline - Date.now();
+            expect(remaining).toBeGreaterThan(0);
+            // Drive the existing poll/readiness timers until the peer receives
+            // the next request; peer closure does not establish client cleanup.
+            await waitForFast(
+              () => expect(held, "Gateway received the held request").toBeDefined(),
+              { timeout: remaining },
             );
             const request = await withinTest(
               awaitGateBeforeSettlement(
@@ -288,15 +269,13 @@ export function registerReleaseUpdateGatewayTests(context: () => GatewayTestCont
               await vi.advanceTimersByTimeAsync(0);
             }
             await vi.advanceTimersByTimeAsync(Math.max(0, deadline - Date.now()));
-            await waitForFast(
-              () => expect(outcome, "CLI settled by the original deadline").toBeDefined(),
-              { timeout: 100 },
-            );
-            await settled;
+            // Keep the clock at expiry while the RPC owner joins real socket
+            // and auth cleanup. An unfixed longer wait cannot settle here.
+            await withinTest(settled, signal);
+            await withinTest(heldClosed.promise, signal);
             if (scenario === "acknowledgement") {
               expect(outcome?.error).toBeInstanceOf(Error);
               expect(String(outcome?.error)).toMatch(/did not finish|timeout/i);
-              await withinTest(heldClosed.promise, signal);
             } else {
               expect(outcome).toEqual({});
               expect(peer.json).toEqual([running]);

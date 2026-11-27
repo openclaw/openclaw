@@ -24,6 +24,7 @@ import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
+import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
@@ -640,18 +641,6 @@ function isPendingActivation(record: UpdateRunRecord | undefined) {
   return record?.status === "running" && record.phase === "activating";
 }
 
-function updateFailure(record: UpdateRunRecord | undefined): string | undefined {
-  if (!record || record.status === "running") {
-    return UPDATE_TIMEOUT_MESSAGE;
-  }
-  if (record.status === "succeeded" || record.status === "skipped") {
-    return undefined;
-  }
-  const detail = record.steps.find(({ step }) => step === "outcome")?.detail;
-  const message = record.origin.nextAction ?? record.reason ?? "unknown reason";
-  return `Update failed: ${detail ? `${detail}\n${message}` : message}`;
-}
-
 function report(record: UpdateRunRecord | undefined, json: boolean) {
   if (json) {
     defaultRuntime.writeJson(record ?? { status: "unknown" });
@@ -659,29 +648,16 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
   }
   // The CLI stopped following before the run finished (its --timeout budget); the run goes on.
   if (!record || (record.status === "running" && !isPendingActivation(record))) {
-    defaultRuntime.error(updateFailure(record));
+    defaultRuntime.error(UPDATE_TIMEOUT_MESSAGE);
     return;
-  }
-  const plugins = record.steps.find(({ step }) => step === "plugins");
-  if (plugins?.status === "failed") {
-    defaultRuntime.error(`Plugins were not all updated: ${plugins.detail ?? "unknown reason"}`);
-  } else if (plugins?.detail) {
-    defaultRuntime.log(`Plugin notes: ${plugins.detail}`);
-  }
-  const forwarding = record.steps.find(({ step }) => step === "forwarding");
-  if (forwarding?.status === "failed") {
-    defaultRuntime.error(forwarding.detail);
   }
   if (isPendingActivation(record)) {
     return;
   }
-  if (record.status === "succeeded") {
-    defaultRuntime.log(`Updated to ${record.after.version ?? "the new version"}.`);
-  } else if (record.status === "skipped") {
-    defaultRuntime.log(
-      record.reason === "already-current" ? "Already up to date." : `Skipped: ${record.reason}`,
-    );
+  const summary = renderUpdateRunSummary(record);
+  if (record.status === "failed" || record.status === "rolled-back") {
+    defaultRuntime.error(summary);
   } else {
-    defaultRuntime.error(updateFailure(record));
+    defaultRuntime.log(summary);
   }
 }

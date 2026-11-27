@@ -23,7 +23,10 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
-import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
+import {
+  checkDoctorMigrationBackupsPending,
+  completeDoctorMigrationBackups,
+} from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
@@ -592,6 +595,39 @@ describe("Doctor NOCOW recovery identities", () => {
       hasUnfinishedRun: false,
       hasPendingRecovery: false,
     });
+  });
+
+  it("has backup completion pending only under schema maintenance until it is recorded", async () => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => {},
+    });
+    try {
+      await maintenance.run(() =>
+        backupDoctorMigrationDatabases({
+          env,
+          pendingDatabasePaths: [sqlitePath],
+          databasePaths: [sqlitePath],
+        }),
+      );
+      const [manifestPath] = listSessionSqliteMigrationManifestPaths(env);
+      const recorded = fs.readFileSync(manifestPath!);
+      // Without schema maintenance the completion is never recorded.
+      expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("none");
+      await maintenance.run(async () => {
+        expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("work");
+        expect(fs.readFileSync(manifestPath!)).toEqual(recorded);
+        expect(readSessionSqliteMigrationManifest(manifestPath!)?.completedAt).toBeUndefined();
+
+        completeDoctorMigrationBackups(env, [sqlitePath]);
+        expect(readSessionSqliteMigrationManifest(manifestPath!)?.completedAt).toEqual(
+          expect.any(String),
+        );
+        expect(checkDoctorMigrationBackupsPending(env, [sqlitePath])).toBe("none");
+      });
+    } finally {
+      await maintenance.close();
+    }
   });
 
   it("retains recovery originals when the SQLite generation probe fails", async () => {

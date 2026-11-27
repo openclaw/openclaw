@@ -10,6 +10,7 @@ import type { CallGatewayOptions } from "../gateway/call-options.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import * as updateRunReader from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import * as stateDatabaseCache from "../state/openclaw-state-db-cache.js";
@@ -51,7 +52,8 @@ const packageTarget = vi.hoisted(() => ({ version: "" }));
 const confirmDowngrade = vi.hoisted(() =>
   vi.fn<() => Promise<"confirmed" | "cancelled" | "confirmation-required">>(),
 );
-const createRun = vi.hoisted(() => vi.fn(async () => ({ runId: "run-cli" })));
+const gatewayRunId = vi.hoisted(() => "e901d247-3929-4f73-94ef-0e54efbcfb73");
+const createRun = vi.hoisted(() => vi.fn(async () => ({ runId: gatewayRunId })));
 const mutateConfig = vi.hoisted(() => vi.fn());
 vi.mock("../config/mutate.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigMutate>()),
@@ -107,16 +109,14 @@ vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
 }));
 vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
-  getUpdateRunAsync: async () => ({
-    ...localRun,
-    before: { version: "2026.11.8" },
-    runId: "run-cli",
-    reason: "already-current",
-    steps: [],
-    after: {},
-  }),
+  getUpdateRunAsync: async () =>
+    createUpdateRunRecordFixture("run-cli", {
+      ...localRun,
+      before: { version: "2026.11.8" },
+      reason: "already-current",
+    }),
 }));
-const runsGet = vi.hoisted(() => [] as Array<() => unknown>);
+const runsGet = vi.hoisted(() => [] as Array<() => { run: Partial<UpdateRunRecord> | null }>);
 const restartReply = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const useWireGateway = vi.hoisted(() => ({ enabled: false }));
 vi.mock("../gateway/call.js", async (importOriginal) => ({
@@ -149,11 +149,12 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
       request.assertDispatchCurrent?.();
       sent.push(structuredClone(request.params));
       return runsGet.length
-        ? { runId: "run-1", ok: true }
+        ? { runId: gatewayRunId, ok: true }
         : { runId: null, ok: false, message: "refused for the test" };
     }
     if (request.method === "update.runs.get" && runsGet.length) {
-      return runsGet.shift()!();
+      const { run } = runsGet.shift()!();
+      return { run: run ? createUpdateRunRecordFixture(gatewayRunId, run) : null };
     }
     throw new Error(`unexpected ${request.method}`);
   },
@@ -291,7 +292,7 @@ it("keeps a terminal status captured before expiry when RPC cleanup settles afte
   const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const deadline = Date.now() + 5_000;
-  const record = { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} };
+  const record = createUpdateRunRecordFixture(gatewayRunId, { status: "succeeded" });
   runsGet.push(() => {
     // callGateway joins teardown after capturing a response. Its successful
     // return remains authoritative even if that cleanup crosses our deadline.
@@ -411,7 +412,11 @@ it.each([false, true])(
       expect(log).not.toHaveBeenCalled();
       expect(writeJson).toHaveBeenCalledOnce();
     } else {
-      expect(lines(log)).toEqual([removed, "finished: finished", "Updated to 2026.11.7."]);
+      expect(lines(log)).toEqual([
+        removed,
+        "finished: finished",
+        expect.stringContaining("✅ OpenClaw updated to 2026.11.7."),
+      ]);
       expect(error).not.toHaveBeenCalled();
     }
     expect(process.exitCode).toBe(0);
@@ -435,25 +440,37 @@ it("leaves kept-runtime lines to the cleanup owner's log", async () => {
   ]);
   const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   await runReleaseUpdateCli({ json: false, restart: false, runningRoot: root });
-  expect(log.mock.calls.map(([line]) => line)).toEqual([removed, "Already up to date."]);
+  expect(log.mock.calls.map(([line]) => line)).toEqual([
+    removed,
+    expect.stringContaining("already up to date"),
+  ]);
 });
 
 it("says the update is still running when the --timeout budget ends first", async () => {
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  runsGet.push(() => ({
-    run: { status: "running", phase: "staging", steps: [], after: {}, origin: {} },
-  }));
-  await runReleaseUpdateCli({
-    json: false,
-    restart: true,
-    runningRoot: root,
-    timeoutMs: 100,
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const deadline = Date.now() + 100;
+  runsGet.push(() => {
+    // Reporting requires an observed running record; filesystem setup must not
+    // decide whether this unit control reaches that boundary.
+    vi.setSystemTime(deadline);
+    return { run: { status: "running", phase: "staging", steps: [], after: {}, origin: {} } };
   });
-  expect(error.mock.calls.map(([message]) => message)).toEqual([
-    "The update did not finish in time. Run `openclaw update status` to see it.",
-  ]);
-  expect(process.exitCode).toBe(1);
+  try {
+    await runReleaseUpdateCli({
+      json: false,
+      restart: true,
+      runningRoot: root,
+      timeoutMs: 100,
+    });
+    expect(error.mock.calls.map(([message]) => message)).toEqual([
+      "The update did not finish in time. Run `openclaw update status` to see it.",
+    ]);
+    expect(process.exitCode).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it.each([true, false])(
@@ -612,7 +629,7 @@ it("restarts the local Gateway after preparing an explicit package tag and follo
   const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   runsGet.push(() => ({
     run: {
-      runId: "run-cli",
+      runId: gatewayRunId,
       status: "succeeded",
       phase: "finished",
       steps: [],

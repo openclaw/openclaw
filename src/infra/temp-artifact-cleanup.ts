@@ -215,6 +215,8 @@ export async function maintainRetainedUpdateRuntimes(params: {
   repair: boolean;
   assertCurrent: () => void;
   assertResourcesSettled?: (directory: string) => void;
+  /** Called for each runtime an updater created, before any removal attempt. */
+  onRecognized?: (directory: string) => void;
 }): Promise<string[]> {
   const messages: string[] = [];
   // Native spelling matches the projection, registration, and marker realpaths
@@ -256,6 +258,7 @@ export async function maintainRetainedUpdateRuntimes(params: {
               "it does not match a runtime an OpenClaw updater created, so it is kept",
             );
           }
+          params.onRecognized?.(directory);
           if (!params.repair) {
             messages.push(
               `Runtime retained at ${directory}: run \`openclaw doctor --fix\` after its workers stop`,
