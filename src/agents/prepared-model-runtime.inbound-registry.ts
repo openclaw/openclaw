@@ -27,7 +27,7 @@ type PreparedInboundRegistryInput = Pick<
 export type PreparedInboundRegistryLoader = (
   input: PreparedInboundRegistryInput,
   metadataSnapshot: PluginMetadataSnapshot,
-  configuredHarnessRuntimes?: readonly string[],
+  getConfiguredHarnessRuntimes?: () => readonly string[],
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ) => PluginRegistry;
 
@@ -78,7 +78,7 @@ function resolveLendingGatewayRegistry(
 export function loadPreparedInboundPluginRegistry(
   input: PreparedInboundRegistryInput,
   metadataSnapshot = prepareOwnedPluginLoadContext(input, input.env ?? process.env, undefined),
-  configuredHarnessRuntimes?: readonly string[],
+  getConfiguredHarnessRuntimes?: () => readonly string[],
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ): PluginRegistry {
   const gatewayRegistry = resolveLendingGatewayRegistry(input);
@@ -107,7 +107,7 @@ export function loadPreparedInboundPluginRegistry(
         ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
         metadataSnapshot,
         preferBuiltPluginArtifacts: true,
-        configuredHarnessRuntimes,
+        getConfiguredHarnessRuntimes,
         borrowRegistry: gatewayRegistry,
       },
       onPrimaryRegistry,
@@ -129,7 +129,7 @@ export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLo
       primaryRegistry: PluginRegistry;
     }
   >();
-  return (input, metadataSnapshot, configuredHarnessRuntimes, onPrimaryRegistry) => {
+  return (input, metadataSnapshot, getConfiguredHarnessRuntimes, onPrimaryRegistry) => {
     const key = inboundRegistryIdentity(input);
     const existing = registries.get(key);
     if (existing?.metadataSnapshot === metadataSnapshot) {
@@ -140,7 +140,7 @@ export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLo
     const registry = loadPreparedInboundPluginRegistry(
       input,
       metadataSnapshot,
-      configuredHarnessRuntimes,
+      getConfiguredHarnessRuntimes,
       (source) => {
         primaryRegistry = source;
       },
@@ -185,7 +185,7 @@ export function prepareWorkspacePluginRegistries(
         loadInboundRegistry?.(
           input,
           metadataSnapshot,
-          getConfiguredHarnessRuntimes?.(),
+          getConfiguredHarnessRuntimes,
           (source) => {
             primaryRegistry = source;
           },
