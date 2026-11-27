@@ -15,6 +15,7 @@ import { readMainTableList } from "../infra/sqlite-strict.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { hasLegacyCronRunLogs } from "../infra/state-legacy-cron-presence.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
+import { hasOpenClawDatabaseQuarantineClearWork } from "./openclaw-quarantine-store.js";
 import { CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
 import { hasCanonicalAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import {
@@ -118,6 +119,11 @@ const STATE_SCHEMA_REPAIR_CONDITIONS: ReadonlyArray<{
           integrityCheck,
         ),
       ) !== "verified",
+  },
+  // clearOpenClawDatabaseQuarantine after the repair commits.
+  {
+    id: "quarantine-store",
+    work: ({ pathname, env }) => hasOpenClawDatabaseQuarantineClearWork(pathname, env),
   },
   // recoverOrphanTaskDeliveryRows.
   { id: "orphan-task-delivery", work: ({ db }) => hasOrphanTaskDeliveryRows(db) },
@@ -229,7 +235,18 @@ export type OpenClawStateSchemaRepairPlan = {
  * "undecidable" for a store nobody holds open, under an updater's capture, and on PostgreSQL.
  * The integrity check is run fresh, as the repair does.
  */
-export async function planOpenClawStateDatabaseDoctorRepair(options: {
+export async function planOpenClawStateDatabaseDoctorRepair(
+  options: Parameters<typeof planRepair>[0],
+): Promise<OpenClawStateSchemaRepairPlan> {
+  try {
+    return await planRepair(options);
+  } catch {
+    // A failed check (an unreadable file, an unexpected stat error) leaves the repair to run.
+    return { decision: "undecidable", conditions: {} };
+  }
+}
+
+async function planRepair(options: {
   env: NodeJS.ProcessEnv;
   integrityCheck?: "quick" | "full";
   now?: number;
@@ -247,7 +264,6 @@ export async function planOpenClawStateDatabaseDoctorRepair(options: {
     return { decision: "work", conditions: { permissions: "work" } };
   }
   const conditions: Record<string, DoctorMaintenancePending> = { permissions: "none" };
-  // A failed read (a busy or unreadable store) leaves the repair to run and report it.
   const decision = await decideDoctorPendingFromLiveStores(
     [pathname, resolveQuarantineStorePath(env), resolveClientCredentialStorePath(env)],
     () => {
@@ -282,6 +298,6 @@ export async function planOpenClawStateDatabaseDoctorRepair(options: {
           ? "work"
           : "none";
     },
-  ).catch((): DoctorMaintenancePending => "undecidable");
+  );
   return { decision, conditions };
 }

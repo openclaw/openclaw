@@ -16,6 +16,7 @@ import {
   openOpenClawStateDatabase,
   prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 // Records every write-mode SQLite open made in this process; the opens still happen.
 const writableOpens = vi.hoisted(() => [] as string[]);
@@ -266,6 +267,40 @@ describe("each condition the doctor repair acts on", () => {
           path: databasePath,
           reason: "seeded integrity failure",
         }),
+    }));
+
+  it("quarantine-store: a schema-1 quarantine store its writer migrates", () =>
+    expectConditionDrivesRepair({
+      condition: "quarantine-store",
+      create: ({ env, databasePath }) => {
+        // A record for another database creates the store without quarantining this one.
+        seedOpenClawDatabaseQuarantine({
+          env,
+          kind: "state",
+          path: `${databasePath}.other`,
+          reason: "seeded for another store",
+        });
+        using store = new DatabaseSync(resolveQuarantineStorePath(env));
+        store.exec(
+          "ALTER TABLE quarantined_databases DROP COLUMN verified_generation; PRAGMA user_version = 1",
+        );
+      },
+    }));
+
+  it("quarantine-store: a quarantine store whose clear fails, which the repair reports", () =>
+    expectConditionDrivesRepair({
+      condition: "quarantine-store",
+      refusal: true,
+      create: ({ env, databasePath }) => {
+        seedOpenClawDatabaseQuarantine({
+          env,
+          kind: "state",
+          path: `${databasePath}.other`,
+          reason: "seeded for another store",
+        });
+        using store = new DatabaseSync(resolveQuarantineStorePath(env));
+        store.exec("DROP TABLE quarantined_databases");
+      },
     }));
 
   it("catalog-readability: the dangling Skill Workshop review index", () =>
