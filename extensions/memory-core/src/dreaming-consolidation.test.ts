@@ -119,6 +119,26 @@ describe("memory consolidation", () => {
     expect(fallback.complete).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
   });
 
+  it("serializes each candidate's key as candidateKey, matching what the system prompt tells the model to echo back", async () => {
+    // Regression for #206625: the payload previously sent "key", while the system prompt
+    // asked the model to return "candidateKey", so a model that mirrored the payload's own
+    // field name produced output parseConsolidationPlan rejected outright.
+    const promoted = candidate("owner");
+    const subagent = createSubagent(decisionOutput(promoted));
+
+    await consolidateMemory({
+      subagent,
+      existingMemory: "# Memory\n",
+      candidates: [promoted],
+      ...consolidationDefaults,
+    });
+
+    const sentMessage = (subagent.complete.mock.calls[0]![0] as { message: string }).message;
+    const sentCandidate = JSON.parse(sentMessage).candidates[0] as Record<string, unknown>;
+    expect(sentCandidate.candidateKey).toBe(promoted.key);
+    expect(sentCandidate).not.toHaveProperty("key");
+  });
+
   it("hard-excludes untrusted and system candidates before prompt construction", async () => {
     const candidates = [
       candidate("owner"),
