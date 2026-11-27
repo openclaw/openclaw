@@ -559,6 +559,7 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
             {
               extensionPath: this.vector.extensionPath,
               signal: knnSignal,
+              unitNormVectors: indexState.vectorUnitNorm === true,
             },
           );
           if (!response.fallbackScanRequired) {

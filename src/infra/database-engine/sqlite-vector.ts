@@ -25,6 +25,12 @@ function compileStatement(source: { toOperationNode(): RootOperationNode }): Sql
   return { sql: statement, parameters: parameters as SQLInputValue[] };
 }
 
+/** The query side of the unit-norm path; a zero vector has no direction and stays as is. */
+function toUnitNorm(vector: readonly number[]): readonly number[] {
+  const norm = Math.hypot(...vector);
+  return norm < 1e-10 ? vector : vector.map((value) => value / norm);
+}
+
 /** Native L2 candidates, cosine reranking, and the existing bounded underfill decision. */
 export function runSqliteVectorQuery(
   db: Pick<DatabaseSync, "prepare">,
@@ -103,15 +109,22 @@ export function bindSqliteVectorCapability(
         /* kysely-allow-raw: Alias comes from the admitted vector index declaration. */ sql.raw(
           `${request.index.alias}.embedding`,
         );
+      const distanceColumn =
+        /* kysely-allow-raw: Alias comes from the admitted vector index declaration. */ sql.raw(
+          `${request.index.alias}.distance`,
+        );
       // The former JSON request normalized -0 and nonfinite query numbers before encoding.
       const vector = admitted.databasePath
         ? request.vector.map((value) => (Number.isFinite(value) ? value + 0 : 0))
         : request.vector;
-      const blob = vectorToBlob(vector);
+      const blob = vectorToBlob(request.unitNormVectors ? toUnitNorm(vector) : vector);
       const query = compileStatement(
         request.query({
           match: /* kysely-allow-raw: sqlite-vec candidate matching binds both vector and candidate limit. */ sql<boolean>`${embedding} MATCH ${blob} AND k = ${candidate}`,
-          distance: /* kysely-allow-raw: Native cosine distance reranks the admitted vector candidates. */ sql<number>`vec_distance_cosine(${embedding}, ${blob})`,
+          distance: request.unitNormVectors
+            ? // For unit vectors, cosine distance = L2² / 2; vec0 returns L2 with each candidate.
+              /* kysely-allow-raw: Alias comes from the admitted vector index declaration. */ sql<number>`(${distanceColumn} * ${distanceColumn}) / 2.0`
+            : /* kysely-allow-raw: Native cosine distance reranks the admitted vector candidates. */ sql<number>`vec_distance_cosine(${embedding}, ${blob})`,
         }),
       );
       const plan: SqliteVectorPlan = {

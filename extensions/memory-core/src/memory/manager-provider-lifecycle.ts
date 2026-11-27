@@ -556,7 +556,7 @@ export abstract class MemoryProviderLifecycle extends MemoryEmbeddingRefusalOps 
       return undefined;
     }
     await this.database.refreshFacts();
-    const { meta, hasIndexedChunks, vectorState } = this.database.facts;
+    const { meta, hasIndexedChunks, vectorState, vectorUnitNorm } = this.database.facts;
     // Chunkless legacy FTS content is not represented in publication facts.
     if (!hasIndexedChunks) {
       return undefined;
@@ -569,6 +569,10 @@ export abstract class MemoryProviderLifecycle extends MemoryEmbeddingRefusalOps 
         this.database.admission?.engine === "postgres" || (meta && meta.provider !== "none")
           ? vectorState
           : { state: "empty" },
+      vectorUnitNorm:
+        this.database.admission?.engine !== "postgres" &&
+        vectorState.state === "complete" &&
+        vectorUnitNorm === true,
     };
   }
 

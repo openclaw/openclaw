@@ -14,6 +14,10 @@ import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-wo
 import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import type { MemoryPublicationSchema } from "./manager-publication-task.js";
 import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
+import {
+  clearMemoryVectorsUnitNorm,
+  markMemoryVectorsUnitNorm,
+} from "./manager-vector-unit-norm.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
 export const MEMORY_INDEX_STATE_ID = 1;
@@ -144,6 +148,12 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
         replaceMemoryVectorTable(params.targetDb, params.sourceSchema.vector);
         if (params.vectorIndexComplete) {
           markMemoryVectorIndexClean(params.targetDb);
+        }
+        // The shadow index was written by this release, which normalizes every vector.
+        if (params.vectorIndexComplete && params.sourceSchema.vector) {
+          markMemoryVectorsUnitNorm(params.targetDb);
+        } else {
+          clearMemoryVectorsUnitNorm(params.targetDb);
         }
         advanceMemoryIndexRevision(params.targetDb);
       },

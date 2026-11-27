@@ -194,6 +194,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
         hasIndexedChunks: false,
         hasFtsContent: false,
         vectorState: { state: "empty" },
+        vectorUnitNorm: false,
       };
       return request.kind === "index-state"
         ? { kind: "index-state", state }

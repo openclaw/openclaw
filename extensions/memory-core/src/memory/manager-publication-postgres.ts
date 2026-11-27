@@ -505,6 +505,10 @@ export function bindPostgresMemoryPublication(
       stageKind = undefined;
       return undefined;
     }
+    if (command.type === "index.normalizeVectors") {
+      // PostgreSQL computes cosine natively; the SQLite unit-norm path does not apply.
+      return { ok: true, value: false };
+    }
     if (command.type === "index.upgradeProviderKey") {
       return rebuilding
         ? { ok: true, value: false }

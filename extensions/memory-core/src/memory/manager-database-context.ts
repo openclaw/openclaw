@@ -668,7 +668,9 @@ export class MemoryIndexDatabase {
         );
   }
 
-  async updateIndexStructure<Key extends "vector.ensure" | "index.upgradeProviderKey">(
+  async updateIndexStructure<
+    Key extends "vector.ensure" | "index.upgradeProviderKey" | "index.normalizeVectors",
+  >(
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,
   ) {

@@ -19,6 +19,7 @@ import {
   resolveMemoryVectorIndexState,
   VECTOR_REBUILD_META_KEY,
 } from "./manager-vector-rebuild-state.js";
+import { normalizeStoredEmbedding } from "./manager-vector-unit-norm.js";
 
 const SOURCE_WRITE_BATCH_SIZE = 128;
 const SOURCE_HEADER_BATCH_BYTES = 64 * 1024;
@@ -320,12 +321,18 @@ export class MemorySourceIndexKernel {
       writeRows(batch, defer);
       if (vectorReady && this.search) {
         // Explicit embeddings are authoritative; PostgreSQL owns its projection.
+        // Stored vectors are unit length so search can derive cosine from L2.
         const vectors = [
           ...new Map(
             batch.flatMap((row) =>
               row.embedding === undefined
                 ? []
-                : [[row.id, { id: row.id, embedding: row.embedding }] as const],
+                : [
+                    [
+                      row.id,
+                      { id: row.id, embedding: normalizeStoredEmbedding(row.embedding) },
+                    ] as const,
+                  ],
             ),
           ).values(),
         ];

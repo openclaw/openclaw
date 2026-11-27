@@ -275,6 +275,28 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
           return MEMORY_SYNC_DEFERRED;
         }
       }
+      if (
+        vectorReady &&
+        this.database.admission?.engine !== "postgres" &&
+        this.database.facts.vectorState.state === "complete" &&
+        !this.database.facts.vectorUnitNorm
+      ) {
+        // One-time: indexes written before vectors were normalized on write.
+        const database = this.database;
+        await database.updateIndexStructure(
+          {
+            type: "index.normalizeVectors",
+            input: {
+              state: {
+                vector: this.vector,
+                fts: this.fts,
+                extensionPath: this.vector.extensionPath,
+              },
+            },
+          },
+          () => this.assertDatabaseMutationCurrent(database),
+        );
+      }
       if (hasTargetSessionRequest && !hasTargetArchiveFiles) {
         return;
       }

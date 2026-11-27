@@ -91,6 +91,11 @@ export type MemoryPublicationOperations = {
     input: MemoryEmbeddingRefusal | null;
     output: MemoryPublicationResult<void>;
   };
+  /** Normalize stored SQLite vectors to unit length once, then mark the index. */
+  "index.normalizeVectors": {
+    input: { state: MemoryPublicationState };
+    output: MemoryPublicationResult<boolean>;
+  };
   "schema.admit": {
     input: Pick<
       Parameters<typeof ensureMemoryIndexSchema>[0],
