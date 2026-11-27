@@ -313,8 +313,9 @@ type Opts = {
   supervisor?: "systemd" | "launchd";
   /** The state directory the runner's own environment resolves. */
   stateDir?: string;
-  /** The release's install writes and restarts a definition that names another entry. */
-  elsewhere?: boolean;
+  /** The release's install writes and restarts a definition that names another entry, or
+   * rewrites only the definition's environment file. */
+  elsewhere?: "unit" | "env";
 };
 function runner(opts: Opts) {
   const { fail = {}, resumed = false, restarts = 0, supervisor = "systemd" } = opts;
@@ -343,13 +344,16 @@ function runner(opts: Opts) {
   fs.mkdirSync(path.dirname(legacy), { recursive: true });
   fs.symlinkSync("../../releases/old", legacy);
   const stateDir = path.join(base, "state");
+  // A second artifact of the definition (a LaunchAgent's environment file) no install changes.
+  const envFile = path.join(base, "gateway.env");
+  fs.writeFileSync(envFile, "A=1\n", { mode: 0o600 });
   const where = { checkout, release, prefix, serviceFile, unit: "u", branch: "main", target };
   const managed = {
     supervisor,
     ...(supervisor === "launchd" ? { domain: GUI } : {}),
     follow: "the job log",
     stateDir,
-    definitionFiles: [serviceFile],
+    definitionFiles: [serviceFile, envFile],
     legacyLink: resumed ? "../../releases/old" : fs.readlinkSync(legacy),
   };
   const plan = { ...where, ...managed, driver: { pid: 1, start: "1" }, enabled: "disabled" };
@@ -386,8 +390,12 @@ function runner(opts: Opts) {
     if (name.endsWith("gateway install") && !fail[name]) {
       // While the early link exists, the install binds the service to that updater's launcher.
       const linked = fs.lstatSync(legacy, { throwIfNoEntry: false });
-      const bound = linked || opts.elsewhere ? `${prefix}/launcher` : cli;
-      fs.writeFileSync(serviceFile, unit(bound));
+      const bound = linked || opts.elsewhere === "unit" ? `${prefix}/launcher` : cli;
+      if (opts.elsewhere === "env") {
+        fs.writeFileSync(envFile, "A=2\n");
+      } else {
+        fs.writeFileSync(serviceFile, unit(bound));
+      }
       [running, enabled, loaded] = [true, true, true];
       // A release that crashes part-way through its boot migration, until its unit fails.
       if (opts.migrates && cli === release) {
@@ -477,6 +485,7 @@ function runner(opts: Opts) {
     serves,
     state,
     link,
+    env: () => fs.readFileSync(envFile, "utf8"),
   };
 }
 
@@ -491,7 +500,8 @@ const runs: Run[] = [
   ["changes nothing when the fast-forward fails", f(MERGE), "original"],
   ["never builds past the target", { past: true }, "original", "", "moved past"],
   ["changes nothing when the service cannot move", f("release gateway install"), "original"],
-  ["puts back a definition the install sent elsewhere", { elsewhere: true }, "original"],
+  ["puts back a definition the install sent elsewhere", { elsewhere: "unit" }, "original"],
+  ["puts back an environment the install rewrote", { elsewhere: "env" }, "original"],
   ["changes nothing under another state directory", { stateDir: "/x" }, "original", "", "/x"],
   ["puts the previous build back when unmigrated", f("release ready"), "original"],
   ["never puts it back once migrated", f("release ready", migrates), "release", "start-failed"],
@@ -508,7 +518,12 @@ const launchd: Opts = { supervisor: "launchd" };
 const launchdRuns: Run[] = [
   ["launchd: release, rebuild, then the checkout", launchd, "checkout"],
   ["launchd: puts the previous build back when unmigrated", f(READY, launchd), "original"],
-  ["launchd: puts back a definition sent elsewhere", { ...launchd, elsewhere: true }, "original"],
+  ["launchd: puts back a definition sent elsewhere", { ...launchd, elsewhere: "unit" }, "original"],
+  [
+    "launchd: puts back an environment the install rewrote",
+    { ...launchd, elsewhere: "env" },
+    "original",
+  ],
   [
     "launchd: never puts it back once migrated",
     f(READY, { ...launchd, ...migrates }),
@@ -554,6 +569,7 @@ it.each([...runs, ...launchdRuns])("%s", async (_name, opts, serves, reason, sai
   );
   expect(fx.calls.lastIndexOf("record")).toBeLessThan(started === -1 ? Infinity : started);
   expect(fx.logs.join("\n")).toContain(said ?? "");
+  expect(fx.env()).toBe("A=1\n");
 });
 
 it("gives up on a slow crash loop at the unit's restart allowance, not on a long migration", async () => {

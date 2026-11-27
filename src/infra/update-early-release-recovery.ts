@@ -258,6 +258,10 @@ export async function runEarlyGitReleaseRecovery(
   const restoreDefinition = () => {
     for (const file of plan.definitionFiles) {
       const saved = savedPath(file);
+      // An artifact the failed install left as it was has no copy left to restore.
+      if (!fs.existsSync(saved)) {
+        continue;
+      }
       const temporary = `${file}.${process.pid}.tmp`;
       fs.writeFileSync(temporary, fs.readFileSync(saved), {
         mode: fs.statSync(saved).mode & 0o777,
@@ -283,10 +287,10 @@ export async function runEarlyGitReleaseRecovery(
       `stopped before changing the Gateway: ${why}.${moves} The next \`openclaw update\` tries again.`,
     );
     restoreLegacyLink();
-    dropUnchangedCopies();
     // A failed install may have rewritten, stopped or (on launchd) unloaded the service; the
     // previous build serves again from its own definition. Only the definition of the previous
     // build is put back: abandon never runs once state moved.
+    dropUnchangedCopies();
     const changed = plan.definitionFiles.some((file) => fs.existsSync(savedPath(file)));
     if (changed && (await service.stop())) {
       restoreDefinition();
