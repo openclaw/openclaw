@@ -192,8 +192,10 @@ export class ComposerDictationCapture {
         }
         this.clearReview();
         options.onCommit(original, true, undefined, true);
+      } else if (this.hooks.active()) {
+        options.onCommit(original, true, true);
       } else {
-        options.onCommit(original, true, this.hooks.active() ? true : undefined);
+        options.onCommit(original, true);
       }
       this.hooks.commitsChanged();
       return true;
