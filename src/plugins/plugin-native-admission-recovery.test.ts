@@ -6,7 +6,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   nativeAdmissionStateFor,
-  releaseReplacedNamespaces,
+  updatePluginNativeAdmissionReceipt,
 } from "./plugin-native-admission-state.js";
 import { createPluginNativeAdmission } from "./plugin-native-admission.js";
 
@@ -86,10 +86,16 @@ it("keeps a recovered namespace resolvable after a newer receipt prunes the shar
         const recovered = createPluginNativeAdmission(root, capture, undefined, recovery);
 
         // A newer receipt for the same plugin replaces the recovered generation's receipt.
-        releaseReplacedNamespaces(nativeAdmissionStateFor(), {
+        const receiptKey = `${root}\0index.js`;
+        updatePluginNativeAdmissionReceipt(nativeAdmissionStateFor(), receiptKey, {
           ...receipt,
           nativeArtifacts: {},
           nativeNamespaces: Object.fromEntries(recovery.namespaces),
+        });
+        updatePluginNativeAdmissionReceipt(nativeAdmissionStateFor(), receiptKey, {
+          ...receipt,
+          nativeArtifacts: {},
+          nativeNamespaces: {},
         });
         expect(nativeAdmissionStateFor().namespaces.size).toBe(0);
 

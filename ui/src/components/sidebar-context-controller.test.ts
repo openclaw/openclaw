@@ -108,7 +108,7 @@ it("restores destination offsets and updates fades after content commits", async
   await navigate("cron", 140);
   await navigate("systems", 35);
 
-  contentHeight = 80;
+  contentHeight = 100;
   await router.navigate("cron", {});
   await expectFade("none");
 });

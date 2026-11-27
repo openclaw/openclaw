@@ -98,7 +98,27 @@ export function waitForQueuedChatHistory(
     ) {
       return null;
     }
-    return { item: current, expectedLeafEntryId: resolveQueuedChatLeaf(host, current, options) };
+    // The follow-up mode was captured before initial history knew whether a
+    // run existed. An idle conversation starts normally, just like a ready pane.
+    const settled = getChatHistoryLoadState(host);
+    const ready =
+      current.queueMode &&
+      settled.phase === "committed" &&
+      settled.sessionInfo?.hasActiveRun === false &&
+      !hasDirectSessionRun(host)
+        ? updateQueuedSendItem(host, options?.storageMode ?? "durable", current.id, (entry) => ({
+            ...entry,
+            queueMode: undefined,
+          }))
+        : current;
+    if (!ready) {
+      const retained = readQueuedMessageById(host, current.id);
+      if (retained && sameQueuedDeliveryVersion(retained, current)) {
+        setChatError(host, chatOfflineQueueStorageError());
+      }
+      return null;
+    }
+    return { item: ready, expectedLeafEntryId: resolveQueuedChatLeaf(host, ready, options) };
   });
 }
 

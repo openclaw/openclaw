@@ -25,6 +25,7 @@ import {
   extractTranslationPlaceholders,
 } from "./lib/control-ui-i18n-sync-plan.ts";
 import { loadControlUiPluginCatalogs } from "./lib/control-ui-plugin-i18n-catalog.ts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
@@ -444,7 +445,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

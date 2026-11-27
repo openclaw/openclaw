@@ -531,18 +531,33 @@ function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
 export function prepareSessionStoreTargetDiscovery(request: SessionStoreTargetPreparationRequest) {
   const prepared =
     "config" in request ? { ...request, config: sessionDiscoveryConfig(request.config) } : request;
-  return {
-    request: prepared,
-    inputBytes:
-      "inventory" in prepared
-        ? measureSessionStoreTargetInventoryInputBytes(prepared)
-        : "observePaths" in prepared && prepared.observePaths.inventory
-          ? measureSessionStoreTargetInventoryInputBytes({
-              ...prepared,
-              paths: prepared.observePaths.inventory.paths,
-            })
-          : JSON.stringify(prepared).length * 2,
-  };
+  if ("inventory" in prepared) {
+    return {
+      request: prepared,
+      inputBytes: measureSessionStoreTargetInventoryInputBytes(prepared),
+    };
+  }
+  if ("observePaths" in prepared && prepared.observePaths.inventory) {
+    const { inventory } = prepared.observePaths;
+    // Observation returns physical facts only. The resolved state directory is enough
+    // to recognize the incognito sentinel; keep the original pending-byte charge.
+    return {
+      request: {
+        observePaths: {
+          ...prepared.observePaths,
+          inventory: {
+            ...inventory,
+            env: { OPENCLAW_STATE_DIR: inventory.env.OPENCLAW_STATE_DIR },
+          },
+        },
+      },
+      inputBytes: measureSessionStoreTargetInventoryInputBytes({
+        ...prepared,
+        paths: inventory.paths,
+      }),
+    };
+  }
+  return { request: prepared, inputBytes: JSON.stringify(prepared).length * 2 };
 }
 
 export function createSessionStoreTargetReaders(
