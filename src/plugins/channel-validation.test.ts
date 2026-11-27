@@ -1,6 +1,7 @@
-import { expect, it } from "vitest";
-import { getChatChannelMeta } from "../channels/chat-meta.js";
+import { expect, it, vi } from "vitest";
+import * as chatMeta from "../channels/chat-meta.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { channelFixture, registrationFixture } from "./registry-registration.test-support.js";
 
 function createChannelRegistry(pluginId = "demo-plugin", source = "/tmp/demo/index.ts") {
@@ -19,7 +20,7 @@ function createChannelRegistry(pluginId = "demo-plugin", source = "/tmp/demo/ind
   };
 }
 
-const { label, selectionLabel, docsPath, blurb } = getChatChannelMeta("telegram");
+const { label, selectionLabel, docsPath, blurb } = chatMeta.getChatChannelMeta("telegram");
 it.each([
   ["telegram", { label, selectionLabel, docsPath, blurb }, false],
   ["external-chat", { ...channelFixture("external-chat").meta, blurb: "" }, true],
@@ -34,6 +35,24 @@ it.each([
   expectDiagnostic(
     `channel "${id}" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb`,
   );
+});
+
+it("recovers bundled registration metadata when the installed channel catalog is absent", () => {
+  using installed = vi.spyOn(chatMeta, "listChatChannels").mockReturnValue([]);
+  for (const row of GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA) {
+    const { register } = createChannelRegistry();
+    const id = row.channelId;
+    const eligible = row.configurable !== false && Boolean(row.label?.trim());
+    const expectedLabel = eligible ? row.label?.trim() : id;
+    expect(register({ id, meta: { id } as never })?.meta).toMatchObject({
+      id,
+      label: expectedLabel,
+      selectionLabel: expectedLabel,
+      docsPath: `/channels/${id}`,
+      blurb: eligible ? (row.description?.trim() ?? "") : "",
+    });
+  }
+  expect(installed).toHaveBeenCalled();
 });
 
 it("fills official external channel aliases omitted by the runtime plugin", () => {
