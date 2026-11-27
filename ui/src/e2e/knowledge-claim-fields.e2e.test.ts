@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
@@ -121,40 +122,12 @@ suite.define(() => {
         const header = page.locator(".knowledge-entity-header");
         const statement = page.locator(".knowledge-statement");
         await statement.locator(".knowledge-claim-details").waitFor();
-        // Capture before asserting, so the same frame also records the base revision's rendering.
-        // These regions exist on both revisions; the new fields render inside them.
         const regions = [
           { target: header.locator(".knowledge-occurred"), text: "Occurrence" },
           { target: statement.locator(".knowledge-claim-copy"), text: "Claim summary" },
           { target: statement.locator(".knowledge-claim-details"), text: "Claim details" },
         ];
-        const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [header], {
-          elements: regions.map((region) => region.target),
-          animations: "disabled",
-        });
-        const annotationFrame = {
-          viewport: page.viewportSize()!,
-          scale: await page.evaluate(() => window.devicePixelRatio),
-          annotations: regions.map((region, index) => {
-            const rect = frame.elements[index]!.bounds;
-            return {
-              kind: "outline" as const,
-              rect,
-              text: region.text,
-              labelAt: { x: 600, y: rect.y + rect.height / 2 },
-              color: "#C2410C",
-            };
-          }),
-        };
-        await writeFile(path.join(suite.artifactDir, "claim-fields-clean.png"), frame.png);
-        await writeFile(
-          path.join(suite.artifactDir, "claim-fields-annotations.json"),
-          JSON.stringify(annotationFrame, null, 2),
-        );
-        await writeFile(
-          path.join(suite.artifactDir, "claim-fields-annotated.png"),
-          await rasterizeProofAnnotations(suite.browser, { ...annotationFrame, image: frame.png }),
-        );
+        await captureProofFramesBeforeChecks(page, header, regions);
         await statement
           .getByText("Takeaway: Teams pick the option they can ship by Friday.", { exact: true })
           .waitFor();
@@ -168,3 +141,37 @@ suite.define(() => {
     );
   });
 });
+
+async function captureProofFramesBeforeChecks(
+  page: Page,
+  header: Locator,
+  regions: { target: Locator; text: string }[],
+) {
+  const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [header], {
+    elements: regions.map((region) => region.target),
+    animations: "disabled",
+  });
+  const annotationFrame = {
+    viewport: page.viewportSize()!,
+    scale: await page.evaluate(() => window.devicePixelRatio),
+    annotations: regions.map((region, index) => {
+      const rect = frame.elements[index]!.bounds;
+      return {
+        kind: "outline" as const,
+        rect,
+        text: region.text,
+        labelAt: { x: 600, y: rect.y + rect.height / 2 },
+        color: "#C2410C",
+      };
+    }),
+  };
+  await writeFile(path.join(suite.artifactDir, "claim-fields-clean.png"), frame.png);
+  await writeFile(
+    path.join(suite.artifactDir, "claim-fields-annotations.json"),
+    JSON.stringify(annotationFrame, null, 2),
+  );
+  await writeFile(
+    path.join(suite.artifactDir, "claim-fields-annotated.png"),
+    await rasterizeProofAnnotations(suite.browser, { ...annotationFrame, image: frame.png }),
+  );
+}

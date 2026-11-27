@@ -124,14 +124,12 @@ it("extracted claims keep takeaway, tags, event span and inference provenance", 
   });
   const tagged = await f.service.grep({ query: "option", tag: "story_angle" }, f.owner);
   expect(tagged.hits.map((hit: any) => hit.record.id)).toStrictEqual([receipt.id]);
-  // Grep hits carry inferred_by, so an agent can filter by extractor without opening records.
   expect(tagged.hits[0].inferredBy).toStrictEqual(atom.inferred_by);
   const agentGrep = await leanToolResults(f.service).grep(
     { query: "option", tag: "story_angle" },
     f.owner,
   );
   expect(agentGrep.hits[0]!.inferredBy).toStrictEqual(atom.inferred_by);
-  // The agent can read back what it wrote.
   const agentRead = await leanToolResults(f.service).record({ id: receipt.id }, f.owner);
   expect(agentRead.record).toMatchObject({
     date: atom.occurred_at,
@@ -194,9 +192,10 @@ it("authored frontmatter using the claim field names, in any shape, stays valid 
   const saved = await f.service.save_page(edit(read, { title: "Renamed project" }), f.owner);
   expect(saved.state).toBe("published");
   expect(await readFile(file, "utf8")).toContain("inferred_by: my-script");
+});
 
-  // An authored claim with off-shape values keeps loading; its card shows only the
-  // well-formed fields.
+it("a claim card shows only the well-formed claim fields of its authored frontmatter", async () => {
+  const f = await foundation();
   const receipt = await f.service.create_claim(f.claim({ takeaway: "Kept" }), f.owner);
   const claim = (await f.service.record_detail({ id: receipt.id }, f.owner)).record!;
   const claimFile = path.join(f.root, "private", claim.path);

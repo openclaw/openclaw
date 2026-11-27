@@ -100,17 +100,14 @@ function compactBatchSchema<T extends TSchema>(schema: T) {
   const definitions: Record<string, TSchema> = {};
   const visit = (original: TSchema, define = false): TSchema => {
     // SAFETY: TSchema is an empty interface; a JSON Schema description keyword is a string.
-    const { description: _note, ...bare } = original as TSchema & { description?: string };
-    // Descriptions are dropped below, so shapes that differ only in description share one definition.
-    const name = shared.get(JSON.stringify(bare));
+    const { description: _description, ...compact } = original as TSchema & {
+      description?: string;
+    };
+    const name = shared.get(JSON.stringify(compact));
     if (name && !define) {
       definitions[name] ??= visit(original, true);
       return { $ref: `#/$defs/${name}` };
     }
-    // SAFETY: TSchema is an empty interface; a JSON Schema description keyword is a string.
-    const { description: _description, ...compact } = original as TSchema & {
-      description?: string;
-    };
     const value: TSchema = compact;
     // SAFETY: TSchema is an empty interface; visited values are TypeBox JSON Schemas with these keywords.
     const shape = value as {

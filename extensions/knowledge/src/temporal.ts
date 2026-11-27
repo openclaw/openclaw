@@ -1,4 +1,4 @@
-import type { ClaimFields, Envelope } from "./model.js";
+import type { StrictClaimFields, Envelope } from "./model.js";
 
 /** Source dates retain their precision; instants must carry an explicit offset. */
 export function validSourceDate(value: string): boolean {
@@ -49,24 +49,21 @@ export function temporalProblems(m: Envelope): string[] {
   }
   return issues;
 }
-/**
- * Rules for the optional claim fields, applied to claim-write input only: authored
- * frontmatter that already uses these names stays valid on read, as before they existed.
- */
+const CLOCK_SKEW_MS = 5 * 60_000;
+const LOCAL_DATE_AHEAD_OF_UTC_MS = 86_400_000;
+
+function sourceDateAfter(a: string, b: string): boolean {
+  return a.length > 10 && b.length > 10
+    ? Date.parse(a) > Date.parse(b)
+    : a.slice(0, 10) > b.slice(0, 10);
+}
+
 export function assertClaimInput(
-  input: Pick<Envelope, "occurred_at" | "assertion_origin"> & ClaimFields,
+  input: Pick<Envelope, "occurred_at" | "assertion_origin"> & StrictClaimFields,
 ): void {
   const { occurred_at: from, occurred_until: until, inferred_by: inference } = input;
   const issues: string[] = [];
-  // Date-only bounds compare as calendar days; two timestamps compare as instants.
-  if (
-    until !== undefined &&
-    (!validSourceDate(until) ||
-      !from ||
-      (from.length > 10 && until.length > 10
-        ? Date.parse(from) > Date.parse(until)
-        : from.slice(0, 10) > until.slice(0, 10)))
-  ) {
+  if (until !== undefined && (!validSourceDate(until) || !from || sourceDateAfter(from, until))) {
     issues.push("occurred_until must be a real date at or after occurred_at");
   }
   if (
@@ -76,8 +73,8 @@ export function assertClaimInput(
     issues.push("inferred_by needs assertion_origin agent_inference and a real date");
   } else if (
     inference &&
-    // A date-only value may be the writer's local today, up to a day ahead of UTC.
-    Date.parse(inference.at) > Date.now() + (inference.at.length > 10 ? 5 * 60_000 : 86_400_000)
+    Date.parse(inference.at) >
+      Date.now() + (inference.at.length > 10 ? CLOCK_SKEW_MS : LOCAL_DATE_AHEAD_OF_UTC_MS)
   ) {
     issues.push("inferred_by.at must not be in the future");
   }
@@ -95,7 +92,6 @@ export function activeNow(m: Envelope, now = Date.now()): boolean {
   );
 }
 
-/** One occurrence or an inclusive span, each end at its recorded precision. */
 export function occurredText(at: string, until?: string): string {
   return until ? `${formatSourceDate(at)} – ${formatSourceDate(until)}` : formatSourceDate(at);
 }

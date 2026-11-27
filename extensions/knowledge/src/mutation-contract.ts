@@ -4,7 +4,7 @@ import { BODY_INPUT_MAX_CHARS } from "./limits.js";
 import {
   text,
   name,
-  ClaimFields,
+  StrictClaimFields,
   Evidence,
   Envelope,
   id,
@@ -92,17 +92,20 @@ const CreateClaim = Type.Object(
     entities: Envelope.properties.entities,
     subject_hint: Envelope.properties.subject_hint,
     occurred_at: Envelope.properties.occurred_at,
-    occurred_until: ClaimFields.properties.occurred_until,
+    occurred_until: StrictClaimFields.properties.occurred_until,
     owner: Envelope.properties.owner,
     due_at: Envelope.properties.due_at,
-    takeaway: ClaimFields.properties.takeaway,
+    takeaway: StrictClaimFields.properties.takeaway,
     tags: Envelope.properties.tags,
-    inferred_by: ClaimFields.properties.inferred_by,
+    inferred_by: StrictClaimFields.properties.inferred_by,
   },
   { additionalProperties: false },
 );
 // Remove Optional markers inherited from the portable (multi-kind) envelope.
 export const ClaimInput = CreateClaim;
+export const claimOnlyInputKeys = Object.keys(CreateClaim.properties).filter(
+  (key) => !(key in common),
+);
 export type ClaimInput = Static<typeof ClaimInput>;
 export const RelationshipInput = Type.Object(
   {

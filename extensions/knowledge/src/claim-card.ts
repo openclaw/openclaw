@@ -1,7 +1,7 @@
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Static } from "typebox";
 import type { ClaimCard } from "./inspection-contract.js";
-import { claimFields, type LoadedRecord } from "./model.js";
+import { wellFormedClaimFields, type LoadedRecord } from "./model.js";
 import { recordSummary, sourceCount } from "./record-summary.js";
 
 export function claimCard(
@@ -34,7 +34,7 @@ export function claimCard(
       ...(m.owner !== undefined ? { owner: m.owner } : {}),
       ...(m.due_at !== undefined ? { due_at: m.due_at } : {}),
       ...(m.occurred_at !== undefined ? { occurred_at: m.occurred_at } : {}),
-      ...claimFields(m),
+      ...wellFormedClaimFields(m),
       ...(m.source_event !== undefined ? { source_event: m.source_event } : {}),
     },
   };

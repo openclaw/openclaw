@@ -3,7 +3,7 @@ import { renderClaim, summaryLink } from "./claim-view.js";
 import { evidenceView, originalDownload } from "./evidence-view.js";
 import { displayAliases, identityTag } from "./knowledge-presentation.js";
 import { markdownView } from "./markdown-view.js";
-import { claimFields } from "./model.js";
+import { wellFormedClaimFields } from "./model.js";
 import type { Page } from "./page-context.js";
 import {
   button,
@@ -92,7 +92,7 @@ export async function showDetail(
     heading.append(
       el(
         "p",
-        `Occurred ${occurredText(occurred, claimFields(meta ?? {}).occurred_until)}`,
+        `Occurred ${occurredText(occurred, wellFormedClaimFields(meta ?? {}).occurred_until)}`,
         "knowledge-occurred",
       ),
     );

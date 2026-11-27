@@ -17,6 +17,7 @@ import { Envelope, RecordAnnotations, type LoadedRecord } from "./model.js";
 import {
   SavePage,
   ClaimInput,
+  claimOnlyInputKeys,
   RelationshipInput,
   CorrectInput,
   type WriteInput,
@@ -285,9 +286,8 @@ export class StoragePublication extends StorageJournal {
       ...(kind === "page"
         ? []
         : ["attribution", "evidence", "valid_from", "valid_until", "expires_at"]),
-      // Claim-only input fields are exactly the keys ClaimInput adds to the shared write fields.
       ...(kind === "claim"
-        ? Object.keys(ClaimInput.properties).filter((key) => !(key in RelationshipInput.properties))
+        ? claimOnlyInputKeys
         : kind === "relationship"
           ? ["from", "to", "label"]
           : []),

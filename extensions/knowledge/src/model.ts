@@ -8,7 +8,6 @@ const timestamp = Type.String({
   pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
 });
 export const strings = Type.Array(text(), { maxItems: 100 });
-// A real date, or a timestamp with seconds and an explicit offset; precision is preserved.
 const sourceDate = Type.String({
   pattern:
     "^\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2}))?$",
@@ -244,19 +243,11 @@ export const Envelope = Type.Object(
 );
 export type Envelope = Static<typeof Envelope>;
 
-/**
- * Claim fields added after authored vaults existed. They are strict on claim writes
- * but stay out of Envelope, so a hand-written record that already uses one of these
- * names with another shape keeps loading as unknown frontmatter.
- */
-export const ClaimFields = Type.Object({
-  /** Inclusive end of the claimed event's span; requires occurred_at. */
+export const StrictClaimFields = Type.Object({
   occurred_until: Type.Optional(sourceDate),
-  /** The lesson or "so what" of a claim, separate from the assertion text in the body. */
   takeaway: Type.Optional(
     Type.String({ minLength: 1, maxLength: 1000, pattern: "^(?=.*\\S)[\\s\\S]+$" }),
   ),
-  /** Which extractor or agent produced an agent_inference claim, when, and how sure it was. */
   inferred_by: Type.Optional(
     Type.Object(
       {
@@ -270,12 +261,11 @@ export const ClaimFields = Type.Object({
     ),
   ),
 });
-export type ClaimFields = Static<typeof ClaimFields>;
+export type StrictClaimFields = Static<typeof StrictClaimFields>;
 
-/** The well-formed claim fields of a record; any other authored value is left unread. */
-export function claimFields(metadata: Record<string, unknown>): ClaimFields {
+export function wellFormedClaimFields(metadata: Record<string, unknown>): StrictClaimFields {
   const { occurred_until, takeaway, inferred_by } = metadata;
-  const { properties: p } = ClaimFields;
+  const { properties: p } = StrictClaimFields;
   return {
     ...(occurred_until !== undefined && Check(p.occurred_until, occurred_until)
       ? { occurred_until }

@@ -3,7 +3,7 @@ import { evidenceView } from "./evidence-view.js";
 import { assertionOrigin as origin, identityTag } from "./knowledge-presentation.js";
 import { loadingPlaceholder } from "./loading-view.js";
 import { markdownView } from "./markdown-view.js";
-import { claimFields } from "./model.js";
+import { wellFormedClaimFields } from "./model.js";
 import type { Page } from "./page-context.js";
 import {
   button,
@@ -132,7 +132,7 @@ export function renderClaim(
             "knowledge-claim-text",
           )),
   );
-  const { takeaway } = claimFields(record.metadata ?? {});
+  const { takeaway } = wellFormedClaimFields(record.metadata ?? {});
   if (takeaway) {
     copy.append(el("p", `Takeaway: ${takeaway}`, "knowledge-claim-takeaway"));
   }
@@ -237,7 +237,7 @@ export function renderClaim(
     evidenceBody.replaceChildren();
     const details = el("dl", undefined, "knowledge-claim-details"),
       m = loaded.record?.metadata,
-      extra = claimFields(m ?? {});
+      extra = wellFormedClaimFields(m ?? {});
     const field = (name: string, value: string | HTMLElement) => {
       const dd = el("dd");
       dd.append(value);
