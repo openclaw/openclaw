@@ -5,6 +5,7 @@ import {
   SqliteCoordinatorError,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
+import { readSqliteDataVersion } from "../infra/sqlite-schema-catalog.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable, runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
@@ -172,7 +173,8 @@ export function createOpenClawStateCurrentWarmReader<T>(
             if (!assertCurrent(current)) {
               return { available: false };
             }
-            const dataVersion = readSqliteDataVersion(connection.database.db);
+            const { db } = connection.database;
+            const dataVersion = isPostgresSqlConnection(db) ? undefined : readSqliteDataVersion(db);
             if (dataVersion !== undefined && observed?.dataVersion === dataVersion) {
               retained?.observe();
               return { available: true, value: observed.value };
@@ -211,14 +213,6 @@ export function createOpenClawStateCurrentWarmReader<T>(
       return bound.read(scope);
     });
   };
-}
-
-function readSqliteDataVersion(db: OpenClawStateReadConnection["database"]["db"]) {
-  if (isPostgresSqlConnection(db)) {
-    return undefined;
-  }
-  const row = db.prepare("PRAGMA data_version").get(); // sqlite-allow-raw -- Connection-local commit counter.
-  return typeof row?.data_version === "number" ? row.data_version : undefined;
 }
 
 /** An independent current reader keeps composite policy rows in one bounded snapshot. */
