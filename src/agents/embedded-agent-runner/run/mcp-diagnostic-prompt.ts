@@ -48,7 +48,7 @@ export function buildMcpDiagnosticPromptFragments(
       kind: "conversation-data",
       text: wrapUntrustedPromptDataBlock({
         label: "MCP server availability",
-        text: `MCP server ${displayedName} unavailable: ${diagnostic.message}`,
+        text: `MCP server ${displayedName} unavailable: ${diagnostic.promptMessage ?? diagnostic.message}`,
         maxEscapedChars: 500,
         truncationMarker: "…",
       }),

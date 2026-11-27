@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { McpToolCatalogDiagnostic } from "../../agent-bundle-mcp-catalog.types.js";
 import { projectRuntimeContextFragments } from "../../internal-runtime-context.js";
+import { McpOAuthDiagnosticError } from "../../mcp-oauth-identity.js";
 import { buildMcpDiagnosticPromptFragments } from "./mcp-diagnostic-prompt.js";
 
 function diagnostic(serverName: string, message = "listing failed"): McpToolCatalogDiagnostic {
@@ -21,7 +22,6 @@ describe("MCP diagnostic prompt projection", () => {
     expect(legacy.length).toBeLessThanOrEqual(2_000);
     expect(escaped.length).toBeLessThanOrEqual(2_000);
     expect(legacy).toContain("MCP server server-00 unavailable");
-    expect(legacy).toMatch(/\d+ additional unavailable MCP servers omitted/);
     expect(fragments.at(-1)?.text).toMatch(/^\d+ additional unavailable MCP servers omitted\.$/);
     expect(fragments).toEqual(buildMcpDiagnosticPromptFragments(diagnostics.toReversed()));
     expect(escaped).not.toContain("<retry>");
@@ -52,15 +52,39 @@ describe("MCP diagnostic prompt projection", () => {
     expect(escaped.length).toBeLessThanOrEqual(2_000);
   });
 
-  it("reserves room for sign-in guidance after a long escaped server name", () => {
+  it.each([
+    ["operator", "Sign in from Settings"],
+    ["requester", "Reconnect from the channel"],
+  ] as const)("retains %s OAuth guidance after a long escaped name", (principal, guidance) => {
+    const serverName = "<".repeat(120);
+    const error = new McpOAuthDiagnosticError(
+      {
+        storeKey: "synthetic",
+        principal,
+        serverName,
+        serverUrl: "https://example.test/mcp",
+        configured: true,
+      },
+      "requires OAuth authorization.",
+    );
     const fragments = buildMcpDiagnosticPromptFragments([
-      diagnostic("<".repeat(2_000), "Sign in from Settings to authorize this server"),
+      { ...diagnostic(serverName, error.message), promptMessage: error.promptMessage },
     ]);
     const legacy = fragments.map((fragment) => fragment.text).join("\n\n");
-    expect(legacy).toContain("Sign in from Settings");
+    expect(error.message).toContain(serverName);
+    expect(error.promptMessage).not.toContain(serverName);
+    expect(legacy).toContain(`requires OAuth authorization. ${guidance}`);
+    if (principal === "operator") {
+      expect(legacy).toContain("ask the agent to connect in a direct chat");
+    }
     expect(legacy).toContain("openclaw mcp doctor <name>");
     expect(legacy.length).toBeLessThanOrEqual(2_000);
-    expect(projectRuntimeContextFragments(fragments).length).toBeLessThanOrEqual(2_000);
+    const escaped = projectRuntimeContextFragments(fragments);
+    expect(escaped).toContain(`requires OAuth authorization. ${guidance}`);
+    if (principal === "operator") {
+      expect(escaped).toContain("ask the agent to connect in a direct chat");
+    }
+    expect(escaped.length).toBeLessThanOrEqual(2_000);
   });
 
   it("does not add a fragment for a healthy catalog", () => {
