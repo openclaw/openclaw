@@ -505,7 +505,10 @@ removes its tree, including a renamed release, without waiting for another updat
 After a killed preparer or a completed rollback, the next update checks for surviving
 processes before removing the abandoned stage or failed candidate. A published
 candidate keeps its run ID: later updates can still check its recorded outcome
-after the preparation lock is gone or another trial replaces it. The cleanup
+after the preparation lock is gone or another trial replaces it. Older preparers
+used a separate release ID. For those builds, cleanup reads the trial's run ID
+from the release's restore manifest and checks that the successful run booted
+the same build. This lookup does not depend on the recent-history limit. The cleanup
 worker checks all abandoned candidates in one process census, including the
 Gateway's own children. A live holder or incomplete inspection keeps the tree.
 Stages from older preparers

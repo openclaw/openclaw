@@ -13,13 +13,13 @@ import { clonePostgresUpgrade, retirePostgresUpgrade } from "../snapshot/databas
 import { readTrial, resolvePrefix, type Trial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import type { DatabaseTarget } from "./state-upgrade-databases.js";
+import {
+  invalidRestoreManifest,
+  readRestoreManifest,
+  type RestoreFile,
+  type RestoreManifest,
+} from "./state-upgrade-restore-manifest.js";
 
-type RestoreFile = { readonly live: string; readonly preimage: string | null };
-type RestoreManifest = {
-  readonly v: 1;
-  readonly runId: string;
-  readonly files: readonly RestoreFile[];
-};
 export type StateUpgradeRestore = {
   file: string;
   stateDir: string;
@@ -28,59 +28,6 @@ export type StateUpgradeRestore = {
   existing: RestoreManifest | undefined;
 };
 const COMPANIONS = ["-wal", "-shm", "-journal", ".seal"] as const;
-
-function invalid(file: string, cause?: unknown): Error {
-  return new Error(
-    `Invalid update restore manifest ${file}. Preserve it and run openclaw triage before retrying the update.`,
-    { cause },
-  );
-}
-
-function readManifest(file: string): RestoreManifest | undefined {
-  if (!fs.existsSync(file)) {
-    return undefined;
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch (error) {
-    throw invalid(file, error);
-  }
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !("v" in value) ||
-    value.v !== 1 ||
-    !("runId" in value) ||
-    typeof value.runId !== "string" ||
-    !value.runId ||
-    !("files" in value) ||
-    !Array.isArray(value.files)
-  ) {
-    throw invalid(file);
-  }
-  const files: RestoreFile[] = [];
-  const seen = new Set<string>();
-  const entries: unknown[] = value.files;
-  for (const entry of entries) {
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      !("live" in entry) ||
-      typeof entry.live !== "string" ||
-      !path.isAbsolute(entry.live) ||
-      seen.has(entry.live) ||
-      !("preimage" in entry) ||
-      (entry.preimage !== null &&
-        (typeof entry.preimage !== "string" || !path.isAbsolute(entry.preimage)))
-    ) {
-      throw invalid(file);
-    }
-    seen.add(entry.live);
-    files.push({ live: entry.live, preimage: entry.preimage });
-  }
-  return { v: 1, runId: value.runId, files };
-}
 
 /** The prepared release owns one immutable restore receipt, including across retry. */
 export async function beginStateUpgradeRestore(
@@ -96,9 +43,9 @@ export async function beginStateUpgradeRestore(
   // journal, including retries initiated by preparers that know no manifest.
   const file = path.join(path.dirname(path.resolve(prefix, trial.target)), ".restore");
   if (!trial.runId || /[\\/\0]/u.test(trial.runId)) {
-    throw invalid(file);
+    throw invalidRestoreManifest(file);
   }
-  const existing = readManifest(file);
+  const existing = readRestoreManifest(file);
   return {
     file,
     stateDir: path.dirname(prefix),

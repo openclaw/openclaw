@@ -184,6 +184,64 @@ it("collects frequent resident releases without removing live, trial, run or unr
   }
 });
 
+it("collects releases with independent IDs only after verifying their own trial run and build", async () => {
+  const dir = await fs.realpath(await prefix());
+  const releases = path.join(dir, "releases");
+  const history = new Map<string, ReturnType<typeof createUpdateRunRecordFixture>>();
+  const release = async (status: "succeeded" | "failed" | "running", mismatch = false) => {
+    const directory = path.join(releases, randomUUID());
+    const root = path.join(directory, "openclaw");
+    const runId = randomUUID(); // Prior resident preparers did not use their run ID as the release ID.
+    const buildId = randomUUID();
+    await fs.mkdir(path.join(root, "dist"), { recursive: true });
+    await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw","version":"1.0.0"}');
+    await fs.writeFile(path.join(root, "dist/build-info.json"), JSON.stringify({ buildId }));
+    await fs.writeFile(
+      path.join(directory, ".restore"),
+      JSON.stringify({ v: 1, runId, files: [] }),
+    );
+    history.set(
+      runId,
+      createUpdateRunRecordFixture(runId, {
+        status,
+        after: { buildId },
+        verification: {
+          booted: true,
+          versionMatch: true,
+          runningBuildId: mismatch ? randomUUID() : buildId,
+        },
+      }),
+    );
+    return root;
+  };
+  const selected = await release("succeeded");
+  const previous = await release("succeeded");
+  const disposable = await release("succeeded");
+  const aged = await release("succeeded");
+  const ambiguous = await release("succeeded", true);
+  const failed = await release("failed");
+  const open = await release("running");
+  await switchLink(selected, dir);
+  vi.spyOn(ledger, "listUpdateRunsAsync").mockResolvedValue(
+    [...history.values()].filter((run) => run.status === "running"),
+  );
+  vi.spyOn(ledger, "getUpdateRunForProgressAsync").mockImplementation(async (id) =>
+    history.get(id),
+  );
+  vi.spyOn(installation, "readUpdateGatewayRoot").mockResolvedValue(undefined);
+  await fs.utimes(path.dirname(aged), 0, 0);
+  // Without a trial, preserve the old grace but still collect known releases after 24 hours.
+  expect((await collectReleases(dir, selected)).removed).toEqual([path.dirname(aged)]);
+  await createTrialPending(
+    { runId: randomUUID(), target: selected, previous, version: "1.0.0" },
+    dir,
+  );
+  expect((await collectReleases(dir, selected)).removed).toEqual([path.dirname(disposable)]);
+  for (const root of [selected, previous, open, ambiguous, failed]) {
+    expect((await fs.stat(root)).isDirectory()).toBe(true);
+  }
+});
+
 it("reclaims an abandoned stage only after its owner exits and the worker excludes surviving work", async () => {
   const dir = await fs.realpath(await prefix());
   const live = await allocateStaging({}, dir);

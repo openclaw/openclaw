@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPidDefinitelyDeadAsync } from "../shared/pid-alive.js";
+import { readRestoreManifest } from "../state/state-upgrade-restore-manifest.js";
 import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { readPackageName } from "./package-json.js";
@@ -14,6 +15,7 @@ import {
 } from "./package-release-slot-path.js";
 import { readPackageReleaseIdentity, type PackageReleaseIdentity } from "./package-release-slot.js";
 import type { ReleaseCandidate, ReleaseHolderResults } from "./release-holder-inspection.js";
+import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 
 /** Covers a process that started from a release but has not taken its lease yet. */
@@ -99,6 +101,48 @@ const claimedResident = new RegExp(
 );
 const unownedStage = new RegExp(`^[.]staging-${uuid}$`, "u");
 const stageId = new RegExp(`^[.]staging-([1-9][0-9]*)-(${uuid})$`, "u");
+
+/** Earlier preparers published an independent UUID. Boot's restore receipt names its trial
+ * directly, even when that run predates every row in the recent-history list. */
+async function readEarlierReleaseRun(
+  directory: string,
+  openRuns: UpdateRunRecord[],
+  env?: NodeJS.ProcessEnv,
+) {
+  const receipt = path.join(directory, ".restore");
+  if (!(await fs.lstat(receipt).catch(ignoreMissingPath))?.isFile()) {
+    return undefined;
+  }
+  const manifest = readRestoreManifest(receipt);
+  if (!manifest) {
+    return undefined;
+  }
+  const { getUpdateRunForProgressAsync } = await import("./update-run-reader.js");
+  const run =
+    openRuns.find((active) => active.runId === manifest.runId) ??
+    (await getUpdateRunForProgressAsync(manifest.runId, { env }));
+  if (!run || run.status === "running") {
+    return run;
+  }
+  // A failed trial can report its fallback as running; build identity alone is not success.
+  const root = path.join(directory, "openclaw");
+  const info = path.join(root, "dist", "build-info.json");
+  const build =
+    (await fs.realpath(info).catch(ignoreMissingPath)) === info
+      ? await readBuiltGatewayBuildId(root)
+      : null;
+  if (
+    run.status !== "succeeded" ||
+    !build ||
+    run.after.buildId !== build ||
+    !run.verification.booted ||
+    !run.verification.versionMatch ||
+    run.verification.runningBuildId !== build
+  ) {
+    throw new Error("The trial run did not verify this release's build.");
+  }
+  return run;
+}
 
 /** Count logical bytes as cleanup --dry-run does: lstat leaves, never follow links. */
 async function retainedReleaseWarning(root: string, error: unknown) {
@@ -314,10 +358,10 @@ export async function collectPackageReleases(params: {
           continue;
         }
         if (!id.startsWith("git-")) {
-          // Published UUIDs are their preparation run IDs, even after a later trial replaces
-          // .trial or a Gateway settles a dead lock. Only committed runs are ordinary releases.
           const { getUpdateRunForProgressAsync } = await import("./update-run-reader.js");
-          const run = await getUpdateRunForProgressAsync(id, { env: params.env });
+          const run =
+            (await getUpdateRunForProgressAsync(id, { env: params.env })) ??
+            (await readEarlierReleaseRun(directory, openRuns, params.env));
           if (!run || run.status === "running") {
             if (!run) {
               failures.push(
