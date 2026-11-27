@@ -156,9 +156,8 @@ async function compress(data: VideoCompressionRequest) {
 }
 
 function onMessage({ data }: MessageEvent<VideoCompressionRequest>) {
-  globalThis.removeEventListener("message", onMessage);
   void compress(data).catch(() => reply({ type: "error", reason: "failed" }));
 }
 
-// The dedicated worker accepts one job; onMessage detaches before encoding it.
-globalThis.addEventListener("message", onMessage);
+// The dedicated worker accepts one job; once detaches before encoding it.
+globalThis.addEventListener("message", onMessage, { once: true });
