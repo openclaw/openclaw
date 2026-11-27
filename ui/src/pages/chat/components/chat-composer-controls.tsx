@@ -294,16 +294,17 @@ export function ComposerDictationSendAction(props: {
                 },
                 primaryPointerDownRef(() => props.onPointerDown),
               ]}
-              onClick={async (event) => {
+              onClick={(event) => {
                 if (source.finalizing) {
                   return;
                 }
                 const requiresReview = source.requiresFormattingReview;
                 const send = props.onSend;
-                await source.finishActive();
-                if (!requiresReview) {
-                  send(event);
-                }
+                void source.finishActive().then(() => {
+                  if (!requiresReview) {
+                    send(event);
+                  }
+                });
               }}
               aria-disabled={props.readDictation().finalizing ? "true" : "false"}
               aria-label={label()}
