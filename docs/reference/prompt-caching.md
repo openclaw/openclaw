@@ -767,6 +767,14 @@ it starts, on every provider route. Each later request in the session extends th
 previous one byte for byte: system prompt, tools, and every earlier message stay
 unchanged, and earlier runtime-context carriers stay in history.
 
+State snapshots in those carriers (active exec sessions, subagents,
+media-generation tasks, approved executables, temporal context) are sent only
+when they change. A turn compares each snapshot with the latest copy the request
+already carries and omits an identical one, so history does not grow with
+repeated state. A snapshot the request does not carry, for example after
+compaction or on a route that clears turn-scoped updates, is sent in full,
+including its empty form.
+
 Mid-session changes (skills, workspace files, permissions, exec wakes,
 inter-session input, subagent completions) go out as appended deltas: an
 in-history system message where the route supports one (direct Anthropic API
