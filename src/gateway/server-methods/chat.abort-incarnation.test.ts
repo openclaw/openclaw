@@ -128,6 +128,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         }
         return await mutateSession(params);
       });
+    // oxlint-disable-next-line typescript/unbound-method -- Every call supplies the intercepted controller via .call.
     const acquireTerminal = SubagentLifecycleController.prototype.acquireTerminalCompletionLock;
     const terminal = vi
       .spyOn(SubagentLifecycleController.prototype, "acquireTerminalCompletionLock")
