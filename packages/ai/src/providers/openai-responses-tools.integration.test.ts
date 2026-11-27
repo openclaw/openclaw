@@ -61,8 +61,8 @@ it.each(
       // An undeclared custom endpoint sends tools exactly as before: no strict field.
       { endpointClass: "custom", supportsStrictMode: undefined, strict: undefined },
       { endpointClass: "custom", supportsStrictMode: false, strict: undefined },
-      { endpointClass: "custom", supportsStrictMode: true, strict: true },
-      { endpointClass: "openai-public", supportsStrictMode: undefined, strict: true },
+      { endpointClass: "custom", supportsStrictMode: true, strict: false },
+      { endpointClass: "openai-public", supportsStrictMode: undefined, strict: false },
     ].map((settings) => Object.assign({ entrypoint }, settings)),
   ),
 )(
@@ -128,29 +128,3 @@ it.each(
     expect(tools.every((tool) => tool.parameters === parameters)).toBe(true);
   },
 );
-
-// Strict is per tool on the schema as written: a fully required, closed tool is strict; a
-// lookaround pattern or an optional key keeps its own tool non-strict and unchanged.
-it("decides strict for each tool in one request", async () => {
-  const model = { ...responsesLoopbackModel, compat: { supportsStrictMode: true } };
-  const lookaround = schema({ filename });
-  const optionalValue = schema({ value: { type: "integer" } }, []);
-  const context = contextFor([
-    { name: "record_value", description: "Record", parameters: lookaround },
-    { name: "set_value", description: "Set", parameters: optionalValue },
-    { name: "write_note", description: "Write", parameters: schema({ note: string }) },
-  ]);
-  for (const stream of [
-    () => owner.stream(model, context, options),
-    () => transport(model, context, options),
-  ]) {
-    expect((await (await stream()).result()).stopReason).toBe("stop");
-  }
-  expect(server.requests.map((request) => request.tools)).toEqual(
-    Array.from({ length: 2 }, () => [
-      wireTool("record_value", lookaround, false, "Record"),
-      wireTool("set_value", optionalValue, false, "Set"),
-      wireTool("write_note", schema({ note: string }), true, "Write"),
-    ]),
-  );
-});

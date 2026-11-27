@@ -34,9 +34,8 @@ import {
   reconcileOpenAICompletionsToolChoice,
 } from "../providers/openai-tool-projection.js";
 import {
-  normalizeOpenAIStrictToolParameters,
+  normalizeOpenAIToolParameters,
   resolveOpenAIStrictToolSetting,
-  resolveOpenAIToolStrictFlag,
 } from "../providers/openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
 import { normalizeToolSchema } from "../providers/tool-schema-normalization.js";
@@ -165,28 +164,17 @@ function convertTools(
   const prepared = mode === "managed" ? prepareOpenAITools(tools) : undefined;
   const projection = prepared?.projection ?? projectOpenAITools(tools);
   const convert = () => {
-    const strictSetting =
-      mode === "direct"
-        ? compat.supportsStrictMode
-          ? false
-          : undefined
-        : resolveOpenAIStrictToolSetting(compat);
+    const strict = resolveOpenAIStrictToolSetting(compat);
     return {
       projection,
       tools: sortTransportToolsByName(projection.tools).map((tool) => {
         const parameters = compat.requiresTypedUnionBranches
           ? normalizeToolSchema(tool.parameters, "moonshot")
           : tool.parameters;
-        const strict =
-          mode === "direct"
-            ? strictSetting
-            : resolveOpenAIToolStrictFlag(parameters, strictSetting);
         return prepareOpenAIFunctionTool(
           tool.name,
           tool.description,
-          mode === "direct"
-            ? parameters
-            : normalizeOpenAIStrictToolParameters(parameters, strict === true, model.compat),
+          mode === "direct" ? parameters : normalizeOpenAIToolParameters(parameters, model.compat),
           strict,
           mutableParameters,
         ).completions;
