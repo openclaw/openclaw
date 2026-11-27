@@ -700,7 +700,6 @@ class MainViewModel internal constructor(
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> =
     runtimeState(initial = emptySet()) { it.chat.pendingSessionSettingsKeys }
   internal val chatStreamingAssistant: StateFlow<ChatController.StreamingAssistant?> = runtimeState(initial = null) { it.chat.streamingAssistant }
-  val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chat.streamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.pendingToolCalls }
   val chatToolActivities: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.toolActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chat.questions }

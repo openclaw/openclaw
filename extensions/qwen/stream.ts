@@ -1,5 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple } from "openclaw/plugin-sdk/llm";
+import { resolveOpenAIModelReasoningEfforts, streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeProviderId,
@@ -33,8 +33,7 @@ import {
 type QwenThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 type QwenThinkingFormat = string | undefined;
 type QwenThinkingContract =
-  | { family: "qwen-3.8" }
-  | { family: "qwen-4-max" }
+  | { family: "qwen"; modelGeneration: "3.8" | "4" }
   | { family: "deepseek-v4" }
   | { family: "kimi" }
   | { family: "glm"; supportsMax: boolean };
@@ -109,13 +108,13 @@ function resolveQwenThinkingContract(
   modelId: string,
 ): QwenThinkingContract | undefined {
   if (isQwen38ModelId(modelId)) {
-    return { family: "qwen-3.8" };
+    return { family: "qwen", modelGeneration: "3.8" };
+  }
+  if (isQwen4MaxModelId(modelId)) {
+    return { family: "qwen", modelGeneration: "4" };
   }
   if (!isQwenTokenPlanProviderId(providerId)) {
     return undefined;
-  }
-  if (isQwen4MaxModelId(modelId)) {
-    return { family: "qwen-4-max" };
   }
   if (isQwenTokenPlanDeepSeekV4ModelId(modelId)) {
     return { family: "deepseek-v4" };
@@ -129,48 +128,31 @@ function resolveQwenThinkingContract(
   return undefined;
 }
 
-function patchQwen38Payload(
+function patchQwenEffortPayload(
   payload: Record<string, unknown>,
   thinkingLevel: QwenThinkingLevel,
   enableThinking: boolean,
+  modelGeneration: "3.8" | "4",
+  model: Parameters<StreamFn>[0],
 ): void {
   delete payload.thinking;
   // An explicit token budget owns reasoning depth; Qwen rejects it together
   // with reasoning_effort. Preserve caller budgets instead of overriding them.
-  if (!enableThinking || payload.thinking_budget !== undefined) {
+  if (
+    !enableThinking ||
+    payload.thinking_budget !== undefined ||
+    (modelGeneration === "4" && resolveOpenAIModelReasoningEfforts(model)?.length === 0)
+  ) {
     delete payload.reasoning_effort;
     return;
   }
-  payload.reasoning_effort =
-    thinkingLevel === "minimal" || thinkingLevel === "low"
-      ? "low"
-      : thinkingLevel === "medium"
-        ? "medium"
-        : "xhigh";
-}
-
-function patchQwen4MaxPayload(
-  payload: Record<string, unknown>,
-  thinkingLevel: QwenThinkingLevel,
-  enableThinking: boolean,
-): void {
-  delete payload.thinking;
-  if (!enableThinking || payload.thinking_budget !== undefined) {
-    delete payload.reasoning_effort;
-    return;
-  }
-  // Chat Completions accepts low, high, and xhigh: https://help.aliyun.com/zh/model-studio/qwen4-max
-  switch (thinkingLevel) {
-    case "minimal":
-    case "low":
-      payload.reasoning_effort = "low";
-      break;
-    case "xhigh":
-    case "max":
-      payload.reasoning_effort = "xhigh";
-      break;
-    default:
-      payload.reasoning_effort = "high";
+  if (thinkingLevel === "minimal" || thinkingLevel === "low") {
+    payload.reasoning_effort = "low";
+  } else if (modelGeneration === "3.8") {
+    payload.reasoning_effort = thinkingLevel === "medium" ? "medium" : "xhigh";
+  } else {
+    payload.reasoning_effort =
+      thinkingLevel === "xhigh" || thinkingLevel === "max" ? "xhigh" : "high";
   }
 }
 
@@ -262,13 +244,17 @@ function createQwenThinkingPayloadPatch(
     } else {
       payloadObj.enable_thinking = enableThinking;
     }
-    if (isQwen38ModelId(model.id) && effectiveThinkingFormat === undefined) {
-      patchQwen38Payload(payloadObj, effectiveThinkingLevel, enableThinking);
-    } else if (
-      tokenPlanContract?.family === "qwen-4-max" &&
+    if (
+      (isQwen38ModelId(model.id) || isQwen4MaxModelId(model.id)) &&
       effectiveThinkingFormat === undefined
     ) {
-      patchQwen4MaxPayload(payloadObj, effectiveThinkingLevel, enableThinking);
+      patchQwenEffortPayload(
+        payloadObj,
+        effectiveThinkingLevel,
+        enableThinking,
+        isQwen4MaxModelId(model.id) ? "4" : "3.8",
+        model,
+      );
     } else if (tokenPlanContract?.family === "deepseek-v4") {
       // DashScope's OpenAI endpoint uses enable_thinking, while DeepSeek V4
       // also requires replay reasoning_content and high/max effort mapping.
@@ -343,7 +329,7 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   // The picker catalog is intentionally curated; direct Token Plan refs still
   // need provider constraints unless an explicit transport format owns them.
   const useWireConstraints =
-    (tokenPlanProvider || tokenPlanContract?.family === "qwen-3.8") &&
+    (tokenPlanProvider || tokenPlanContract?.family === "qwen") &&
     !explicitLegacyThinkingFormat &&
     thinkingFormat === undefined;
   const forceThinking = useWireConstraints && isQwenTokenPlanThinkingOnlyModelId(ctx.modelId);
@@ -390,9 +376,7 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
               if (
                 !forceThinking &&
                 (rawThinkingLevel === "off" ||
-                  (rawThinkingLevel === "none" &&
-                    (tokenPlanContract?.family === "qwen-3.8" ||
-                      tokenPlanContract?.family === "qwen-4-max")))
+                  (tokenPlanContract?.family === "qwen" && rawThinkingLevel === "none"))
               ) {
                 enableThinking = false;
               }
@@ -417,17 +401,13 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
                   }
                 }
               }
-              if (tokenPlanContract?.family === "qwen-3.8") {
-                patchQwen38Payload(
+              if (tokenPlanContract?.family === "qwen") {
+                patchQwenEffortPayload(
                   payload,
                   normalizeQwenThinkingLevel(rawThinkingLevel),
                   enableThinking,
-                );
-              } else if (tokenPlanContract?.family === "qwen-4-max") {
-                patchQwen4MaxPayload(
-                  payload,
-                  normalizeQwenThinkingLevel(rawThinkingLevel, requestedThinkingLevel),
-                  enableThinking,
+                  tokenPlanContract.modelGeneration,
+                  model,
                 );
               } else if (tokenPlanContract?.family === "deepseek-v4") {
                 const deepSeekLevel =

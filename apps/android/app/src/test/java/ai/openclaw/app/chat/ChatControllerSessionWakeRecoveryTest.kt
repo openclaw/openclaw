@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.PersonalSessionPinAccess
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
@@ -72,7 +73,7 @@ class ChatControllerSessionWakeRecoveryTest {
     retryAfterMs: Int? = null,
   ): Nothing =
     throw GatewayRequestRejected(
-      GatewaySession.ErrorShape(code, "roster read refused", retryAfterMs?.let { GatewayErrorDetails(null, false, null, reason = "gateway-suspending", method = "sessions.list", retryAfterMs = it) }, retryable = retryAfterMs != null),
+      ErrorShape(code, "roster read refused", retryAfterMs?.let { GatewayErrorDetails(null, false, null, reason = "gateway-suspending", method = "sessions.list", retryAfterMs = it) }, retryable = retryAfterMs != null),
     )
 
   @Test

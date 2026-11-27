@@ -1,7 +1,7 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.takeUtf16Safe
 import android.content.Context
 import kotlinx.coroutines.CancellationException
@@ -26,18 +26,18 @@ class CameraHandler(
   private val setCameraAudioCaptureActive: (Boolean) -> Boolean,
 ) {
   /** Handles camera.list by exposing CameraX devices through gateway metadata. */
-  suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult =
+  suspend fun handleList(_paramsJson: String?): InvokeResult =
     try {
       val devices = camera.listDevices()
-      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("devices" to devices)))
+      InvokeResult.ok(Json.encodeToString(mapOf("devices" to devices)))
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
       val (code, message) = invokeErrorFromThrowable(err)
-      GatewaySession.InvokeResult.error(code = code, message = message)
+      InvokeResult.error(code = code, message = message)
     }
 
-  suspend fun handleSnap(paramsJson: String?): GatewaySession.InvokeResult {
+  suspend fun handleSnap(paramsJson: String?): InvokeResult {
     val logFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
     val camLog = cameraLogger(logFile, "camera.snap")
     try {
@@ -51,20 +51,20 @@ class CameraHandler(
           val (code, message) = invokeErrorFromThrowable(err)
           camLog("inner error: ${err::class.java.simpleName} code=$code")
           camLog("stack: ${err.stackTrace.joinToString("\n").takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
-          return GatewaySession.InvokeResult.error(code = code, message = message)
+          return InvokeResult.error(code = code, message = message)
         }
-      return GatewaySession.InvokeResult.ok(res)
+      return InvokeResult.ok(res)
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
       camLog("outer error: ${err::class.java.simpleName}")
       camLog("stack: ${err.stackTrace.joinToString("\n").takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
-      return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera snap failed")
+      return InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera snap failed")
     }
   }
 
   /** Handles camera.clip and keeps external audio capture paused while camera audio is active. */
-  suspend fun handleClip(paramsJson: String?): GatewaySession.InvokeResult {
+  suspend fun handleClip(paramsJson: String?): InvokeResult {
     val clipLogFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
     val clipLog = cameraLogger(clipLogFile, "camera.clip", "CLIP ")
     val includeAudio = parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio") ?: true
@@ -87,7 +87,7 @@ class CameraHandler(
           val (code, message) = invokeErrorFromThrowable(err)
           clipLog("inner error: ${err::class.java.simpleName} code=$code")
           clipLog("stack: ${err.stackTrace.joinToString("\n").takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
-          return GatewaySession.InvokeResult.error(code = code, message = message)
+          return InvokeResult.error(code = code, message = message)
         }
       val rawBytes = filePayload.file.length()
       if (!isCameraClipWithinPayloadLimit(rawBytes)) {
@@ -100,7 +100,7 @@ class CameraHandler(
 
       val bytes = withContext(Dispatchers.IO) { filePayload.file.readBytes() }
       val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-      return GatewaySession.InvokeResult.ok(
+      return InvokeResult.ok(
         """{"format":"mp4","base64":"$base64","durationMs":${filePayload.durationMs},"hasAudio":${filePayload.hasAudio}}""",
       )
     } catch (err: CancellationException) {
@@ -108,7 +108,7 @@ class CameraHandler(
     } catch (err: Throwable) {
       clipLog("outer error: ${err::class.java.simpleName}")
       clipLog("stack: ${err.stackTrace.joinToString("\n").takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
-      return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera clip failed")
+      return InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera clip failed")
     } finally {
       try {
         ownedClipFile.getAndSet(null)?.let { file ->

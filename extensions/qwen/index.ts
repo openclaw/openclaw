@@ -1,3 +1,4 @@
+import { resolveOpenAIModelReasoningEfforts } from "openclaw/plugin-sdk/llm";
 import { describeOpenAiCompatibleVideo } from "openclaw/plugin-sdk/media-understanding";
 import type {
   ProviderCatalogContext,
@@ -216,12 +217,6 @@ function resolveQwenTokenPlanThinkingProfile(modelId: string) {
     return qwenProfile;
   }
   // Uncataloged exact refs remain selectable, so family predicates preserve their request controls.
-  if (isQwen4MaxModelId(modelId)) {
-    return {
-      levels: QWEN_TOKEN_PLAN_THINKING_LEVEL_IDS.map((id) => ({ id })),
-      defaultLevel: "high" as const,
-    };
-  }
   if (isQwenTokenPlanThinkingOnlyModelId(modelId)) {
     return {
       levels: [{ id: "low" as const, label: "on" }],
@@ -252,7 +247,10 @@ function normalizeQwenTokenPlanResolvedModel({ model }: ProviderNormalizeResolve
     !isQwen4MaxModelId(model.id) ||
     !model.reasoning ||
     model.api !== "openai-completions" ||
-    (model.compat && "thinkingFormat" in model.compat && model.compat.thinkingFormat !== undefined)
+    (model.compat &&
+      "thinkingFormat" in model.compat &&
+      model.compat.thinkingFormat !== undefined) ||
+    resolveOpenAIModelReasoningEfforts(model)?.length === 0
   ) {
     return undefined;
   }
@@ -264,6 +262,14 @@ function normalizeQwenTokenPlanResolvedModel({ model }: ProviderNormalizeResolve
 }
 
 function resolveQwenThinkingProfile(modelId: string) {
+  if (isQwen4MaxModelId(modelId)) {
+    return {
+      levels: (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const).map((id) => ({
+        id,
+      })),
+      defaultLevel: "high" as const,
+    };
+  }
   return isQwen38ModelId(modelId)
     ? {
         levels: (["off", "low", "medium", "xhigh"] as const).map((id) => ({ id })),

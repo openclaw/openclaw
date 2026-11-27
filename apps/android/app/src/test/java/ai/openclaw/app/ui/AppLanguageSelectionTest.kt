@@ -3,11 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.AppLanguage
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
-import ai.openclaw.app.NodeRuntime
-import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
-import ai.openclaw.app.bindNodeRuntimeTestFixture
-import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.setAppLanguage
@@ -52,10 +48,8 @@ class AppLanguageSelectionTest {
   private val models = ViewModelStore()
   private val mounted = mutableStateOf(true)
   private lateinit var app: NodeApp
-  private lateinit var runtime: NodeRuntime
   private lateinit var model: MainViewModel
   private lateinit var localeActivity: ActivityController<AppLanguageSelectionActivity>
-  private var previousRuntime: NodeRuntime? = null
   private var previousLanguage = AppLanguage.System
 
   @Before
@@ -68,9 +62,6 @@ class AppLanguageSelectionTest {
     setAppLanguage(AppLanguage.English)
     val storage = app.getSharedPreferences("language-selection-${UUID.randomUUID()}", Context.MODE_PRIVATE)
     val prefs = SecurePrefs(app, storage)
-    previousRuntime = app.peekRuntime()
-    runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
-    bindNodeRuntimeTestFixture(app, runtime)
     model = MainViewModel(app, prefs, SavedStateHandle())
     models.put("appearance", model)
   }
@@ -79,13 +70,8 @@ class AppLanguageSelectionTest {
   fun tearDown() {
     try {
       composeRule.runOnIdle { mounted.value = false }
-      try {
-        models.clear()
-      } finally {
-        closeNodeRuntimeTestFixture(runtime)
-      }
+      models.clear()
     } finally {
-      bindNodeRuntimeTestFixture(app, previousRuntime)
       try {
         setAppLanguage(previousLanguage)
       } finally {

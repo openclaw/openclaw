@@ -57,12 +57,14 @@ If you prefer editing config directly:
 - Compacts noisy `exec` and `bash` results before they are fed back into the session.
 - Keeps the original command execution untouched.
 - Applies a safe-inventory policy: exact file-content reads stay raw, standalone repository-inventory commands can compact, and unsafe mixed command sequences stay raw.
+- Keeps timeout and spilled-output results unchanged so OpenClaw's retry guidance and full-output links remain available.
+- Keeps the original result if Tokenjuice fails to compact it, for example because a local rule file is malformed.
 - Stays opt-in: disable the plugin if you want verbatim output everywhere.
 
-The plugin releases Tokenjuice's compiled rule cache after results have used 128
-distinct selected working directories. Ignored fallback directories do not count
-toward this limit. This bounds retained rule sets from old
-worktrees while preserving reuse for repeated results within the current set.
+The plugin releases Tokenjuice's compiled rule cache after shell results passed to
+the reducer have used 128 distinct selected working directories. Other tool results
+and ignored fallback directories do not count. This bounds retained rule sets from
+old worktrees while preserving reuse for repeated results within the current set.
 After a release, active projects reload their rules on the next eligible result.
 Rule selection still uses the command's working directory.
 

@@ -4,6 +4,7 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { abortControlledSubagents } from "../../agents/subagents/cancel-descendants.js";
 import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { ensureSubagentControllerOwnsRun } from "../../agents/subagents/registry/subagent-control-scope.js";
 import {
@@ -31,7 +32,6 @@ import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
 import { canRequesterAbortChatRun, getChatRunAbortAuthority } from "./chat-abort-authorization.js";
-import { abortControlledSubagents } from "./chat-abort-descendants.js";
 import type { ChatSessionAbortParams, ChatSessionAbortResult } from "./chat-abort-runtime.types.js";
 import { prepareChatSessionAbort } from "./chat-abort-session-plan.js";
 import {
@@ -41,8 +41,6 @@ import {
   type ChatAbortSessionSnapshot,
 } from "./chat-aborted-partial.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-
-export { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
 
 function getQueuedCollectorCancellationRunId(result: SubagentAdminKillResult): string | undefined {
   return result.found &&
