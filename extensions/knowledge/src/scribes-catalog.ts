@@ -500,7 +500,7 @@ export function setupPrompt(setup: ScribeSetup) {
 const PROGRESS_WORK = {
   start: 'Save progress as "Saved progress" there says, starting a new file list.',
   continue:
-    'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill for the files on that checkpoint, continuing as "Saved progress" there says: keep its file list and import only the files that are not done yet. Never change Memory files.',
+    'Follow "Saved progress" under "Learn from Memory" in the knowledge-ingest skill. Recompute every listed file\'s SHA-256 before skipping any file. Replace each changed file\'s entire checkpoint line with its path and new hash, clearing any "nothing new" marker. Keep the checkpoint\'s file list and never change Memory files.',
 };
 const PROGRESS_END = `${endStep("done", `one sentence with counts: ${COUNTS.memory}`)} Use \`done\` only when every file on the checkpoint is done; otherwise end with \`Scribe status: needs attention — <files done> of <files listed> files imported\`.`;
 

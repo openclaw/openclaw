@@ -96,11 +96,14 @@ workspace): the Scribes page and a continuing turn check those receipts with
    import, save the page with `knowledge_save_page` (type `note`), replacing
    any earlier body: one line per file, `- <path> <sha256>`. To continue,
    `knowledge_lookup` the page and keep its list (start a new one only when the
-   page is missing). If a listed file's bytes changed since, replace its hash on
-   its line with `knowledge_edit_body` first.
+   page is missing). Compare every listed file's current hash with its saved
+   hash before considering any file done. If the hash changed, use
+   `knowledge_edit_body` to replace the entire line with `- <path> <new sha256>`.
+   Include any old `nothing new` marker in the replaced range. Read the updated
+   checkpoint before deciding which files to skip.
 2. **Skip done files.** `knowledge_source_check` each listed file
-   (`{provider: "openclaw-memory", key: <path>, sha256}`). Skip `unchanged`
-   files and files whose line ends in `nothing new`.
+   (`{provider: "openclaw-memory", key: <path>, sha256}`) using the updated list.
+   Skip `unchanged` files and files whose line still ends in `nothing new`.
 3. **Import each other file**, in list order:
    - `knowledge_attach_file` the file (its path, listed SHA-256, filename and
      attribution) and cite the returned evidence, with the lines of each item,
