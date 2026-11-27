@@ -21,6 +21,7 @@ import * as caches from "../../plugins/plugin-cache.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as runtimeScope from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
 import { startOperatorMcpOAuthLink } from "../mcp-oauth-link.js";
 import * as modelScope from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
@@ -188,7 +189,7 @@ it("reports sign-in as not done when the delegated setup did not commit the serv
 
 function expectUnscoped() {
   expect(modelScope.getPreparedModelRuntimePluginGeneration()).toBeUndefined();
-  expect(runtimeScope.getPluginRuntimeGenerationRegistry()).toBeUndefined();
+  expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
   expect(caches.getScopedPluginCache()).toBeUndefined();
 }
 
@@ -222,7 +223,7 @@ it("admits each delegated call outside its caller generation without dropping ca
           for (const message of ["First helper call", "Second helper call"]) {
             await tool.execute("delegate", { message });
             expect(modelScope.getPreparedModelRuntimePluginGeneration()).toBe(generation);
-            expect(runtimeScope.getPluginRuntimeGenerationRegistry()).toBe(registry);
+            expect(getPluginRuntimeGenerationRegistry()).toBe(registry);
             expect(caches.getScopedPluginCache()).toBe(cache);
           }
         },

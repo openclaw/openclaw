@@ -3,6 +3,7 @@ import { listAgentIds } from "../agents/agent-roster.js";
 import { getSubagentRegistryPublicationRevision } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { createSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read-index.js";
 import type { SubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
+import { buildSessionSwarmSummary } from "../agents/subagents/registry/subagent-session-swarm-summary.js";
 import {
   buildProjectedAgentRunIndex,
   readAgentRunIndexVersion,
@@ -11,7 +12,6 @@ import { captureModelCostPricing } from "../model-catalog/usage-pricing.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import * as records from "./session-row-projection-record.js";
-import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import type { SessionChildLink } from "./session-utils-core.js";
 import {

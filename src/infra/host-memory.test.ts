@@ -7,7 +7,6 @@ import {
   captureCgroupV2WorkingSetReader,
   captureDelegatedMemoryPressureReader,
   captureServiceAvailableMemoryReader,
-  isMemoryPressureHigh,
   readCgroupV2MemoryLimits,
   readEffectiveMemoryLimit,
   readHostFreeMemoryBytes,
@@ -77,7 +76,15 @@ function setMachMemory(params: { free: number; inactive: number; purgeable: numb
 
 const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
 
-beforeEach(() => {
+let isMemoryPressureHigh: typeof import("./host-memory.js").isMemoryPressureHigh;
+
+async function loadMemoryPressureCheck() {
+  vi.resetModules();
+  return (await import("./host-memory.js")).isMemoryPressureHigh;
+}
+
+beforeEach(async () => {
+  isMemoryPressureHigh = await loadMemoryPressureCheck();
   // Bun on macOS: availableMemory() equals freemem() and constrainedMemory() is physical RAM.
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.4" });
@@ -228,7 +235,7 @@ it.each([0, 1000])("tracks sibling pressure with native leaf limit %i", (leafLim
   expect(isMemoryPressureHigh()).toBe(false);
 });
 
-it("maps only the service's visible cgroup controllers in a delegated mount", () => {
+it("maps only the service's visible cgroup controllers in a delegated mount", async () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   delete (process.versions as { bun?: string }).bun;
   vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
@@ -275,19 +282,23 @@ it("maps only the service's visible cgroup controllers in a delegated mount", ()
       view,
     ].join("\n"),
   );
+  isMemoryPressureHigh = await loadMemoryPressureCheck();
   expect(isMemoryPressureHigh()).toBe(true);
   files.set(
     "/proc/self/mountinfo",
     `${view}\n31 30 0:27 /other ${mount}/sibling rw - cgroup2 cgroup rw`,
   );
+  isMemoryPressureHigh = await loadMemoryPressureCheck();
   expect(isMemoryPressureHigh()).toBe(true);
   files.set("/proc/self/mountinfo", `${view}\n31 30 0:27 /other ${parent} rw - cgroup2 cgroup rw`);
+  isMemoryPressureHigh = await loadMemoryPressureCheck();
   expect(isMemoryPressureHigh()).toBe(false);
   files.delete("/proc/self/mountinfo");
+  isMemoryPressureHigh = await loadMemoryPressureCheck();
   expect(isMemoryPressureHigh()).toBe(false);
 });
 
-it("observes parent pressure when its service leaf is overmounted", () => {
+it("observes parent pressure when its service leaf is overmounted", async () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   delete (process.versions as { bun?: string }).bun;
   vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
@@ -312,6 +323,7 @@ it("observes parent pressure when its service leaf is overmounted", () => {
       ].join("\n"),
     );
     read.mockClear();
+    isMemoryPressureHigh = await loadMemoryPressureCheck();
     expect(isMemoryPressureHigh()).toBe(true);
     expect(read).not.toHaveBeenCalledWith(covered, "utf8");
   }
@@ -404,7 +416,27 @@ it("samples native cron headroom without looking up an ordinary mount again", ()
   expect(reads).not.toHaveBeenCalled();
 });
 
-it("follows the delegated leaf's raw charge across moves without consulting a second controller", () => {
+it("reads fresh delegated charge without rediscovering an unchanged mount", () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  delete (process.versions as { bun?: string }).bun;
+  vi.spyOn(os, "freemem").mockReturnValue(8 * GiB);
+  vi.spyOn(os, "totalmem").mockReturnValue(16 * GiB);
+  const leaf = "/sys/fs/cgroup/service";
+  const files = new Map([
+    ["/proc/self/cgroup", "0::/pod/service"],
+    ["/proc/self/mountinfo", "30 1 0:27 /pod /sys/fs/cgroup rw - cgroup2 cgroup rw"],
+    [`${leaf}/memory.max`, "1000"],
+    [`${leaf}/memory.high`, "max"],
+    [`${leaf}/memory.current`, "799"],
+  ]);
+  const reads = mockCgroupFiles(files);
+  expect(isMemoryPressureHigh()).toBe(false);
+  files.set(`${leaf}/memory.current`, "800");
+  expect(isMemoryPressureHigh()).toBe(true);
+  expect(reads.mock.calls.filter(([file]) => file === "/proc/self/mountinfo")).toHaveLength(1);
+});
+
+it("follows the delegated leaf's raw charge across moves without consulting a second controller", async () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   delete (process.versions as { bun?: string }).bun;
   const nativeLimit = vi.spyOn(process, "constrainedMemory").mockReturnValue(1000);
@@ -441,6 +473,7 @@ it("follows the delegated leaf's raw charge across moves without consulting a se
     `${mountinfo}\n31 30 0:28 / ${mount}/other/memory.current ro - tmpfs tmpfs rw`,
   );
   expect(read?.().availableBytes).toBeUndefined();
+  isMemoryPressureHigh = await loadMemoryPressureCheck();
   expect(isMemoryPressureHigh()).toBe(false);
   expect(nativeLimit).not.toHaveBeenCalled();
   expect(nativeAvailable).not.toHaveBeenCalled();

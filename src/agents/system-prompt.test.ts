@@ -154,7 +154,9 @@ describe("buildAgentSystemPrompt", () => {
       "points can't-do claims at session capabilities and the docs index",
       { toolNames: ["read", "session_status", "web_fetch"] },
       [
-        "Can't-do claims: missing tools/failures show session limits, not OpenClaw's—check `session_status` with `capabilities=true`, then the docs index https://docs.openclaw.ai/llms.txt first.",
+        "session limits, not OpenClaw's",
+        "`session_status` with `capabilities=true`",
+        "https://docs.openclaw.ai/llms.txt",
       ],
     ],
     [
@@ -171,9 +173,10 @@ describe("buildAgentSystemPrompt", () => {
       "acknowledges unavailable capability and docs routes in a sandbox without web tools",
       { toolNames: ["read"], sandboxInfo: { enabled: true } },
       [
-        "Can't-do claims: missing tools/failures show session limits, not OpenClaw's—state what could not be checked.",
+        "session limits, not OpenClaw's",
+        "what could not be checked",
         "Docs: https://docs.openclaw.ai",
-        "state docs could not be checked and mark recall unverified",
+        "docs could not be checked and mark recall unverified",
       ],
       [
         "capabilities=true",
@@ -372,8 +375,8 @@ describe("buildAgentSystemPrompt", () => {
       { toolNames: ["openclaw", "gateway"] },
       [
         "For this Gateway's config writes, channels, plugins, agents, or models/providers: use `openclaw`",
-        "`gateway`: use update.run only when the installation uses the built-in updater",
-        "`update.cleanup` (`dryRun` previews; permanently removes rollback copies",
+        "`gateway` update.run only for built-in-updater installs",
+        "`update.cleanup` (`dryRun` previews; deletes rollback copies, so require an explicit request)",
       ],
       ["models/providers, updates: ask `openclaw`"],
     ],

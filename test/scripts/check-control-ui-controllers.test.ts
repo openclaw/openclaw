@@ -287,16 +287,26 @@ describe("Control UI controller guard", () => {
   });
 
   it.each(["flush", "getOwner", "runWithOwner"])(
-    "ratchets imported %s aliases and namespace calls only",
+    "ratchets imported %s without counting unrelated or shadowed bindings",
     (pattern) => {
       const source = [
         `import { ${pattern} as action } from "solid-js";`,
         'import * as signals from "@solidjs/signals";',
-        "action<number>();",
-        `signals.${pattern}?.();`,
-        `signals["${pattern}"]();`,
+        `import { ${pattern} } from "./owner.ts";`,
+        `${pattern}();`,
+        `owner.${pattern}();`,
+        `owner["${pattern}"]();`,
+        "function parameter(action: () => void) { action(); }",
+        `function namespace(signals: any) { signals.${pattern}(); }`,
+        "{ const action = () => {}; action(); }",
+        "function hoisted() { { var action = () => {}; } action(); }",
+        "function destructured({ action }: { action: () => void }) { action(); }",
+        `try {} catch (signals) { signals.${pattern}(); }`,
       ].join("\n");
       const root = fixture(source);
+      expect(main(root, [])).toBe(0);
+      const calls = `\naction<number>();\nsignals.${pattern}?.();\nsignals["${pattern}"]();`;
+      fs.appendFileSync(path.join(root, "ui/src/view.ts"), calls);
       const baseline = path.join(root, `config/control-ui-${pattern}-baseline.txt`);
       fs.writeFileSync(baseline, "ui/src/view.ts\t3\n");
       git(root, ["add", "."]);
@@ -305,29 +315,6 @@ describe("Control UI controller guard", () => {
       fs.appendFileSync(path.join(root, "ui/src/view.ts"), "\naction();\n");
       expect(main(root, [])).toBe(1);
       expect(errors.mock.calls.flat().join("\n")).toContain(`${pattern} calls must not increase`);
-    },
-  );
-
-  it.each(["flush", "getOwner", "runWithOwner"])(
-    "ignores non-Solid and shadowed %s bindings",
-    (pattern) => {
-      const root = fixture(
-        [
-          `import { ${pattern} as action } from "solid-js";`,
-          'import * as signals from "@solidjs/signals";',
-          `import { ${pattern} } from "./owner.ts";`,
-          `${pattern}();`,
-          `owner.${pattern}();`,
-          `owner["${pattern}"]();`,
-          "function parameter(action: () => void) { action(); }",
-          `function namespace(signals: any) { signals.${pattern}(); }`,
-          "{ const action = () => {}; action(); }",
-          "function hoisted() { { var action = () => {}; } action(); }",
-          "function destructured({ action }: { action: () => void }) { action(); }",
-          `try {} catch (signals) { signals.${pattern}(); }`,
-        ].join("\n"),
-      );
-      expect(main(root, [])).toBe(0);
     },
   );
 
