@@ -9,11 +9,6 @@ import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
 import type { CronJob, CronRunStatus, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
 import {
-  autoDisableCronJob,
-  maybeAutoDisableCronJobAfterRunFailure,
-  queueCronAutoDisableNotification,
-} from "./auto-disable.js";
-import {
   finalizeCronFailureNotifications,
   resolveFailureIncident,
   resolveFailureAlert,
@@ -116,6 +111,7 @@ export function applyJobResult(
     forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
   };
   const previousRunInterruptedByRestart = job.state.lastError === STARTUP_INTERRUPTED_ERROR;
+  delete job.state.admissionDeferred;
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
   job.state.runningReceiptId = undefined;
@@ -239,7 +235,6 @@ export function applyJobResult(
     !oneShotNextCheck &&
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
-  let terminalRecurring = false;
   let terminalOneShot = false;
   // Set when a quick transient re-run is scheduled for a provider outage; finalize holds
   // the failure alert/repair until that retry ladder resolves.
@@ -255,44 +250,28 @@ export function applyJobResult(
     if (shouldDelete || job.schedule.kind === "event") {
       job.state.nextRunAtMs = undefined;
     }
+    if (
+      ownsSchedule &&
+      result.status === "error" &&
+      previousScheduleState.pacedNextRunAtMs !== undefined
+    ) {
+      // A failed check has not consumed the paced occurrence; its backoff retry still owns it.
+      job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
+    }
     // A parent pause is not a failure: its own notice below replaces the skipped-run alert.
-    const failureNotification = result.parentUnavailable
-      ? undefined
-      : finalizeCronFailureNotifications(state, {
-          job,
-          alertConfig,
-          result,
-          completionStatus,
-          terminalRecurring,
-          terminalOneShot,
-          pendingTransientRetry,
-          replay: opts.replay,
-          deferredNotifications: opts.deferredNotifications,
-        });
-    if (terminalRecurring && failureNotification !== "queued") {
-      // Same contract as a terminal one-shot: the route-backed alert carries the
-      // safety notice; every other outcome keeps the in-app notice as before.
-      queueCronAutoDisableNotification({
+    if (!result.parentUnavailable) {
+      finalizeCronFailureNotifications(state, {
         job,
-        reason: "consecutive-failures",
-        consecutiveErrors: job.state.consecutiveErrors ?? 0,
+        alertConfig,
+        result,
+        completionStatus,
+        terminalOneShot,
+        pendingTransientRetry,
+        replay: opts.replay,
         deferredNotifications: opts.deferredNotifications,
       });
     }
-    if (terminalOneShot) {
-      autoDisableCronJob({
-        job,
-        reason: "consecutive-failures",
-        atMs: result.endedAt,
-        consecutiveErrors: job.state.consecutiveErrors ?? 0,
-        terminalOneShot: true,
-        // Cooldown and incident suppression remain the alert owner's decision.
-        notify: failureNotification === "unavailable" && !opts.replay,
-        deferredNotifications: opts.deferredNotifications,
-      });
-    }
-    // One-shot handling may already have disabled the job above; the notice
-    // belongs to the pause either way, sent once while the job was still enabled.
+    // The notice belongs to the pause, sent once while the job was still enabled.
     // A newer operator edit owns enablement, so a stale pause result changes nothing.
     if (result.parentUnavailable && ownsSchedule && previousScheduleState.enabled) {
       // The parent conversation is gone; pause until someone re-enables the job.
@@ -301,13 +280,17 @@ export function applyJobResult(
       if (!opts.replay) {
         // The gone conversation cannot accept the notice; its owning agent gets it instead.
         const notice = cronNotificationJob(job);
-        const { agentId } = resolveCronNotificationQueueOwner(notice, "auto-disabled");
-        const { sessionKey, ...ownerNotice } = notice;
+        const { agentId, sessionKey } = resolveCronNotificationQueueOwner(notice, "auto-disabled");
         opts.deferredNotifications.push({
           kind: "auto-disabled",
           job:
             sessionKey === result.parentUnavailable.parentSessionKey
-              ? { ...ownerNotice, ...(agentId ? { agentId } : {}) }
+              ? {
+                  ...notice,
+                  owner: undefined,
+                  sessionKey: undefined,
+                  ...(agentId ? { agentId } : {}),
+                }
               : notice,
           text: result.error ?? "Automation paused: its parent conversation is unavailable.",
         });
@@ -327,12 +310,16 @@ export function applyJobResult(
     if (
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&
-      (isPluginCommandCronJob(job) || job.operatorSource)
+      (isPluginCommandCronJob(job) || job.operatorSource) &&
+      // Missing account configuration does not revoke the job creator's authority.
+      result.failureNotificationDetail?.kind !== "inference-account-unrecorded"
     ) {
-      // A retired plugin or unusable continuation source cannot recover through retries.
+      // A permanent error here means a retired plugin or a refused operator source:
+      // the job can never run again as written.
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       job.state.startupCatchupAtMs = undefined;
+      terminalOneShot = isOneShotSchedule && runFailed;
     } else if (job.schedule.kind === "event") {
       // The transferred ingress receipt owns this occurrence. A timer retry
       // would lose its immutable event and could repeat an external side effect.
@@ -422,30 +409,6 @@ export function applyJobResult(
       job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
-    } else if (
-      runFailed &&
-      isJobEnabled(job) &&
-      maybeAutoDisableCronJobAfterRunFailure({
-        job,
-        atMs: result.endedAt,
-        deferredNotifications: opts.deferredNotifications,
-        // The failure route owns the terminal notice when one resolves; the
-        // in-app notice is queued at finish only when no route can carry it.
-        notify: false,
-      })
-    ) {
-      terminalRecurring = true;
-      // Keep this after the ownership and immediate-preserve gates: those paths
-      // restore schedule state and would otherwise silently undo the disable.
-      state.deps.log.error(
-        {
-          jobId: job.id,
-          name: job.name,
-          consecutiveErrors: job.state.consecutiveErrors,
-          error: result.error,
-        },
-        "cron: auto-disabled job after consecutive run failures",
-      );
     } else if (result.status === "error" && isJobEnabled(job)) {
       const retryDecision = resolveTransientCronRetryDecision({
         error: result.error,
@@ -464,7 +427,9 @@ export function applyJobResult(
       let normalNextComputed = false;
       const computeNormalNext = () => {
         if (!normalNextComputed) {
-          normalNext = computeNaturalNext(retryDecision.retryable || previousConsecutiveErrors > 0);
+          normalNext =
+            previousScheduleState.pacedNextRunAtMs ??
+            computeNaturalNext(retryDecision.retryable || previousConsecutiveErrors > 0);
           normalNextComputed = true;
         }
         return normalNext;
@@ -633,8 +598,10 @@ export function applyTriggerNoFireResult(
   job.state.runningAtMs = undefined;
   job.state.runningReceiptId = undefined;
   delete job.state.runningScheduleChangeId;
+  // A completed quiet check ends any waiting episode, like a payload run's completion.
+  delete job.state.admissionDeferred;
   job.updatedAtMs = result.endedAt;
-  if (!result.triggerEval.busy && opts.triggerOwnership !== "stale") {
+  if (opts.triggerOwnership !== "stale") {
     // A non-firing evaluation is successful scheduler work, not a payload run;
     // reset error streaks, but preserve delivery history and its alert cooldown.
     job.state.consecutiveErrors = 0;

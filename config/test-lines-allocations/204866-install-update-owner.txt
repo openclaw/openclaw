@@ -1,0 +1,15 @@
+# PR #204866: measured net +740 test lines minus the standard 400-line allowance = 340.
+# src/cli/update-cli/update-command-release-owner.test.ts: converted and settled legacy refusals, node-only package ownership versus Git SHA routing, documented targets, and first-conversion root identity.
+# src/cli/update-cli/update-command-immutable-owner.test.ts: immutable dry runs reach inspection and structured preview; resident-owned activation remains refused.
+# src/cli/update-cli/update-command-node-package-advice.test.ts: human/JSON package-result instructions and executable platform quoting, without service inspection or invented activation after failure.
+# src/cli/update-cli/update-command-post-update.test-support.ts: real finalization publishes exactly the node advice while preserving the absent-Gateway no-restart outcome.
+# src/commands/daemon-install-path.test.ts: the install-plan producer forwards its captured state-directory environment without changing the process environment.
+# src/commands/daemon-install-helpers.test.ts: Bun runtime selection still forwards the complete captured environment and does not mutate it.
+# src/daemon/program-args.release.test.ts: service-entry consumer keeps the resident launcher, retained recovery precedence, node independence, and source-copy planning.
+# src/daemon/schtasks-runtime.deadline.test.ts: a slow successful inspection remains within the existing overall deadline; late/native failures remain unknown.
+# src/daemon/schtasks-state-probe.test.ts: native process snapshots receive the default or explicit owner budget without a hidden five-second clamp.
+# src/update/cli.test.ts: RPC can take over opaque foreground ownership; local-only preparation refuses before cleanup or run creation.
+# src/update/prepare.test.ts: verified Gateway custody defers plugin maintenance; converted node-only preparation retains its resident owner and publishes a pending trial.
+# src/infra/git-release.test.ts: ordinary service planning keeps both legacy release layouts on their launcher; explicit strings remain reserved for recovery.
+# src/cli/update-cli/update-command-fresh-preview.test.ts: a converted installation reaches the real structured preview without changing its release slot, package, trial, or state database.
+340

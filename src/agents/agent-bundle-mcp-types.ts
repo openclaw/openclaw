@@ -4,17 +4,11 @@ import type {
   ListResourceTemplatesResult,
   ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { TSchema } from "typebox";
+import type { SessionMcpStoreSource } from "../config/sessions/session-mcp-store-admission.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
-import type { McpCodexToolApprovalMode, McpServerToolFilterConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
-import type {
-  McpAppIcon,
-  McpAppSettingsCapability,
-  McpAppToolExtensions,
-} from "../shared/mcp-app-extensions.js";
-import type { McpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
+import type { McpToolCatalog, McpToolCatalogDiagnostic } from "./agent-bundle-mcp-catalog.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export type SessionMcpConfigReload = {
@@ -33,73 +27,15 @@ export type BundleMcpToolRuntime = {
   dispose: () => Promise<void>;
 };
 
-export type McpServerCatalog = {
-  serverName: string;
-  safeServerName?: string;
-  launchSummary: string;
-  pluginId?: string;
-  marketplace?: string;
-  title?: string;
-  icons?: McpAppIcon[];
-  /** Complete server-level guidance from the upstream initialize result. */
-  instructions?: string;
-  settings?: McpAppSettingsCapability;
-  toolCount: number;
-  resources?: {
-    listChanged?: boolean;
-  };
-  prompts?: {
-    listChanged?: boolean;
-  };
-  tools?: {
-    listChanged?: boolean;
-    filteredCount?: number;
-  };
-  requestTimeoutMs?: number;
-  supportsParallelToolCalls?: boolean;
-  toolFilter?: McpServerToolFilterConfig;
-  deniedToolNames?: string[];
-  codexApprovalMode?: McpCodexToolApprovalMode;
-};
-
-/** MCP tool entry after server-name sanitization and schema normalization. */
-export type McpCatalogTool = {
-  serverName: string;
-  safeServerName: string;
-  toolName: string;
-  title?: string;
-  description?: string;
-  inputSchema: TSchema;
-  fallbackDescription: string;
-  appExtensions?: McpAppToolExtensions;
-  uiResourceUri?: string;
-  uiVisibility?: Array<"app" | "model">;
-  /** Listed by the server but excluded from OpenClaw's callable tool catalog. */
-  excludedFromOpenClawCatalog?: true;
-  deniedBySession?: true;
-  codexAnnotations?: McpCodexToolAnnotations;
-  /** Trusted requester OAuth sign-in bootstrap; never dispatches into the server's tools. */
-  oauthConnectBootstrap?: true;
-};
-
-export type McpToolCatalog = {
-  version: number;
-  generatedAt: number;
-  servers: Record<string, McpServerCatalog>;
-  tools: McpCatalogTool[];
-  /** Complete raw catalog used to project policy into native MCP clients. */
-  policyTools?: McpCatalogTool[];
-  /** Listed tools hidden only by the session override, retained for read-only inventory. */
-  sessionDeniedTools?: McpCatalogTool[];
-  diagnostics?: readonly McpToolCatalogDiagnostic[];
-};
-
 /** Transient requester sign-in surface kept outside the remembered live catalog. */
 export type RequesterMcpConnect = {
   catalog: McpToolCatalog;
   authorizedServerNames: readonly string[];
   configFingerprint: string;
-  createExecute: (serverName: string) => AnyAgentTool["execute"] | undefined;
+  createExecute: (
+    serverName: string,
+    options?: { assertCurrent: () => void },
+  ) => AnyAgentTool["execute"] | undefined;
 };
 
 type PreparedNativeMcpServerPolicy = {
@@ -112,13 +48,6 @@ type PreparedNativeMcpServerPolicy = {
 /** Concrete raw/safe policy fact prepared once for native MCP adapters. */
 export type PreparedNativeMcpPolicy = {
   servers: Record<string, PreparedNativeMcpServerPolicy>;
-};
-
-export type McpToolCatalogDiagnostic = {
-  serverName: string;
-  safeServerName: string;
-  launchSummary: string;
-  message: string;
 };
 
 export type McpRequestOptions = {
@@ -214,6 +143,7 @@ export type RequesterScopedMcpRuntimeHandle = SessionMcpRuntimeLease & {
 /** Manager for session-scoped MCP runtimes and their idle lifecycle. */
 export type SessionMcpRuntimeManager = {
   acquire: (params: {
+    storeAdmission?: object;
     sessionId: string;
     sessionKey?: string;
     agentId?: string;
@@ -223,6 +153,8 @@ export type SessionMcpRuntimeManager = {
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
     /** Trusted sender id; required to materialize requester-scoped MCP servers. */
     requesterSenderId?: string | null;
+    /** Turn-owned authority for the personal partition, never cached with a runtime. */
+    assertRequesterCurrent?: () => void;
     agentAccountId?: string | null;
     messageChannel?: string | null;
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
@@ -254,6 +186,9 @@ export type SessionMcpRuntimeManager = {
     sessionId?: string;
     sessionKey?: string;
   }) => { sessionId: string; retire: (assertCurrent: () => void) => Promise<void> } | undefined;
+  captureStoreRetirement: (
+    sessionId: string,
+  ) => ((source: SessionMcpStoreSource) => Promise<void>) | undefined;
   disposeSession: (sessionId: string) => Promise<void>;
   /** Required retirement stays armed when a stopping run creates or reuses a runtime. */
   deferRetirement: (sessionId: string, opts?: { retainAcrossReuse?: boolean }) => boolean;

@@ -83,7 +83,7 @@ it("keeps composer conflict recovery outside the durable transcript entry", asyn
   for (const marker of [
     "chat-workspace-conflict-notice",
     "git show ",
-    "Local versions kept; inspect or take the cloud version.",
+    "Local versions kept. Review them or use the cloud version.",
   ]) {
     expect(hot.code).not.toContain(marker);
     expect(cold.code).toContain(marker);

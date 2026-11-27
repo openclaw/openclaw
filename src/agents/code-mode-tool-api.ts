@@ -52,7 +52,7 @@ export async function createCodeModeToolApiFile(
   }
   const content = [
     "// Generated from the effective tool contract. Unsupported shapes stay unknown.",
-    "// JSON Schema validation owns constraints; describe() exposes the original schema.",
+    "// JSON Schema validation owns constraints; describe() exposes the original input schema.",
     "// Values enter the guest intact or reject when program-data admission is full.",
     ...declarations,
   ].join("\n");
@@ -200,7 +200,12 @@ function createVariantDeclarations(params: {
   if (!append("};")) {
     return undefined;
   }
-  const fallback = names.join(" | ");
+  // The complete union is shared by both overloads and both conditional arms. Do not
+  // spend the declaration allowance on three copies of the same action names.
+  const fallback = `${prefix}Output`;
+  if (!append(`type ${fallback} = ${names.join(" | ")};`)) {
+    return undefined;
+  }
   if (
     !append(
       `declare function ${callableName}<const Input extends ${inputName}>(input: Input): Promise<Input extends { ${JSON.stringify(variants.inputProperty)}: infer Value } ? Value extends keyof ${mappingName} ? ${mappingName}[Value] : ${fallback} : ${fallback}>;`,

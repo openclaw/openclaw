@@ -1,20 +1,18 @@
 import type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SecretInputMode } from "./provider-auth-types.js";
-
-export type ProviderAuthOptionBag = {
-  token?: string;
-  tokenProvider?: string;
-  secretInputMode?: SecretInputMode;
-  [key: string]: unknown;
-};
 
 /** Context for resolving synthetic provider credentials from config. */
 export type ProviderResolveSyntheticAuthContext = {
   config?: OpenClawConfig;
   provider: string;
   providerConfig?: ModelProviderConfig;
+};
+
+/** Validated, non-secret native login metadata for display, never auth authority. */
+export type ProviderNativeAuthDisplay = {
+  kind: "subscription" | "api" | "native";
+  plan?: string;
 };
 
 /** Synthetic provider credential returned by plugin auth helpers. */
@@ -24,7 +22,11 @@ export type ProviderSyntheticAuthResult = {
   mode: Exclude<ModelProviderAuthMode, "aws-sdk" | "none" | "native-command">;
   expiresAt?: number;
   /** Native presence authorizes only this runtime, never a provider bearer request. */
-  nativeAuth?: { runtime: string; mode: "api-key" | "oauth" | "token" };
+  nativeAuth?: {
+    runtime: string;
+    mode: "api-key" | "oauth" | "token";
+    display?: ProviderNativeAuthDisplay;
+  };
 };
 
 /** Context for resolving external provider auth profiles. */

@@ -2,7 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { expectAbsent, expectContent, expectPresent } from "../../test-helpers/model-providers.ts";
+import {
+  expectAbsent,
+  expectContent,
+  expectPresent,
+  profile,
+} from "../../test-helpers/model-providers.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   appendPage,
@@ -27,37 +32,89 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage usage convergence", () => {
+  it("refreshes only expired provider usage on activation and retains the displayed plan", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+    const harness = createHarness("main");
+    const replacement = deferred<unknown>();
+    const request = harness.request.getMockImplementation()!;
+    harness.request.mockImplementation((method, ...args) =>
+      method === "usage.status" ? replacement.promise : request(method, ...args),
+    );
+    const plans = (plan: string) => ({
+      updatedAt: Date.now(),
+      providers: [{ provider: "openai", displayName: "OpenAI", plan, windows: [] }],
+    });
+    const page = createPage(harness.context);
+    mountPage(page);
+    const loadedAt = Date.now();
+    publishRouteData(page, {
+      ...createApiKeyProviderData(),
+      updatedAt: loadedAt,
+      providerUsage: plans("Original"),
+    });
+    const plan = () => page.querySelector(".provider-row__plan")?.textContent;
+    await waitForSolid(() => expect(plan()).toBe("Original"));
+    await waitForProviders(page);
+    expect(requestCount(harness.request, "usage.status")).toBe(0);
+    harness.request.mockClear();
+
+    const activate = () => window.dispatchEvent(new Event("focus"));
+    vi.setSystemTime(loadedAt + 300_000 - 1);
+    activate();
+    expect(harness.request).not.toHaveBeenCalled();
+
+    vi.setSystemTime(loadedAt + 300_000);
+    visibility.mockReturnValue("hidden");
+    activate();
+    expect(harness.request).not.toHaveBeenCalled();
+    visibility.mockReturnValue("visible");
+    activate();
+    activate();
+    expect(harness.request.mock.calls.map(([method]) => method)).toEqual(["usage.status"]);
+    expect(plan()).toBe("Original");
+
+    replacement.resolve(plans("Updated"));
+    await waitForSolid(() => expect(plan()).toBe("Updated"));
+    activate();
+    expect(harness.request.mock.calls.map(([method]) => method)).toEqual(["usage.status"]);
+  });
+
   it("keeps account quotas during config saves and refreshes them from the page", async () => {
     const { context, request, snapshot, runtimeConfig, notifyRuntimeConfig } =
       createHarness("main");
-    snapshot.hello = {
-      type: "hello-ok",
-      protocol: 3,
-      features: { methods: ["config.get", "config.patch", "codex.accountUsage"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    };
+    snapshot.hello!.features!.methods!.push("codex.accountUsage");
     const original = request.getMockImplementation()!;
     let usedPercent = 10;
+    const initial = deferred();
+    const slow = deferred();
     const accountRequests: unknown[] = [];
     request.mockImplementation(async (method, params?: unknown) => {
       if (method === "models.authStatus") {
         return createAuthStatus([
           {
+            profileOrder: ["openai:one", "openai:key", "openai:two"],
             profiles: [
-              { profileId: "openai:one", type: "oauth", status: "ok" },
-              { profileId: "openai:two", type: "token", status: "static" },
-              { profileId: "openai:key", type: "api_key", status: "static" },
+              profile("openai:one"),
+              profile("openai:two", { type: "token", status: "static" }),
+              profile("openai:key", { type: "api_key", status: "static" }),
             ],
           },
-          {
-            provider: "anthropic",
-            displayName: "Anthropic",
-            profiles: [{ profileId: "anthropic:one", type: "oauth", status: "ok" }],
-          },
+          { provider: "anthropic", displayName: "Anthropic", profiles: [profile("anthropic:one")] },
         ]);
       }
       if (method === "codex.accountUsage") {
         accountRequests.push(params);
+        if (accountRequests.length === 1) {
+          throw new Error("Offline");
+        }
+        if (accountRequests.length === 2) {
+          return initial.promise;
+        }
+        if (accountRequests.length === 4) {
+          await slow.promise;
+        }
         return {
           updatedAt: 1,
           providers: [
@@ -71,30 +128,47 @@ describe("ModelProvidersPage usage convergence", () => {
     await waitForProviders(page);
     const openai = await expandProvider(page, "openai");
     const anthropic = await expandProvider(page, "anthropic");
-    const limitsText = () =>
-      [...openai.querySelectorAll(".model-providers__account-limits")].map(
-        (limits) => limits.textContent,
-      );
-    const expectLimits = (remaining: number) =>
-      expect(limitsText()).toEqual(
-        Array.from({ length: 2 }, () => expect.stringContaining(`${remaining}% left`)),
-      );
+    const segments = () => [...openai.querySelectorAll("[data-account-segment]")];
+    const bars = openai.querySelector(".model-providers__usage-bars")!;
+    const refresh = () =>
+      page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
+    await vi.waitFor(() => expectContent(bars, ["Signed-in account: Offline", "Loading…"]));
+    expect([...bars.querySelectorAll('[role="status"]')].map((node) => node.textContent)).toEqual([
+      "Loading…",
+      "Signed-in account: Offline · Refresh to try again.",
+    ]);
+    // Opening the pending account adds credential actions, not a second copy of the grid outcome.
+    bars.querySelectorAll<HTMLButtonElement>(".model-providers__segment-name")[1]!.click();
+    const expanded = () =>
+      openai.querySelector('[data-profile-id="openai:two"] .model-providers__account-limits');
+    await waitForSolid(() => {
+      expect(expanded()).not.toBeNull();
+      expect(expanded()!.textContent).not.toContain("Loading");
+    });
+    initial.reject(new Error("Timed out"));
+    const retryHint = "Access token: Timed out · Refresh to try again.";
+    await vi.waitFor(() => expectContent(bars, [retryHint]));
+    expect(expanded()!.textContent).not.toContain("Timed out");
+    expect(segments()).toHaveLength(0);
+    refresh();
+    const expectLimits = (percent: number) => {
+      const left = expect.stringContaining(`${percent}% left`);
+      expect(segments().map((el) => el.ariaLabel)).toEqual([left, left]);
+    };
+    await vi.waitFor(() => expect(segments().map((el) => el.textContent)).toEqual(["90%", "—"]));
+    slow.resolve();
     await vi.waitFor(() => expectLimits(90));
-    expect(accountRequests).toEqual([
+    expect(bars.textContent).not.toContain("Refresh to try again");
+    expect(expanded()).not.toBeNull();
+    expect(expanded()!.textContent).not.toMatch(/Timed out|Loading|90%/u);
+    expect(accountRequests.slice(2)).toEqual([
       { agentId: "main", profileId: "openai:one" },
       { agentId: "main", profileId: "openai:two" },
     ]);
-    expect(
-      [...openai.querySelectorAll('.model-providers__account-limits [role="meter"]')].map((meter) =>
-        meter.getAttribute("aria-valuenow"),
-      ),
-    ).toEqual(["90", "90"]);
-    for (const [row, id] of [
-      [anthropic, "anthropic:one"],
-      [openai, "openai:key"],
-    ] as const) {
-      expectAbsent(row, `[data-profile-id="${id}"] .model-providers__account-limits`);
-    }
+    const ids = segments().map((el) => el.getAttribute("data-account-segment"));
+    expect(ids).toEqual(["openai:one", "openai:two"]);
+    expectAbsent(anthropic, ".model-providers__account-limits");
+    expectAbsent(openai, '[data-profile-id="openai:key"] .model-providers__account-limits');
     runtimeConfig.state.configSaving = true;
     notifyRuntimeConfig();
     await page.updateComplete;
@@ -102,9 +176,17 @@ describe("ModelProvidersPage usage convergence", () => {
     runtimeConfig.state.configSaving = false;
     notifyRuntimeConfig();
     usedPercent = 90;
-    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
+    refresh();
     await vi.waitFor(() => expectLimits(10));
-    expect(accountRequests).toHaveLength(4);
+    expect(accountRequests).toHaveLength(6);
+    segments()[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("models.authOrderSet", {
+        provider: "openai",
+        agentId: "main",
+        profileIds: ["openai:two", "openai:key", "openai:one"],
+      }),
+    );
   });
 
   it.each(["reconnect", "manual refresh"] as const)(
@@ -118,7 +200,7 @@ describe("ModelProvidersPage usage convergence", () => {
       await page.updateComplete;
       await advanceUsageRetries();
       await page.updateComplete;
-      expectContent(page.renderRoot, ["did not finish loading"]);
+      expectContent(page.renderRoot, ["Couldn’t finish loading provider usage"]);
 
       const usageCallsBeforeRestart = requestCount(harness.request, "usage.status");
       expect(usageCallsBeforeRestart).toBe(4);
@@ -232,6 +314,7 @@ describe("ModelProvidersPage usage convergence", () => {
     expectNoProviderReads();
     page.loaderPending = true;
     publishRouteData(page, createApiKeyProviderData());
+    page.routeData = { ...page.routeData!, provider: "openai" };
     await waitForSolid(() => expectPresent(page, '[data-provider-id="openai"]'));
     expect(usageReads).toBe(0);
     expect(requestCount(harness.request, "sessions.usage")).toBe(0);
@@ -258,9 +341,7 @@ describe("ModelProvidersPage usage convergence", () => {
     expectRetainedControls();
     page.view.props.onRefresh();
     await waitForSolid(() =>
-      expectContent(page.renderRoot, [
-        "Provider usage is unavailable; the last request failed. Refresh to retry.",
-      ]),
+      expectContent(page.renderRoot, ["Couldn’t load provider usage. Refresh to try again."]),
     );
     expectRetainedControls();
     usageFails = false;

@@ -55,6 +55,17 @@ describe("signalMessageActions", () => {
     ).toStrictEqual(actions);
   });
 
+  it("owns group-reaction author fields only while reactions are advertised", () => {
+    expect(signalMessageActions.describeMessageTool?.({ cfg: overrideCfg })?.schema).toEqual({
+      actions: ["react"],
+      visibility: "all-configured",
+      properties: { targetAuthor: { type: "string" }, targetAuthorUuid: { type: "string" } },
+    });
+    expect(
+      signalMessageActions.describeMessageTool?.({ cfg: disabledCfg })?.schema,
+    ).toBeUndefined();
+  });
+
   it("supports only reactions for plugin dispatch", () => {
     expect(signalMessageActions.supportsAction?.({ action: "send" })).toBe(false);
     expect(signalMessageActions.supportsAction?.({ action: "react" })).toBe(true);

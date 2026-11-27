@@ -4,10 +4,10 @@ import { createSqliteWorkerOperationAdmission } from "../sqlite-worker-operation
 import { PostgresSyncConnection } from "./connection.js";
 
 export function usePostgresFixture() {
-  const cleanups: Array<() => void> = [];
-  afterEach(() => {
+  const cleanups: Array<() => void | Promise<void>> = [];
+  afterEach(async () => {
     for (const cleanup of cleanups.splice(0).toReversed()) {
-      cleanup();
+      await cleanup();
     }
     vi.restoreAllMocks();
   });
@@ -26,6 +26,7 @@ export function usePostgresFixture() {
         [Symbol.for("openclaw.postgres-sync-connection")]: { value: true },
         anchor: { value: nativeDatabase() },
         advisoryLockKey: { value: -42n },
+        bridgeParameters: { value: {} },
       });
       return Object.assign(db, { isOpen: true, isTransaction: false, mutationRevision: 0 });
     },

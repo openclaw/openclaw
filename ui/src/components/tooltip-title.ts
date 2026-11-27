@@ -299,7 +299,7 @@ export function installTitleTooltips(ownerDocument: Document) {
           .catch((error: unknown) => {
             if (active === current) {
               restore();
-              showToast({ message: formatUiError(error) });
+              showToast({ severity: "error", message: formatUiError(error) });
             }
           });
         return;

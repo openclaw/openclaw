@@ -35,7 +35,12 @@ it("updates the open popover after the Gateway deadline without per-run requests
             expiry: { at: startedAt + 7 * 86_400_000, remainingMs: 7 * 86_400_000, label: "7d" },
           },
         ],
-        usage: { providerId: "openai", plan: "Plus", windows: [{ label: "5h", usedPercent }] },
+        usage: {
+          providerId: "openai",
+          authProfileId: "openai:test",
+          plan: "Plus",
+          windows: [{ label: "5h", usedPercent }],
+        },
       },
     ],
   }));
@@ -53,7 +58,17 @@ it("updates the open popover after the Gateway deadline without per-run requests
     ],
     "main",
     undefined,
-    { "models.authStatus": auth },
+    {
+      "models.authStatus": auth,
+      "models.list": () => ({
+        models: [],
+        accountSelection: {
+          mode: "configured",
+          authProfileId: "openai:test",
+          label: "Selected account",
+        },
+      }),
+    },
   );
   await fixture.sessions.refresh({ agentId: "main", force: true });
   const pane = fixture.mount(key);

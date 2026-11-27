@@ -18,9 +18,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerMemoryCli } from "./cli.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const forgetMemoryEntries = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn((): OpenClawConfig => ({})));
 
 vi.mock("./memory/index.js", () => ({ getMemorySearchManager }));
+vi.mock("./memory-forget.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./memory-forget.js")>()),
+  forgetMemoryEntries,
+}));
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")>()),
@@ -90,6 +95,7 @@ beforeEach(() => {
     diagnostics: [],
   }));
   getMemorySearchManager.mockReset();
+  forgetMemoryEntries.mockReset();
   getRuntimeConfig.mockReset().mockReturnValue(knowledgeSlot);
 });
 
@@ -240,4 +246,24 @@ it("reports recall recording failure without discarding search results", async (
     results: [result],
     warning: "Memory recall recording failed: fixture recall persistence failed",
   });
+});
+
+it("records the selected memory plugin in forget --json while Memory Core is the sidecar", async () => {
+  const report = { agentId: "main", dryRun: true, sessionIds: ["session-one"], entryKeys: [] };
+  const agents = { ownership: "explicit" as const, entries: { main: {} } };
+  getRuntimeConfig.mockReturnValue({ ...knowledgeSlot, agents });
+  forgetMemoryEntries.mockResolvedValue(report);
+  const sidecar = await runMemoryCli(["forget", "--session", "session-one", "--dry-run", "--json"]);
+  expect(sidecar.json).toEqual({
+    ...report,
+    provider: "knowledge",
+    memoryCore: "consolidation-sidecar",
+  });
+  expect(sidecar.error).toContain('plugins.slots.memory selects "knowledge"');
+
+  vi.restoreAllMocks();
+  getRuntimeConfig.mockReturnValue({ agents, plugins: { slots: { memory: "memory-core" } } });
+  const owner = await runMemoryCli(["forget", "--session", "session-one", "--dry-run", "--json"]);
+  expect(owner.json).toEqual(report);
+  expect(owner.error).toBe("");
 });

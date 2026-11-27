@@ -15,11 +15,15 @@ import {
   connectNode,
   connectGatewayStatusClient,
   postJson,
-  spawnGatewayInstance,
   stopGatewayInstance,
   waitForNodeStatus,
 } from "./helpers/gateway-e2e-harness.js";
-import { connectProofClient } from "./helpers/gateway-integration-fixtures.js";
+import { connectProofClient, readRequestText } from "./helpers/gateway-integration-fixtures.js";
+import {
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+} from "./helpers/openai-responses-model-fixture.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { waitForFile } from "./helpers/process-wait.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -79,20 +83,47 @@ describe("gateway multi-instance e2e", () => {
   const instances: GatewayInstance[] = [];
   const nodeClients: GatewayClient[] = [];
   const acquisitions: Promise<unknown>[] = [];
+  const modelCleanups: Array<() => Promise<void>> = [];
 
   afterAll(async () => {
     // Join failed acquisitions' siblings before reading their retained owners.
     await Promise.allSettled(acquisitions);
-    await cleanupGateways(instances, nodeClients);
+    await runQaGatewayFixture(() => cleanupGateways(instances, nodeClients), ...modelCleanups);
   });
 
   it(
     "spins up two gateways and exercises WS + HTTP + node pairing",
     { timeout: E2E_TIMEOUT_MS },
     async () => {
+      const model = await startOpenAiResponsesModelServer({
+        modelId: "multi-gateway",
+        bindError: "multi-gateway model server did not bind",
+        onRequest: async (request, response) => {
+          await readRequestText(request);
+          writeOpenAiResponsesText(response, {
+            text: "Wake handled",
+            messageId: "multi-gateway-message",
+            responseId: "multi-gateway-response",
+          });
+        },
+      });
+      modelCleanups.push(model.close);
       const spawnOwnedGateway = async (name: string) => {
-        const inst = await spawnGatewayInstance(name);
+        // Immediate wakes run ordinary agent work, so these Gateways need a
+        // real configured runtime instead of the transport-only minimal fixture.
+        const inst = await createOpenClawTestInstance({
+          name,
+          config: createOpenAiResponsesModelConfig({
+            baseUrl: model.baseUrl,
+            providerId: "multi-gateway",
+            modelId: "multi-gateway",
+            reasoning: false,
+            toolProfile: "minimal",
+          }),
+          env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+        });
         instances.push(inst);
+        await inst.startGateway();
         return inst;
       };
       const gatewayAcquisitions = [spawnOwnedGateway("a"), spawnOwnedGateway("b")] as const;
@@ -107,7 +138,7 @@ describe("gateway multi-instance e2e", () => {
           ),
         ),
       );
-      expect(hookResults).toMatchObject([
+      expect(hookResults, JSON.stringify(hookResults)).toMatchObject([
         { status: 200, json: { ok: true } },
         { status: 200, json: { ok: true } },
       ]);

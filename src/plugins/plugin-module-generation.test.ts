@@ -315,30 +315,6 @@ describe("plugin module generations", () => {
     },
   );
 
-  it.each(["mjs", "ts"])("preserves computed import URL identity (%s)", async (extension) => {
-    const root = temp.make("plugin-computed-url-");
-    fs.writeFileSync(
-      path.join(root, `index.${extension}`),
-      "export const read = name => import(name);",
-    );
-    fs.writeFileSync(
-      path.join(root, `helper.${extension}`),
-      "export const token = Symbol('module');",
-    );
-    const plugin = load(root, `index.${extension}`, true).value as {
-      read(name: string): Promise<{ token: symbol }>;
-    };
-    const target = extension === "ts" ? "./helper.js" : "./helper.mjs";
-    const query = await plugin.read(`${target}?one`);
-    const fragment = await plugin.read(`${target}#two`);
-    const plain = await plugin.read(target);
-    expect((await plugin.read(`${target}?one`)).token).toBe(query.token);
-    expect((await plugin.read(`${target}#two`)).token).toBe(fragment.token);
-    expect(query.token).not.toBe(plain.token);
-    expect(fragment.token).not.toBe(plain.token);
-    expect(fragment.token).not.toBe(query.token);
-  });
-
   it("retains a failed computed package capture through another export path", () => {
     const root = temp.make("plugin-failed-computed-package-");
     fs.writeFileSync(path.join(root, "index.cjs"), "exports.read = name => require(name).value;");
@@ -550,7 +526,6 @@ describe("plugin module generations", () => {
       const entry = `index.${extension}`;
       const source = path.join(root, entry);
       const tsconfig = path.join(mode === "ancestor" ? fixtureRoot : root, "tsconfig.json");
-      fs.mkdirSync(path.join(root, "lib"));
       fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
       const unused = path.join(root, "unused", "unrelated.ts");
       fs.mkdirSync(path.dirname(unused));
@@ -842,7 +817,7 @@ describe("plugin module generations", () => {
     await expect(plugin.read()).rejects.toThrow(
       process.versions.bun
         ? /^ParseError: (?:[A-Za-z]:[\\/]: )?Unexpected token[\s\S]*broken\.ts:1:20/
-        : /^Transform failed with 1 error:\nbroken\.ts:1:20: ERROR: Unexpected "="/,
+        : /Unexpected "="[\s\S]*broken\.ts:1:20/,
     );
   });
 

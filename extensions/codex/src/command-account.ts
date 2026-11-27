@@ -292,6 +292,7 @@ function describeFailureStatus(
 
 const ELIGIBILITY_STATUS = new Map([
   ["expired", "sign-in expired"],
+  ["refresh_failed", "sign-in required"],
   ["invalid_expires", "sign-in expired"],
   ["unresolved_ref", "credential unavailable"],
   ["provider_mismatch", "wrong provider"],

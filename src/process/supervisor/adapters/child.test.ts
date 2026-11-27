@@ -121,6 +121,37 @@ describe("createChildAdapter", () => {
     vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
   });
 
+  it.each([false, true])(
+    "waits for target preparation before a direct spawn (refused=%s)",
+    async (refused) => {
+      setPlatform("darwin");
+      const gate = createDeferred();
+      const preparing = createDeferred();
+      const failure = new Error("saved credential removed");
+      const stub = createStubChild();
+      spawnMock.mockResolvedValue(stub.child);
+      const starting = start({
+        argv: ["synthetic-command"],
+        prepareTargetSpawn: async () => {
+          preparing.resolve();
+          await gate.promise;
+          if (refused) {
+            throw failure;
+          }
+        },
+      });
+      const outcome = refused ? expect(starting).rejects.toBe(failure) : starting;
+      await preparing.promise;
+      expect(spawnMock).not.toHaveBeenCalled();
+      gate.resolve();
+      await outcome;
+      expect(spawnMock).toHaveBeenCalledTimes(refused ? 0 : 1);
+      if (!refused) {
+        (await starting).dispose();
+      }
+    },
+  );
+
   it("joins worker exit, closed pipes and the queued IPC disconnect", async () => {
     const { adapter, child, disconnectMock, emitExit } = await setupTimed("darwin", {
       ownedWorker: true,

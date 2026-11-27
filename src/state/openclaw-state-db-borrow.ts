@@ -1,4 +1,7 @@
+import type { PreparedStateDatabaseReadAccess } from "../infra/gateway-state-owner.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceResourceOwned,
@@ -19,6 +22,7 @@ export type StateDatabaseBorrowers = {
   retiring: boolean;
   cleanupComplete: boolean;
   retirement?: RetirementIntent;
+  releaseJoin?: Deferred;
   asyncRetirement?: {
     start(): void;
     close(): Promise<void>;
@@ -32,7 +36,11 @@ export function createStateDatabaseRetainer(
     cachedDatabases: Map<string, OpenClawStateDatabase>;
   },
   operations: {
-    assertOpen(pathname: string, ownership?: "cached-read"): void;
+    assertOpen(
+      pathname: string,
+      ownership?: "cached-read",
+      access?: PreparedStateDatabaseReadAccess,
+    ): void;
     capture(pathname: string): { assertCurrent(): void };
     retire(database: OpenClawStateDatabase, retireAdmission: boolean): void;
     retainFailed(database: OpenClawStateDatabase): void;
@@ -40,14 +48,18 @@ export function createStateDatabaseRetainer(
     touch(database: OpenClawStateDatabase): void;
   },
 ) {
-  const admit = (pathname: string, ownership?: "cached-read") => {
+  const admit = (
+    pathname: string,
+    ownership?: "cached-read",
+    access?: PreparedStateDatabaseReadAccess,
+  ) => {
     const scope = getOpenClawDatabaseMaintenanceScope();
     if (ownership === "cached-read") {
       scope?.assertReadAdmission();
     } else {
       scope?.assertAdmission();
     }
-    operations.assertOpen(pathname, ownership);
+    operations.assertOpen(pathname, ownership, access);
     return scope;
   };
   // Only the synchronous entry points below can reach this already-admitted step.
@@ -94,7 +106,9 @@ export function createStateDatabaseRetainer(
       let unregister: (() => void) | undefined;
       const finish = (retirement?: RetirementIntent) => {
         owner.references.delete(retained);
-        if (retirement?.isCurrent()) {
+        if (owner.releaseJoin) {
+          owner.releaseJoin.resolve();
+        } else if (retirement?.isCurrent()) {
           retirement.retire();
         } else {
           owner.retiring = false;
@@ -103,7 +117,9 @@ export function createStateDatabaseRetainer(
         owner.asyncRetirement = undefined;
         unregister?.();
         unregister = undefined;
-        operations.touch(database);
+        if (!owner.releaseJoin) {
+          operations.touch(database);
+        }
       };
       const run = (): Promise<void> => {
         if (pending) {
@@ -131,6 +147,8 @@ export function createStateDatabaseRetainer(
           .catch((error: unknown) => {
             owner.references.add(retained);
             operations.retainFailed(database);
+            owner.releaseJoin?.reject(error);
+            owner.releaseJoin = undefined;
             throw error;
           });
         // A synchronous final release hands failures to the registered lifecycle resource.
@@ -159,6 +177,12 @@ export function createStateDatabaseRetainer(
       }
       released = true;
       owner.references.delete(reference);
+      if (owner.releaseJoin) {
+        if (owner.references.size === 0) {
+          owner.releaseJoin.resolve();
+        }
+        return;
+      }
       if (owner.retirement && !owner.retirement.isCurrent()) {
         owner.retirement = undefined;
         owner.asyncRetirement = undefined;
@@ -196,6 +220,10 @@ export function createStateDatabaseRetainer(
         if (owner.cleanupComplete) {
           return;
         }
+        if (owner.releaseJoin) {
+          release();
+          return;
+        }
         const retirement =
           requestedRetirement?.isCurrent() && !owner.retirement?.ordinary
             ? requestedRetirement
@@ -210,13 +238,17 @@ export function createStateDatabaseRetainer(
     scope?.own(retainedReference, "shared-references", () => retainedReference.releaseAsync());
     return retainedReference;
   };
-  const findReadDatabase = (pathname: string, ownership?: "cached-read") => {
+  const findReadDatabase = (
+    pathname: string,
+    ownership?: "cached-read",
+    access?: PreparedStateDatabaseReadAccess,
+  ) => {
     const resolvedPath = resolveDatabasePath({ path: pathname });
     const database = state.cachedDatabases.get(resolvedPath);
     if (!database?.db.isOpen) {
       return { database: undefined, scope: undefined };
     }
-    return { database, scope: admit(resolvedPath, ownership) };
+    return { database, scope: admit(resolvedPath, ownership, access) };
   };
   const retainReadReference = (
     database: OpenClawStateDatabase,
@@ -240,12 +272,22 @@ export function createStateDatabaseRetainer(
   };
   return {
     retain: (database: OpenClawStateDatabase) => retain(database, admit(database.path)),
-    retainForIndependentRead(this: void, pathname: string, ownership?: "cached-read") {
-      const { database, scope } = findReadDatabase(pathname, ownership);
+    retainForIndependentRead(
+      this: void,
+      pathname: string,
+      ownership?: "cached-read",
+      access?: PreparedStateDatabaseReadAccess,
+    ) {
+      const { database, scope } = findReadDatabase(pathname, ownership, access);
       return database ? retainReadReference(database, scope) : undefined;
     },
-    borrowForRead(this: void, pathname: string, ownership?: "cached-read") {
-      const { database, scope } = findReadDatabase(pathname, ownership);
+    borrowForRead(
+      this: void,
+      pathname: string,
+      ownership?: "cached-read",
+      access?: PreparedStateDatabaseReadAccess,
+    ) {
+      const { database, scope } = findReadDatabase(pathname, ownership, access);
       if (!database) {
         return undefined;
       }
@@ -257,11 +299,34 @@ export function createStateDatabaseRetainer(
   };
 }
 
+/** Admission stops immediately; only the admitted references may release native custody. */
+export async function joinStateDatabaseBorrowersReleased(
+  owner: StateDatabaseBorrowers | undefined,
+  pathname: string,
+): Promise<void> {
+  if (!owner || owner.cleanupComplete) {
+    return;
+  }
+  owner.retiring = true;
+  if (owner.references.size === 0) {
+    return;
+  }
+  if (!owner.releaseJoin) {
+    owner.releaseJoin = createDeferredCore();
+    getProcessCleanupBudget()?.warn(
+      `Waiting for ${owner.references.size} active native borrower(s) before retiring OpenClaw state database: ${pathname}`,
+    );
+  }
+  await owner.releaseJoin.promise;
+}
+
 export function assertStateDatabaseBorrowersReleased(
   owner: StateDatabaseBorrowers | undefined,
   pathname: string,
 ): void {
   if (owner?.references.size) {
-    throw new Error(`OpenClaw state database still has active native borrowers: ${pathname}`);
+    throw new Error(
+      `OpenClaw state database still has active native borrowers (${owner.references.size}): ${pathname}`,
+    );
   }
 }

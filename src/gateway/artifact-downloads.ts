@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
+import { ScratchFileExpiredError } from "../infra/scratch-expiry.js";
 import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import {
   assertArtifactDownloadGrantCurrent,
@@ -92,13 +93,14 @@ export async function handleArtifactDownloadHttpRequest(
       const width = normalizeChatImageRenditionWidth(url.searchParams.get("width"));
       const cacheKey = `${createHash("sha256").update(source).digest("hex")}\0${width}`;
       // Preview failures are unavailable, never an implicit full-image download.
-      const bytes = new Uint8Array(
-        await resolveManagedImageThumbnail(cacheKey, () => encodeImageThumbnail(source, width)),
+      const image = await resolveManagedImageThumbnail(cacheKey, () =>
+        encodeImageThumbnail(source, width),
       );
+      const bytes = new Uint8Array(image.data);
       prepared.artifact = {
         ...prepared.artifact,
-        mimeType: "image/webp",
-        title: `${prepared.artifact.title}-preview.webp`,
+        mimeType: image.mimeType,
+        title: `${prepared.artifact.title}-preview${image.extension}`,
       };
       const response = resolveByteResponse({
         file: { size: bytes.byteLength },
@@ -116,7 +118,16 @@ export async function handleArtifactDownloadHttpRequest(
             : bytes;
       assertCurrent();
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof ScratchFileExpiredError) {
+      assertCurrent();
+      res.writeHead(410, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      res.end(error.message);
+      return true;
+    }
     prepared = undefined;
   }
   if (!prepared) {

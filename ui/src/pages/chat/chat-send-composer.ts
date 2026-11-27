@@ -24,6 +24,7 @@ import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { chatAttachmentDraftSignature } from "./composer-draft.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
+import { isPastedTextAttachment } from "./pasted-text-card.ts";
 
 export function chatSubmitKey(
   host: ChatHost,
@@ -68,17 +69,22 @@ export function clearSubmittedComposerState(
   host.chatMessage = "";
   host.chatMentions = [];
   host.chatReplyTarget = null;
-  if (retainAttachments !== "all") {
-    host.chatAttachments =
-      retainAttachments === "annotations"
+  // Submission always consumes pasted-text cards: their text is already in the message and
+  // no queued row owns their payload. Recovery snapshots carry their own data URLs.
+  const consumed = host.chatAttachments.filter(isPastedTextAttachment);
+  host.chatAttachments =
+    retainAttachments === "all"
+      ? host.chatAttachments.filter((attachment) => !isPastedTextAttachment(attachment))
+      : retainAttachments === "annotations"
         ? host.chatAttachments.filter(
             (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
           )
         : [];
-  }
+  releaseChatAttachmentPayloads(consumed);
   resetChatInputHistoryNavigation(host);
   host.composerDraftChanged?.();
   return {
+    retainedAttachments: retainAttachments === "all",
     previousAttachments: submittedAttachments,
     previousDraft: submittedDraft,
     previousMentions: submittedMentions,
@@ -192,13 +198,16 @@ function commandComposerFallbackRetainsAttachments(
   );
 }
 
-function composerRetainsSubmittedAnnotations(
+function composerRetainsSubmittedAttachments(
   host: ChatHost,
   submittedAttachments?: readonly ChatAttachment[],
+  retainAll = false,
 ): boolean {
-  const retained = submittedAttachments?.filter(
-    (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
-  );
+  const retained = retainAll
+    ? submittedAttachments?.filter((attachment) => !isPastedTextAttachment(attachment))
+    : submittedAttachments?.filter(
+        (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
+      );
   return Boolean(
     retained?.length &&
     retained.length === host.chatAttachments.length &&
@@ -254,7 +263,11 @@ function restoreFailedCommandComposer(
   }
   if (
     owner.chatAttachments.length > 0 &&
-    !composerRetainsSubmittedAnnotations(owner, composer.previousAttachments)
+    !composerRetainsSubmittedAttachments(
+      owner,
+      composer.previousAttachments,
+      composer.retainedAttachments,
+    )
   ) {
     clearOwnedCommandComposerFallback(host, recovery);
     return composer.previousAttachments.length === 0;
@@ -300,6 +313,7 @@ export function settleChatCommandComposer(
 }
 
 export type PendingComposerSnapshot = {
+  retainedAttachments?: boolean;
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
   previousMentions?: readonly HumanMention[];
@@ -315,7 +329,11 @@ function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot
     !host.chatReplyTarget &&
     (!host.chatGoalDraftMode || host.chatGoalDraftMode === snapshot.previousGoalDraftMode) &&
     (host.chatAttachments.length === 0 ||
-      composerRetainsSubmittedAnnotations(host, snapshot.previousAttachments));
+      composerRetainsSubmittedAttachments(
+        host,
+        snapshot.previousAttachments,
+        snapshot.retainedAttachments,
+      ));
   const attachments = Boolean(snapshot.previousAttachments?.length && composerBlank);
   const draft = snapshot.previousDraft != null && composerBlank;
   return {

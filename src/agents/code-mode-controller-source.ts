@@ -554,7 +554,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       describe: {
         value: isMcp
           ? () => request("namespace", [binding.namespaceId, [path[0], "$api"], [path.slice(1).join("."), { schema: true }]])
-          : () => request("describe", [callableName]),
+          : (options) => request("describe", [
+              callableName,
+              options?.includeRarelyNeededOutputSchema === true ? "outputSchema" : undefined,
+            ]),
         enumerable: true,
       },
       toJSON: { value: () => {

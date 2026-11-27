@@ -182,7 +182,7 @@ export function createTelegramMessageSessionRuntime({
       defaultProvider: resolveDefaultModelForAgent({
         cfg: params.runtimeCfg,
         agentId: route.agentId,
-      }).provider,
+      })?.provider,
     });
     const provider = entry?.modelProvider?.trim();
     const model = entry?.model?.trim();
@@ -326,6 +326,9 @@ export function createTelegramMessageContextRuntime({
       ? { threadSpec, isTopicMessage: node?.sourceMessage?.is_topic_message === true }
       : undefined;
   };
+
+  const getCachedMessage = (chatId: number | string, messageId: string) =>
+    messageCache.get({ accountId, chatId, messageId });
 
   const buildReplyChainForMessage = (msg: Message) =>
     buildTelegramReplyChain({ cache: messageCache, accountId, chatId: msg.chat.id, msg });
@@ -504,6 +507,7 @@ export function createTelegramMessageContextRuntime({
     recordMessageResolvedMedia,
     recordReplyMessageResolvedMedia,
     resolveCachedMessageThreadSpec,
+    getCachedMessage,
     buildReplyChainForMessage,
     toReplyChainEntry,
     buildPromptContextForMessage,

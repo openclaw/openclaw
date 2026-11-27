@@ -68,7 +68,9 @@
           "importFailed": "个人资料导入失败",
           "importedFromRelays": "已从中继导入个人资料。 请检查并发布。",
           "imported": "个人资料已导入。 请检查并发布。"
-        }
+        },
+        "setupProfile": "设置 Nostr 以添加或编辑个人资料。",
+        "readOnlyProfile": "您需要管理员权限才能编辑此个人资料。"
       }
     }
   },
@@ -141,7 +143,9 @@
           "importFailed": "個人檔案匯入失敗",
           "importedFromRelays": "已從中繼伺服器匯入個人檔案。 請檢查後發布。",
           "imported": "個人檔案已匯入。 請檢查後發布。"
-        }
+        },
+        "setupProfile": "設定 Nostr 以新增或編輯個人檔案。",
+        "readOnlyProfile": "您需要管理員權限才能編輯此個人檔案。"
       }
     }
   },
@@ -214,7 +218,9 @@
           "importFailed": "Falha ao importar o perfil",
           "importedFromRelays": "Perfil importado dos relays. Revise e publique.",
           "imported": "Perfil importado. Revise e publique."
-        }
+        },
+        "setupProfile": "Configure o Nostr para adicionar ou editar um perfil.",
+        "readOnlyProfile": "Você precisa de acesso de administrador para editar este perfil."
       }
     }
   },
@@ -287,7 +293,9 @@
           "importFailed": "Profilimport fehlgeschlagen",
           "importedFromRelays": "Profil von Relays importiert. Prüfen und veröffentlichen.",
           "imported": "Profil importiert. Prüfen und veröffentlichen."
-        }
+        },
+        "setupProfile": "Richten Sie Nostr ein, um ein Profil hinzuzufügen oder zu bearbeiten.",
+        "readOnlyProfile": "Sie benötigen Administratorrechte, um dieses Profil zu bearbeiten."
       }
     }
   },
@@ -360,7 +368,9 @@
           "importFailed": "No se pudo importar el perfil",
           "importedFromRelays": "Perfil importado de los servidores de retransmisión. Revisa y publica.",
           "imported": "Perfil importado. Revisa y publica."
-        }
+        },
+        "setupProfile": "Configura Nostr para añadir o editar un perfil.",
+        "readOnlyProfile": "Necesitas acceso de administrador para editar este perfil."
       }
     }
   },
@@ -433,7 +443,9 @@
           "importFailed": "プロフィールのインポートに失敗しました",
           "importedFromRelays": "リレーからプロフィールをインポートしました。 内容を確認して公開してください。",
           "imported": "プロフィールをインポートしました。 内容を確認して公開してください。"
-        }
+        },
+        "setupProfile": "プロフィールを追加または編集するには、Nostrを設定してください。",
+        "readOnlyProfile": "このプロフィールを編集するには、管理者権限が必要です。"
       }
     }
   },
@@ -506,7 +518,9 @@
           "importFailed": "프로필 가져오기 실패",
           "importedFromRelays": "릴레이에서 프로필을 가져왔습니다. 검토 후 게시하세요.",
           "imported": "프로필을 가져왔습니다. 검토 후 게시하세요."
-        }
+        },
+        "setupProfile": "프로필을 추가하거나 수정하려면 Nostr를 설정하세요.",
+        "readOnlyProfile": "이 프로필을 수정하려면 관리자 권한이 필요합니다."
       }
     }
   },
@@ -579,7 +593,9 @@
           "importFailed": "Échec de l’importation du profil",
           "importedFromRelays": "Profil importé depuis les relais. Vérifiez-le et publiez-le.",
           "imported": "Profil importé. Vérifiez-le et publiez-le."
-        }
+        },
+        "setupProfile": "Configurez Nostr pour ajouter ou modifier un profil.",
+        "readOnlyProfile": "Vous devez disposer de droits d’administration pour modifier ce profil."
       }
     }
   },
@@ -652,7 +668,9 @@
           "importFailed": "प्रोफ़ाइल आयात विफल रहा",
           "importedFromRelays": "प्रोफ़ाइल रिले से आयात हो गई. समीक्षा करें और प्रकाशित करें.",
           "imported": "प्रोफ़ाइल आयात हो गई. समीक्षा करें और प्रकाशित करें."
-        }
+        },
+        "setupProfile": "प्रोफ़ाइल जोड़ने या संपादित करने के लिए Nostr सेट अप करें।",
+        "readOnlyProfile": "इस प्रोफ़ाइल को संपादित करने के लिए आपको व्यवस्थापक अधिकार चाहिए।"
       }
     }
   },
@@ -725,7 +743,9 @@
           "importFailed": "فشل استيراد الملف الشخصي",
           "importedFromRelays": "تم استيراد الملف الشخصي من خوادم الترحيل. راجعه وانشره.",
           "imported": "تم استيراد الملف الشخصي. راجعه وانشره."
-        }
+        },
+        "setupProfile": "قم بإعداد Nostr لإضافة ملف شخصي أو تعديله.",
+        "readOnlyProfile": "تحتاج إلى صلاحيات المسؤول لتعديل هذا الملف الشخصي."
       }
     }
   },
@@ -798,7 +818,9 @@
           "importFailed": "Importazione del profilo non riuscita",
           "importedFromRelays": "Profilo importato dai relay. Verifica e pubblica.",
           "imported": "Profilo importato. Verifica e pubblica."
-        }
+        },
+        "setupProfile": "Configura Nostr per aggiungere o modificare un profilo.",
+        "readOnlyProfile": "Per modificare questo profilo sono necessari i privilegi di amministratore."
       }
     }
   },
@@ -871,7 +893,9 @@
           "importFailed": "Profil içe aktarılamadı",
           "importedFromRelays": "Profil aktarıcılardan içe aktarıldı. Gözden geçirip yayımlayın.",
           "imported": "Profil içe aktarıldı. Gözden geçirip yayımlayın."
-        }
+        },
+        "setupProfile": "Profil eklemek veya düzenlemek için Nostr'ı yapılandırın.",
+        "readOnlyProfile": "Bu profili düzenlemek için yönetici erişimine ihtiyacınız var."
       }
     }
   },
@@ -944,7 +968,9 @@
           "importFailed": "Не вдалося імпортувати профіль",
           "importedFromRelays": "Профіль імпортовано з ретрансляторів. Перегляньте та опублікуйте.",
           "imported": "Профіль імпортовано. Перегляньте та опублікуйте."
-        }
+        },
+        "setupProfile": "Налаштуйте Nostr, щоб додати або змінити профіль.",
+        "readOnlyProfile": "Щоб змінити цей профіль, потрібні права адміністратора."
       }
     }
   },
@@ -1017,7 +1043,9 @@
           "importFailed": "Impor profil gagal",
           "importedFromRelays": "Profil diimpor dari relai. Tinjau dan publikasikan.",
           "imported": "Profil diimpor. Tinjau dan publikasikan."
-        }
+        },
+        "setupProfile": "Siapkan Nostr untuk menambahkan atau mengedit profil.",
+        "readOnlyProfile": "Anda memerlukan akses administrator untuk mengedit profil ini."
       }
     }
   },
@@ -1090,7 +1118,9 @@
           "importFailed": "Import profilu nie powiódł się",
           "importedFromRelays": "Zaimportowano profil z serwerów przekaźnikowych. Sprawdź i opublikuj.",
           "imported": "Zaimportowano profil. Sprawdź i opublikuj."
-        }
+        },
+        "setupProfile": "Skonfiguruj Nostr, aby dodać lub edytować profil.",
+        "readOnlyProfile": "Aby edytować ten profil, potrzebujesz uprawnień administratora."
       }
     }
   },
@@ -1163,7 +1193,9 @@
           "importFailed": "นำเข้าโปรไฟล์ไม่สำเร็จ",
           "importedFromRelays": "นำเข้าโปรไฟล์จากรีเลย์แล้ว. ตรวจสอบและเผยแพร่.",
           "imported": "นำเข้าโปรไฟล์แล้ว. ตรวจสอบและเผยแพร่."
-        }
+        },
+        "setupProfile": "ตั้งค่า Nostr เพื่อเพิ่มหรือแก้ไขโปรไฟล์",
+        "readOnlyProfile": "คุณต้องมีสิทธิ์ผู้ดูแลระบบเพื่อแก้ไขโปรไฟล์นี้"
       }
     }
   },
@@ -1236,7 +1268,9 @@
           "importFailed": "Nhập hồ sơ thất bại",
           "importedFromRelays": "Đã nhập hồ sơ từ các máy chủ chuyển tiếp. Hãy xem lại và xuất bản.",
           "imported": "Đã nhập hồ sơ. Hãy xem lại và xuất bản."
-        }
+        },
+        "setupProfile": "Thiết lập Nostr để thêm hoặc chỉnh sửa hồ sơ.",
+        "readOnlyProfile": "Bạn cần quyền quản trị viên để chỉnh sửa hồ sơ này."
       }
     }
   },
@@ -1309,7 +1343,9 @@
           "importFailed": "Profiel importeren mislukt",
           "importedFromRelays": "Profiel geïmporteerd van relays. Controleer en publiceer.",
           "imported": "Profiel geïmporteerd. Controleer en publiceer."
-        }
+        },
+        "setupProfile": "Stel Nostr in om een profiel toe te voegen of te bewerken.",
+        "readOnlyProfile": "Je hebt beheerdersrechten nodig om dit profiel te bewerken."
       }
     }
   },
@@ -1382,7 +1418,9 @@
           "importFailed": "وارد کردن نمایه ناموفق بود",
           "importedFromRelays": "نمایه از رله‌ها وارد شد. بررسی و منتشر کنید.",
           "imported": "نمایه وارد شد. بررسی و منتشر کنید."
-        }
+        },
+        "setupProfile": "برای افزودن یا ویرایش نمایه، Nostr را راه‌اندازی کنید.",
+        "readOnlyProfile": "برای ویرایش این نمایه به دسترسی مدیر نیاز دارید."
       }
     }
   },
@@ -1455,7 +1493,9 @@
           "importFailed": "Не удалось импортировать профиль",
           "importedFromRelays": "Профиль импортирован с ретрансляторов. Проверьте и опубликуйте.",
           "imported": "Профиль импортирован. Проверьте и опубликуйте."
-        }
+        },
+        "setupProfile": "Настройте Nostr, чтобы добавить или изменить профиль.",
+        "readOnlyProfile": "Для редактирования этого профиля необходимы права администратора."
       }
     }
   },
@@ -1528,7 +1568,9 @@
           "importFailed": "Profilimporten misslyckades",
           "importedFromRelays": "Profilen har importerats från reläerna. Granska och publicera.",
           "imported": "Profilen har importerats. Granska och publicera."
-        }
+        },
+        "setupProfile": "Konfigurera Nostr för att lägga till eller redigera en profil.",
+        "readOnlyProfile": "Du behöver administratörsbehörighet för att redigera den här profilen."
       }
     }
   },
@@ -1601,7 +1643,9 @@
           "importFailed": "No s'ha pogut importar el perfil",
           "importedFromRelays": "Perfil importat dels servidors de retransmissió. Reviseu-lo i publiqueu-lo.",
           "imported": "S'ha importat el perfil. Revisa'l i publica'l."
-        }
+        },
+        "setupProfile": "Configura Nostr per afegir o editar un perfil.",
+        "readOnlyProfile": "Necessites accés d'administrador per editar aquest perfil."
       }
     }
   }

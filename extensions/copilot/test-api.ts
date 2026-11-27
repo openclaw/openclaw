@@ -48,23 +48,25 @@ function createProbeSession(params: {
   sessionId: string;
 }): CopilotSession {
   const listeners = new Map<string, Array<(event: SessionEvent) => void>>();
-  const session: CopilotSession = Object.assign(Object.create(CopilotSession.prototype), {
-    abort: async () => undefined,
-    disconnect: async () => undefined,
-    on(eventType: string, handler: (event: SessionEvent) => void) {
-      listeners.set(eventType, [...(listeners.get(eventType) ?? []), handler]);
+  const session: CopilotSession = Object.assign(
+    Object.create(CopilotSession.prototype, { sessionId: { value: params.sessionId } }),
+    {
+      abort: async () => undefined,
+      disconnect: async () => undefined,
+      on(eventType: string, handler: (event: SessionEvent) => void) {
+        listeners.set(eventType, [...(listeners.get(eventType) ?? []), handler]);
+      },
+      send: async () => "sdk-user",
+      async sendAndWait() {
+        await params.onSend();
+        const event = createAssistantMessageEvent(`assistant-${params.sessionId}`);
+        for (const listener of listeners.get(event.type) ?? []) {
+          listener(event);
+        }
+        return event;
+      },
     },
-    send: async () => "sdk-user",
-    async sendAndWait() {
-      await params.onSend();
-      const event = createAssistantMessageEvent(`assistant-${params.sessionId}`);
-      for (const listener of listeners.get(event.type) ?? []) {
-        listener(event);
-      }
-      return event;
-    },
-    sessionId: params.sessionId,
-  });
+  );
   return session;
 }
 

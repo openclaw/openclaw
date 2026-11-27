@@ -1,6 +1,6 @@
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
+import { normalizeStaticProviderModelId } from "../agents/model-selection-normalize.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";

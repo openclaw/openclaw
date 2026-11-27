@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -6,11 +8,14 @@ import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
-import { chatMessage } from "./chat-flow.test-support.ts";
+import { captureUiProofEnabled, chatMessage } from "./chat-flow.test-support.ts";
+import { layoutBox, right } from "./chat-presentation.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Details panel navigation",
@@ -137,6 +142,80 @@ async function openOutputs(details: Locator) {
 }
 
 suite.define(() => {
+  it("keeps Details beside Home when the conversation has room", async () => {
+    await suite.withPage(
+      { colorScheme: "dark", viewport: { width: 1920, height: 960 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          sessionKey,
+          sessions: [
+            { key: sessionKey, label: "Release checklist review", kind: "direct", updatedAt: 1 },
+          ],
+          historyMessages: [
+            chatMessage("user", "Is the release checklist ready to review?"),
+            chatMessage(
+              "assistant",
+              "Yes. The project notes and release checklist are ready. The only item left is confirming the rollout owner.",
+            ),
+          ],
+          featureMethods: ["chat.history", "chat.metadata", "chat.startup"],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        const composerShell = pane.locator(".agent-chat__composer-shell");
+        const composer = pane.locator(".agent-chat__composer-combobox textarea");
+        const transcript = pane.locator(".chat-thread-inner");
+        const details = pane.locator(".chat-details");
+        const trigger = pane.getByRole("button", { name: "Details", exact: true });
+        const home = page.locator(".assistant-panel--right");
+        await pane
+          .getByText("Is the release checklist ready to review?", { exact: true })
+          .waitFor();
+        await details.waitFor();
+        const composerWidth = (await layoutBox(composerShell)).width;
+        await openProgressHomeDock(page);
+        await home.waitFor();
+        await waitForLayoutSettled(
+          page,
+          ".assistant-panel--right, .chat-main__conversation-frame, .chat-details",
+        );
+        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
+        expect(await details.getAttribute("role")).toBe("complementary");
+        const panel = await layoutBox(details);
+        expect((await layoutBox(composerShell)).width).toBeCloseTo(composerWidth, 0);
+        expect(right(await layoutBox(transcript))).toBeLessThanOrEqual(panel.x);
+        expect(right(panel)).toBeLessThanOrEqual((await layoutBox(home)).x);
+        const empty = details.getByText("No session details to show.", { exact: true });
+        await empty.waitFor();
+        if (captureUiProofEnabled) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".shell"),
+            [composer, empty, home],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(suite.artifactDir, "after.png"), frame.png);
+        }
+
+        // At 1650px Home leaves 1158px for chat, below the old 1200px cutoff.
+        await page.setViewportSize({ width: 1650, height: 960 });
+        await waitForLayoutSettled(page, ".assistant-panel--right, .chat-main__conversation-frame");
+        expect(await details.getAttribute("role")).toBe("complementary");
+        expect((await layoutBox(composerShell)).width).toBeCloseTo(composerWidth, 0);
+        await composer.fill("Keep this draft while resizing.");
+        await page.setViewportSize({ width: 1280, height: 960 });
+        await details.waitFor({ state: "hidden" });
+        await trigger.click();
+        await details.waitFor();
+        expect(await details.getAttribute("role")).toBe("dialog");
+        await page.setViewportSize({ width: 1650, height: 960 });
+        await expect.poll(() => details.getAttribute("role")).toBe("complementary");
+        expect(await composer.inputValue()).toBe("Keep this draft while resizing.");
+        expect(await home.isVisible()).toBe(true);
+      },
+    );
+  });
+
   it("opens Files from View all and dismisses Details in Chat and Dashboard", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       await setup(page);
@@ -147,6 +226,7 @@ suite.define(() => {
         }
         const details = await openChatDetails(page);
         await openOutputs(details);
+        expect(await details.locator(".chat-details-desktop-empty").isVisible()).toBe(false);
         await details.getByRole("button", { name: "View all", exact: true }).click();
         try {
           await page.locator('[data-panel-slot="workspace"][data-region="side"]').waitFor();

@@ -8,10 +8,11 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { DiagnosticLivenessSample } from "./diagnostic-liveness.js";
-import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
@@ -254,24 +255,41 @@ describe("stuck session diagnostics threshold", () => {
   it.each([
     { name: "material stall", progressAt: 20_000, tickAt: 35_000, warns: true },
     { name: "ordinary jitter", progressAt: 15_500, tickAt: 30_999, warns: false },
-  ])("reports $name without inventing ownerless recovery", ({ progressAt, tickAt, warns }) => {
-    startSession();
+  ])(
+    "reports $name without inventing ownerless recovery",
+    async ({ progressAt, tickAt, warns }) => {
+      const clock = createGatewaySchedulerClock(0);
+      startGatewayDiagnosticHeartbeat(
+        createTestGatewayScheduler(clock.clock),
+        { diagnostics: { enabled: true } },
+        {
+          testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+          recoverStuckSession,
+        },
+      );
+      logSessionStateChange({ ...session, state: "processing" });
+      markDiagnosticEmbeddedRunStarted(session);
 
-    vi.advanceTimersByTime(progressAt);
-    markDiagnosticSessionProgress(session);
-    markDiagnosticRunProgress({ ...session, reason: "embedded_run:progress" });
-    vi.advanceTimersByTime(30_000 - progressAt);
+      vi.setSystemTime(progressAt);
+      await clock.advanceBy(progressAt);
+      markDiagnosticSessionProgress(session);
+      markDiagnosticRunProgress({ ...session, reason: "embedded_run:progress" });
+      vi.setSystemTime(30_000);
+      await clock.advanceBy(30_000 - progressAt);
 
-    vi.setSystemTime(tickAt);
-    vi.advanceTimersByTime(30_000);
+      // Delay the host wake itself; a wall-clock change alone permits other jobs to re-arm it.
+      vi.setSystemTime(30_000 + tickAt);
+      await clock.advanceBy(tickAt);
 
-    expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed", warns);
-    expect(recoverStuckSession).not.toHaveBeenCalled();
+      expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed", warns);
+      expect(recoverStuckSession).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(30_000);
+      vi.setSystemTime(60_000 + tickAt);
+      await clock.advanceBy(30_000);
 
-    expect(recoverStuckSession).not.toHaveBeenCalled();
-  });
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["embedded_run", "model_call"] as const)(
     "reports silent %s at its threshold without ownerless recovery",
@@ -313,6 +331,33 @@ describe("stuck session diagnostics threshold", () => {
       expect(recoverStuckSession).not.toHaveBeenCalled();
     },
   );
+
+  it("publishes a stalled session as an event only, without a log line", async () => {
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 },
+      },
+    );
+    logSessionStateChange({ ...session, state: "processing" });
+    markDiagnosticEmbeddedRunStarted(session);
+    const debugSpy = vi.spyOn(diagnosticLogger, "debug").mockImplementation(() => undefined);
+    startModel();
+    await vi.advanceTimersByTimeAsync(60_000);
+    // The same log path still reports the long-running phase before the stall.
+    await vi.waitFor(() => expectLoggerMessageContaining(debugSpy, "long-running session"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(lastEvent("session.stalled")).toMatchObject({
+      reason: "active_work_without_progress",
+      activeWorkKind: "model_call",
+    });
+    expectStability({ type: "session.stalled" });
+    await vi.advanceTimersByTimeAsync(0);
+    expectLoggerMessageContaining(warnSpy, "stalled session", false);
+    expectLoggerMessageContaining(debugSpy, "stalled session", false);
+  });
 
   it.each(["blocked", "progressing", "ended"] as const)(
     "uses the owned-work clock for a %s tool while inbound keeps arriving",
@@ -581,37 +626,6 @@ describe("stuck session diagnostics threshold", () => {
       expect(events.some(({ type }) => type === "diagnostic.liveness.warning")).toBe(tick === 2);
       expect(recoverStuckSession).not.toHaveBeenCalled();
     }
-  });
-
-  it("adds phase and work labels to liveness warnings", async () => {
-    await withDiagnosticPhase("stale.phase", () => undefined);
-    vi.advanceTimersByTime(60_000);
-    await withDiagnosticPhase("recent.phase", () => undefined);
-    const { promise, resolve: completePhase } = createDeferredCore();
-    const phase = withDiagnosticPhase("startup.plugins.load", () => promise);
-
-    try {
-      startHeartbeat({
-        emitMemorySample: createEmitMemorySampleMock(),
-        sampleLiveness: () => livenessSample(),
-      });
-
-      logMessageQueued({ ...session, source: "telegram" });
-      vi.advanceTimersByTime(30_000);
-    } finally {
-      completePhase();
-      await phase;
-    }
-
-    expectLoggerMessageContaining(warnSpy, "phase=startup.plugins.load");
-    expectLoggerMessageContaining(warnSpy, "work=[queued=main(");
-    expectLoggerMessageContaining(warnSpy, "recentPhases=recent.phase:");
-    expectLoggerMessageContaining(warnSpy, "stale.phase", false);
-    expect(lastEvent("diagnostic.liveness.warning")).toMatchObject({
-      recentPhases: [expect.objectContaining({ name: "recent.phase" })],
-      phase: "startup.plugins.load",
-      queuedWorkLabels: expect.arrayContaining([expect.stringContaining("main(")]),
-    });
   });
 
   it.each(["before", "after"])(

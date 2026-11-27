@@ -62,8 +62,9 @@ openclaw-multi-select {
 }
 
 .multi-select__chevron svg {
-  width: 14px;
-  height: 14px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .multi-select--open .multi-select__chevron {

@@ -14,28 +14,59 @@ import {
 
 const suite = createConfigSuite("Control UI config form guidance mocked Gateway E2E");
 
-const proof = configProof("config-form-guidance");
-
-function notificationStatusConfigMocks() {
-  const config = { ui: { prefs: { theme: "claw" } } };
-  return {
-    "config.get": configSnapshot(config, "notification-status-e2e", true),
-    "config.schema": configSchema(
-      objectSchema("", {
-        ui: objectSchema("UI", {
-          prefs: objectSchema("Prefs", { theme: { type: "string", title: "Theme" } }),
-        }),
-      }),
-      { "ui.prefs.theme": { advanced: false } },
-    ),
-  };
-}
-
 const withPage = pageRunner(suite, settingsPageOptions);
-
-const capture = proof.capture;
+const { capture } = configProof("config-form-guidance");
 
 suite.define(() => {
+  it("keeps phone section help inside the gutters and above the settings it explains", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, reducedMotion: "reduce" },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configSnapshot({}, "help-placement"),
+            "config.schema": configSchema(
+              objectSchema("", {
+                approvals: objectSchema("Approvals", {
+                  exec: objectSchema("Exec approval forwarding", {
+                    enabled: { type: "boolean" },
+                    mode: { type: "string" },
+                  }),
+                }),
+              }),
+              {
+                approvals: {
+                  label: "Approvals",
+                  help: "Choose where approval requests are delivered.",
+                  docsUrl: "https://docs.openclaw.ai/tools/exec-approvals",
+                },
+              },
+            ),
+          },
+        });
+        await page.goto(new URL("settings/security?section=approvals", suite.server.baseUrl).href);
+        const trigger = page.getByRole("button", { name: "Help for Approvals", exact: true });
+        await trigger.tap();
+        const panel = page.locator(".settings-section__help-popover:visible");
+        await panel.getByRole("link").waitFor();
+        const placement = await panel.evaluate((el) => {
+          const b = el.getBoundingClientRect();
+          return { left: b.left, right: innerWidth - b.right, bottom: b.bottom };
+        });
+        expect(placement.left).toBeGreaterThanOrEqual(12);
+        expect(placement.right).toBeCloseTo(placement.left, 0);
+        const firstSetting = page
+          .locator("section.settings-section")
+          .filter({ has: trigger })
+          .locator(".settings-row")
+          .first();
+        expect(placement.bottom).toBeLessThanOrEqual((await firstSetting.boundingBox())!.y);
+        await page.keyboard.press("Escape");
+        await expect.poll(() => trigger.evaluate((el) => document.activeElement === el)).toBe(true);
+      },
+    );
+  });
+
   it("renders every accepted branch of a transform input schema", async () => {
     await withPage(async ({ page }) => {
       const config = { meta: { groupPolicy: "allowlist" } };
@@ -58,18 +89,20 @@ suite.define(() => {
         },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}settings/advanced`);
-      expect(response?.status()).toBe(200);
+      expect((await page.goto(`${suite.server.baseUrl}settings/advanced`))?.status()).toBe(200);
 
       await page.getByRole("button", { name: "Core" }).click();
       await page.getByRole("button", { name: "Meta", exact: true }).click();
 
       const policyRow = page.locator(".settings-row").filter({ hasText: "Group policy" });
-      await expect.poll(() => policyRow.getByRole("radio").count()).toBe(4);
-      await expect.poll(() => policyRow.getByText("open", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("allowlist", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("disabled", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("allowall", { exact: true }).count()).toBe(1);
+      await expect
+        .poll(() =>
+          policyRow
+            .locator("select option")
+            .allTextContents()
+            .then((labels) => labels.map((label) => label.trim())),
+        )
+        .toEqual(expect.arrayContaining(["Open", "Allowlist", "Disabled", "Allowall"]));
       await expect
         .poll(() => page.getByText("Unsupported schema node. Use Raw mode.").count())
         .toBe(0);
@@ -89,6 +122,7 @@ suite.define(() => {
 
   it("keeps the one advanced disclosure browser-local", async () => {
     await withPage(async ({ page }) => {
+      await page.clock.install();
       const config = { ui: { prefs: { theme: "claw" } } };
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -116,8 +150,7 @@ suite.define(() => {
         },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      expect(response?.status()).toBe(200);
+      expect((await page.goto(`${suite.server.baseUrl}settings/appearance`))?.status()).toBe(200);
       await page.getByRole("tab", { name: "UI", exact: true }).click();
 
       const disclosure = page.locator("details.config-advanced-disclosure");
@@ -139,7 +172,7 @@ suite.define(() => {
 
       await disclosure.locator(":scope > summary").click();
       await expect.poll(() => disclosure.getAttribute("open")).toBeNull();
-      await page.waitForTimeout(750);
+      await page.clock.runFor(750);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
@@ -149,12 +182,23 @@ suite.define(() => {
 
   it("keeps a settled autosave quiet on Notifications", async () => {
     await withPage(async ({ page }) => {
+      await page.clock.install();
+      const config = { ui: { prefs: { theme: "claw" } } };
       const gateway = await installMockGateway(page, {
-        methodResponses: notificationStatusConfigMocks(),
+        methodResponses: {
+          "config.get": configSnapshot(config, "notification-status-e2e", true),
+          "config.schema": configSchema(
+            objectSchema("", {
+              ui: objectSchema("UI", {
+                prefs: objectSchema("Prefs", { theme: { type: "string", title: "Theme" } }),
+              }),
+            }),
+            { "ui.prefs.theme": { advanced: false } },
+          ),
+        },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      expect(response?.status()).toBe(200);
+      expect((await page.goto(`${suite.server.baseUrl}settings/appearance`))?.status()).toBe(200);
       await page.getByRole("tab", { name: "UI", exact: true }).click();
 
       const themeInput = page
@@ -164,21 +208,22 @@ suite.define(() => {
       await expect.poll(() => themeInput.count()).toBe(1);
       await themeInput.fill("knot");
       await gateway.waitForRequest("config.set");
-      await page.getByRole("button", { name: "Apply changes", exact: true }).click();
+      const apply = page.getByRole("button", { name: "Apply changes", exact: true });
+      await expect.poll(() => page.clock.runFor(1_000).then(() => apply.count())).toBe(1);
+      await page.clock.resume();
+      await apply.click();
       await gateway.waitForRequest("config.apply");
 
       await page.getByRole("link", { name: "Notifications", exact: true }).click();
       await page.getByRole("heading", { name: "Push notifications", exact: true }).waitFor();
 
-      const section = page.locator("#settings-communications-notifications");
+      const statusRow = page
+        .locator("#settings-communications-notifications .settings-row")
+        .filter({ has: page.getByText("Status", { exact: true }) });
       await expect.poll(() => page.locator(".config-toolbar").count()).toBe(0);
       await expect.poll(() => page.getByText("Saved", { exact: true }).count()).toBe(0);
-      await expect
-        .poll(() => section.locator(".settings-section__header .settings-status").count())
-        .toBe(1);
-      await expect
-        .poll(() => section.locator(".settings-section__header").textContent())
-        .toContain("Ready");
+      await expect.poll(() => statusRow.locator(".settings-status").count()).toBe(1);
+      await expect.poll(() => statusRow.textContent()).toContain("Ready");
 
       await capture(page, "05-notifications-ready-aligned.png", true);
     });

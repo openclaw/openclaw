@@ -134,12 +134,10 @@ suite.define(() => {
 
             useLog(sourceB);
             await nextPoll();
-            await expect
-              .poll(() => page.locator(".logs-card .settings-row").first().textContent())
-              .toContain(sourceB);
+            await expect.poll(() => page.locator(".logs-footer").textContent()).toContain(sourceB);
             await expectMessages(page, [messageBPrefix, "source B tail"]);
 
-            const filter = page.getByRole("textbox", { name: "Filter" });
+            const filter = page.getByRole("searchbox", { name: "Search logs" });
             await filter.fill("source B tail");
             await expectMessages(page, ["source B tail"]);
             const download = await downloadLog(page, "Export filtered");

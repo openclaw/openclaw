@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { moduleResolve } from "import-meta-resolve";
 import { createStandaloneLexicalBindings } from "./bun-standalone-bindings.mjs";
 import { standaloneDataExpression, standaloneLookupExpression } from "./bun-standalone-data.mjs";
+import { resolveStandaloneNativeExports } from "./bun-standalone-native-resolve.mjs";
 
 const TABLE_MARKER = "__OPENCLAW_STANDALONE_NATIVE_TABLE__";
 const NATIVE_LIBRARY = /\.(?:dylib|dll|so(?:\.\d+)*)$/;
@@ -14,6 +15,16 @@ const RESOURCE = /\.wasm$/;
 const COPILOT_RUNTIME_PACKAGE = /^@github\/copilot-sdk-(?:darwin|linux|linuxmusl|win32)-/;
 const LICENSE = /^(?:licen[cs]e|copying|notice)(?:[.-].*)?$/i;
 const slash = (filename) => filename.split(path.sep).join("/");
+
+function staticString(node) {
+  if (node?.type === "Literal" && typeof node.value === "string") {
+    return node.value;
+  }
+  if (node?.type === "TemplateLiteral" && node.expressions.length === 0) {
+    return node.quasis[0].value.cooked ?? undefined;
+  }
+  return undefined;
+}
 
 function isCommonJsEntry(filename, packageType) {
   return filename.endsWith(".cjs") || (filename.endsWith(".js") && packageType !== "module");
@@ -532,11 +543,11 @@ export function createStandaloneNativeAdapter({
       return undefined;
     }
     const [specifier, parent, conditions] = node.arguments;
+    const request = staticString(specifier);
     const url = parent?.arguments?.[0];
     const values = conditions?.arguments?.[0];
     if (
-      specifier.type !== "Literal" ||
-      typeof specifier.value !== "string" ||
+      request === undefined ||
       parent?.type !== "NewExpression" ||
       parent.callee.type !== "Identifier" ||
       parent.callee.name !== "URL" ||
@@ -553,15 +564,15 @@ export function createStandaloneNativeAdapter({
       bindings.isBound(conditions.callee) ||
       conditions.arguments.length !== 1 ||
       values?.type !== "ArrayExpression" ||
-      values.elements.some((value) => value?.type !== "Literal" || typeof value.value !== "string")
+      values.elements.some((value) => staticString(value) === undefined)
     ) {
       return undefined;
     }
     try {
       const resolved = moduleResolve(
-        specifier.value,
+        request,
         pathToFileURL(filename),
-        new Set(values.elements.map((value) => value.value)),
+        new Set(values.elements.map(staticString)),
       );
       if (resolved.protocol !== "file:") {
         return undefined;
@@ -1084,7 +1095,10 @@ export function createStandaloneNativeAdapter({
         }
       }
       function resolutionDependencies(owner) {
-        const dependencies = new Map([[owner.manifest.name, owner], ...owner.dependencies]);
+        const dependencies = new Map([
+          ...(owner.manifest.name ? [[owner.manifest.name, owner]] : []),
+          ...owner.dependencies,
+        ]);
         const additionalNames =
           owner === rootOwner
             ? rootVisibleNames
@@ -1110,31 +1124,39 @@ export function createStandaloneNativeAdapter({
         }
         return dependencies;
       }
+      const resolutionOwners = [...metadataOwners].map((owner) => ({
+        owner,
+        dependencies: [...resolutionDependencies(owner)],
+      }));
+      const captured = resolveStandaloneNativeExports(
+        resolutionOwners.map(({ owner, dependencies }) => ({
+          parent: path.join(owner.directory, "package.json"),
+          dependencies: dependencies.map(([name, dependency]) => ({
+            name,
+            exports: dependency.manifest.exports,
+            main: dependency.manifest.main,
+          })),
+        })),
+      );
       // Keep longest-prefix lookup while making equal-length owners independent of discovery.
-      const owners = [...metadataOwners]
-        .map((owner) => ({
+      const owners = resolutionOwners
+        .map(({ owner, dependencies }, index) => ({
           original: owner.original,
           destination: owner.destination,
           dependencies: Object.fromEntries(
-            [...resolutionDependencies(owner)].map(([name, dependency]) => {
-              const entries = {};
-              const subpaths = Object.keys(dependency.manifest.exports ?? {}).filter(
-                (key) => key.startsWith("./") && !key.includes("*"),
-              );
-              // Public export names need not match filenames (fs-safe's secure-temp-root
-              // exports dist/secure-temp-dir.js). Capture Node's resolution before pruning.
-              for (const specifier of [name, ...subpaths.map((key) => name + key.slice(1))]) {
-                try {
-                  const resolved = owner.require.resolve(specifier);
-                  if (path.isAbsolute(resolved) && contained(resolved)) {
-                    entries[specifier] = relative(resolved);
-                  }
-                } catch {
-                  /* Optional packages and import-only exports may have no require entry. */
-                }
-              }
-              return [name, { original: dependency.original, entries }];
-            }),
+            dependencies.map(([name, dependency]) => [
+              name,
+              {
+                original: dependency.original,
+                entries: Object.fromEntries(
+                  Object.entries(captured[index][name]).flatMap(([specifier, resolved]) =>
+                    path.isAbsolute(resolved) && contained(resolved)
+                      ? [[specifier, relative(resolved)]]
+                      : [],
+                  ),
+                ),
+              },
+            ]),
           ),
         }))
         .toSorted(

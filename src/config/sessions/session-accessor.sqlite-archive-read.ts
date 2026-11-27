@@ -6,17 +6,16 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   readSessionTranscriptFailureRunId,
   readSessionTranscriptRunId,
 } from "../../sessions/transcript-events.js";
+import { isVisibleTranscriptRecord } from "../../sessions/transcript-record-visibility.js";
 import {
   isAssistantResultEventForRun,
   isVisibleAssistantResultEventForRun,
-  isVisibleTranscriptRecord,
 } from "../../sessions/transcript-visible-record.js";
 import {
   isSilentAssistantTranscriptMessage,
@@ -31,6 +30,7 @@ import {
   hashSessionArchiveBytes,
   MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES,
 } from "./session-accessor.sqlite-archive-artifact.js";
+import { listTranscriptArchivesFromDatabase } from "./session-accessor.sqlite-archive-metadata.js";
 import { withTranscriptArchiveSelection } from "./session-accessor.sqlite-archive-selection.js";
 import {
   MAX_TASK_ARCHIVE_RECORD_BYTES,
@@ -49,45 +49,6 @@ import type { TranscriptEvent } from "./session-accessor.types.js";
 import { readSessionTranscriptHeaderStartedAt } from "./transcript-header.js";
 
 type ArchiveDatabase = Pick<DB, "session_transcript_archives">;
-
-export function listTranscriptArchivesFromDatabase(
-  { db, agentId }: Pick<OpenClawAgentDatabase, "db" | "agentId">,
-  logicalAgentId: string | undefined,
-  selectors: readonly string[],
-  archiveNames: readonly string[],
-) {
-  // Archive metadata is optional until the first archive write.
-  if (!tableExists(db, "session_transcript_archives")) {
-    return [];
-  }
-  const selected = sqliteStringSet(selectors);
-  const query = getNodeSqliteKysely<ArchiveDatabase>(db)
-    .selectFrom("session_transcript_archives")
-    .select([
-      "archive_name as archiveName",
-      "session_id as sessionId",
-      "session_key as sessionKey",
-      "created_at as createdAt",
-    ])
-    .orderBy("created_at")
-    .orderBy("session_id")
-    .where((expression) =>
-      expression.or([
-        ...(selectors.length > 0
-          ? [expression("session_id", "in", selected), expression("session_key", "in", selected)]
-          : []),
-        ...(archiveNames.length > 0
-          ? [expression("archive_name", "in", sqliteStringSet(archiveNames))]
-          : []),
-      ]),
-    );
-  const rows = executeSqliteQuerySync(db, query).rows;
-  return rows
-    .map((row) =>
-      Object.assign(row, { agentId: resolveAgentIdFromSessionKey(row.sessionKey, agentId) }),
-    )
-    .filter((row) => logicalAgentId === undefined || row.agentId === logicalAgentId);
-}
 
 function hasTranscriptArchiveInDatabase(
   database: Pick<OpenClawAgentDatabase, "db" | "agentId">,

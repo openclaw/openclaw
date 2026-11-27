@@ -5,6 +5,8 @@ import {
   type SessionsFilesGetResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { resolveScratchFilePath } from "../../infra/scratch-expiry.js";
+import { isWorkspaceScratchPath, SCRATCH_EXPIRED_MESSAGE } from "../../shared/scratch-expiry.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import type { RespondFn } from "./types.js";
 
@@ -41,13 +43,20 @@ export function respondSessionFileTooLarge(
 }
 
 export function respondSessionFileNotFound(respond: RespondFn, filePath: string, reason?: string) {
+  const expired =
+    reason !== "outside_session_boundary" &&
+    (isWorkspaceScratchPath(filePath) || resolveScratchFilePath(filePath));
   respond(
     false,
     undefined,
-    sessionFilesError("session_file_not_found", "session file not found", {
-      path: filePath,
-      ...(reason ? { reason } : {}),
-    }),
+    sessionFilesError(
+      expired ? "artifact_file_expired" : "session_file_not_found",
+      expired ? SCRATCH_EXPIRED_MESSAGE : "session file not found",
+      {
+        path: filePath,
+        ...(reason ? { reason } : {}),
+      },
+    ),
   );
 }
 

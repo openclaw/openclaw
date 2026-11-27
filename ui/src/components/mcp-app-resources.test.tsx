@@ -71,7 +71,7 @@ it("explains an unsupported mention result without exposing schema issues", asyn
   );
   await waitForSolid(() =>
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      "This app returned an unsupported resource list",
+      "This app returned a resource list OpenClaw can’t read.",
     ),
   );
   expect(request).toHaveBeenCalledWith("mcp.app.mention", {
@@ -352,3 +352,52 @@ it("retains resource errors through edits and collapse but clears them during re
   expect(container.querySelector('[role="alert"]')).toBeNull();
   expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false);
 });
+
+it.each(["pending", "settled"])(
+  "retires a %s resource search when its server is removed from discovery",
+  async (state) => {
+    const { container, request, publishEvent } = mountResources([
+      { serverName: "parts", label: "Parts", entrypoints: [], mentionTool: "search" },
+      { serverName: "manuals", label: "Manuals", entrypoints: [], mentionTool: "search" },
+    ]);
+    await waitForSolid(() => expect(container.querySelector("button")).not.toBeNull());
+    const pending = createDeferred<{
+      resources: { type: "resource_link"; uri: string; name: string }[];
+    }>();
+    const result = {
+      resources: [{ type: "resource_link" as const, uri: "file:///parts/gear.txt", name: "Gear" }],
+    };
+    request.mockReturnValueOnce(pending.promise);
+    await searchResources(container);
+    if (state === "settled") {
+      pending.resolve(result);
+      await waitForSolid(() =>
+        expect(container.querySelector(".mcp-app-resources__result")).not.toBeNull(),
+      );
+    }
+    const retained = container.querySelector<HTMLButtonElement>(".mcp-app-resources__result");
+    const mention = vi.fn((event: Event) => event.preventDefault());
+    container.addEventListener(MCP_APP_RESOURCE_MENTION_EVENT, mention);
+    request.mockResolvedValueOnce({
+      servers: [
+        { serverName: "manuals", label: "Manuals", entrypoints: [], mentionTool: "search" },
+      ],
+    });
+    publishEvent({ type: "event", event: "config.changed" });
+    await waitForSolid(() => expect(container.querySelector("select")?.value).toBe("manuals"));
+    if (state === "pending") {
+      pending.resolve(result);
+      await waitForSolid(() =>
+        expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(
+          false,
+        ),
+      );
+    }
+    retained?.click();
+    expect(mention).not.toHaveBeenCalled();
+    expect(container.querySelector(".mcp-app-resources__result")).toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(
+      false,
+    );
+  },
+);

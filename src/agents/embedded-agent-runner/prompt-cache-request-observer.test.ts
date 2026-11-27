@@ -57,7 +57,10 @@ describe("prompt cache request observer", () => {
   beforeEach(() => {
     currentTestScope = String(++testScope);
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   it("pairs a drop with the last measured wire request across missing usage and run boundaries", async () => {
     const sessionId = scopedKey("wire-pair");
@@ -113,6 +116,8 @@ describe("prompt cache request observer", () => {
   });
 
   it("retains the input change when a request has no usage callback", async () => {
+    // Deliberate prefix drift exercises production diagnostics instead of assertion mode.
+    vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
     const observer = createObserver(scopedKey("unfinished-request"));
     await requestContext(observer, "before");
     observer.onModelUsage({ cacheRead: 8_000 });
@@ -186,6 +191,36 @@ describe("prompt cache request observer", () => {
         expect(observation?.requests?.current?.serviceTier).toBe("default");
       }
       expect(JSON.stringify(observation)).not.toContain("private");
+    },
+  );
+
+  it.each([
+    ["max_tokens", {}, "prefix-match"],
+    ["max_completion_tokens", {}, "prefix-match"],
+    ["max_output_tokens", {}, "prefix-match"],
+    ["max_completion_tokens", { temperature: 0.2 }, "parameters:temperature"],
+    ["max_completion_tokens", { instructions: "provider rewritten system" }, "system"],
+  ] as const)(
+    "does not attribute a drop to a re-clamped %s output cap (with %j: %s)",
+    async (cap, replacement, expected) => {
+      const observer = createObserver(scopedKey(`output-cap-${cap}-${expected}`));
+      const payload = {
+        instructions: "original system",
+        tools: [{ type: "function", name: "read" }],
+        input: [{ role: "user", content: "first" }],
+        temperature: 1,
+      };
+      await measure(observer, { ...payload, [cap]: 32_000 }, 22_560);
+      const observation = await measure(observer, { ...payload, ...replacement, [cap]: 31_304 }, 0);
+      expect(observation).toMatchObject({
+        broke: true,
+        changes: null,
+        providerPrefix: expected,
+        dropCause:
+          expected === "prefix-match"
+            ? "provider-cache-reuse-lost:unchanged-prefix"
+            : `provider-input-change:${expected}`,
+      });
     },
   );
 

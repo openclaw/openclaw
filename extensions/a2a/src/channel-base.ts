@@ -70,7 +70,14 @@ export const a2aChannelSetupPlugin = {
           patch: {
             ...(advertisedUrl ? { advertisedUrl } : {}),
             ...(peerName && peerToken
-              ? { peers: { ...currentPeers, [peerName]: { token: peerToken } } }
+              ? {
+                  // Rotation replaces only the inbound token; the peer's authored
+                  // outbound fields (url, outboundToken) must survive it.
+                  peers: {
+                    ...currentPeers,
+                    [peerName]: { ...currentPeers?.[peerName], token: peerToken },
+                  },
+                }
               : {}),
           },
         });

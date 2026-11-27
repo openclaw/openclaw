@@ -314,7 +314,11 @@ describe("ollama embedding provider", () => {
   });
 
   it("preserves the legacy identity only for the default Ollama endpoint", async () => {
-    const defaultEndpoint = await memoryKey({ dimensions: 2 });
+    const { runtime } = await ollamaMemoryEmbeddingProviderAdapter.create(
+      embeddingOptions<MemoryEmbeddingOptions>({ dimensions: 2 }),
+    );
+    expect(runtime?.inlineIndexConcurrency).toBe(1);
+    const defaultEndpoint = runtime?.cacheKeyData;
     const customEndpoint = await memoryKey({
       remote: { baseUrl: "http://10.0.0.5:11434" },
       dimensions: 2,

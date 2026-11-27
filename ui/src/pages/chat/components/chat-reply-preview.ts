@@ -67,7 +67,16 @@ function projectResolvedReplyPreview(
   // Another agent's original reaches this session only with its session
   // provenance; transcript sender metadata never carries an agent identity.
   // Only an original without that provenance is the viewing agent's own.
-  const agentId = normalized.senderSession?.agentId ?? props.currentAgentId ?? DEFAULT_AGENT_ID;
+  // A session's agent-written opening is a user row whose sender the
+  // normalizer derived from that same provenance.
+  // A session's agent-written opening is a user row with an agent sender.
+  const openingAgentId =
+    !isAssistant && normalized.sender?.identity?.type === "agent"
+      ? normalized.sender.identity.id
+      : undefined;
+  const isAgentAuthored = isAssistant || openingAgentId !== undefined;
+  const agentId =
+    openingAgentId ?? normalized.senderSession?.agentId ?? props.currentAgentId ?? DEFAULT_AGENT_ID;
   const isCurrentAgent = agentId === (props.currentAgentId ?? DEFAULT_AGENT_ID);
   // Another agent's original is named by that agent, never by the viewing
   // agent's name; an agent without a display name leaves the author unknown.
@@ -76,19 +85,19 @@ function projectResolvedReplyPreview(
       ? normalized.senderLabel?.trim() ||
         props.agents?.find((agent) => agent.id === agentId)?.identity?.name?.trim() ||
         null
-      : (loaded?.senderLabel ?? resolveMessageGroupSenderLabel(group, props));
+      : (loaded?.senderLabel ?? resolveMessageGroupSenderLabel(group, props, props.currentAgentId));
   return {
     messageId: loaded?.messageId ?? sourceMessageId,
     sourceMessageId: loaded ? replyToId : sourceMessageId,
     senderLabel,
-    sender: isAssistant
+    sender: isAgentAuthored
       ? {
           ...normalized.sender,
           ...(senderLabel ? { name: senderLabel } : {}),
           identity: normalized.sender?.identity ?? { type: "agent", id: agentId },
         }
       : normalized.sender,
-    ...(isAssistant
+    ...(isAgentAuthored
       ? {
           agentAvatar: resolveAssistantDisplayAvatar({
             currentAgentId: agentId,
@@ -100,7 +109,8 @@ function projectResolvedReplyPreview(
             assistantAvatarSource: isCurrentAgent ? props.assistantAvatarSource : undefined,
           }),
         }
-      : { turnRunId: userTurnRunId(message) ?? undefined }),
+      : {}),
+    ...(isAssistant ? {} : { turnRunId: userTurnRunId(message) ?? undefined }),
     text,
   };
 }

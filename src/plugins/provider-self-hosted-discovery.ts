@@ -9,6 +9,7 @@ import {
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
+import { resolveDefaultModelMaxTokens } from "../agents/defaults.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
@@ -21,7 +22,6 @@ import {
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
-  SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -56,6 +56,7 @@ type OpenAICompatibleModelDiscoveryResult =
       health: "ready" | "loading" | "unknown";
       rows: OpenAICompatibleModelDiscoveryRow[];
       fetchedAt: number;
+      matchedLocalListener?: true;
     }
   | { kind: "unreachable"; error: unknown }
   | { kind: "http-error"; path: string; status: number }
@@ -188,6 +189,21 @@ async function discoverOpenAICompatibleModelRows(
   const inferredServerBaseUrl = inferenceBaseUrl.replace(/\/v1$/u, "");
   const serverBaseUrl = (params.serverBaseUrl ?? inferredServerBaseUrl).replace(/\/+$/, "");
   const timeoutMs = params.timeoutMs ?? 5_000;
+  if (params.localListenerArgument) {
+    const { localListenerHasArgument } = await import("../infra/ports-inspect.js");
+    if (
+      !(await localListenerHasArgument(
+        new URL(inferenceBaseUrl),
+        params.localListenerArgument,
+        params.signal,
+      ))
+    ) {
+      return {
+        kind: "unreachable",
+        error: new Error("Local provider listener does not match the requested app"),
+      };
+    }
+  }
   const requestPolicy = await resolveDiscoveryRequestPolicy(params, inferenceBaseUrl);
   const request = {
     ...params,
@@ -302,7 +318,13 @@ async function discoverOpenAICompatibleModelRows(
     });
   }
 
-  return { kind: "success", health, rows, fetchedAt: Date.now() };
+  return {
+    kind: "success",
+    health,
+    rows,
+    fetchedAt: Date.now(),
+    ...(params.localListenerArgument ? { matchedLocalListener: true as const } : {}),
+  };
 }
 
 type OpenAICompatibleLocalModelsParams = {
@@ -319,6 +341,8 @@ type OpenAICompatibleLocalModelsParams = {
   healthPath?: string;
   modelsPathOrder?: "inference" | "server-first";
   routerModelProps?: boolean;
+  /** Only discover a loopback server whose listening process has this exact flag and value. */
+  localListenerArgument?: { flag: string; value: string };
   contextWindow?: number;
   discoverRuntimeContext?: boolean;
   maxTokens?: number;
@@ -440,12 +464,8 @@ export async function discoverOpenAICompatibleLocalModels(
     }
     // max_model_len describes the serving instance, not the model training window.
     // Do not promote defaults, generic metadata, or malformed values to live ceilings.
-    const servingTokens = model.max_model_len;
-    if (
-      typeof servingTokens === "number" &&
-      Number.isSafeInteger(servingTokens) &&
-      servingTokens > 0
-    ) {
+    const servingTokens = asPositiveSafeInteger(model.max_model_len);
+    if (servingTokens !== undefined) {
       recordLiveServingContextLimit({
         id: modelId,
         api: "openai-completions",
@@ -461,6 +481,12 @@ export async function discoverOpenAICompatibleLocalModels(
     const runtimeContextTokens =
       readPositiveInteger(generationSettings?.n_ctx) ?? readPositiveInteger(props?.n_ctx);
     const parameterCount = asPositiveSafeInteger(model.parameterCount);
+    const contextWindow =
+      params.contextWindow ??
+      readPositiveInteger(meta?.n_ctx_train) ??
+      readOpenAICompatibleContextWindow(model) ??
+      parentContextWindow ??
+      SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
     const modelConfig: ModelDefinitionConfig = {
       id: modelId,
       name:
@@ -474,13 +500,17 @@ export async function discoverOpenAICompatibleLocalModels(
       ),
       input: ["text"],
       cost: SELF_HOSTED_DEFAULT_COST,
-      contextWindow:
-        params.contextWindow ??
-        readPositiveInteger(meta?.n_ctx_train) ??
-        readOpenAICompatibleContextWindow(model) ??
-        parentContextWindow ??
-        SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      contextWindow,
+      // The serving window (n_ctx, max_model_len) bounds prompt plus output on these servers.
+      maxTokens:
+        params.maxTokens ??
+        resolveDefaultModelMaxTokens(
+          Math.min(
+            contextWindow,
+            runtimeContextTokens ?? contextWindow,
+            servingTokens ?? contextWindow,
+          ),
+        ),
       ...(runtimeContextTokens ? { contextTokens: runtimeContextTokens } : {}),
     };
     return [modelConfig];

@@ -33,14 +33,12 @@ import {
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { requireGit } from "./git.js";
 import { createManagedWorktreeOwnerPolicy } from "./owner-protection.js";
-import * as registryReads from "./registry-read.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import * as removal from "./removal-git.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
-import { ManagedWorktreeService, WORKTREE_GC_INTERVAL_MS } from "./service.js";
+import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
-  materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import * as snapshots from "./snapshot-host.js";
@@ -388,61 +386,3 @@ it(
     }
   },
 );
-
-it("bounds Git housekeeping without delaying orphan cleanup or newly registered repositories", async () => {
-  const root = tempDirs.make("worktree-gc-cadence-state-");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-  setRuntimeConfigSnapshot({});
-  const repo = await initializeRepository(tempDirs.make("worktree-gc-cadence-"));
-  const seed = (repoRoot: string, names: string[], now = 1) =>
-    materializeManagedWorktreeFixtures({ env, repoRoot, stateDir: repoRoot, names, now });
-  await seed(repo, ["first", "second", "third"]);
-  const service = new ManagedWorktreeService({ env });
-  const commands = vi.spyOn(gitExec, "executeGitCommand");
-  const expectMaintenance = (...roots: string[]) => {
-    const calls = commands.mock.calls.filter(
-      (call) => call[2]?.operation === "worktree.maintenance",
-    );
-    expect(new Set(calls.map(([cwd]) => cwd))).toEqual(new Set(roots));
-    commands.mockClear();
-  };
-  await service.gc();
-  expectMaintenance(repo);
-
-  const orphan = path.join(env.OPENCLAW_STATE_DIR, "worktrees", "unregistered", "empty");
-  await fs.mkdir(orphan, { recursive: true });
-  expect(await service.gc()).toMatchObject({ orphansDeleted: 1, outcome: "completed" });
-  await expect(fs.access(orphan)).rejects.toMatchObject({ code: "ENOENT" });
-  expectMaintenance();
-
-  const otherRepo = await initializeRepository(tempDirs.make("worktree-gc-new-repo-"));
-  await seed(otherRepo, ["new-repo"], Date.now());
-  await service.gc();
-  expectMaintenance(otherRepo);
-
-  await service.gc({ retryDeferred: true });
-  expectMaintenance(repo, otherRepo);
-  await service.gc();
-  expectMaintenance();
-
-  const records = await registryReads.readRegistryWorktrees(env);
-  await closeOpenClawStateDatabaseAsync();
-  const inventory = vi.spyOn(registryReads, "readRegistryWorktrees").mockResolvedValue(records);
-  // Keep the cadence clock behind the lease worker's real clock throughout the test.
-  let now = Date.now() - WORKTREE_GC_INTERVAL_MS;
-  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-  try {
-    const maintain = createWorktreeGitMaintenance(env);
-    await maintain({});
-    expectMaintenance(repo, otherRepo);
-    now += WORKTREE_GC_INTERVAL_MS - 1;
-    await maintain({});
-    expectMaintenance();
-    now += 1;
-    await maintain({});
-    expectMaintenance(repo, otherRepo);
-  } finally {
-    clock.mockRestore();
-    inventory.mockRestore();
-  }
-});

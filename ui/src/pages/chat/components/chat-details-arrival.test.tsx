@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { createComponent, createSignal } from "solid-js";
+import { Loading, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
@@ -52,14 +52,11 @@ function mountDetails(overrides: Partial<ChatDetailsProps> = {}) {
     ...overrides,
   };
   const [details, setDetails] = createSignal(initial);
-  const view = mountSolid(() =>
-    createComponent(ChatDetailsDesktopComposition, {
-      get props() {
-        return details();
-      },
-      presented: true,
-    }),
-  );
+  const view = mountSolid(() => (
+    <Loading>
+      <ChatDetailsDesktopComposition props={details()} presented />
+    </Loading>
+  ));
   flush();
   onTestFinished(() => {
     view.unmount();
@@ -76,6 +73,18 @@ function mountDetails(overrides: Partial<ChatDetailsProps> = {}) {
     group: (name: string) => view.container.querySelector(`[data-details-group="${name}"]`),
   };
 }
+
+it("keeps a compact loading row only until the first session facts settle", () => {
+  const view = mountDetails({ sessionFactsReady: false });
+  expect(view.container.querySelector(".chat-details-desktop-loading")).not.toBeNull();
+  view.update({ sessionFactsReady: true });
+  expect(view.container.querySelector(".chat-details-desktop-loading")).toBeNull();
+  view.update({
+    sessionFactsReady: false,
+    cachedDetails: { locale: "en", environment: { worktree: false } },
+  });
+  expect(view.container.querySelector(".chat-details-desktop-loading")).toBeNull();
+});
 
 it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads", async () => {
   const view = mountDetails();
@@ -219,13 +228,14 @@ function automationGateway(request: ReturnType<typeof createGatewayRequestMock>)
   return { gateway, publish };
 }
 
-it("retains cached Subagents until the roster observes its parent, then adopts no children", async () => {
+it("retains cached and known native Subagents through hydration and failed refreshes", async () => {
   const remember = vi.fn<NonNullable<ChatDetailsProps["onDetailsSnapshot"]>>();
+  const open = vi.fn();
   const view = mountDetails({
     selectedSession: undefined,
     subagentSessionsHydrated: true,
-    onOpenSubagent() {},
-    onOpenSubagents() {},
+    onOpenSubagent: open,
+    onOpenSubagents: open,
     onDetailsSnapshot: remember,
     cachedDetails: {
       locale: "en",
@@ -250,18 +260,129 @@ it("retains cached Subagents until the roster observes its parent, then adopts n
         },
       ],
     },
+    {
+      subagentSessionsPending: true,
+      subagentSessions: [
+        { key: view.initial.sessionKey, kind: "direct" },
+        {
+          key: "agent:main:subagent:partial",
+          kind: "direct",
+          derivedTitle: "Partial child",
+          parentSessionKey: view.initial.sessionKey,
+        },
+      ],
+    },
   ];
   for (const facts of pending) {
     view.update(facts);
     await advance();
     expect(view.group("subagents")?.textContent).toContain("Review");
+    view
+      .group("subagents")!
+      .querySelector<HTMLButtonElement>("button[data-subagent-session-key]")!
+      .click();
+    expect(open).not.toHaveBeenCalled();
     expect(remember).not.toHaveBeenCalled();
   }
-  view.update({ subagentSessions: [{ key: view.initial.sessionKey, kind: "direct" }] });
+  view.update({
+    subagentSessionsPending: false,
+    subagentSessionsUnavailable: true,
+    subagentSessions: [
+      { key: view.initial.sessionKey, kind: "direct" },
+      {
+        key: "agent:main:subagent:review",
+        kind: "direct",
+        label: "Known native review",
+        parentSessionKey: view.initial.sessionKey,
+      },
+    ],
+  });
+  await advance();
+  expect(view.group("subagents")?.textContent).toContain("Known native review");
+  view.update({
+    subagentSessionsPending: false,
+    subagentSessionsUnavailable: false,
+    subagentSessions: [{ key: view.initial.sessionKey, kind: "direct" }],
+  });
   await advance();
   expect(view.group("subagents")).toBeNull();
-  expect(remember).toHaveBeenCalledWith({ subagents: { total: 0, rows: [], counts: [] } });
+  expect(remember).toHaveBeenCalledWith(
+    expect.objectContaining({ subagents: { total: 0, rows: [], counts: [] } }),
+  );
 });
+
+it.each(["empty", "unavailable", "unavailable-with-parent-facts"] as const)(
+  "omits cached ordinary children while its live roster becomes %s",
+  async (outcome) => {
+    const remember = vi.fn<NonNullable<ChatDetailsProps["onDetailsSnapshot"]>>();
+    const open = vi.fn();
+    const view = mountDetails({
+      selectedSession: undefined,
+      onSessionSelect: open,
+      onDetailsSnapshot: remember,
+      cachedDetails: {
+        locale: "en",
+        subagents: {
+          total: 1,
+          counts: [{ status: "done", count: 1, listed: false }],
+          rows: [
+            {
+              key: "agent:main:review",
+              label: "Cached review",
+              status: "done",
+              listed: false,
+            },
+          ],
+        },
+      },
+    });
+    await advance();
+    expect(view.group("subagents")).toBeNull();
+    expect(remember).not.toHaveBeenCalled();
+    view.update({
+      selectedSession: { key: view.initial.sessionKey, kind: "direct" },
+      subagentSessionsHydrated: true,
+      subagentSessions: [],
+    });
+    await advance();
+    expect(view.group("subagents")).toBeNull();
+    expect(remember).not.toHaveBeenCalled();
+    const parent = { key: view.initial.sessionKey, kind: "direct" as const };
+    view.update(
+      outcome === "empty"
+        ? { subagentSessions: [parent] }
+        : {
+            subagentSessionsUnavailable: true,
+            ...(outcome === "unavailable-with-parent-facts"
+              ? {
+                  subagentSessions: [
+                    parent,
+                    {
+                      key: "agent:main:live-review",
+                      kind: "direct",
+                      label: "Known live review",
+                      parentSessionKey: parent.key,
+                      status: "done",
+                    },
+                  ],
+                }
+              : {}),
+          },
+    );
+    await advance();
+    expect(view.group("subagents")).toBeNull();
+    expect(remember).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subagents: {
+          total: 0,
+          rows: [],
+          counts: [],
+        },
+      }),
+    );
+    expect(open).not.toHaveBeenCalled();
+  },
+);
 
 it.each([false, true])(
   "keeps disclosure reset and restored preference: controlled=%s",
@@ -329,14 +450,10 @@ it("accepts one replacement-client page while its physical session row is restor
 });
 
 it("resets reveals on physical identity changes without reapplying a pending reveal", async () => {
-  const first = automationPage("Scheduled check", 50);
-  first.total = 51;
-  first.hasMore = true;
-  first.nextOffset = 50;
-  const appended = createDeferred<CronJobsListResult<CronCompactJob>>();
-  const request = createGatewayRequestMock()
-    .mockResolvedValueOnce(first)
-    .mockReturnValueOnce(appended.promise);
+  const first = automationPage("Scheduled check", 51);
+  first.limit = 200;
+  first.jobs[50]!.name = "ZZZ Appended automation";
+  const request = createGatewayRequestMock().mockResolvedValue(first);
   const view = mountDetails({ pullRequestsGateway: automationGateway(request).gateway });
   await advance();
   const group = () => view.group("automations")!;
@@ -364,34 +481,28 @@ it("resets reveals on physical identity changes without reapplying a pending rev
   button.focus();
   button.click();
   flush();
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls[1]?.[1]).toMatchObject({ limit: 50, offset: 50 });
+  expect(request).toHaveBeenCalledOnce();
+  // The complete canonical inventory owns the next page; presentation still settles async.
   view.update({ selectedSession: undefined });
   view.update({ selectedSession: view.initial.selectedSession });
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledOnce();
   // The pending read retains its current frame; the reset lands with that read.
   expect(count()).toBe(50);
 
-  appended.resolve({
-    ...automationPage("Appended automation"),
-    snapshotRevision: first.snapshotRevision,
-    offset: 50,
-    total: 51,
-  });
   await advance();
   expect(count()).toBe(10);
   expect(group().textContent).not.toContain("Appended automation");
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledOnce();
 
   for (const expected of [20, 30, 40, 50, 51]) {
     more().click();
     flush();
     expect(count()).toBe(expected);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledOnce();
   }
   expect(group().textContent).toContain("Appended automation");
   view.update({ selectedSession: { ...view.initial.selectedSession!, sessionId: "arrival-2" } });
   await advance();
   expect(count()).toBe(10);
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledOnce();
 });

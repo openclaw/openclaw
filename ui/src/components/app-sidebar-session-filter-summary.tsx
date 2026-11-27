@@ -4,8 +4,9 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { SidebarPanelFilter, SidebarPanelHeader } from "./app-sidebar-panel-headers.tsx";
+import { SidebarNewSessionAction, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import { Icon } from "./solid/icon.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 
@@ -63,7 +64,6 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
         params: {
           id: "sidebar-session-owner-title",
           class: "sidebar-session-owner-filter",
-          triggerIcon: "chevronsUpDown" as const,
           label: t("sessionsView.owners"),
           value: props.host.sessionInvolvingMeFilterActive
             ? "involving-me"
@@ -96,9 +96,7 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
   return (
     <Show
       when={owners().length > 0 || ownerId() !== null || props.host.sessionInvolvingMeFilterActive}
-      fallback={
-        <span class="sidebar-recent-sessions__label-text">{t("chat.sidebar.threads")}</span>
-      }
+      fallback={<span class="sidebar-panel-header__title">{t("chat.sidebar.threads")}</span>}
     >
       <Picker {...picker().params} />
     </Show>
@@ -110,7 +108,9 @@ export function countSidebarSessionFilters(host: Pick<SessionListHost, "sessions
   return Number(host.sessionsStatusFilter !== "active");
 }
 
-export function renderSessionListToolbar(host: SessionListHost & { onToggleSidebar?: () => void }) {
+export function renderSessionListToolbar(
+  host: SessionListHost & Pick<AppSidebarRenderHost, "onToggleSidebar">,
+) {
   const statusLabel = () =>
     host.sessionsStatusFilter === "active"
       ? t("common.active")
@@ -127,28 +127,24 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
         label={`${t("chat.sidebar.sortSessions")} · ${statusLabel()}`}
         description={`${t("sessionsView.status")}: ${statusLabel()}`}
       />
+      <SidebarNewSessionAction
+        host={host}
+        class="sidebar-session-toolbar__button sidebar-new-session"
+      />
     </SidebarPanelHeader>
   );
 }
-export function renderSessionMutationError(host: Pick<SessionListHost, "sessionData">) {
-  return host.sessionData.sessionMutationError ? (
-    <div
-      class="sidebar-session-error callout danger callout--dismissible"
-      role="alert"
+export function renderSessionListError(host: Pick<SessionListHost, "sessionData">) {
+  return host.sessionData.sessionListError ? (
+    <InlineAlert
+      tone="danger"
+      class="sidebar-session-error"
       data-sidebar-session-error=""
+      onDismiss={() => host.sessionData.dismissSessionListError()}
+      dismissLabel={t("chat.actions.dismissError")}
     >
-      <span class="callout__content">{host.sessionData.sessionMutationError}</span>
-      <openclaw-tooltip prop:content={t("chat.actions.dismissError")}>
-        <button
-          class="callout__dismiss"
-          type="button"
-          onClick={() => host.sessionData.dismissSessionMutationError()}
-          aria-label={t("chat.actions.dismissError")}
-        >
-          <Icon name="x" />
-        </button>
-      </openclaw-tooltip>
-    </div>
+      {host.sessionData.sessionListError}
+    </InlineAlert>
   ) : undefined;
 }
 

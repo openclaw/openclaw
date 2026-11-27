@@ -63,11 +63,25 @@ type AttachmentCacheEntry = {
   lastLocalError?: MediaUnderstandingSkipError;
 };
 
-function maxBytesError(params: { attachmentIndex: number; maxBytes: number }) {
+export function maxBytesError(params: { attachmentIndex: number; maxBytes: number }) {
   return new MediaUnderstandingSkipError(
     "maxBytes",
-    `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
+    `Attachment ${params.attachmentIndex + 1} exceeds the size limit of ${params.maxBytes} bytes.`,
   );
+}
+
+function localFileSkipError(index: number, error: FsSafeError): MediaUnderstandingSkipError {
+  const label = `Attachment ${index + 1}`;
+  if (error.code === "not-found") {
+    return new MediaUnderstandingSkipError(
+      "empty",
+      `The file for attachment ${index + 1} does not exist.`,
+    );
+  }
+  if (error.code === "not-file") {
+    return new MediaUnderstandingSkipError("empty", `${label} path is not a regular file.`);
+  }
+  return new MediaUnderstandingSkipError("blocked", `${label} path is outside allowed roots.`);
 }
 
 let defaultLocalPathRoots: readonly string[] | undefined;
@@ -166,8 +180,10 @@ export class MediaAttachmentCache {
     attachmentIndex: number;
     maxBytes: number;
     timeoutMs: number;
+    signal?: AbortSignal;
   }): Promise<MediaBufferResult> {
     const entry = await this.ensureEntry(params.attachmentIndex);
+    params.signal?.throwIfAborted();
     const url = remoteFetchUrl(entry.attachment.url);
     if (entry.bufferResult) {
       if (entry.bufferResult.size > params.maxBytes) {
@@ -177,6 +193,7 @@ export class MediaAttachmentCache {
     }
 
     const local = await this.withLocalFile(entry, () => this.readEntryLocalBuffer(entry, params));
+    params.signal?.throwIfAborted();
     if (local) {
       return local;
     }
@@ -198,6 +215,7 @@ export class MediaAttachmentCache {
         maxBytes: params.maxBytes,
         ssrfPolicy: this.ssrfPolicy,
         retry: REMOTE_MEDIA_FETCH_RETRY,
+        ...(params.signal ? { requestInit: { signal: params.signal } } : {}),
       });
       const classification = await classifyAttachmentBytes({
         buffer: fetched.buffer,
@@ -207,6 +225,7 @@ export class MediaAttachmentCache {
         declaredMime: concreteMime(entry.attachment.mime),
         additionalMimeHints: [fetched.contentType, fetched.headerContentType],
       });
+      params.signal?.throwIfAborted();
       entry.bufferResult = {
         buffer: fetched.buffer,
         classification,
@@ -216,6 +235,7 @@ export class MediaAttachmentCache {
       };
       return entry.bufferResult;
     } catch (err) {
+      params.signal?.throwIfAborted();
       if (err instanceof MediaFetchError && err.code === "max_bytes") {
         throw maxBytesError(params);
       }
@@ -260,16 +280,7 @@ export class MediaAttachmentCache {
         if (err.code === "too-large") {
           throw maxBytesError(params);
         }
-        if (err.code === "not-file" || err.code === "not-found") {
-          throw new MediaUnderstandingSkipError(
-            "empty",
-            `Attachment ${params.attachmentIndex + 1} path is not a regular file.`,
-          );
-        }
-        throw new MediaUnderstandingSkipError(
-          "blocked",
-          `Attachment ${params.attachmentIndex + 1} path is outside allowed roots.`,
-        );
+        throw localFileSkipError(params.attachmentIndex, err);
       }
       throw err;
     } finally {
@@ -342,6 +353,7 @@ export class MediaAttachmentCache {
   /** Returns a local path for providers that cannot accept buffers, creating a temp file if needed. */
   async getPath(params: Parameters<MediaAttachmentCache["getBuffer"]>[0]): Promise<string> {
     const entry = await this.ensureEntry(params.attachmentIndex);
+    params.signal?.throwIfAborted();
     const local = await this.withLocalFile(entry, async () => {
       await (await this.prepareLocalFile(entry))?.handle.close().catch(() => {});
       const size = entry.statSize;
@@ -353,6 +365,7 @@ export class MediaAttachmentCache {
       }
       return undefined;
     });
+    params.signal?.throwIfAborted();
     if (local) {
       return local;
     }
@@ -371,11 +384,13 @@ export class MediaAttachmentCache {
       extension,
     });
     this.stagedPaths.add(tmpPath);
-    await fs.writeFile(tmpPath, bufferResult.buffer).catch(async (error: unknown) => {
-      // A failed attempt cannot remove another borrower's file; retain failed removals for cleanup.
-      await this.removeStagedPath(tmpPath);
-      throw error;
-    });
+    await fs
+      .writeFile(tmpPath, bufferResult.buffer, { signal: params.signal })
+      .catch(async (error: unknown) => {
+        // A failed attempt cannot remove another borrower's file; retain failed removals for cleanup.
+        await this.removeStagedPath(tmpPath);
+        throw error;
+      });
     entry.tempPath = tmpPath;
     return tmpPath;
   }
@@ -503,29 +518,12 @@ export class MediaAttachmentCache {
       }
       if (err instanceof FsSafeError) {
         entry.resolvedPath = undefined;
-        if (err.code === "not-file") {
-          throw new MediaUnderstandingSkipError(
-            "empty",
-            `Attachment ${entry.attachment.index + 1} path is not a regular file.`,
-          );
-        }
-        if (err.code !== "not-found") {
-          throw new MediaUnderstandingSkipError(
-            "blocked",
-            `Attachment ${entry.attachment.index + 1} path is outside allowed roots.`,
-          );
-        }
-      } else {
-        throw new MediaUnderstandingSkipError(
-          "blocked",
-          `Attachment ${entry.attachment.index + 1} could not be canonicalized.`,
-        );
+        throw localFileSkipError(entry.attachment.index, err);
       }
-      entry.resolvedPath = undefined;
-      if (shouldLogVerbose()) {
-        logVerbose(`Failed to read attachment ${entry.attachment.index + 1}: ${String(err)}`);
-      }
-      return undefined;
+      throw new MediaUnderstandingSkipError(
+        "blocked",
+        `Attachment ${entry.attachment.index + 1} could not be canonicalized.`,
+      );
     }
   }
 

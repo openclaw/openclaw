@@ -1,11 +1,126 @@
 import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames, navigation } from "./control-ui-interaction-navigation.ts";
+import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 import { workboardResourceRoute } from "./control-ui-workboard-resource-fixture.ts";
 
 /** Native owner updates exercise style invalidation without replacing the document. */
 export function createEngineStyleScenarios(): readonly EngineScenario[] {
+  const typing = interactionScenarios.find(({ id }) => id === "chat-typing");
+  if (!typing) {
+    throw new Error("Missing shared chat typing scenario");
+  }
   return [
+    {
+      ...typing,
+      id: "chat-typing-prefocused",
+      explicitOnly: true,
+      prepare: async (page, gateway) => {
+        await typing.prepare(page, gateway);
+        await page
+          .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
+          .focus();
+        await frames(page);
+      },
+    },
+    {
+      ...typing,
+      id: "native-composer-keystroke",
+      explicitOnly: true,
+      expected: "One prefocused keystroke changes the draft without sending it.",
+      prepare: async (page, gateway) => {
+        await typing.prepare(page, gateway);
+        await page
+          .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
+          .focus();
+        await frames(page);
+      },
+      run: async (page, gateway) => {
+        const input = page.locator(
+          ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+        );
+        const sends = (await gateway.getRequests("chat.send")).length;
+        await input.press("x");
+        await frames(page);
+        if (
+          (await input.inputValue()) !== "x" ||
+          (await gateway.getRequests("chat.send")).length !== sends
+        ) {
+          throw new Error("Keystroke must update the draft without sending");
+        }
+      },
+    },
+    {
+      ...typing,
+      id: "native-composer-hover",
+      explicitOnly: true,
+      viewports: ["desktop"],
+      expected: "Hover leaves the composer draft unchanged.",
+      run: async (page) => {
+        const input = page.locator(
+          ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+        );
+        await input.hover();
+        await frames(page);
+        if ((await input.inputValue()) !== "") {
+          throw new Error("Hover changed the draft");
+        }
+      },
+    },
+    {
+      ...typing,
+      id: "menu-spacing-submenu",
+      explicitOnly: true,
+      viewports: ["desktop"],
+      expected: "The session menu and nested appearance controls retain their row spacing.",
+      run: async (page) => {
+        const trigger = page.locator(".chat-header-session-menu__trigger");
+        await trigger.focus();
+        await trigger.press("Enter");
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).hover();
+        await page.getByRole("menuitem", { name: "Icon & color", exact: true }).hover();
+        await page.locator(".session-menu__appearance:visible").waitFor();
+        await page.getByRole("button", { name: "Blue", exact: true }).waitFor();
+        await frames(page);
+        return { visibleMenus: await page.locator(".oc-menu:visible").count() };
+      },
+    },
+    {
+      ...typing,
+      id: "session-icon-first-custom-input",
+      explicitOnly: true,
+      viewports: ["desktop"],
+      expected: "The first custom emoji input enables Set without applying an appearance change.",
+      prepare: async (page, gateway) => {
+        await typing.prepare(page, gateway);
+        const trigger = page.locator(".chat-header-session-menu__trigger");
+        await trigger.focus();
+        await trigger.press("Enter");
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).hover();
+        await page.getByRole("menuitem", { name: "Icon & color", exact: true }).hover();
+        await page.locator(".session-menu__icon-choice--custom:visible").click();
+        await page.locator(".session-menu__icon-custom-input:visible").waitFor();
+        await page.waitForFunction(() => {
+          const input = document.activeElement;
+          return (
+            input instanceof HTMLTextAreaElement &&
+            input.matches(".session-menu__icon-custom-input") &&
+            input.value === ""
+          );
+        });
+        await frames(page);
+      },
+      run: async (page) => {
+        const input = page.locator(".session-menu__icon-custom-input:visible");
+        await input.fill("🦞");
+        await page.locator(".session-menu__icon-set:enabled").waitFor();
+        await frames(page);
+        if ((await input.inputValue()) !== "🦞") {
+          throw new Error("Custom icon input lost the emoji draft");
+        }
+        return { customIconAccepted: true };
+      },
+    },
     {
       id: "workboard-style-cycles",
       explicitOnly: true,

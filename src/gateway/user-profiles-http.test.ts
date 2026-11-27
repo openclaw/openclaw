@@ -14,7 +14,6 @@ import { repairMergedGatewayOwnerProfile } from "../state/user-profiles-owner-mi
 import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
 const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
@@ -170,9 +169,7 @@ describe("profile avatar HTTP endpoint", () => {
     profileFixture.mockReset();
     getRuntimeConfig.mockReset();
     resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
-    authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
-      bindHttpResponseAuthority({ operatorScopes: ["operator.read"] }, res, () => true),
-    );
+    authorizeControlUiReadRequestOrReply.mockReturnValue({ operatorScopes: ["operator.read"] });
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
     });
@@ -252,6 +249,33 @@ describe("profile avatar HTTP endpoint", () => {
     await handle(unauthorized, pathname);
     expect(unauthorized.end).not.toHaveBeenCalled();
     expect(resolveHostAccountAvatar).toHaveBeenCalledOnce();
+  });
+
+  it("serves the verified GitHub photo before Gravatar and keeps an uploaded photo authoritative", async () => {
+    const { writes, options, createReader } = await realProfiles("github-avatar-");
+    const person = writes.syncGitHubIdentity(
+      {
+        identity: { accountId: 424242, login: "octocat" },
+        authenticationAlias: { kind: "email", email: "private@example.test" },
+      },
+      options,
+    );
+    createProfileAvatarReader.mockImplementation((id: string) => createReader(id, options));
+    const bytes = new Uint8Array([1, 2, 3]);
+    const fetchImage = vi.fn(async () => image(bytes));
+    const res = response();
+    await serveProfile(person.id, res, fetchImage);
+    expectHead(res, 200, { "Content-Type": "image/png" });
+    expect(res.end).toHaveBeenCalledWith(bytes);
+    expect(fetchImage).toHaveBeenCalledExactlyOnceWith(
+      "https://avatars.githubusercontent.com/u/424242?v=4",
+      expect.objectContaining({ redirect: "error" }),
+    );
+    writes.setAvatar(person.id, new Uint8Array([9]), "image/png", options);
+    const uploaded = response();
+    await serveProfile(person.id, uploaded, fetchImage);
+    expect(uploaded.end).toHaveBeenCalledWith(new Uint8Array([9]));
+    expect(fetchImage).toHaveBeenCalledTimes(1);
   });
 
   it("does not inherit the host photo through a merged owner before Doctor repair", async () => {

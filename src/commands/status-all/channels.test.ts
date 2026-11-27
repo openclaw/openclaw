@@ -67,7 +67,7 @@ vi.mock("../../channels/account-inspection.js", () => ({
 }));
 // mock-isolation: Supply the selected channel owners without loading installed plugins.
 vi.mock("../../channels/plugins/read-only.js", () => ({
-  resolveReadOnlyChannelPluginsForConfig: (...args: unknown[]) => ({
+  resolveReadOnlyChannelPluginsForConfigAsync: async (...args: unknown[]) => ({
     plugins: mocks.plugins(...args),
     manifestRecords: [],
     configuredChannelIds: [],

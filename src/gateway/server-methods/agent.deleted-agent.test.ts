@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
@@ -29,8 +28,7 @@ vi.mock("../chat-attachments.js", async (importOriginal) => ({
 }));
 
 // Load the handler after the shared helper has registered its storage mocks.
-const { agentHandlers } = await import("./agent.js");
-const handleAgent = expectDefined(agentHandlers.agent, "agent RPC handler");
+const { agentRunHandler: handleAgent } = await import("./agent-run-handler.js");
 
 async function invoke(
   params: Record<string, unknown>,
@@ -72,7 +70,10 @@ it.each([
     mode === "cli"
       ? ({ connect: { scopes: ["operator.admin"] } } as never)
       : mode === "backend"
-        ? ({ connect: { client: { mode: "backend" } } } as never)
+        ? ({
+            connect: { client: { mode: "backend" } },
+            internal: { localBackendClient: true },
+          } as never)
         : null;
   const params: Record<string, unknown> = {
     message,

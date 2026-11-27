@@ -11,9 +11,11 @@ import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { outputItem } from "./openai-stream-cases.test-support.js";
 const initialHost = getAiTransportHost();
 const model = fixtures.createModel({
-  id: "gpt-5.4",
+  id: "gpt-6.2-sol",
   api: "openai-chatgpt-responses",
   baseUrl: "https://chatgpt.com/backend-api/codex",
+  // The shared OpenAI catalog row also serves the API-key runtime.
+  compat: { cachesInstructions: false },
 });
 const options = {
   apiKey: `eyJhbGciOiJub25lIn0.${Buffer.from(
@@ -112,6 +114,20 @@ describe.each([
     const result = await compact(context, hooked);
     const [normal, v2] = requests;
     assert(normal && v2, "Expected normal and compaction requests");
+    if (_transportName === "native ChatGPT") {
+      expect(normal.body).not.toHaveProperty("instructions");
+      expect(normal.body.input).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "developer",
+            content: [{ type: "input_text", text: "Stable instructions" }],
+          }),
+        ]),
+      );
+    } else {
+      expect(normal.body.instructions).toBe("Stable instructions");
+      expect(JSON.stringify(normal.body.input)).not.toContain("Stable instructions");
+    }
     expect(v2.url).toBe(normal.url);
     expect(v2.url.endsWith("/responses")).toBe(true);
     expect(v2.body).toEqual({
@@ -167,16 +183,16 @@ describe.each([
     expect(JSON.stringify(requests[1]?.body)).toContain("real request");
   });
 });
-it("bounds retained multilingual input without reviving older users", async () => {
+it.each([
+  ["BMP", "中".repeat(64_001), "中".repeat(64_000)],
+  ["astral", "a".repeat(255_997) + "😀".repeat(2), "a".repeat(255_997) + "😀"],
+])("bounds retained %s input without reviving older users", async (_name, text, expected) => {
   const result = await compact({
     ...context,
-    messages: [fixtures.userMessage("oldest", 1), fixtures.userMessage("中".repeat(64_001), 2)],
+    messages: [fixtures.userMessage("oldest", 1), fixtures.userMessage(text, 2)],
   });
   expect(result.output).toHaveLength(2);
-  expect(JSON.stringify(result.output)).not.toContain("oldest");
-  expect(result.output[0]).toMatchObject({
-    content: [{ type: "input_text", text: "中".repeat(64_000) }],
-  });
+  expect(result.output[0]).toMatchObject({ content: [{ type: "input_text", text: expected }] });
 });
 it.each<[string, unknown[]]>([
   ["unfinished stream", [checkpoint()]],

@@ -619,7 +619,8 @@ describe("native conversation contract", () => {
       f.bridge.interceptNavigation(location("/settings"));
       await flush();
       expect(showToast).toHaveBeenCalledWith({
-        message: "Couldn't open that page in the Dashboard",
+        severity: "error",
+        message: "Couldn't open that page",
       });
       expect(f.navigateAndWait).not.toHaveBeenCalled();
       expect(f.data.sessionKey).toBe("agent:main:main");

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -22,9 +22,14 @@ import { createMirrorStaging } from "../../scripts/crabbox-staging.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const childProcess = await importOriginal<typeof import("node:child_process")>();
+  return { ...childProcess, execFileSync: vi.fn(childProcess.execFileSync) };
+});
+
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
-  return { ...fs, lstatSync: vi.fn(fs.lstatSync), mkdirSync: vi.fn(fs.mkdirSync) };
+  return { ...fs, lstatSync: vi.fn(fs.lstatSync) };
 });
 
 vi.mock("../../scripts/crabbox-staging.mts", async (importOriginal) => {
@@ -137,15 +142,53 @@ function fileIdentity(path: string) {
   return { ino: stat.ino, mtime: stat.mtimeNs, ctime: stat.ctimeNs, size: stat.size };
 }
 
+function expectNoEmptyGitBatches() {
+  for (const [command, args, options] of vi.mocked(execFileSync).mock.calls) {
+    if (
+      command === "git" &&
+      ((args?.includes("update-index") && args.includes("--index-info")) ||
+        (args?.includes("hash-object") &&
+          (args.includes("--stdin") || args.includes("--stdin-paths"))))
+    ) {
+      expect(options?.input, args.join(" ")).not.toBe("");
+    }
+  }
+}
+
 describe.skipIf(process.platform === "win32")("persistent Crabbox source capsules", () => {
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])("freezes empty source (mirror=%s, empty base=%s)", (mirror, emptyBase) => {
+    const f = fixture();
+    const deleted = f.git(f.repository, "ls-files").split("\n");
+    f.git(f.repository, "rm", "-r", "--", ".");
+    if (emptyBase) {
+      f.git(f.repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "empty");
+    }
+    const capsule = f.prepare(mirror);
+    try {
+      expect(f.git(capsule.directory, "ls-tree", "-r", capsule.tree)).toBe("");
+      expect(
+        JSON.parse(f.git(capsule.directory, "show", "-s", "--format=%B", capsule.carrier)),
+      ).toEqual({ deleted: emptyBase ? [] : deleted });
+    } finally {
+      capsule.cleanup();
+    }
+  });
+
   it.each([false, true])("observes cold source only while copying (mirror=%s)", (mirror) => {
     const f = fixture({ ".gitignore": "*.secret\n*.ignored\n.crabboxignore\n" });
     writeFileSync(join(f.repository, "new.txt"), "new source\n");
     writeFileSync(join(f.repository, ".crabboxignore"), "private.secret\n");
     writeFileSync(join(f.repository, "private.secret"), "synthetic private source\n");
     vi.mocked(lstatSync).mockClear();
+    vi.mocked(execFileSync).mockClear();
     const capsule = f.prepare(mirror);
     try {
+      expectNoEmptyGitBatches();
       for (const path of [
         "stable.txt",
         "new.txt",
@@ -231,48 +274,6 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
     }
   });
 
-  it("creates each freeze parent once for regular, sparse, and symlink copies", () => {
-    const f = fixture({
-      "nested/a.txt": "a\n",
-      "nested/b.txt": "b\n",
-      "nested/sparse.txt": "sparse\n",
-    });
-    symlinkSync("a.txt", join(f.repository, "nested/link"));
-    f.git(f.repository, "add", "nested/link");
-    f.git(f.repository, "update-index", "--skip-worktree", "nested/sparse.txt");
-    rmSync(join(f.repository, "nested/sparse.txt"));
-    vi.mocked(mkdirSync).mockClear();
-    const first = f.prepare();
-    try {
-      expect(
-        vi
-          .mocked(mkdirSync)
-          .mock.calls.filter(([directory]) => directory === join(first.directory, "nested")),
-      ).toHaveLength(1);
-      expect(readlinkSync(join(first.directory, "nested/link"))).toBe("a.txt");
-      expect(readFileSync(join(first.directory, "nested/sparse.txt"), "utf8")).toBe("sparse\n");
-      f.expectColdEquivalent(first);
-    } finally {
-      first.cleanup();
-    }
-    writeFileSync(join(f.repository, "nested/a.txt"), "changed a\n");
-    writeFileSync(join(f.repository, "nested/b.txt"), "changed b\n");
-    vi.mocked(mkdirSync).mockClear();
-    const warm = f.prepare();
-    try {
-      // The existing parent makes recursive mkdir return undefined; it still
-      // admits the later sibling without another filesystem operation.
-      expect(
-        vi
-          .mocked(mkdirSync)
-          .mock.calls.filter(([directory]) => directory === join(warm.directory, "nested")),
-      ).toHaveLength(1);
-      f.expectColdEquivalent(warm);
-    } finally {
-      warm.cleanup();
-    }
-  });
-
   it.each(["initial allocation", "cold rebuild"])(
     "rejects an unrecorded mirror before freezing during %s",
     async (allocation) => {
@@ -327,11 +328,13 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
 
     const arrivingSecret = join(f.repository, "arriving.secret");
     vi.mocked(lstatSync).mockClear();
+    vi.mocked(execFileSync).mockClear();
     const unchanged = f.prepare(
       true,
       `require("node:fs").writeFileSync(${JSON.stringify(arrivingSecret)},"synthetic secret");`,
     );
     try {
+      expectNoEmptyGitBatches();
       // One pre-Git integrity check and one shared final seal per retained file.
       expect(
         vi.mocked(lstatSync).mock.calls.filter(([path]) => path === join(directory, "stable.txt")),

@@ -11,9 +11,9 @@ import {
   type TranscriptsRuntimeContext,
 } from "./capture.js";
 import { resolveTranscriptsConfig } from "./config.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { TranscriptsSummaryChangedError } from "./store-errors.js";
 import { TranscriptsStore } from "./store.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 export function createTranscriptsStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
   return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"), {

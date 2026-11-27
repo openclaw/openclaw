@@ -134,6 +134,11 @@ export function projectGatewayUrlForDiagnostics(url: string): string {
   return redactSensitiveUrlLikeString(url);
 }
 
+export const GATEWAY_PAIRING_APPROVAL_HINT =
+  "On the Gateway host, run `openclaw devices approve --latest` to preview the pending request. " +
+  "Review the preview, then run the printed `openclaw devices approve <requestId>` command to approve it. " +
+  "Or approve it in that Gateway's Control UI (Settings -> Devices). Then retry.";
+
 /** Build gateway target details and reject unsafe remote plaintext websocket URLs. */
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {

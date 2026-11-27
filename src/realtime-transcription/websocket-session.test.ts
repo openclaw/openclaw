@@ -194,6 +194,37 @@ it("owns queued bytes without replaying successfully flushed frames", async () =
   expect(sentFrames).toEqual(["first", "second"]);
 });
 
+it("discards queued audio when the provider terminates before readiness", async () => {
+  const liveReceived = createDeferred();
+  const { session, frames } = await setup(
+    {
+      readyOnOpen: false,
+      onMessage: (event, transport) => {
+        if (event.type === "terminal") {
+          transport.closeNow();
+        } else {
+          handleProviderEvent(event, transport);
+        }
+      },
+    },
+    (socket, number) => {
+      socket.send(JSON.stringify({ type: number === 1 ? "terminal" : "session.created" }));
+      socket.on("message", (data) => {
+        if (Buffer.isBuffer(data) && data.toString() === "live") {
+          liveReceived.resolve();
+        }
+      });
+    },
+  );
+  session.sendAudio(Buffer.from("previous session"));
+  await session.connect();
+  session.close();
+  await session.connect();
+  session.sendAudio(Buffer.from("live"));
+  await liveReceived.promise;
+  expect(frames).toEqual([Buffer.from("live")]);
+});
+
 it("keeps replacement sockets owned when retired socket callbacks arrive late", async () => {
   const { session, connections, transports, onError, onTranscript } = await setup({
     closeTimeoutMs: 30,
@@ -328,18 +359,30 @@ it("lets providers mark ready after a JSON handshake", async () => {
   ]);
 });
 
-it.each(["connected", "closed", "superseded"] as const)(
+it.each(["connected", "closed", "superseded", "revoked"] as const)(
   "resolves async credentials: %s",
   async (phase) => {
     const url = createDeferred<string>();
+    const onError = vi.fn();
+    let revoked = false;
     let attempts = 0;
     const state: Awaited<ReturnType<typeof setup>> = await setup({
       url: () => (++attempts === 1 ? url.promise : state.url),
       headers: async () => ({ Authorization: "Bearer resolved-token" }),
+      callbacks: {
+        onError,
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("transcription authority revoked");
+          }
+        },
+      },
     });
     const { session, connections } = state;
     const connecting = session.connect();
-    if (phase !== "connected") {
+    if (phase === "revoked") {
+      revoked = true;
+    } else if (phase !== "connected") {
       session.close();
     }
     if (phase === "superseded") {
@@ -351,8 +394,14 @@ it.each(["connected", "closed", "superseded"] as const)(
       await delay(20);
       expect(connections).toHaveLength(1);
     }
-    expect(state.authHeaders).toEqual(phase === "closed" ? [] : ["Bearer resolved-token"]);
-    expect(session.isConnected()).toBe(phase !== "closed");
+    const stopped = phase === "closed" || phase === "revoked";
+    expect(state.authHeaders).toEqual(stopped ? [] : ["Bearer resolved-token"]);
+    expect(session.isConnected()).toBe(!stopped);
+    if (phase === "revoked") {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "transcription authority revoked" }),
+      );
+    }
   },
 );
 

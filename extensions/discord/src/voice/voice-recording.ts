@@ -48,7 +48,8 @@ export class DiscordVoiceRecording {
   constructor(
     private readonly params: {
       entry: VoiceSessionEntry;
-      cfg: OpenClawConfig;
+      maxBytes: number;
+      readConfig: () => OpenClawConfig;
       userId: string;
       isInputComplete: () => boolean;
       minimumSeconds: () => number;
@@ -59,16 +60,13 @@ export class DiscordVoiceRecording {
       onExcluded: () => void;
     },
   ) {
-    const budget = params.entry.audioInputBudget;
     // Include the WAV header and keep complete stereo PCM frames within the upload cap.
-    this.segmentBytes = budget.enabled
-      ? Math.max(
-          0,
-          Math.floor(
-            (Math.min(budget.maxBytes, MAX_PENDING_RECORDING_BYTES) - VOICE_WAV_HEADER_BYTES) / 4,
-          ) * 4,
-        )
-      : 0;
+    this.segmentBytes = Math.max(
+      0,
+      Math.floor(
+        (Math.min(params.maxBytes, MAX_PENDING_RECORDING_BYTES) - VOICE_WAV_HEADER_BYTES) / 4,
+      ) * 4,
+    );
   }
 
   async append(pcm: Buffer, receipt: DiscordVoiceAudioReceipt): Promise<void> {
@@ -173,6 +171,8 @@ export class DiscordVoiceRecording {
         await previousProcessing;
         return await processDiscordVoiceSegment({
           ...this.params,
+          // Transcribe with the current media config; the recorder can outlive a hot reload.
+          cfg: this.params.readConfig(),
           wavPath: wav.path,
           isConversationCurrent: this.params.canConverse,
           onConversationOnly: () => conversationOnly.resolve(),

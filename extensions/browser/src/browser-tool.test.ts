@@ -1977,7 +1977,7 @@ describe("browser observation actions and tab previews", () => {
       node: "Browser Node",
       targetId: payload.targetId,
     });
-    expect(firstResultText(result)).toBe(JSON.stringify(payload, null, 2));
+    expect(firstResultText(result)).toBe(JSON.stringify(payload));
     expect(result.details).toEqual(payload);
   });
 
@@ -2005,6 +2005,70 @@ describe("browser observation actions and tab previews", () => {
       (await tool.execute("failed-batch", { action: "act", kind: "batch", actions: [] })).details,
     ).not.toHaveProperty("browserTab");
   });
+
+  it.each<{
+    format: "ai" | "aria";
+    query: string;
+    name?: string;
+    maxChars?: number;
+    outcome: "matching" | "empty" | "capped";
+  }>([
+    { format: "ai", query: "  IN\tSIGN ", outcome: "matching" },
+    { format: "aria", query: "  IN\tSIGN ", outcome: "matching" },
+    { format: "aria", query: "cafe", name: "Cafe\u0301", outcome: "empty" },
+    { format: "ai", query: "not found", outcome: "empty" },
+    { format: "ai", query: "sign in", maxChars: 5, outcome: "capped" },
+  ])(
+    "filters $format snapshot queries with $outcome results and current stats",
+    async ({ format, name = "Sign in", outcome, ...queryOptions }) => {
+      const snapshotNodes = [
+        { ref: "e1", role: "button", name },
+        { ref: "e2", role: "button", name: "Sign out" },
+      ];
+      client.browserSnapshot.mockResolvedValueOnce({
+        ok: true,
+        targetId: "t1",
+        format,
+        ...(outcome === "matching" ? { url: "https://example.com" } : {}),
+        ...(format === "aria"
+          ? { nodes: snapshotNodes }
+          : {
+              snapshot: `- button ${JSON.stringify(name)} [ref=e1]\n- button "Sign out" [ref=e2]`,
+              refs: Object.fromEntries(snapshotNodes.map((node) => [node.ref, node])),
+              stats: { lines: 2, chars: 100, refs: 2, interactive: 2 },
+            }),
+      });
+      const result = await execute({ action: "snapshot", snapshotFormat: format, ...queryOptions });
+      if (outcome === "matching") {
+        const text = firstResultText(result);
+        expect(text).toContain("1 matching line");
+        expect(text).toContain("[ref=e1]");
+        expect(text).toContain(name);
+        expect(text).not.toContain("[ref=e2]");
+        expect(result.details).toMatchObject({
+          matchCount: 1,
+          refs: 1,
+          stats: { lines: 1, refs: 1, interactive: 1 },
+          browserTab: { targetId: "t1" },
+        });
+      } else if (outcome === "empty") {
+        expect(firstResultText(result)).toContain("No matching lines");
+        expect(firstResultText(result)).toContain("Refine");
+        expect(result.details).toMatchObject({
+          matchCount: 0,
+          refs: 0,
+          stats: { lines: 0, chars: 0, refs: 0, interactive: 0 },
+        });
+      } else {
+        expect(result.details).toMatchObject({
+          matchCount: 1,
+          truncated: true,
+          refs: 0,
+          stats: { chars: 5, refs: 0 },
+        });
+      }
+    },
+  );
 });
 
 it.each([{ scopes: ["operator.write"] }, { scopes: ["operator.sessions.write"] }])(

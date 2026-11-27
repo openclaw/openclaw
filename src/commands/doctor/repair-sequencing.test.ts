@@ -1,6 +1,10 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING,
+  recordUpdateModelRetirement,
+} from "../../infra/update-deferred-model-retirement.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   createPluginManifestRecordFixture,
@@ -97,7 +101,7 @@ describe("doctor repair sequencing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasDeferredRetirement.mockReturnValue(false);
-    mocks.applyPluginAutoEnable.mockImplementation(unchangedConfig);
+    mocks.applyPluginAutoEnableAsync.mockImplementation(unchangedConfig);
     mocks.materializePluginAutoEnableCandidates.mockImplementation(unchangedConfig);
     mocks.ensureAuthProfileStore.mockReturnValue({ profiles: {}, usageStats: {} });
     mocks.evaluateStoredCredentialEligibility.mockReturnValue({ eligible: true, reasonCode: "ok" });
@@ -138,45 +142,42 @@ describe("doctor repair sequencing", () => {
 
   registerSharedRuntimeReaderDoctorTests();
 
-  it.each(["retirement", "prior-config", "prior-state", "uncertain-retirement"])(
-    "proves retirement-only from recorded work: %s",
-    async (kind) => {
-      hasDeferredRetirement.mockReturnValue(true);
-      if (kind === "prior-config") {
-        mocks.maybeRepairStaleConfiguredAuthOrders.mockReturnValueOnce({
-          config: {},
-          changes: ["Repaired auth order"],
-        });
-      }
-      if (kind === "prior-state") {
-        mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValueOnce({
-          changes: ["Repaired identity"],
-          warnings: [],
-        });
-      }
-      mocks.repairStaleAgentModelRefs.mockReturnValueOnce({
-        config: {},
-        changes: ["Retired model"],
-        warnings: kind === "uncertain-retirement" ? ["Catalog unavailable"] : [],
-      });
-      const result = await runRepairs();
-      expect(result.modelRetirementOnly).toBe(kind === "retirement");
-      expect(result.state.pendingChanges).toBe(true);
-    },
-  );
+  it.each<[string, Record<string, unknown>, string[]]>([
+    ["retirement", {}, []],
+    ["custom-command", { appServer: { command: "/synthetic/codex" } }, []],
+    [
+      "inline-command",
+      { appServer: { command: "node --bad-inline-arg" } },
+      ["warning-notes", "warning-notes.codex-routes"],
+    ],
+    ["computer-use", { computerUse: { enabled: true } }, []],
+    ["service-tier", {}, ["pending-changes"]],
+    ["uncertain-retirement", {}, ["model-repair-warnings"]],
+  ])("proves retirement-only from recorded work: %s", async (kind, config, blockers) => {
+    hasDeferredRetirement.mockReturnValue(true);
+    const cfg: OpenClawConfig = { plugins: { entries: { codex: { config } } } };
+    if (kind === "service-tier") {
+      const model = "openai/gpt-5.6-sol";
+      const entry = {
+        agentRuntime: { id: "codex" },
+        params: { fastMode: true, serviceTier: "priority" },
+      } as const;
+      cfg.agents = { defaults: { model, models: { [model]: entry } } };
+    }
+    mocks.repairStaleAgentModelRefs.mockReturnValueOnce({
+      ...mutation({}, "Retired model"),
+      warnings: kind === "uncertain-retirement" ? ["Catalog unavailable"] : [],
+    });
+    const result = await runRepairs(cfg);
+    expect(result.modelRetirementBlockers).toEqual(
+      blockers.map((why) => `model-retirement.${why}`),
+    );
+  });
 
   it.each([
-    {
-      name: "Tailscale profile identity migration",
-      repair: mocks.migrateLegacyTailscaleProfileIdentities,
-      options: {},
-    },
-    {
-      name: "merged gateway owner profile repair",
-      repair: mocks.repairMergedGatewayOwnerProfile,
-      options: { shouldRepair: true },
-    },
-  ])("reports the doctor-only $name", async ({ repair, options }) => {
+    [mocks.migrateLegacyTailscaleProfileIdentities, {}],
+    [mocks.repairMergedGatewayOwnerProfile, { shouldRepair: true }],
+  ] as const)("reports doctor-only identity repair %#", async (repair, options) => {
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-test" };
     repair.mockReturnValue({
       repaired: true,
@@ -341,14 +342,15 @@ describe("doctor repair sequencing", () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce(
       installedPlugin("brave", "@openclaw/brave-plugin"),
     );
-    mocks.applyPluginAutoEnable.mockImplementationOnce(({ config }: { config: OpenClawConfig }) =>
-      mutation(
-        {
-          ...config,
-          plugins: { allow: ["telegram", "brave"], entries: { brave: { enabled: true } } },
-        },
-        "brave web search provider selected, enabled automatically.",
-      ),
+    mocks.applyPluginAutoEnableAsync.mockImplementationOnce(
+      ({ config }: { config: OpenClawConfig }) =>
+        mutation(
+          {
+            ...config,
+            plugins: { allow: ["telegram", "brave"], entries: { brave: { enabled: true } } },
+          },
+          "brave web search provider selected, enabled automatically.",
+        ),
     );
 
     const result = await runRepairs({
@@ -386,7 +388,7 @@ describe("doctor repair sequencing", () => {
       },
     });
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+    expect(mocks.applyPluginAutoEnableAsync).toHaveBeenCalledWith(
       expect.objectContaining({ manifestRegistry }),
     );
   });
@@ -563,30 +565,12 @@ describe("doctor repair sequencing", () => {
     expect(result.state.candidate.agents?.defaults?.model).toBe(`${workspaceProvider}/model`);
   });
 
-  it("moves legacy Codex routes to canonical OpenAI before missing plugin install repair", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
-      async (params: { cfg: OpenClawConfig }) => {
-        expect(params.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
-        expect(params.cfg.agents?.defaults).not.toHaveProperty("agentRuntime");
-        return { changes: [], warnings: [] };
-      },
-    );
-
-    const result = await runRepairs(
-      { agents: { defaults: { model: "openai-codex/gpt-5.5" } } },
-      { env: {} },
-    );
-
-    expect(result.state.pendingChanges).toBe(true);
-    expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
-    expect(result.state.candidate.agents?.defaults).not.toHaveProperty("agentRuntime");
-  });
-
   it("repairs #94184 stale Codex model-map refs before missing plugin install repair", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
       async (params: { cfg: OpenClawConfig }) => {
         expect(params.cfg.plugins?.entries?.codex?.enabled).toBe(true);
         expect(params.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
+        expect(params.cfg.agents?.defaults).not.toHaveProperty("agentRuntime");
         expect(params.cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
           id: "codex",
         });
@@ -619,6 +603,7 @@ describe("doctor repair sequencing", () => {
     expect(result.state.candidate.plugins?.allow).toEqual(["openai", "codex"]);
     expect(result.state.candidate.plugins?.entries?.codex?.enabled).toBe(true);
     expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(result.state.candidate.agents?.defaults).not.toHaveProperty("agentRuntime");
     expect(
       result.state.candidate.agents?.defaults?.models?.["openai-codex/gpt-5.5"],
     ).toBeUndefined();
@@ -677,6 +662,80 @@ describe("doctor repair sequencing", () => {
     expect(result.state.candidate.plugins?.allow).toEqual(["brave"]);
     expect(result.state.candidate.plugins?.entries?.brave?.enabled).toBe(true);
     expect(result.changeNotes).toStrictEqual([deferred]);
+  });
+
+  describe("package update doctor pass", () => {
+    const swapEnv = { OPENCLAW_UPDATE_IN_PROGRESS: "1" };
+    const staleRef = "ghost-provider/model-a";
+    const modelConfig = (): OpenClawConfig => ({
+      agents: { defaults: { model: { primary: staleRef } } },
+    });
+    const deferrals = () =>
+      vi.mocked(recordUpdateModelRetirement).mock.calls.filter(([status]) => status === "deferred");
+
+    it("does not wait for plugin convergence when it has nothing to change", async () => {
+      mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+        changes: [],
+        warnings: [],
+        records: {},
+      });
+      const config = modelConfig();
+
+      const result = await runRepairs(config, { env: swapEnv });
+
+      expect(deferrals()).toStrictEqual([]);
+      expect(result.warningNotes).not.toContain(DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING);
+      expect(result.state.candidate).toStrictEqual(modelConfig());
+      expect(result.state.pendingChanges).toBe(false);
+    });
+
+    it.each([
+      [
+        "a model reference would be retired",
+        () =>
+          mocks.repairStaleAgentModelRefs.mockImplementation((cfg: OpenClawConfig) =>
+            mutation(
+              { ...cfg, agents: { defaults: {} } },
+              `Removed agents.defaults.model.primary ${staleRef}`,
+            ),
+          ),
+      ],
+      [
+        "retirement cannot read the provider inventory",
+        () =>
+          mocks.repairStaleAgentModelRefs.mockImplementation((cfg: OpenClawConfig) => ({
+            ...unchanged(cfg),
+            warnings: ["Provider inventory unavailable"],
+          })),
+      ],
+      [
+        "a stale plugin entry would be removed",
+        () =>
+          mocks.maybeRepairStalePluginConfig.mockImplementation((cfg: OpenClawConfig) =>
+            mutation(cfg, "plugins.entries: removed 1 stale plugin entry (old-plugin)"),
+          ),
+      ],
+      [
+        "an installed plugin can still change in convergence",
+        () =>
+          mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+            changes: [],
+            warnings: [],
+            records: { brave: { source: "npm", spec: "@openclaw/brave-plugin" } },
+          }),
+      ],
+    ])("waits for plugin convergence when %s", async (_case, arrange) => {
+      arrange();
+      const config = modelConfig();
+
+      const result = await runRepairs(config, { env: swapEnv });
+
+      expect(deferrals()).toHaveLength(1);
+      expect(result.warningNotes).toContain(DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING);
+      // Deciding to wait must not apply the repair it is waiting for.
+      expect(result.state.candidate).toStrictEqual(modelConfig());
+      expect(result.state.pendingChanges).toBe(false);
+    });
   });
 
   it("preserves configured plugins when their install repair fails", async () => {

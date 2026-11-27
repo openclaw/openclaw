@@ -36,6 +36,7 @@ import {
   HOST_READ_DECLARED_TEXT_ERROR,
   type HostReadHtmlTrust,
 } from "./host-read-media-policy.js";
+import { readImageMetadataFromHeader } from "./image-header-metadata.js";
 import { ImageOptimizationLimitError } from "./image-optimization-error.js";
 import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 import { createImageProcessorWithPixelLimits } from "./image-processor.js";
@@ -45,6 +46,7 @@ import {
   getDefaultLocalRootsCore,
   HostReadMediaTypeError,
   LocalMediaAccessError,
+  localMediaNotFoundError,
   readLocalMediaFile,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
@@ -52,7 +54,6 @@ import { MediaReferenceError, resolveInboundMediaReference } from "./media-refer
 import {
   createImageProcessor,
   isAnimatedWebpBuffer,
-  readImageMetadataFromHeader,
   readImageProbeFromHeader,
   type ImageMetadata,
 } from "./media-services.js";
@@ -692,9 +693,7 @@ async function loadWebMediaInternal(
           });
         }
         if (err.code === "not-found") {
-          throw new LocalMediaAccessError("not-found", `Local media file not found: ${mediaUrl}`, {
-            cause: err,
-          });
+          throw localMediaNotFoundError(mediaUrl, err);
         }
         if (err.code === "not-file") {
           throw new LocalMediaAccessError(

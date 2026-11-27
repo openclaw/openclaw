@@ -17,6 +17,7 @@ import {
 } from "../config/io.js";
 import { recoverConfigFromLastKnownGoodCore } from "../config/io.observe-recovery.js";
 import { prepareConfigRecoveryFromContext } from "../config/io.snapshot.js";
+import { findLegacyConfigRuleIssues } from "../config/legacy.shared.js";
 import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
@@ -26,6 +27,7 @@ import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js
 import type { planAutomaticConfigRepair } from "./doctor/shared/automatic-config-repair.js";
 import { classifyOtelGrpcMigrationOwnership } from "./doctor/shared/include-migration-ownership.js";
 import { applyLegacyDoctorMigrations } from "./doctor/shared/legacy-config-compat.js";
+import { LEGACY_PLUGIN_PROMPT_PERMISSION } from "./doctor/shared/legacy-config-migrations.plugin-prompts.js";
 import { findRetiredConfigUpgradeRequirement } from "./doctor/shared/retired-config-formats.js";
 
 const transformDoctorRecoveryCandidate: ConfigRecoveryCandidateTransform = (params) => {
@@ -72,6 +74,11 @@ export async function migrateLegacyDoctorConfig(params: {
   return changes.length > 0;
 }
 
+/** Next steps once Doctor has tried and failed to recover an unparseable config. */
+export function formatUnparseableConfigNextSteps(): string {
+  return `Inspect the exact parse error with ${formatCliCommand("openclaw config validate")}, then hand-edit the file; or move it aside and run ${formatCliCommand("openclaw onboard")} to generate a fresh config.`;
+}
+
 /** Repair active legacy bytes before considering an older backup. */
 export async function prepareDoctorConfigRecovery(params: {
   enabled: boolean;
@@ -111,6 +118,7 @@ export async function prepareDoctorConfigRecovery(params: {
     const recovery = await prepareConfigRecoveryFromContext(
       createConfigIoContext({ configPath: snapshot.path }, transformDoctorRecoveryCandidate),
       snapshot,
+      "doctor-repair",
     );
     if (recovery) {
       await recovery.apply();
@@ -124,6 +132,15 @@ export async function prepareDoctorConfigRecovery(params: {
       typeof snapshot.raw === "string" && parseConfigJson5(snapshot.raw).ok
         ? await params.planRepair(snapshot)
         : null;
+    if (
+      !activeConfigRepair &&
+      findLegacyConfigRuleIssues(sourceConfig, LEGACY_PLUGIN_PROMPT_PERMISSION.legacyRules ?? [])
+        .length > 0
+    ) {
+      // Includes can prevent an automatic write plan. Keep the current permission
+      // for Doctor rather than restoring a historical grant or denial from backup.
+      return { snapshotRead, activeConfigRepair };
+    }
     let configRepaired = false;
     const recoverPrefix =
       params.databaseAccess === "none"
@@ -171,7 +188,7 @@ export async function prepareDoctorConfigRecovery(params: {
       !parseConfigJson5(snapshot.raw).ok
     ) {
       throw new Error(
-        `Config at ${snapshot.path} is not parseable and cannot be repaired automatically. The file remains unchanged. Inspect the exact parse error with ${formatCliCommand("openclaw config validate")}, then hand-edit the file; or move it aside and run ${formatCliCommand("openclaw onboard")} to generate a fresh config.`,
+        `Config at ${snapshot.path} is not parseable and cannot be repaired automatically. The file remains unchanged. ${formatUnparseableConfigNextSteps()}`,
       );
     }
   }

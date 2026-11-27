@@ -237,6 +237,9 @@ export function useRepositoryWorkspaceResultFixture() {
       },
       assertPreparedIntentCurrent: vi.fn(),
       getPreparedCandidates: () => [],
+      refreshPreparedEnvironment: async () => {
+        throw new Error("unexpected prepared refresh");
+      },
       schedulePreparedRefill: vi.fn(),
       bindPreparedWorkspace: async () => {
         throw new Error("unexpected prepared binding");

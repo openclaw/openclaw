@@ -3,8 +3,18 @@
   "categories": ["developer-tools"],
   "activation": {
     "onStartup": false,
+    "onCommands": ["beam"],
     "onConfigPaths": ["plugins.entries.beam"]
   },
+  "contracts": { "gatewayMethodDispatch": ["authenticated-request"] },
+  "cliCommands": [
+    {
+      "name": "beam",
+      "description": "Inspect the installed Beam connector",
+      "hasSubcommands": true
+    }
+  ],
+  "commandAliases": [{ "name": "beam", "kind": "cli" }],
   "configContracts": {
     "secretInputs": {
       "bundledDefaultEnabled": false,
@@ -14,7 +24,7 @@
   "uiHints": {
     "mirror.endpoint": {
       "label": "Mirror Endpoint",
-      "help": "Final Beam receiver URL, e.g. https://team.example.com/api/v1/beam/sessions. Redirects are not followed; retries pause until the service restarts or the endpoint changes."
+      "help": "Final receiver URL. Use /api/v1/beam/sessions for existing mirrors or /api/v2/beam for explicitly enrolled independent publications. Connect as an administrator and call beam.mirror.enroll with the full source locator."
     },
     "mirror.token": {
       "label": "Mirror Token",
@@ -60,5 +70,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Explain how to share a sanitized coding-session snapshot with Beam.",
+    "Compare Beam snapshots with Session Share for read-only team visibility."
+  ]
 }

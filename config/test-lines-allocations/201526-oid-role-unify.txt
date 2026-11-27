@@ -1,0 +1,39 @@
+# Unified profile-role authority: real Gateway suspension and mention-invite coverage
+# across all enforcement modes, canonical role migration/persistence and Discovery
+# publication, recovered and queued work, HTTP/WS admission, and owner exemptions.
+# Existing member-role recovery coverage is consolidated into the profile-role matrix;
+# CI fixtures now assign canonical roles instead of granting authority via ID labels.
+# Recovery and automation-creator transport fixtures prove canonical role ceilings
+# independently of opaque membership labels.
+# Owner pairing remains uncapped while catalog-only policy governs linked members.
+# Owner certificate revocation and catalog-only MCP consent have distinct cutoffs;
+# canonical member roles retain sandbox, history and mention nondisclosure coverage.
+# Identified MCP callers cannot acquire owner grants without owner authority.
+# Admitted profile-policy recovery retains work across definition edits until release.
+# Persisted pre-upgrade cron, stream, queued, restart, environment and standing-grant
+# sources retain only matching captured policy; mismatches and stale commits refuse.
+# Individual admitted requests finish while retained runs, queues and children stop.
+# Sandbox stream migration survives database reopen without changing target or grant;
+# payload execution bindings migrate only when valid, and stale bindings remain stale.
+# Retained question producers cancel ordinary, secret and sessionless waiters, including
+# role loss during preparation and independent owner cleanup; admitted requests settle.
+# Explicit source revocation also cancels non-runtime producers and their native waiters.
+# Retained Goal role-loss coverage waits for actual provider cancellation before settlement.
+# Removal nondisclosure preserves both exact source-revoked and runtime-retired diagnostics.
+# Member-only scope correction adds a real Gateway 6x4 transport/config matrix,
+# owner HTTP/push/device and empty-ceiling compatibility, canonical no-socket joins,
+# recovery and PR-audience membership cache fences, and disable-during-import latches.
+# Credential-race cases fence membership at token commit, registration and hello delivery.
+# Existing transport/recovery/sandbox fixtures now publish canonical active membership;
+# nonmember catalog-only fixtures preserve the base contract, and stream startup is covered.
+# Publication and scheduled-source fixtures own their canonical profile catalogs;
+# WebSocket admission fixtures emit real lifecycle events for prepared authority.
+# CI repairs retain publication catalogs and give scheduled-owner fixtures current
+# canonical facts, preserving revocation checks rather than bypassing admission.
+# Offline Doctor diagnostics distinguish inactive nonmembers from active catalog members,
+# covering disabled ID, removed membership and the installation-wide default boundary.
+# Mocked user-turn providers declare ordered creation plans before saving automations,
+# preserving suspension and read-boundary assertions under the merged main contract.
+# PostgreSQL publication conformance retains its canonical profile catalog for all engine pairs.
+# Measured against merged main 72b63a35495e: 4037 net test lines; 400 + 3637 allocated.
+3637

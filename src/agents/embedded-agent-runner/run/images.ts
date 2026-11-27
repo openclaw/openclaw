@@ -176,11 +176,11 @@ async function loadMediaFromRef(
   attachment = false,
 ): Promise<WebMediaResult | null> {
   options.signal?.throwIfAborted();
-  // Remote workspaces keep admitted attachment originals on Gateway for hydration.
-  // Prompt-discovered workspace references still use the sandbox boundary.
+  // Admitted managed originals belong to Gateway; staged and discovered paths stay sandboxed.
   const gatewayAttachment =
     attachment &&
     Boolean(
+      ref.type === "media-uri" ||
       getAgentWorkspaceAccess(
         options.agentWorkspaceDir ?? options.workspaceDir,
         "prepareTurnAttachments",
@@ -660,7 +660,7 @@ export async function hydratePromptMediaMessages(
 
 /** Materializes one transient provider context from exact-message media facts. */
 export async function materializeProviderContext(
-  params: Omit<PromptMediaOptions, "provider" | "model" | "maxBytes" | "maxDimensionPx"> & {
+  params: Omit<PromptMediaOptions, "provider" | "model" | "maxBytes"> & {
     context: Context;
   },
 ): Promise<ProviderContext> {

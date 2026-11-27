@@ -277,6 +277,9 @@ async function createWebKitMemoryCollector(page: Page) {
 
 /** Capture only quiescent checkpoints; heap snapshots deliberately perturb timing. */
 export async function createEngineMemoryCollector(page: Page, engine: ControlUiEngine) {
+  if (engine === "firefox") {
+    throw new Error("Firefox does not expose forced GC or heap snapshots in this harness");
+  }
   if (engine === "webkit") {
     return createWebKitMemoryCollector(page);
   }

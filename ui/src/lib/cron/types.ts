@@ -18,6 +18,11 @@ import type {
 type CronDelivery = NonNullable<CronJob["delivery"]>;
 type CronFormAnnounceDelivery = Extract<CronDelivery, { mode: "announce" }>;
 
+export type CronRunsFailure = {
+  reason: "load" | "more" | "readAccess" | "accessDenied" | "automationUnavailable" | "blocked";
+  detail: string;
+};
+
 export type CronFormState = {
   name: string;
   description: string;
@@ -35,6 +40,7 @@ export type CronFormState = {
   eventArguments: string;
   eventSource: string;
   scheduleAt: string;
+  originalScheduleAt?: { at: string; local: string };
   everyAmount: string;
   everyUnit: "seconds" | "minutes" | "hours" | "days";
   cronExpr: string;
@@ -79,6 +85,7 @@ export type CronFormState = {
   failureAlertTo: string;
   failureAlertDeliveryMode: "" | "announce" | "webhook";
   failureAlertAccountId: string;
+  failureAlertThreadId: CronDelivery["threadId"] | undefined;
   timeoutSeconds: string;
 };
 
@@ -138,6 +145,8 @@ export type CronJobsState<Row = CronJob> = {
 };
 
 export type CronState<Row = CronJob> = CronJobsState<Row> & {
+  // History reads follow the presented surface, independently of scheduler reads.
+  canRefreshRuns?: () => boolean;
   cronStatus: CronStatus | null;
   cronScopedTotal: number | null;
   cronScopedNextWakeAtMs: number | null;
@@ -153,7 +162,7 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   // only the current filtered/paged table cache.
   cronEditingJob: CronJob | null;
   cronCloningJob: CronJob | null;
-  cronRunsError: string | null;
+  cronRunsError: CronRunsFailure | null;
   cronRunsJobId: string | null;
   cronRunsRunId?: string | null;
   cronRunsLoadingMore: boolean;

@@ -1,4 +1,3 @@
-import { dirname } from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -30,18 +29,19 @@ import {
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
 import { withAuthProfileReaderCleanup } from "../agents/auth-profiles/reader-cleanup.js";
 import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
-import {
-  resolveAuthProfileDatabasePath,
-  resolveAuthProfileDatabaseOwnerId,
-} from "../agents/auth-profiles/sqlite.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isRecord } from "../utils.js";
+import { decideDoctorPendingFromLiveStores } from "./doctor-live-store-pending.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { listUnavailableAuthProfiles } from "./models/auth-unavailability.js";
 
@@ -55,11 +55,11 @@ const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   [LEGACY_CODEX_PROVIDER_ID]: OPENAI_PROVIDER_ID,
 };
 
-/** Explain the retired ambient-token activation once per state directory. */
-export async function collectCopilotAmbientTokenFindings(
+/** Whether the retired ambient-token notice is still unclaimed for this state directory. */
+async function isCopilotAmbientTokenNoticePending(
   cfg: OpenClawConfig,
-  env = process.env,
-): Promise<readonly HealthFinding[]> {
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
   if (
     !(env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim()) ||
     env.COPILOT_GITHUB_TOKEN?.trim() ||
@@ -69,7 +69,7 @@ export async function collectCopilotAmbientTokenFindings(
     ) ||
     (await readConfigMachineStateAsync<boolean>(COPILOT_NOTICE_KEY, { env }))
   ) {
-    return [];
+    return false;
   }
   const agentDirs = [undefined, ...listAgentIds(cfg).map((id) => resolveAgentDir(cfg, id, env))];
   for (const agentDir of agentDirs) {
@@ -79,8 +79,19 @@ export async function collectCopilotAmbientTokenFindings(
       env,
     );
     if (Object.values(store.profiles).some((profile) => profile.provider === "github-copilot")) {
-      return [];
+      return false;
     }
+  }
+  return true;
+}
+
+/** Explain the retired ambient-token activation once per state directory. */
+export async function collectCopilotAmbientTokenFindings(
+  cfg: OpenClawConfig,
+  env = process.env,
+): Promise<readonly HealthFinding[]> {
+  if (!(await isCopilotAmbientTokenNoticePending(cfg, env))) {
+    return [];
   }
   let claimed = false;
   updateConfigMachineState<boolean>(
@@ -115,9 +126,8 @@ export async function collectSharedAuthStoreFindings(
     return [];
   }
   const databasePath = resolveSharedAuthStorePath(env);
-  const source = prepareAgentAuthProfileRowsRead({
+  const source = await prepareAgentAuthProfileRowsRead({
     databasePath,
-    agentId: resolveAuthProfileDatabaseOwnerId(dirname(databasePath)),
     env,
   });
   const readable = await withAuthProfileReaderCleanup(
@@ -253,6 +263,7 @@ type AuthIssue = AuthHealthSummary["profiles"][number];
 
 type AuthProfileHealthTarget = {
   label: string;
+  agentId?: string;
   agentDir?: string;
 };
 
@@ -271,7 +282,7 @@ async function listAuthProfileHealthTargets(
     const agentDir = resolveAgentDir(cfg, agentId);
     const databasePath = resolveAuthProfileDatabasePath(agentDir);
     if (!targets.has(databasePath) && (await hasLocalAuthProfileStoreSourceAsync(agentDir))) {
-      targets.set(databasePath, { label: `Agent ${agentId}`, agentDir });
+      targets.set(databasePath, { label: `Agent ${agentId}`, agentId, agentDir });
     }
   }
 
@@ -402,6 +413,33 @@ async function collectAuthProfileTargetFindings(params: {
   const findings: HealthFinding[] = [];
   const owner = params.labelStores ? `${params.target.label} auth profile` : "Auth profile";
   const path = resolveAuthStorePathForDisplay(params.target.agentDir);
+  const orderedProfiles = new Map(
+    Object.entries(params.store.order ?? {}).flatMap(([provider, profileIds]) =>
+      profileIds.map((profileId) => [profileId, provider] as const),
+    ),
+  );
+  for (const [profileId, provider] of orderedProfiles) {
+    if (
+      params.store.profiles[profileId] ||
+      (await findPersistedAuthProfileCredentialAsync({
+        agentDir: params.target.agentDir,
+        profileId,
+      }))
+    ) {
+      continue;
+    }
+    findings.push({
+      checkId: AUTH_PROFILES_CHECK_ID,
+      severity: "warning",
+      category: "fix-now",
+      message: `${owner} ${profileId} is referenced by saved ${provider} account order but has no effective credential.`,
+      path,
+      target: profileId,
+      requirement: "missing_ordered_profile",
+      fixHint: `Inspect available accounts with openclaw models auth list${params.target.agentId ? ` --agent ${quoteCliArg(params.target.agentId)}` : ""} --provider ${quoteCliArg(provider)}. Restore the missing credential or explicitly change the saved account order.`,
+      docsUrl: "https://docs.openclaw.ai/concepts/oauth",
+    });
+  }
   for (const cooldown of await collectAuthProfileCooldowns(params.store)) {
     findings.push({
       checkId: AUTH_PROFILES_CHECK_ID,
@@ -459,6 +497,71 @@ export async function collectAuthProfileHealthFindings(params: {
   return [...findings, ...(await collectLegacyCodexProviderOverrideFindings(params.cfg))];
 }
 
+/** OAuth profiles {@link inspectAuthProfileHealth} offers to refresh. */
+function listAuthProfileRefreshTargets(
+  summary: Awaited<ReturnType<typeof loadAuthProfileHealth>>["summary"],
+) {
+  return summary.profiles
+    .filter(isAuthProfileHealthIssue)
+    .filter((issue) => issue.type === "oauth");
+}
+
+/**
+ * Read-only: whether the auth-profile diagnostics would write: the ambient-token notice
+ * claim, or (with `inspectProfiles`) an OAuth refresh in {@link inspectAuthProfileHealth},
+ * a network call that rewrites the auth store. It reads each store as the lint check does
+ * and never refreshes.
+ */
+export async function checkAuthProfileRefreshPending(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  inspectProfiles: boolean;
+}): Promise<DoctorMaintenancePending> {
+  const env = params.env ?? process.env;
+  // The notice reads Doctor's env; the profile inspection, like the repair, reads the
+  // process env. Each decides only while every store it may read is held.
+  const notice = await decideFromHeldAuthStores(params.cfg, env, async () =>
+    // The once-per-state ambient-token notice records that it was shown.
+    (await isCopilotAmbientTokenNoticePending(params.cfg, env)) ? "work" : "none",
+  );
+  if (notice !== "none" || !params.inspectProfiles) {
+    return notice;
+  }
+  return decideFromHeldAuthStores(params.cfg, process.env, async () => {
+    for (const target of await listAuthProfileHealthTargets(params.cfg)) {
+      const { summary } = await loadAuthProfileHealth({
+        cfg: params.cfg,
+        target,
+        allowKeychainPrompt: false,
+        readOnly: true,
+      });
+      if (listAuthProfileRefreshTargets(summary).length > 0) {
+        return "work";
+      }
+    }
+    return "none";
+  });
+}
+
+/** The state database, every agent's auth store, then the shared auth store, all held. */
+async function decideFromHeldAuthStores(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  decide: () => Promise<DoctorMaintenancePending>,
+): Promise<DoctorMaintenancePending> {
+  const stores = [
+    resolveOpenClawStateSqlitePath(env),
+    ...listAgentIds(cfg).map((agentId) =>
+      resolveAuthProfileDatabasePath(resolveAgentDir(cfg, agentId, env)),
+    ),
+  ];
+  return decideDoctorPendingFromLiveStores(stores, async () => {
+    // The shared store's location is known only after its ownership is read.
+    await prepareSharedAuthStoreOwnership(env);
+    return decideDoctorPendingFromLiveStores([resolveSharedAuthStorePath(env)], decide);
+  });
+}
+
 /** Aggregate normal Doctor output; lint retains each store's location and finding. */
 export async function inspectAuthProfileHealth(params: {
   cfg: OpenClawConfig;
@@ -470,9 +573,7 @@ export async function inspectAuthProfileHealth(params: {
   for (const target of targets) {
     const { cfg, prompter, allowKeychainPrompt } = params;
     let { store, summary } = await loadAuthProfileHealth({ cfg, target, allowKeychainPrompt });
-    const refreshTargets = summary.profiles
-      .filter(isAuthProfileHealthIssue)
-      .filter((issue) => issue.type === "oauth");
+    const refreshTargets = listAuthProfileRefreshTargets(summary);
     const refreshErrors = new Map<string, string>();
     const shouldRefresh =
       refreshTargets.length > 0 &&

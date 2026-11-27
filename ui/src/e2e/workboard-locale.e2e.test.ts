@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { makeBoard, makeCard } from "../pages/workboard/workboard.e2e.test-support.ts";
 import { configResponse } from "./appearance-prefs.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installWorkboardPage } from "./workboard-page.test-support.ts";
@@ -12,6 +13,34 @@ const named = (host: Page | Locator, role: Parameters<Page["getByRole"]>[0], nam
   host.getByRole(role, { name, exact: true });
 
 suite.define(() => {
+  it("distinguishes queued, running and completed cards on a Polish board", async () => {
+    await suite.withPage(
+      { locale: "pl-PL", viewport: { width: 1280, height: 800 } },
+      async ({ page }) => {
+        const board = makeBoard("default", { name: "Zespół" });
+        const cards = [
+          makeCard({ id: "a", status: "ready", title: "Sprawdzić notatki" }),
+          makeCard({ id: "b", status: "running", title: "Przetłumaczyć opis" }),
+          makeCard({ id: "c", status: "done", title: "Opublikować plan" }, Date.now()),
+        ];
+        await installWorkboardPage(page, suite.server.baseUrl, board.id, {
+          "config.get": configResponse({ locale: "pl" }, "workboard-pl"),
+          "workboard.boards.list": { boards: [board] },
+          "workboard.cards.list": {
+            boards: [board],
+            cards,
+            statuses: cards.map((card) => card.status),
+          },
+        });
+        await page.goto(suite.server.baseUrl + "workboard/default");
+        const headings = page.locator(".workboard-column__heading h2");
+        await expect
+          .poll(() => headings.allTextContents())
+          .toEqual(["Do podjęcia", "W toku", "Ukończone"]);
+      },
+    );
+  });
+
   it.each(["en", "fr"])(
     "loads plugin copy in %s and preserves drafts across a live locale switch",
     async (locale) => {

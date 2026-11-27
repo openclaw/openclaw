@@ -106,7 +106,6 @@ function isExecutionAliasCandidateForProvider(
 
 function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
-  agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -153,7 +152,6 @@ function resolveImageModelConfigForTool(params: {
     const decision = resolveOpenAiImageMediaCandidate({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
       authStore: params.authStore,
       openAiModel,
       resolveCodexMediaRoute,
@@ -165,21 +163,27 @@ function resolveImageModelConfigForTool(params: {
     return decision.kind === "keep" ? decision.ref : null;
   };
 
-  const providerVisionFromConfig = resolveProviderVisionModelFromConfig({
-    cfg: params.cfg,
-    provider: primary.provider,
-  });
-  const primaryModelId = providerVisionFromConfig
-    ? providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1)
-    : resolveDefaultMediaModel({
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        providerId: primary.provider,
-        capability: "image",
-        includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
-      });
-  const primaryCandidates =
-    providerVisionFromConfig || primaryModelId
+  // No configured model contributes no primary-provider candidates.
+  const providerVisionFromConfig =
+    primary &&
+    resolveProviderVisionModelFromConfig({
+      cfg: params.cfg,
+      provider: primary.provider,
+    });
+  const primaryModelId = !primary
+    ? undefined
+    : providerVisionFromConfig
+      ? providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1)
+      : resolveDefaultMediaModel({
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          providerId: primary.provider,
+          capability: "image",
+          includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
+        });
+  const primaryCandidates = !primary
+    ? []
+    : providerVisionFromConfig || primaryModelId
       ? [
           primary.provider === "openai"
             ? resolveImplicitOpenAiImageCandidate(primaryModelId ?? "")
@@ -221,11 +225,12 @@ function resolveImageModelConfigForTool(params: {
   const defaultPrimaryIsImplicit = !resolveAgentModelPrimaryValue(
     params.cfg?.agents?.defaults?.model,
   );
-  const primaryAliasCandidates = defaultPrimaryIsImplicit
-    ? autoCandidates.filter((candidate) =>
-        isExecutionAliasCandidateForProvider(candidate, primary.provider),
-      )
-    : [];
+  const primaryAliasCandidates =
+    defaultPrimaryIsImplicit && primary
+      ? autoCandidates.filter((candidate) =>
+          isExecutionAliasCandidateForProvider(candidate, primary.provider),
+        )
+      : [];
   const remainingAutoCandidates =
     primaryAliasCandidates.length === 0
       ? autoCandidates
@@ -235,7 +240,6 @@ function resolveImageModelConfigForTool(params: {
     explicit,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
     authStore: params.authStore,
     candidates: [...primaryAliasCandidates, ...primaryCandidates, ...remainingAutoCandidates],
     isProviderConfigured: (provider) =>
@@ -248,7 +252,6 @@ export function createImageTool(options?: {
   agentId?: string;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;
@@ -309,7 +312,6 @@ export function createImageTool(options?: {
           : suppliedSignal;
         const assertCurrent = () => {
           capturedOperator.assertInvocationCurrent?.();
-          operatorAuthority?.assertCurrent();
           signal?.throwIfAborted();
         };
         assertCurrent();
@@ -359,7 +361,6 @@ export function createImageTool(options?: {
             assertCurrent();
             imageModelConfig = resolveImageModelConfigForTool({
               cfg: options?.config,
-              agentDir,
               workspaceDir: options?.workspaceDir,
               authStore,
               preparedModelRuntime: options?.preparedModelRuntime,

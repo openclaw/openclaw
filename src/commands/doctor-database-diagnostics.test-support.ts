@@ -220,11 +220,75 @@ export async function inspectDiagnosticStores(root: string, config = diagnosticC
   ).stores!;
 }
 
+type StatusExpectation = readonly [
+  defaultEngine: "sqlite" | "postgres",
+  postgresFamily?: "state" | "agent",
+];
+
+function expectedAdmittedStatus([defaultEngine, postgresFamily]: StatusExpectation) {
+  const families = [
+    ["state", false],
+    ["agent", false],
+    ["workboard", false],
+    ["logbook", false],
+    ["team-reports", false],
+    ["quarantine", true],
+    ["managed-update", true],
+    ["package-activation", true],
+    ["credentials", true],
+  ] as const;
+  const issue = "Status reports admitted facts; unobserved facts remain unknown.";
+  const nextStep =
+    "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.";
+  const facts = {
+    admittedExtensions: null,
+    backup: null,
+    connectivity: "unknown",
+    custody: "unverifiable",
+    database: null,
+    degraded: null,
+    extensions: null,
+    issues: [issue],
+    lease: "unverifiable",
+    legacyMigrations: { pending: [], state: "unknown" },
+    mismatch: null,
+    namespace: null,
+    nextSteps: [nextStep],
+    observed: "unknown",
+    path: null,
+    schema: { expectedVersion: null, pending: null, version: null, versioning: "unknown" },
+    storeId: null,
+  };
+  const detail =
+    "observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; " +
+    "connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; " +
+    "extensions=unknown; admittedExtensions=unknown; degraded=unknown; " +
+    "custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; " +
+    `${issue}; Next: ${nextStep}`;
+  const json = families.map(([family, fixedLocal]) => {
+    const override = family === postgresFamily ? "postgres" : null;
+    const effective = fixedLocal ? "sqlite" : (override ?? defaultEngine);
+    const row = {
+      family,
+      configured: { default: defaultEngine, effective, fixedLocal, override },
+    };
+    return Object.assign(row, facts);
+  });
+  const text = json.map(({ family, configured: { effective, fixedLocal, override } }) => ({
+    Item: `Database ${family}`,
+    Value:
+      `${family}; default=${defaultEngine}, override=${fixedLocal ? "fixed local (local by design)" : (override ?? "inherit")}, ` +
+      `effective=${effective}; ${detail}`,
+  }));
+  return { source: "admitted", json, text };
+}
+
 export async function diagnosticOutput(
   root: string,
   config: OpenClawConfig,
   descriptors: Map<string, PortDescriptor>,
   stores: DatabaseStoreDiagnostic | DatabaseStoreDiagnostic[],
+  expectedStatus: StatusExpectation,
   connection?: string,
   normalizedConnection = connection,
 ) {
@@ -265,5 +329,8 @@ export async function diagnosticOutput(
       assert(!text.includes(parsed.password), "diagnostics must not expose credentials");
     }
   }
-  return JSON.parse(text) as unknown;
+  // Verify the complete Status output after checking redaction across the original report.
+  const { status: observedStatus, ...physical } = JSON.parse(text) as Record<string, unknown>;
+  assert.deepStrictEqual(observedStatus, expectedAdmittedStatus(expectedStatus));
+  return physical;
 }

@@ -1,5 +1,5 @@
 import { createRoot, createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
@@ -42,12 +42,15 @@ describe("promise dialog native focus and dismissal", () => {
     });
     try {
       const result = showConfirmDialog({
-        message: "Remove synthetic device?",
+        compact: true,
+        title: "Remove synthetic device?",
+        message: "Its pairing stops working.",
+        confirmLabel: "Remove",
         canConfirm: live.connected,
         signal: controller.signal,
       });
       const { dialog } = await getRenderedModalDialog(document.body);
-      const submit = button("Confirm");
+      const submit = button("Remove");
       expect(submit.disabled).toBe(false);
       live.setConnected(false);
       flush();
@@ -67,7 +70,8 @@ describe("promise dialog native focus and dismissal", () => {
   it("aligns mobile choices, focuses Cancel, and restores the opener", async () => {
     await setViewport(390, 844);
     const result = showConfirmChoiceDialog({
-      message: "Change this session?",
+      title: "Change this session?",
+      message: "Your changes aren’t saved yet.",
       confirmLabel: "Save",
       alternativeLabel: "Discard",
       signal: controller.signal,
@@ -89,6 +93,7 @@ describe("promise dialog native focus and dismissal", () => {
     const secondary = "Archive only this session";
     const primary = "Archive all (3)";
     const result = showConfirmChoiceDialog({
+      title: "Archive nested sessions?",
       message: "Synthetic nested-session scope",
       confirmLabel: primary,
       alternativeLabel: secondary,
@@ -102,7 +107,7 @@ describe("promise dialog native focus and dismissal", () => {
       );
     await expect.poll(order).toEqual([secondary, primary, "Cancel"]);
     expect(document.activeElement).toBe(button("Cancel"));
-    for (const name of [secondary, primary, "Cancel"]) {
+    for (const name of ["close", secondary, primary, "Cancel"]) {
       // macOS WebKit uses Option-Tab to visit each control inside the dialog.
       if (
         navigator.platform.includes("Mac") &&
@@ -113,7 +118,9 @@ describe("promise dialog native focus and dismissal", () => {
       } else {
         await userEvent.tab();
       }
-      expect(document.activeElement).toBe(button(name));
+      expect(document.activeElement).toBe(
+        name === "close" ? document.querySelector(".oc-dialog__close") : button(name),
+      );
     }
     for (const width of [1280, 390, 320, 390]) {
       await setViewport(width, 844);
@@ -153,5 +160,44 @@ describe("promise dialog native focus and dismissal", () => {
     pending.resolve(null);
     await expect(result).resolves.toBe("Synthetic session");
     expect(document.activeElement).toBe(trigger);
+  });
+});
+
+describe("shared text-entry dialog composition", () => {
+  it("keeps an IME composition-confirm Enter from submitting the form", async () => {
+    const submit = vi.fn(async () => null);
+    const result = showInputDialog({
+      title: "Rename group",
+      signal: controller.signal,
+      submit,
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+    const input = modal.querySelector<HTMLInputElement>('input[name="value"]')!;
+    input.value = "に";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const confirmed = new CompositionEvent("compositionend", { bubbles: true });
+    input.dispatchEvent(confirmed);
+    const enterAfterConfirmation = (elapsedMs: number) => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        keyCode: 13,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(event, "timeStamp", { value: confirmed.timeStamp + elapsedMs });
+      input.dispatchEvent(event);
+      return event;
+    };
+
+    // Safari can deliver the committing Enter with both composition flags cleared.
+    expect(enterAfterConfirmation(1).defaultPrevented).toBe(true);
+    expect(enterAfterConfirmation(99).defaultPrevented).toBe(true);
+    // A deliberate Enter outside the composition window still submits.
+    expect(enterAfterConfirmation(100).defaultPrevented).toBe(false);
+    expect(submit).not.toHaveBeenCalled();
+
+    controller.abort();
+    await expect(result).resolves.toBeNull();
   });
 });

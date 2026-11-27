@@ -1,10 +1,19 @@
+import { freezeTrustedJsonSnapshot } from "../../../shared/immutable-data.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type RunIdentity = Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">;
 type LookupIdentity = RunIdentity &
-  Pick<SubagentRunReadRecord, "runId" | "swarmRunId" | "schedulerSlotId" | "controllerSessionKey"> &
+  Pick<
+    SubagentRunReadRecord,
+    | "runId"
+    | "swarmRunId"
+    | "schedulerSlotId"
+    | "controllerSessionKey"
+    | "collect"
+    | "swarmRequesterSessionKey"
+  > &
   Pick<SubagentRunRecord, "requesterTurnRunId">;
 
 function buildChildren(runGroups: readonly Iterable<RunIdentity>[]) {
@@ -58,12 +67,13 @@ type LookupMembership = {
   requester: string;
   child: string;
   controller: string;
+  swarmRequester: string;
   order: number;
 };
 type SessionBuckets = {
   children: Map<string, Map<string, number>>;
   byChild: Map<string, Set<LookupMembership>>;
-  byController: Map<string, Set<LookupMembership>>;
+  byControllerOrSwarmRequester: Map<string, Set<LookupMembership>>;
   byOwner: Map<string, Set<LookupMembership>>;
 };
 
@@ -100,6 +110,7 @@ export class SubagentSessionReadLookup {
     const child = entry.childSessionKey.trim();
     const requester = entry.requesterSessionKey;
     const controller = resolveControllerSessionKey(entry);
+    const swarmRequester = entry.collect ? entry.swarmRequesterSessionKey?.trim() || "" : "";
     if (
       previous &&
       previous.runId === entry.runId &&
@@ -108,7 +119,8 @@ export class SubagentSessionReadLookup {
       previous.requesterTurnRunId === entry.requesterTurnRunId &&
       previous.child === child &&
       previous.requester === requester &&
-      previous.controller === controller
+      previous.controller === controller &&
+      previous.swarmRequester === swarmRequester
     ) {
       previous.entry = entry;
       return;
@@ -126,6 +138,7 @@ export class SubagentSessionReadLookup {
       child,
       requester,
       controller,
+      swarmRequester,
       order: previous?.order ?? this.#nextOrder++,
     };
     this.#memberships.set(cacheKey, membership);
@@ -140,11 +153,12 @@ export class SubagentSessionReadLookup {
 
   /** Durable comparison bases share immutable links until their row owner changes. */
   captureTopology(): readonly Readonly<RunIdentity>[] {
-    return (this.#topology ??= Object.freeze(
+    return (this.#topology ??= freezeTrustedJsonSnapshot(
       [...this.#memberships.values()]
-        .map(({ entry: { childSessionKey, requesterSessionKey } }) =>
-          Object.freeze({ childSessionKey, requesterSessionKey }),
-        )
+        .map(({ entry: { childSessionKey, requesterSessionKey } }) => ({
+          childSessionKey,
+          requesterSessionKey,
+        }))
         .toSorted(
           (left, right) =>
             left.childSessionKey.localeCompare(right.childSessionKey) ||
@@ -158,13 +172,16 @@ export class SubagentSessionReadLookup {
       this.#sessions = {
         children: new Map(),
         byChild: new Map(),
-        byController: new Map(),
+        byControllerOrSwarmRequester: new Map(),
         byOwner: new Map(),
       };
       for (const membership of this.#memberships.values()) {
         membership.child = membership.entry.childSessionKey.trim();
         membership.requester = membership.entry.requesterSessionKey;
         membership.controller = resolveControllerSessionKey(membership.entry);
+        membership.swarmRequester = membership.entry.collect
+          ? membership.entry.swarmRequesterSessionKey?.trim() || ""
+          : "";
         this.#indexSession(membership);
       }
     }
@@ -195,8 +212,10 @@ export class SubagentSessionReadLookup {
       }
       this.#updateBucket(buckets.byChild, child, membership, add);
     }
-    if (controller) {
-      this.#updateBucket(buckets.byController, controller, membership, add);
+    for (const key of new Set([controller, membership.swarmRequester])) {
+      if (key) {
+        this.#updateBucket(buckets.byControllerOrSwarmRequester, key, membership, add);
+      }
     }
   }
 
@@ -220,12 +239,25 @@ export class SubagentSessionReadLookup {
     return { sessionKeys: selected, cacheKeys: this.#select(buckets.byChild, selected) };
   }
 
-  selectChildren(childKeys: ReadonlySet<string>): string[] {
-    return this.#select(this.#sessionBuckets().byChild, childKeys);
+  selectChildren(
+    childKeys: ReadonlySet<string>,
+    additionalCacheKeys: readonly string[] = [],
+  ): string[] {
+    return this.#select(this.#sessionBuckets().byChild, childKeys, additionalCacheKeys);
   }
 
-  selectControllers(controllerKeys: ReadonlySet<string>): string[] {
-    return this.#select(this.#sessionBuckets().byController, controllerKeys);
+  selectControllers(controllerKeys: ReadonlySet<string>, includeSwarmRequesters = false): string[] {
+    const selected = this.#select(
+      this.#sessionBuckets().byControllerOrSwarmRequester,
+      controllerKeys,
+    );
+    return includeSwarmRequesters
+      ? selected
+      : selected.filter((key) => controllerKeys.has(this.#memberships.get(key)!.controller));
+  }
+
+  childrenForRequester(requester: string): Iterable<string> {
+    return this.#sessionBuckets().children.get(requester)?.keys() ?? [];
   }
 
   /** Include every generation of selected children, even after an ownership move. */

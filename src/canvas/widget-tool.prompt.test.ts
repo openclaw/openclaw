@@ -57,10 +57,14 @@ describe("show_widget prompt", () => {
     setActivePluginRegistry(registry);
     const tool = createShowWidgetTool();
     const instructions = JSON.stringify(tool.parameters) + tool.description;
-    expect(instructions).toContain("With a usable connected agent GitHub identity");
-    expect(instructions).toContain("Identity is checked before save");
+    expect(tool.description).toContain("Follow result.presentation");
+    expect(tool.description).toContain("Inspect widgets in their chat/dashboard frame");
+    expect(tool.description).toContain("not hosting URLs as browser pages");
+    expect(tool.description).toContain("verify interaction or say unverified");
+    expect(instructions).toContain("usable agent GitHub identity");
+    expect(instructions).toContain("reconnect in Settings if unavailable");
     expect(instructions).toContain("github.actions.runs");
-    expect(instructions).toContain("github.actions.runs:owner/repo");
+    expect(instructions).toContain("openclaw.data.query");
     expect(instructions).toContain("fixture.list");
     expect(instructions).toContain("List fixture items");
     expect(instructions).toContain("fixture.dispatch");

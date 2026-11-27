@@ -9,9 +9,12 @@ import {
 } from "solid-js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { formatUiError, UserFacingError } from "../lib/format-error.ts";
+import { clearCompositionEnd, isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
+import { DialogHeader } from "./solid/dialog-header.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 
 export type InputDialogOptions = {
   title: string;
@@ -152,48 +155,60 @@ function renderInputDialog(
       }}
     >
       <form
-        class="exec-approval-card"
+        class="oc-dialog input-dialog"
+        onCompositionEnd={recordCompositionEnd}
+        onFocusOut={clearCompositionEnd}
+        onKeyUp={clearCompositionEnd}
+        onKeyDown={(event) => {
+          // Implicit Enter submission runs before onSubmit, so a composing Enter must
+          // be cancelled at the key to keep the draft.
+          if (event.key === "Enter" && isComposingKeyboardEvent(event)) {
+            event.preventDefault();
+          }
+        }}
         onSubmit={(event) => {
           // The outcome slot observes rejection; consume it even if the modal retires.
           void submit(event).catch(() => undefined);
         }}
       >
-        <div class="exec-approval-header">
-          <div class="exec-approval-title">{options.title}</div>
+        <DialogHeader title={options.title} closeDisabled={saving()} onClose={() => finish(null)} />
+        <div class="oc-dialog__body">
+          <label class="field">
+            <span class={{ "sr-only": !options.label || options.label === options.title }}>
+              {options.label ?? options.title}
+            </span>
+            <input
+              ref={(element) => {
+                input = element;
+              }}
+              name="value"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              value={rawValue()}
+              disabled={saving()}
+              aria-invalid={!saving() && invalid() ? "true" : undefined}
+              onInput={(event) => setRawValue(event.currentTarget.value)}
+              autofocus
+            />
+          </label>
+          <Show when={!saving()}>
+            <Errored
+              fallback={(error) => (
+                <InlineAlert tone="danger" role="alert">
+                  {formatUiError(error())}
+                </InlineAlert>
+              )}
+            >
+              <Show when={message()}>
+                <InlineAlert tone="danger" role="alert">
+                  {message()}
+                </InlineAlert>
+              </Show>
+            </Errored>
+          </Show>
         </div>
-        <label class="field input-dialog__field">
-          <span>{options.label ?? options.title}</span>
-          <input
-            ref={(element) => {
-              input = element;
-            }}
-            name="value"
-            type="text"
-            autocomplete="off"
-            spellcheck="false"
-            value={rawValue()}
-            disabled={saving()}
-            aria-invalid={!saving() && invalid() ? "true" : undefined}
-            onInput={(event) => setRawValue(event.currentTarget.value)}
-            autofocus
-          />
-        </label>
-        <Show when={!saving()}>
-          <Errored
-            fallback={(error) => (
-              <div class="exec-approval-error" role="alert">
-                {formatUiError(error())}
-              </div>
-            )}
-          >
-            <Show when={message()}>
-              <div class="exec-approval-error" role="alert">
-                {message()}
-              </div>
-            </Show>
-          </Errored>
-        </Show>
-        <openclaw-modal-actions class="exec-approval-actions">
+        <openclaw-modal-actions class="oc-dialog__footer">
           <button type="button" class="btn" disabled={saving()} onClick={() => finish(null)}>
             {options.cancelLabel ?? t("common.cancel")}
           </button>

@@ -138,11 +138,11 @@ When the predecessor is unavailable, reconcile live state and explicitly retire
 its ownership before continuing. Do not redispatch uncertain operations.
 
 Require the [release-owner checkpoint](hotfix-ledger-management.md#enforced-release-owner-checkpoint)
-after every release-branch change and at handoff. Reject a handoff whose ledger
-head differs from the verified remote ref, whose stale assessments were only
-relabeled to the new SHA, or whose proposed, included, deferred, and blocked
-decisions are not revisioned and counted in the receipt. Preparation releases
-with `disclosure: unknown` stay in the authenticated operator view; never expose
+after every release-branch change and at handoff, using its local fallback when
+the service cannot be used. Apply that owner's synchronization and receipt rules;
+do not turn unavailable ledger access into a publication or handoff gate.
+Preparation releases with `disclosure: unknown` stay in the authenticated
+operator view; never expose
 them through the public lineage projection to make a dashboard appear complete.
 
 A credential failure routes the precise operation to an authorized capable
@@ -154,3 +154,5 @@ retro/ledger PR, repair PR disposition, cleanup, and deferred-hotfix owner.
 Deduplicate shared lessons and follow-ups; per-release retrospectives retain
 their own evidence. Do not report the campaign complete while a release is
 merely dispatched, waiting for approval, or awaiting an unacknowledged handoff.
+
+Track ledger repairs in the [per-agent tracker](retrospective.md#track-in-flight-fixes-per-agent).

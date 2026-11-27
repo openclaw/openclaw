@@ -234,8 +234,11 @@ describe("device pairing setup state", () => {
     closeDevicePairSetup(state);
   });
 
-  it("keeps the selected access when setup creation fails", async () => {
-    const request = vi.fn().mockRejectedValue(new Error("setup unavailable"));
+  it("keeps the selected access and the failure when setup creation fails", async () => {
+    const failure = Object.assign(new Error("setup unavailable"), {
+      details: { code: "DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY" },
+    });
+    const request = vi.fn().mockRejectedValue(failure);
     const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
 
     await refreshDevicePairSetup(state);
@@ -244,7 +247,10 @@ describe("device pairing setup state", () => {
       phase: "error",
       source: "create",
       access: "full",
-      message: "setup unavailable",
+      error: expect.objectContaining({
+        message: "setup unavailable",
+        details: { code: "DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY" },
+      }),
     });
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });
@@ -264,8 +270,7 @@ describe("device pairing setup state", () => {
       phase: "error",
       source: "create",
       access: "full",
-      message:
-        "Gateway does not provide pairing lifecycle metadata. Update the Gateway and try again.",
+      error: new Error("Couldn’t track this connection. Update the Gateway and try again."),
     });
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });
@@ -477,7 +482,7 @@ describe("device pairing setup state", () => {
     [
       "the recorded completion belongs to another setup",
       async () => ({ completion: completion("other-setup") }),
-      "Invalid setup status response",
+      "Couldn’t read the connection status. Try again.",
     ],
   ] as const)(
     "keeps an unknown outcome recoverable when %s",

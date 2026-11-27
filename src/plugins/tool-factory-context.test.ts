@@ -2,12 +2,8 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import {
-  captureGatewayToolCallerAssertion,
-  withGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import { InvocationFrame } from "./plugin-instance-invocation.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -78,14 +74,6 @@ const declarations = (readNames: () => string[] | undefined) =>
     },
   });
 
-const continuation = (isCurrent: () => boolean) => ({
-  isCurrent,
-  assertCurrent: () => assert(isCurrent(), "owner closed"),
-  senderId: "original-owner",
-  channel: "discord",
-  accountId: "original-account",
-});
-
 it("enters the registered owner's scopes and retains the execution cancellation scope", async () => {
   const observed: string[] = [];
   const observe = () => {
@@ -114,8 +102,8 @@ it("enters the registered owner's scopes and retains the execution cancellation 
     expect(tool.prepareArguments?.(args)).toBe(args);
     await tool.execute("probe", args);
     expect(observed).toEqual(["probe", "probe", "probe"]);
-    // Each of the four async resources installs one invocation/recovery frame.
-    expect(frames).toHaveBeenCalledTimes(4);
+    // Count invocation/recovery frames independently of the source-authority store.
+    expect(frames.mock.calls.filter(([frame]) => frame instanceof InvocationFrame)).toHaveLength(4);
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   } finally {
     frames.mockRestore();
@@ -202,42 +190,6 @@ it.each([false, true])("preserves V1 callbacks with host authority=%s", async (h
   expect(effect).toHaveBeenCalledOnce();
 });
 
-it.each([false, true])(
-  "does not promote legacy continuation factories, preserving direct owner=%s",
-  (directOwner) => {
-    const create = vi.fn(() => null);
-    const direct = { senderIsOwner: directOwner, requesterSenderId: "direct-sender" };
-    const { entry, context } = register(create, {
-      context: direct,
-      ownerContinuation: continuation(() => true),
-    });
-    entry.factory(context);
-    expect(create).toHaveBeenCalledWith(expect.objectContaining(direct));
-    expect([context.messageChannel, context.agentAccountId]).toEqual([undefined, undefined]);
-  },
-);
-
-it("rejects an operational caller that has no live receipt authority", async () => {
-  await withGatewayToolCallerIdentity(
-    {
-      agentId: "main",
-      sessionKey: "agent:main:probe",
-      operationalRunInstance: createOperationalRunInstanceRef("missing-receipt"),
-    },
-    async () => {
-      const { context } = register(
-        { contextVersion: 2, create: () => null },
-        {
-          assertInvocationCurrent: captureGatewayToolCallerAssertion(),
-        },
-      );
-      expect(() => context.assertInvocationCurrent?.()).toThrow(
-        "caller authority is no longer active",
-      );
-    },
-  );
-});
-
 it.each(["probe", "records"])("checks memory audience currency for slot owner=%s", (slotOwner) => {
   const checkAudience = vi.fn(() => assert.fail("memory audience is no longer current"));
   const { context } = register(() => null, {
@@ -276,13 +228,12 @@ it("allows metadata construction but rejects V2 effects without an admitted invo
   expect(effect).not.toHaveBeenCalled();
 });
 
-it.each(["allowed", "owner-close", "run-close", "plugin-close"] as const)(
+it.each(["allowed", "run-close", "plugin-close"] as const)(
   "checks %s before the asynchronous tool's final effect and in retained preparers",
   async (mode) => {
     const entered = createDeferred();
     const release = createDeferred();
     const effect = vi.fn();
-    let ownerCurrent = true;
     let runCurrent = true;
     const registration = register(
       {
@@ -304,21 +255,12 @@ it.each(["allowed", "owner-close", "run-close", "plugin-close"] as const)(
         assertInvocationCurrent() {
           assert(runCurrent, "run closed");
         },
-        ownerContinuation: continuation(() => ownerCurrent),
       },
     );
-    const { context } = registration;
-    expect(context).toMatchObject({
-      senderIsOwner: true,
-      requesterSenderId: "original-owner",
-      messageChannel: "discord",
-      agentAccountId: "original-account",
-    });
     const tool = registration.tool();
     const work = tool.execute("probe", {});
     void work.catch(() => {});
     await entered.promise;
-    ownerCurrent = mode !== "owner-close";
     runCurrent = mode !== "run-close";
     if (mode === "plugin-close") {
       markPluginRegistryRetired(registration.registry);

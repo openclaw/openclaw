@@ -1,5 +1,5 @@
 import type { WizardAnswer } from "@openclaw/gateway-protocol";
-import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.ts";
+import { SYSTEM_AGENT_WIZARD_CANCEL } from "../../../../packages/gateway-protocol/src/server-capabilities.ts";
 import type { WizardStep } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -45,9 +45,7 @@ export function custodianWizardSubmission(
 
 export function isCustodianWizardCancelAvailable(context: ApplicationContext | null): boolean {
   return (
-    isGatewayCapabilityAdvertised(
-      context?.gateway.snapshot ?? {},
-      GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
-    ) ?? false
+    isGatewayCapabilityAdvertised(context?.gateway.snapshot ?? {}, SYSTEM_AGENT_WIZARD_CANCEL) ??
+    false
   );
 }

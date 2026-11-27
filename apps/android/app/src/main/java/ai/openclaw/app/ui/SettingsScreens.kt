@@ -105,6 +105,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -198,8 +200,8 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.SystemAgent -> SystemAgentSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Channels -> ChannelsSettingsScreen(state = viewModel.channelsState.collectAsState().value, isConnected = viewModel.isConnected.collectAsState().value, onRefresh = viewModel::refreshChannels, onBack = onBack)
+    SettingsRoute.Dreaming -> DreamingSettingsScreen(state = viewModel.dreamingState.collectAsState().value, isConnected = viewModel.isConnected.collectAsState().value, onRefresh = viewModel::refreshDreaming, onBack = onBack)
     SettingsRoute.Terminal -> TerminalSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Desktop -> DesktopScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -655,7 +657,8 @@ private fun VoiceSettingsScreen(
   val voiceWakeLastCommand by viewModel.voiceWakeLastTriggeredCommand.collectAsState()
   val voiceWakeWordsSaving by viewModel.voiceWakeWordsSaving.collectAsState()
   val voiceWakeWordsNoticeText by viewModel.voiceWakeWordsNoticeText.collectAsState()
-  var wakeWordDrafts by remember(voiceWakeWords) {
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  var wakeWordDrafts by remember(activeGatewayStableId, voiceWakeWords) {
     mutableStateOf(voiceWakeWords)
   }
   var audioInputDevices by remember { mutableStateOf<List<AudioInputDeviceOption>>(emptyList()) }
@@ -696,7 +699,7 @@ private fun VoiceSettingsScreen(
               title = nativeString("Listen for wake words"),
               subtitle =
                 if (voiceWakeAvailable) {
-                  nativeString("Runs on-device while OpenClaw is visible.")
+                  nativeString("Runs on-device, including in the background while the node service has microphone access.")
                 } else {
                   nativeString("On-device speech recognition is unavailable.")
                 },
@@ -804,7 +807,10 @@ private fun AudioInputDevicePanel(
   val preferredAvailable = devices.any { it.key == preferredDeviceKey }
   val unavailablePreferredDevice =
     preferredDeviceKey?.takeUnless { preferredAvailable }?.let(::audioInputDeviceOptionFromKey)
-  ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+  ClawPanel(
+    modifier = Modifier.selectableGroup(),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
     AudioInputDeviceRow(
       title = nativeString("Automatic"),
       subtitle =
@@ -853,9 +859,15 @@ private fun AudioInputDeviceRow(
     title = title,
     subtitle = subtitle,
     metadata = nativeString("Next session").takeIf { pending },
+    modifier =
+      Modifier.selectable(
+        selected = selected,
+        enabled = onClick != null,
+        role = Role.RadioButton,
+        onClick = onClick ?: {},
+      ),
     leading = { ClawIconBadge(Icons.Default.Mic) },
-    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
-    onClick = onClick,
+    trailing = if (selected) ({ Box(Modifier.clearAndSetSemantics {}) { SettingsSelectionCheck() } }) else null,
   )
 }
 
@@ -1655,8 +1667,9 @@ private fun GatewaySettingsScreen(
     )
   }
 
-  // Keep discovery available to the disclosed list, as in onboarding.
-  LaunchedEffect(Unit) { viewModel.startGatewayDiscovery() }
+  LaunchedEffect(viewModel) {
+    viewModel.loadGatewaySettings()
+  }
 
   fun connectGateway(useSetupCode: Boolean) {
     val plan =
@@ -1757,6 +1770,7 @@ private fun GatewaySettingsScreen(
             },
             trailing = {
               Switch(
+                modifier = Modifier.semantics { contentDescription = entry.displayName },
                 checked = entry.stableId == activeGatewayStableId || entry.stableId in connectedGatewayStableIds,
                 onCheckedChange = { enabled ->
                   viewModel.setGatewayConnectionEnabled(entry.stableId, enabled)
@@ -1793,6 +1807,10 @@ private fun GatewaySettingsScreen(
     )
     SettingsDisclosureButton(text = nativeString("Discovered"), expanded = showDiscovery, onClick = { showDiscovery = !showDiscovery })
     if (showDiscovery) {
+      DisposableEffect(viewModel) {
+        val discovery = viewModel.startGatewayDiscovery()
+        onDispose { discovery.cancel() }
+      }
       ClawPanel(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         if (discoveredGateways.isEmpty()) {
           Text(
@@ -1997,7 +2015,7 @@ internal fun gatewayAccessLabel(
 
 internal fun gatewayLimitedAccessUpgradeText(): String =
   nativeString(
-    "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+    "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the web app or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
   )
 
 @Composable
@@ -2076,7 +2094,10 @@ private fun AppearanceSettingsScreen(
         optionLabel = { "${it.percent}%" },
       )
     }
-    ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    ClawPanel(
+      modifier = Modifier.selectableGroup(),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
       Text(text = nativeString("App language"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       AppLanguage.entries.forEachIndexed { index, language ->
         if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
@@ -2109,11 +2130,14 @@ private fun AppearanceThemeFamilyCard(
         .clip(shape)
         .background(if (selected) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface)
         .border(1.dp, if (selected) ClawTheme.colors.primary else ClawTheme.colors.borderStrong, shape)
-        .clickable(onClick = onClick)
+        .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
         .padding(ClawTheme.spacing.xs),
     verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
   ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+      modifier = Modifier.clearAndSetSemantics {},
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       Row(
         modifier = Modifier.weight(1f),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -2190,10 +2214,15 @@ private fun AppLanguageRow(
 ) {
   ClawListItem(
     title = appLanguageTitle(language),
+    modifier = Modifier.selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
     subtitle = appLanguageRowSubtitle(language = language, systemLanguageTag = systemLanguageTag),
     leading = { ClawIconBadge(Icons.Default.Language) },
-    trailing = if (selected) ({ SettingsSelectionCheck() }) else null,
-    onClick = onClick,
+    trailing =
+      if (selected) {
+        { Box(Modifier.clearAndSetSemantics {}) { SettingsSelectionCheck() } }
+      } else {
+        null
+      },
   )
 }
 
@@ -2311,7 +2340,7 @@ private val aboutLinks =
     AboutLink("Website", "openclaw.ai", "https://openclaw.ai"),
     AboutLink("Docs", "docs.openclaw.ai", "https://docs.openclaw.ai"),
     AboutLink("GitHub", "github.com/openclaw/openclaw", "https://github.com/openclaw/openclaw"),
-    AboutLink("Discord", "discord.gg/clawd", "https://discord.gg/clawd"),
+    AboutLink("Discord", "discord.gg/clawd", "https://openclaw.ai/discord?from=openclaw-app-android-about"),
   )
 
 @Composable

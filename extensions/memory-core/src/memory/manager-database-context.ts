@@ -54,6 +54,7 @@ import type { loadMemorySourceFileState } from "./manager-source-state.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
 type CachePruneInput = MemoryPublicationOperations["cache.prune"]["input"];
+type CacheRetireInput = MemoryPublicationOperations["cache.retire"]["input"];
 const log = createSubsystemLogger("memory");
 type PublicationWorker = {
   store: Pick<
@@ -208,6 +209,7 @@ export class MemoryIndexDatabase {
     invalidatedSources: [],
     hasVectorTable: false,
     vectorState: { state: "empty" },
+    embeddingRefusal: null,
   };
   searchSchema: MemoryPublicationSchema = { fts: null, paths: null, vector: null };
   vectorDegradedWriteWarningShown = false;
@@ -581,6 +583,14 @@ export class MemoryIndexDatabase {
       this.executePublication({ type: "cache.prune", input }, assertCurrent),
     );
     return pruned ?? false;
+  }
+
+  async retireEmbeddingCache(input: CacheRetireInput, assertCurrent: () => void) {
+    assertCurrent();
+    const next = await this.settlePublication(() =>
+      this.executePublication({ type: "cache.retire", input }, assertCurrent),
+    );
+    return next ?? null;
   }
 
   async mutateEmbeddingCache(

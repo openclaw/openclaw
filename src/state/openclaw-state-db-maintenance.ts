@@ -21,12 +21,12 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-attribution.js";
+import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-context.js";
 import { VERSION } from "../version.js";
 import {
   getStateRuntimeSchemaAdmission,
   getStateSchemaVersionAdmission,
-  publishStateSchemaVersionAdmission,
+  adoptPeerPublishedStateSchemaVersion,
 } from "./openclaw-state-db-admission.js";
 import {
   CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
@@ -74,6 +74,9 @@ import {
 } from "./openclaw-state-db-schema-v36-template-names.js";
 import { stateWorkerDiskMigrations } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { stateWorkerRetentionMigration } from "./openclaw-state-db-schema-v39-worker-retention.js";
+import { stateWorkerProvisionSourceMigration } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { stateApprovalProfileMigration } from "./openclaw-state-db-schema-v41-approval-profile.js";
+import { stateWorkerLossRecoveryMigration } from "./openclaw-state-db-schema-v42-worker-loss-recovery.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -127,7 +130,7 @@ export function prepareStateDatabaseSchemaRepair(
   database: DatabaseSync,
   pathname: string,
   env: NodeJS.ProcessEnv,
-): () => string[] {
+): { needed: boolean; apply(): string[]; applyReadability(): string[] } {
   const danglingWorkshopIndex = hasDanglingSkillWorkshopCollectionReviewIndex(database);
   const assertWriteAllowed = () =>
     assertOpenClawStateWriteAllowed({
@@ -148,7 +151,7 @@ export function prepareStateDatabaseSchemaRepair(
   } else {
     admit();
   }
-  return () => {
+  const apply = () => {
     // Recheck ownership after BEGIN IMMEDIATE and before catalog mutation.
     if (danglingWorkshopIndex) {
       withSqliteWritableSchema(database, assertWriteAllowed);
@@ -159,31 +162,28 @@ export function prepareStateDatabaseSchemaRepair(
       ? ["Removed dangling legacy Skill Workshop review index"]
       : [];
   };
-}
-
-/** Commit recognized catalog readability before a private preservation reader inspects it. */
-export function repairStateDatabaseSchemaReadability(
-  database: DatabaseSync,
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-): string[] {
-  const repair = prepareStateDatabaseSchemaRepair(database, pathname, env);
-  return runSqliteImmediateTransactionSync(
-    database,
-    () => {
-      const changes = repair();
-      if (changes.length > 0) {
-        assertOpenClawStateDatabaseOwner(database, { pathname });
-        assertSqliteTableIntegrity(database, pathname, "skill_workshop_collection_reviews");
-      }
-      return changes;
+  return {
+    needed: danglingWorkshopIndex,
+    apply,
+    applyReadability() {
+      return runSqliteImmediateTransactionSync(
+        database,
+        () => {
+          const changes = apply();
+          if (changes.length > 0) {
+            assertOpenClawStateDatabaseOwner(database, { pathname });
+            assertSqliteTableIntegrity(database, pathname, "skill_workshop_collection_reviews");
+          }
+          return changes;
+        },
+        {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          databaseLabel: pathname,
+          operationLabel: "state.schema.readability-repair",
+        },
+      );
     },
-    {
-      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-      databaseLabel: pathname,
-      operationLabel: "state.schema.readability-repair",
-    },
-  );
+  };
 }
 
 type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
@@ -240,31 +240,22 @@ export function assertOpenClawStateDatabaseForMaintenance(
   );
   const contentVersion =
     options.schemaVersions?.contentVersion ?? readStateSchemaContentVersion(database);
-  if (contentVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
+  if (contentVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
   }
 
   const metadata = assertOpenClawStateDatabaseOwner(database, options);
-  if (metadata?.schema_version !== userVersion) {
-    // A peer process (the Gateway's update-run watcher) may publish the deferred
-    // version after this connection admitted its floor; refuse only if the header disagrees.
-    if (
-      metadata?.schema_version === OPENCLAW_STATE_SCHEMA_VERSION &&
-      readSqliteUserVersion(database) === OPENCLAW_STATE_SCHEMA_VERSION
-    ) {
-      publishStateSchemaVersionAdmission(database, {
-        userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-        contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
-    } else {
-      const schemaVersion =
-        typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
-      throw new SqliteSchemaMismatchError(
-        `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
-      );
-    }
+  if (
+    metadata?.schema_version !== userVersion &&
+    !adoptPeerPublishedStateSchemaVersion(database, metadata)
+  ) {
+    const schemaVersion =
+      typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
+    );
   }
   assertSqliteSchemaContains(
     database,
@@ -329,19 +320,15 @@ export function markCurrentStateSchemaVersion(
   db: DatabaseSync,
   options: { createMetadataIfMissing?: boolean } = {},
 ): void {
+  if (readStateSchemaContentVersion(db) > OPENCLAW_STATE_SCHEMA_VERSION) {
+    return;
+  }
   // Pre-v2 databases can legitimately predate the audit table. Leave their
   // version untouched so normal open can create the complete v2 schema first.
   if (!tableExists(db, "audit_events")) {
     return;
   }
   const version = resolveStateSchemaVersionToPublish(db);
-  if (readSqliteUserVersion(db) !== version) {
-    db.exec(`PRAGMA user_version = ${version};`);
-  }
-  publishStateSchemaVersionAdmission(db, {
-    userVersion: version,
-    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-  });
   if (
     tableExists(db, "schema_meta") &&
     ["meta_key", "schema_version", "updated_at"].every((column) =>
@@ -549,6 +536,9 @@ export const versionedStateMigrations = [
   stateTemplateNamesMigration,
   ...stateWorkerDiskMigrations,
   stateWorkerRetentionMigration,
+  stateWorkerProvisionSourceMigration,
+  stateApprovalProfileMigration,
+  stateWorkerLossRecoveryMigration,
 ] as const;
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -575,6 +565,9 @@ export function migrateBoundedStateSchema(
     stateTemplateNamesMigration,
     ...stateWorkerDiskMigrations,
     stateWorkerRetentionMigration,
+    stateWorkerProvisionSourceMigration,
+    stateApprovalProfileMigration,
+    stateWorkerLossRecoveryMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
@@ -695,15 +688,11 @@ export function runStateSchemaMigrationTransaction<T>(
 }
 
 export function writeCurrentStateSchemaMetadata(db: DatabaseSync, now: number): void {
+  if (readStateSchemaContentVersion(db) > OPENCLAW_STATE_SCHEMA_VERSION) {
+    return;
+  }
   const kysely = getNodeSqliteKysely<Pick<DB, "schema_meta">>(db);
   const schemaVersion = resolveStateSchemaVersionToPublish(db);
-  if (readSqliteUserVersion(db) !== schemaVersion) {
-    db.exec(`PRAGMA user_version = ${schemaVersion};`);
-  }
-  publishStateSchemaVersionAdmission(db, {
-    userVersion: schemaVersion,
-    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-  });
   executeSqliteQuerySync(
     db,
     kysely

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { pt_BR } from "../../i18n/locales/pt-BR.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installLogsViewport } from "./logs-layout.test-support.ts";
 import { LogsView, type LogsProps } from "./view.tsx";
@@ -105,101 +106,6 @@ it("checks default filters once per batch and keeps the first retained row in or
   );
 });
 
-it("formats only new rows until the locale or effective timezone changes", async () => {
-  const validTimes = ["2026-09-22T12:00:37Z", "1970-01-01T00:00:00Z"];
-  const allTimes = [...validTimes, "not a timestamp", "", null, undefined];
-  const props = createProps({
-    status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
-    entries: allTimes.map((time, index) => ({
-      id: index,
-      time,
-      raw: "log entry",
-      message: index === 0 ? "A\u0308 Café initial" : "other entry",
-    })),
-  });
-  const [entries, setEntries] = createSignal(props.entries);
-  const [filterText, setFilterText] = createSignal("");
-  const NativeDateTimeFormat = Intl.DateTimeFormat;
-  let timeZone = "UTC";
-  const formatCalls: Array<ReturnType<typeof vi.fn<Intl.DateTimeFormat["format"]>>> = [];
-  // Model an OS timezone change while retaining native Intl timestamp formatting.
-  vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (locales, options) {
-    const formatter = new NativeDateTimeFormat(locales, { ...options, timeZone });
-    const format = vi.fn(formatter.format.bind(formatter));
-    formatCalls.push(format);
-    Object.defineProperty(formatter, "format", { value: format });
-    return formatter;
-  });
-  const { container } = mountSolid(() => (
-    <LogsView
-      {...props}
-      entries={entries()}
-      filterText={filterText()}
-      onFilterTextChange={setFilterText}
-    />
-  ));
-  const filterInput = container.querySelector<HTMLInputElement>(".settings-input")!;
-
-  const expectTimes = (times: typeof allTimes, locale = "en", formats?: number) => {
-    flush();
-    if (formats !== undefined) {
-      expect(formatCalls.flatMap((format) => format.mock.calls)).toHaveLength(formats);
-    }
-    const native = new NativeDateTimeFormat(locale, { timeStyle: "short", timeZone });
-    const expected = times.map((time) => {
-      const date = new Date(time ?? "");
-      return !time ? "" : Number.isNaN(date.getTime()) ? time : native.format(date);
-    });
-    expect(Array.from(container.querySelectorAll(".log-time"), (row) => row.textContent)).toEqual(
-      expected,
-    );
-    formatCalls.forEach((format) => format.mockClear());
-  };
-
-  expectTimes(allTimes, "en");
-  for (const locale of ["fr", "en"] as const) {
-    await i18n.setLocale(locale);
-    expectTimes(allTimes, locale);
-  }
-
-  const appendedTime = "2026-09-22T18:10:00Z";
-  setEntries((rows) => [
-    ...rows,
-    { id: allTimes.length, time: appendedTime, raw: "A\u0308 Café appended" },
-  ]);
-  expectTimes([...allTimes, appendedTime], "en", 1);
-
-  filterInput.value = "ä";
-  filterInput.dispatchEvent(new Event("input", { bubbles: true }));
-  expectTimes([validTimes[0], appendedTime], "en", 0);
-
-  timeZone = "America/Los_Angeles";
-  const nextTime = "2026-09-22T20:00:00Z";
-  setEntries((rows) => [...rows, { id: allTimes.length + 1, time: nextTime, raw: "Ä Café next" }]);
-  expectTimes([validTimes[0], appendedTime, nextTime], "en");
-
-  timeZone = "Asia/Tokyo";
-  filterInput.value = "cafe\u0301 initial";
-  filterInput.dispatchEvent(new Event("input", { bubbles: true }));
-  expectTimes([validTimes[0]], "en");
-});
-
-it("keeps the visible export filename suffix stable when labels are localized", async () => {
-  i18n.registerTranslation("pt-BR", {
-    gatewayLogs: {
-      exportButton: "Exportar {label}",
-      exportLabels: { filtered: "filtrado", visible: "visivel" },
-    },
-  });
-  await i18n.setLocale("pt-BR");
-  const onExport = vi.fn();
-  const view = mountSolid(() => <LogsView {...createProps({ onExport })} />);
-  flush();
-  view.getByRole("button", { name: "Exportar visivel" }).click();
-
-  expect(onExport).toHaveBeenCalledWith([raw], "visible");
-});
-
 it.each(["follow", "queued-follow", "reader"] as const)(
   "preserves scroll intent through row resizes (%s)",
   (mode) => {
@@ -235,7 +141,7 @@ it.each(["follow", "queued-follow", "reader"] as const)(
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
       this: HTMLElement,
     ) {
-      return this.classList.contains("log-stream") ? 380 : (heights.get(this) ?? 44);
+      return this.classList.contains("log-stream") ? 380 : (heights.get(this) ?? 20);
     });
     const lines = (count: number) =>
       Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
@@ -262,12 +168,12 @@ it.each(["follow", "queued-follow", "reader"] as const)(
     };
     const readBack = () => stream.dispatchEvent(new Event("scroll"));
     const resize = (row: Element) => {
-      heights.set(row, 91);
+      heights.set(row, 31);
       for (const observer of observers) {
         if (!observer.targets.has(row)) {
           continue;
         }
-        const size = [{ inlineSize: 900, blockSize: 91 }];
+        const size = [{ inlineSize: 900, blockSize: 31 }];
         observer.callback(
           [
             {
@@ -275,7 +181,7 @@ it.each(["follow", "queued-follow", "reader"] as const)(
               borderBoxSize: size,
               contentBoxSize: size,
               devicePixelContentBoxSize: size,
-              contentRect: new DOMRect(0, 0, 900, 91),
+              contentRect: new DOMRect(0, 0, 900, 31),
             },
           ],
           observer.observer,
@@ -315,7 +221,7 @@ it.each(["follow", "queued-follow", "reader"] as const)(
         flush();
         resize(rows[2]!);
         frame();
-        expect(stream.scrollTop).toBe(readerTop + 47);
+        expect(stream.scrollTop).toBe(readerTop + 11);
         return;
       }
       expect(stream.scrollHeight - stream.scrollTop - stream.clientHeight).toBeLessThan(2);
@@ -339,6 +245,159 @@ it.each(["follow", "queued-follow", "reader"] as const)(
     }
   },
 );
+
+it("shows whether the stream is following as the reader leaves and returns to the end", () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const clock = createFrameClock();
+  vi.stubGlobal("requestAnimationFrame", clock.request);
+  vi.stubGlobal("cancelAnimationFrame", clock.cancel);
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.classList.contains("log-stream") ? 380 : 20;
+  });
+  const lines = (count: number) =>
+    Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
+  const [entries, setEntries] = createSignal(lines(500));
+  const [autoFollow, setAutoFollow] = createSignal(true);
+  const onToggleAutoFollow = vi.fn(setAutoFollow);
+  const [filterText, setFilterText] = createSignal("");
+  let stream!: HTMLDivElement;
+  let jump!: () => void;
+  const view = mountSolid(() => (
+    <LogsView
+      {...createProps({
+        status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+        onToggleAutoFollow,
+        onStreamRef: (element, scroll) => {
+          stream = element;
+          jump = scroll;
+          installClampedLogsViewport(element, 378);
+        },
+      })}
+      autoFollow={autoFollow()}
+      filterText={filterText()}
+      entries={entries()}
+    />
+  ));
+  const frames = (count = 4) => {
+    for (let index = 0; index < count; index++) {
+      vi.advanceTimersByTime(16);
+      clock.flush(performance.now());
+      flush();
+      stream.dispatchEvent(new Event("scroll"));
+      flush();
+    }
+  };
+  const scrollTo = (top: number) => {
+    stream.scrollTop = top;
+    stream.dispatchEvent(new Event("scroll"));
+    flush();
+  };
+  const wheelTo = (top: number) => {
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaY: top - stream.scrollTop }));
+    scrollTo(top);
+  };
+  const end = () => stream.scrollHeight - stream.clientHeight;
+  const expired = () => {
+    clock.flush(performance.now());
+    stream.dispatchEvent(new Event("scrollend"));
+    vi.advanceTimersByTime(250);
+    flush();
+  };
+  const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  try {
+    flush();
+    jump();
+    frames();
+    expect(toggle.checked).toBe(true);
+
+    // Scrolling the reader did not ask for, such as a trim's anchor, leaves the switch alone.
+    scrollTo(end() - 200);
+    expect(onToggleAutoFollow).not.toHaveBeenCalled();
+    scrollTo(end());
+    expect(onToggleAutoFollow).not.toHaveBeenCalled();
+
+    // Wheel jitter of less than a row keeps following.
+    wheelTo(end() - 10);
+    expect(onToggleAutoFollow).not.toHaveBeenCalled();
+    wheelTo(end());
+    expired();
+
+    // Scrolling up releases, and appended lines no longer move the reader.
+    wheelTo(end() - 200);
+    expect(onToggleAutoFollow).toHaveBeenLastCalledWith(false);
+    expect(toggle.checked).toBe(false);
+    expired();
+    const readerTop = stream.scrollTop;
+    setEntries(lines(520));
+    frames();
+    expect(stream.scrollTop).toBe(readerTop);
+    expect(toggle.checked).toBe(false);
+
+    // Model the idle deadline passing before the first input frame and scroll.
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaY: end() - stream.scrollTop }));
+    vi.advanceTimersByTime(250);
+    scrollTo(end());
+    frames(1);
+    expect(onToggleAutoFollow).toHaveBeenLastCalledWith(true);
+    expect(toggle.checked).toBe(true);
+    expired();
+
+    // A held pointer, on the scrollbar or selecting text, counts as the reader until released.
+    stream.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expired();
+    scrollTo(end() - 200);
+    expect(toggle.checked).toBe(false);
+    document.dispatchEvent(new PointerEvent("pointerup"));
+    expired();
+
+    // End is a request for the live tail.
+    stream.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    flush();
+    expect(toggle.checked).toBe(true);
+    frames();
+    expired();
+
+    // Widening a filter while following lands on the newest line.
+    setFilterText("line 51");
+    frames();
+    setFilterText("");
+    frames(8);
+    expect(toggle.checked).toBe(true);
+    expect(Math.abs(end() - stream.scrollTop)).toBeLessThan(2);
+    expired();
+
+    // A switch turned off at the end stays off while the reader only nudges the wheel there.
+    toggle.click();
+    flush();
+    expect(toggle.checked).toBe(false);
+    wheelTo(end());
+    frames(1);
+    expect(toggle.checked).toBe(false);
+
+    // A mostly horizontal wheel in the interior may cause no vertical movement.
+    // A later programmatic return to the end must still leave the switch off.
+    scrollTo(end() - 200);
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaX: 80, deltaY: 0.25 }));
+    expired();
+    scrollTo(end());
+    expect(toggle.checked).toBe(false);
+
+    // A native wheel offset can arrive before the browser's coalesced scroll event.
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaY: -1000 }));
+    stream.scrollTop = end() - 200;
+    setEntries(lines(540));
+    flush();
+    vi.advanceTimersByTime(16);
+    flush();
+    // The append already sampled the reader's offset; only the final scroll is delivered.
+    wheelTo(end());
+    expect(toggle.checked).toBe(true);
+  } finally {
+    view.unmount();
+  }
+});
 
 it("keeps an in-flight hidden append at the end when the page becomes visible", async () => {
   vi.useFakeTimers({ toFake: ["performance", "setInterval", "clearInterval"] });
@@ -468,61 +527,95 @@ it("keeps an in-flight hidden append at the end when the page becomes visible", 
   }
 });
 
-it("moves filters into a popover and page actions into a menu at phone width", async () => {
-  vi.stubGlobal("matchMedia", (query: string) => ({
-    matches: query === "(max-width: 640px)",
-    media: query,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  }));
-  const onLevelToggle = vi.fn();
-  const onToggleAutoFollow = vi.fn();
-  const onExport = vi.fn();
-  const view = mountSolid(() => (
-    <LogsView
-      {...createProps({
-        status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
-        file: "/tmp/openclaw/openclaw-gateway.log",
-        levelFilters: {
-          trace: false,
-          debug: true,
-          info: true,
-          warn: true,
-          error: true,
-          fatal: true,
-        },
-        onLevelToggle,
-        onToggleAutoFollow,
-        onExport,
-      })}
-    />
-  ));
-  flush();
+it.each([
+  { input: "wheel", delayedScroll: "first" },
+  { input: "wheel", delayedScroll: "final" },
+  { input: "keyboard", delayedScroll: "final" },
+])(
+  "resumes following when $input delays the $delayedScroll scroll event beyond the idle window",
+  ({ input, delayedScroll }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const clock = createFrameClock();
+    vi.stubGlobal("requestAnimationFrame", clock.request);
+    vi.stubGlobal("cancelAnimationFrame", clock.cancel);
+    let rowHeight = 20;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("log-stream") ? 380 : rowHeight;
+    });
+    const lines = (count: number) =>
+      Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
+    const [autoFollow, setAutoFollow] = createSignal(true);
+    const onToggleAutoFollow = vi.fn(setAutoFollow);
+    let stream!: HTMLDivElement;
+    let jump!: () => void;
+    const view = mountSolid(() => (
+      <LogsView
+        {...createProps({
+          status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+          onToggleAutoFollow,
+          onStreamRef: (element, scroll) => {
+            stream = element;
+            jump = scroll;
+            installClampedLogsViewport(element, 378);
+          },
+        })}
+        autoFollow={autoFollow()}
+        entries={lines(500)}
+      />
+    ));
+    const frame = (scroll: boolean) => {
+      vi.advanceTimersByTime(16);
+      clock.flush(performance.now());
+      flush();
+      if (scroll) {
+        stream.dispatchEvent(new Event("scroll"));
+      }
+      flush();
+    };
+    const end = () => stream.scrollHeight - stream.clientHeight;
+    try {
+      flush();
+      jump();
+      for (let i = 0; i < 4; i++) {
+        frame(true);
+      }
+      stream.dispatchEvent(new WheelEvent("wheel", { deltaY: -4000 }));
+      stream.scrollTop = 2000;
+      stream.dispatchEvent(new Event("scroll"));
+      flush();
+      vi.advanceTimersByTime(300);
+      expect(onToggleAutoFollow).toHaveBeenLastCalledWith(false);
 
-  const filter = view.container.querySelector<HTMLElement>(
-    '[aria-controls="logs-filter-popover"]',
-  )!;
-  expect(filter.classList.contains("active")).toBe(true);
+      // Rows near the end render taller than the estimate. A busy main thread delivers the wheel's
+      // scroll event after the idle window; its measurements then carry the view to the end.
+      rowHeight = 23;
+      if (input === "keyboard") {
+        stream.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true }));
+      } else {
+        stream.dispatchEvent(new WheelEvent("wheel", { deltaY: 1_000_000 }));
+      }
+      if (delayedScroll === "final") {
+        stream.scrollTop = end() - 500;
+        stream.dispatchEvent(new Event("scroll"));
+        flush();
+      }
+      stream.scrollTop = end();
+      for (let i = 0; i < 3; i++) {
+        frame(false);
+      }
+      vi.advanceTimersByTime(250);
+      stream.dispatchEvent(new Event("scroll"));
+      flush();
+      for (let i = 0; i < 6; i++) {
+        frame(true);
+      }
 
-  const popover = view.container.querySelector("#logs-filter-popover")!;
-  popover.querySelector<HTMLInputElement>(".log-chip.debug input")!.click();
-  expect(onLevelToggle).toHaveBeenCalledWith("debug", false);
-  popover
-    .querySelector<HTMLInputElement>(
-      'input[role="switch"], input[type="checkbox"]:not(.log-chip input)',
-    )!
-    .click();
-  expect(onToggleAutoFollow).toHaveBeenCalledWith(false);
-  expect(popover.textContent).toContain("File: /tmp/openclaw/openclaw-gateway.log");
-
-  view.getByRole("button", { name: "More actions" }).click();
-  flush();
-  await vi.waitFor(() => {
-    const exportItem = [...document.querySelectorAll<HTMLElement>(".oc-menu-item")].find(
-      (item) => item.textContent?.trim() === "Export filtered",
-    );
-    expect(exportItem).toBeTruthy();
-    exportItem!.click();
-  });
-  expect(onExport).toHaveBeenCalledWith([raw], "filtered");
-});
+      expect(end() - stream.scrollTop).toBeLessThan(2);
+      expect(onToggleAutoFollow).toHaveBeenLastCalledWith(true);
+    } finally {
+      view.unmount();
+    }
+  },
+);

@@ -1,6 +1,7 @@
 import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
 import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
+import { getBrowserExecutableError } from "../chrome.executable-probe.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { getCachedChromeGraphicsDiagnostics } from "../chrome.graphics.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
@@ -298,6 +299,13 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
             if (route === "/") {
               return status;
             }
+            const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+            if (capabilities.browserFilesystemLocal && status.detectedExecutablePath) {
+              status.detectError = await getBrowserExecutableError(
+                status.detectedExecutablePath,
+                signal,
+              );
+            }
             const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
             const identity =
               relay?.ownership === "borrowed"
@@ -318,6 +326,11 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       );
     });
   }
+
+  registerBasicProfilePost(app, ctx, "/prewarm", async ({ req, res, profileCtx }) => {
+    await profileCtx.ensureBrowserAvailable({ prewarm: true, signal: req.signal });
+    res.json({ ok: true });
+  });
 
   registerBasicProfilePost(app, ctx, "/start", async ({ req, res, profileCtx }) => {
     let headless: boolean | undefined;

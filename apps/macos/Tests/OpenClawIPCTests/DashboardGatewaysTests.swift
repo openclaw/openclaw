@@ -283,7 +283,8 @@ struct DashboardManagerGatewayTargetTests {
         }
 
         #expect(catalogReads == 0)
-        #expect(manager._testGatewayRefreshObserverCount() == 0)
+        // Local window focus/close observers stay active without observing the profile registry.
+        #expect(manager._testGatewayRefreshObserverCount() == 2)
     }
 
     @Test func `interactive configuration retains the gateway profile refresh`() async {
@@ -862,8 +863,7 @@ struct DashboardManagerGatewayTargetTests {
             await manager._testOpenWindow(for: .profile("secondary"))
             let secondary = try #require(manager._testAuxiliaryWindows().first?.controller)
             for controller in [primary, secondary] {
-                // Profile preparation can precede WebKit's loading flag. Install
-                // listeners only after the fixture document replaces the blank page.
+                // Profile preparation can precede WebKit's loading flag; native readiness is asynchronous.
                 try await DashboardTestWait.document(controller, "gateway command document") {
                     controller.webView.url?.port == Int(server.port)
                 }
@@ -877,6 +877,7 @@ struct DashboardManagerGatewayTargetTests {
                   event.preventDefault(); window.commandEvents.push('palette');
                 });
                 """)
+                try await controller.waitForDocumentLoad()
             }
             secondary.show()
             #expect(manager.frontmostDashboardTarget == .profile("secondary"))

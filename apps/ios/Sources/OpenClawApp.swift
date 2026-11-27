@@ -1,5 +1,6 @@
 import BackgroundTasks
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import os
 import SwiftUI
@@ -90,7 +91,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private var pendingExecApprovalPrompts: [ApprovalNotificationPrompt] = []
     private var pendingExecApprovalRequestedPushes: [ApprovalNotificationPrompt] = []
     private var pendingExecApprovalResolvedPushes: [ApprovalNotificationPrompt] = []
-    private var pendingOpenURLs: [URL] = []
 
     weak var appModel: NodeAppModel? {
         didSet {
@@ -109,9 +109,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             }
             self.deliverPending(&self.pendingExecApprovalResolvedPushes) { push in
                 await model.handleExecApprovalResolvedRemotePush(push)
-            }
-            self.deliverPending(&self.pendingOpenURLs) { url in
-                await model.handleDeepLink(url: url)
             }
         }
     }
@@ -154,22 +151,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         ApprovalNotificationBridge.registerCategories(center: notificationCenter)
         Task { @MainActor in
             await self.registerForRemoteNotificationsIfEnrollmentReady(application)
-        }
-        return true
-    }
-
-    func application(
-        _: UIApplication,
-        open url: URL,
-        options _: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool
-    {
-        guard DeepLinkParser.parse(url) != nil else { return false }
-        guard let model = resolvedAppModel() else {
-            self.pendingOpenURLs.append(url)
-            return true
-        }
-        Task { @MainActor in
-            await model.handleDeepLink(url: url)
         }
         return true
     }
@@ -614,8 +595,15 @@ struct OpenClawApp: App {
         GatewaySettingsStore.bootstrapPersistence()
         (UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard)
             .removeObject(forKey: "share.defaultInstruction")
+        // Settings used to persist pasted setup codes (which carry Gateway credentials) here.
+        UserDefaults.standard.removeObject(forKey: "gateway.setupCode")
+        // Retired unattended deep-link key; no build reads it.
+        UserDefaults.standard.removeObject(forKey: "deeplink.agent.key")
         OpenClawType.installUIKitAppearance()
-        let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+        let appModel = NodeAppModel(
+            voiceNoteRecorder: Self.voiceNoteRecorder,
+            audioAdmissionInitiallyAllowed: false,
+            restoringSavedGatewayRoute: true)
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--openclaw-reset-onboarding") {
             // Reruns must exercise onboarding instead of saved pairing state.
@@ -676,8 +664,6 @@ struct OpenClawApp: App {
                         OpenClawType.refreshUIKitAppearance(in: Self.connectedWindows())
                     })
                 .onOpenURL { url in
-                    // SwiftUI owns normal scene delivery; the delegate also queues URLs
-                    // that arrive before the scene has installed its model.
                     Task { await self.appModel.handleDeepLink(url: url) }
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
@@ -695,6 +681,15 @@ struct OpenClawApp: App {
         #else
         false
         #endif
+    }
+
+    private static var voiceNoteRecorder: OpenClawVoiceNoteRecorder {
+        #if DEBUG
+        if self.screenshotModeEnabled, ProcessInfo.processInfo.arguments.contains("--openclaw-voice-note-fixture") {
+            return OpenClawVoiceNoteRecorder(capture: VoiceNoteFixtureCapture())
+        }
+        #endif
+        return OpenClawVoiceNoteRecorder()
     }
 
     private static var screenshotNotificationGuidanceEnabled: Bool {

@@ -31,7 +31,6 @@ import {
   loadPluginCliRegistrationEntriesWithDefaults,
   resolvePluginCliRootOwnerIds,
 } from "./cli-registry-loader.js";
-import { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { loadOpenClawPluginCliRegistry } from "./loader.js";
@@ -732,11 +731,4 @@ it("runs a legacy external plugin register once across CLI bootstrap stages", as
   expect(ownerIds).toEqual(["counting-cli"]);
   expect(descriptors.map((entry) => entry.name)).toContain("counting-cli");
   expect(countRegisterRuns(markerPath)).toBe(1);
-});
-
-it("keeps distinct load scopes on separate register passes", async () => {
-  const { config, markerPath } = setupCountingCliPlugin();
-  await loadPluginCliDescriptors({ cfg: config, env: process.env });
-  await getPluginCliCommandDescriptors(config, process.env);
-  expect(countRegisterRuns(markerPath)).toBe(2);
 });

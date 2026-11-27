@@ -2,6 +2,10 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { ignoreMissingPath } from "../../infra/errno.js";
 import { statIfExists } from "../../infra/path-existence.js";
+import {
+  openSessionArchiveDecodedStream,
+  SESSION_ARCHIVE_ZSTD_SUFFIX,
+} from "./archive-compression.js";
 import { readFileRangeAsync } from "./file-range.js";
 
 const REVERSE_CHUNK_BYTES = 64 * 1024;
@@ -15,7 +19,9 @@ export async function* streamSessionTranscriptLines(filePath: string): AsyncGene
   if (!stat || !stat.isFile() || stat.size <= 0) {
     return;
   }
-  const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
+  const stream = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)
+    ? openSessionArchiveDecodedStream(filePath)
+    : fs.createReadStream(filePath, { encoding: "utf-8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   try {
     for await (const line of rl) {
