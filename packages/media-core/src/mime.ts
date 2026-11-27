@@ -1,6 +1,7 @@
 import path from "node:path";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 import { extnameFromAnyPath } from "./file-name.js";
+import { fileNameFromMediaUrl } from "./media-source-url.js";
 
 /** Maximum byte prefix passed to dependency MIME sniffers for bounded memory/CPU work. */
 export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
@@ -211,15 +212,7 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   }
   const url = /^https?:\/\//i.test(filePath) ? URL.parse(filePath) : null;
   if (url) {
-    let filename = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
-    try {
-      // Decode only the URL filename while keeping encoded separators literal.
-      const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
-      filename = decodeURIComponent(decodable);
-    } catch {
-      // Preserve the raw filename when its own percent encoding is malformed.
-    }
-    return path.posix.extname(filename).toLowerCase() || undefined;
+    return path.posix.extname(fileNameFromMediaUrl(url)).toLowerCase() || undefined;
   }
   const ext = extnameFromAnyPath(filePath).toLowerCase();
   return ext || undefined;

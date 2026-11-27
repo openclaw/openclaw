@@ -198,6 +198,10 @@ describe("mime detection", () => {
 
 describe("getFileExtension", () => {
   it.each([
+    ["https://cdn.example.com/.hidden", undefined],
+    ["https://cdn.example.com/report.", "."],
+    ["https://cdn.example.com/render%252Emp4", undefined],
+    ["https://cdn.example.com/bad%C3%28%2Emp4", undefined],
     ["https://cdn.example.com/render.mp4/", undefined],
     ["https://cdn.example.com/render.mp4%2Fpreview", ".mp4%2fpreview"],
     ["https://cdn.example.com/render.mp4%5Cpreview", ".mp4%5cpreview"],

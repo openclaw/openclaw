@@ -68,6 +68,11 @@ it.each([
     label: "雪---a1b2c3d4-e5f6-7890-abcd-ef1234567890.backup.pdf",
   },
   { path: "https://example.com/files/report---old.pdf", label: "report---old.pdf" },
+  {
+    path: "https://example.com/bad%ZZ/%E9%9B%AA%20%F0%9F%A6%9E+%2f%5c%252F.pdf?name=other#page",
+    label: "雪 🦞+%2F%5C%2F.pdf",
+  },
+  { path: "https://example.com/bad%C3%28%2F%2Epdf", label: "bad%C3%28%2F%2Epdf" },
 ])("preserves the original filename for $path", ({ label, ...media }) => {
   const { attachments } = projectMessageMedia(
     userMedia([{ ...media, contentType: "application/pdf" }]),

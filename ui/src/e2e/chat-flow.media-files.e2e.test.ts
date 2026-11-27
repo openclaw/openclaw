@@ -43,6 +43,38 @@ const rectangle = (locator: Locator) =>
   });
 
 suite.define(() => {
+  it("shows decoded URL and managed inbound filenames in history attachment cards", async () => {
+    const page = await newChatPage(suite);
+    const labels = ["雪 🦞+%2F%5C%2F.pdf", "report---original.pdf"];
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "user",
+          content: "",
+          __openclaw: {
+            media: [
+              {
+                path: "https://example.com/%E9%9B%AA%20%F0%9F%A6%9E+%2f%5c%252F.pdf?other#page",
+                contentType: "application/pdf",
+              },
+              {
+                path: "media://inbound/report---original---43007e90-2ade-43f2-a781-42b843e9eca3.pdf",
+                contentType: "application/pdf",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    await page.goto(suite.server.baseUrl + "chat");
+    for (const label of labels) {
+      await page
+        .locator(".chat-assistant-attachment-card")
+        .getByText(label, { exact: true })
+        .waitFor();
+    }
+  });
+
   it("renders relative assistant media through the session-scoped ticket route", async () => {
     const page = await newChatPage(suite);
     const source = "openclaw/tmp/github-panel/v2-proof/github-pr-diff-light.png";

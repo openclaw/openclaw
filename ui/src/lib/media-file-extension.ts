@@ -1,3 +1,5 @@
+import { fileNameFromMediaUrl } from "@openclaw/media-core/media-source-url";
+
 const SAME_ORIGIN_MEDIA_ROUTE_MARKERS = [
   "/__openclaw__/assistant-media",
   "/__openclaw__/media/",
@@ -21,16 +23,7 @@ function getMediaFileName(value: string, decodeInbound = false): string | undefi
   if (!url) {
     return (trimmed.split(/[\\/]/).pop() ?? trimmed) || undefined;
   }
-  let filename = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
-  try {
-    // Match media-core: decode only the filename and keep encoded path
-    // separators as filename data instead of turning them into boundaries.
-    const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
-    filename = decodeURIComponent(decodable);
-  } catch {
-    // Preserve the raw filename when its own percent encoding is malformed.
-  }
-  return filename || undefined;
+  return fileNameFromMediaUrl(url) || undefined;
 }
 
 /** Returns a lowercase extension without the leading dot. */
