@@ -1,5 +1,4 @@
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { estimateStringChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   chunkMarkdown,
   extractCuratedEntryRecallMetadata,
@@ -15,6 +14,7 @@ import type {
   SessionEntryStream,
   SessionEntrySummary,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import { estimateStringChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { chunkSessionContentAtResetBoundary } from "./manager-reset-chunk-boundary.js";
 import type { resolveMemoryPathClassification } from "./memory-path-provenance.js";
