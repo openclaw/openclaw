@@ -2288,6 +2288,7 @@
                       },
                       "providers/opencode",
                       "providers/opencode-go",
+                      "providers/openuncensored",
                       "providers/particle",
                       "providers/perplexity-provider",
                       "providers/poolside",

@@ -75,6 +75,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [OpenCode](/providers/opencode)
 - [OpenCode Go](/providers/opencode-go)
 - [OpenRouter](/providers/openrouter)
+- [OpenUncensored (uncensored and abliterated models)](/providers/openuncensored)
 - [Particle](/providers/particle)
 - [Perplexity (web search)](/providers/perplexity-provider)
 - [Poolside (Laguna)](/providers/poolside)
