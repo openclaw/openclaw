@@ -17,7 +17,11 @@ import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { PaneSessionChangeOptions } from "../chat-pane-shared.ts";
-import { endedWithoutFinishing, isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
+import {
+  endedWithoutFinishing,
+  isUnfinishedSubagent,
+  pausedSubagentStatus,
+} from "../chat-spawned-subagent.ts";
 import { SubagentsPanelData, type SubagentsPanelRow } from "../subagents-panel-data.ts";
 import {
   SessionPanelGroups,
@@ -267,7 +271,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
           : status === "running"
             ? t("common.running")
             : status === "waiting"
-              ? t("chat.waitingOnSubagents")
+              ? (pausedSubagentStatus(row.session) ?? t("chat.waitingOnSubagents"))
               : status === "failed"
                 ? t("common.failed")
                 : status === "stopped"

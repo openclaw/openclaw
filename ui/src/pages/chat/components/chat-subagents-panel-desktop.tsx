@@ -10,7 +10,11 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
-import { endedWithoutFinishing, isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
+import {
+  endedWithoutFinishing,
+  isUnfinishedSubagent,
+  pausedSubagentStatus,
+} from "../chat-spawned-subagent.ts";
 import type { SubagentsPanelData, SubagentsPanelRow } from "../subagents-panel-data.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-subagents-working.css";
@@ -142,7 +146,8 @@ function DesktopRow(props: {
                       group() === "waiting"
                         ? props.row.session.status === "queued"
                           ? t("common.queued")
-                          : t("chat.subagentsPanel.desktopWaiting")
+                          : (pausedSubagentStatus(props.row.session) ??
+                            t("chat.subagentsPanel.desktopWaiting"))
                         : groupLabel(group())
                     }
                   >

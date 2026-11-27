@@ -285,9 +285,28 @@ export function isSubagentsPanelSession(row: GatewaySessionRow): boolean {
   return row.classification === "subagent" || isSubagentSessionKey(row.key);
 }
 
-/** A subagent that handed off to its own subagents is still at work. */
+/**
+ * A subagent that handed off to its own subagents, or paused on sessions_yield
+ * and still owes its result, is still at work.
+ */
 export function isUnfinishedSubagent(row: GatewaySessionRow): boolean {
-  return isSessionRunStateActive(row) || row.hasActiveSubagentRun === true;
+  return (
+    isSessionRunStateActive(row) ||
+    row.hasActiveSubagentRun === true ||
+    row.subagentRunState === "paused"
+  );
+}
+
+/** What a paused subagent waits on; undefined when it is not paused or waits on children. */
+export function pausedSubagentStatus(row: GatewaySessionRow): string | undefined {
+  if (row.subagentRunState !== "paused") {
+    return undefined;
+  }
+  return row.backgroundProcessCount
+    ? t("chat.handoffSessionStatus.background")
+    : row.hasActiveSubagentRun
+      ? undefined
+      : t("chat.handoffSessionStatus.paused");
 }
 
 function finishedRuntimeMs(row: GatewaySessionRow): number | null {
