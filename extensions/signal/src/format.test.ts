@@ -115,4 +115,22 @@ describe("Signal formatting", () => {
     expect(markdownToSignalText("ordinary   ").text).toBe("ordinary");
     expect(markdownToSignalText("```\nhello\n```").text).toBe("hello");
   });
+
+  it("prefixes every quoted line and chunk while styles keep their words", () => {
+    expect(
+      markdownToSignalText(
+        "> line one\n> **line two**\n>\n> second para\n> > nested one\n> > nested two",
+      ),
+    ).toEqual({
+      text: "> line one\n> line two\n\n> second para\n\n> > nested one\n> > nested two",
+      styles: [{ start: 13, length: 8, style: "BOLD" }],
+    });
+    expect(
+      markdownToSignalTextChunks(`> ${"word ".repeat(18)}`, 40).map((chunk) => chunk.text),
+    ).toEqual([
+      "> word word word word word word word",
+      "> word word word word word word word",
+      "> word word word word",
+    ]);
+  });
 });

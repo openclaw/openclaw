@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import * as crypto from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -33,7 +32,6 @@ import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import * as stepWrites from "../../infra/update-run-write.async.js";
 import { runStep } from "../../infra/update-runner-command.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
@@ -70,11 +68,6 @@ vi.mock("@clack/prompts", async (importOriginal) => ({
   confirm: async () => false,
 }));
 
-vi.mock("node:crypto", async () => {
-  const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
-  return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
-});
-
 const sourceImportArgs = resolveRuntimeWorkerUrl(
   updateExecutorNativeEntrypoints.commandRun,
 ).pathname.endsWith(".ts")
@@ -92,7 +85,6 @@ const updateResult = (overrides: Parameters<typeof resultFixture>[1]) =>
   resultFixture(undefined, { status: "error", durationMs: 1, ...overrides });
 
 afterEach(async () => {
-  vi.mocked(crypto.randomUUID).mockReset();
   await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -144,9 +136,6 @@ it("persists fingerprint warnings before closing a rolled-back run", async () =>
       warnings.map((detail) => expect.objectContaining({ status: "completed", detail })),
     ),
   );
-  for (const warning of warnings) {
-    expect(renderUpdateRunReport(recorded).markdown).toContain(warning);
-  }
 });
 
 it("keeps restored-generation completion with its helper across CLI unwind", () => {
@@ -386,39 +375,16 @@ it("does not complete an operationally pending update from diagnostic success", 
   expect(loadUpdateRecovery(run.runId, { env: run.env })).toEqual(record);
 });
 
-it("saves the complete error diagnostics before printing the Markdown path", async () => {
+it("retains a bounded redacted Doctor receipt in the terminal ledger", async () => {
   const secret = "sk-synthetic-terminal-" + "x".repeat(48);
   const run = createRun("update-terminal-report-", { OPENAI_API_KEY: secret });
   const { env } = run;
-  const reportPath = path.join(env.OPENCLAW_STATE_DIR, "update-reports", `${run.runId}.md`);
-  let savedAtPublication: { markdown: string; failure: string; inventory: string } | undefined;
-  const log = vi.spyOn(defaultRuntime, "log").mockImplementation((value) => {
-    if (String(value) === `Report: ${reportPath}`) {
-      const markdown = fs.readFileSync(reportPath, "utf8");
-      const diagnosticLink = /^Bounded diagnostic JSON: ([^\r\n]+)$/mu.exec(markdown)?.[1];
-      if (!diagnosticLink) {
-        throw new Error("Published failure report is missing its diagnostic JSON link.");
-      }
-      const failure = fs.readFileSync(
-        path.resolve(path.dirname(reportPath), diagnosticLink),
-        "utf8",
-      );
-      expect(Buffer.byteLength(failure)).toBeLessThanOrEqual(8 * 1024);
-      const inventoryPath = JSON.parse(failure)
-        .error.split("Complete Doctor lint inventory: ")[1]
-        .split(" Doctor lint receipt: ")[0]
-        .replace("$OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-      const inventory = fs.readFileSync(inventoryPath, "utf8");
-      savedAtPublication = { markdown, failure, inventory };
-    }
-  });
+  vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   const doctorLintFindings: UpdateDoctorLintFinding[] = Array.from({ length: 40 }, (_, index) => ({
     checkId: `fixture/check-${index}`,
     severity: index === 0 ? "error" : "warning",
     message: `Finding ${index}: ${secret}`,
   }));
-  // A valid UUID with a numeric tail must remain a readable diagnostic link.
-  vi.mocked(crypto.randomUUID).mockReturnValue("00000000-0000-4000-8000-123456789012");
   await publishUpdateCommandTerminalResult(
     { opts: { run } },
     updateResult({
@@ -434,14 +400,17 @@ it("saves the complete error diagnostics before printing the Markdown path", asy
     }),
     { rolledBack: false },
   );
-  expect(log.mock.calls.flat().join("\n")).toContain(`Report: ${reportPath}`);
-  expect(savedAtPublication).toBeDefined();
-  for (const finding of doctorLintFindings) {
-    expect(savedAtPublication?.markdown).toContain(finding.checkId);
-    expect(savedAtPublication?.inventory).toContain(finding.checkId);
-  }
-  expect(JSON.stringify(savedAtPublication)).not.toContain(secret);
-  expect(savedAtPublication?.markdown).toContain("doctor-failed");
+  const recorded = getUpdateRun(run.runId, { env })!;
+  const receipt = recorded.steps.find(
+    (step) => step.step === "finalize:doctor-lint:candidate doctor lint",
+  )?.detail;
+  expect(receipt).toBeDefined();
+  expect(JSON.parse(receipt!)).toMatchObject({
+    counts: { error: 1, warning: 39, info: 0 },
+    errors: [expect.objectContaining({ checkId: "fixture/check-0" })],
+  });
+  expect(JSON.stringify(recorded)).not.toContain(secret);
+  expect(recorded.reason).toBe("doctor-failed");
 });
 
 // Real signals terminate a separate process; the parent never emits into Vitest.

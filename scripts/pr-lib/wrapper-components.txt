@@ -1057,6 +1057,7 @@ src/infra/dedupe.ts
 src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts
 src/infra/deferred-plugin-migrations.cohort.ts
+src/infra/deferred-plugin-migrations.read.kernel.ts
 src/infra/deferred-plugin-migrations.ts
 src/infra/deferred-plugin-session-transcript-read.worker.ts
 src/infra/delivery-queue-cache.ts
@@ -1228,6 +1229,7 @@ src/infra/package-update-activation-schema.ts
 src/infra/package-update-activation-settlement.ts
 src/infra/package-update-activation-status.ts
 src/infra/package-update-filesystem.ts
+src/infra/package-update-integrity-drift.ts
 src/infra/package-update-integrity-hasher.ts
 src/infra/package-update-integrity-hasher.worker.ts
 src/infra/package-update-integrity.ts
@@ -2164,6 +2166,7 @@ src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
 src/state/openclaw-agent-db-lease-inspection.ts
 src/state/openclaw-agent-db-lease-provenance.ts
+src/state/openclaw-agent-db-lease-rows.ts
 src/state/openclaw-agent-db-lease.ts
 src/state/openclaw-agent-db-legacy-schema.ts
 src/state/openclaw-agent-db-lifecycle.ts
@@ -2295,6 +2298,7 @@ src/state/openclaw-state-db-read-connection.ts
 src/state/openclaw-state-db-read-schema.ts
 src/state/openclaw-state-db-readonly-reuse.ts
 src/state/openclaw-state-db-readonly.ts
+src/state/openclaw-state-db-repair-pending.ts
 src/state/openclaw-state-db-repair.ts
 src/state/openclaw-state-db-schema-additive.ts
 src/state/openclaw-state-db-schema-discovery.ts
@@ -2896,6 +2900,7 @@ src/sessions/input-provenance.ts
 src/sessions/model-overrides.ts
 src/sessions/nested-tool-activity.ts
 src/sessions/provider-review.ts
+src/sessions/sessions-send-failure-notice.ts
 src/sessions/transcript-anchor-page.ts
 src/sessions/transcript-display-position.ts
 src/sessions/transcript-record-visibility.ts
@@ -3069,6 +3074,7 @@ src/infra/sqlite-readonly-inspection.ts
 src/infra/sqlite-readonly-native-resource.ts
 src/infra/sqlite-snapshot-staging-runtime.ts
 src/infra/sqlite-snapshot-staging.worker.ts
+src/process/spawn-broker/command-handlers.ts
 src/process/spawn-broker/execa-worker.ts
 src/process/spawn-broker/resource-server.ts
 src/process/spawn-broker/worker-sender.ts

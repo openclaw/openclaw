@@ -186,6 +186,57 @@ describe("guarded capture ownership", () => {
     }
   });
 
+  it("persists redacted JSON from a bounded Responses request byte view", async () => {
+    const secret = "synthetic-responses-capture-secret";
+    const wire = JSON.stringify({ input: "synthetic 🦞", credential: secret });
+    const expected = '{"input":"synthetic 🦞","credential":"[REDACTED]"}';
+    const bytes = new TextEncoder().encode(`!${wire}!`);
+    const fixture = await captureRoots();
+    registerSecretValueForRedaction(secret);
+    try {
+      await withServer(
+        (request, response) => request.pipe(response),
+        async (baseUrl) => {
+          const result = await fetchWithSsrFGuard({
+            url: `${baseUrl}/responses`,
+            pinDns: false,
+            policy: { allowPrivateNetwork: true },
+            init: {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: bytes.subarray(1, -1),
+            },
+          });
+          try {
+            expect(result.response.status).toBe(200);
+            expect(await result.response.text()).toBe(wire);
+          } finally {
+            await result.release();
+          }
+        },
+      );
+      await fixture.close();
+      const requests = (await fixture.readEvents())
+        .flat()
+        .filter((event) => event.kind === "request");
+      expect(requests).toHaveLength(1);
+      const [request] = requests;
+      expect(request).toMatchObject({
+        method: "POST",
+        path: "/responses",
+        contentType: "application/json",
+        dataText: expected,
+        dataBlobId: expect.any(String),
+      });
+      const reader = createDebugProxyCaptureReaderAsync({
+        env: { ...process.env, OPENCLAW_STATE_DIR: fixture.roots[1] },
+      });
+      expect(await reader.readBlob(String(request?.dataBlobId))).toBe(expected);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("records an active transport rejection once through the global owner", async () => {
     const fixture = await captureRoots();
     const arrived = createDeferredCore<ServerResponse>();

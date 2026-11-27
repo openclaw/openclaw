@@ -213,9 +213,10 @@ AOT hosts admit embedded plugins only. See
 Busy plugins admit replacement and fence new retained work on the old instance.
 Existing agent runs keep their original callbacks while new runs wait for the
 replacement. Before stopping services or channels, replacement waits up to
-60 seconds for retained work and in-flight calls to finish. Detailed readiness
-and Gateway logs show the queued work count and deadline; the command waits for
-the final applied receipt. Successful publication emits `plugins.changed` and
+60 seconds for retained work and in-flight calls to finish. The previous generation
+keeps serving during this drain, so a pending reload does not make `/readyz` fail.
+Gateway status and logs show the queued work count and deadline; the command waits
+for the final applied receipt. Successful publication emits `plugins.changed` and
 logs the applied replacement. If work exceeds the budget, the reload fails once
 and the previous generation resumes serving; unfinished runs are not forcibly
 disposed. Retry `openclaw plugins reload <id>` after that work finishes, or use
@@ -235,8 +236,8 @@ the wait; disconnecting its Gateway request also cancels it. Before publication,
 cancellation restores the previous generation when recovery succeeds, without
 cancelling admitted runs. Once publication commits, cancellation does not undo it.
 Service shutdown, resource cleanup, and recovery keep their existing deadlines.
-Detailed readiness, `openclaw status`, and `status --json` (`pluginReload`)
-expose the pending reload, its drain deadline, and why new runs are waiting.
+`openclaw status` and `status --json` (`pluginReload`) expose the pending reload,
+its drain deadline, and why new runs are waiting.
 The ten-minute budget is shared across drain stages. On expiry, the reload fails
 and restores the previous generation without cancelling its admitted work.
 Incoming messages retain their channel's existing queue and replay

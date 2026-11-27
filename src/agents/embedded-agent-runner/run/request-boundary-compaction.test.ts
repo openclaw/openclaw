@@ -3,7 +3,12 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
 import { streamSimpleAnthropic } from "../../../../packages/ai/src/providers/anthropic.js";
-import { clearBoundaryMaintenance, declineBoundaryMaintenance } from "../../context-pressure.js";
+import {
+  clearBoundaryMaintenance,
+  clearBoundaryMaintenanceDeferral,
+  declineBoundaryMaintenance,
+} from "../../context-pressure.js";
+import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import {
   createAssistant,
   createTestSession,
@@ -11,6 +16,7 @@ import {
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import {
   agentSessionDeferThresholdCompaction,
+  agentSessionRunWarmCompaction,
   type AgentSessionEvent,
 } from "../../sessions/agent-session-types.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
@@ -21,6 +27,7 @@ import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 import { createRequestBoundaryCompaction } from "./request-boundary-compaction.js";
+import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 // mock-isolation: records the boundary's lifecycle calls; the real hooks need a Gateway.
 const hookCalls = vi.hoisted(() => [] as string[]);
@@ -109,6 +116,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   configureAiTransportHost(initialHost);
+  for (const runId of ["warm-run", "pr205959-check-false", "pr205959-check-true"]) {
+    clearBoundaryMaintenanceDeferral(runId);
+  }
 });
 
 const textOf = (message: Payload["messages"][number]) =>
@@ -116,7 +126,9 @@ const textOf = (message: Payload["messages"][number]) =>
 const isSummaryRequest = (payload: Payload) =>
   textOf(payload.messages.at(-1)!).includes("context checkpoint summary");
 
-async function fixture(options: { boundary?: boolean; history?: SessionManager } = {}) {
+async function fixture(
+  options: { boundary?: boolean; history?: SessionManager; runtimeContext?: string } = {},
+) {
   const sessionManager = options.history ?? SessionManager.inMemory();
   if (!options.history) {
     sessionManager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
@@ -146,11 +158,19 @@ async function fixture(options: { boundary?: boolean; history?: SessionManager }
       },
     ],
   });
-  session.agent.transformContext = async (messages) =>
-    normalizeMessagesForLlmBoundary(messages, {
-      appendOnlyRuntimeContext: true,
-      inHistorySystemUpdates: true,
+  const appendOnlyRuntimeContext = options.runtimeContext === undefined;
+  const convertToLlm = session.agent.convertToLlm.bind(session.agent);
+  session.agent.convertToLlm = async (messages) => {
+    const normalized = normalizeMessagesForLlmBoundary(messages, {
+      appendOnlyRuntimeContext,
+      inHistorySystemUpdates: appendOnlyRuntimeContext,
     });
+    return convertToLlm(
+      appendOnlyRuntimeContext
+        ? normalized
+        : relocateCurrentRuntimeContextCarrierToTail(normalized),
+    );
+  };
   session[agentSessionDeferThresholdCompaction] = true;
   const providerStream: StreamFn = (activeModel, context, streamOptions) =>
     streamSimpleAnthropic(activeModel as Model<"anthropic-messages">, context, {
@@ -164,6 +184,8 @@ async function fixture(options: { boundary?: boolean; history?: SessionManager }
     events.push(event);
   });
   const onPrecheck = vi.fn();
+  const onModelRequest =
+    vi.fn<NonNullable<Parameters<typeof submitEmbeddedAttemptPrompt>[0]["onModelRequest"]>>();
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
     withSessionManagerWrite(sessionManager, write);
   const boundary =
@@ -198,19 +220,21 @@ async function fixture(options: { boundary?: boolean; history?: SessionManager }
       modelPrompt: prompt,
       transcriptPrompt: prompt,
       onFinalPromptText: () => {},
+      onModelRequest,
       persistToolResultProjections: async () => {},
       withTranscriptWrite,
       runtimeOnly: false,
+      runtimeContextMessage: buildRuntimeContextCustomMessage(options.runtimeContext),
       systemPrompt: "stable system",
       toolResultAggregateMaxChars: 80_000,
       toolResultMaxChars: 80_000,
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       trajectoryRecorder: null,
       transcriptLeafId: sessionManager.getLeafId(),
-      appendOnlyRuntimeContext: true,
+      appendOnlyRuntimeContext,
       promptActiveSession: (text, promptOptions) => session.prompt(text, promptOptions),
     });
-  return { session, sessionManager, events, onPrecheck, submit };
+  return { session, sessionManager, events, onPrecheck, onModelRequest, submit };
 }
 
 const completedCompactions = (events: AgentSessionEvent[]) =>
@@ -348,6 +372,85 @@ describe("warm text compaction at the request boundary", () => {
     const kept = manager.buildSessionContext().messages;
     expect(kept.filter((message) => message.role === "toolResult")).toHaveLength(1);
   });
+
+  it.each([false, true])(
+    "finishes with the intact tool result and no checkpoint (runtime carrier: %s)",
+    async (carrier) => {
+      const runtimeContext = "The current request is a release review.";
+      const f = await fixture({
+        history: SessionManager.inMemory(),
+        runtimeContext: carrier ? runtimeContext : undefined,
+      });
+      const evidence = "Release evidence. ".repeat(1_200);
+      f.session.agent.state.tools[0]!.execute = async () => ({
+        content: [{ type: "text", text: evidence }],
+        details: {},
+      });
+      replies = ["tool", "done"];
+      await f.submit();
+      if (carrier) {
+        expect(f.onModelRequest.mock.calls[1]?.[1].messages.at(-1)).toMatchObject({
+          role: "user",
+          runtimeContextCarrier: true,
+        });
+      }
+      expect(requests.map(isSummaryRequest)).toEqual([false, false]);
+      expect(JSON.stringify(requests[1]!.messages)).toContain(evidence);
+      if (carrier) {
+        expect(JSON.stringify(requests[1]!.messages)).toContain(runtimeContext);
+      }
+      expect(completedCompactions(f.events)).toHaveLength(0);
+    },
+  );
+
+  it.each([false, true])(
+    "defers once across rebuilt attempt boundaries (runtime carrier: %s)",
+    async (carrier) => {
+      const f = await fixture({ history: SessionManager.inMemory() });
+      const compact = vi
+        .spyOn(f.session, agentSessionRunWarmCompaction)
+        .mockResolvedValue(undefined);
+      const result = {
+        role: "toolResult" as const,
+        toolName: "lookup",
+        toolCallId: "finished-call",
+        content: [{ type: "text" as const, text: "complete" }],
+        timestamp: 1,
+        isError: false,
+      };
+      const context = {
+        role: "user" as const,
+        runtimeContextCarrier: true,
+        content: "context",
+        timestamp: 2,
+      };
+      const send = () => {
+        const messages = carrier ? [result, context] : [result];
+        return createRequestBoundaryCompaction({
+          variant: "text",
+          session: f.session,
+          runId: "pr205959-check-" + String(carrier),
+          contextTokenBudget: 8_000,
+          reserveTokens: 2_000,
+          isToolBoundarySafe: () => true,
+          timeoutMs: 30_000,
+          assertActive: () => {},
+          withTranscriptWrite: <T>(write: () => Promise<T>) => write(),
+          onPrecheck: () => {},
+        })(
+          f.session.agent.streamFn,
+          model,
+          { messages },
+          { maxTokens: 512 },
+          { requestIndex: 1, messageCount: messages.length, contextTokens: 6_988 },
+        );
+      };
+      await expect(send()).resolves.toBeUndefined();
+      expect(compact).not.toHaveBeenCalled();
+      await expect(send()).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
+      expect(compact).toHaveBeenCalledOnce();
+    },
+  );
 
   it("sends the request unchanged after the run declined maintenance", async () => {
     // Recovery declines maintenance that could not reduce context; repeating it would

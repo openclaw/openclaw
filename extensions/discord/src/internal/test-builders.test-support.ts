@@ -22,15 +22,13 @@ type FakeRestCall = {
 export function createTestCommand(
   name: string,
   options?: CommandOptions,
-  config: Partial<Pick<Command, "description" | "run" | "defer" | "ephemeral">> = {},
+  config: Partial<Pick<Command, "description">> = {},
 ) {
   return new (class extends Command {
     name = name;
     override description = config.description ?? `${name} command`;
     override options = options;
-    override defer = config.defer ?? false;
-    override ephemeral = config.ephemeral ?? false;
-    run = config.run ?? (() => {});
+    run = () => {};
   })();
 }
 

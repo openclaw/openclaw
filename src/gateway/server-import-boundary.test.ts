@@ -256,10 +256,10 @@ console.log("prewarm-cold-selection-ok");`,
     );
   });
 
-  it("starts the command broker without loading the execa runtime", () => {
-    expect(collectStaticValueImports("src/process/spawn-broker/worker.ts")).not.toContain(
-      path.normalize("src/process/spawn-broker/execa-worker.ts"),
-    );
+  it("waits for the broker bootstrap before loading command handlers", () => {
+    const modules = collectStaticValueImports("src/process/spawn-broker/worker.ts");
+    expect(modules).not.toContain(path.normalize("src/process/spawn-broker/execa-worker.ts"));
+    expect(modules).not.toContain(path.normalize("src/agents/sessions/tools/read-file-page.ts"));
   });
 
   it.each([

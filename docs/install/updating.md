@@ -69,9 +69,9 @@ Managed start/restart keeps the selected release. Use
 `openclaw update --tag <version>` for an explicit downgrade. An explicit
 `--tag` or `--channel` remains your target selection instead of the npm package.
 
-Plugin maintenance failures are warnings, not failed core updates. Retry them
-with `openclaw plugins update --all`. An already-current installation still maintains
-plugins and restarts only when needed and restart was requested.
+Plugin maintenance failures are warnings, not failed core updates. The final
+summary names the failed step and its recovery command. An already-current
+installation still maintains plugins and restarts only when needed and requested.
 
 Older installed updaters still perform their first hop with their shipped update
 flow. The compatibility and recovery details below also cover those older
@@ -166,16 +166,20 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    After activation of a modern launcher trial, only the Gateway that is ready settles the run
    from the launcher trial and preparation lock. A published trial takes precedence
    over an expired lock for the same run. Only a Gateway that runs the target build
-   records success; restored files alone do not prove that the previous Gateway
-   is serving. Startup does not infer a failed update from PID reuse or uptime.
-7. After success is recorded, the serving release runs advisory Doctor inspections
+   records success. It settles once after required plugin work, so the final
+   summary and notice include its result. Restored files alone do not prove that
+   the previous Gateway is serving. Startup does not infer a failed update from
+   PID reuse or uptime.
+7. After the result is recorded, the serving release runs advisory Doctor inspections
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
    completion, fail the update, or trigger rollback.
 8. The serving release updates installed plugins in the background, then reloads
-   changed plugins through the existing runtime lifecycle. Plugin failures appear
-   in the same update details and warning count; they never fail the core update
-   or trigger rollback.
+   changed plugins through the existing runtime lifecycle. The run settles and
+   sends one notice after this work finishes. Plugin failures appear in that
+   summary with the failed step and exact next command; they never fail the core
+   update or trigger rollback. A successful reload's warnings stay in the plugin
+   step details without marking activation failed or requesting a retry.
 
 Packaged bundled plugins belong to the selected core release, not a second
 plugin installation. Channel synchronization retires obsolete compiled-bundle
@@ -424,6 +428,13 @@ database objects, catalog snapshots, or queried row values.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
+The release CLI uses one client deadline for Gateway requests, status polling,
+restart requests, and a capability-consent retry through a replacement Gateway.
+Expiry stops client work and joins connection cleanup; it does not cancel an
+accepted server update or invalidate a published trial. Run `openclaw update status`
+before retrying an unconfirmed request. Preparation and installed-package delegation
+retain their own lifecycle budgets. The installed CLI must contain this repair.
+
 Gateway post-ready maintenance and `openclaw update repair` refresh the known
 legacy Git launcher from development build `d44f263`, which incorrectly counted
 `gateway status` as a start. The candidate must contain this repair. It applies
@@ -434,6 +445,26 @@ rollback behavior; it does not settle the trial or rewrite update history. This
 is recovery for an observed development install, not a stable-release migration.
 The normal next release update replaces the legacy launcher with the resident
 launcher.
+
+Git installs that tracked main before the resident launcher can retain a format-1
+trial. Before listening, the Gateway captures the matching publication. When the
+selected running build reaches core readiness, it rechecks the selection and removes the
+trial so a later restart can't roll back that healthy release. Channel health and
+update history writes don't gate trial removal.
+
+If the older updater calls the candidate's native install or restart command,
+the candidate tries to link that publication to the original run before carrying
+out the service action. The Gateway separately recovers the matching run after
+the older updater exits, even if that updater removed the trial after its own
+healthy response but failed to write history. It retries while it serves if the driver is still
+running or the history write fails. A Gateway restart before recovery can leave
+the original history entry unchanged with the healthy release still selected.
+
+The Gateway preserves existing repair acknowledgments, unrelated failures, and
+recovery records. It needs one matching publication receipt before it can record
+success and run advisory Doctor inspections and plugin maintenance. If the older
+updater exits because it can't read the migrated schema, its exit status still
+reflects that refusal.
 
 Prepared-release plugin maintenance normally runs after the candidate has migrated
 state and reported ready. Downgrades retain pre-trial maintenance because older
@@ -554,8 +585,16 @@ never runs automatically or settles the deferred migration: after explicit
 recovery, rerun `openclaw update repair` or `openclaw doctor --fix`, then restart
 the Gateway. Older installed CLIs do not gain this route from a newer plugin alone.
 
-When a package baseline's final rescan detects stat drift, the update still
-refuses package replacement. Local failure output and `openclaw update status --json`
+When a package baseline's final rescan detects stat drift that only moved the
+change time or link count (attribute, ACL or extended-attribute changes, a
+same-mode `chmod`, or a hard link added or removed by a backup, sync, indexing
+or security tool), the scan re-reads only those entries: a file's bytes, a
+symbolic link's target or a directory's entry names. When they match what the
+scan recorded, the update continues and reports a warning naming the first
+entries and their changed fields. Any other drift, or drifted entries whose
+contents changed, still refuses package replacement. A change after the scan
+is caught when a rollback verifies the retained package before restoring it.
+Local failure output and `openclaw update status --json`
 diagnostics identify the first entry relative to the package root (`.` for the
 root), changed stat fields, and their before/after values. Public failure reports
 retain only the changed field names. An unavailable original inode still refuses

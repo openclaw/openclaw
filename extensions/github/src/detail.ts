@@ -20,6 +20,7 @@ import {
 import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import {
   assertPublicGitHubRepository,
+  fetchAvatarDataUrl,
   isPublicGitHubRepository,
   parseControlUiGitHubPreviewResponse,
 } from "./preview.js";
@@ -54,6 +55,8 @@ const COMMENT_MAX_CHARS = 4 * 1024;
 const FILE_LIMIT = 30;
 const PATCH_MAX_CHARS = 16 * 1024;
 const PATCH_TOTAL_MAX_CHARS = 96 * 1024;
+// The author's picture decorates the header; a slow avatar host must not hold the document.
+const AVATAR_BUDGET_MS = 500;
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const PARTIAL_CACHE_MS = 30_000;
 const CACHE_LIMIT = 32;
@@ -422,7 +425,12 @@ async function loadGitHubDetailWithIdentity(
         };
       }
 
-      const { preview } = parseControlUiGitHubPreviewResponse(parsed, value);
+      const { preview, avatarUrl } = parseControlUiGitHubPreviewResponse(parsed, value);
+      // The header belongs to the overview; its picture loads beside the content reads.
+      const avatar =
+        section === undefined || section === "overview"
+          ? fetchAvatarDataUrl(avatarUrl, fetchImpl, AbortSignal.timeout(AVATAR_BUDGET_MS))
+          : undefined;
       const content = markdownBody(value.body, BODY_MAX_CHARS);
       const discussionCount = includeDiscussion ? requiredCount(value, "comments") : 0;
       const reviewCount =
@@ -475,13 +483,9 @@ async function loadGitHubDetailWithIdentity(
         parsed.kind === "pull" && includeChecks
           ? await fetchPullChecks(repositoryUrl, head.sha, url + "/checks", readPage)
           : undefined;
-      const view = githubPreviewView(preview, host);
-      const metadata = githubChangeMetadata(
-        preview.additions,
-        preview.deletions,
-        preview.changedFiles,
-        preview.comments,
-      );
+      const avatarDataUrl = await avatar;
+      const view = githubPreviewView(avatarDataUrl ? { ...preview, avatarDataUrl } : preview, host);
+      const metadata = githubChangeMetadata(preview.additions, preview.deletions);
       const headRef = readOptionalGitHubString(head, "ref")?.slice(0, 256);
       const baseRef = readOptionalGitHubString(base, "ref")?.slice(0, 256);
       return {
@@ -496,8 +500,19 @@ async function loadGitHubDetailWithIdentity(
         ...(section === "overview" ? { deferredSections } : {}),
         ...content,
         ...(checks ? { checks } : {}),
-        ...(includeDiscussion ? { comments, commentsTotal, commentsTruncated } : {}),
-        ...(includeFiles ? { files, filesTotal, filesTruncated } : {}),
+        // Section counts are known up front, so navigation shows them before a section loads.
+        ...(includeDiscussion
+          ? { comments, commentsTotal, commentsTruncated }
+          : {
+              commentsTotal:
+                requiredCount(value, "comments") +
+                (parsed.kind === "pull" ? requiredCount(value, "review_comments") : 0),
+            }),
+        ...(includeFiles
+          ? { files, filesTotal, filesTruncated }
+          : parsed.kind === "pull"
+            ? { filesTotal }
+            : {}),
         partial:
           content.bodyTruncated ||
           commentsTruncated ||

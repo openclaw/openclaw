@@ -359,7 +359,11 @@ Mention-gated group with bounded context:
 }
 ```
 
-Allowed group messages that do not address the bot stay silent and are kept only in the bounded pending history window. When a later native @mention, fallback text mention, or quote-reply to the bot triggers it, OpenClaw includes that recent context and replies to the same group. Skipped attachment bodies are not downloaded; they may appear only as compact media placeholders in the pending context.
+Allowed group messages that do not address the bot stay silent and are kept in the bounded pending history window. A later native @mention, fallback text mention, or opted-in native reply to a verified OpenClaw message can include recent photos from the sender. A message that mentions the bot and replies to a photo can also include that photo if it is still available in the same window.
+
+To include other members' photos in an unquoted mention, set `includeOtherMembersHistoryImages: true` on that specific group. For example, set `channels.signal.groups["<signal-group-id>"]` to `{ requireMention: true, includeOtherMembersHistoryImages: true }` for a mention-gated group. Named accounts can configure this under `channels.signal.accounts.<id>.groups`. The setting defaults to off and only exact group entries can enable it.
+
+OpenClaw reads up to four photos when it handles the mention. It prioritizes the photo being replied to and looks back up to 30 minutes for unquoted photos. It applies the account's [context visibility policy](/channels/groups#context-visibility-and-allowlists), `ignoreAttachments`, and the media size limit. View-once and disappearing images are excluded. Attachments that cannot be retrieved remain as media placeholders.
 
 ## How it works (behavior)
 

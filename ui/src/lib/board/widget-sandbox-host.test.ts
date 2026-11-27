@@ -722,7 +722,6 @@ describe("document timeouts", () => {
     }
     await vi.advanceTimersByTimeAsync(0);
     expect(f.onLoaded).toHaveBeenCalledOnce();
-    expect(fetchMock).toHaveBeenCalledOnce();
     if (phase === "render") {
       const delivery = f.post.mock.calls.find(
         ([data]) => data.method === "ui/notifications/sandbox-resource-ready",

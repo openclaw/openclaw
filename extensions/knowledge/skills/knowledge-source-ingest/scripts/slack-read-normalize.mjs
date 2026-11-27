@@ -12,8 +12,9 @@ const USAGE =
   "writes, for chat-transcript.mjs and source-manifest.mjs. Each input is a JSON read result\n" +
   "({messages, hasMore}), an array of them, or JSON Lines of them. Item IDs are CHANNEL_ID/ts; replies\n" +
   "carry thread_id and reply_to_message_id of their root. Authors are named from the profile or bot name\n" +
-  "the read returned, otherwise by user ID. Each row's sha256 covers the message itself, not the labels\n" +
-  "that depend on what else was read (author and thread names, reply counts), so an unchanged message\n" +
+  "the read returned, otherwise by user ID, and mentioned users from the read's userProfiles as\n" +
+  "mention_names. Each row's sha256 covers the message itself, not the labels that depend on what else\n" +
+  "was read (author, mention and thread names, reply counts), so an unchanged message\n" +
   "keeps its hash across overlapping reads. A message read more than once keeps its latest edit.\n" +
   "Prints the source key and counts to stderr.\n";
 
@@ -86,7 +87,15 @@ async function run(argv) {
 
   // One message per ts. A message read twice keeps its latest edit; a tie keeps the later read.
   const messages = new Map();
+  // Mentioned users' names from every read, by user ID.
+  const mentionNames = new Map();
   for (const result of results) {
+    for (const [userId, profile] of Object.entries(result.userProfiles ?? {})) {
+      const name = profile?.display_name || profile?.real_name || profile?.name;
+      if (name) {
+        mentionNames.set(userId, name);
+      }
+    }
     const read = result.channelId;
     if (read !== undefined && read !== channel) {
       throw new Error("A read result belongs to channel " + read + ", not " + channel);
@@ -108,8 +117,22 @@ async function run(argv) {
     const line = (root?.text ?? "").split("\n")[0].trim();
     return line ? [...line].slice(0, 60).join("") : "thread " + threadTs;
   };
+  // Names for the users a message's text mentions, when a read named them.
+  const mentionsOf = (text) => {
+    const named = {};
+    for (const [, userId] of (text ?? "").matchAll(/<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/g)) {
+      if (mentionNames.has(userId)) {
+        named[userId] = mentionNames.get(userId);
+      }
+    }
+    return Object.keys(named).length ? named : undefined;
+  };
   const rows = [...messages.values()].map((message) => {
     const reply = Boolean(message.thread_ts) && message.thread_ts !== message.ts;
+    // A reply also names the users its thread's name mentions.
+    const mentioned = mentionsOf(
+      reply ? message.text + " " + threadName(message.thread_ts) : message.text,
+    );
     const author = message.user ?? message.bot_id ?? "unknown";
     const occurredAt = instant(message.ts, "A message");
     const files = Array.isArray(message.files) ? message.files : [];
@@ -137,6 +160,7 @@ async function run(argv) {
         edited_at: message.edited?.ts ? instant(message.edited.ts, "An edit") : null,
         deleted_at: null,
         content: message.text ?? "",
+        ...(mentioned ? { mention_names: mentioned } : {}),
         reply_to_message_id: reply ? id(message.thread_ts) : null,
         reply_count: message.reply_count ?? 0,
         has_attachments: files.length || message.attachments?.length ? 1 : 0,
@@ -149,6 +173,7 @@ async function run(argv) {
     const {
       thread_name: _threadName,
       author_name: _authorName,
+      mention_names: _mentionNames,
       reply_count: _replyCount,
       ...source
     } = row.payload;
