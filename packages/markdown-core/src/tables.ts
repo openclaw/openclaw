@@ -184,7 +184,7 @@ function renderRowLabel(markdown: string, parser: MarkdownItParser, env: Env): s
           start,
           end,
         }))
-        .sort((left, right) => {
+        .toSorted((left, right) => {
           if (left.key === right.key) {
             return left.start - right.start;
           }
