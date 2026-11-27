@@ -1,5 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddingProviderCreateOptions } from "../../../../src/plugins/embedding-provider-types.js";
+import {
+  isNativeOpenAIEmbeddingRoute,
+  normalizeEmbeddingDestinationKey,
+  resolveProviderEmbeddingBaseUrl,
+} from "./embeddings-destination.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
 import {
   resolveProviderRequestPolicyConfig,
@@ -22,17 +27,6 @@ function resolveOpenClawAttributionHeaders(): Record<string, string> {
     ...(version ? { version } : {}),
     "User-Agent": version ? `openclaw/${version}` : "openclaw",
   };
-}
-
-function normalizeEmbeddingDestinationKey(baseUrl: string): string | undefined {
-  const parsed = URL.parse(baseUrl);
-  if (!parsed) {
-    return undefined;
-  }
-  const hostname = parsed.hostname.toLowerCase();
-  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-  const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
-  return `${parsed.protocol}//${hostname}:${port}${pathname}${parsed.search}`;
 }
 
 /** Whether provider-owned embedding credentials belong to the selected destination. */
@@ -73,39 +67,6 @@ function resolveEmbeddingHeaders(
   return resolved;
 }
 
-/** Detect the native OpenAI embeddings API route that accepts attribution headers. */
-function isNativeOpenAIEmbeddingRoute(provider: string, baseUrl: string): boolean {
-  return (
-    provider === "openai" &&
-    URL.parse(baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com"
-  );
-}
-
-/**
- * The recognized native ChatGPT/Codex subscription route. It serves chat
- * traffic only — it has no embeddings endpoint, so its base URL must never
- * leak into embedding requests. (#165476)
- */
-const NATIVE_CHAT_ONLY_SUBSCRIPTION_BASE_URL = "https://chatgpt.com/backend-api/codex";
-
-/**
- * Whether the provider is pinned to the recognized native chat-only
- * subscription route. The redirect to the adapter default must apply ONLY
- * here: matching on the api mode alone would also redirect custom provider
- * URLs, misattributing their destination-owned credentials (e.g. a custom
- * Authorization header) to the adapter default such as api.openai.com.
- */
-function isNativeChatOnlySubscriptionRoute(
-  api: string | undefined,
-  baseUrl: string | undefined,
-): boolean {
-  return (
-    api === "openai-chatgpt-responses" &&
-    normalizeEmbeddingDestinationKey(NATIVE_CHAT_ONLY_SUBSCRIPTION_BASE_URL) ===
-      normalizeEmbeddingDestinationKey(baseUrl ?? "")
-  );
-}
-
 /** Resolve base URL, bearer headers, header overrides, and SSRF policy for remote embeddings. */
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
@@ -125,17 +86,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   });
   const remoteBaseUrl = normalizeOptionalString(remote?.baseUrl);
   const providerConfig = params.options.config.models?.providers?.[params.provider];
-  // A chat-only subscription route has no embeddings endpoint: never inherit
-  // its base URL for embeddings — fall through to the adapter default instead.
-  // The redirect applies ONLY to the recognized native subscription route; a
-  // custom provider URL keeps its own destination (and credentials) even when
-  // the provider uses a chat-only subscription api mode.
-  const providerBaseUrl = isNativeChatOnlySubscriptionRoute(
-    normalizeOptionalString(providerConfig?.api),
-    normalizeOptionalString(providerConfig?.baseUrl),
-  )
-    ? params.defaultBaseUrl
-    : normalizeOptionalString(providerConfig?.baseUrl) || params.defaultBaseUrl;
+  const providerBaseUrl = resolveProviderEmbeddingBaseUrl(providerConfig, params.defaultBaseUrl);
   const baseUrl = remoteBaseUrl || providerBaseUrl;
   const providerOwnsDestination = embeddingProviderOwnsDestination({
     baseUrl,

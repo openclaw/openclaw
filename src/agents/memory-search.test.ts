@@ -474,18 +474,32 @@ describe("memory search config", () => {
       provider: "openai",
     },
     {
-      case: "native OpenAI, auto",
-      baseUrl: "https://api.openai.com/v1",
+      case: "native OpenAI with a trailing hostname dot, auto",
+      baseUrl: "https://API.OPENAI.COM./v1",
       search: { provider: "auto" },
       provider: "openai",
     },
+    {
+      case: "ChatGPT subscription route, auto",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      search: {},
+      provider: "openai",
+    },
+    {
+      case: "ChatGPT api mode on a custom endpoint, auto",
+      api: "openai-chatgpt-responses",
+      baseUrl: "http://127.0.0.1:8787/v1",
+      search: {},
+      provider: "none",
+    },
     { case: "no openai provider config, auto", baseUrl: undefined, search: {}, provider: "openai" },
-  ] as const)("selects the embedding provider for $case", ({ baseUrl, search, provider }) => {
+  ] as const)("selects the embedding provider for $case", (scenario) => {
+    const { baseUrl, search, provider } = scenario;
+    const api = "api" in scenario ? scenario.api : "openai-completions";
     const cfg = asConfig({
       memory: { search },
-      ...(baseUrl && {
-        models: { providers: { openai: { baseUrl, api: "openai-completions", models: [] } } },
-      }),
+      ...(baseUrl && { models: { providers: { openai: { baseUrl, api, models: [] } } } }),
     });
     expect(resolveMemorySearchConfig(cfg, "main")?.provider).toBe(provider);
   });

@@ -1,13 +1,16 @@
 /**
  * Resolves memory-search source, sync, and ranking configuration.
  */
-import { isNativeOpenAIEndpoint } from "@openclaw/ai/internal/openai-completions-compat";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   normalizeConfiguredMemoryExtraPaths,
   resolveRememberAcrossConversations,
 } from "../memory-host-sdk/host/config-utils.js";
+import {
+  isNativeOpenAIEmbeddingRoute,
+  resolveProviderEmbeddingBaseUrl,
+} from "../memory-host-sdk/host/embeddings-destination.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
@@ -175,13 +178,12 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
   };
 }
 
-function openAIProviderReachesOpenAI(cfg: OpenClawConfig): boolean {
-  const openai = cfg.models?.providers?.openai;
-  // A chat-only ChatGPT route sends its embeddings to native OpenAI (#165476).
-  return (
-    openai?.api === "openai-chatgpt-responses" ||
-    isNativeOpenAIEndpoint({ provider: "openai", baseUrl: openai?.baseUrl })
+function openAIEmbeddingsReachOpenAI(cfg: OpenClawConfig): boolean {
+  const baseUrl = resolveProviderEmbeddingBaseUrl(
+    cfg.models?.providers?.openai,
+    "https://api.openai.com/v1",
   );
+  return isNativeOpenAIEmbeddingRoute("openai", baseUrl);
 }
 
 function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
@@ -204,7 +206,7 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
   // Auto embeds through OpenAI only where the openai provider reaches OpenAI itself. A custom
   // chat endpoint is no embeddings route, so search stays keyword-only there.
   const provider =
-    embeddingsConfigured || openAIProviderReachesOpenAI(cfg)
+    embeddingsConfigured || openAIEmbeddingsReachOpenAI(cfg)
       ? resolveMemorySearchProviderId(configuredProvider)
       : "none";
   const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
