@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSessionPatch
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
@@ -74,7 +75,7 @@ class AppearancePreferenceRuntimeTest {
             request.method == "users.prefs.get" && request.profileId == "display-only" -> """{"status":"no_durable_identity"}"""
             request.method != "users.self" -> null
             request.profileId != null -> """{"profile":{"id":${JsonPrimitive(request.profileId)}}}"""
-            else -> throw GatewayRequestRejected(GatewaySession.ErrorShape("FORBIDDEN", "Sign in"))
+            else -> throw GatewayRequestRejected(ErrorShape("FORBIDDEN", "Sign in"))
           }
         }
         val methods = setOf("sessions.patch", "users.self", "users.prefs.get")
@@ -108,7 +109,7 @@ class AppearancePreferenceRuntimeTest {
     runBlocking {
       withAppearanceGateway {
         respond = { request ->
-          if (request.method == "users.prefs.get") throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "Profile pending"))
+          if (request.method == "users.prefs.get") throw GatewayRequestRejected(ErrorShape("UNAVAILABLE", "Profile pending"))
           null
         }
         connect(methods = setOf("sessions.patch", "users.prefs.get", "users.self"), capabilities = setOf("personal-session-pins"))
@@ -118,7 +119,7 @@ class AppearancePreferenceRuntimeTest {
         setProfilePreferences("profile-a", """{"ui.railShortcuts":["session:agent:main:sleep","session-rail:agent:main:other"]}""")
         respond = { request ->
           when (request.method) {
-            "config.get" -> throw GatewayRequestRejected(GatewaySession.ErrorShape("FORBIDDEN", "No config access"))
+            "config.get" -> throw GatewayRequestRejected(ErrorShape("FORBIDDEN", "No config access"))
             "sessions.patch" -> """{"ok":true,"key":"agent:main:sleep","entry":{"updatedAt":1}}"""
             else -> null
           }
@@ -310,7 +311,7 @@ class AppearancePreferenceRuntimeTest {
         setProfilePreferences("profile-b", """{"ui.theme":"rose","ui.themeMode":"light","ui.accent":"#E96CB7"}""")
         respond = { request ->
           if (request.method == "users.self") {
-            throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "Profile lookup temporarily unavailable"))
+            throw GatewayRequestRejected(ErrorShape("UNAVAILABLE", "Profile lookup temporarily unavailable"))
           }
           null
         }
@@ -346,7 +347,7 @@ class AppearancePreferenceRuntimeTest {
               "users.self" -> {
                 profileLookupStarted.complete(Unit)
                 releaseProfileLookup.await()
-                throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "Profile lookup temporarily unavailable"))
+                throw GatewayRequestRejected(ErrorShape("UNAVAILABLE", "Profile lookup temporarily unavailable"))
               }
             }
           }
@@ -398,7 +399,7 @@ class AppearancePreferenceRuntimeTest {
           val unsupportedMethods = if (catalogOmitsMethod) setOf("agents.list", "config.get") else null
           val unsupportedPreferences: suspend (AppearanceRpcRequest) -> String? = { request ->
             if (request.method == "users.prefs.get") {
-              throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unknown method: users.prefs.get"))
+              throw GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "unknown method: users.prefs.get"))
             }
             null
           }
@@ -1061,7 +1062,7 @@ private class AppearanceGatewayFixture(
     val previousRespond = respond
     respond = { request ->
       if (request.method == "connect") {
-        throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "Gateway offline"))
+        throw GatewayRequestRejected(ErrorShape("UNAVAILABLE", "Gateway offline"))
       }
       previousRespond(request)
     }
@@ -1254,7 +1255,7 @@ private class AppearanceGatewayFixture(
 
   private fun requireWriteScope(identity: Connection) {
     if ("operator.write" !in identity.scopes) {
-      throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "missing scope: operator.write"))
+      throw GatewayRequestRejected(ErrorShape("INVALID_REQUEST", "missing scope: operator.write"))
     }
   }
 

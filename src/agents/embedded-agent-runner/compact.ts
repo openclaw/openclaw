@@ -36,7 +36,6 @@ import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { NO_MODEL_CONFIGURED_MESSAGE } from "../model-selection-config.js";
-import { assertParticipationRuntime } from "../participation-ceiling.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
@@ -73,7 +72,6 @@ export async function compactNativeCliSession(params: {
   replyOperation?: ReplyOperation;
   runtime: string | undefined;
   compactParams: CompactEmbeddedAgentSessionParams;
-  sourceAuthority?: import("../harness/host-source-authority.js").AgentHarnessCompactionSourceAuthority;
   runControlOperation?: (run: () => Promise<void>) => Promise<void>;
 }): Promise<EmbeddedAgentCompactResult | undefined> {
   const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
@@ -86,10 +84,6 @@ export async function compactNativeCliSession(params: {
   if (!backend?.ownsNativeCompaction) {
     return undefined;
   }
-  assertParticipationRuntime(
-    params.sourceAuthority?.operatorAuthority?.participationCeiling,
-    "cli",
-  );
   const manualCompaction = backend.manualCompaction;
   if (!manualCompaction) {
     return buildCompactionFailureResult(
@@ -153,13 +147,14 @@ export async function compactNativeCliSession(params: {
       forwardedAuthProfileId = params.compactParams.authProfileId;
     }
   }
+  // Native compaction is session maintenance: any member who may send can trigger it, and the
+  // triggering turn may already have ended. Its control operation refuses OpenClaw tool calls,
+  // so it runs as System work and lends no authority to whoever triggered it.
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
     params.compactParams.config ?? {},
     runId,
     sessionAgentId,
     "agents.native-compaction",
-    params.sourceAuthority?.assertActive,
-    params.sourceAuthority?.operatorAuthority,
   );
   let compactedMeta: EmbeddedAgentMeta | undefined;
   try {
@@ -342,10 +337,6 @@ export async function compactEmbeddedAgentSessionDirect(
     replyOperation:
       resolveSessionControllerOperationForSignal(paramsInput.abortSignal) ??
       getCurrentSessionControllerOwner(),
-    sourceAuthority: {
-      assertActive: assertReadCurrent,
-      operatorAuthority: requestedParams.pluginExecutionAuthority,
-    },
     runtime: runtimeSelection.selectedHarnessRuntime,
     compactParams: {
       ...requestedParams,

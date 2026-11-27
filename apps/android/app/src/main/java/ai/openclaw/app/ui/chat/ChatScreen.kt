@@ -603,7 +603,7 @@ internal fun ChatScreen(
       loading = viewModel.chatHistoryLoading.value || viewModel.chatSessionCreating.value,
       sending = expected in composerState.sendStates.value,
       activeRun = viewModel.pendingRunCount.value > 0,
-      streaming = viewModel.chatStreamingAssistantText.value != null,
+      streaming = viewModel.chatStreamingAssistant.value?.text != null,
       settingsMutationPending = viewModel.chatSessionKey.value in viewModel.chatPendingSessionSettingsKeys.value,
     )
 

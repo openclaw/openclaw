@@ -162,13 +162,18 @@ class GatewayDiscoveryLifecycleTest {
         val recovered = withTimeout(5_000) { runtime.pendingGatewayTrust.first { it != null } }!!
         assertEquals(primaryId, recovered.endpoint.stableId)
         assertEquals("127.0.0.1", recovered.endpoint.host)
+        val session = ReflectionHelpers.getField<GatewaySession>(runtime, "nodeSession")
         runtime.disconnect()
+        // Settle both role callbacks before synthesizing a connected session below.
+        withTimeout(5_000) {
+          ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession").disconnectAndJoin()
+          session.disconnectAndJoin()
+        }
         assertEquals(0, listeners().size)
 
         runtime.setForeground(true)
         runtime.setForeground(true)
         assertEquals(1, listeners().size)
-        val session = ReflectionHelpers.getField<GatewaySession>(runtime, "nodeSession")
         ReflectionHelpers.getField<(GatewayHelloSummary) -> Unit>(session, "onConnected")(
           GatewayHelloSummary(null, null, null, null, null),
         )

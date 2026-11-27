@@ -186,24 +186,27 @@ function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {
   }
 }
 
-/** Recognize explicit required intent only on the authorized core tool bindings. */
+/**
+ * Recognize required intent only on the authorized core tool bindings. A native
+ * ask_user question is always required: parking it would let turn teardown cancel it.
+ */
 export function requiresCodeModeCompletion(
   requests: readonly PendingBridgeRequest[],
   catalogProjection: CodeModeCatalogProjection,
 ): boolean {
   return requests.some((request) => {
-    if (
-      request.method !== "callValue" ||
-      !isRecord(request.args[1]) ||
-      request.args[1].awaitResults !== true
-    ) {
+    if (request.method !== "callValue" || typeof request.args[0] !== "string") {
       return false;
     }
-    const binding =
-      typeof request.args[0] === "string"
-        ? catalogProjection.byCallableName.get(request.args[0])
-        : undefined;
-    return binding?.id === "openclaw:core:exec" || binding?.id === "openclaw:core:agents_wait";
+    const id = catalogProjection.byCallableName.get(request.args[0])?.id;
+    if (id === "openclaw:core:ask_user") {
+      return true;
+    }
+    return (
+      isRecord(request.args[1]) &&
+      request.args[1].awaitResults === true &&
+      (id === "openclaw:core:exec" || id === "openclaw:core:agents_wait")
+    );
   });
 }
 
