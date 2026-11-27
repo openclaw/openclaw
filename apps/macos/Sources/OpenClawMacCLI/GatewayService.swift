@@ -33,10 +33,14 @@ struct AppGatewayServiceCommand {
         else { return nil }
         let entryIndex = command[1] == "--no-install" ? 2 : 1
         let entry = URL(fileURLWithPath: command[entryIndex]).standardizedFileURL.path
+        // Match the shipped CLI and the Gateway service entrypoints in runtime-process-manifest.ts.
+        let serviceEntrypoints = [
+            "openclaw.mjs", "dist/index.js", "dist/index.mjs", "dist/entry.js", "dist/entry.mjs",
+        ]
         guard command.count > entryIndex + 1,
               command[entryIndex] == entry,
               entry.hasPrefix(root + "/runtime/"),
-              entry.hasSuffix("/lib/node_modules/openclaw/openclaw.mjs"),
+              serviceEntrypoints.contains(where: { entry.hasSuffix("/lib/node_modules/openclaw/" + $0) }),
               command[entryIndex + 1] == "gateway"
         else { return nil }
         if wrapperCount > 0 {

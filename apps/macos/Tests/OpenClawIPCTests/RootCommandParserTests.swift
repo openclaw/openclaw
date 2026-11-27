@@ -18,11 +18,18 @@ struct RootCommandParserTests {
             .executable.path == bun)
         #expect(AppGatewayServiceCommand(arguments: [wrapper, file, bun, entry, "gateway"], homeDirectory: home)?
             .executable.path == wrapper)
+        for name in ["dist/index.js", "dist/index.mjs", "dist/entry.js", "dist/entry.mjs"] {
+            let installed = root + "/runtime/build/lib/node_modules/openclaw/" + name
+            #expect(AppGatewayServiceCommand(
+                arguments: ["/bin/sh", wrapper, file, bun, "--no-install", installed, "gateway"],
+                homeDirectory: home) != nil)
+        }
         for invalid in [
             ["/bin/sh", "/tmp/wrapper", file, bun, entry, "gateway"],
             ["/bin/sh", wrapper, file, "/usr/bin/node", entry, "gateway"],
             ["/bin/sh", wrapper, file, bun, entry, "exec"],
             ["/bin/sh", wrapper, file, bun, "/tmp/openclaw.mjs", "gateway"],
+            ["/bin/sh", wrapper, file, bun, root + "/runtime/build/lib/node_modules/openclaw/dist/other.js", "gateway"],
         ] {
             #expect(AppGatewayServiceCommand(arguments: invalid, homeDirectory: home) == nil)
         }
