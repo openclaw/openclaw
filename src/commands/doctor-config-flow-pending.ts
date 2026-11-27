@@ -29,7 +29,7 @@ export function doctorConfigFlowPendingInputs(params: {
  * Traces each input as `config-flow.<id>`, then the step itself from their answers.
  * `trace` is Doctor's maintenance tracer; it returns whether that check has work.
  */
-export async function traceDoctorConfigFlowPending(
+export async function traceConfigFlowPendingInputs(
   trace: (step: string, check?: DoctorMaintenancePendingCheck) => Promise<boolean> | undefined,
   params: Parameters<typeof doctorConfigFlowPendingInputs>[0],
 ): Promise<void> {

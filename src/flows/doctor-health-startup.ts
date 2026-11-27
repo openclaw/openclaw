@@ -297,9 +297,9 @@ export async function traceDoctorConfigFlowPending(
   trace: (step: string, check?: DoctorMaintenancePendingCheck) => Promise<boolean> | undefined,
   options: DoctorOptions,
 ): Promise<void> {
-  const { traceDoctorConfigFlowPending: traceInputs } =
+  const { traceConfigFlowPendingInputs } =
     await import("../commands/doctor-config-flow-pending.js");
-  await traceInputs(trace, {
+  await traceConfigFlowPendingInputs(trace, {
     env: process.env,
     integrityCheck: options.fullIntegrityCheck ? "full" : "quick",
   });

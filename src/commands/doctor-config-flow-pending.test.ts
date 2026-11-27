@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { traceDoctorConfigFlowPending } from "./doctor-config-flow-pending.js";
+import { traceConfigFlowPendingInputs } from "./doctor-config-flow-pending.js";
 import type {
   DoctorMaintenancePending,
   DoctorMaintenancePendingCheck,
@@ -18,7 +18,7 @@ it("keeps the config flow at work while inputs without a check remain, after tra
     return pending !== "none";
   };
 
-  await traceDoctorConfigFlowPending(trace, { env, integrityCheck: "quick" });
+  await traceConfigFlowPendingInputs(trace, { env, integrityCheck: "quick" });
 
   expect(traced).toEqual([
     ["config-flow.state-schema", "none"],
