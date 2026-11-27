@@ -43,7 +43,9 @@ on the device rather than being copied to or reconciled with the Gateway. See
 
 The icon rail stays separate from the selected navigation list. **Pages** opens
 available built-in pages, dashboards, and plugin destinations, **Sessions** opens conversations,
-and **Users** opens the people list. Its header selects **Online** (the default)
+and **Users** opens the people list. On a single-user Gateway, the People icon
+is hidden; **Activity** and, when enabled, **OpenClaw ID** remote access are
+still available in **Pages** (**⋯**). The people list header selects **Online** (the default)
 or **All users**, including offline profiles from the authorized user directory.
 The header is a filter, not a collapse control. Right-click a person, or focus their
 row and press Shift+F10, to open their actions. The **⋯** button appears beside

@@ -265,7 +265,11 @@ suite.define(() => {
         await expect.poll(() => selected.textContent()).toContain("Trailing rate update 2");
         // Counts belong to Online; opening it must still fetch them on demand.
         await page.clock.resume();
-        await sidebar.locator('[data-navigation-view="online"]').click();
+        await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+        await page
+          .locator(".sidebar-pages-menu")
+          .getByRole("link", { name: "Activity", exact: true })
+          .click();
         await expect
           .poll(() =>
             lists.some(

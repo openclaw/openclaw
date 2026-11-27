@@ -3,18 +3,46 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  captureUiProofEnabled,
   createSessionManagementE2eSuite,
   installMockGateway,
+  waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it("hides the People shortcut on a solo Gateway and keeps Activity in Pages", async () => {
+    await suite.withPage(
+      { colorScheme: "dark", locale: "en-US", viewport: { width: 1280, height: 800 } },
+      async ({ page }) => {
+        await installMockGateway(page, { hasMultipleSessionSharingIdentities: false });
+        await page.goto(suite.server.baseUrl + "chat");
+        await waitForSessionRosterHydration(page);
+        const rail = page.locator(".sidebar-rail");
+        if (captureUiProofEnabled) {
+          const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [rail], {
+            animations: "disabled",
+            elements: [rail],
+          });
+          await writeFile(path.join(suite.artifactDir, "solo-rail.png"), frame.elements[0]!.png);
+        }
+        expect(await rail.getByRole("button", { name: "People", exact: true }).count()).toBe(0);
+        await rail.getByRole("button", { name: "Pages", exact: true }).click();
+        await page
+          .locator(".sidebar-pages-menu")
+          .getByRole("link", { name: "Activity", exact: true })
+          .click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
+      },
+    );
+  });
+
   it("selects only visible rail panels and restores them without a separate expand button", async () => {
     await suite.withPage(
       { colorScheme: "dark", locale: "en-US", viewport: { width: 1280, height: 800 } },
       async ({ page }) => {
-        await installMockGateway(page);
+        await installMockGateway(page, { hasMultipleSessionSharingIdentities: true });
         await page.goto(`${suite.server.baseUrl}new`);
         const sidebar = page.locator("openclaw-app-sidebar .sidebar-shell");
         const selected = page.locator('[data-navigation-view][aria-pressed="true"]');

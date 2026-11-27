@@ -25,11 +25,12 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // pins reference the catalog without changing its availability. Chat has the
 // Sessions view; Settings/Docs remain in the profile menu.
 // Skills, Skill Workshop and Templates are reached from the Customize sidebar, not sidebar items.
-// Apps is reached from the profile menu and the command palette; Activity is the
-// rail's People section.
+// Apps is reached from the profile menu and the command palette. Activity is
+// reached through People, or through Pages when the People shortcut is hidden.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
+  "activity",
   "dashboards",
   "usage",
   "cron",
@@ -52,8 +53,8 @@ export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
 }
 
 /**
- * Plugin pages the Users section lists under Activity instead of the "more" menu: OpenClaw
- * ID remote access manages who can reach this claw.
+ * Plugin pages the Users section lists under Activity when it has a rail shortcut:
+ * OpenClaw ID remote access manages who can reach this claw.
  */
 export const USERS_SECTION_PLUGIN_PAGES: ReadonlySet<string> = new Set([
   "openclaw-id-access/access",

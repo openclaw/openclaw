@@ -22,6 +22,7 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -209,6 +210,10 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   const [pagesMenuOpen, setPagesMenuOpen] = createSignal(false);
   // Boards share one route but not one address, so the rail follows the router and the plugins.
   const app = useApplication();
+  const gateway = projectGateway(app.gateway);
+  const peopleInRail = createMemo(
+    () => gateway.read().snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !== false,
+  );
   const [opened, setOpened] = createSignal(0);
   onSettled(() => {
     const changed = () => setOpened((value) => value + 1);
@@ -223,8 +228,10 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
     const pluginPage = host.activePluginTabId;
     const menuRoute = route && isPluginsHubRoute(route) ? "plugins" : route;
     const inMenu = pluginPage
-      ? !USERS_SECTION_PLUGIN_PAGES.has(pluginPage)
-      : menuRoute !== "sessions" && SIDEBAR_NAV_ROUTES.some((entry) => entry === menuRoute);
+      ? !peopleInRail() || !USERS_SECTION_PLUGIN_PAGES.has(pluginPage)
+      : menuRoute !== "sessions" &&
+        (menuRoute !== "activity" || !peopleInRail()) &&
+        SIDEBAR_NAV_ROUTES.some((entry) => entry === menuRoute);
     if (!inMenu) {
       return false;
     }
@@ -308,32 +315,34 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
             <Icon name="sessions" filled={sessionsPressed()} />
           </button>
         </openclaw-tooltip>
-        <openclaw-tooltip prop:content={t("presence.peopleTitle")}>
-          <button
-            ref={registerView("online")}
-            type="button"
-            class="sidebar-rail__button"
-            data-navigation-view="online"
-            aria-label={t("presence.peopleTitle")}
-            aria-pressed={peoplePressed() ? "true" : "false"}
-            onClick={() => {
-              // People is the Users section: Activity in the content, people in the sidebar.
-              host.navigationView = "online";
-              if (host.onExitSettings) {
-                host.onExitSettings();
-              } else if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
-                host.onToggleSidebar?.();
-              }
-              // The mobile drawer closes on navigation, so there People only opens the list.
-              if (!isMobileNavLayout()) {
-                host.onNavigate?.("activity");
-              }
-              host.invalidate();
-            }}
-          >
-            <Icon name="users" filled={peoplePressed()} />
-          </button>
-        </openclaw-tooltip>
+        <Show when={peopleInRail()}>
+          <openclaw-tooltip prop:content={t("presence.peopleTitle")}>
+            <button
+              ref={registerView("online")}
+              type="button"
+              class="sidebar-rail__button"
+              data-navigation-view="online"
+              aria-label={t("presence.peopleTitle")}
+              aria-pressed={peoplePressed() ? "true" : "false"}
+              onClick={() => {
+                // People is the Users section: Activity in the content, people in the sidebar.
+                host.navigationView = "online";
+                if (host.onExitSettings) {
+                  host.onExitSettings();
+                } else if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
+                  host.onToggleSidebar?.();
+                }
+                // The mobile drawer closes on navigation, so there People only opens the list.
+                if (!isMobileNavLayout()) {
+                  host.onNavigate?.("activity");
+                }
+                host.invalidate();
+              }}
+            >
+              <Icon name="users" filled={peoplePressed()} />
+            </button>
+          </openclaw-tooltip>
+        </Show>
       </div>
       <div
         class={[
@@ -424,6 +433,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
     >
       <SidebarPagesMenu
         host={host}
+        peopleInRail={peopleInRail()}
         onNavigate={(entry) => {
           pagesMenu?.hide();
           if (entry) {

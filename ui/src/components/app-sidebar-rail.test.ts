@@ -149,6 +149,33 @@ function drag(
 }
 
 describe("personal navigation rail", () => {
+  it("moves Activity and Access into Pages only when the Gateway confirms solo use", async () => {
+    const { sidebar, gateway, dom } = await fixture();
+    const people = '[data-navigation-view="online"]';
+    const activity = '.sidebar-pages-menu [data-sidebar-entry="route:activity"] a';
+    const access = '.sidebar-pages-menu [data-sidebar-entry="plugin:openclaw-id-access/access"] a';
+    const hello = {
+      ...gatewayHelloForMethods([]),
+      controlUiTabs: [{ id: "access", pluginId: "openclaw-id-access", label: "Access" }],
+    };
+    expect(dom.query(people)).not.toBeNull();
+
+    gateway.publish({
+      hello: { ...hello, policy: { hasMultipleSessionSharingIdentities: false } },
+    });
+    await waitForSolid(() => expect(dom.query(people)).toBeNull());
+    await click(sidebar, "[data-rail-more]");
+    expect(dom.query<HTMLAnchorElement>(activity)?.getAttribute("href")).toBe("/activity");
+    expect(dom.query(access)?.textContent).toContain("Access");
+
+    gateway.publish({ hello: { ...hello, policy: { hasMultipleSessionSharingIdentities: true } } });
+    await waitForSolid(() => {
+      expect(dom.query(people)).not.toBeNull();
+      expect(dom.query(activity)).toBeNull();
+      expect(dom.query(access)).toBeNull();
+    });
+  });
+
   it("keeps fixed navigation and Home, Inbox, identity separate from the middle view", async () => {
     const { sidebar, dom } = await fixture();
     expect(

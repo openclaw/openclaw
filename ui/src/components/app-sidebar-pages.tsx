@@ -48,13 +48,17 @@ function PinToggle(props: { host: AppSidebarRenderHost; entry: string }) {
  */
 export function SidebarPagesMenu(props: {
   host: AppSidebarRenderHost;
+  peopleInRail: boolean;
   onNavigate: (entry: SidebarZoneEntry | null) => void;
 }): JSX.Element {
   const zone = createMemo(() => props.host.reconciledSidebarZone());
   const routes = createMemo(() =>
     // Sessions opens from the agent avatar and its groups, so the menu leaves it out.
     SIDEBAR_NAV_ROUTES.filter(
-      (route) => route !== "sessions" && props.host.sidebarMenus.isRouteEnabled(route),
+      (route) =>
+        route !== "sessions" &&
+        (route !== "activity" || !props.peopleInRail) &&
+        props.host.sidebarMenus.isRouteEnabled(route),
     )
       .toSorted((left, right) => titleForRoute(left, t).localeCompare(titleForRoute(right, t)))
       .map((route) => serializeSidebarEntry({ type: "route", route })),
@@ -70,8 +74,7 @@ export function SidebarPagesMenu(props: {
           .map((entry) => entry.key),
       ]),
     ]
-      // The Users section lists its plugin pages itself.
-      .filter((key) => !USERS_SECTION_PLUGIN_PAGES.has(key))
+      .filter((key) => !props.peopleInRail || !USERS_SECTION_PLUGIN_PAGES.has(key))
       .map((key) => serializeSidebarEntry({ type: "plugin", key })),
   );
   const Entry = (entry: { key: string }) => {
