@@ -72,6 +72,25 @@ struct ChatTranscriptExporterTests {
         #expect(!markdown.contains("Unknown marker body"))
     }
 
+    @Test(arguments: ["\r\n", "\n"]) func `omits protected runtime context from exported text`(lineEnding: String) {
+        let text = [
+            "Before the runtime context.",
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "Synthetic internal text.",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "After the runtime context.",
+        ].joined(separator: lineEnding)
+        let markdown = ChatTranscriptExporter.markdown(
+            sessionTitle: "Transcript",
+            sessionKey: "main",
+            messages: [self.message(role: "user", text: text, timestamp: 0)])
+
+        #expect(markdown.contains("Before the runtime context."))
+        #expect(markdown.contains("After the runtime context."))
+        #expect(!markdown.contains("Synthetic internal text."))
+        #expect(!markdown.contains("OPENCLAW_INTERNAL_CONTEXT"))
+    }
+
     @Test func `formats visible messages and attachments`() {
         let messages = [
             self.message(role: "system", text: "Hidden setup", timestamp: 0),

@@ -16,7 +16,7 @@ enum ChatInternalContext {
         var kept: [Substring] = []
         var depth = 0
         var inCurrent = false
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        for line in text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }) {
             let token = self.token(line)
             if inCurrent {
                 if token == self.footer { inCurrent = false }
