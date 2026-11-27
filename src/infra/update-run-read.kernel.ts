@@ -100,6 +100,7 @@ export type UpdateRunListInput = {
   reason?: string;
   excludeReason?: string;
   includeRunId?: string;
+  excludeRunIds?: readonly string[];
 };
 
 export function readUpdateRuns(db: EngineConnection, input: UpdateRunListInput) {
@@ -123,6 +124,9 @@ export function readUpdateRuns(db: EngineConnection, input: UpdateRunListInput) 
     query = query.where((eb) =>
       eb.or([eb("reason", "is", null), eb("reason", "!=", excludeReason)]),
     );
+  }
+  if (input.excludeRunIds?.length) {
+    query = query.where("run_id", "not in", input.excludeRunIds);
   }
   const runs = executeSqliteQuerySync(
     db,

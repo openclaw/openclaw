@@ -187,9 +187,15 @@ export async function prepareUpdate(params: {
       // The serving release may still own its handed-over plugin work after commit.
       const handedOverRunId = servingTrialRoot === runningRoot ? trial?.runId : undefined;
       for (;;) {
-        const unfinished = (
-          await listUpdateRunsAsync({ active: true, limit: 100 }, { env }, { current: true })
-        ).filter((run) => run.runId !== params.runId && run.runId !== handedOverRunId);
+        const unfinished = await listUpdateRunsAsync(
+          {
+            active: true,
+            limit: 100,
+            excludeRunIds: handedOverRunId ? [params.runId, handedOverRunId] : [params.runId],
+          },
+          { env },
+          { current: true },
+        );
         if (unfinished.length === 0) {
           break;
         }

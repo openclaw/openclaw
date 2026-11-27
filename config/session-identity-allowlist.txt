@@ -1555,8 +1555,3 @@ src/worker/worker-connection-frames.ts	2
 src/worker/worker-connection.ts	10
 src/worker/worker-rpc-inference-client.ts	4
 src/worker/worker-rpc-live-event-client.ts	2
-# update/run.ts pin 1: the existing preparation lock identifies this request's ledger address, not chat authority.
-# update/run.ts pin 2: candidate run IDs select which foreign history rows to interrupt, after admission is owned.
-# update/run.ts pin 3: the handoff address comes from the existing trial only after its physical serving path matches.
-# update/run.ts pin 4: excluding that handed-over row preserves its current finalizer; the ID does not grant execution.
-src/update/run.ts	4
