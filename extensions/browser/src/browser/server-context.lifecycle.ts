@@ -225,7 +225,7 @@ export function prepareAddressWarmupForStart(
   const pendingWarmup = actor.addressWarmupOnly && actor.starts.size > 0;
   actor.addressWarmupOnly = options?.prewarm === true;
   if (options?.prewarm || !pendingWarmup || typeof options?.headless !== "boolean") {
-    return;
+    return undefined;
   }
   const current = state();
   const warmupHeadless =
@@ -238,6 +238,7 @@ export function prepareAddressWarmupForStart(
       reason: "explicit browser launch mode requested",
     });
   }
+  return undefined;
 }
 
 export function observeAddressWarmupPages(
