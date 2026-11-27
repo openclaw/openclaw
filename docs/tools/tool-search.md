@@ -331,12 +331,14 @@ output, server instructions, and tool results. Choose MCP servers you trust.
 
 The directory is limited to 4,096 UTF-8 bytes, about 1,000 tokens. When the
 rows do not fit, OpenClaw first drops descriptions and keeps names and inputs.
-If inputs do not all fit, the smallest servers keep theirs and the others list
-names only. If names still do not fit, servers with the most tools become count lines such as
+If names still do not fit, servers with the most tools become count lines such as
 `- github server: 40 tools, names omitted`, starting with the largest server.
 If even count lines do not fit, the remaining servers are counted in one
 final line. A server is never omitted silently, and a closing line points to
-`tool_search` whenever names are omitted.
+`tool_search` whenever names are omitted. Inputs then fill the space the
+listed names leave, row by row and shortest first, so the most listed tools
+can be called in one step; a listed row without its input sends the model to
+`tool_describe` first.
 
 With the [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
 enabled and learned usage available, the same budget keeps descriptions for the

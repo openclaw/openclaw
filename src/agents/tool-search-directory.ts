@@ -483,9 +483,8 @@ function formatMcpToolDirectory(
     ...server,
     rows: server.rows.toSorted((a, b) => compare(a.label, b.label)),
   })).toSorted((a, b) => compare(a.name, b.name));
-  // Degrade in fixed steps: descriptions, then input signatures (smallest servers keep
-  // theirs), then names, then whole servers become counts. Every server stays visible as at
-  // least a count.
+  // Degrade in fixed steps: descriptions, then inputs (per row), then names, then whole
+  // servers become counts. Every server stays visible as at least a count.
   const full = renderMcpToolDirectory(servers, { expanded: all, signed: all, described: all });
   if (fitsMcpToolDirectory(full)) {
     return full;
@@ -497,48 +496,65 @@ function formatMcpToolDirectory(
   if (ranked !== undefined) {
     return ranked;
   }
-  // Smallest servers first, both for signatures and for names: the most servers stay
-  // callable, and the ones that keep inputs skip tool_describe.
-  const bySize = servers.toSorted(
-    (a, b) => a.rows.length - b.rows.length || compare(a.name, b.name),
-  );
-  const grow = (members: Set<McpDirectoryServer>, layout: () => McpDirectoryLayout) => {
+  // Names first: when they do not all fit, the smallest servers keep theirs so the most
+  // servers stay callable, and the rest become count lines.
+  const expanded = new Set<McpDirectoryServer>(fitsMcpToolDirectory(names) ? servers : []);
+  const isExpanded = (server: McpDirectoryServer) => expanded.has(server);
+  if (expanded.size === 0) {
+    const bySize = servers.toSorted(
+      (a, b) => a.rows.length - b.rows.length || compare(a.name, b.name),
+    );
     for (const server of bySize) {
-      members.add(server);
-      if (!fitsMcpToolDirectory(renderMcpToolDirectory(servers, layout()))) {
-        members.delete(server);
+      expanded.add(server);
+      if (
+        !fitsMcpToolDirectory(
+          renderMcpToolDirectory(servers, { expanded: isExpanded, described: none }),
+        )
+      ) {
+        expanded.delete(server);
         break;
       }
     }
-  };
-  if (fitsMcpToolDirectory(names)) {
-    const signedServers = new Set<McpDirectoryServer>();
-    const serverOf = new Map(servers.flatMap((server) => server.rows.map((row) => [row, server])));
-    const signedLayout = (): McpDirectoryLayout => ({
-      expanded: all,
-      signed: (row) => {
-        const server = serverOf.get(row);
-        return server !== undefined && signedServers.has(server);
-      },
-      described: none,
-    });
-    grow(signedServers, signedLayout);
-    return renderMcpToolDirectory(servers, signedLayout());
   }
-  const expanded = new Set<McpDirectoryServer>();
-  const isExpanded = (server: McpDirectoryServer) => expanded.has(server);
-  grow(expanded, () => ({ expanded: isExpanded, described: none }));
-  for (let hidden = 0; hidden <= servers.length; hidden += 1) {
-    const text = renderMcpToolDirectory(servers, {
-      expanded: isExpanded,
-      described: none,
-      hiddenServers: hidden,
-    });
-    if (fitsMcpToolDirectory(text) || hidden === servers.length) {
-      return text;
+  let hiddenServers = 0;
+  while (
+    hiddenServers < servers.length &&
+    !fitsMcpToolDirectory(
+      renderMcpToolDirectory(servers, { expanded: isExpanded, described: none, hiddenServers }),
+    )
+  ) {
+    hiddenServers += 1;
+  }
+  // Then inputs per row, in whatever space the names leave, cheapest first so the most rows
+  // become callable in one step. No row's place depends on its server's size.
+  const signed = new Set<McpDirectoryRow>();
+  const layout: McpDirectoryLayout = {
+    expanded: isExpanded,
+    signed: (row) => signed.has(row),
+    described: none,
+    hiddenServers,
+  };
+  const headingSlack =
+    Buffer.byteLength(
+      `${MCP_TOOL_DIRECTORY_CALL_WITH_INPUT} ${MCP_TOOL_DIRECTORY_CALL_WITHOUT_INPUT}`,
+    ) - Buffer.byteLength(MCP_TOOL_DIRECTORY_DESCRIBE_FIRST);
+  let remaining =
+    MAX_MCP_TOOL_DIRECTORY_BYTES -
+    Buffer.byteLength(renderMcpToolDirectory(servers, layout)) -
+    headingSlack;
+  const candidates = servers
+    .slice(0, servers.length - hiddenServers)
+    .filter(isExpanded)
+    .flatMap((server) => server.rows)
+    .flatMap((row) => (row.input ? [{ row, cost: Buffer.byteLength(row.input) + 1 }] : []))
+    .toSorted((a, b) => a.cost - b.cost || compare(a.row.id, b.row.id));
+  for (const { row, cost } of candidates) {
+    if (cost <= remaining) {
+      signed.add(row);
+      remaining -= cost;
     }
   }
-  return "";
+  return renderMcpToolDirectory(servers, layout);
 }
 
 /**

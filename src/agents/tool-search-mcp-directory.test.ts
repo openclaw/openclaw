@@ -245,24 +245,41 @@ describe("MCP directory in the system prompt", () => {
     );
   });
 
-  it("keeps inputs for the smallest servers when every input does not fit", () => {
-    const typed = (server: string, name: string) =>
-      Object.assign(mcpTool(server, name, "x".repeat(90)), {
-        parameters: Type.Object(
-          { project: Type.String(), limit: Type.Optional(Type.Integer()) },
-          { additionalProperties: false },
-        ),
-      });
-    const directory = apply([
-      typed("small", "get"),
-      ...Array.from({ length: 60 }, (_, i) => typed("big", `op_${i}`)),
-    ]).directory;
-    expect(Buffer.byteLength(directory)).toBeLessThanOrEqual(4_096);
-    expect(directory).toContain("- mcp:small:small__get { project: string");
-    expect(directory).toContain("- mcp:big:big__op_0\n");
-    expect(directory.split("\n")[0]).toContain(
-      "For a name listed without input, call tool_describe first.",
+  it("fills inputs per row in the space names leave, whatever the server's size", () => {
+    const tool = (server: string, name: string, parameters: object) =>
+      Object.assign(mcpTool(server, name, "x".repeat(90)), { parameters });
+    const wide = Type.Object(
+      {
+        project: Type.String(),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+        format: Type.Optional(Type.Union([Type.Literal("json"), Type.Literal("csv")])),
+      },
+      { additionalProperties: false },
     );
+    const issue = Type.Object({ number: Type.Integer() }, { additionalProperties: false });
+    // The needed tool sits on the largest server, next to many tools; small servers are wide.
+    const tools = [
+      tool("tracker", "get_issue", issue),
+      ...Array.from({ length: 34 }, (_, i) => tool("tracker", `op_${i}`, wide)),
+      ...["alpha", "bravo", "charlie", "delta"].flatMap((server) =>
+        Array.from({ length: 6 }, (_, i) => tool(server, `op_${i}`, wide)),
+      ),
+    ];
+    const directory = apply(tools).directory;
+    const rows = directory.split("\n");
+    expect(Buffer.byteLength(directory)).toBeLessThanOrEqual(4_096);
+    expect(rows).toContain("- mcp:tracker:tracker__get_issue { number: number /* integer */ }");
+    // Inputs are not all-or-nothing per server: equal-cost rows fill by id until space runs
+    // out, so one server ends up partly signed.
+    const signedBy = new Map<string, boolean[]>();
+    for (const row of rows.filter((line) => line.startsWith("- mcp:"))) {
+      const server = row.split(":")[1]!;
+      signedBy.set(server, [...(signedBy.get(server) ?? []), row.includes(" { ")]);
+    }
+    expect(
+      [...signedBy.values()].some((flags) => flags.includes(true) && flags.includes(false)),
+    ).toBe(true);
+    expect(rows[0]).toContain("For a name listed without input, call tool_describe first.");
   });
 
   it("is deterministic across turns and changes only with the MCP inventory", () => {
