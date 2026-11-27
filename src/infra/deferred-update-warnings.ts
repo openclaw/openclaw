@@ -2,11 +2,16 @@ import {
   DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING,
   hasCompletedUpdateModelRetirement,
 } from "./update-deferred-model-retirement.js";
+import { readRetiredPluginVersionDriftWarnings } from "./update-plugin-version-warnings.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import type { UpdateRunResult } from "./update-run-result.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+
+type PluginUpdate = NonNullable<NonNullable<UpdateRunResult["postUpdate"]>["plugins"]>;
 
 type DeferredUpdateWarningOptions = {
   finallyReportedPluginIds?: ReadonlySet<string>;
+  pluginUpdate?: PluginUpdate;
   readUpdateRun?: () => Pick<UpdateRunRecord, "steps"> | undefined;
 };
 
@@ -21,7 +26,7 @@ export async function readRetiredDeferredUpdateWarnings(
   messages: readonly (string | undefined)[],
   options: DeferredUpdateWarningOptions = {},
 ): Promise<ReadonlySet<string>> {
-  const retired = new Set<string>();
+  const retired = readRetiredPluginVersionDriftWarnings(messages, options.pluginUpdate);
   if (
     messages.includes(DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING) &&
     hasCompletedUpdateModelRetirement(options.readUpdateRun?.())

@@ -14,6 +14,7 @@ import {
 } from "../../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner } from "./shared.js";
+import { refreshPostCoreVersionMismatchWarnings } from "./update-command-plugins-internals.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
@@ -209,7 +210,7 @@ export async function applyPostPluginUpdateReadiness(params: {
     if (params.includeOptionalInspections) {
       doctorLint.deferredInspectionCheckIds = [];
     }
-    return pluginUpdate;
+    return await refreshPostCoreVersionMismatchWarnings(pluginUpdate, params.root);
   }
   if (readinessFindings.length === 0) {
     return createPostPluginReadinessExecutionWarning(

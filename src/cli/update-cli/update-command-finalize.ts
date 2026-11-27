@@ -67,7 +67,7 @@ import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
 import { settleOwedStepsAfterFinalization } from "./update-command-owed.js";
 import {
-  collectPostCorePluginAdvisories,
+  collectPostCorePluginAdvisories as collectPluginAdvisories,
   collectPostCorePluginFailureFacts,
 } from "./update-command-plugins-internals.js";
 import {
@@ -500,13 +500,13 @@ async function updateFinalizeCommandInternal(
         });
         // Post-plugin convergence rereads the ledger and reports each still-pending
         // migration as a plugin warning; that final report supersedes Doctor's.
-        const finallyReportedPluginIds = new Set(
-          (result.pluginUpdate.warnings ?? []).flatMap((warning) =>
-            warning.reason === "doctor-advisory" && warning.pluginId ? [warning.pluginId] : [],
-          ),
-        );
         doctorWarnings = await retainCurrentDeferredUpdateWarnings(doctorWarnings, {
-          finallyReportedPluginIds,
+          finallyReportedPluginIds: new Set(
+            (result.pluginUpdate.warnings ?? []).flatMap((warning) =>
+              warning.reason === "doctor-advisory" && warning.pluginId ? [warning.pluginId] : [],
+            ),
+          ),
+          pluginUpdate: result.pluginUpdate,
           readUpdateRun: () => resolveDoctorUpdateRun(process.env, invokingRunId),
         });
         phase.assertCurrent();
@@ -518,7 +518,7 @@ async function updateFinalizeCommandInternal(
       { restore: (result) => restoreMaintenance(result.configSnapshot.config) },
     );
     const pluginUpdate = completedPluginUpdate.pluginUpdate;
-    lifecycle.recordWarnings(collectPostCorePluginAdvisories(pluginUpdate), "plugins");
+    lifecycle.recordWarnings(collectPluginAdvisories(pluginUpdate, doctorWarnings), "plugins");
     const { configSnapshot } = completedPluginUpdate;
     const completionBudget = lifecycle.budget("completionCache");
     // Leave shutdown time inside the phase deadline so optional cache failures can settle.

@@ -7,6 +7,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { readRetiredPluginVersionDriftWarnings } from "./update-plugin-version-warnings.js";
 import { sendUpdateResultTelemetry } from "./update-result-telemetry.js";
 import { inspectUpdateRepairDriverAdmission } from "./update-run-activity.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
@@ -22,6 +23,7 @@ import {
 } from "./update-run-interruption-worker.js";
 import { hasStoredUpdateRecovery, readUpdateRunRecord } from "./update-run-read.kernel.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import type { UpdateRunResult } from "./update-run-result.js";
 import { upsertStep } from "./update-run-step-upsert.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { persistRun, updateRunLedgerSchema } from "./update-run-write.js";
@@ -36,6 +38,7 @@ export function recordPostCoreUpdateEvidence(
   input: {
     candidate?: { version: string | null; buildId?: string };
     warnings: string[];
+    pluginUpdate?: NonNullable<UpdateRunResult["postUpdate"]>["plugins"];
     doctorLint?: UpdateStepResult;
   },
   options: UpdateRunLedgerOptions = {},
@@ -63,6 +66,22 @@ export function recordPostCoreUpdateEvidence(
           endedAtMs: Date.now(),
           detail: JSON.stringify(candidate.data),
         });
+      }
+      const retiredWarnings = readRetiredPluginVersionDriftWarnings(
+        run.steps
+          .filter((step) => step.status === "completed" && step.step.startsWith("warning:"))
+          .map((step) => step.detail),
+        input.pluginUpdate,
+      );
+      for (const step of run.steps) {
+        if (
+          step.step.startsWith("warning:") &&
+          step.status === "completed" &&
+          step.detail &&
+          retiredWarnings.has(step.detail)
+        ) {
+          upsertStep(run, { ...step, status: "skipped", endedAtMs: Date.now() });
+        }
       }
       for (const [index, detail] of input.warnings.entries()) {
         upsertStep(run, {

@@ -6,11 +6,14 @@ import {
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveOpenClawReleaseCohortVersion } from "../../infra/npm-registry-spec.js";
+import { readPackageVersion } from "../../infra/package-json.js";
 import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
 import {
   normalizeUpdateFailureFacts,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
+import { readPluginVersionDriftWarning } from "../../infra/update-plugin-version-warnings.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import type { UpdateOwedStepId } from "../../infra/update-run-owed-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -51,9 +54,24 @@ export function createPostCorePluginUpdateResult(
 /** Producer-classified notices shared by current and published updater handoffs. */
 export function collectPostCorePluginAdvisories(
   result: PostCorePluginUpdateResult | undefined,
+  doctorWarnings: readonly string[] = [],
 ): string[] {
+  const warnings = result?.warnings ?? [];
+  const alreadyReported = new Set(
+    [
+      ...warnings
+        .filter(({ reason }) => reason === "plugin-target-unavailable")
+        .map(({ pluginId }) => pluginId),
+      ...[
+        ...doctorWarnings,
+        ...warnings
+          .filter(({ reason }) => reason === "doctor-advisory")
+          .map(({ message }) => message),
+      ].map((message) => readPluginVersionDriftWarning(message)?.pluginId),
+    ].filter((pluginId) => pluginId !== undefined),
+  );
   return [
-    ...(result?.warnings ?? [])
+    ...warnings
       .filter(
         (warning) =>
           warning.reason === "plugin-target-unavailable" ||
@@ -65,7 +83,104 @@ export function collectPostCorePluginAdvisories(
     ...(result?.npm?.outcomes ?? [])
       .filter((outcome) => outcome.code === "source-bundled-plugin")
       .map((outcome) => outcome.message),
+    // Append new warning categories after the rows known to shipped parent updaters.
+    ...warnings
+      .filter(
+        (warning) =>
+          warning.reason === "plugin-version-mismatch" &&
+          (!warning.pluginId || !alreadyReported.has(warning.pluginId)),
+      )
+      .map((warning) => warning.message),
   ];
+}
+
+/** Final Doctor can repair an earlier mismatch. Require the committed record and payload to agree. */
+export async function refreshPostCoreVersionMismatchWarnings(
+  result: PostCorePluginUpdateResult,
+  root: string,
+): Promise<PostCorePluginUpdateResult> {
+  const warnings = result.warnings ?? [];
+  const candidates = new Set(
+    warnings.flatMap(({ reason, pluginId }) =>
+      reason === "plugin-version-mismatch" && pluginId ? [pluginId] : [],
+    ),
+  );
+  if (
+    !candidates.size ||
+    result.status === "error" ||
+    warnings.some(
+      ({ reason }) => reason === "plugin-config-conflict" || reason === "plugin-convergence",
+    )
+  ) {
+    return result;
+  }
+  try {
+    const { readPersistedInstalledPluginIndexInstallRecordsAsync } =
+      await import("../../plugins/installed-plugin-index-record-reader.js");
+    const { createPluginCache, withPluginCache } = await import("../../plugins/plugin-cache.js");
+    // A fresh Doctor can commit after the parent's metadata cache was populated.
+    await using cache = createPluginCache();
+    const [target, records] = await Promise.all([
+      readPackageVersion(root),
+      withPluginCache(cache, () => readPersistedInstalledPluginIndexInstallRecordsAsync()),
+    ]);
+    if (!target || !records) {
+      return result;
+    }
+    const cohort = resolveOpenClawReleaseCohortVersion(target);
+    const repaired = new Map<string, string>();
+    for (const pluginId of candidates) {
+      const record = Object.hasOwn(records, pluginId) ? records[pluginId] : undefined;
+      const version = record?.resolvedVersion ?? record?.version;
+      if (
+        record?.source === "npm" &&
+        record.installPath &&
+        version &&
+        resolveOpenClawReleaseCohortVersion(version) === cohort &&
+        (await readPackageVersion(record.installPath)) === version
+      ) {
+        repaired.set(pluginId, version);
+      }
+    }
+    if (!repaired.size) {
+      return result;
+    }
+    const remaining = warnings.filter(
+      ({ reason, pluginId }) =>
+        !pluginId ||
+        !repaired.has(pluginId) ||
+        (reason !== "plugin-version-mismatch" && reason !== "plugin-target-unavailable"),
+    );
+    const outcomes = [
+      ...result.npm.outcomes,
+      ...Array.from(repaired).map(([pluginId, nextVersion]) => ({
+        pluginId,
+        status: "updated" as const,
+        nextVersion,
+        message: `Plugin "${pluginId}" is now at ${nextVersion} after post-plugin checks.`,
+      })),
+    ];
+    const finalOutcomes = new Map(outcomes.map((outcome) => [outcome.pluginId, outcome]));
+    const settled =
+      result.status === "warning" &&
+      !result.reason &&
+      !remaining.length &&
+      !result.sync.warnings.length &&
+      !result.sync.errors.length &&
+      ![...finalOutcomes.values()].some(({ status }) => status === "error");
+    return {
+      ...result,
+      status: settled ? "ok" : result.status,
+      warnings: remaining,
+      npm: {
+        ...result.npm,
+        outcomes,
+      },
+    };
+  } catch {
+    // An unreadable ledger or package is not proof of repair.
+    return result;
+  }
 }
 
 export function collectPostCorePluginFailureFacts(

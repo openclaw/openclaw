@@ -6,6 +6,8 @@ import {
   readDeferredPluginMigrationsAsync,
   recordDeferredPluginMigrations,
 } from "../../infra/deferred-plugin-migrations.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import { createUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { listUpdateRuns } from "../../infra/update-run-reader.js";
 import { updateRunWarningMessages } from "../../infra/update-run-step.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
@@ -303,6 +305,93 @@ describe("update completion ownership", () => {
     expect(await events()).toEqual(["post-attempt", "post-acquired"]);
     expect(mocks.restart).not.toHaveBeenCalled();
     expectDoctorDiagnostics();
+  });
+
+  it("settles only repaired plugin version warnings in a shipped parent's update", async () => {
+    const runId = "00000000-0000-4000-8000-000000000205";
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", runId);
+    const driver = readUpdateRunDriver();
+    createUpdateRun({ trigger: "cli", runId, origin: { driver } });
+    const stale = (pluginId: string) =>
+      `core/doctor/workspace-status: Plugin ${pluginId} is 2026.10.10, but a Gateway restart will load OpenClaw 2026.11.10.`;
+    const resolved = stale("codex");
+    const unresolved = stale("groq");
+    const otherVersion = stale("tokenjuice");
+    const unrelated = "An unrelated Doctor advisory remains.";
+    // A shipped parent records its package-swap Doctor before launching resume.
+    for (const [index, detail] of [resolved, unresolved, unrelated].entries()) {
+      recordUpdateRunStep(runId, {
+        step: `warning:openclaw doctor:${index + 1}`,
+        status: "completed",
+        detail,
+      });
+    }
+    const finalMismatch =
+      'Plugin "groq" could not be updated. Run `openclaw plugins update groq` to retry.';
+    await writeScenario("resume", {
+      doctorWarningsByInvocation: [
+        [resolved, unresolved, otherVersion, unrelated],
+        [unresolved, otherVersion],
+      ],
+    });
+    await fs.rm(state.path("handoff.json"));
+    mocks.plugins.mockResolvedValueOnce({
+      ...pluginResult,
+      status: "warning",
+      warnings: [
+        {
+          pluginId: "groq",
+          reason: "plugin-version-mismatch",
+          message: finalMismatch,
+          guidance: ["openclaw plugins update groq"],
+        },
+      ],
+      npm: {
+        changed: true,
+        outcomes: [
+          {
+            pluginId: "codex",
+            status: "updated",
+            currentVersion: "2026.10.10",
+            nextVersion: "2026.11.10",
+            message: "Updated codex.",
+          },
+          {
+            pluginId: "groq",
+            status: "skipped",
+            currentVersion: "2026.10.10",
+            message: "Groq remains installed.",
+          },
+          {
+            pluginId: "tokenjuice",
+            status: "updated",
+            currentVersion: "2026.10.10",
+            nextVersion: "2026.11.9",
+            message: "Updated tokenjuice, still short of target.",
+          },
+        ],
+      },
+    });
+
+    await invoke("resume");
+
+    const receipt = reportedResult("resume");
+    expect(JSON.stringify(receipt)).not.toContain(resolved);
+    expect(receipt).toMatchObject({
+      warnings: expect.arrayContaining([
+        expect.objectContaining({ message: unresolved }),
+        expect.objectContaining({ message: otherVersion }),
+        expect.objectContaining({ message: unrelated }),
+        expect.objectContaining({ message: finalMismatch }),
+      ]),
+    });
+    const [run] = listUpdateRuns();
+    expect(updateRunWarningMessages(run?.steps ?? [])).toEqual(
+      expect.arrayContaining([unresolved, otherVersion, unrelated]),
+    );
+    expect(updateRunWarningMessages(run?.steps ?? [])).not.toContain(resolved);
+    expect(updateRunWarningMessages(run?.steps ?? [])).not.toContain(finalMismatch);
   });
 
   it("legacy resume repairs Doctor-only node state before plugins even when config is current", async () => {
