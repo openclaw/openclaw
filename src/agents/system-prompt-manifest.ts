@@ -8,7 +8,8 @@
  *   relocated behind tools by providers.
  * - `includedWhen`: the capability or session fact that admits the section. Never a
  *   provider or model name.
- * - `budgetBytes`: the most UTF-8 bytes the section may render.
+ * - `budgetBytes`: the most UTF-8 bytes the section may render for the measured install shapes
+ *   (system-prompt.inventory-snapshot.test.ts); content-bound sections carry their own caps.
  */
 export type SystemPromptSectionRegion = "stable" | "dynamic" | "runtime";
 
@@ -27,7 +28,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "system-prompt.ts",
     region: "stable",
     includedWhen: "always",
-    budgetBytes: 128,
+    budgetBytes: 64,
   },
   {
     id: "interaction_style",
@@ -41,14 +42,14 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "system-prompt-policy-sections.ts",
     region: "stable",
     includedWhen: "full prompt, or a provider override",
-    budgetBytes: 4_096,
+    budgetBytes: 650,
   },
   {
     id: "promised_work",
     owner: "promised-work-prompt.ts",
     region: "stable",
     includedWhen: "always",
-    budgetBytes: 1_024,
+    budgetBytes: 620,
   },
   {
     id: "provider_stable_prefix",
@@ -62,7 +63,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "system-prompt-policy-sections.ts",
     region: "stable",
     includedWhen: "always",
-    budgetBytes: 512,
+    budgetBytes: 350,
   },
   {
     id: "workspace",
@@ -83,7 +84,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "system-prompt.ts",
     region: "stable",
     includedWhen: "always",
-    budgetBytes: 256,
+    budgetBytes: 128,
   },
   {
     id: "reasoning_format",
@@ -111,7 +112,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "system-prompt.ts",
     region: "dynamic",
     includedWhen: "one working directory",
-    budgetBytes: 512,
+    budgetBytes: 320,
   },
   {
     id: "tool_workflow",
@@ -119,28 +120,28 @@ export const SYSTEM_PROMPT_SECTIONS = [
     region: "dynamic",
     includedWhen:
       "exec/process, sessions, automations, screen, media tools; plugin command guidance",
-    budgetBytes: 4_096,
+    budgetBytes: 2_048,
   },
   {
     id: "tool_call_style",
     owner: "system-prompt-policy-sections.ts",
     region: "dynamic",
     includedWhen: "tool guidance, or a provider override",
-    budgetBytes: 2_048,
+    budgetBytes: 480,
   },
   {
     id: "care",
     owner: "system-prompt-policy-sections.ts",
     region: "dynamic",
     includedWhen: "always",
-    budgetBytes: 1_536,
+    budgetBytes: 1_000,
   },
   {
     id: "openclaw_control",
     owner: "system-prompt-control.ts",
     region: "dynamic",
     includedWhen: "openclaw, gateway, or exec tool",
-    budgetBytes: 3_072,
+    budgetBytes: 2_000,
   },
   {
     id: "skills",
@@ -168,7 +169,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "memory plugin prompt (plugins/memory-state.ts)",
     region: "dynamic",
     includedWhen: "full prompt with memory tools",
-    budgetBytes: 4_096,
+    budgetBytes: 2_048,
   },
   {
     id: "model_aliases",
@@ -182,7 +183,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "system-prompt-documentation.ts",
     region: "dynamic",
     includedWhen: "full prompt",
-    budgetBytes: 1_536,
+    budgetBytes: 1_024,
   },
   {
     id: "sandbox",
@@ -210,28 +211,28 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "system-prompt.ts",
     region: "dynamic",
     includedWhen: "sandboxed runtime with elevated exec facts",
-    budgetBytes: 256,
+    budgetBytes: 160,
   },
   {
     id: "output_directives",
     owner: "system-prompt-messaging.ts",
     region: "dynamic",
     includedWhen: "full prompt with a visible reply path",
-    budgetBytes: 1_536,
+    budgetBytes: 512,
   },
   {
     id: "silent_replies",
     owner: "system-prompt.ts",
     region: "dynamic",
     includedWhen: "full prompt on a channel that allows silence",
-    budgetBytes: 512,
+    budgetBytes: 420,
   },
   {
     id: "exec_approval",
     owner: "system-prompt-control.ts",
     region: "dynamic",
     includedWhen: "exec tool without a provider tool_call_style override",
-    budgetBytes: 1_536,
+    budgetBytes: 400,
   },
   {
     id: "authorized_senders",
@@ -245,7 +246,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "ui-presentation-prompt.ts",
     region: "dynamic",
     includedWhen: "full prompt with UI tools",
-    budgetBytes: 2_048,
+    budgetBytes: 1_450,
   },
   {
     id: "control_ui",
@@ -259,14 +260,14 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "system-prompt-messaging.ts",
     region: "dynamic",
     includedWhen: "full prompt; message tool details when listed",
-    budgetBytes: 3_072,
+    budgetBytes: 1_600,
   },
   {
     id: "collapsible_details",
     owner: "system-prompt.ts",
     region: "dynamic",
     includedWhen: "full prompt on a channel with markdownDetails",
-    budgetBytes: 512,
+    budgetBytes: 240,
   },
   {
     id: "voice",
@@ -287,7 +288,7 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "system-prompt.ts",
     region: "dynamic",
     includedWhen: "channel reaction guidance",
-    budgetBytes: 512,
+    budgetBytes: 240,
   },
   {
     id: "provider_dynamic_suffix",
@@ -308,8 +309,11 @@ export const SYSTEM_PROMPT_SECTIONS = [
     owner: "system-prompt.ts, system-prompt-runtime.ts",
     region: "runtime",
     includedWhen: "always",
-    budgetBytes: 2_048,
+    budgetBytes: 1_024,
   },
 ] as const satisfies readonly SystemPromptSectionSpec[];
 
 export type SystemPromptSectionId = (typeof SYSTEM_PROMPT_SECTIONS)[number]["id"];
+
+/** @internal Budget gate for the fresh-install fixture (12,864 B after the shave; ~5% headroom). */
+export const FRESH_INSTALL_SYSTEM_PROMPT_BUDGET_BYTES = 13_500;

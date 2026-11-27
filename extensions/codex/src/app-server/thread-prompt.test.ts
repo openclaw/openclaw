@@ -242,8 +242,13 @@ describe("buildDeveloperInstructions delegation guidance", () => {
       const instructions = renderCreation(true);
 
       expect(instructions).toContain("`openclaw.sessions_create`");
-      expect(instructions).toContain("no completion event or yield expectation");
-      expect(instructions).toContain("Actual delegated helpers use native `spawn_agent`");
+      expect(instructions).toContain("independent visible session, not a supervised child");
+      expect(instructions).toContain("no completion event or yield");
+      const helperRoute = instructions
+        .split("\n")
+        .find((line) => line.startsWith("- Delegated helpers:"));
+      expect(helperRoute).toContain("hidden native `spawn_agent`");
+      expect(helperRoute).toContain('`sessions_spawn` with `runtime="subagent"`');
       expect(instructions).toContain("unrequested follow-up proposals use `openclaw.suggest_task`");
       expect(instructions).not.toContain("## Delegation");
       expect(renderCreation(false)).not.toContain("`openclaw.sessions_create`");
