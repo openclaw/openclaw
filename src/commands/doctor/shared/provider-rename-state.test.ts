@@ -127,6 +127,45 @@ describe("persisted provider rename", () => {
     });
   });
 
+  it("preserves configured Codex session routes when config is read-only", async () => {
+    await withOpenClawTestState(
+      { label: "codex-provider-readonly", env: { OPENCLAW_CONFIG_READONLY: "1" } },
+      async (state) => {
+        const selectedModel = "example-provider/selected-model";
+        const defaultModel = "example-provider/default-model";
+        const { cfg, readSession, writeSession } = await fixture(state, {
+          plugins: { enabled: false },
+          agents: { entries: { main: {} }, defaults: { model: `codex/${defaultModel}` } },
+          models: {
+            providers: {
+              codex: {
+                baseUrl: "https://models.example.invalid/v1",
+                api: "openai-responses",
+                models: [
+                  createTestModelDefinition(defaultModel),
+                  createTestModelDefinition(selectedModel),
+                ],
+              },
+            },
+          },
+        });
+        await writeSession("selected", {
+          ...selection("codex", selectedModel),
+          modelOverrideSource: "user",
+        });
+        await writeSession("legacy", selection("openai-codex", defaultModel));
+
+        await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true });
+
+        expect(readSession("selected")).toMatchObject({
+          ...selection("codex", selectedModel),
+          modelOverrideSource: "user",
+        });
+        expect(readSession("legacy")).toMatchObject(selection("openai", defaultModel));
+      },
+    );
+  });
+
   it("repairs all cron partitions under the state owner, retries config-last, then leaves later local selections alone", async () => {
     await withOpenClawTestState({ label: "provider-rename-resume" }, async (state) => {
       const f = await fixture(state);
