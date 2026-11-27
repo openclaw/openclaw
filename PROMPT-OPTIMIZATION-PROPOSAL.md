@@ -41,8 +41,6 @@ November testing used OpenClaw 2026.11.10, Windows, local Gemma via openai-compl
 
 Related cache investigation: https://github.com/openclaw/openclaw/issues/202001. The renamed transient-context package is locally tested but not independently live-installed; the overlay is tied to exact compiled bundles. Current upstream source integration, regression tests, tool-enabled and cross-provider validation, rollback and controlled combined benchmarks remain outstanding.
 
-This is a design proposal.
-
 ## Our track record: working solutions months before upstream
 
 On August 10, 2026, we submitted [upstream PR #121683](https://github.com/openclaw/openclaw/pull/121683), addressing a related defect: switching between an owner and a non-owner changed the registered dynamic-tool schema, destabilizing Codex native-thread reuse and prompt caching. We separated the stable advertised tool catalog from actual per-turn execution permissions.
